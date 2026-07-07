@@ -1,52 +1,48 @@
 # Go
 
-`mise` can be used to install and manage multiple versions of [go](https://golang.org/) on the same system.
+`mise` 可用于在同一系统上安装和管理 [go](https://golang.org/) 的多个版本。
 
-> The following are instructions for using the go mise core plugin. This is used when there isn't a
-> git plugin installed named "go". If you want to use [asdf-golang](https://github.com/kennyp/asdf-golang)
-> then use `mise plugins install go GIT_URL`.
+> 以下是使用 go mise 核心插件的说明。当没有安装名为 "go" 的 git 插件时，会使用此插件。若你想使用 [asdf-golang](https://github.com/kennyp/asdf-golang)，请使用 `mise plugins install go GIT_URL`。
 
-The code for this is inside the mise repository at
-[`./src/plugins/core/go.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/go.rs).
+这部分的代码位于 mise 仓库中的
+[`./src/plugins/core/go.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/go.rs)。
 
-## Usage
+## 用法
 
-The following installs the latest version of go-1.21.x (if some version of 1.21.x is not already
-installed) and makes it the global default:
+以下命令会安装最新版本的 go-1.21.x（如果尚未安装 1.21.x 的某个版本），并将其设为全局默认：
 
 ```sh
 mise use -g go@1.21
 ```
 
-Minor go versions 1.20 and below require specifying `prefix` before the version number because the
-first version of each series was released without a `.0` suffix, making 1.20 an exact version match:
+1.20 及更低的 go 次版本需要在版本号前指定 `prefix`，因为每个系列的第一个版本发布时没有 `.0` 后缀，这使得 1.20 会成为精确版本匹配：
 
 ```sh
 mise use -g go@prefix:1.20
 ```
 
-## `.go-version` file support
+## `.go-version` 文件支持
 
-mise uses a `mise.toml` or `.tool-versions` file for auto-switching between software versions.
-However, it can also read go-specific version files named `.go-version`.
+mise 使用 `mise.toml` 或 `.tool-versions` 文件在不同软件版本之间自动切换。
+不过，它也可以读取名为 `.go-version` 的 Go 特定版本文件。
 
-See [idiomatic version files](/configuration.html#idiomatic-version-files)
+参见 [惯用版本文件](/configuration.html#idiomatic-version-files)
 
-## Default packages
+## 默认包
 
-::: warning Planned deprecation
-Default package files are deprecated. They are still supported for now, but mise will start warning
-in `2026.11.0` and support will be removed in `2027.11.0`.
+::: warning 计划弃用
+默认包文件已被弃用。它们目前仍受支持，但 mise 将从 `2026.11.0` 开始发出警告，
+并将在 `2027.11.0` 移除支持。
 
-For Go CLIs, install the tool directly with the `go:` backend:
+对于 Go CLI，请直接使用 `go:` 后端安装工具：
 
 ```toml
 [tools]
 "go:github.com/jesseduffield/lazygit" = "latest"
 ```
 
-For packages that really should be installed into every Go version, use a tool-level `postinstall`
-hook:
+对于确实应该安装到每个 Go 版本中的包，请使用工具级别的 `postinstall`
+钩子：
 
 ```toml
 [tools]
@@ -55,31 +51,29 @@ go = { version = "1.25", postinstall = "go install github.com/daixiang0/gci@late
 
 :::
 
-mise can automatically install a default set of packages right after installing a new go version.
-To use this legacy feature, provide a `$HOME/.default-go-packages` file that lists one package per
-line, for example:
+mise 可以在安装新的 go 版本后自动安装一组默认包。
+要使用此旧版功能，请提供一个 `$HOME/.default-go-packages` 文件，其中每行列出一个包，例如：
 
 ```text
-github.com/daixiang0/gci # allows comments
+github.com/daixiang0/gci # 允许注释
 github.com/jesseduffield/lazygit
 ```
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `go` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `go` 后端。
+这些选项位于 `mise.toml` 中的 `[tools]` 部分。
 
 ### `install_env`
 
-Set environment variables for default package installation and install-time verification commands
-run by the core `go` backend:
+为核心 `go` 后端运行的默认包安装和安装时验证命令设置环境变量：
 
 ```toml
 [tools]
 go = { version = "latest", install_env = { GOPRIVATE = "github.com/acme/*" } }
 ```
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

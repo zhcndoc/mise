@@ -38,24 +38,24 @@ const board = [
 ]
 </script>
 
-# Team
+# 团队
 
-Jeff Dickey is the primary developer behind mise. He does the bulk
-of development for the project.
+Jeff Dickey 是 mise 背后的主要开发者。他承担了这个项目的大部分
+开发工作。
 
 <VPTeamMembers :members="members" />
 
-## Advisory Board
+## 顾问委员会
 
-The advisory board helps make important decisions about the project such as:
+顾问委员会帮助就项目做出重要决策，例如：
 
-- What features should be on the roadmap
-- When should functionality move from experimental to stable
-- If/when/how features should be deprecated
+- 路线图中应该包含哪些功能
+- 何时应将功能从实验性转为稳定版
+- 功能是否、何时以及如何被弃用
 
 <VPTeamMembers :members="board" />
 
-## Contributors
+## 贡献者
 
-mise is an open source project which welcomes [contributions](https://github.com/jdx/mise/graphs/contributors).
-We're grateful for those that have volunteered their work for the project.
+mise 是一个开源项目，欢迎[贡献](https://github.com/jdx/mise/graphs/contributors)。
+我们感谢那些为该项目贡献了自己劳动的人。

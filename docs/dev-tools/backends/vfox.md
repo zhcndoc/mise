@@ -1,27 +1,27 @@
-# Vfox Backend
+# Vfox 后端
 
 ::: tip
-Vfox is the recommended plugin system for mise. It provides cross-platform support, built-in modules, and a modern hook-based architecture.
+Vfox 是 mise 推荐的插件系统。它提供跨平台支持、内置模块，以及现代的基于钩子的架构。
 :::
 
-[Vfox](https://github.com/version-fox/vfox) plugins may be used in mise to install tools.
+[Vfox](https://github.com/version-fox/vfox) 插件可用于 mise 中安装工具。
 
-## Why vfox?
+## 为什么选择 vfox？
 
-- **Cross-platform** — plugins work on Windows, macOS, and Linux without platform-specific code
-- **Built-in modules** — HTTP, JSON, HTML parsing, archive extraction, semver comparison, and logging are all available out of the box, no external dependencies needed
-- **Security** — [tool plugins](../../tool-plugin-development.md) support attestation verification (GitHub artifact attestations, cosign signatures, SLSA provenance) for downloaded artifacts. When a tool plugin's `PreInstall` hook returns an `attestation` table, mise verifies it during install and records the result in `mise.lock`, protecting against downgrade attacks on subsequent installs. Backend plugins do not currently support attestation
-- **Modern architecture** — structured hooks with typed contexts, backend plugins for multi-tool management, rolling version checksums, and lock file support
+- **跨平台** — 插件可在 Windows、macOS 和 Linux 上运行，无需针对不同平台编写特定代码
+- **内置模块** — HTTP、JSON、HTML 解析、压缩包解压、semver 比较和日志记录都开箱即用，无需外部依赖
+- **安全性** — [工具插件](../../tool-plugin-development.md) 支持对已下载工件进行证明验证（GitHub artifact attestations、cosign 签名、SLSA provenance）。当某个工具插件的 `PreInstall` 钩子返回一个 `attestation` 表时，mise 会在安装期间对其进行验证，并将结果记录到 `mise.lock` 中，从而在后续安装中防止降级攻击。后端插件目前不支持 attestation
+- **现代架构** — 具有类型化上下文的结构化钩子、用于多工具管理的后端插件、滚动版本校验和以及锁文件支持
 
-The code for this is inside the mise repository at [`./src/backend/vfox.rs`](https://github.com/jdx/mise/blob/main/src/backend/vfox.rs).
+这部分代码位于 mise 仓库中的 [`./src/backend/vfox.rs`](https://github.com/jdx/mise/blob/main/src/backend/vfox.rs)。
 
-## Dependencies
+## 依赖项
 
-No extra system packages are required to _run_ the vfox backend. Vfox Lua code is executed by the interpreter built into mise.
+运行 vfox 后端不需要额外的系统包。Vfox Lua 代码由 mise 内置的解释器执行。
 
-## Usage
+## 用法
 
-The following installs the latest version of cmake and sets it as the active version on PATH:
+以下命令会安装最新版本的 cmake，并将其设置为 PATH 上的活动版本：
 
 ```sh
 $ mise use -g vfox:version-fox/vfox-cmake
@@ -29,23 +29,23 @@ $ cmake --version
 cmake version 3.21.3
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+版本将以以下格式设置在 `~/.config/mise/config.toml` 中：
 
 ```toml
 [tools]
 "vfox:version-fox/vfox-cmake" = "latest"
 ```
 
-## Default plugin backend
+## 默认插件后端
 
-On Windows, mise uses vfox plugins by default.
-If you'd like to use plugins by default even on Linux/macOS, set the following settings:
+在 Windows 上，mise 默认使用 vfox 插件。
+如果你希望即使在 Linux/macOS 上也默认使用插件，请设置以下配置：
 
 ```sh
 mise settings add disable_backends asdf
 ```
 
-Now you can list available plugins with `mise registry`:
+现在你可以使用 `mise registry` 列出可用插件：
 
 ```sh
 $ mise registry | grep vfox:
@@ -66,53 +66,52 @@ terraform                     aqua:hashicorp/terraform vfox:mise-plugins/vfox-te
 vlang                         vfox:mise-plugins/vfox-vlang
 ```
 
-And they will be installed when running commands such as `mise use -g cmake` without needing to
-specify `vfox:cmake`.
+这样，在运行诸如 `mise use -g cmake` 之类的命令时，它们就会被安装，而无需
+指定 `vfox:cmake`。
 
-## Plugins
+## 插件
 
-In addition to the standard vfox plugins, mise supports modern plugins that can manage multiple tools using the `plugin:tool` format. These plugins are perfect for:
+除了标准的 vfox 插件之外，mise 还支持现代插件，这些插件可以使用 `plugin:tool` 格式管理多个工具。这些插件非常适合用于：
 
-- Installing tools from private repositories
-- Package managers (npm, pip, etc.)
-- Custom tool families
+- 从私有仓库安装工具
+- 包管理器（npm、pip 等）
+- 自定义工具家族
 
-### Example: Plugin Usage
+### 示例：插件用法
 
 ```bash
-# Install a plugin
+# 安装插件
 mise plugin install my-plugin https://github.com/username/my-plugin
 
-# Use the plugin:tool format
+# 使用 plugin:tool 格式
 mise install my-plugin:some-tool@1.0.0
 mise use my-plugin:some-tool@latest
 ```
 
-### Install from Zip File
+### 从 Zip 文件安装
 
 ```bash
-# Install a plugin from a zip file over HTTPS
+# 通过 HTTPS 从 zip 文件安装插件
 mise plugin install <plugin-name> <zip-url>
-# Example: Installing a plugin from a zip file
+# 示例：从 zip 文件安装插件
 mise plugin install vfox-cmake https://github.com/mise-plugins/vfox-cmake/archive/refs/heads/main.zip
 ```
 
-For more information, see:
+更多信息请参见：
 
-- [Using Plugins](../../plugin-usage.md) - End-user guide
-- [Plugin Development](../../tool-plugin-development.md) - Developer guide
-- [Plugin Template](https://github.com/jdx/mise-tool-plugin-template) - Quick start template for creating plugins
+- [使用插件](../../plugin-usage.md) - 最终用户指南
+- [插件开发](../../tool-plugin-development.md) - 开发者指南
+- [插件模板](https://github.com/jdx/mise-tool-plugin-template) - 创建插件的快速开始模板
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `vfox` backend—these
-go in `[tools]` in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `vfox` 后端——这些选项
+应放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
 
-Set environment variables for commands that a vfox plugin starts with `cmd.exec`
-during install hooks. vfox's built-in Lua HTTP, archive, and JSON helpers do not
-use these variables directly.
+为在安装钩子期间通过 `cmd.exec` 启动的 vfox 插件命令设置环境变量。
+vfox 内置的 Lua HTTP、archive 和 JSON 辅助工具不会直接使用这些变量。
 
 ```toml
 [tools]

@@ -1,36 +1,36 @@
 # Deno
 
-`mise` can be used to install and manage multiple versions of [deno](https://deno.land/) on the same system.
+`mise` 可用于在同一系统上安装和管理 [deno](https://deno.land/) 的多个版本。
 
-> The following are instructions for using the deno mise core plugin. This is used when there isn't a
-> git plugin installed named "deno". If you want to use [asdf-deno](https://github.com/asdf-community/asdf-deno)
-> then run `mise plugins install deno https://github.com/asdf-community/asdf-deno`.
+> 以下是使用 deno mise 核心插件的说明。当没有安装名为“deno”的
+> git 插件时会使用它。如果你想使用 [asdf-deno](https://github.com/asdf-community/asdf-deno)
+> 那么运行 `mise plugins install deno https://github.com/asdf-community/asdf-deno`。
 
-The code for this is inside the mise repository at
-[`./src/plugins/core/deno.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/deno.rs).
+这部分代码位于 mise 仓库中的
+[`./src/plugins/core/deno.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/deno.rs)。
 
-## Usage
+## 使用
 
-The following installs deno and makes it the global default:
+以下命令会安装 deno 并将其设为全局默认：
 
 ```sh
-mise use -g deno@1       # install deno 1.x
-mise use -g deno@latest  # install latest deno
+mise use -g deno@1       # 安装 deno 1.x
+mise use -g deno@latest  # 安装最新版本的 deno
 ```
 
-See available versions with `mise ls-remote deno`.
+使用 `mise ls-remote deno` 查看可用版本。
 
 > [!NOTE]
-> Avoid using `deno upgrade` to upgrade `deno` as `mise` will not be aware of the change.
+> 避免使用 `deno upgrade` 来升级 `deno`，因为 `mise` 不会知晓这一变更。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `deno` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 可用于 `deno` 后端。
+这些选项位于 `mise.toml` 中的 `[tools]` 部分。
 
 ### `install_env`
 
-Set environment variables for install-time commands run by the core `deno` backend:
+为由核心 `deno` 后端运行的安装时命令设置环境变量：
 
 ```toml
 [tools]

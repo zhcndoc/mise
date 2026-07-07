@@ -4,34 +4,34 @@
 - **Usage**: `mise activate [FLAGS] [SHELL_TYPE]`
 - **Source code**: [`src/cli/activate.rs`](https://github.com/jdx/mise/blob/main/src/cli/activate.rs)
 
-Initializes mise in the current shell session
+在当前 shell 会话中初始化 mise
 
-This should go into your shell's rc file or login shell.
-Otherwise, it will only take effect in the current session.
-(e.g. ~/.zshrc, ~/.zprofile, ~/.zshenv, ~/.bashrc, ~/.bash_profile, ~/.profile, ~/.config/fish/config.fish, or $PROFILE for powershell)
+这应该放到你的 shell rc 文件或登录 shell 中。
+否则，它只会在当前会话中生效。
+（例如 ~/.zshrc、~/.zprofile、~/.zshenv、~/.bashrc、~/.bash_profile、~/.profile、~/.config/fish/config.fish，或者 powershell 的 $PROFILE）
 
-Typically, this can be added with something like the following:
+通常，可以用如下方式添加：
 
 ```
 echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
 ```
 
-However, this requires that "mise" is in your PATH. If it is not, you need to
-specify the full path like this:
+不过，这要求 "mise" 已经在你的 PATH 中。如果不在，你需要
+像这样指定完整路径：
 
 ```
 echo 'eval "$(/path/to/mise activate zsh)"' >> ~/.zshrc
 ```
 
-Customize status output with `status` settings.
+可通过 `status` 设置来自定义状态输出。
 
-## Arguments
+## 参数
 
 ### `[SHELL_TYPE]`
 
-Shell type to generate the script for
+生成脚本所使用的 Shell 类型
 
-**Choices:**
+**可选项：**
 
 - `bash`
 - `elvish`
@@ -41,31 +41,31 @@ Shell type to generate the script for
 - `zsh`
 - `pwsh`
 
-## Flags
+## 标志
 
 ### `-q --quiet`
 
-Suppress non-error messages
+抑制非错误消息
 
 ### `--no-hook-env`
 
-Do not automatically call hook-env
+不要自动调用 hook-env
 
-This can be helpful for debugging mise. If you run `eval "$(mise activate --no-hook-env)"`, then you can call `mise hook-env` manually which will output the env vars to stdout without actually modifying the environment. That way you can do things like `mise hook-env --trace` to get more information or just see the values that hook-env is outputting.
+这对于调试 mise 很有帮助。如果你运行 `eval "$(mise activate --no-hook-env)"`，那么你可以手动调用 `mise hook-env`，它会将环境变量输出到 stdout，而不会实际修改环境。这样你就可以使用像 `mise hook-env --trace` 这样的命令来获取更多信息，或者直接查看 hook-env 输出的值。
 
 ### `--shims`
 
-Use shims instead of modifying PATH
-Effectively the same as:
+使用 shims，而不是修改 PATH
+效果上等同于：
 
 ```
 PATH="$HOME/.local/share/mise/shims:$PATH"
 ```
 
-`mise activate --shims` does not support all the features of `mise activate`.
-See <https://mise.en.dev/dev-tools/shims.html#shims-vs-path> for more information
+`mise activate --shims` 不支持 `mise activate` 的所有功能。
+更多信息请参见 <https://mise.en.dev/dev-tools/shims.html#shims-vs-path>
 
-Examples:
+示例：
 
 ```
 eval "$(mise activate bash)"

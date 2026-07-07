@@ -1,6 +1,6 @@
 # pacman <Badge type="warning" text="experimental" />
 
-System packages for Arch-family Linux (Arch, Manjaro, EndeavourOS, ...).
+Arch 系 Linux（Arch、Manjaro、EndeavourOS 等）的系统包。
 
 ```toml
 [bootstrap.packages]
@@ -8,26 +8,26 @@ System packages for Arch-family Linux (Arch, Manjaro, EndeavourOS, ...).
 "pacman:base-devel" = "latest"
 ```
 
-## Behavior
+## 行为
 
-- Package state is checked with `pacman -Q` (read-only, never elevates).
-- Missing packages are installed with `pacman -S --noconfirm --needed`,
-  elevated with sudo when necessary (see
-  [sudo](/bootstrap/packages/#sudo)). `--needed` makes installs
-  idempotent.
-- If `/var/lib/pacman/sync` contains no databases (fresh containers), mise
-  runs `pacman -Sy` automatically before installing. Force a refresh with
-  `mise bootstrap packages apply --update`.
-- `mise bootstrap packages upgrade` runs `pacman -Sy` and then upgrades only the
-  configured packages. Note that Arch officially supports only full-system
-  upgrades (`pacman -Syu`) — upgrading individual packages is a
-  [partial upgrade](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported),
-  so prefer running `pacman -Syu` yourself on a rolling-release system.
+- 使用 `pacman -Q` 检查软件包状态（只读，绝不提权）。
+- 缺失的软件包使用 `pacman -S --noconfirm --needed` 安装，
+  必要时通过 sudo 提权（参见
+  [sudo](/bootstrap/packages/#sudo)）。`--needed` 使安装
+  具有幂等性。
+- 如果 `/var/lib/pacman/sync` 不包含任何数据库（全新容器），mise
+  会在安装前自动运行 `pacman -Sy`。如需强制刷新，请使用
+  `mise bootstrap packages apply --update`。
+- `mise bootstrap packages upgrade` 会运行 `pacman -Sy`，然后只升级已
+  配置的软件包。请注意，Arch 官方仅支持全系统升级（`pacman -Syu`）——
+  单独升级某个软件包属于
+  [部分升级](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported)，
+  因此在滚动发行版系统上更建议你自行运行 `pacman -Syu`。
 
 ::: warning
-Arch repositories only carry the latest version of each package, so pacman
-entries cannot be installed at a pinned version — `mise bootstrap packages apply`
-skips pinned entries with a warning, though `mise bootstrap packages status` still
-reports a `version mismatch` for them. AUR packages are not supported (they
-require an AUR helper and building from source).
+Arch 软件仓库只包含每个软件包的最新版本，因此 pacman
+条目无法按固定版本安装——`mise bootstrap packages apply`
+会跳过已固定版本的条目并给出警告，不过 `mise bootstrap packages status` 仍会
+将它们报告为 `version mismatch`。不支持 AUR 软件包（它们
+需要 AUR helper 并从源码构建）。
 :::

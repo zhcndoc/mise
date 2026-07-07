@@ -5,15 +5,14 @@
 - **Aliases**: `r`
 - **Source code**: [`src/cli/tasks/run.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/run.rs)
 
-Run task(s)
+运行任务
 
-This command will run a task, or multiple tasks in parallel.
-Tasks may have dependencies on other tasks or on source files.
-If source is configured on a task, it will only run if the source
-files have changed.
+此命令将运行一个任务，或并行运行多个任务。
+任务可能依赖于其他任务或源文件。
+如果任务配置了 source，则只有在源文件发生变化时才会运行。
 
-Tasks can be defined in mise.toml or as standalone scripts.
-In mise.toml, tasks take this form:
+任务可以在 mise.toml 中定义，也可以作为独立脚本定义。
+在 mise.toml 中，任务采用以下形式：
 
 ```
 [tasks.build]
@@ -22,10 +21,10 @@ sources = ["src/**/*.ts"]
 outputs = ["dist/**/*.js"]
 ```
 
-Alternatively, tasks can be defined as standalone scripts.
-These must be located in `mise-tasks`, `.mise-tasks`, `.mise/tasks`, `mise/tasks` or
-`.config/mise/tasks`.
-The name of the script will be the name of the tasks.
+或者，任务可以定义为独立脚本。
+这些脚本必须位于 `mise-tasks`、`.mise-tasks`、`.mise/tasks`、`mise/tasks` 或
+`.config/mise/tasks` 中。
+脚本的名称将作为任务的名称。
 
 ```
 $ cat .mise/tasks/build&lt;&lt;EOF
@@ -35,170 +34,170 @@ EOF
 $ mise run build
 ```
 
-## Arguments
+## 参数
 
 ### `[TASK]`
 
-Tasks to run
-Can specify multiple tasks by separating with `:::`
-e.g.: mise run task1 arg1 arg2 ::: task2 arg1 arg2
+要运行的任务  
+可以通过使用 `:::` 分隔来指定多个任务  
+例如：mise run task1 arg1 arg2 ::: task2 arg1 arg2
 
-**Default:** `default`
+**默认值：** `default`
 
 ### `[ARGS]…`
 
-Arguments to pass to the tasks. Use ":::" to separate tasks
+要传递给任务的参数。使用 `:::` 来分隔任务
 
-## Flags
+## 标志
 
 ### `-c --continue-on-error`
 
-Continue running tasks even if one fails
+即使某个任务失败，也继续运行任务
 
 ### `-C --cd <CD>`
 
-Change to this directory before executing the command
+在执行命令前切换到此目录
 
 ### `-f --force`
 
-Force the tasks to run even if outputs are up to date
+强制任务运行，即使输出已经是最新的
 
 ### `-j --jobs <JOBS>`
 
-Number of tasks to run in parallel
+并行运行的任务数量
 [default: 4]
-Configure with `jobs` config or `MISE_JOBS` env var
+可通过 `jobs` 配置或 `MISE_JOBS` 环境变量进行配置
 
 ### `-n --dry-run`
 
-Don't actually run the task(s), just print them in order of execution
+不实际运行任务，只按执行顺序打印它们
 
 ### `-o --output <OUTPUT>`
 
-Change how tasks information is output when running tasks
+更改运行任务时任务信息的输出方式
 
-- `prefix` - Print stdout/stderr by line, prefixed with the task's label
-- `interleave` - Print directly to stdout/stderr instead of by line
-- `replacing` - Stdout is replaced each time, stderr is printed as is
-- `timed` - Only show stdout lines if they are displayed for more than 1 second
-- `keep-order` - Print stdout/stderr by line, prefixed with the task's label, but keep the order of the output
-- `quiet` - Don't show extra output
-- `silent` - Don't show any output including stdout and stderr from the task except for errors
+- `prefix` - 按行打印 stdout/stderr，并带上任务标签作为前缀
+- `interleave` - 直接输出到 stdout/stderr，而不是按行输出
+- `replacing` - 每次都替换 stdout，stderr 按原样打印
+- `timed` - 仅当 stdout 行显示超过 1 秒时才显示
+- `keep-order` - 按行打印 stdout/stderr，并带上任务标签作为前缀，但保持输出顺序
+- `quiet` - 不显示额外输出
+- `silent` - 不显示任何输出，包括任务的 stdout 和 stderr，错误除外
 
 ### `-q --quiet`
 
-Don't show extra output
+不显示额外输出
 
 ### `-r --raw`
 
-Read/write directly to stdin/stdout/stderr instead of by line
-Redactions are not applied with this option
-Configure with `raw` config or `MISE_RAW` env var
+直接读写 stdin/stdout/stderr，而不是按行处理
+此选项不会应用重定向
+可通过 `raw` 配置或 `MISE_RAW` 环境变量进行配置
 
 ### `-s --shell <SHELL>`
 
-Shell to use to run toml tasks
+用于运行 toml 任务的 shell
 
-Defaults to `sh -c -o errexit -o pipefail` on unix, and `cmd /c` on Windows
-Can also be set with the setting `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS` or `MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS`
-Or it can be overridden with the `shell` property on a task.
+默认在 Unix 上为 `sh -c -o errexit -o pipefail`，在 Windows 上为 `cmd /c`
+也可以通过 `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS` 或 `MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS` 设置
+或者可通过任务上的 `shell` 属性覆盖
 
 ### `-S --silent`
 
-Don't show any output except for errors
+除错误外不显示任何输出
 
 ### `-t --tool… <TOOL@VERSION>`
 
-Tool(s) to run in addition to what is in mise.toml files e.g.: node@20 python@3.10
+除 `mise.toml` 文件中的内容之外，还要运行的工具，例如：`node@20` `python@3.10`
 
 ### `--allow-env… <VAR>`
 
-Allow specific env var through (implies --deny-env for everything else)
-Supports wildcards, e.g. --allow-env='MYAPP_*'
+允许特定环境变量通过（隐含为对其他所有变量启用 `--deny-env`）
+支持通配符，例如 `--allow-env='MYAPP_*'`
 
 ### `--allow-net… <HOST>`
 
-Allow network to specific host (implies --deny-net for everything else)
+允许访问特定主机的网络（隐含为对其他所有主机启用 `--deny-net`）
 
 ### `--allow-read… <PATH>`
 
-Allow reads from specific path (implies --deny-read for everything else)
+允许从特定路径读取（隐含为对其他所有路径启用 `--deny-read`）
 
 ### `--allow-write… <PATH>`
 
-Allow writes to specific path (implies --deny-write for everything else)
+允许向特定路径写入（隐含为对其他所有路径启用 `--deny-write`）
 
 ### `--deny-all`
 
-Block reads, writes, network, and env vars
+阻止读取、写入、网络和环境变量
 
 ### `--deny-env`
 
-Block env var inheritance (only PATH, HOME, USER, SHELL, TERM, LANG pass through)
+阻止继承环境变量（仅透传 PATH、HOME、USER、SHELL、TERM、LANG）
 
 ### `--deny-net`
 
-Block all network access
+阻止所有网络访问
 
 ### `--deny-read`
 
-Block filesystem reads (system libs and tool dirs still accessible)
+阻止文件系统读取（系统库和工具目录仍可访问）
 
 ### `--deny-write`
 
-Block all filesystem writes
+阻止所有文件系统写入
 
 ### `--fresh-env`
 
-Bypass the environment cache and recompute the environment
+绕过环境缓存并重新计算环境
 
 ### `--no-cache`
 
-Do not use cache on remote tasks
+不对远程任务使用缓存
 
 ### `--no-deps`
 
-Skip automatic dependency preparation
+跳过自动依赖准备
 
 ### `--no-timings`
 
-Hides elapsed time after each task completes
+在每个任务完成后隐藏已耗时长
 
-Default to always hide with `MISE_TASK_TIMINGS=0`
+默认始终隐藏，可通过 `MISE_TASK_TIMINGS=0`
 
 ### `--skip-deps`
 
-Run only the specified tasks skipping all dependencies
+只运行指定任务，跳过所有依赖
 
 ### `--skip-tools`
 
-Skip installing tools before running tasks
+运行任务前跳过工具安装
 
-Can also be set persistently with the `task.run_auto_install` setting
-or `MISE_TASK_RUN_AUTO_INSTALL=false` env var
+也可以通过 `task.run_auto_install` 设置持久配置
+或 `MISE_TASK_RUN_AUTO_INSTALL=false` 环境变量进行设置
 
 ### `--timeout <TIMEOUT>`
 
-Timeout for the task to complete
-e.g.: 30s, 5m
+任务完成的超时时间
+例如：30s、5m
 
-Examples:
+示例：
 
 ```
-# Runs the "lint" tasks. This needs to either be defined in mise.toml
-# or as a standalone script. See the project README for more information.
+# 运行 "lint" 任务。这需要在 mise.toml 中定义，
+# 或作为独立脚本存在。更多信息请参见项目 README。
 $ mise run lint
 
-# Forces the "build" tasks to run even if its sources are up-to-date.
+# 强制运行 "build" 任务，即使其源已是最新。
 $ mise run --force build
 
-# Run "test" with stdin/stdout/stderr all connected to the current terminal.
-# This forces `--jobs=1` to prevent interleaving of output.
+# 运行 "test"，其 stdin/stdout/stderr 都连接到当前终端。
+# 这会强制使用 `--jobs=1`，以防止输出交错。
 $ mise run --raw test
 
-# Runs the "lint", "test", and "check" tasks in parallel.
+# 并行运行 "lint"、"test" 和 "check" 任务。
 $ mise run lint ::: test ::: check
 
-# Execute multiple tasks each with their own arguments.
+# 执行多个任务，每个任务都有自己的参数。
 $ mise run cmd1 arg1 arg2 ::: cmd2 arg1 arg2
 ```

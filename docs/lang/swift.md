@@ -1,33 +1,33 @@
 # Swift
 
-`mise` can be used to manage multiple versions of [`swift`](https://swift.org/) on the same system. Swift is supported for macos and linux.
+`mise` 可用于在同一系统上管理多个 [`swift`](https://swift.org/) 版本。Swift 支持 macos 和 linux。
 
-## Usage
+## 用法
 
-Use the latest stable version of swift:
+使用最新稳定版本的 swift：
 
 ```sh
 mise use -g swift
 swift --version
 ```
 
-See [a mise guide for Swift developers](https://tuist.dev/blog/2025/02/04/mise) on how to use `mise` with `swift`.
+请参阅 [面向 Swift 开发者的 mise 指南](https://tuist.dev/blog/2025/02/04/mise)，了解如何将 `mise` 与 `swift` 一起使用。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `swift` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `swift` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for install-time commands run by the core `swift` backend:
+为由核心 `swift` 后端运行的安装时命令设置环境变量：
 
 ```toml
 [tools]
 swift = { version = "latest", install_env = { HTTPS_PROXY = "http://proxy.example" } }
 ```
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

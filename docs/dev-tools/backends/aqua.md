@@ -1,38 +1,38 @@
-# Aqua Backend
+# Aqua 后端
 
-[Aqua](https://aquaproj.github.io/) tools may be used natively in mise. aqua is the ideal backend
-to use for new tools since they don't require plugins, they work on windows, they offer security
-features in addition to checksums. aqua installs also show more progress bars, which is nice.
+[Aqua](https://aquaproj.github.io/) 工具可以在 mise 中原生使用。aqua 是新工具的理想后端，
+因为它们不需要插件，支持 Windows，并且除了校验和之外还提供安全
+功能。aqua 的安装过程还会显示更多进度条，这一点很不错。
 
-You do not need to separately install aqua. The aqua CLI is not used in mise at all. What is used is
-the [aqua registry](https://github.com/aquaproj/aqua-registry) that gets compiled into the mise binary on release.
-Here's an example package entry: [`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml).
-mise has a reimplementation of aqua that knows how to work with these files to install tools.
+你不需要单独安装 aqua。mise 中完全不会使用 aqua CLI。实际使用的是
+[aqua registry](https://github.com/aquaproj/aqua-registry)，它会在发布时编译进 mise 可执行文件中。
+这里有一个包条目的示例：[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml)。
+mise 内置了一个 aqua 的重新实现，它知道如何处理这些文件来安装工具。
 
-As of this writing, aqua is relatively new to mise and because a lot of tools are being converted from
-asdf to aqua, there may be some configuration in aqua tools that need to be tightened up. I put some
-common issues below and would strongly recommend contributing changes back to the aqua registry if you
-notice problems. The maintainer is super responsive and great to work with.
+截至本文撰写时，aqua 对 mise 来说还相对较新，而且由于许多工具正从
+asdf 转换到 aqua，aqua 工具中可能还有一些需要进一步收紧的配置。
+我在下面列出了一些常见问题；如果你发现问题，非常强烈建议你把修改贡献回 aqua registry。
+维护者响应非常迅速，也很容易合作。
 
-If all else fails, you can disable aqua entirely with [`MISE_DISABLE_BACKENDS=aqua`](/configuration/settings.html#disable_backends).
+如果其他方法都失败了，你可以通过 [`MISE_DISABLE_BACKENDS=aqua`](/configuration/settings.html#disable_backends) 完全禁用 aqua。
 
-Currently aqua tools don't support setting environment variables or doing more than simply downloading
-binaries though (and I'm not sure this functionality would ever get added), so some tools will likely
-always require plugins like asdf/vfox.
+目前，aqua 工具不支持设置环境变量，也不支持除了简单下载
+二进制文件之外的更多功能（而且我也不确定这一功能将来是否会被加入），因此某些工具很可能
+始终需要像 asdf/vfox 这样的插件。
 
-The code for this is inside the mise repository at [`./src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs).
+这段代码位于 mise 仓库中的 [`./src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs)。
 
-## Custom Registry
+## 自定义注册表
 
-Set [`aqua.registries`](/configuration/settings.html#aqua-registries) to check custom aqua
-registry repositories before the baked-in registry:
+将 [`aqua.registries`](/configuration/settings.html#aqua-registries) 设置为在内置注册表之前检查自定义 aqua
+注册表仓库：
 
 ```toml
 [settings]
 aqua.registries = ["https://github.com/my-org/aqua-registry"]
 ```
 
-To check multiple registries before the baked registry, list them in order:
+要在内置注册表之前检查多个注册表，请按顺序列出它们：
 
 ```toml
 [settings]
@@ -42,27 +42,22 @@ aqua.registries = [
 ]
 ```
 
-mise downloads `registry.yaml` from each repository root, falling back to `registry.yml` if needed.
-Downloaded registry sources are cached under `MISE_CACHE_DIR` for
-[`aqua.registry_cache_ttl`](/configuration/settings.html#aqua-registry_cache_ttl), which defaults
-to one week. In `MISE_AQUA_REGISTRIES`, separate multiple registry URLs with commas.
+mise 会从每个仓库根目录下载 `registry.yaml`，如有需要则回退到 `registry.yml`。
+下载的注册表源会根据 [`aqua.registry_cache_ttl`](/configuration/settings.html#aqua-registry_cache_ttl) 缓存到
+`MISE_CACHE_DIR` 下，默认值为一周。在 `MISE_AQUA_REGISTRIES` 中，多个注册表 URL 之间用逗号分隔。
 
-After a refreshed registry source is downloaded, mise hashes the source and uses that hash in the
-compiled registry cache path. When a new compiled cache is successfully loaded or written, older
-compiled caches for the same registry URL are pruned.
+当刷新后的注册表源被下载后，mise 会对该源进行哈希处理，并使用该哈希作为编译后注册表缓存路径的一部分。
+当新的编译缓存成功加载或写入时，会清理同一注册表 URL 的旧编译缓存。
 
-Packages are resolved by checking the configured registries in order. When `aqua.baked_registry` is
-enabled, the baked-in registry remains a fallback for packages missing from all configured
-registries. Aqua registry aliases are local to the registry that defines them; use
-[`[tool_alias]`](/dev-tools/aliases) when you want a mise shorthand or alias to point at an aqua
-package from another registry.
+包的解析会按配置的注册表顺序进行检查。当启用 `aqua.baked_registry` 时，内置注册表仍会作为所有已配置注册表中缺失包的回退。
+Aqua 注册表别名仅在定义它们的注册表内有效；当你希望 mise 的简写或别名指向来自其他注册表的 aqua
+包时，请使用 [`[tool_alias]`](/dev-tools/aliases)。
 
-The legacy [`aqua.registry_url`](/configuration/settings.html#aqua-registry_url) setting is still
-supported for a single registry URL, but `aqua.registries` takes precedence when both are set.
+旧版的 [`aqua.registry_url`](/configuration/settings.html#aqua-registry_url) 设置仍然支持单个注册表 URL，但当两者都设置时，`aqua.registries` 优先。
 
-## Usage
+## 使用
 
-The following installs the latest version of ripgrep and sets it as the active version on PATH:
+下面的命令会安装 ripgrep 的最新版本，并将其设置为 PATH 上的活动版本：
 
 ```sh
 $ mise use -g aqua:BurntSushi/ripgrep
@@ -70,42 +65,41 @@ $ rg --version
 ripgrep 14.1.1
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+该版本将以以下格式写入 `~/.config/mise/config.toml`：
 
 ```toml
 [tools]
 "aqua:BurntSushi/ripgrep" = "latest"
 ```
 
-Some tools will default to use aqua if they're specified in [registry/](https://github.com/jdx/mise/blob/main/registry/)
-to use the aqua backend. To see these tools, run `mise registry | grep aqua:`.
+如果某些工具在 [registry/](https://github.com/jdx/mise/blob/main/registry/) 中被指定为使用 aqua 后端，它们将默认使用 aqua。要查看这些工具，请运行 `mise registry | grep aqua:`。
 
-## Tool Options
+## 工具选项
 
 ### `symlink_bins`
 
-Some tools bundle extra executables that you may not want exposed on PATH. For example, `aws-cli` bundles
-Python, which can conflict with your intended Python version.
+有些工具会捆绑额外的可执行文件，这些文件你可能不希望暴露在 PATH 上。例如，`aws-cli` 会捆绑
+Python，这可能会与你期望使用的 Python 版本冲突。
 
-Setting `symlink_bins = true` creates a filtered `.mise-bins` directory and exposes only the binaries mise
-intends to expose for that Aqua package, instead of every discovered executable from the install.
+设置 `symlink_bins = true` 会创建一个经过筛选的 `.mise-bins` 目录，只暴露 mise
+打算为该 Aqua 包公开的二进制文件，而不是从安装中发现的所有可执行文件。
 
 ```toml
 [tools]
 aws-cli = { version = "latest", symlink_bins = true }
 ```
 
-When enabled:
+启用后：
 
-- If the aqua registry defines a `files` field, only those binaries are exposed (e.g., `aws` and `aws_completer` for aws-cli)
-- Otherwise, mise falls back to exposing the inferred primary binary for the package
-- A `.mise-bins` subdirectory is created with symlinks to the exposed binaries
-- Bundled dependencies and other extra executables, such as Python in `aws-cli`, are not added to PATH
+- 如果 aqua registry 定义了 `files` 字段，则只会暴露那些二进制文件（例如 aws-cli 的 `aws` 和 `aws_completer`）
+- 否则，mise 会回退为暴露该包推断出的主二进制文件
+- 会创建一个 `.mise-bins` 子目录，并为暴露的二进制文件创建符号链接
+- 捆绑的依赖项和其他额外可执行文件，例如 `aws-cli` 中的 Python，不会被添加到 PATH
 
 ### `vars`
 
-Some aqua registry entries define template variables (for example <span v-pre>`{{.Vars.channel}}`</span>).
-Set them via tool options using either top-level keys or a nested `vars` table:
+某些 aqua registry 条目定义了模板变量（例如 <span v-pre>`{{.Vars.channel}}`</span>）。
+可通过工具选项来设置它们，既可以使用顶层键，也可以使用嵌套的 `vars` 表：
 
 ```toml
 [tools]
@@ -113,48 +107,48 @@ Set them via tool options using either top-level keys or a nested `vars` table:
 "aqua:scenarigo/scenarigo" = { version = "0.21.0", vars = { go_version = "1.24" } }
 ```
 
-Vars with defaults are filled automatically. Vars marked as required in the aqua registry must be set
-unless the registry also provides a default.
+带默认值的变量会自动填充。aqua registry 中标记为必需的变量必须设置，
+除非该 registry 也提供了默认值。
 
 ### `prerelease`
 
-By default, releases flagged `prerelease: true` on GitHub are excluded from `mise ls-remote` and from `latest` resolution. Set `prerelease = true` to include them:
+默认情况下，GitHub 上标记为 `prerelease: true` 的发布不会被包含在 `mise ls-remote` 和 `latest` 解析中。设置 `prerelease = true` 以包含它们：
 
 ```toml
 [tools]
 "aqua:owner/tool" = { version = "latest", prerelease = true }
 ```
 
-When set, pre-release tags (e.g. `v1.0.0-rc1`, `v0.1.2-dev.86`) appear in `mise ls-remote`, `latest` resolves against the full list including pre-releases, and fuzzy version queries match pre-release tags. Has no effect when a package uses the `github_tag` version source (git tags don't carry a prerelease flag). Draft releases are always excluded. See the [github backend docs](/dev-tools/backends/github.html#prerelease) for more detail.
+设置后，预发布标签（例如 `v1.0.0-rc1`、`v0.1.2-dev.86`）会出现在 `mise ls-remote` 中，`latest` 会基于包含预发布版本的完整列表进行解析，模糊版本查询也会匹配预发布标签。当包使用 `github_tag` 版本源时无效（git 标签不携带 prerelease 标记）。草稿发布始终被排除。更多细节请参见 [github 后端文档](/dev-tools/backends/github.html#prerelease)。
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="aqua" :level="3" />
 
-## Security Verification
+## 安全验证
 
-Aqua backend supports multiple security verification methods to ensure the integrity and authenticity of downloaded tools. mise provides **native Rust implementation** for all verification methods, eliminating the need for external CLI tools like `cosign`, `slsa-verifier`, or `gh`.
+Aqua 后端支持多种安全验证方法，以确保下载工具的完整性和真实性。mise 为所有验证方法提供了**原生 Rust 实现**，无需依赖 `cosign`、`slsa-verifier` 或 `gh` 等外部 CLI 工具。
 
 ### GitHub Artifact Attestations
 
-GitHub Artifact Attestations provide cryptographic proof that artifacts were built by specific GitHub Actions workflows. mise verifies these attestations natively to ensure the authenticity and integrity of downloaded tools.
+GitHub Artifact Attestations 提供加密证明，表明制品是由特定的 GitHub Actions 工作流构建的。mise 原生验证这些证明，以确保下载工具的真实性和完整性。
 
-**Requirements:**
+**要求：**
 
-- The tool must have `github_artifact_attestations` configuration in the aqua registry for attestations to be verified
-- No external tools required - verification is handled natively by mise
+- 工具必须在 aqua 注册表中配置 `github_artifact_attestations`，才能验证证明
+- 不需要外部工具——验证由 mise 原生处理
 
-**Configuration:**
+**配置：**
 
 ```bash
-# Enable/disable GitHub artifact attestations verification (default: true)
+# 启用/禁用 GitHub artifact attestations 验证（默认：true）
 export MISE_AQUA_GITHUB_ATTESTATIONS=true
 ```
 
-**Registry Configuration Example:**
+**注册表配置示例：**
 
 ```yaml
 packages:
@@ -165,71 +159,71 @@ packages:
       signer_workflow: cli/cli/.github/workflows/deployment.yml
 ```
 
-### Cosign Verification
+### Cosign 验证
 
-mise natively verifies Cosign signatures without requiring the `cosign` CLI tool to be installed.
+mise 原生验证 Cosign 签名，无需安装 `cosign` CLI 工具。
 
-**Configuration:**
+**配置：**
 
 ```bash
-# Enable/disable Cosign verification (default: true)
+# 启用/禁用 Cosign 验证（默认：true）
 export MISE_AQUA_COSIGN=true
 
-# Pass extra arguments to the verification process
+# 向验证过程传递额外参数
 export MISE_AQUA_COSIGN_EXTRA_ARGS="--key /path/to/key.pub"
 ```
 
-### SLSA Provenance Verification
+### SLSA 溯源验证
 
-mise natively verifies SLSA (Supply-chain Levels for Software Artifacts) provenance without requiring the `slsa-verifier` CLI tool.
+mise 原生验证 SLSA（软件制品供应链级别）溯源，无需安装 `slsa-verifier` CLI 工具。
 
-**Configuration:**
+**配置：**
 
 ```bash
-# Enable/disable SLSA verification (default: true)
+# 启用/禁用 SLSA 验证（默认：true）
 export MISE_AQUA_SLSA=true
 ```
 
-### Other Security Methods
+### 其他安全方法
 
-Aqua also supports:
+Aqua 还支持：
 
-- **Minisign verification**: Uses minisign for signature verification
-- **Checksum verification**: Verifies SHA256/SHA512/SHA1/MD5 checksums (always enabled)
+- **Minisign 验证**：使用 minisign 进行签名验证
+- **校验和验证**：验证 SHA256/SHA512/SHA1/MD5 校验和（始终启用）
 
-### Verification Process
+### 验证流程
 
-During tool installation, mise will:
+在安装工具期间，mise 将：
 
-1. Download the tool and any signature/attestation files
-2. Perform native verification using the configured methods
-3. Display verification status with progress indicators
-4. Abort installation if any verification fails
+1. 下载工具及其签名/证明文件
+2. 使用配置的方法进行原生验证
+3. 通过进度指示器显示验证状态
+4. 如果任何验证失败，则中止安装
 
-**Example output during installation:**
+**安装期间的示例输出：**
 
 ```
-✓ Downloaded cli/cli v2.50.0
-✓ GitHub artifact attestations verified
-✓ Tool installed successfully
+✓ 已下载 cli/cli v2.50.0
+✓ GitHub artifact attestations 已验证
+✓ 工具安装成功
 ```
 
-### Troubleshooting
+### 故障排查
 
-If verification fails:
+如果验证失败：
 
-1. **Check network connectivity**: Verification requires downloading attestation data
-2. **Verify tool configuration**: Ensure the aqua registry has correct verification settings
-3. **Disable specific verification**: Temporarily disable problematic verification methods
-4. **Enable debug logging**: Use `MISE_DEBUG=1` to see detailed verification logs
+1. **检查网络连接**：验证需要下载证明数据
+2. **验证工具配置**：确保 aqua 注册表具有正确的验证设置
+3. **禁用特定验证**：临时禁用有问题的验证方法
+4. **启用调试日志**：使用 `MISE_DEBUG=1` 查看详细的验证日志
 
-**Common issues:**
+**常见问题：**
 
-- **No attestations found**: The tool may not have attestations configured in the registry
-- **Verification timeout**: Network issues or slow attestation services
-- **Certificate validation**: Clock skew or certificate chain issues
+- **未找到证明**：该工具可能未在注册表中配置证明
+- **验证超时**：网络问题或证明服务响应缓慢
+- **证书验证**：时钟偏差或证书链问题
 
-To disable all verification temporarily:
+要临时禁用所有验证：
 
 ```bash
 export MISE_AQUA_GITHUB_ATTESTATIONS=false
@@ -240,28 +234,27 @@ export MISE_AQUA_MINISIGN=false
 
 ## Common aqua issues
 
-Here's some common issues I've seen when working with aqua tools.
+以下是我在使用 aqua 工具时见过的一些常见问题。
 
 ### Supported env missing
 
-The aqua registry defines supported envs for each tool of the os/arch. I've noticed some of these
-are simply missing os/arch combos that are in fact supported—possibly because it was added after
-the registry was created for that tool.
+aqua 注册表为每个工具定义了 os/arch 的支持环境。我注意到其中一些
+只是缺少实际上受支持的 os/arch 组合——这可能是因为该工具的注册表创建之后才加入的。
 
-The fix is simple, just edit the `supported_envs` section of `registry.yaml` for the tool in question.
+修复很简单，只需编辑相关工具 `registry.yaml` 中的 `supported_envs` 部分即可。
 
 ### Using `version_filter` instead of `version_prefix`
 
-This is a weird one that causes weird issues in mise. In general in mise we like versions like
-`1.2.3` with no decoration like `v1.2.3` or `cli-v1.2.3`. This consistency not only makes `mise.toml`
-cleaner but, it also helps make things like `mise up` function right because it's able to parse it as
-semver without dealing with a bunch of edge-cases.
+这是一个很奇怪的问题，会在 mise 中引发奇怪的故障。一般来说，在 mise 里我们喜欢像
+`1.2.3` 这样的版本号，不带 `v1.2.3` 或 `cli-v1.2.3` 之类的装饰。这种一致性不仅让 `mise.toml`
+更简洁，也有助于像 `mise up` 这样的功能正常工作，因为它能够把它解析为
+semver，而不用处理一堆边缘情况。
 
-Really if you notice aqua tools are giving you versions that aren't simple triplets, it's worth fixing.
+实际上，如果你注意到 aqua 工具给出的版本号不是简单的三段式，那么值得修正。
 
-One common thing I've seen is registries using a `version_filter` expression like `Version startsWith "Version startsWith "atlascli/""`.
+我见过的一个常见情况是，注册表使用了像 `Version startsWith "Version startsWith "atlascli/""` 这样的 `version_filter` 表达式。
 
-This ultimately causes the version to be `atlascli/1.2.3` which is not what we want. The fix is to use
-`version_prefix` instead of `version_filter` and just put the prefix in the `version_prefix` field.
-In this example, it would be `atlascli/`. mise will automatically strip this out and add it back in,
-which it can't do with `version_filter`.
+这最终会导致版本变成 `atlascli/1.2.3`，而这不是我们想要的。修复方法是使用
+`version_prefix` 而不是 `version_filter`，并且只把前缀放到 `version_prefix` 字段里。
+在这个例子中，它应该是 `atlascli/`。mise 会自动把它去掉并在需要时再加回去，
+而这对 `version_filter` 做不到。

@@ -1,84 +1,67 @@
-# Paranoid
+# 偏执
 
-Paranoid is an optional behavior that locks mise down more to make it harder
-for a bad actor to compromise your system. These are settings that I
-personally do not use on my own system because I find the behavior too
-restrictive for the benefits.
+偏执是一种可选行为，它会进一步锁定 mise，使恶意行为者更难危害你的系统。这些是我个人在自己的系统上不会使用的设置，因为我觉得这种行为相对于其带来的好处来说限制太多了。
 
-Paranoid mode can be enabled with either `MISE_PARANOID=1` or a setting:
+可以通过 `MISE_PARANOID=1` 或某个设置来启用偏执模式：
 
 ```sh
 mise settings paranoid=1
 ```
 
-## Config files
+## 配置文件
 
-Normally `mise` will make sure some config files are "trusted" before loading
-them. This will prompt you to confirm that you want to load the file, e.g.:
+通常情况下，`mise` 会在加载某些配置文件之前先确保它们是“受信任”的。这会提示你确认是否要加载该文件，例如：
 
 ```sh
 $ mise install
 mise ~/src/mise/.tool-versions is not trusted. Trust it [y/n]?
 ```
 
-In normal mode, mise checks trust before parsing `mise.toml` files because they
-can contain behavior that executes code or affects the environment. Some
-discovery paths that look at previously tracked configs may skip untrusted files
-instead of prompting. Commands that directly need an untrusted config, such as
-`mise lock`, can fail with an untrusted-config error when mise cannot prompt.
-When mise detects that it is running in CI, configs are assumed to be trusted
-unless paranoid mode is enabled.
+在正常模式下，mise 会在解析 `mise.toml` 文件之前检查信任，因为它们可能包含会执行代码或影响环境的行为。一些会查看之前跟踪过的配置的发现路径，可能会跳过不受信任的文件，而不是提示用户。那些直接需要不受信任配置的命令，例如 `mise lock`，在 mise 无法提示时，可能会因不受信任的配置错误而失败。当 mise 检测到自己在 CI 中运行时，除非启用了偏执模式，否则配置会被视为受信任。
 
-Under paranoid, all config files must be trusted first, including formats that
-normally do not require trust.
+在偏执模式下，所有配置文件在使用前都必须先被信任，包括通常不需要信任的格式。
 
-Also, in normal mode, a config file only needs to be trusted a single time.
-In paranoid, the contents of the file are hashed to check if the file changes.
-If you change your config file, you'll need to trust it again.
+另外，在正常模式下，一个配置文件只需要被信任一次。而在偏执模式下，会对文件内容进行哈希校验，以检查文件是否发生变化。如果你修改了配置文件，就需要重新信任它。
 
-Note that global and system config files (e.g., `~/.config/mise/config.toml`) are implicitly trusted and exempt from this check. This allows paranoid mode to be enabled in a global config without requiring a trust prompt for that file itself.
+请注意，全局和系统配置文件（例如 `~/.config/mise/config.toml`）会被隐式信任，并且免于此检查。这使得可以在全局配置中启用偏执模式，而无需对该文件本身进行信任提示。
 
-## Community plugins
+## 社区插件
 
-Community plugins cannot be directly installed via short-name under paranoid.
-You can install plugins that are either core, maintained by the mise team,
-or plugins that mise has marked as "first-party"—meaning plugins developed by
-the same team that builds the tool the plugin installs.
+在 paranoid 模式下，社区插件不能通过短名称直接安装。
+你可以安装以下类型的插件：核心插件、由 mise 团队维护的插件，
+或者被 mise 标记为“第一方”的插件——也就是由构建该工具的同一团队开发的
+用于安装该工具的插件。
 
-Other than that, say for "shfmt", you'll need to specify the full git repo
-to install:
+除此之外，以 “shfmt” 为例，你需要指定完整的 git 仓库
+才能安装：
 
 ```sh
 mise plugin install shfmt https://github.com/luizm/asdf-shfmt
 ```
 
-Unlike in normal mode where `mise plugin install shfmt` would be sufficient.
+这与正常模式不同，在正常模式下只需 `mise plugin install shfmt` 即可。
 
-## Always uses HTTPS
+## 始终使用 HTTPS
 
-Some endpoints in mise are fetched over HTTP such as checking for the latest mise
-version and pulling version lists of tools. These are not security risks and a
-malicious actor injecting false data would not introduce a security risk.
-Normally mise uses HTTP because loading the TLS module takes about 10ms and this
-affects commonly used commands so it is a noticeably delay.
-In paranoid mode, all endpoints will be fetched over HTTPS.
+mise 中的一些端点是通过 HTTP 获取的，例如检查最新的 mise 版本以及拉取工具的版本列表。这些并不是安全风险，恶意行为者注入虚假数据也不会引入安全风险。  
+通常 mise 使用 HTTP，因为加载 TLS 模块大约需要 10ms，这会影响常用命令，因此会造成明显的延迟。  
+在偏执模式下，所有端点都将通过 HTTPS 获取。
 
-## Provenance re-verification
+## 溯源重新验证
 
-Normally, when a lockfile contains both a checksum and a provenance entry for a tool,
-`mise install` trusts the lockfile and skips provenance re-verification to avoid
-redundant API calls (e.g., to GitHub). This is safe when you trust the lockfile was
-generated correctly.
+通常，当一个 lockfile 同时包含某个工具的校验和和溯源条目时，
+`mise install` 会信任该 lockfile，并跳过溯源重新验证，以避免
+重复的 API 调用（例如对 GitHub 的调用）。当你信任该 lockfile 是
+正确生成时，这种做法是安全的。
 
-In paranoid mode, `mise install` always re-verifies provenance (SLSA, cosign, minisign,
-GitHub artifact attestations) at install time, even when the lockfile already has a
-provenance entry. This ensures that cryptographic verification happens on every install,
-not just when the lockfile is first generated.
+在 paranoid 模式下，`mise install` 会始终在安装时重新验证溯源（SLSA、cosign、minisign、
+GitHub artifact attestations），即使 lockfile 中已经有一个
+溯源条目也是如此。这确保了加密验证会在每次安装时都执行，
+而不只是首次生成 lockfile 时执行。
 
-This behavior can also be enabled independently via the
-[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) setting.
+此行为也可以通过
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 设置单独启用。
 
-## More?
+## 还有吗？
 
-If you have suggestions for more that could be added to paranoid, please let
-me know.
+如果你对可以添加到 paranoid 的更多内容有建议，请告诉我。

@@ -1,63 +1,51 @@
-# Directory Structure
+# 目录结构
 
-The following are the directories that mise uses.
+以下是 mise 使用的目录。
 
 ::: tip
-If you often find yourself using these directories (as I do), I suggest setting all of them to `~/.mise` for easy access.
+如果你经常使用这些目录（像我一样），我建议将它们全部设置为 `~/.mise`，以便于访问。
 :::
 
 ## `~/.config/mise`
 
-- Override: `$MISE_CONFIG_DIR`
-- Default: `${XDG_CONFIG_HOME:-$HOME/.config}/mise`
+- 覆盖：`$MISE_CONFIG_DIR`
+- 默认：`${XDG_CONFIG_HOME:-$HOME/.config}/mise`
 
-This directory stores the global configuration file `~/.config/mise/config.toml`. This is intended to go into your
-dotfiles repo to share across machines.
+此目录存储全局配置文件 `~/.config/mise/config.toml`。此文件通常应放入你的 dotfiles 仓库中，以便在多台机器之间共享。
 
 ## `~/.cache/mise`
 
-- Override: `$MISE_CACHE_DIR`
-- Default: `${XDG_CACHE_HOME:-$HOME/.cache}/mise`, _macOS: `~/Library/Caches/mise`._
+- 覆盖：`$MISE_CACHE_DIR`
+- 默认：`${XDG_CACHE_HOME:-$HOME/.cache}/mise`，_macOS：`~/Library/Caches/mise`。_
 
-Stores internal cache that mise uses for things like the list of all available versions of a
-plugin. Do not share this across machines. You may delete this directory any time mise isn't actively installing something.
-Do this with `mise cache clear`.
-See [Cache Behavior](/cache-behavior) for more information.
+存储 mise 用于诸如某个插件的所有可用版本列表之类用途的内部缓存。不要在不同机器之间共享此缓存。你可以在 mise 没有正在主动安装任何内容时随时删除该目录。使用 `mise cache clear` 执行此操作。
+有关更多信息，请参见 [Cache Behavior](/cache-behavior)。
 
 ## `~/.local/state/mise`
 
-- Override: `$MISE_STATE_DIR`
-- Default: `${XDG_STATE_HOME:-$HOME/.local/state}/mise`
+- 覆盖：`$MISE_STATE_DIR`
+- 默认：`${XDG_STATE_HOME:-$HOME/.local/state}/mise`
 
-Used for storing state local to the machine such as which config files are trusted. These should not be shared across
-machines.
+用于存储仅限本机的状态，例如哪些配置文件是受信任的。这些内容不应在不同机器之间共享。
 
 ## `~/.local/share/mise`
 
-- Override: `$MISE_DATA_DIR`
-- Default: `${XDG_DATA_HOME:-$HOME/.local/share}/mise`
+- 覆盖：`$MISE_DATA_DIR`
+- 默认：`${XDG_DATA_HOME:-$HOME/.local/share}/mise`
 
-This is the main directory that mise uses and is where plugins and tools are installed into.
-It is nearly identical to `~/.asdf` in asdf, so much so that you may be able to get by
-symlinking these together and using asdf and mise simultaneously. (Supporting this isn't a
-project goal, however).
+这是 mise 使用的主目录，插件和工具都会安装到这里。
+它与 asdf 中的 `~/.asdf` 几乎完全相同，以至于你可能只需将它们通过符号链接连接起来，就能同时使用 asdf 和 mise。（不过，支持这种用法并不是本项目的目标）。
 
-This directory _could_ be shared across machines but only if they run the same OS/arch. In general I wouldn't advise
-doing so.
+这个目录 _可以_ 在不同机器之间共享，但前提是它们运行相同的操作系统/架构。通常我不建议这样做。
 
 ### `~/.local/share/mise/downloads`
 
-This is where plugins may write downloaded assets such as tarballs during installation. mise removes these files by
-default after install/uninstall; set `always_keep_download` to keep them for debugging backend/plugin install behavior.
-This directory is not a supported download cache. Some backends may skip a download when the expected file already exists,
-but that behavior is backend-specific and not guaranteed. Cache `~/.local/share/mise/installs` instead if you want to
-avoid reinstalling tools in CI or offline workflows.
+插件可能会把安装过程中下载的资源（例如 tarball）写到这里。mise 在安装/卸载后默认会删除这些文件；将 `always_keep_download` 设为保留它们，以便调试后端/插件的安装行为。
+这个目录不是受支持的下载缓存。有些后端在预期文件已存在时可能会跳过下载，但这种行为取决于具体后端，且不保证一定如此。如果你想避免在 CI 或离线工作流中重新安装工具，请改为缓存 `~/.local/share/mise/installs`。
 
 ### `~/.local/share/mise/plugins`
 
-mise installs plugins to this directory when running `mise plugins install`. If you are working on a
-plugin, I suggest
-symlinking it manually by running:
+当运行 `mise plugins install` 时，mise 会将插件安装到这个目录。如果你正在开发某个插件，我建议你通过以下方式手动创建符号链接：
 
 ```sh
 ln -s ~/src/mise-my-tool ~/.local/share/mise/plugins/my-tool
@@ -65,12 +53,11 @@ ln -s ~/src/mise-my-tool ~/.local/share/mise/plugins/my-tool
 
 ### `~/.local/share/mise/installs`
 
-This is where tools are installed to when running `mise install`. For example, `mise install
-node@20.0.0` will install to `~/.local/share/mise/installs/node/20.0.0`
+运行 `mise install` 时，工具会安装到这里。例如，`mise install
+node@20.0.0` 会安装到 `~/.local/share/mise/installs/node/20.0.0`
 
-This will also create other symlinks to this directory for version prefixes ("20" and "20.15")
-and matching aliases ("lts", "latest").
-For example:
+这还会为该目录创建其他符号链接，用于版本前缀（`"20"` 和 `"20.15"`）以及匹配的别名（`"lts"`、`"latest"`）。
+例如：
 
 ```sh
 $ tree ~/.local/share/mise/installs/node
@@ -80,9 +67,9 @@ lts -> ./20.15.0
 latest -> ./20.15.0
 ```
 
-You can set the `MISE_INSTALLS_DIR` environment variable to override this location.
+你可以设置 `MISE_INSTALLS_DIR` 环境变量来覆盖这个位置。
 
 ### `~/.local/share/mise/shims`
 
-This is where mise places shims. Generally these are used for IDE integration or if `mise activate`
-does not work for some reason.
+这是 mise 放置 shims 的位置。通常这些用于 IDE 集成，或者在 `mise activate`
+由于某些原因无法正常工作时使用。

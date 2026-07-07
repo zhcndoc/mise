@@ -1,12 +1,12 @@
 # systemd <Badge type="warning" text="experimental" />
 
-mise can declare Linux systemd user services in
-`[bootstrap.linux.systemd.units]` and apply them with
-`mise bootstrap linux systemd-units apply`:
+mise 可以在
+`[bootstrap.linux.systemd.units]` 中声明 Linux systemd 用户服务，并使用
+`mise bootstrap linux systemd-units apply` 将其应用：
 
 ```toml
 [bootstrap.linux.systemd.units.my-sync]
-description = "sync files"
+description = "同步文件"
 exec_start = "~/.local/bin/my-sync --watch"
 after = ["network-online.target"]
 wants = ["network-online.target"]
@@ -18,14 +18,13 @@ standard_output = "append:%h/.local/state/my-sync.log"
 standard_error = "journal"
 ```
 
-Each unit is written to `~/.config/systemd/user/dev.mise.<name>.service` and
-managed with `systemctl --user`. Unit names may contain letters, numbers, `.`,
-`_`, `-`, and `@`. mise owns only the service files it creates with the
-`dev.mise.` prefix.
+每个单元都会写入到 `~/.config/systemd/user/dev.mise.<name>.service`，并通过
+`systemctl --user` 进行管理。单元名称可以包含字母、数字、`.`,
+`_`、`-` 和 `@`。mise 只拥有它创建的、带有 `dev.mise.` 前缀的服务文件。
 
-## Supported keys
+## 支持的键
 
-| TOML key            | systemd key                    |
+| TOML 键             | systemd 键                      |
 | ------------------- | ------------------------------ |
 | `description`       | `Description`                  |
 | `after`             | `After`                        |
@@ -36,46 +35,40 @@ managed with `systemctl --user`. Unit names may contain letters, numbers, `.`,
 | `restart`           | `Restart`                      |
 | `restart_sec`       | `RestartSec`                   |
 | `standard_output`   | `StandardOutput`               |
-| `standard_error`    | `StandardError`                |
+| `standard_error`    | `StandardError`                 |
 | `wanted_by`         | `WantedBy`                     |
-| `start`             | run `systemctl --user restart` |
+| `start`             | 运行 `systemctl --user restart` |
 
-`exec_start` and `working_directory` expand bare `~` and `~/` to the current
-user's home directory before writing the service file. `wanted_by` defaults to
-`["default.target"]`; set `wanted_by = []` to write the unit and disable any
-previous enablement. `start` defaults to `true`; set `start = false` to write
-and enable without keeping the unit running.
+`exec_start` 和 `working_directory` 会在写入服务文件之前，将裸 `~` 和 `~/` 展开为当前用户的主目录。`wanted_by` 的默认值为 `["default.target"]`；将 `wanted_by = []` 可写入单元并禁用任何先前的启用状态。`start` 的默认值为 `true`；将 `start = false` 可在写入并启用后不保持单元运行。
 
-## Semantics
+## 语义
 
-- **Declarative and additive** — unit names merge across the
-  [config hierarchy](/configuration.html) (global → project). A more local
-  config replaces the full declaration for the same unit name.
-- **Linux-only** — on other platforms the section is inert:
-  `mise bootstrap linux systemd-units status` lists entries as skipped and
-  `mise bootstrap linux systemd-units apply` ignores them.
-- **User services only** — mise writes to `~/.config/systemd/user` and uses
-  `systemctl --user`. System services in `/etc/systemd/system` are not
-  supported.
-- **Target user only** — run mise as the user who owns the services, with a
-  reachable systemd user manager. `sudo mise` is skipped because `systemctl --user`
-  would target the wrong user manager.
-- **Manual application only** — mise never writes or starts systemd services
-  implicitly; only `mise bootstrap linux systemd-units apply` and `mise bootstrap` do.
+- **声明式且可叠加** — unit 名称会在
+  [配置层级](/configuration.html)（全局 → 项目）之间合并。更局部的
+  配置会替换同一 unit 名称的完整声明。
+- **仅限 Linux** — 在其他平台上，该部分不会生效：
+  `mise bootstrap linux systemd-units status` 会将条目标记为跳过，
+  `mise bootstrap linux systemd-units apply` 会忽略它们。
+- **仅限用户服务** — mise 会写入 `~/.config/systemd/user`，并使用
+  `systemctl --user`。`/etc/systemd/system` 中的系统服务不受支持。
+- **仅限目标用户** — 以服务所属的用户身份运行 mise，并确保该用户的 systemd user manager 可访问。`sudo mise` 会被跳过，因为 `systemctl --user`
+  会指向错误的用户 manager。
+- **仅限手动应用** — mise 从不隐式写入或启动 systemd 服务；
+  只有 `mise bootstrap linux systemd-units apply` 和 `mise bootstrap` 会这样做。
 
-## Commands
+## 命令
 
 ```sh
-mise bootstrap linux systemd-units status            # shows systemd user service state
-mise bootstrap linux systemd-units status --json     # machine-readable
-mise bootstrap linux systemd-units status --missing  # exit 1 if any unit is missing, changed, or inactive
+mise bootstrap linux systemd-units status            # 显示 systemd 用户服务状态
+mise bootstrap linux systemd-units status --json     # 机器可读
+mise bootstrap linux systemd-units status --missing  # 如果任何单元缺失、已更改或非活动，则退出 1
 
-mise bootstrap linux systemd-units apply           # write and start missing/changed units
-mise bootstrap linux systemd-units apply --dry-run # print the commands without running them
-mise bootstrap linux systemd-units apply --yes     # skip the confirmation prompt
+mise bootstrap linux systemd-units apply           # 写入并启动缺失/已更改的单元
+mise bootstrap linux systemd-units apply --dry-run # 打印命令而不运行它们
+mise bootstrap linux systemd-units apply --yes     # 跳过确认提示
 ```
 
-`status` reports each unit as `active`, `inactive`, `differs`, or `missing`.
-`apply` rewrites changed service files, runs `systemctl --user daemon-reload`,
-enables units with `wanted_by`, disables units with `wanted_by = []`, and
-restarts them when `start = true` or stops them when `start = false`.
+`status` 会将每个单元报告为 `active`、`inactive`、`differs` 或 `missing`。
+`apply` 会重写已更改的服务文件，运行 `systemctl --user daemon-reload`，
+启用带有 `wanted_by` 的单元，禁用 `wanted_by = []` 的单元，并在
+`start = true` 时重启它们，或在 `start = false` 时停止它们。

@@ -1,21 +1,19 @@
-# Templates
+# 模板
 
-Templates in mise provide a powerful way to configure different aspects of
-your environment and project settings.
+mise 中的模板提供了一种强大的方式来配置环境和项目设置的不同方面。
 
-A template is a string that contains variables, expressions, and control structures.
-When rendered, the template engine (`tera`) replaces the variables with their values.
+模板是一个包含变量、表达式和控制结构的字符串。渲染时，模板引擎（`tera`）会用它们的值替换这些变量。
 
-You can define and use templates in the following locations:
+你可以在以下位置定义和使用模板：
 
-- Most `mise.toml` configuration values
-  - The `mise.toml` file itself is not templated and must be valid toml
-- `.tool-versions` files
-- `.miserc.toml` files (limited context — see [Template Support in .miserc.toml](#miserc-template-support))
+- 大多数 `mise.toml` 配置值
+  - `mise.toml` 文件本身不支持模板，且必须是有效的 toml
+- `.tool-versions` 文件
+- `.miserc.toml` 文件（上下文有限——参见 [Template Support in .miserc.toml](#miserc-template-support)）
 
-## Example
+## 示例
 
-Here is an example of a `mise.toml` file that uses templates:
+这是一个使用模板的 `mise.toml` 文件示例：
 
 ```toml
 [env]
@@ -23,24 +21,24 @@ PROJECT_NAME = "{{ cwd | basename }}"
 TERRAFORM_VERSION = "1.0.0"
 
 [tools]
-# refers to env variable defined in this file
+# 引用在此文件中定义的 env 变量
 terraform = "{{ env.TERRAFORM_VERSION }}"
-# refers to external env variable
+# 引用外部 env 变量
 node = "{{ get_env(name='NODE_VERSION', default='20') }}"
 ```
 
-You will find more examples in the [cookbook](./mise-cookbook/index.md).
+你可以在 [食谱](./mise-cookbook/index.md) 中找到更多示例。
 
-## Template Rendering
+## 模板渲染
 
-Mise uses [tera](https://keats.github.io/tera/docs/) to provide the template feature.
-In the template, there are 3 kinds of delimiters:
+Mise 使用 [tera](https://keats.github.io/tera/docs/) 来提供模板功能。
+在模板中，有 3 种分隔符：
 
-- <span v-pre>`{{`</span> and <span v-pre>`}}`</span> for expressions
-- <span v-pre>`{%`</span> and <span v-pre>`%}`</span> for statements
-- <span v-pre>`{#`</span> and <span v-pre>`#}`</span> for comments
+- <span v-pre>`{{`</span> 和 <span v-pre>`}}`</span> 用于表达式
+- <span v-pre>`{%`</span> 和 <span v-pre>`%}`</span> 用于语句
+- <span v-pre>`{#`</span> 和 <span v-pre>`#}`</span> 用于注释
 
-Additionally, use `raw` block to skip rendering tera delimiters:
+此外，使用 `raw` 块来跳过 tera 分隔符的渲染：
 
 <div v-pre>
 
@@ -52,119 +50,113 @@ Additionally, use `raw` block to skip rendering tera delimiters:
 
 </div>
 
-This will become <span v-pre>`Hello {{name}}`</span>.
+这将变成 <span v-pre>`Hello {{name}}`</span>。
 
-Tera supports [literals](https://keats.github.io/tera/docs/#literals), including:
+Tera 支持 [字面量](https://keats.github.io/tera/docs/#literals)，包括：
 
-- booleans: `true` (or `True`) and `false` (or `False`)
-- integers
-- floats
-- strings: text delimited by `""`, `''` or <code>\`\`</code>
-- arrays: a comma-separated list of literals and/or ident surrounded by
-  `[` and `]` (trailing comma allowed)
+- 布尔值：`true`（或 `True`）和 `false`（或 `False`）
+- 整数
+- 浮点数
+- 字符串：由 `""`、`''` 或 <code>\`\`</code> 包围的文本
+- 数组：由 `[` 和 `]` 包围的，以逗号分隔的字面量和/或标识符列表（允许末尾逗号）
 
-You can render a variable by using the <span v-pre>`{{ name }}`</span>.
-For complex attributes, use:
+你可以使用 <span v-pre>`{{ name }}`</span> 来渲染变量。
+对于复杂属性，使用：
 
-- dot `.`, e.g. <span v-pre>`{{ product.name }}`</span>
-- square brackets `[]`, e.g. <span v-pre>`{{ product["name"] }}`</span>
+- 点号 `.`，例如 <span v-pre>`{{ product.name }}`</span>
+- 方括号 `[]`，例如 <span v-pre>`{{ product["name"] }}`</span>
 
-Tera also supports powerful [expressions](https://keats.github.io/tera/docs/#expressions):
+Tera 还支持强大的 [表达式](https://keats.github.io/tera/docs/#expressions)：
 
-- mathematical expressions
+- 数学表达式
   - `+`
   - `-`
   - `/`
   - `*`
   - `%`
-- comparisons
+- 比较
   - `==`
   - `!=`
   - `>=`
   - `<=`
   - `<`
   - `>`
-- logic
+- 逻辑
   - `and`
   - `or`
   - `not`
-- concatenation `~`, e.g. <code v-pre>{{ "hello " ~ 'world' ~ \`!\` }}</code>
-- in checking, e.g. <span v-pre>`{{ some_var in [1, 2, 3] }}`</span>
+- 连接 `~`，例如 <code v-pre>{{ "hello " ~ 'world' ~ \`!\` }}</code>
+- in 检查，例如 <span v-pre>`{{ some_var in [1, 2, 3] }}`</span>
 
-Tera also supports [control structures such as <span v-pre>`if`</span> and
-<span v-pre>`for`</span>](https://keats.github.io/tera/docs/#control-structures).
+Tera 还支持 [控制结构，例如 <span v-pre>`if`</span> 和
+<span v-pre>`for`</span>](https://keats.github.io/tera/docs/#control-structures)。
 
-### Tera Filters
+### Tera 过滤器
 
-You can modify variables using [filters](https://keats.github.io/tera/docs/#filters).
-You can filter a variable by a pipe symbol (`|`) and may have named arguments
-in parentheses. You can also chain multiple filters.
-e.g. <span v-pre>`{{ "Doctor Who" | lower | replace(from="doctor", to="Dr.") }}`</span>
-will output `Dr. who`.
+你可以使用 [过滤器](https://keats.github.io/tera/docs/#filters) 来修改变量。
+你可以通过管道符（`|`）过滤变量，并且可以在括号中使用命名参数。
+你还可以串联多个过滤器。
+例如 <span v-pre>`{{ "Doctor Who" | lower | replace(from="doctor", to="Dr.") }}`</span>
+将输出 `Dr. who`。
 
-### Tera Functions
+### Tera 函数
 
-[Functions](https://keats.github.io/tera/docs/#functions) provide
-additional features to templates.
+[函数](https://keats.github.io/tera/docs/#functions) 为模板提供额外功能。
 
-### Tera Tests
+### Tera 测试
 
-You can also uses [tests](https://keats.github.io/tera/docs/#tests) to examine variables.
+你也可以使用 [测试](https://keats.github.io/tera/docs/#tests) 来检查变量。
 
 ```
 {% if my_number is not odd %}
-  Even
+  偶数
 {% endif %}
 ```
 
-## Mise Template Features
+## Mise 模板功能
 
-Mise provides additional variables, functions, filters, and tests on top of tera features.
+Mise 在 tera 功能的基础上提供了额外的变量、函数、过滤器和测试。
 
-### Variables
+### 变量
 
-Mise exposes several [variables](https://keats.github.io/tera/docs/#variables).
-These variables offer key information about the current environment:
+Mise 暴露了若干 [变量](https://keats.github.io/tera/docs/#variables)。
+这些变量提供了当前环境的关键信息：
 
-- `env: HashMap<String, String>` – Accesses current environment variables as
-  a key-value map.
-- `cwd: PathBuf` – Points to the current working directory.
-- `config_root: PathBuf` – Locates the directory containing your `mise.toml` file, or in the case of something like `~/src/myproj/.config/mise.toml`, it will point to `~/src/myproj`.
-- `mise_bin: String` - Points to the path to the current mise executable
-- `mise_pid: String` - Points to the pid of the current mise process
-- `mise_env: Vec<String>` - The configuration environment as specified by `MISE_ENV`, `-E`, or `--env`. Will be undefined if the configuration environment is not set.
-- `xdg_cache_home: PathBuf` - Points to the directory of XDG cache home
-- `xdg_config_home: PathBuf` - Points to the directory of XDG config home
-- `xdg_data_home: PathBuf` - Points to the directory of XDG data home
-- `xdg_state_home: PathBuf` - Points to the directory of XDG state home
-- `tools: HashMap<String, ToolInfo | ToolInfo[]>` – Maps installed tool names to their info.
-  Available in task templates and env directives with `tools = true`.
-  - When a single version is installed:
-    - `tools.<name>.version: String` – The resolved version (e.g., `"22.1.0"`)
-    - `tools.<name>.path: String` – The install path
-  - When multiple versions are installed, it becomes an array:
-    - `tools.<name>[0].version: String` – The first version
-    - `tools.<name>[0].path: String` – The first install path
-    - `tools.<name>[1].version: String` – The second version, etc.
+- `env: HashMap<String, String>` – 以键值对映射的形式访问当前环境变量。
+- `cwd: PathBuf` – 指向当前工作目录。
+- `config_root: PathBuf` – 定位包含你的 `mise.toml` 文件的目录，或者在类似 `~/src/myproj/.config/mise.toml` 的情况下，它会指向 `~/src/myproj`。
+- `mise_bin: String` - 指向当前 mise 可执行文件的路径
+- `mise_pid: String` - 指向当前 mise 进程的 pid
+- `mise_env: Vec<String>` - 由 `MISE_ENV`、`-E` 或 `--env` 指定的配置环境。如果未设置配置环境，则该变量未定义。
+- `xdg_cache_home: PathBuf` - 指向 XDG 缓存主目录
+- `xdg_config_home: PathBuf` - 指向 XDG 配置主目录
+- `xdg_data_home: PathBuf` - 指向 XDG 数据主目录
+- `xdg_state_home: PathBuf` - 指向 XDG 状态主目录
+- `tools: HashMap<String, ToolInfo | ToolInfo[]>` – 将已安装的工具名称映射到其信息。
+  在任务模板和 `tools = true` 的环境指令中可用。
+  - 当安装了单个版本时：
+    - `tools.<name>.version: String` – 解析后的版本（例如，`"22.1.0"`）
+    - `tools.<name>.path: String` – 安装路径
+  - 当安装了多个版本时，它会变成数组：
+    - `tools.<name>[0].version: String` – 第一个版本
+    - `tools.<name>[0].path: String` – 第一个安装路径
+    - `tools.<name>[1].version: String` – 第二个版本，等等。
 
-In **task run scripts**, mise also exposes a `usage` map when the task has a usage
-specification (see [Task Arguments](/tasks/task-arguments#usage-field)):
+在 **任务运行脚本** 中，当任务有 usage 规范时，mise 还会暴露一个 `usage` 映射（参见 [任务参数](/tasks/task-arguments#usage-field)）：
 
-- `usage: HashMap<String, Value>` – Parsed task arguments and flags, keyed by their
-  names. Values are **not shell-escaped or quoted** and may be:
-  - booleans (for flags and boolean args)
-  - strings
-  - arrays of booleans/strings for variadic args/flags
+- `usage: HashMap<String, Value>` – 已解析的任务参数和标志，以其名称为键。值**不会经过 shell 转义或加引号**，并且可能是：
+  - 布尔值（用于标志和布尔参数）
+  - 字符串
+  - 布尔值/字符串数组（用于可变参数/标志）
 
-The keys are the argument/flag names as written in the usage spec. If the name
-contains `-`, use bracket access, e.g. <span v-pre>`{{ usage["dry-run"] }}`</span>.
-Examples:
+这些键就是 usage 规范中写入的参数/标志名称。如果名称包含 `-`，请使用方括号访问，例如 <span v-pre>`{{ usage["dry-run"] }}`</span>。
+示例：
 
 ```mise-toml
 [tasks.deploy]
 usage = '''
-arg "<environment>" help="Target environment"
-flag "-v --verbose" help="Enable verbose output"
+arg "<environment>" help="目标环境"
+flag "-v --verbose" help="启用详细输出"
 arg "[tags]" var=#true
 '''
 run = '''
@@ -177,87 +169,75 @@ echo "tag count={{ usage.tags | length }}"
 '''
 ```
 
-### Functions
+### 函数
 
-#### Tera Built-In Functions
+#### Tera 内置函数
 
-Tera offers many [built-in functions](https://keats.github.io/tera/docs/#built-in-functions).
-`[]` indicates an optional function argument.
-Some functions:
+Tera 提供了许多[内置函数](https://keats.github.io/tera/docs/#built-in-functions)。
+`[]` 表示可选的函数参数。
+一些函数：
 
-- `range(end, [start], [step_by])` - Returns an array of integers created
-  using the arguments given.
-  - `end: usize`: stop before `end`, mandatory
-  - `start: usize`: where to start from, defaults to `0`
-  - `step_by: usize`: with what number do we increment, defaults to `1`
-- `now([timestamp], [utc])` - Returns the local datetime as string or
-  the timestamp as integer.
-  - `timestamp: bool`: whether to return the timestamp instead of the datetime
-  - `utc: bool`: whether to return the UTC datetime instead of
-    the local one
-  - Tip: use date filter to format date string.
-    e.g. <span v-pre>`{{ now() | date(format="%Y") }}`</span> gets the current year.
-- `throw(message)` - Throws with the message.
-- `get_random(end, [start])` - Returns a random integer in a range.
-  - `end: usize`: upper end of the range
-  - `start: usize`: defaults to 0
-- `get_env(name, [default])`: Returns the environment variable value by name.
-  Prefer `env` variable than this function.
-  - `name: String`: the name of the environment variable
-  - `default: String`: a default value in case the environment variable is not found.
-    Throws when can't find the environment variable and `default` is not set.
+- `range(end, [start], [step_by])` - 返回一个使用所给参数创建的整数数组。
+  - `end: usize`：在 `end` 之前停止，必填
+  - `start: usize`：从哪里开始，默认为 `0`
+  - `step_by: usize`：每次递增多少，默认为 `1`
+- `now([timestamp], [utc])` - 返回本地日期时间字符串或时间戳整数。
+  - `timestamp: bool`：是否返回时间戳而不是日期时间
+  - `utc: bool`：是否返回 UTC 日期时间而不是本地时间
+  - 提示：使用 date 过滤器来格式化日期字符串。
+    例如，<span v-pre>`{{ now() | date(format="%Y") }}`</span> 获取当前年份。
+- `throw(message)` - 抛出带有该消息的错误。
+- `get_random(end, [start])` - 返回范围内的随机整数。
+  - `end: usize`：范围的上限
+  - `start: usize`：默认为 0
+- `get_env(name, [default])`：按名称返回环境变量值。
+  建议优先使用 `env` 变量而不是此函数。
+  - `name: String`：环境变量的名称
+  - `default: String`：当找不到环境变量时使用的默认值。
+    当无法找到环境变量且未设置 `default` 时会抛出错误。
 
-Tera offers more functions. Read more on [tera documentation](https://keats.github.io/tera/docs/#functions).
+Tera 提供了更多函数。更多内容请参阅[Tera 文档](https://keats.github.io/tera/docs/#functions)。
 
-#### Additional Mise Functions
+#### 其他 Mise 函数
 
-Mise offers a slew of useful functions in addition to tera's built-ins.
+除了 tera 的内置函数外，Mise 还提供了许多有用的函数。
 
-##### General Functions
+##### 通用函数
 
-These functions are available in all tasks, and will always behave the same way regardless
-of the task definition they are used in. In other words, their return values are consistent
-across task definition(s).
+这些函数在所有任务中都可用，并且无论它们用于什么任务定义，其行为始终相同。换句话说，它们的返回值在不同任务定义之间是一致的。
 
-- `exec(command) -> String` – Runs a shell command and returns its output as a string.
-- `arch() -> String` – Retrieves the system architecture, such as `x64` or `arm64`.
-- `os() -> String` – Returns the name of the operating system,
-  e.g. linux, macos, windows.
-- `os_family() -> String` – Returns the operating system family, e.g. `unix`, `windows`.
-- `num_cpus() -> usize` – Gets the number of CPUs available on the system.
-- `choice(n, alphabet)` - Generate a string of `n` with random sample with replacement
-  of `alphabet`. For example, `choice(n=64, alphabet='0123456789abcdef')` will generate a random
-  64-character lowercase hex string.
-- `read_file(path) -> String` – Reads the contents of a file at the given path and returns
-  it as a string.
+- `exec(command) -> String` – 运行一个 shell 命令并将其输出作为字符串返回。
+- `arch() -> String` – 获取系统架构，例如 `x64` 或 `arm64`。
+- `os() -> String` – 返回操作系统名称，
+  例如 linux、macos、windows。
+- `os_family() -> String` – 返回操作系统家族，例如 `unix`、`windows`。
+- `num_cpus() -> usize` – 获取系统可用的 CPU 数量。
+- `choice(n, alphabet)` - 使用 `alphabet` 有放回随机抽样生成一个长度为 `n` 的字符串。例如，`choice(n=64, alphabet='0123456789abcdef')` 将生成一个随机的 64 字符小写十六进制字符串。
+- `read_file(path) -> String` – 读取给定路径下文件的内容并以字符串形式返回。
 
-##### Task-Specific Functions
+##### 任务特定函数
 
-These functions are task-specific and behave differently depending on the task they are used
-in. In other words, their return values **_may_** (but are not guaranteed to) be consistent
-across executions of any given _task_, and should be expected to be inconsistent across
-different task definition(s).
+这些函数是任务特定的，并且会根据所使用的任务而表现不同。换句话说，它们的返回值**_可能_**（但不保证）在任何给定 _任务_ 的多次执行之间保持一致，并且应当预期在不同任务定义之间不一致。
 
-For example, `task_source_files()` returns a different set of filepaths depending on the [`sources`](https://mise.en.dev/tasks/task-configuration.html#sources) of the task it's called from.
+例如，`task_source_files()` 会根据调用它的任务的[`sources`](https://mise.en.dev/tasks/task-configuration.html#sources)返回不同的文件路径集合。
 
-- <span id="task-source-files">`task_source_files() -> Vec<String>`</span> – Returns the task's [`sources`](https://mise.en.dev/tasks/task-configuration.html#sources)
-  as an array of resolved file paths. This function processes glob patterns and Tera template strings
-  defined in the task's sources, expanding them into actual file paths. If a pattern doesn't match any
-  files, it will be omitted from the result. Returns an empty array if no sources are configured or if
-  no files match the patterns.
+- <span id="task-source-files">`task_source_files() -> Vec<String>`</span> – 返回任务的[`sources`](https://mise.en.dev/tasks/task-configuration.html#sources)
+  作为解析后的文件路径数组。此函数会处理任务 sources 中定义的 glob 模式和 Tera 模板字符串，
+  将它们展开为实际文件路径。如果某个模式未匹配到任何文件，它将从结果中省略。如果未配置 sources，或
+  没有文件匹配这些模式，则返回空数组。
 
-#### Examples
+#### 示例
 
 ```toml
-# Using exec to get command output
+# 使用 exec 获取命令输出
 [alias.node.versions]
 current = "{{ exec(command='node --version') }}"
 
-# Using read_file to include content from a file
+# 使用 read_file 引入文件内容
 [env]
 VERSION = "{{ read_file(path='VERSION') | trim }}"
 
-# Access resolved source files in task scripts
+# 在任务脚本中访问已解析的源文件
 [tasks.example]
 sources = ["src/**/*.ts", "package.json"]
 run = '''
@@ -267,179 +247,173 @@ run = '''
 '''
 ```
 
-### Exec Options
+### Exec 选项
 
-The `exec` function supports the following options:
+`exec` 函数支持以下选项：
 
-- `command: String` – [required] The command to run.
-- `cache_key: String` – The cache key to store the result.
-  If the cache key is provided, the result will be cached and reused
-  for subsequent calls.
-- `cache_duration: String` – The duration to cache the result.
-  The duration is in seconds, minutes, hours, days, or weeks.
-  e.g. `cache_duration="1d"` will cache the result for 1 day.
+- `command: String` – [必需] 要运行的命令。
+- `cache_key: String` – 用于存储结果的缓存键。
+  如果提供了缓存键，结果将被缓存并在后续调用中复用。
+- `cache_duration: String` – 缓存结果的时长。
+  时长单位可以是秒、分钟、小时、天或周。
+  例如，`cache_duration="1d"` 将把结果缓存 1 天。
 
-### Filters
+### 过滤器
 
-Tera offers many [built-in filters](https://keats.github.io/tera/docs/#built-in-filters).
-`[]` indicates an optional filter argument.
-Some filters:
+Tera 提供了许多[内置过滤器](https://keats.github.io/tera/docs/#built-in-filters)。
+`[]` 表示可选的过滤器参数。
+一些过滤器：
 
-- `str | lower -> String` – Converts a string to lowercase.
-- `str | upper -> String` – Converts a string to uppercase.
-- `str | capitalize -> String` – Converts a string with all its characters lowercased
-  apart from the first char which is uppercased.
-- `str | replace(from, to) -> String` – Replaces a string with all instances of
-  `from` to `to`. e.g., <span v-pre>`{{ name | replace(from="Robert", to="Bob")}}`</span>
-- `str | title -> String` – Capitalizes each word inside a sentence.
-  e.g., <span v-pre>`{{ "foo bar" | title }}`</span> becomes `Foo Bar`.
-- `str | trim -> String` – Removes leading and trailing whitespace.
-- `str | trim_start -> String` – Removes leading whitespace.
-- `str | trim_end -> String` – Removes trailing whitespace.
-- `str | truncate -> String` – Truncates a string to the indicated length.
-- `str | first -> String` – Returns the first element in an array or string.
-- `str | last -> String` – Returns the last element in an array or string.
-- `str | join(sep) -> String` – Joins an array of strings with a separator,
-  such as <span v-pre>`{{ ["a", "b", "c"] | join(sep=", ") }}`</span>
-  to produce `a, b, c`.
-- `str | length -> usize` – Returns the length of a string or array.
-- `str | reverse -> String` – Reverses the order of characters in a string or
-  elements in an array.
-- `str | urlencode -> String` – Encodes a string to be safely used in URLs,
-  converting special characters to percent-encoded values.
-- `arr | map(attribute) -> Array` – Extracts an attribute from each object
-  in an array.
-- `arr | concat(with) -> Array` – Appends values to an array.
-- `num | abs -> Number` – Returns the absolute value of a number.
-- `num | filesizeformat -> String` – Converts an integer into
-  a human-readable file size (e.g., 110 MB).
-- `str | date(format) -> String` – Converts a timestamp to
-  a formatted date string using the provided format,
-  such as <span v-pre>`{{ ts | date(format="%Y-%m-%d") }}`</span>.
-  Find a list of time format on [`chrono` documentation](https://docs.rs/chrono/latest/chrono/format/strftime/index.html).
-- `str | split(pat) -> Array` – Splits a string by the given pattern and
-  returns an array of substrings.
-- `str | default(value) -> String` – Returns the default value
-  if the variable is not defined or is empty.
+- `str | lower -> String` – 将字符串转换为小写。
+- `str | upper -> String` – 将字符串转换为大写。
+- `str | capitalize -> String` – 将字符串转换为首字母大写，
+  其余字符小写。
+- `str | replace(from, to) -> String` – 将字符串中所有 `from` 替换为
+  `to`。例如，<span v-pre>`{{ name | replace(from="Robert", to="Bob")}}`</span>
+- `str | title -> String` – 将句子中的每个单词首字母大写。
+  例如，<span v-pre>`{{ "foo bar" | title }}`</span> 变为 `Foo Bar`。
+- `str | trim -> String` – 移除首尾空白字符。
+- `str | trim_start -> String` – 移除前导空白字符。
+- `str | trim_end -> String` – 移除尾随空白字符。
+- `str | truncate -> String` – 将字符串截断为指定长度。
+- `str | first -> String` – 返回数组或字符串中的第一个元素。
+- `str | last -> String` – 返回数组或字符串中的最后一个元素。
+- `str | join(sep) -> String` – 使用分隔符连接字符串数组，
+  例如 <span v-pre>`{{ ["a", "b", "c"] | join(sep=", ") }}`</span>
+  生成 `a, b, c`。
+- `str | length -> usize` – 返回字符串或数组的长度。
+- `str | reverse -> String` – 反转字符串中字符的顺序，或
+  数组中元素的顺序。
+- `str | urlencode -> String` – 对字符串进行编码，以便安全地用于 URL，
+  将特殊字符转换为百分号编码值。
+- `arr | map(attribute) -> Array` – 从数组中的每个对象提取一个属性。
+- `arr | concat(with) -> Array` – 向数组追加值。
+- `num | abs -> Number` – 返回数字的绝对值。
+- `num | filesizeformat -> String` – 将整数转换为
+  人类可读的文件大小（例如，110 MB）。
+- `str | date(format) -> String` – 使用提供的格式将时间戳转换为
+  格式化的日期字符串，例如 <span v-pre>`{{ ts | date(format="%Y-%m-%d") }}`</span>。
+  时间格式列表可参考[`chrono` 文档](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)。
+- `str | split(pat) -> Array` – 按给定模式拆分字符串，并
+  返回子字符串数组。
+- `str | default(value) -> String` – 如果变量未定义或为空，
+  则返回默认值。
 
-Tera offers more filters. Read more on [tera documentation](https://keats.github.io/tera/docs/#built-in-filters).
+Tera 提供了更多过滤器。更多内容请参阅 [tera 文档](https://keats.github.io/tera/docs/#built-in-filters)。
 
 #### Hash
 
-- `str | hash([algorithm], [len]) -> String` – Generates a hash for the input string.
-  - `algorithm: "sha256" | "blake3"`: hash algorithm to use (default: `"sha256"`)
-  - `len: usize`: truncates the hash string to the given size
-  - Examples:
-    - <span v-pre>`{{ "foo" | hash }}`</span> – SHA256 hash (default)
-    - <span v-pre>`{{ "foo" | hash(algorithm="blake3") }}`</span> – BLAKE3 hash
-    - <span v-pre>`{{ "foo" | hash(len=8) }}`</span> – SHA256 hash truncated to 8 characters
-- `path | hash_file([len]) -> String` – Returns the BLAKE3 hash of the file
-  at the given path.
-  - `len: usize`: truncates the hash string to the given size
+- `str | hash([algorithm], [len]) -> String` – 为输入字符串生成哈希。
+  - `algorithm: "sha256" | "blake3"`：要使用的哈希算法（默认：`"sha256"`）
+  - `len: usize`：将哈希字符串截断为给定长度
+  - 示例：
+    - <span v-pre>`{{ "foo" | hash }}`</span> – SHA256 哈希（默认）
+    - <span v-pre>`{{ "foo" | hash(algorithm="blake3") }}`</span> – BLAKE3 哈希
+    - <span v-pre>`{{ "foo" | hash(len=8) }}`</span> – 将 SHA256 哈希截断为 8 个字符
+- `path | hash_file([len]) -> String` – 返回给定路径下文件的 BLAKE3 哈希值。
+  - `len: usize`：将哈希字符串截断为给定长度
 
-#### Path Manipulation
+#### 路径操作
 
-- `path | absolute -> String` – Converts the input path into
-  an absolute path. Does not require the path to exist.
-- `path | canonicalize -> String` – Converts the input path into
-  absolute input path version. Throws if path doesn't exist.
-- `path | basename -> String` – Extracts the file name from a path,
-  e.g. `/foo/bar/baz.txt` becomes `baz.txt`.
-- `path | file_size -> String` – Returns the size of a file in bytes.
-- `path | dirname -> String` – Returns the directory path for a file,
-  e.g. `/foo/bar/baz.txt` becomes `/foo/bar`.
-- `path | basename -> String` – Returns the base name of a file,
-  e.g. `/foo/bar/baz.txt` becomes `baz.txt`.
-- `path | extname -> String` – Returns the extension of a file,
-  e.g. `/foo/bar/baz.txt` becomes `.txt`.
-- `path | file_stem -> String` – Returns the file name without the extension,
-  e.g. `/foo/bar/baz.txt` becomes `baz`.
-- `path | file_size -> String` – Returns the size of a file in bytes.
-- `path | last_modified -> String` – Returns the last modified time of a file.
-- `path[] | join_path -> String` – Joins an array of paths into a single path.
+- `path | absolute -> String` – 将输入路径转换为
+  绝对路径。不要求路径存在。
+- `path | canonicalize -> String` – 将输入路径转换为
+  绝对输入路径版本。如果路径不存在则抛出错误。
+- `path | basename -> String` – 从路径中提取文件名，
+  例如 `/foo/bar/baz.txt` 变为 `baz.txt`。
+- `path | file_size -> String` – 返回文件的字节大小。
+- `path | dirname -> String` – 返回文件的目录路径，
+  例如 `/foo/bar/baz.txt` 变为 `/foo/bar`。
+- `path | basename -> String` – 返回文件的基本名称，
+  例如 `/foo/bar/baz.txt` 变为 `baz.txt`。
+- `path | extname -> String` – 返回文件的扩展名，
+  例如 `/foo/bar/baz.txt` 变为 `.txt`。
+- `path | file_stem -> String` – 返回不含扩展名的文件名，
+  例如 `/foo/bar/baz.txt` 变为 `baz`。
+- `path | file_size -> String` – 返回文件的字节大小。
+- `path | last_modified -> String` – 返回文件的最后修改时间。
+- `path[] | join_path -> String` – 将路径数组连接为单一路径。
 
-For example, you can use `split()`, `concat()`, and `join_path` filters to
-construct a file path:
+例如，你可以使用 `split()`、`concat()` 和 `join_path` 过滤器来
+构造文件路径：
 
 ```toml
 [env]
 PROJECT_CONFIG = "{{ [config_root] | concat(with='bar.txt') | join_path }}"
 ```
 
-#### String Manipulation
+#### 字符串操作
 
-- `str | quote -> String` – Quotes a string. Converts `'` to `\'` and
-  then quotes str, e.g `'it\'s str'`.
-- `str | kebabcase -> String` – Converts a string to kebab-case
-- `str | lowercamelcase -> String` – Converts a string to lowerCamelCase
-- `str | uppercamelcase -> String` – Converts a string to UpperCamelCase
-- `str | snakecase -> String` – Converts a string to snake_case
-- `str | shoutysnakecase -> String` – Converts a string to SHOUTY_SNAKE_CASE
+- `str | quote -> String` – 给字符串加引号。将 `'` 转换为 `\'`，然后
+  为字符串加引号，例如 `'it\'s str'`。
+- `str | kebabcase -> String` – 将字符串转换为 kebab-case
+- `str | lowercamelcase -> String` – 将字符串转换为 lowerCamelCase
+- `str | uppercamelcase -> String` – 将字符串转换为 UpperCamelCase
+- `str | snakecase -> String` – 将字符串转换为 snake_case
+- `str | shoutysnakecase -> String` – 将字符串转换为 SHOUTY_SNAKE_CASE
 
-### Tests
+### 测试
 
-Tera offers many [built-in tests](https://keats.github.io/tera/docs/#built-in-tests).
-Some tests:
+Tera 提供了许多 [内置测试](https://keats.github.io/tera/docs/#built-in-tests)。
+一些测试如下：
 
-- `defined` - Returns `true` if the given variable is defined.
-- `string` - Returns `true` if the given variable is a string.
-- `number` - Returns `true` if the given variable is a number.
-- `starting_with` - Returns `true` if the given variable is a string and starts with
-  the arg given.
-- `ending_with` - Returns `true` if the given variable is a string and ends with
-  the arg given.
-- `containing` - Returns `true` if the given variable contains the arg given.
-- `matching` - Returns `true` if the given variable is a string and matches the regex
-  in the argument.
+- `defined` - 如果给定变量已定义，则返回 `true`。
+- `string` - 如果给定变量是字符串，则返回 `true`。
+- `number` - 如果给定变量是数字，则返回 `true`。
+- `starting_with` - 如果给定变量是字符串且以
+  所给参数开头，则返回 `true`。
+- `ending_with` - 如果给定变量是字符串且以
+  所给参数结尾，则返回 `true`。
+- `containing` - 如果给定变量包含所给参数，则返回 `true`。
+- `matching` - 如果给定变量是字符串且与参数中的正则表达式
+  匹配，则返回 `true`。
 
-Tera offers more tests. Read more on [tera documentation](https://keats.github.io/tera/docs/#built-in-tests).
+Tera 提供了更多测试。更多内容请参阅 [tera 文档](https://keats.github.io/tera/docs/#built-in-tests)。
 
-Mise offers additional tests:
+Mise 提供了额外的测试：
 
-- `if path is dir` – Checks if the provided path is a directory.
-- `if path is file` – Checks if the path points to a file.
-- `if path is exists` – Checks if the path exists.
+- `if path is dir` – 检查提供的路径是否是一个目录。
+- `if path is file` – 检查路径是否指向一个文件。
+- `if path is exists` – 检查路径是否存在。
 
-## Template Support in .miserc.toml {#miserc-template-support}
+## .miserc.toml 中的模板支持 {#miserc-template-support}
 
-`.miserc.toml` files support Tera templates, but with a **limited context**. This is because
-`.miserc.toml` is loaded very early — before `mise.toml`, Settings, and the main config are
-parsed — so only information available at OS level can be used.
+`.miserc.toml` 文件支持 Tera 模板，但仅限于**受限上下文**。这是因为
+`.miserc.toml` 加载得非常早——早于 `mise.toml`、Settings 和主配置被解析——因此只能使用操作系统级别可用的信息。
 
-### Available context
+### 可用上下文
 
-- `env: HashMap<String, String>` – OS environment variables (same as in `mise.toml`)
-- `config_root: PathBuf` – Directory containing the `.miserc.toml` file
-- `cwd: PathBuf` – Current working directory
-- `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home` – XDG base directories
-- All [functions](#functions): `arch()`, `os()`, `os_family()`, `num_cpus()`, `choice()`, etc.
-- All [filters](#filters): `absolute`, `dirname`, `basename`, `hash`, etc.
+- `env: HashMap<String, String>` – 操作系统环境变量（与 `mise.toml` 中相同）
+- `config_root: PathBuf` – 包含 `.miserc.toml` 文件的目录
+- `cwd: PathBuf` – 当前工作目录
+- `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home` – XDG 基础目录
+- 所有 [函数](#functions)：`arch()`、`os()`、`os_family()`、`num_cpus()`、`choice()` 等
+- 所有 [过滤器](#filters)：`absolute`、`dirname`、`basename`、`hash` 等
 
-### Not available
+### 不可用内容
 
-- `mise_env` – This is what `.miserc.toml` defines; it cannot reference itself
-- `exec()` – Requires Settings, which are not yet loaded
-- `read_file()` – Not registered in the early-init context (needs per-file directory resolution that is not set up at this stage)
-- `mise_bin`, `mise_pid` – Not meaningful at this stage
+- `mise_env` – 这是 `.miserc.toml` 定义的内容；它不能引用自身
+- `exec()` – 需要 Settings，但此时它们尚未加载
+- `read_file()` – 未在早期初始化上下文中注册（在此阶段尚未设置按文件目录解析）
+- `mise_bin`、`mise_pid` – 在此阶段没有意义
 
-### miserc.toml Examples
+### miserc.toml 示例
 
 <div v-pre>
 
 ```toml
 # ~/.config/mise/miserc.toml
 
-# Use $HOME to set a ceiling path (stops config search at home directory)
+# 使用 $HOME 设置一个上限路径（在 home 目录处停止配置搜索）
 ceiling_paths = ["{{ env.HOME }}"]
 
-# Ignore a config path relative to home
+# 忽略一个相对于 home 的配置路径
 ignored_config_paths = ["{{ env.HOME }}/shared"]
 ```
 
 </div>
 
-Conditionals work too — `{% if %}` blocks at the top level produce empty lines when the
-condition is false, which TOML ignores:
+条件判断也可以——顶层的 `{% if %}` 块在条件为 false 时会产生空行，而 TOML 会忽略这些空行：
 
 <div v-pre>
 
@@ -453,12 +427,11 @@ ceiling_paths = ["{{ env.HOME }}/work"]
 </div>
 
 ::: tip
-If a template fails to render (e.g. due to an undefined variable), mise will log a warning
-and fall back to the raw content.
+如果模板渲染失败（例如由于变量未定义），mise 会记录一条警告并回退到原始内容。
 :::
 
 ::: warning
-If your `.miserc.toml` values contain literal <span v-pre>`{{`</span>, `{%`, or `{#` characters
-(not intended as templates), wrap them in a `{% raw %}...{% endraw %}` block to prevent Tera
-from interpreting them.
+如果你的 `.miserc.toml` 值中包含字面量的 <span v-pre>`{{`</span>、`{%` 或 `{#` 字符
+（并非用于模板），请将它们放入 `{% raw %}...{% endraw %}` 块中，以防止 Tera
+将其解释为模板。
 :::

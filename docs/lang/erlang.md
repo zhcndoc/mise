@@ -1,49 +1,48 @@
 # Erlang
 
-`mise` can be used to install and manage multiple versions of [erlang](https://www.erlang.org/) on the same system.
+`mise` 可用于在同一系统上安装和管理 [erlang](https://www.erlang.org/) 的多个版本。
 
-> The following are instructions for using the erlang core plugin.
-> This is used when there isn't a git plugin installed named "erlang".
+> 以下是使用 erlang 核心插件的说明。
+> 当没有安装名为“erlang”的 git 插件时，会使用该插件。
 
-The code for this is inside the mise repository at
-[`./src/plugins/core/erlang.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/erlang.rs).
+其代码位于 mise 仓库中的
+[`./src/plugins/core/erlang.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/erlang.rs)。
 
-## Usage
+## 用法
 
-The following installs erlang and makes it the global default:
+以下命令会安装 erlang 并将其设为全局默认版本：
 
 ```sh
 mise use -g erlang@26
 ```
 
-See available versions with `mise ls-remote erlang`.
+使用 `mise ls-remote erlang` 查看可用版本。
 
 ## kerl
 
-The plugin uses [kerl](https://github.com/kerl/kerl) under the hood to build erlang.
-See kerl's docs for information on configuring kerl.
+该插件在底层使用 [kerl](https://github.com/kerl/kerl) 来构建 erlang。  
+有关如何配置 kerl 的信息，请参阅 kerl 的文档。
 
-On GitHub Actions Linux runners, `ImageOS=ubuntu24`, `ImageOS=ubuntu22`, and `ImageOS=ubuntu20`
-map to the precompiled Erlang build targets `ubuntu-24.04`, `ubuntu-22.04`, and
-`ubuntu-20.04`. Unsupported values disable precompiled lockfile URL resolution in the
-default `erlang.compile` mode, so locked installs can fall back to kerl.
+在 GitHub Actions 的 Linux runner 上，`ImageOS=ubuntu24`、`ImageOS=ubuntu22` 和 `ImageOS=ubuntu20`  
+分别映射到预编译的 Erlang 构建目标 `ubuntu-24.04`、`ubuntu-22.04` 和  
+`ubuntu-20.04`。不受支持的值会在默认的 `erlang.compile` 模式下禁用预编译 lockfile URL 解析，  
+因此锁定安装可以回退到 kerl。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `erlang` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `erlang` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for kerl build/install commands and other install-time commands run by
-the core `erlang` backend:
+为 kerl 构建/安装命令以及由核心 `erlang` 后端运行的其他安装时命令设置环境变量：
 
 ```toml
 [tools]
 erlang = { version = "latest", install_env = { KERL_CONFIGURE_OPTIONS = "--without-javac" } }
 ```
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

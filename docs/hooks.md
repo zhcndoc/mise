@@ -1,79 +1,79 @@
 # Hooks
 
-You can have mise automatically execute scripts during a `mise activate` session. You cannot use these
-without the `mise activate` shell hook installed in your shell—except the `preinstall` and `postinstall` hooks.
-The configuration goes into `mise.toml`.
+你可以让 mise 在 `mise activate` 会话期间自动执行脚本。除了 `preinstall` 和 `postinstall` 钩子之外，
+如果你的 shell 中没有安装 `mise activate` shell 钩子，就不能使用这些功能。
+配置写入 `mise.toml`。
 
-## CD hook
+## CD 钩子
 
-This hook is run anytime the directory is changed.
+只要目录发生更改，就会运行此钩子。
 
 ```toml
 [hooks]
 cd = "echo 'I changed directories'"
 ```
 
-## Enter hook
+## 进入钩子
 
-This hook is run when the project is entered. Changing directories while in the project will not trigger this hook again.
+当进入项目时运行此钩子。在项目中更改目录不会再次触发此钩子。
 
 ```toml
 [hooks]
 enter = "echo 'I entered the project'"
 ```
 
-## Leave hook
+## 离开钩子
 
-This hook is run when the project is left. Changing directories while in the project will not trigger this hook.
-
-```toml
-[hooks]
-leave = "echo 'I left the project'"
-```
-
-## Preinstall/postinstall hook
-
-These hooks are run before and after tools are installed (respectively). Unlike other hooks, these hooks do not require `mise activate`.
+当项目被离开时运行此钩子。在项目中切换目录不会触发此钩子。
 
 ```toml
 [hooks]
-preinstall = "echo 'I am about to install tools'"
-postinstall = "echo 'I just installed tools'"
+leave = "echo '我离开了项目'"
 ```
 
-String hooks are shorthand for `run` hooks. Use a hook table when you need to select the inline shell command:
+## 预安装/后安装钩子
+
+这些钩子会分别在工具安装之前和之后运行。与其他钩子不同，这些钩子不需要 `mise activate`。
 
 ```toml
 [hooks]
-postinstall = { run = "echo 'installed'", shell = "bash -c" }
+preinstall = "echo '我即将安装工具'"
+postinstall = "echo '我刚刚安装了工具'"
 ```
 
-Like tasks, inline hook tables may define a Windows-specific command with `run_windows`.
-On Windows, mise uses `run_windows` when it is set; otherwise it uses `run`. On other
-platforms, a hook with only `run_windows` is skipped.
+字符串形式的钩子是 `run` 钩子的简写。当你需要选择内联 shell 命令时，请使用钩子表：
+
+```toml
+[hooks]
+postinstall = { run = "echo '已安装'", shell = "bash -c" }
+```
+
+与任务一样，内联钩子表可以通过 `run_windows` 定义 Windows 特定命令。
+在 Windows 上，mise 会在设置了 `run_windows` 时使用它；否则使用 `run`。在其他
+平台上，只有 `run_windows` 的钩子会被跳过。
 
 ```toml
 [hooks]
 postinstall = { run = "echo installed", run_windows = "Write-Output installed" }
 ```
 
-For `preinstall` and `postinstall`, `script = ...` is a legacy alias for `run = ...`. If a `shell` is also set on a `script`/`scripts` hook, mise warns that the shell is ignored and still runs the script with the default inline shell. Use `run = ...` with `shell = "bash -c"` to choose the inline shell command. The `script` alias for install hooks is deprecated.
+对于 `preinstall` 和 `postinstall`，`script = ...` 是 `run = ...` 的旧别名。如果在 `script`/`scripts` 钩子上也设置了 `shell`，mise 会警告该 shell 被忽略，并仍然使用默认的内联 shell 运行脚本。使用 `run = ...` 搭配 `shell = "bash -c"` 来选择内联 shell 命令。安装钩子的 `script` 别名已被弃用。
 
-A `mise install` that finds nothing to install (all configured tools are already present) still runs the `postinstall` hook — it is not skipped on a no-op install.
+即使 `mise install` 没有发现任何需要安装的内容（所有已配置的工具都已存在），它仍然会运行 `postinstall` 钩子——在无操作安装时它不会被跳过。
 
-The `postinstall` hook receives a `MISE_INSTALLED_TOOLS` environment variable containing a JSON array of the tools that were just installed, or `[]` when nothing was installed (e.g. a no-op install). Hooks that should only act on real installs can guard on `MISE_INSTALLED_TOOLS != "[]"`:
+`postinstall` 钩子会接收一个名为 `MISE_INSTALLED_TOOLS` 的环境变量，其中包含一个 JSON 数组，表示刚刚安装的工具；如果没有安装任何内容，则为 `[]`（例如无操作安装）。只应在真实安装时执行的钩子可以通过检查 `MISE_INSTALLED_TOOLS != "[]"` 来进行保护：
 
 ```toml
 [hooks]
 postinstall = '''
-echo "Installed: $MISE_INSTALLED_TOOLS"
-# Example output: [{"name":"node","version":"20.10.0"},{"name":"python","version":"3.12.0"}]
+echo "已安装：$MISE_INSTALLED_TOOLS"
+# 示例输出：[{"name":"node","version":"20.10.0"},{"name":"python","version":"3.12.0"}]
 '''
 ```
 
-## Tool-level postinstall
+## 工具级 postinstall
 
-Individual tools can define their own postinstall scripts using the `postinstall` option. These run immediately after each tool is installed (before other tools in the same session are installed):
+单个工具可以使用 `postinstall` 选项定义自己的 postinstall 脚本。这些脚本会在每个工具安装后立即运行（在同一会话中的其他工具安装之前）：
 
 ```toml
 [tools]
@@ -81,18 +81,16 @@ node = { version = "20", postinstall = "npm install -g pnpm" }
 python = { version = "3.12", postinstall = "pip install pipx" }
 ```
 
-Tool-level postinstall scripts receive the following environment variables:
+工具级 postinstall 脚本会接收以下环境变量：
 
-- `MISE_TOOL_NAME`: The short name of the tool (e.g., "node", "python")
-- `MISE_TOOL_VERSION`: The version that was installed (e.g., "20.10.0", "3.12.0")
-- `MISE_TOOL_INSTALL_PATH`: The path where the tool was installed
-- Variables from that tool's `install_env` option
+- `MISE_TOOL_NAME`: 工具的简称（例如 "node"、"python"）
+- `MISE_TOOL_VERSION`: 已安装的版本（例如 "20.10.0"、"3.12.0"）
+- `MISE_TOOL_INSTALL_PATH`: 工具的安装路径
+- 来自该工具 `install_env` 选项中的变量
 
-## Task hooks
+## 任务 hooks
 
-Instead of inline scripts, hooks can reference mise tasks. The task is executed as a subprocess
-via `mise run`, so it reuses the full task system including dependencies, environment variables,
-and file-based task definitions.
+hooks 可以引用 mise 任务，而不是内联脚本。任务会通过 `mise run` 作为子进程执行，因此它会复用完整的任务系统，包括依赖、环境变量以及基于文件的任务定义。
 
 ```toml
 [tasks.setup]
@@ -103,18 +101,18 @@ depends = ["install-deps"]
 enter = { task = "setup" }
 ```
 
-You can mix task references with inline scripts in arrays:
+你可以在数组中混合使用任务引用和内联脚本：
 
 ```toml
 [hooks]
 enter = ["echo 'entering project'", { task = "setup" }]
 ```
 
-Task hooks work with all hook types (`enter`, `leave`, `cd`, `preinstall`, `postinstall`).
+Task hooks 适用于所有 hook 类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
 
-## Watch files hook
+## 文件监视钩子
 
-While using `mise activate` you can have mise watch files for changes and execute a script or task when a file changes.
+在使用 `mise activate` 时，你可以让 mise 监视文件变化，并在文件发生变化时执行脚本或任务。
 
 ```toml
 [[watch_files]]
@@ -122,10 +120,10 @@ patterns = ["src/**/*.rs"]
 run = "cargo fmt"
 ```
 
-By default, `run` uses the configured inline shell:
+默认情况下，`run` 使用已配置的内联 shell：
 [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)
-or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args).
-Add `shell = "bash -c"` to choose a different inline shell command for a watch file hook:
+或 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)。
+为文件监视钩子添加 `shell = "bash -c"` 以选择不同的内联 shell 命令：
 
 ```toml
 [[watch_files]]
@@ -134,7 +132,7 @@ run = "eslint --fix ."
 shell = "bash -c"
 ```
 
-`shell` only applies to `run` hooks. You can also reference a mise task instead of an inline script:
+`shell` 仅适用于 `run` 钩子。你也可以引用一个 mise 任务，而不是内联脚本：
 
 ```toml
 [[watch_files]]
@@ -142,28 +140,28 @@ patterns = ["uv.lock"]
 task = "sync-deps"
 ```
 
-Each `[[watch_files]]` entry should have either `run` or `task`, but not both.
+每个 `[[watch_files]]` 条目应当包含 `run` 或 `task` 之一，但不能同时包含两者。
 
-This hook will have the following environment variables set:
+此钩子会设置以下环境变量：
 
-- `MISE_WATCH_FILES_MODIFIED`: A colon-separated list of the files that have been modified. Colons are escaped with a backslash.
+- `MISE_WATCH_FILES_MODIFIED`：一个以冒号分隔的已修改文件列表。冒号使用反斜杠进行转义。
 
-## Hook execution
+## Hook 执行
 
-Hooks are executed with the following environment variables set:
+Hooks 会在设置了以下环境变量的情况下执行：
 
-- `MISE_ORIGINAL_CWD`: The directory that the user is in.
-- `MISE_PROJECT_ROOT`: The root directory of the project.
-- `MISE_PREVIOUS_DIR`: The directory that the user was in before the directory change (only if a directory change occurred).
-- `MISE_INSTALLED_TOOLS`: A JSON array of tools that were installed (only for `postinstall` hooks).
+- `MISE_ORIGINAL_CWD`：用户所在的目录。
+- `MISE_PROJECT_ROOT`：项目的根目录。
+- `MISE_PREVIOUS_DIR`：目录更改之前用户所在的目录（仅在发生目录更改时）。
+- `MISE_INSTALLED_TOOLS`：已安装工具的 JSON 数组（仅用于 `postinstall` hooks）。
 
-Inline `run` hooks can be written as `{ run = "..." }` for any hook type. The string shorthand
-(`enter = "echo hi"`) is equivalent to `{ run = "echo hi" }`.
+内联 `run` hooks 可以针对任何 hook 类型写成 `{ run = "..." }`。字符串简写
+（`enter = "echo hi"`）等同于 `{ run = "echo hi" }`。
 
-`run` and `run_windows` must be strings. `run = ["echo one", "echo two"]` is not supported.
+`run` 和 `run_windows` 必须是字符串。`run = ["echo one", "echo two"]` 不受支持。
 
-To run separate spawned inline commands, define multiple hooks. Each hook entry is a separate
-execution, so mise starts one subprocess per `run` entry:
+要运行彼此独立启动的内联命令，请定义多个 hooks。每个 hook 条目都是一次单独的
+执行，因此 mise 会为每个 `run` 条目启动一个子进程：
 
 ```toml
 [hooks]
@@ -173,8 +171,8 @@ enter = [
 ]
 ```
 
-To run multiple shell lines in one spawned command, use one multiline `run` string. This is one hook
-execution and one subprocess:
+要在一个启动的命令中运行多行 shell 命令，请使用一个多行 `run` 字符串。这是一次 hook
+执行和一个子进程：
 
 ```toml
 [hooks.enter]
@@ -184,16 +182,16 @@ echo two
 """
 ```
 
-`run` hooks execute in a subprocess using the default inline shell:
+`run` hooks 会在子进程中使用默认的内联 shell 执行：
 [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)
-or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args).
-Add `shell = "bash -c"` to a `run` hook table to choose a different inline shell command. Like task
-`shell`, the value should include both the program and the argument that evaluates the inline command
-such as `bash -c`, `zsh -c`, or `pwsh -Command`.
+或 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)。
+向 `run` hook 表添加 `shell = "bash -c"` 以选择不同的内联 shell 命令。与 task 的
+`shell` 类似，该值应同时包含程序以及用于求值内联命令的参数，
+例如 `bash -c`、`zsh -c` 或 `pwsh -Command`。
 
-## Shell hooks
+## Shell 钩子
 
-`enter`, `leave`, and `cd` hooks can be executed in the current shell, for example if you'd like to add bash completions when entering a directory:
+`enter`、`leave` 和 `cd` 钩子可以在当前 shell 中执行，例如，如果你想在进入某个目录时添加 bash 补全：
 
 ```toml
 [hooks.enter]
@@ -201,7 +199,7 @@ shell = "bash"
 script = "source completions.sh"
 ```
 
-Current-shell hooks may use `script`/`scripts` arrays:
+当前 shell 钩子可以使用 `script`/`scripts` 数组：
 
 ```toml
 [hooks.enter]
@@ -218,28 +216,24 @@ scripts = [
 ]
 ```
 
-`script` with `shell` is for current-shell hooks. Here, `shell` is a shell-name selector such as
-`bash`, `zsh`, or `fish`, not an inline shell command like `bash -c`. mise only prints the script
-when the active `mise activate` shell matches.
+带有 `shell` 的 `script` 用于当前 shell 钩子。这里的 `shell` 是一个 shell 名称选择器，例如
+`bash`、`zsh` 或 `fish`，而不是像 `bash -c` 这样的内联 shell 命令。只有当当前激活的 `mise activate` shell 匹配时，mise 才会打印该脚本。
 
-Use `run` when the hook should execute as an inline command in a subprocess. `preinstall` and
-`postinstall` do not have a current shell, so `script` is only kept there as a legacy alias for `run`;
-if `shell` is set with `script`/`scripts` on those hooks, it is ignored.
+当钩子应作为子进程中的内联命令执行时，请使用 `run`。`preinstall` 和
+`postinstall` 没有当前 shell，因此 `script` 在那里仅作为 `run` 的旧别名保留；如果在这些钩子上设置了 `shell` 与 `script`/`scripts`，它会被忽略。
 
 ::: warning
-I feel this should be obvious but in case it's not, this isn't going to do any sort of cleanup
-when you _leave_ the directory like using `[env]` does in `mise.toml`. You're literally just
-executing shell code when you enter the directory which mise has no way to track at all.
-I don't think there is a solution to this problem and it's likely the reason direnv has never
-implemented something similar.
+我觉得这应该是不言自明的，但万一不是的话，这并不会像 `mise.toml` 中的 `[env]` 那样在你 _离开_ 目录时执行任何清理操作。你实际上只是
+在进入目录时执行 shell 代码，而 mise 完全没有办法跟踪这一点。
+我认为这个问题没有解决方案，这很可能也是 direnv 从未实现类似功能的原因。
 
-I think in most situations this is probably fine, though worth keeping in mind.
+不过我认为在大多数情况下这可能没问题，只是值得记住这一点。
 
 :::
 
-## Multiple hooks syntax
+## 多个钩子语法
 
-You can use arrays to define multiple hooks in the same file:
+你可以使用数组在同一个文件中定义多个钩子：
 
 ```toml
 [hooks]

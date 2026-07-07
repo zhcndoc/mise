@@ -1,16 +1,14 @@
-# Tips & Tricks
+# 提示与技巧
 
-An assortment of helpful tips for using `mise`.
+使用 `mise` 的一些实用技巧汇总。
 
 ## macOS Rosetta
 
-If you have a need to run tools as x86_64 on Apple Silicon, this can be done with mise however you'll currently
-need to use the x86_64 version of mise itself. A common reason for doing this is to support compiling node <=14.
+如果你需要在 Apple Silicon 上以 x86_64 运行工具，可以使用 mise 来实现，但目前你需要使用 x86_64 版本的 mise 本身。这样做的一个常见原因是为了支持编译 node <=14。
 
-You can do this either with the [`MISE_ARCH`](https://mise.en.dev/configuration/settings.html#arch)
-setting or by using a dedicated rosetta mise bin as described below:
+你可以通过 [`MISE_ARCH`](https://mise.en.dev/configuration/settings.html#arch) 设置，或者使用下面描述的专用 rosetta mise 可执行文件：
 
-First, you'll need a copy of mise that's built for x86_64:
+首先，你需要一个为 x86_64 构建的 mise 版本：
 
 ```sh
 $ curl https://mise.run | MISE_INSTALL_PATH=~/.local/bin/mise-x64 MISE_INSTALL_ARCH=x64 sh
@@ -19,10 +17,10 @@ mise 2024.x.x
 ```
 
 ::: warning
-If `~/.local/bin` is not in PATH, you'll need to prefix all commands with `~/.local/bin/mise-x64`.
+如果 `~/.local/bin` 不在 PATH 中，你需要在所有命令前加上 `~/.local/bin/mise-x64`。
 :::
 
-Now you can use `mise-x64` to install tools:
+现在你可以使用 `mise-x64` 来安装工具：
 
 ```sh
 mise-x64 use -g node@20
@@ -30,21 +28,21 @@ mise-x64 use -g node@20
 
 ## Shebang
 
-You can specify a tool and its version in a shebang without needing to first
-set up a `mise.toml`/`.tool-versions` config:
+你可以在 shebang 中指定一个工具及其版本，而无需先
+设置 `mise.toml`/`.tool-versions` 配置：
 
 ```typescript
 #!/usr/bin/env -S mise x node@20 -- node
-// "env -S" allows multiple arguments in a shebang
+// "env -S" 允许在 shebang 中使用多个参数
 console.log(`Running node: ${process.version}`);
 ```
 
-This can also be useful in environments where mise isn't activated
-(such as a non-interactive session).
+这在 mise 未被激活的环境中也很有用
+（例如非交互式会话）。
 
-## Bootstrap script
+## Bootstrap 脚本
 
-You can download the <https://mise.run> script to use in a project bootstrap script:
+你可以下载 <https://mise.run> 脚本，用于项目引导脚本中：
 
 ```sh
 curl https://mise.run > setup-mise.sh
@@ -53,16 +51,14 @@ chmod +x setup-mise.sh
 ```
 
 ::: tip
-This file contains checksums so it's more secure to commit it into your project rather than
-calling `curl https://mise.run` dynamically—though of course this means it will only fetch
-the version of mise that was current when the script was created.
+这个文件包含校验和，因此将其提交到你的项目中比动态调用 `curl https://mise.run` 更安全——不过当然，这也意味着它只会获取脚本创建时当时最新版本的 mise。
 :::
 
-## Project-local task entrypoints
+## 项目本地任务入口点
 
-If you want contributors to run project tasks without installing mise first, pair
-[`mise generate bootstrap`](/cli/generate/bootstrap.html) with
-[`mise generate task-stubs`](/cli/generate/task-stubs.html):
+如果你希望贡献者在不先安装 mise 的情况下运行项目任务，可以将
+[`mise generate bootstrap`](/cli/generate/bootstrap.html) 与
+[`mise generate task-stubs`](/cli/generate/task-stubs.html) 配合使用：
 
 ```sh
 mkdir -p bin
@@ -71,81 +67,73 @@ mise generate task-stubs --mise-bin ./bin/mise
 ./bin/test
 ```
 
-The generated task stubs behave like small project commands, while `bin/mise`
-downloads and runs the pinned mise binary for the project.
+生成的任务存根会像小型项目命令一样运行，而 `bin/mise`
+会下载并运行该项目固定版本的 mise 二进制文件。
 
-## Machine bootstrapping <Badge type="warning" text="experimental" />
+## 机器引导配置 <Badge type="warning" text="experimental" />
 
-Beyond `[tools]`, mise can declare the rest of the machine setup needed for
-a project or workstation, and [`mise bootstrap`](/cli/bootstrap.html)
-converges it in one command — system packages, then repos, then dotfiles, then
-shell activation, then macOS defaults, then LaunchAgents, then systemd user
-services, then login shell, then tools, then a `bootstrap` task if you define
-one:
+除了 `[tools]` 之外，mise 还可以声明项目或工作站所需的其余机器设置，并且 [`mise bootstrap`](/cli/bootstrap.html)
+会通过一条命令将其收敛到目标状态——先是系统包，然后是仓库，然后是 dotfiles，然后
+shell 激活，然后是 macOS 默认设置，然后是 LaunchAgents，然后是 systemd 用户
+服务，然后是登录 shell，然后是工具，最后如果你定义了一个 `bootstrap` 任务，还会执行它：
 
 ```toml
-[bootstrap.packages]                      # OS packages (apk/apt/dnf/pacman/brew)
+[bootstrap.packages]                      # 操作系统包 (apk/apt/dnf/pacman/brew)
 "apk:build-base" = "latest"
 "apt:build-essential" = "latest"
 "brew:postgresql@17" = "latest"
 
-[bootstrap.repos]                         # git repos cloned before dotfiles
+[bootstrap.repos]                         # 在 dotfiles 之前克隆的 git 仓库
 "~/src/dotfiles" = { url = "git@github.com:jdx/dotfiles.git", ref = "main" }
 
-[dotfiles]                             # dotfiles: symlink/copy/template
+[dotfiles]                             # dotfiles：符号链接/复制/模板
 "~/.gitconfig" = { mode = "symlink" }
 "~/.config/nvim" = { mode = "symlink" }
 
-[bootstrap.mise_shell_activate]       # mise activation in shell startup files
+[bootstrap.mise_shell_activate]       # shell 启动文件中的 mise 激活
 zprofile = "shims"
 zshrc = "activate"
 fish = "activate"
 
-[bootstrap.macos.dock]                 # friendly macOS defaults
+[bootstrap.macos.dock]                 # 友好的 macOS 默认设置
 autohide = true
 orientation = "left"
 
 [bootstrap.macos.finder]
 show_pathbar = true
 
-[bootstrap.macos.launchd.agents.my-sync]      # macOS user LaunchAgents
+[bootstrap.macos.launchd.agents.my-sync]      # macOS 用户 LaunchAgents
 program = "~/.local/bin/my-sync"
 run_at_load = true
 
-[bootstrap.linux.systemd.units.my-sync]       # Linux systemd user services
+[bootstrap.linux.systemd.units.my-sync]       # Linux systemd 用户服务
 exec_start = "~/.local/bin/my-sync --watch"
 restart = "on-failure"
 
-[bootstrap.user]                       # current user's login shell
+[bootstrap.user]                       # 当前用户的登录 shell
 login_shell = "/bin/zsh"
 
-[bootstrap.hooks.post-defaults]        # optional phase hooks
+[bootstrap.hooks.post-defaults]        # 可选的阶段钩子
 run = "killall Dock || true"
 
-[tasks.bootstrap]                      # anything else, with tools on PATH
+[tasks.bootstrap]                      # 其他任何内容，且 PATH 上可用 tools
 run = "gh auth status || gh auth login"
 ```
 
 ```sh
-mise bootstrap --yes   # new laptop or container -> ready to work
+mise bootstrap --yes   # 新笔记本或容器 -> 可开始工作
 ```
 
-Everything is declarative and idempotent: re-running skips whatever is
-already in its desired state, `mise bootstrap packages status --missing` and
-`mise bootstrap dotfiles status --missing` make CI checks, and nothing is ever
-applied implicitly. The exceptions are `[bootstrap.hooks]` and `[tasks.bootstrap]`,
-which are imperative commands run during `mise bootstrap` and may have side
-effects; treat hook commands as non-idempotent unless they are written to
-converge safely. See
-[Bootstrap](/bootstrap.html), [Bootstrap Packages](/bootstrap/packages/),
-[Repos](/bootstrap/repos.html), [Dotfiles](/dotfiles.html),
-[Shell Activation](/bootstrap/shell.html),
-[macOS Defaults](/bootstrap/macos-defaults.html), [launchd](/bootstrap/launchd.html),
-[systemd](/bootstrap/systemd.html), and [User Login Shell](/bootstrap/user.html).
+一切都是声明式且幂等的：再次运行时会跳过任何已经处于目标状态的内容，`mise bootstrap packages status --missing` 和 `mise bootstrap dotfiles status --missing` 可用于 CI 检查，而且不会有任何内容被隐式应用。例外是 `[bootstrap.hooks]` 和 `[tasks.bootstrap]`，
+它们是在 `mise bootstrap` 期间运行的命令式命令，可能会产生副作用；除非钩子命令本身被编写为可安全收敛，否则应将其视为非幂等。参见
+[Bootstrap](/bootstrap.html)、[Bootstrap Packages](/bootstrap/packages/)、[Repos](/bootstrap/repos.html)、[Dotfiles](/dotfiles.html)、
+[Shell Activation](/bootstrap/shell.html)、
+[macOS Defaults](/bootstrap/macos-defaults.html)、[launchd](/bootstrap/launchd.html)、
+[systemd](/bootstrap/systemd.html) 和 [User Login Shell](/bootstrap/user.html)。
 
-## Installation via zsh zinit
+## 通过 zsh zinit 安装
 
-[Zinit](https://github.com/zdharma-continuum/zinit) is a plugin manager for ZSH, which this snippet you will get mise (and usage for shell completion):
+[Zinit](https://github.com/zdharma-continuum/zinit) 是 ZSH 的一个插件管理器，通过这段配置你将获得 mise（以及 shell 补全的用法）：
 
 ```sh
 zinit as="command" lucid from="gh-r" for \
@@ -164,11 +152,11 @@ zinit as="command" lucid from="gh-r" for \
 
 ## CI/CD
 
-Using mise in CI/CD is a great way to synchronize tool versions for dev/build.
+在 CI/CD 中使用 mise 是一种很好的方式，可以同步开发/构建所使用的工具版本。
 
 ### GitHub Actions
 
-mise is pretty easy to use without an action:
+在不使用 action 的情况下，mise 也很容易使用：
 
 ```yaml
 jobs:
@@ -180,7 +168,7 @@ jobs:
           echo "$HOME/.local/share/mise/shims" >> $GITHUB_PATH
 ```
 
-Or you can use the custom action [`jdx/mise-action`](https://github.com/jdx/mise-action):
+或者你也可以使用自定义 action [`jdx/mise-action`](https://github.com/jdx/mise-action)：
 
 ```yaml
 jobs:
@@ -188,71 +176,70 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: jdx/mise-action@v3
-      - run: node -v # will be the node version from `mise.toml`/`.tool-versions`
+      - run: node -v # 将会是来自 `mise.toml`/`.tool-versions` 的 node 版本
 ```
 
 ## `mise set`
 
-Instead of manually editing `mise.toml` to add env vars, you can use [`mise set`](/cli/set.html) instead:
+你可以使用 [`mise set`](/cli/set.html) 来代替手动编辑 `mise.toml` 以添加环境变量：
 
 ```sh
 mise set NODE_ENV=production
 ```
 
-## Using Tera to read unsupported version files
+## 使用 Tera 读取不受支持的版本文件
 
-Some project-local version files are already supported as [idiomatic version files](https://mise.en.dev/configuration.html#idiomatic-version-files). For other version files, you can use Tera templates in `mise.toml` to read the file and assign the version to the appropriate tool.
+一些项目本地的版本文件已经作为[惯用版本文件](https://mise.en.dev/configuration.html#idiomatic-version-files)得到支持。对于其他版本文件，你可以在 `mise.toml` 中使用 Tera 模板读取该文件，并将版本分配给相应的工具。
 
-For example, to use a `.hvm` file with a plain Hugo version:
+例如，要使用 `.hvm` 文件并指定普通的 Hugo 版本：
 
 ```toml
 [tools]
 hugo = "{{ read_file(path='.hvm') | trim }}"
 ```
 
-HVM also supports versions with an `/extended` suffix. In mise, Hugo and Hugo Extended are separate tools, so strip the suffix and use `hugo-extended` instead:
+HVM 也支持带有 `/extended` 后缀的版本。在 mise 中，Hugo 和 Hugo Extended 是两个独立的工具，因此需要去掉该后缀，并改用 `hugo-extended`：
 
 ```toml
 [tools]
 hugo-extended = "{{ read_file(path='.hvm') | trim | replace(from='/extended', to='') }}"
 ```
 
-See [Templates](/templates.html) for more details on Tera functions and filters.
+有关 Tera 函数和过滤器的更多细节，请参见[模板](/templates.html)。
 
-## [`mise run`](/cli/run.html) shorthand
+## [`mise run`](/cli/run.html) 简写
 
-As long as the task name doesn't conflict with a mise-provided command you can skip the `run` part:
+只要任务名称不与 mise 提供的命令冲突，你就可以省略 `run` 部分：
 
 ```sh
 mise test
 ```
 
 ::: warning
-Don't do this inside of scripts because mise may add a command in a future version and could conflict with your task.
+不要在脚本中这样做，因为 mise 未来版本可能会添加一个命令，并与你的任务发生冲突。
 :::
 
-## Watch tasks while editing
+## 编辑时监视任务
 
-[`mise watch`](/cli/watch.html) reruns tasks when files change. It uses
-`watchexec`, which you can install globally with mise:
+[`mise watch`](/cli/watch.html) 会在文件更改时重新运行任务。它使用
+`watchexec`，你可以使用 mise 全局安装它：
 
 ```sh
 mise use -g watchexec@latest
 mise watch test
 ```
 
-Use `--restart` for long-running processes that should restart on changes:
+对于应在更改时重启的长时间运行进程，使用 `--restart`：
 
 ```sh
 mise watch --restart dev
 ```
 
-## Share task catalogs
+## 共享任务目录
 
-For projects with a lot of tasks,
+对于拥有大量任务的项目，
 [`task_config.includes`](/tasks/task-configuration.html#task-config-includes)
-can load task definitions from additional directories, `tasks.toml` files, or
-remote git repositories:
+可以从额外的目录、`tasks.toml` 文件或远程 git 仓库加载任务定义：
 
 ```toml
 [task_config]
@@ -263,13 +250,13 @@ includes = [
 ]
 ```
 
-Included `tasks.toml` files use the same shape as the `[tasks]` table without
-the `[tasks.]` prefix.
+被包含的 `tasks.toml` 文件使用与 `[tasks]` 表相同的结构，只是没有
+`[tasks.]` 前缀。
 
-## Reuse task definitions with templates
+## 使用模板复用任务定义
 
-Experimental [task templates](/tasks/templates.html) let multiple tasks share
-common tools, environment variables, and command defaults:
+实验性的 [任务模板](/tasks/templates.html) 允许多个任务共享
+通用工具、环境变量和命令默认值：
 
 ```toml
 [settings]
@@ -284,43 +271,42 @@ extends = "node:test"
 run = "pnpm test -- --watch=false"
 ```
 
-This is especially useful in monorepos where each package needs similar build,
-test, or lint tasks with small local overrides.
+这在 monorepo 中尤其有用，因为其中每个包都需要类似的构建、
+测试或 lint 任务，并且只需进行少量本地覆盖。
 
-## Redact secrets from task output
+## 从任务输出中去除敏感信息
 
-If a task may echo secrets in CI logs, add `redactions` to the task or config.
-The listed environment variables are replaced with `[redacted]` in task output:
+如果某个任务可能在 CI 日志中回显敏感信息，请在任务或配置中添加 `redactions`。
+列出的环境变量会在任务输出中替换为 `[redacted]`：
 
 ```toml
 redactions = ["API_KEY", "PASSWORD"]
 ```
 
-Glob patterns are also supported:
+也支持 glob 模式：
 
 ```toml
 redactions.env = ["SECRETS_*"]
 ```
 
-## Software verification
+## 软件验证
 
-See [Security](/security.html#software-verification) for mise's software verification controls,
-including aqua signatures, SLSA provenance, and GitHub artifact attestations.
+请参阅 [安全](/security.html#software-verification) 了解 mise 的软件验证控制，
+包括 aqua 签名、SLSA 来源证明以及 GitHub 产物证明。
 
-## Minimum release age
+## 最低发布年龄
 
-See [Security](/security.html#minimum-release-age) for supply-chain delay controls, backend support,
-and transitive dependency filtering behavior.
+请参阅 [安全](/security.html#minimum-release-age) 以了解供应链延迟控制、后端支持以及传递依赖过滤行为。
 
 ## [`mise up --bump`](/cli/upgrade.html)
 
-Use `mise up --bump` to upgrade all software to the latest version and update `mise.toml` files. This keeps the same semver range as before,
-so if you had `node = "24"` and node 26 is the latest, `mise up --bump node` will change `mise.toml` to `node = "26"`.
+使用 `mise up --bump` 将所有软件升级到最新版本并更新 `mise.toml` 文件。这会保持与之前相同的 semver 范围，
+因此如果你原来有 `node = "24"`，而 node 26 是最新版本，那么 `mise up --bump node` 会将 `mise.toml` 改为 `node = "26"`。
 
 ## cargo-binstall
 
-cargo-binstall is sort of like ubi but specific to rust tools. It fetches binaries for cargo releases. mise will use this automatically for `cargo:` tools if it is installed
-so if you use `cargo:` you should add this to make `mise i` go much faster.
+cargo-binstall 有点像 ubi，但专用于 Rust 工具。它会为 cargo 发布版本获取二进制文件。如果已安装，mise 会自动将其用于 `cargo:` 工具
+因此如果你使用 `cargo:`，你应该把它加上，这样 `mise i` 会快很多。
 
 ```sh
 mise use -g cargo-binstall
@@ -328,17 +314,16 @@ mise use -g cargo-binstall
 
 ## [`mise cache clear`](/cli/cache.html)
 
-mise caches things for obvious reasons but sometimes you want it to use fresh data (maybe it's not noticing a new release). Run `mise cache clear` to remove the cache which
-basically just run `rm -rf ~/.cache/mise/*`.
+mise 会出于显而易见的原因缓存一些内容，但有时你希望它使用新鲜数据（也许它没有注意到一个新发布版本）。运行 `mise cache clear` 来移除缓存，这基本上等同于运行 `rm -rf ~/.cache/mise/*`。
 
 ## [`mise en`](/cli/en.html)
 
-`mise en` is a great alternative to `mise activate` if you don't want to always be using mise for some reason. It sets up the mise environment in your current directory
-but doesn't keep running and updating the env vars after that.
+`mise en` 是 `mise activate` 的一个很好的替代方案，如果你因为某些原因不想一直使用 mise。它会在你当前目录中设置 mise 环境，
+但之后不会持续运行并更新环境变量。
 
-## Auto-install when entering a project
+## 进入项目时自动安装
 
-Auto-install tools when entering a project by adding the following to `mise.toml`:
+通过将以下内容添加到 `mise.toml`，在进入项目时自动安装工具：
 
 ```toml
 [hooks]
@@ -347,7 +332,7 @@ enter = "mise i -q"
 
 ## [`mise tool [TOOL]`](/cli/tool.html)
 
-Get information about what backend a tool is using and other information with `mise tool [TOOL]`:
+使用 `mise tool [TOOL]` 获取有关某个工具正在使用的后端以及其他信息：
 
 ```sh
 ❯ mise tool ripgrep
@@ -361,7 +346,7 @@ Tool Options:       [none]
 
 ## [`mise cfg`](/cli/config.html)
 
-List the config files mise is reading in a particular directory with `mise cfg`:
+使用 `mise cfg` 列出 mise 在特定目录中正在读取的配置文件：
 
 ```sh
 ❯ mise cfg
@@ -374,31 +359,28 @@ Path                                    Tools
 ~/src/mise/mise.local.toml              (none)
 ```
 
-This is helpful figuring out which order the config files are loaded in to figure out which one is overriding.
+这有助于弄清楚配置文件的加载顺序，从而判断哪个配置文件会覆盖其他配置。
 
 ## `mise.lock`
 
-When lockfiles are enabled, mise will update `mise.lock` with full versions and tarball checksums (if supported by the backend).
-These can be updated with [`mise up`](/cli/upgrade.html). You need to manually create the lockfile, then mise will add the tools to it:
+当启用锁文件时，mise 会将完整版本和 tarball 校验和（如果后端支持）更新到 `mise.lock` 中。
+这些内容可以通过 [`mise up`](/cli/upgrade.html) 更新。你需要手动创建锁文件，然后 mise 会将工具添加进去：
 
 ```sh
 touch mise.lock
 mise i
 ```
 
-The lockfile uses a consolidated format with `[tools.name.assets]` sections to organize asset information under each tool. Asset information includes checksums, file sizes, and optional download URLs. Legacy lockfiles with separate `[tools.name.checksums]` and `[tools.name.sizes]` sections are automatically migrated to the new format.
+锁文件使用一种统一格式，采用 `[tools.name.assets]` 部分来组织每个工具下的资产信息。资产信息包括校验和、文件大小以及可选的下载 URL。旧版锁文件使用单独的 `[tools.name.checksums]` 和 `[tools.name.sizes]` 部分，会自动迁移到新格式。
 
-Note that at least currently mise needs to actually install the tool to get the tarball checksum (otherwise it would need to download the tarball just
-to get the checksum of it since normally that gets deleted). So you may need to run something like `mise uninstall --all` first in order to have it
-reinstall everything. It will store the full versions even if it doesn't know the checksum though so it'll still lock the version just not have a checksum
-to go with it.
+请注意，至少目前来说，mise 需要实际安装该工具才能获取 tarball 校验和（否则它就需要先下载 tarball，才能获取其校验和，因为通常下载后它会被删除）。因此，你可能需要先运行类似 `mise uninstall --all` 的命令，以便让它重新安装所有内容。不过，即使它不知道校验和，它仍会保存完整版本，所以它依然会锁定版本，只是不会附带校验和。
 
-## Lockfile URL Tracking (Avoiding Rate Limits)
+## 锁文件 URL 跟踪（避免速率限制）
 
-When you use a lockfile (`mise.lock`), mise stores the exact download URLs for each tool asset. This means that after the initial install, future `mise install` runs will use the URLs from the lockfile instead of making API calls to GitHub (or other providers). This has several benefits:
+当你使用锁文件（`mise.lock`）时，mise 会为每个工具资产存储确切的下载 URL。这意味着在首次安装之后，后续的 `mise install` 运行将使用锁文件中的 URL，而不是向 GitHub（或其他提供商）发起 API 调用。这带来了几个好处：
 
-- **Avoids GitHub API rate limits**: No need to make repeated API calls for every install, which can quickly exhaust your rate limit, especially in CI or large teams.
-- **No need for GITHUB_TOKEN**: Since the URLs are already known, you don’t need to set up a `GITHUB_TOKEN` for simple installs. See [GitHub Tokens](/dev-tools/github-tokens.html) for more on token configuration.
-- **Faster installs**: Skipping API lookups speeds up repeated installs.
+- **避免 GitHub API 速率限制**：无需为每次安装重复发起 API 调用，这会很快耗尽你的速率限制，尤其是在 CI 或大型团队中。
+- **无需 GITHUB_TOKEN**：由于 URL 已经已知，对于简单安装，你不需要配置 `GITHUB_TOKEN`。有关令牌配置的更多信息，请参见 [GitHub Tokens](/dev-tools/github-tokens.html)。
+- **更快的安装**：跳过 API 查询可加快重复安装速度。
 
-This is especially useful in CI/CD or when working in environments with strict network or authentication requirements.
+这在 CI/CD 中，或在具有严格网络或身份验证要求的环境中工作时尤其有用。

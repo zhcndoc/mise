@@ -5,96 +5,96 @@
 - **Aliases**: `x`
 - **Source code**: [`src/cli/exec.rs`](https://github.com/jdx/mise/blob/main/src/cli/exec.rs)
 
-Execute a command with tool(s) set
+使用已设置的工具执行命令
 
-use this to avoid modifying the shell session or running ad-hoc commands with mise tools set.
+可用于避免修改 shell 会话，或使用 mise 已设置的工具运行临时命令。
 
-Tools will be loaded from mise.toml, though they can be overridden with &lt;RUNTIME> args
-Note that only the plugin specified will be overridden, so if a `mise.toml` file
-includes "node 20" but you run `mise exec python@3.11`; it will still load node@20.
+工具将从 mise.toml 中加载，不过可以通过 &lt;RUNTIME> 参数进行覆盖
+请注意，只有指定的插件会被覆盖，因此如果一个 `mise.toml` 文件
+包含 "node 20"，但你运行 `mise exec python@3.11`；它仍然会加载 node@20。
 
-The "--" separates runtimes from the commands to pass along to the subprocess.
+“--” 用于将运行时与传递给子进程的命令分隔开。
 
-## Arguments
+## 参数
 
 ### `[TOOL@VERSION]…`
 
-Tool(s) to start e.g.: node@20 python@3.10
+要启动的工具，例如：node@20 python@3.10
 
 ### `[-- COMMAND]…`
 
-Command string to execute (same as --command)
+要执行的命令字符串（与 --command 相同）
 
-## Flags
+## 标志
 
 ### `-c --command <C>`
 
-Command string to execute
+要执行的命令字符串
 
 ### `-j --jobs <JOBS>`
 
-Number of jobs to run in parallel
-[default: 4]
+要并行运行的任务数量
+[默认: 4]
 
 ### `--allow-env… <VAR>`
 
-Allow specific env var through (implies --deny-env for everything else)
-Supports wildcards, e.g. --allow-env='MYAPP_*'
+允许特定的环境变量通过（意味着对其他所有环境变量启用 --deny-env）
+支持通配符，例如 --allow-env='MYAPP_*'
 
 ### `--allow-net… <HOST>`
 
-Allow network to specific host (implies --deny-net for everything else)
-macOS only in v1; on Linux falls back to allowing all network
+允许访问特定主机的网络（意味着对其他所有网络启用 --deny-net）
+仅在 v1 中支持 macOS；在 Linux 上则回退为允许所有网络
 
 ### `--allow-read… <PATH>`
 
-Allow reads from specific path (implies --deny-read for everything else)
+允许从特定路径读取（意味着对其他所有路径启用 --deny-read）
 
 ### `--allow-write… <PATH>`
 
-Allow writes to specific path (implies --deny-write for everything else)
+允许向特定路径写入（意味着对其他所有路径启用 --deny-write）
 
 ### `--deny-all`
 
-Block reads, writes, network, and env vars
+阻止读取、写入、网络和环境变量
 
 ### `--deny-env`
 
-Block env var inheritance (only PATH, HOME, USER, SHELL, TERM, LANG pass through)
+阻止继承环境变量（仅 PATH、HOME、USER、SHELL、TERM、LANG 会透传）
 
 ### `--deny-net`
 
-Block all network access
+阻止所有网络访问
 
 ### `--deny-read`
 
-Block filesystem reads (system libs and tool dirs still accessible)
+阻止文件系统读取（系统库和工具目录仍可访问）
 
 ### `--deny-write`
 
-Block all filesystem writes
+阻止所有文件系统写入
 
 ### `--fresh-env`
 
-Bypass the environment cache and recompute the environment
+绕过环境缓存并重新计算环境
 
 ### `--no-deps`
 
-Skip automatic dependency preparation
+跳过自动依赖准备
 
 ### `--raw`
 
-Connect backend install command stdin/stdout/stderr directly to the terminal Implies --jobs=1
+将后端安装命令的 stdin/stdout/stderr 直接连接到终端，意味着 --jobs=1
 
-Examples:
+示例：
 
 ```
-$ mise exec node@20 -- node ./app.js  # launch app.js using node-20.x
-$ mise x node@20 -- node ./app.js     # shorter alias
+$ mise exec node@20 -- node ./app.js  # 使用 node-20.x 启动 app.js
+$ mise x node@20 -- node ./app.js     # 更短的别名
 
-# Specify command as a string:
+# 将命令指定为字符串：
 $ mise exec node@20 python@3.11 --command "node -v && python -V"
 
-# Run a command in a different directory:
+# 在不同目录中运行命令：
 $ mise x -C /path/to/project node@20 -- node ./app.js
 ```

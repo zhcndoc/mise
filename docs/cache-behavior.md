@@ -1,58 +1,46 @@
-# Cache Behavior
+# 缓存行为
 
-mise makes use of caching in many places in order to be efficient. The details about how long to keep
-cache for should eventually all be configurable. There may be gaps in the current behavior where
-things are hardcoded, but I'm happy to add more settings to cover whatever config is needed.
+mise 在很多地方都会使用缓存，以提高效率。关于缓存应保留多长时间的细节，最终都应该可以配置。目前的行为中可能还存在一些空缺，也就是某些内容是硬编码的，但我很乐意添加更多设置来覆盖所需的任何配置。
 
-Below I explain the behavior it uses around caching. If you're seeing behavior where things don't appear
-to be updating, this is a good place to start.
+下面我会解释它在缓存方面使用的行为。如果你看到某些内容似乎没有更新，那么这里是一个很好的起点。
 
-## Tool Cache
+## 工具缓存
 
-Each tool/backend has a cache that's stored in `~/$MISE_CACHE_DIR/<TOOL>`. It stores
-the list of versions available for that tool (`mise ls-remote <TOOL>`), the idiomatic filenames (see below),
-the list of aliases, the bin directories within each tool installation, and the result of
-running `exec-env` after the tool was installed.
+每个工具/后端都有一个缓存，存储在 `~/$MISE_CACHE_DIR/<TOOL>` 中。它保存该工具可用版本列表（`mise ls-remote <TOOL>`）、惯用文件名（见下文）、别名列表、每个工具安装中的 bin 目录，以及在工具安装后运行 `exec-env` 的结果。
 
-Remote versions are updated daily by default. The file is zlib messagepack, if you want to view it you can
-run the following (requires [msgpack-cli](https://github.com/msgpack/msgpack-cli)).
+默认情况下，远程版本每天更新一次。该文件是 zlib messagepack，如果你想查看它，可以运行以下命令（需要 [msgpack-cli](https://github.com/msgpack/msgpack-cli)）。
 
 ```sh
 cat ~/$MISE_CACHE_DIR/node/remote_versions.msgpack.z | perl -e 'use Compress::Raw::Zlib;my $d=new Compress::Raw::Zlib::Inflate();my $o;undef $/;$d->inflate(<>,$o);print $o;' | msgpack-cli decode
 ```
 
-Note that the caching of `exec-env` may be problematic if the script isn't simply exporting
-static values. The vast majority of `exec-env` scripts only export static values.
+请注意，如果脚本不仅仅是导出静态值，那么缓存 `exec-env` 可能会有问题。绝大多数 `exec-env` 脚本只导出静态值。
 
-Caching `exec-env` massively improved the performance of mise since it requires calling bash
-every time mise is initialized.
+缓存 `exec-env` 极大提升了 mise 的性能，因为 mise 初始化时否则每次都需要调用 bash。
 
-## Environment Caching
+## 环境缓存
 
-For more advanced caching needs (including dynamic environment providers like secret managers),
-mise provides the [`env_cache`](/configuration/settings.html#env_cache) setting. When enabled,
-mise caches the computed environment to disk with encryption.
+对于更高级的缓存需求（包括像密钥管理器这样的动态环境提供者），mise 提供了 [`env_cache`](/configuration/settings.html#env_cache) 设置。启用后，mise 会将计算得到的环境加密后缓存到磁盘。
 
 ```toml
 # ~/.config/mise/config.toml
 [settings]
 env_cache = true
-env_cache_ttl = "1h"  # optional, default is 1h
+env_cache_ttl = "1h"  # 可选，默认值为 1h
 ```
 
-Cache invalidation happens automatically when:
+缓存失效会在以下情况自动发生：
 
-- Any config file changes (mise.toml, .tool-versions, etc.)
-- Tool versions change
-- Settings change
-- mise version changes
-- TTL expires (configurable via `env_cache_ttl`)
-- Any watched files change (from modules or `_.source` directives)
+- 任何配置文件发生变化（mise.toml、.tool-versions 等）
+- 工具版本发生变化
+- 设置发生变化
+- mise 版本发生变化
+- TTL 到期（可通过 `env_cache_ttl` 配置）
+- 任何被监视的文件发生变化（来自模块或 `_.source` 指令）
 
-Env plugins (vfox modules) can declare themselves cacheable by returning `{cacheable = true, watch_files = [...]}`
-from their `MiseEnv` hook. See [Env Plugin Development](/env-plugin-development.html) for details.
+环境插件（vfox 模块）可以通过在其 `MiseEnv` 钩子中返回 `{cacheable = true, watch_files = [...]}` 来声明自己可被缓存。详情请参见 [环境插件开发](/env-plugin-development.html)。
 
-Directives can opt out of caching by setting `cacheable = false`:
+通过设置 `cacheable = false`，指令可以选择不使用缓存：
 
 ```toml
 [env]
@@ -60,7 +48,6 @@ TIMESTAMP = { value = "{{ now() }}", cacheable = false }
 _.source = { file = "dynamic.sh", cacheable = false }
 ```
 
-## Cache auto-pruning
+## 缓存自动清理
 
-mise will automatically delete old files in its cache directory (configured with [`cache_prune_age`](https://mise.en.dev/configuration/settings.html#cache_prune_age)). Much of
-the contents are also ignored by mise if they are >24 hours old or a few days. For this reason, it's likely wasteful to store this directory in CI jobs.
+mise 会自动删除其缓存目录中的旧文件（可通过 [`cache_prune_age`](https://mise.en.dev/configuration/settings.html#cache_prune_age) 配置）。其中大部分内容如果超过 24 小时或几天，也会被 mise 忽略。因此，在 CI 作业中存储这个目录很可能是一种浪费。

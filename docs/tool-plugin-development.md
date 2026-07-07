@@ -1,36 +1,36 @@
-# Tool Plugin Development
+# 工具插件开发
 
 ::: tip
-The [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) provides a ready-to-use starting point with LuaCATS type definitions, stylua formatting, and hk linting pre-configured.
+[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 提供了一个可直接使用的起点，已预配置 LuaCATS 类型定义、stylua 格式化和 hk lint 检查。
 :::
 
-Tool plugins use a hook-based architecture to manage individual tools. They are compatible with the standard vfox ecosystem and are perfect for tools that need complex installation logic, environment configuration, or legacy file parsing.
+工具插件使用基于 hook 的架构来管理单个工具。它们与标准的 vfox 生态系统兼容，非常适合需要复杂安装逻辑、环境配置或旧版文件解析的工具。
 
-## What are Tool Plugins?
+## 什么是工具插件？
 
-Tool plugins use traditional hook functions to manage a single tool. They provide:
+工具插件使用传统的钩子函数来管理单个工具。它们提供：
 
-- **Standard vfox Compatibility**: Works with both mise and vfox
-- **Complex Installation Logic**: Handle source compilation, custom builds, and complex setups
-- **Environment Configuration**: Set up complex environment variables beyond just PATH
-- **Legacy File Support**: Parse version files from other tools (`.nvmrc`, `.tool-version`, etc.)
-- **Cross-Platform Support**: Works on Windows, macOS, and Linux
+- **标准 vfox 兼容性**：同时适用于 mise 和 vfox
+- **复杂安装逻辑**：处理源码编译、自定义构建和复杂的设置
+- **环境配置**：设置除 PATH 之外的复杂环境变量
+- **旧版文件支持**：解析其他工具的版本文件（`.nvmrc`、`.tool-version` 等）
+- **跨平台支持**：可在 Windows、macOS 和 Linux 上运行
 
-## Plugin Architecture
+## 插件架构
 
-Tool plugins are implemented in Lua (version 5.1 at the moment). They use a hook-based architecture with specific functions for different lifecycle events:
+工具插件使用 Lua（当前版本为 5.1）实现。它们采用基于钩子的架构，并为不同的生命周期事件提供特定函数：
 
 ```mermaid
 graph TD
-    A[User Request] --> B[mise CLI]
-    B --> C[Tool Plugin]
+    A[用户请求] --> B[mise CLI]
+    B --> C[工具插件]
 
-    C --> D[Available Hook<br/>List Versions]
-    C --> E[PreInstall Hook<br/>Download]
-    C --> F[PostInstall Hook<br/>Setup]
-    C --> G[EnvKeys Hook<br/>Configure]
+    C --> D[可用钩子<br/>列出版本]
+    C --> E[预安装钩子<br/>下载]
+    C --> F[后安装钩子<br/>设置]
+    C --> G[环境键钩子<br/>配置]
 
-    subgraph "Plugin Files"
+    subgraph "插件文件"
         H[metadata.lua]
         I[hooks/available.lua]
         J[hooks/pre_install.lua]
@@ -45,26 +45,26 @@ graph TD
     style G fill:#e8f5e8
 ```
 
-## Hook Functions
+## Hook 函数
 
-### Required Hooks
+### 必需的 Hook
 
-These hooks must be implemented for a functional plugin:
+功能性插件必须实现这些 hook：
 
 #### Available Hook
 
-Lists all available versions of the tool:
+列出工具的所有可用版本：
 
 ```lua
 -- hooks/available.lua
 function PLUGIN:Available(ctx)
-    local args = ctx.args  -- User arguments
+    local args = ctx.args  -- 用户参数
 
-    -- Return array of available versions
+    -- 返回可用版本数组
     return {
         {
             version = "20.0.0",
-            note = "Latest"
+            note = "最新"
         },
         {
             version = "18.18.0",
@@ -80,44 +80,44 @@ function PLUGIN:Available(ctx)
 end
 ```
 
-##### Rolling Releases
+##### 滚动发布
 
-For tools that have rolling releases like "nightly" or "stable" where the version string stays the same but the content changes, you can mark versions as rolling and provide a checksum for update detection:
+对于具有“nightly”或“stable”这类滚动发布的工具，版本字符串保持不变但内容会变化，你可以将版本标记为滚动版本，并提供校验和用于更新检测：
 
 ```lua
 function PLUGIN:Available(ctx)
     return {
         {
             version = "nightly",
-            note = "Latest development build",
-            rolling = true,  -- Mark as rolling release
-            checksum = "abc123..."  -- SHA256 of the release asset
+            note = "最新开发构建",
+            rolling = true,  -- 标记为滚动发布
+            checksum = "abc123..."  -- 发布资源的 SHA256
         },
         {
             version = "stable",
-            note = "Latest stable release",
+            note = "最新稳定版",
             rolling = true,
             checksum = "def456..."
         },
         {
             version = "1.0.0",
-            note = "Fixed release"
-            -- No rolling or checksum needed for fixed versions
+            note = "固定发布"
+            -- 固定版本不需要 rolling 或 checksum
         }
-    }
+    end
 end
 ```
 
-When `rolling = true` is set:
+当设置 `rolling = true` 时：
 
-- `mise upgrade` will check if the checksum has changed to detect updates
-- `mise upgrade --bump` will preserve the version name (e.g., "nightly") instead of converting it to a semver
+- `mise upgrade` 会检查校验和是否发生变化以检测更新
+- `mise upgrade --bump` 会保留版本名称（例如 "nightly"），而不是将其转换为 semver
 
-The checksum should be the SHA256 hash of the release asset for the user's platform. See the [vfox-neovim plugin](https://github.com/mise-plugins/vfox-neovim) for a complete example.
+校验和应为用户平台对应发布资源的 SHA256 哈希。完整示例请参见 [vfox-neovim 插件](https://github.com/mise-plugins/vfox-neovim)。
 
 #### PreInstall Hook
 
-Handles pre-installation logic and returns download information:
+处理预安装逻辑并返回下载信息：
 
 ```lua
 -- hooks/pre_install.lua
@@ -125,15 +125,15 @@ function PLUGIN:PreInstall(ctx)
     local version = ctx.version
     local runtimeVersion = ctx.runtimeVersion
 
-    -- Determine download URL and checksums
+    -- 确定下载 URL 和校验和
     local url = "https://nodejs.org/dist/v" .. version .. "/node-v" .. version .. "-linux-x64.tar.gz"
 
     return {
         version = version,
         url = url,
-        sha256 = "abc123...",  -- Optional checksum
-        note = "Installing Node.js " .. version,
-        -- Optional attestation metadata, choose a verification type
+        sha256 = "abc123...",  -- 可选校验和
+        note = "正在安装 Node.js " .. version,
+        -- 可选的证明元数据，选择一种验证类型
         attestation = {
             -- GitHub
             github_owner = "ownername"
@@ -143,7 +143,7 @@ function PLUGIN:PreInstall(ctx)
             -- SLSA
             slsa_provenance_path = "/path/to/provenance/file"
         },
-        -- Additional files can be specified
+        -- 可以指定额外文件
         addition = {
             {
                 name = "npm",
@@ -156,7 +156,7 @@ end
 
 #### EnvKeys Hook
 
-Configures environment variables for the installed tool:
+为已安装的工具配置环境变量：
 
 ```lua
 -- hooks/env_keys.lua
@@ -177,22 +177,22 @@ function PLUGIN:EnvKeys(ctx)
             key = "PATH",
             value = mainPath .. "/bin"
         },
-        -- Multiple PATH entries are automatically merged
+        -- 多个 PATH 条目会自动合并
         {
             key = "PATH",
             value = mainPath .. "/lib/node_modules/.bin"
         }
-    }
+    end
 end
 ```
 
-### Optional Hooks
+### 可选 Hook
 
-These hooks provide additional functionality:
+这些 hook 提供额外功能：
 
 #### PostInstall Hook
 
-Performs additional setup after installation:
+在安装后执行额外设置：
 
 ```lua
 -- hooks/post_install.lua
@@ -203,19 +203,19 @@ function PLUGIN:PostInstall(ctx)
     local path = sdkInfo.path
     local version = sdkInfo.version
 
-    -- Compile native modules, set permissions, etc.
+    -- 编译原生模块、设置权限等
     local result = os.execute("chmod +x " .. path .. "/bin/*")
     if result ~= 0 then
         error("Failed to set permissions")
     end
 
-    -- No return value needed
+    -- 不需要返回值
 end
 ```
 
 #### PreUse Hook
 
-Modifies version before use:
+在使用前修改版本：
 
 ```lua
 -- hooks/pre_use.lua
@@ -224,11 +224,11 @@ function PLUGIN:PreUse(ctx)
     local previousVersion = ctx.previousVersion
     local installedSdks = ctx.installedSdks
     local cwd = ctx.cwd
-    local scope = ctx.scope  -- global/project/session
+    local scope = ctx.scope  -- 全局/项目/会话
 
-    -- Optionally modify the version
+    -- 可选地修改版本
     if version == "latest" then
-        version = "20.0.0"  -- Resolve to specific version
+        version = "20.0.0"  -- 解析为具体版本
     end
 
     return {
@@ -239,7 +239,7 @@ end
 
 #### ParseLegacyFile Hook
 
-Parses version files from other tools:
+解析来自其他工具的版本文件：
 
 ```lua
 -- hooks/parse_legacy_file.lua
@@ -248,7 +248,7 @@ function PLUGIN:ParseLegacyFile(ctx)
     local filepath = ctx.filepath
     local versions = ctx:getInstalledVersions()
 
-    -- Read and parse the file
+    -- 读取并解析文件
     local file = require("file")
     local content = file.read(filepath)
     local version = content:match("v?([%d%.]+)")
@@ -259,95 +259,95 @@ function PLUGIN:ParseLegacyFile(ctx)
 end
 ```
 
-## Creating a Tool Plugin
+## 创建工具插件
 
-### Using the Template Repository
+### 使用模板仓库
 
-The easiest way to create a new tool plugin is to use the [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) repository as a starting point:
+创建新工具插件最简单的方法，是以 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 仓库作为起点：
 
 ```bash
-# Clone the template
+# 克隆模板
 git clone https://github.com/jdx/mise-tool-plugin-template my-tool-plugin
 cd my-tool-plugin
 
-# Remove the template's git history and start fresh
+# 移除模板的 git 历史并重新开始
 rm -rf .git
 git init
 
-# Customize the plugin for your tool
-# Edit metadata.lua, hooks/*.lua files, etc.
+# 为你的工具自定义插件
+# 编辑 metadata.lua、hooks/*.lua 文件等
 ```
 
-The template includes:
+该模板包含：
 
-- Pre-configured plugin structure with all required hooks
-- Example implementations with comments
-- Linting configuration (`.luacheckrc`, `stylua.toml`)
-- Testing setup with mise tasks
-- GitHub Actions workflow for CI
+- 预先配置好的插件结构，包含所有必需的 hooks
+- 带注释的示例实现
+- 代码检查配置（`.luacheckrc`、`stylua.toml`）
+- 使用 mise 任务的测试设置
+- 用于 CI 的 GitHub Actions 工作流
 
-### 1. Plugin Structure
+### 1. 插件结构
 
-Create a directory with this structure (or use the template above):
+创建一个具有以下结构的目录（或使用上面的模板）：
 
 ```
 my-tool-plugin/
-├── metadata.lua          # Plugin metadata and configuration
-├── hooks/               # Hook functions directory
-│   ├── available.lua    # List available versions [required]
-│   ├── pre_install.lua  # Pre-installation hook [required]
-│   ├── env_keys.lua     # Environment configuration [required]
-│   ├── post_install.lua # Post-installation hook [optional]
-│   ├── pre_use.lua      # Pre-use hook [optional]
-│   └── parse_legacy_file.lua # Legacy file parser [optional]
-├── lib/                 # Shared library code [optional]
-│   └── helper.lua       # Helper functions
-└── test/               # Test scripts [optional]
+├── metadata.lua          # 插件元数据和配置
+├── hooks/               # Hook 函数目录
+│   ├── available.lua    # 列出可用版本 [required]
+│   ├── pre_install.lua  # 安装前 hook [required]
+│   ├── env_keys.lua     # 环境配置 [required]
+│   ├── post_install.lua # 安装后 hook [optional]
+│   ├── pre_use.lua      # 使用前 hook [optional]
+│   └── parse_legacy_file.lua # 旧格式文件解析器 [optional]
+├── lib/                 # 共享库代码 [optional]
+│   └── helper.lua       # 辅助函数
+└── test/               # 测试脚本 [optional]
     └── test.sh
 ```
 
 ### 2. metadata.lua
 
-Configure plugin metadata and legacy file support:
+配置插件元数据和旧文件支持：
 
 ```lua
 -- metadata.lua
 PLUGIN = {
     name = "nodejs",
     version = "1.0.0",
-    description = "Node.js runtime environment",
-    author = "Plugin Author",
+    description = "Node.js 运行时环境",
+    author = "插件作者",
 
-    -- Legacy version files this plugin can parse
+    -- 此插件可以解析的旧版本文件
     legacyFilenames = {
         '.nvmrc',
         '.node-version'
     },
 
-    -- Tools whose bin paths should be available during install hooks
+    -- 在安装 hooks 期间，其 bin 路径应可用的工具
     depends = { "node" },
 }
 ```
 
-Add `depends` to the `PLUGIN` table when install hooks need other mise-managed tools on `PATH`. Use tool names as they would appear in `mise.toml`, for example `depends = { "go", "make" }`. Omit it if hooks do not shell out to other tools.
+当安装 hooks 需要 PATH 上的其他由 mise 管理的工具时，将 `depends` 添加到 `PLUGIN` 表中。使用它们在 `mise.toml` 中出现的工具名，例如 `depends = { "go", "make" }`。如果 hooks 不需要调用其他工具，则省略它。
 
-This is separate from `depends` in `[tools]`, which only makes one configured tool wait for another configured tool in the install graph. vfox `metadata.lua` `depends` is plugin metadata; when matching tools are configured, mise uses it to order current install jobs and to build the hook environment.
+这与 `[tools]` 中的 `depends` 是分开的，后者只会让一个已配置的工具在安装图中等待另一个已配置的工具。vfox `metadata.lua` 中的 `depends` 是插件元数据；当匹配的工具被配置时，mise 会使用它来对当前安装任务排序，并构建 hook 环境。
 
-### 3. Helper Libraries
+### 3. 辅助库
 
-Create shared functions in the `lib/` directory:
+在 `lib/` 目录中创建共享函数：
 
 ```lua
 -- lib/helper.lua
 local M = {}
 
 function M.get_arch()
-    -- Use the RUNTIME object provided by vfox/mise
-    return (RUNTIME.archType == "amd64") and "x64" or RUNTIME.archType  -- return as-is for other architectures
+    -- 使用 vfox/mise 提供的 RUNTIME 对象
+    return (RUNTIME.archType == "amd64") and "x64" or RUNTIME.archType  -- 对其他架构保持原样返回
 end
 
 function M.get_os()
-    -- Use the RUNTIME object provided by vfox/mise
+    -- 使用 vfox/mise 提供的 RUNTIME 对象
     return (RUNTIME.osType == "windows") and "win" or RUNTIME.osType
 end
 
@@ -358,11 +358,11 @@ end
 return M
 ```
 
-## Real-World Example: vfox-nodejs
+## 真实世界示例：vfox-nodejs
 
-Here's a complete example based on the vfox-nodejs plugin that demonstrates all the concepts:
+以下是基于 vfox-nodejs 插件的完整示例，展示了所有概念：
 
-### Available Hook Example
+### 可用 Hook 示例
 
 ```lua
 -- hooks/available.lua
@@ -370,20 +370,20 @@ function PLUGIN:Available(ctx)
     local http = require("http")
     local json = require("json")
 
-    -- Fetch versions from Node.js API
+    -- 从 Node.js API 获取版本
     local resp, err = http.get({
         url = "https://nodejs.org/dist/index.json"
     })
 
     if err ~= nil then
-        error("Failed to fetch versions: " .. err)
+        error("获取版本失败: " .. err)
     end
 
     local versions = json.decode(resp.body)
     local result = {}
 
     for i, v in ipairs(versions) do
-        local version = v.version:gsub("^v", "")  -- Remove 'v' prefix
+        local version = v.version:gsub("^v", "")  -- 移除 'v' 前缀
         local note = nil
 
         if v.lts then
@@ -406,31 +406,31 @@ function PLUGIN:Available(ctx)
 end
 ```
 
-### PreInstall Hook Example
+### PreInstall Hook 示例
 
 ```lua
 -- hooks/pre_install.lua
 function PLUGIN:PreInstall(ctx)
     local version = ctx.version
 
-    -- Determine platform using RUNTIME object
+    -- 使用 RUNTIME 对象确定平台
     local arch_token = (RUNTIME.archType == "amd64") and "x64" or RUNTIME.archType
     local os_token = (RUNTIME.osType == "windows") and "win" or RUNTIME.osType
     local platform = os_token .. "-" .. arch_token
     local extension = (RUNTIME.osType == "windows") and "zip" or "tar.gz"
 
-    -- Build download URL
+    -- 构建下载 URL
     local filename = "node-v" .. version .. "-" .. platform .. "." .. extension
     local url = "https://nodejs.org/dist/v" .. version .. "/" .. filename
 
-    -- Fetch checksum
+    -- 获取校验和
     local http = require("http")
     local shasums_url = "https://nodejs.org/dist/v" .. version .. "/SHASUMS256.txt"
     local resp, err = http.get({ url = shasums_url })
 
     local sha256 = nil
     if err == nil then
-        -- Extract SHA256 for our file
+        -- 为我们的文件提取 SHA256
         for line in resp.body:gmatch("[^\n]+") do
             if line:match(filename) then
                 sha256 = line:match("^(%w+)")
@@ -448,7 +448,7 @@ function PLUGIN:PreInstall(ctx)
 end
 ```
 
-### EnvKeys Hook Example
+### EnvKeys Hook 示例
 
 ```lua
 -- hooks/env_keys.lua
@@ -467,7 +467,7 @@ function PLUGIN:EnvKeys(ctx)
         }
     }
 
-    -- Add npm global modules to PATH
+    -- 将 npm 全局模块添加到 PATH
     local npm_global_path = mainPath .. "/lib/node_modules/.bin"
     if os_type == "windows" then
         npm_global_path = mainPath .. "/node_modules/.bin"
@@ -482,23 +482,23 @@ function PLUGIN:EnvKeys(ctx)
 end
 ```
 
-### PostInstall Hook Example
+### PostInstall Hook 示例
 
 ```lua
 -- hooks/post_install.lua
 function PLUGIN:PostInstall(ctx)
     local sdkInfo = ctx.sdkInfo['nodejs']
     local path = sdkInfo.path
-    -- Set executable permissions on Unix systems
+    -- 在 Unix 系统上设置可执行权限
     if RUNTIME.osType ~= "windows" then
         os.execute("chmod +x " .. path .. "/bin/*")
     end
 
-    -- Create npm cache directory
+    -- 创建 npm 缓存目录
     local npm_cache_dir = path .. "/.npm"
     os.execute("mkdir -p " .. npm_cache_dir)
 
-    -- Configure npm to use local cache
+    -- 配置 npm 使用本地缓存
     local npm_cmd = path .. "/bin/npm"
     if RUNTIME.osType == "windows" then
         npm_cmd = path .. "/npm.cmd"
@@ -509,7 +509,7 @@ function PLUGIN:PostInstall(ctx)
 end
 ```
 
-### Legacy File Support
+### 旧文件支持
 
 ```lua
 -- hooks/parse_legacy_file.lua
@@ -518,24 +518,24 @@ function PLUGIN:ParseLegacyFile(ctx)
     local filepath = ctx.filepath
     local file = require("file")
 
-    -- Read file content
+    -- 读取文件内容
     local content = file.read(filepath)
     if not content then
-        error("Failed to read " .. filepath)
+        error("读取 " .. filepath .. " 失败")
     end
 
-    -- Parse version from different file formats
+    -- 从不同文件格式中解析版本
     local version = nil
 
     if filename == ".nvmrc" then
-        -- .nvmrc can contain version with or without 'v' prefix
+        -- .nvmrc 可能包含带或不带 'v' 前缀的版本
         version = content:match("v?([%d%.]+)")
     elseif filename == ".node-version" then
-        -- .node-version typically contains just the version number
+        -- .node-version 通常只包含版本号
         version = content:match("([%d%.]+)")
     end
 
-    -- Remove any whitespace
+    -- 移除所有空白字符
     if version then
         version = version:gsub("%s+", "")
     end
@@ -546,86 +546,86 @@ function PLUGIN:ParseLegacyFile(ctx)
 end
 ```
 
-## Testing Your Plugin
+## 测试你的插件
 
-### Local Development
+### 本地开发
 
 ```bash
-# Link your plugin for development
+# 为开发链接你的插件
 mise plugin link my-tool /path/to/my-tool-plugin
 
-# Test listing versions
+# 测试版本列表
 mise ls-remote my-tool
 
-# Test installation
+# 测试安装
 mise install my-tool@1.0.0
 
-# Test environment setup
+# 测试环境设置
 mise use my-tool@1.0.0
 my-tool --version
 
-# Test legacy file parsing (if applicable)
+# 测试旧版文件解析（如果适用）
 echo "2.0.0" > .my-tool-version
 mise use my-tool
 ```
 
-If you're using the template repository, you can run the included tests:
+如果你使用的是模板仓库，可以运行包含的测试：
 
 ```bash
-# Run linting
+# 运行 lint 检查
 mise run lint
 
-# Run tests
+# 运行测试
 mise run test
 ```
 
-### Debug Mode
+### 调试模式
 
-Use debug mode to see detailed plugin execution:
+使用调试模式查看详细的插件执行过程：
 
 ```bash
 mise --debug install nodejs@20.0.0
 ```
 
-### Plugin Test Script
+### 插件测试脚本
 
-Create a comprehensive test script:
+创建一个完整的测试脚本：
 
 ```bash
 #!/bin/bash
 # test/test.sh
 set -e
 
-echo "Testing nodejs plugin..."
+echo "正在测试 nodejs 插件..."
 
-# Install the plugin
+# 安装插件
 mise plugin install nodejs .
 
-# Test basic functionality
+# 测试基本功能
 mise install nodejs@18.18.0
 mise use nodejs@18.18.0
 
-# Verify installation
+# 验证安装
 node --version | grep "18.18.0"
 npm --version
 
-# Test legacy file support
+# 测试旧版文件支持
 echo "20.0.0" > .nvmrc
 mise use nodejs
 node --version | grep "20.0.0"
 
-# Clean up
+# 清理
 rm -f .nvmrc
 mise plugin remove nodejs
 
-echo "All tests passed!"
+echo "所有测试已通过！"
 ```
 
-## Best Practices
+## 最佳实践
 
-### Error Handling
+### 错误处理
 
-Always provide meaningful error messages:
+始终提供有意义的错误消息：
 
 ```lua
 function PLUGIN:Available(ctx)
@@ -635,20 +635,20 @@ function PLUGIN:Available(ctx)
     })
 
     if err ~= nil then
-        error("Failed to fetch versions from API: " .. err)
+        error("无法从 API 获取版本： " .. err)
     end
 
     if resp.status_code ~= 200 then
-        error("API returned status " .. resp.status_code .. ": " .. resp.body)
+        error("API 返回状态 " .. resp.status_code .. "： " .. resp.body)
     end
 
-    -- Process response...
+    -- 处理响应...
 end
 ```
 
-### Platform Detection
+### 平台检测
 
-Handle different operating systems properly using the RUNTIME object:
+使用 RUNTIME 对象正确处理不同的操作系统：
 
 ```lua
 -- lib/platform.lua
@@ -669,51 +669,51 @@ end
 return M
 ```
 
-**Note:** The `RUNTIME` object is automatically available in all plugin hooks and provides:
+**注意：** `RUNTIME` 对象会自动在所有插件钩子中可用，并提供：
 
-- `RUNTIME.osType`: Operating system type ("windows", "linux", "darwin")
-- `RUNTIME.archType`: Architecture ("amd64", "arm64", "x86", etc.)
-- `RUNTIME.envType`: libc environment type (`"gnu"` on glibc Linux, `"musl"` on musl Linux, `nil` on Windows/macOS and undetected systems)
-- `RUNTIME.version`: vfox runtime version
-- `RUNTIME.pluginDirPath`: Plugin directory path
+- `RUNTIME.osType`：操作系统类型（"windows"、"linux"、"darwin"）
+- `RUNTIME.archType`：架构（"amd64"、"arm64"、"x86" 等）
+- `RUNTIME.envType`：libc 环境类型（glibc Linux 上为 `"gnu"`，musl Linux 上为 `"musl"`，Windows/macOS 和未检测系统上为 `nil`）
+- `RUNTIME.version`：vfox 运行时版本
+- `RUNTIME.pluginDirPath`：插件目录路径
 
-### Version Normalization
+### 版本规范化
 
-Normalize versions consistently:
+始终一致地规范化版本：
 
 ```lua
 local function normalize_version(version)
-    -- Remove 'v' prefix if present
+    -- 如果存在，移除 'v' 前缀
     version = version:gsub("^v", "")
 
-    -- Remove pre-release suffixes
+    -- 移除预发布后缀
     version = version:gsub("%-.*", "")
 
     return version
 end
 ```
 
-### Caching
+### 缓存
 
-Cache expensive operations:
+缓存代价高的操作：
 
 ```lua
--- Cache versions for 12 hours
+-- 缓存版本 12 小时
 local cache = {}
-local cache_ttl = 12 * 60 * 60  -- 12 hours in seconds
+local cache_ttl = 12 * 60 * 60  -- 12 小时（秒）
 
 function PLUGIN:Available(ctx)
     local now = os.time()
 
-    -- Check cache first
+    -- 先检查缓存
     if cache.versions and cache.timestamp and (now - cache.timestamp) < cache_ttl then
         return cache.versions
     end
 
-    -- Fetch fresh data
+    -- 获取最新数据
     local versions = fetch_versions_from_api()
 
-    -- Update cache
+    -- 更新缓存
     cache.versions = versions
     cache.timestamp = now
 
@@ -721,33 +721,33 @@ function PLUGIN:Available(ctx)
 end
 ```
 
-## Advanced Features
+## 高级特性
 
-### Conditional Installation
+### 条件安装
 
-Different installation logic based on platform or version:
+根据平台或版本使用不同的安装逻辑：
 
 ```lua
 function PLUGIN:PreInstall(ctx)
     local version = ctx.version
 
-    -- Different logic for different platforms using RUNTIME object
+    -- 针对不同平台使用不同逻辑
     if RUNTIME.osType == "windows" then
-        -- Windows-specific installation
+        -- Windows 特定安装
         return install_windows(version)
     elseif RUNTIME.osType == "darwin" then
-        -- macOS-specific installation
+        -- macOS 特定安装
         return install_macos(version)
     else
-        -- Linux installation
+        -- Linux 安装
         return install_linux(version)
     end
 end
 ```
 
-### Source Compilation
+### 源码编译
 
-For plugins that need to compile from source:
+适用于需要从源码编译的插件：
 
 ```lua
 -- hooks/post_install.lua
@@ -756,32 +756,32 @@ function PLUGIN:PostInstall(ctx)
     local path = sdkInfo.path
     local version = sdkInfo.version
 
-    -- Change to source directory
+    -- 切换到源码目录
     local build_dir = path .. "/src"
 
-    -- Configure build
+    -- 配置构建
     local configure_result = os.execute("cd " .. build_dir .. " && ./configure --prefix=" .. path)
     if configure_result ~= 0 then
-        error("Configure failed")
+        error("配置失败")
     end
 
-    -- Compile
+    -- 编译
     local make_result = os.execute("cd " .. build_dir .. " && make -j$(nproc)")
     if make_result ~= 0 then
-        error("Compilation failed")
+        error("编译失败")
     end
 
-    -- Install
+    -- 安装
     local install_result = os.execute("cd " .. build_dir .. " && make install")
     if install_result ~= 0 then
-        error("Installation failed")
+        error("安装失败")
     end
 end
 ```
 
-### Environment Configuration
+### 环境配置
 
-Complex environment variable setup:
+复杂的环境变量设置：
 
 ```lua
 function PLUGIN:EnvKeys(ctx)
@@ -789,7 +789,7 @@ function PLUGIN:EnvKeys(ctx)
     local version = ctx.sdkInfo['tool-name'].version
 
     local env_vars = {
-        -- Standard environment variables
+        -- 标准环境变量
         {
             key = "TOOL_HOME",
             value = mainPath
@@ -799,7 +799,7 @@ function PLUGIN:EnvKeys(ctx)
             value = version
         },
 
-        -- PATH entries
+        -- PATH 条目
         {
             key = "PATH",
             value = mainPath .. "/bin"
@@ -809,7 +809,7 @@ function PLUGIN:EnvKeys(ctx)
             value = mainPath .. "/scripts"
         },
 
-        -- Library paths
+        -- 库路径
         {
             key = "LD_LIBRARY_PATH",
             value = mainPath .. "/lib"
@@ -820,7 +820,7 @@ function PLUGIN:EnvKeys(ctx)
         }
     }
 
-    -- Platform-specific additions
+    -- 平台特定添加项
     if RUNTIME.osType == "darwin" then
         table.insert(env_vars, {
             key = "DYLD_LIBRARY_PATH",
@@ -832,10 +832,10 @@ function PLUGIN:EnvKeys(ctx)
 end
 ```
 
-## Next Steps
+## 后续步骤
 
-- [Start with the plugin template](https://github.com/jdx/mise-tool-plugin-template)
-- [Learn about Backend Plugin Development](backend-plugin-development.md)
-- [Explore available Lua modules](plugin-lua-modules.md)
-- [Publishing your plugin](plugin-publishing.md)
-- [View the vfox-nodejs plugin source](https://github.com/version-fox/vfox-nodejs)
+- [从插件模板开始](https://github.com/jdx/mise-tool-plugin-template)
+- [了解后端插件开发](backend-plugin-development.md)
+- [探索可用的 Lua 模块](plugin-lua-modules.md)
+- [发布你的插件](plugin-publishing.md)
+- [查看 vfox-nodejs 插件源代码](https://github.com/version-fox/vfox-nodejs)

@@ -4,25 +4,25 @@
 - **Usage**: `mise patrons [-J --json] [--refresh]`
 - **Source code**: [`src/cli/patrons.rs`](https://github.com/jdx/mise/blob/main/src/cli/patrons.rs)
 
-Show the individuals supporting mise as Patron-tier members
+显示作为 Patron 级别成员支持 mise 的个人
 
-Lists the individuals on the Patron tier from &lt;<https://jdx.dev/patrons.json>>.
-The list refreshes daily; supporting terminals will render each patron's
-name as a clickable link via OSC 8 hyperlinks.
+列出来自 &lt;<https://jdx.dev/patrons.json>> 的 Patron 级别个人。
+该列表每天刷新一次；支持终端将通过 OSC 8 超链接将每位 patron 的
+姓名渲染为可点击链接。
 
-To appear here, become a patron at &lt;<https://jdx.dev/sponsors.html>>.
+要出现在这里，请在 &lt;<https://jdx.dev/sponsors.html>> 成为 patron。
 
-## Flags
+## 标志
 
 ### `-J --json`
 
-Output in JSON format
+以 JSON 格式输出
 
 ### `--refresh`
 
-Bypass the local cache and re-fetch
+绕过本地缓存并重新获取
 
-Examples:
+示例：
 
 ```
 mise patrons

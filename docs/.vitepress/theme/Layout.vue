@@ -13,7 +13,7 @@
     <!-- Landing hero content from the design handoff -->
     <template #home-hero-info-before>
       <div class="hero-copy">
-        <div class="hero-eyebrow">mise · pronounced "meez"</div>
+        <div class="hero-eyebrow">mise · 发音为 “meez”</div>
         <div class="hero-lockup">
           <img
             class="chef-logo chef-logo-light"
@@ -26,16 +26,15 @@
             alt="mise-en-place"
           />
         </div>
-        <h1>Your dev env,<br /><em>already prepped.</em></h1>
+        <h1>开发环境，<br /><em>准备就绪。</em></h1>
         <p>
-          One tool to manage languages, env vars, and tasks per project,
-          reproducibly.
+          用一个工具按项目可复现地管理语言运行时、环境变量和任务。
         </p>
         <div class="hero-actions">
           <a class="action-btn action-btn-brand" href="/getting-started"
-            >Getting Started</a
+            >入门指南</a
           >
-          <a class="action-btn action-btn-alt" href="/demo">Demo</a>
+          <a class="action-btn action-btn-alt" href="/demo">演示</a>
         </div>
       </div>
     </template>
@@ -43,7 +42,7 @@
     <!-- Right column: terminal-forward proof of the workflow -->
     <template #home-hero-info-after>
       <div class="hero-right">
-        <div class="hero-terminal" aria-label="mise terminal example">
+        <div class="hero-terminal" aria-label="mise 终端示例">
           <div class="terminal-bar">
             <span></span>
             <span></span>
@@ -54,34 +53,34 @@
             <div><span class="prompt">$</span> cd ~/projects/orders</div>
             <div>
               <span class="dim"
-                ># mise picks up mise.toml and updates the shell</span
+                ># mise 读取 mise.toml 并更新 shell</span
               >
             </div>
-            <div><span class="ok">✓</span> node@24 active</div>
-            <div><span class="ok">✓</span> python@3.13 active</div>
-            <div><span class="ok">✓</span> terraform@1 active</div>
+            <div><span class="ok">✓</span> node@24 已激活</div>
+            <div><span class="ok">✓</span> python@3.13 已激活</div>
+            <div><span class="ok">✓</span> terraform@1 已激活</div>
             <div>
-              <span class="ok">✓</span> DATABASE_URL loaded from .env.local
+              <span class="ok">✓</span> 已从 .env.local 加载 DATABASE_URL
             </div>
             <div><span class="prompt">$</span> mise run deploy</div>
             <div>
-              <span class="key">→</span> running task "deploy" (4 steps)
+              <span class="key">→</span> 正在运行任务 “deploy”（4 步）
             </div>
             <div>
               <span class="dim"> build · test · migrate · ship ...</span>
             </div>
-            <div><span class="ok">✓</span> done in 42.1s</div>
+            <div><span class="ok">✓</span> 42.1 秒完成</div>
           </div>
         </div>
         <div class="hero-install">
           <button class="install-command" type="button" @click="copyInstall">
             <code>curl https://mise.run | sh</code>
             <span class="install-copy" :class="{ copied }">{{
-              copied ? "copied" : "copy"
+              copied ? "已复制" : "复制"
             }}</span>
           </button>
           <a class="install-alt" href="/installing-mise"
-            >More install methods</a
+            >更多安装方式</a
           >
         </div>
       </div>

@@ -1,201 +1,201 @@
-# Backend Architecture
+# 后端架构
 
-Understanding how mise's backend system works can help you choose the right backend for your tools and troubleshoot issues when they arise. Most users don't need to explicitly choose backends since the [mise registry](../registry.md) defines smart defaults, but understanding the system helps when you need specific tools or want to optimize performance.
+了解 mise 的后端系统如何工作，可以帮助你为你的工具选择合适的后端，并在问题出现时进行排查。大多数用户并不需要显式选择后端，因为 [mise 注册表](../registry.md) 已定义了智能默认值，但在你需要特定工具或想要优化性能时，理解这个系统会很有帮助。
 
-## What are Backends?
+## 什么是后端？
 
-Backends are mise's way of supporting different tool installation methods. Each backend knows how to:
+后端是 mise 支持不同工具安装方式的机制。每个后端都知道如何：
 
-- List available versions of tools
-- Download and install specific versions
-- Set up the environment for installed tools
-- Manage tool lifecycles (updates, uninstalls)
+- 列出可用的工具版本
+- 下载并安装特定版本
+- 为已安装的工具设置环境
+- 管理工具生命周期（更新、卸载）
 
-Think of backends as "adapters" that let mise work with different package managers and installation systems.
+可以把后端看作“适配器”，让 mise 能够与不同的包管理器和安装系统协同工作。
 
-## The Backend Trait System
+## 后端特性系统
 
-All backends implement a common interface (called a "trait" in Rust), which means they all provide the same basic functionality:
+所有后端都实现了一个公共接口（在 Rust 中称为“trait”），这意味着它们都提供相同的基本功能：
 
 ```rust
 pub trait Backend {
     async fn list_remote_versions(&self) -> Result<Vec<String>>;
     async fn install_version(&self, ctx: &InstallContext, tv: &ToolVersion) -> Result<()>;
     async fn uninstall_version(&self, tv: &ToolVersion) -> Result<()>;
-    // ... other methods
+    // ... 其他方法
 }
 ```
 
-This design allows mise to treat all backends uniformly while each backend handles the specifics of its installation method.
+这种设计使 mise 能够统一地对待所有后端，而每个后端则处理其安装方式的具体细节。
 
-## Backend Types
+## 后端类型
 
-### Core Tools
+### 核心工具
 
-Built directly into mise, written in Rust for performance and reliability:
+直接内置于 mise 中，使用 Rust 编写，以实现高性能和可靠性：
 
-- **Node.js, Python, Ruby, Go, Java, etc.** - Native implementations
-- **Benefits**: Fastest performance, no external dependencies, best integration
-- **Drawbacks**: Require much more maintenance; new core tool contributions are likely to be rejected unless they're for very popular tools like Node.js, Python, or Go
+- **Node.js、Python、Ruby、Go、Java 等** - 原生实现
+- **优点**：性能最快、无外部依赖、集成最佳
+- **缺点**：需要更多维护；除非是像 Node.js、Python 或 Go 这样非常流行的工具，否则新的核心工具贡献很可能会被拒绝
 
 ::: info
-Core tools like Node.js and Java are implemented as backends even though they represent single tools. This consistent backend architecture allows mise to handle all tools uniformly, whether they're complex ecosystems or individual tools.
+像 Node.js 和 Java 这样的核心工具虽然代表的是单个工具，但也是作为后端实现的。这种一致的后端架构使 mise 能够统一处理所有工具，无论它们是复杂生态系统还是单独的工具。
 :::
 
-### Language Package Managers
+### 语言包管理器
 
-Leverage existing language ecosystems:
+利用现有的语言生态系统：
 
-- **npm** - npm packages (`npm:prettier`, `npm:typescript`)
-- **pipx** - Python packages (`pipx:black`, `pipx:poetry`)
-- **cargo** - Rust crates (`cargo:ripgrep`, `cargo:fd-find`)
-- **gem** - Ruby gems (`gem:bundler`, `gem:rails`)
-- **go** - Go modules (`go:github.com/golangci/golangci-lint/cmd/golangci-lint`)
+- **npm** - npm 包（`npm:prettier`、`npm:typescript`）
+- **pipx** - Python 包（`pipx:black`、`pipx:poetry`）
+- **cargo** - Rust crates（`cargo:ripgrep`、`cargo:fd-find`）
+- **gem** - Ruby gems（`gem:bundler`、`gem:rails`）
+- **go** - Go modules（`go:github.com/golangci/golangci-lint/cmd/golangci-lint`）
 
-### Universal Installers
+### 通用安装器
 
-#### aqua - Comprehensive Package Manager
+#### aqua - 综合包管理器
 
-Registry-based package manager with strong security features:
+基于注册表的包管理器，具有强大的安全特性：
 
-- **Usage**: `aqua:golangci/golangci-lint`
-- **Requirements**: Tools must be available in the [aqua registry](https://github.com/aquaproj/aqua-registry)
-- **Sources**: Primarily GitHub but supports other sources through registry configuration
-- **Security**: Comprehensive checksums, signatures, and verification
+- **用法**：`aqua:golangci/golangci-lint`
+- **要求**：工具必须在 [aqua 注册表](https://github.com/aquaproj/aqua-registry) 中可用
+- **来源**：主要来自 GitHub，但通过注册表配置也支持其他来源
+- **安全性**：全面的校验和、签名和验证
 
-#### ubi - Universal Binary Installer (Deprecated)
+#### ubi - 通用二进制安装器（已弃用）
 
 ::: warning
-The ubi backend is deprecated. Use the [github backend](/dev-tools/backends/github) instead.
+ubi 后端已弃用。请改用 [github 后端](/dev-tools/backends/github)。
 :::
 
-Zero-configuration installer that works with any GitHub/GitLab repository following standard conventions:
+无需配置的安装器，适用于任何遵循标准约定的 GitHub/GitLab 仓库：
 
-- **Usage**: `ubi:BurntSushi/ripgrep` → migrate to `github:BurntSushi/ripgrep`
-- **Requirements**: Repository must follow standard release tarball conventions
-- **Sources**: Primarily GitHub releases, with GitLab support (rarely used in mise)
-- **Configuration**: None required - automatically detects and downloads appropriate binaries
+- **用法**：`ubi:BurntSushi/ripgrep` → 迁移为 `github:BurntSushi/ripgrep`
+- **要求**：仓库必须遵循标准的发布 tarball 约定
+- **来源**：主要是 GitHub releases，并支持 GitLab（在 mise 中很少使用）
+- **配置**：无需配置 - 会自动检测并下载合适的二进制文件
 
-### Plugin Systems
+### 插件系统
 
-Support for external plugin ecosystems:
+支持外部插件生态系统：
 
-- **Tool Plugins** - Hook-based plugins for single tools (`my-tool`) - a superset of vfox plugins functionality
-- **asdf Plugins** - Legacy plugin ecosystem (`asdf:postgres`, `asdf:redis`) - generally Linux/macOS only
-- **Backend Plugins** - Enhanced plugins using the `plugin:tool` format (`my-plugin:some-tool`) - enables private/custom tools with backend methods
+- **工具插件** - 基于钩子的单工具插件（`my-tool`）- 是 vfox 插件功能的超集
+- **asdf 插件** - 传统插件生态系统（`asdf:postgres`、`asdf:redis`）- 通常仅支持 Linux/macOS
+- **后端插件** - 使用 `plugin:tool` 格式（`my-plugin:some-tool`）的增强型插件 - 通过后端方法支持私有/自定义工具
 
-## How Backend Selection Works
+## 后端选择如何工作
 
-When you specify a tool, mise determines the backend using this priority:
+当你指定一个工具时，mise 会按以下优先级确定后端：
 
-1. **Explicit backend**: `mise use aqua:golangci/golangci-lint`
-2. **Environment variable override**: `MISE_BACKENDS_<TOOL>` (see below)
-3. **Registry lookup**: `mise use golangci-lint` → checks registry for default backend
-4. **Core tools**: `mise use node` → uses built-in core backend
-5. **Fallback**: If not found, suggests available backends
+1. **显式后端**：`mise use aqua:golangci/golangci-lint`
+2. **环境变量覆盖**：`MISE_BACKENDS_<TOOL>`（见下文）
+3. **注册表查找**：`mise use golangci-lint` → 检查注册表中的默认后端
+4. **核心工具**：`mise use node` → 使用内置的核心后端
+5. **回退**：如果未找到，则建议可用的后端
 
-The [mise registry](../registry.md) defines a priority order for which backend to use for each tool, so typically end-users don't need to know which backend to choose unless they want tools not available in the registry or want to override the default selection.
+[mise registry](../registry.md) 定义了每个工具应使用哪个后端的优先级顺序，因此通常最终用户不需要知道该选择哪个后端，除非他们想使用注册表中不可用的工具，或者想覆盖默认选择。
 
-### Environment Variable Overrides
+### 环境变量覆盖
 
-You can override the backend for any tool using the `MISE_BACKENDS_<TOOL>` environment variable pattern. The tool name is converted to SHOUTY_SNAKE_CASE (uppercase with underscores replacing hyphens).
+你可以使用 `MISE_BACKENDS_<TOOL>` 环境变量模式来覆盖任意工具的后端。工具名称会转换为 SHOUTY_SNAKE_CASE（大写，并用下划线替换连字符）。
 
 ```bash
-# Use vfox backend for php
+# 为 php 使用 vfox 后端
 export MISE_BACKENDS_PHP='vfox:mise-plugins/vfox-php'
 mise install php@latest
 ```
 
-### Registry System
+### 注册表系统
 
-The [registry](../registry.md) (`mise registry`) maps short names to full backend specifications with a preferred priority order:
+[mise registry](../registry.md)（`mise registry`）会将短名称映射为完整的后端规格，并按首选优先级顺序排列：
 
 ```toml
 # ~/.config/mise/config.toml
 [tool_alias]
-go = "core:go"                    # Use core backend
-terraform = "aqua:hashicorp/terraform"  # Use aqua backend
+go = "core:go"                    # 使用 core 后端
+terraform = "aqua:hashicorp/terraform"  # 使用 aqua 后端
 ```
 
-## Backend Capabilities Comparison
+## 后端能力比较
 
-| Feature                   | Core | npm/pipx/cargo | aqua | ubi | Backend Plugins | Tool Plugins (vfox) | asdf Plugins (legacy) |
+| 特性                     | Core | npm/pipx/cargo | aqua | ubi | Backend Plugins | Tool Plugins (vfox) | asdf Plugins (legacy) |
 | ------------------------- | ---- | -------------- | ---- | --- | --------------- | ------------------- | --------------------- |
-| **Speed**                 | ✅   | ⚠️             | ✅   | ✅  | ⚠️              | ⚠️                  | ⚠️                    |
-| **Security**              | ✅   | ⚠️             | ✅   | ⚠️  | ⚠️              | ⚠️                  | ⚠️                    |
-| **Windows Support**       | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
-| **Env Var Support**       | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
-| **Custom Scripts**        | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
-| **Built-in Modules**      | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ❌                    |
-| **Security Attestations** | ❌   | ❌             | ✅   | ❌  | ✅              | ✅                  | ❌                    |
-| **Multi-tool Plugins**    | ❌   | ❌             | ❌   | ❌  | ✅              | ❌                  | ❌                    |
-| **Progress/Logging**      | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
+| **速度**                 | ✅   | ⚠️             | ✅   | ✅  | ⚠️              | ⚠️                  | ⚠️                    |
+| **安全性**               | ✅   | ⚠️             | ✅   | ⚠️  | ⚠️              | ⚠️                  | ⚠️                    |
+| **Windows 支持**         | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
+| **环境变量支持**         | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
+| **自定义脚本**           | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
+| **内置模块**             | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ❌                    |
+| **安全证明**             | ❌   | ❌             | ✅   | ❌  | ✅              | ✅                  | ❌                    |
+| **多工具插件**           | ❌   | ❌             | ❌   | ❌  | ✅              | ❌                  | ❌                    |
+| **进度/日志**            | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
 
-## When to Use Each Backend
+## 何时使用每种后端
 
-### Use **Core Tools** when
+### 何时使用 **Core Tools**
 
-- Available for your tool (check the [registry](../registry.md))
-- You want the fastest performance
-- You're using major programming languages
+- 当你的工具可用时（请查看 [registry](../registry.md)）
+- 你希望获得最快的性能
+- 你正在使用主流编程语言
 
-Core tools should generally always be used when available, as they provide the best performance and integration with mise.
+在可用时，通常应始终使用 core tools，因为它们能与 mise 提供最佳的性能和集成。
 
-### Use **Language Package Managers** when
+### 何时使用 **Language Package Managers**
 
-- Installing tools specific to that language ecosystem
-- The tool is primarily distributed through that package manager
-- You want automatic dependency management
+- 安装特定于该语言生态系统的工具
+- 该工具主要通过该包管理器分发
+- 你希望自动依赖管理
 
-### Use **aqua** when
+### 何时使用 **aqua**
 
-- Installing pre-compiled binaries or static packages (no compilation needed)
-- You want comprehensive security features (checksums, signatures)
-- You need Windows support
-- The tool is already available in the [aqua registry](https://github.com/aquaproj/aqua-registry)
-- You're willing to contribute tools to the aqua registry for tools not yet available
+- 安装预编译二进制文件或静态包（无需编译）
+- 你希望获得全面的安全特性（校验和、签名）
+- 你需要 Windows 支持
+- 该工具已在 [aqua registry](https://github.com/aquaproj/aqua-registry) 中提供
+- 你愿意为尚未提供的工具向 aqua registry 贡献工具
 
-### Use **github** when
+### 何时使用 **github**
 
-- Installing pre-compiled binaries from GitHub releases
-- The repository follows standard conventions for release tarballs
-- You want zero configuration - no registry setup required
-- You need simple, fast binary installation
-- The tool doesn't require complex build processes or environment setup
+- 从 GitHub releases 安装预编译二进制文件
+- 该仓库遵循发布 tarball 的标准约定
+- 你希望零配置 - 无需注册表设置
+- 你需要简单、快速的二进制安装
+- 该工具不需要复杂的构建流程或环境设置
 
 ::: info
-The `ubi` backend still works but is deprecated in favor of `github`. Replace `ubi:owner/repo` with `github:owner/repo`.
+`ubi` 后端仍然可用，但已被弃用，建议改用 `github`。请将 `ubi:owner/repo` 替换为 `github:owner/repo`。
 :::
 
-### Use **Backend Plugins** when
+### 何时使用 **Backend Plugins**
 
-- You need to manage multiple tools with one plugin
-- Want enhanced backend methods for better performance
-- Need the `plugin:tool` format for flexibility
-- Working with custom or private tools
-- Want modern plugin architecture with backend methods
+- 你需要用一个插件管理多个工具
+- 希望使用增强的后端方法以获得更好的性能
+- 需要 `plugin:tool` 格式以获得灵活性
+- 使用自定义或私有工具
+- 希望采用带有后端方法的现代插件架构
 
-### Use **Tool Plugins** when
+### 何时使用 **Tool Plugins**
 
-- Creating traditional single-tool plugins
-- Need fine-grained control over installation hooks
-- Want to use the vfox hook system
-- Tool requires complex installation logic or build processes
-- Tool requires environment variable setup (like `JAVA_HOME`, `GOROOT`, etc.)
-- You need cross-platform support including Windows
+- 创建传统的单工具插件
+- 需要对安装钩子进行细粒度控制
+- 希望使用 vfox 钩子系统
+- 工具需要复杂的安装逻辑或构建流程
+- 工具需要设置环境变量（如 `JAVA_HOME`、`GOROOT` 等）
+- 你需要包括 Windows 在内的跨平台支持
 
-### Use **asdf Plugins** when
+### 何时使用 **asdf Plugins**
 
-- Tool requires compilation from source
-- Need complex installation logic or build processes
-- Tool requires environment variable setup (like `JAVA_HOME`, `GOROOT`, etc.)
-- No other backend supports the tool
-- Migrating from existing asdf setup
-- Working on Linux/macOS (no Windows support)
+- 工具需要从源码编译
+- 需要复杂的安装逻辑或构建流程
+- 工具需要设置环境变量（如 `JAVA_HOME`、`GOROOT` 等）
+- 没有其他后端支持该工具
+- 从现有的 asdf 配置迁移
+- 在 Linux/macOS 上工作（不支持 Windows）
 
-## Backend Dependencies
+## 后端依赖
 
-Some backends have dependencies on others:
+某些后端依赖于其他后端：
 
 ```mermaid
 graph TD
@@ -205,44 +205,44 @@ graph TD
     G[gem backend] --> H[Ruby]
 ```
 
-mise automatically handles these dependencies, installing Node.js before npm tools, pipx before pipx tools, etc.
+mise 会自动处理这些依赖，在安装 npm 工具之前先安装 Node.js，在安装 pipx 工具之前先安装 pipx，等等。
 
-## Configuration and Overrides
+## 配置和覆盖
 
-### Disable Backends
+### 禁用后端
 
 ```toml
 # ~/.config/mise/config.toml
 [settings]
-disable_backends = ["asdf", "vfox"] # Don't use these backends
+disable_backends = ["asdf", "vfox"] # 不使用这些后端
 ```
 
-### Force Backend for Tool
+### 为工具强制指定后端
 
 ```toml
 # mise.toml
 [tools]
-"core:node" = "20"     # Explicitly use core backend
-"aqua:yarn" = "latest" # Use aqua backend instead of default (vfox)
+"core:node" = "20"     # 显式使用 core 后端
+"aqua:yarn" = "latest" # 使用 aqua 后端代替默认值（vfox）
 ```
 
-### Backend-Specific Settings
+### 后端特定设置
 
-Some backends support additional configuration:
+一些后端支持额外配置：
 
 ```toml
 # mise.toml
 [tools]
-python = { version = "3.12", virtualenv = ".venv" }  # Core backend options
-black = { version = "latest", python = "3.12" }      # pipx backend options
+python = { version = "3.12", virtualenv = ".venv" }  # core 后端选项
+black = { version = "latest", python = "3.12" }      # pipx 后端选项
 ```
 
-## Troubleshooting Backend Issues
+## 后端问题排查
 
-### Debug Backend Selection
+### 调试后端选择
 
 ```bash
-mise doctor                   # Check backend configuration
-mise tool python              # See which backend is used for a tool
-mise config get tools         # Verify tool configurations
+mise doctor                   # 检查后端配置
+mise tool python              # 查看某个工具使用的是哪个后端
+mise config get tools         # 验证工具配置
 ```

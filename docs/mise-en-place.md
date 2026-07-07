@@ -1,49 +1,49 @@
-# mise-en-place: The Song
+# mise-en-place：这首歌
 
 <audio controls preload="metadata" src="/mise-en-place.mp3">
-  <a href="/mise-en-place.mp3">Download the MP3</a>
+  <a href="/mise-en-place.mp3">下载 MP3</a>
 </audio>
 
-## Lyrics
+## 歌词
 
 ```text
-I keep a tidy kitchen for the working software engineer,
-Where every runtime's labeled so the shell can find it bright and clear;
-I pin the Node and Python, Rust and Go all reproducibly,
-Then place them in the PATH so every shell behaves predictably.
+我为忙碌的软件工程师保持整洁的厨房，
+每个运行时都标好标签，让 shell 能清楚快速找到；
+我固定 Node 和 Python，Rust 和 Go，全部都可复现，
+再把它们放进 PATH，让每个 shell 的行为都可预测。
 
-I read the mise.toml and respect the team's intention there,
-I make the CI match the laptop, terminal, and everywhere;
-No source-build ceremony when a plain old binary will do;
-The work remains ergonomic, repeatable, and practical.
+我阅读 mise.toml，尊重团队在那里的意图，
+我让 CI 和笔记本、终端以及各处都保持一致；
+当一个普通的二进制就足够时，就无需源代码构建仪式；
+工作依然符合人体工学、可重复且实用。
 
-In short, it's Nix for people who have actual work to do now,
-No wrestling stupid flakes to make a shell that simply starts for you;
-The laptop and the CI both become interoperable,
-It's mise-en-place for dev machines: precise and operational.
+简而言之，它就是给现在有实际工作要做的人用的 Nix，
+不用折腾那些愚蠢的 flakes，才能让 shell 只是顺利为你启动；
+笔记本和 CI 都变得可互操作，
+这就是开发机器的 mise-en-place：精确且可执行。
 
-With hk at the doorway all my hooks are quite dependable,
-And aube can make the Node work feel suspiciously delectable;
-With fnox I keep the secrets out of all dotfiles accidental,
-And pitchfork keeps the daemons running steady, quite instrumental.
+有了 hk 守在门口，我所有的 hooks 都相当可靠，
+aube 还能让 Node 的工作感觉出奇地美味；
+有了 fnox，我把秘密妥善藏在所有意外的 dotfiles 之外，
+pitchfork 则让守护进程稳定运行，相当有分量。
 
-They form a tidy lineup for a workflow quite methodical,
-Where every command-line detail turns conveniently practical;
-The hooks, the packages, the secrets, processes, and all of them,
-Are tidied up by mise before I think to make a call of them.
+它们组成了一支整洁的队列，支撑着相当有条理的工作流，
+每个命令行细节都变得顺手而实用；
+hooks、packages、secrets、processes，以及它们全部，
+在我想到要调用它们之前，就已被 mise 整理妥当。
 
-In short, it's Nix for people who have actual work to do now,
-No wrestling stupid flakes to make a shell that simply starts for you;
-The laptop and the CI both become interoperable,
-It's mise-en-place for dev machines: precise and operational.
+简而言之，它就是给现在有实际工作要做的人用的 Nix，
+不用折腾那些愚蠢的 flakes，才能让 shell 只是顺利为你启动；
+笔记本和 CI 都变得可互操作，
+这就是开发机器的 mise-en-place：精确且可执行。
 
-With aqua I fetch builds where checksums all are verifiable,
-With provenance and policies the pathway is auditable;
-I ask the proper backend for the answer that's most suitable,
-Then lock a concrete version so the build remains repeatable.
+有了 aqua，我获取的构建物，其校验和都可验证，
+再加上来源和策略，这条路径也可审计；
+我向合适的后端询问最合适的答案，
+然后锁定一个具体版本，让构建保持可复现。
 
-From worktrees into CI, every step remains operational,
-Exactly what you'd hope for from any dev-tool professional;
-So raise a tidy terminal, with every tool addressable,
-And start the whole production with the workspace quite impeccable.
+从 worktrees 到 CI，每一步都保持可执行，
+这正是你对任何开发工具专业人士所期望的；
+所以举起一个整洁的终端，让每个工具都可直接访问，
+然后以无可挑剔的 workspace 启动整个生产流程。
 ```

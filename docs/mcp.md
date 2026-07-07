@@ -1,80 +1,80 @@
-# Model Context Protocol (MCP)
+# 模型上下文协议（MCP）
 
-The Model Context Protocol (MCP) is a standard protocol that enables AI assistants to interact with development tools and access project context. Mise provides an MCP server that allows AI assistants to query information about your development environment.
+模型上下文协议（MCP）是一种标准协议，使 AI 助手能够与开发工具交互并访问项目上下文。Mise 提供了一个 MCP 服务器，允许 AI 助手查询有关你的开发环境的信息。
 
-## Overview
+## 概述
 
-When you run `mise mcp`, it starts a server that AI assistants can connect to and query information about your mise-managed development environment. The server communicates over stdin/stdout using JSON-RPC protocol.
+当你运行 `mise mcp` 时，它会启动一个服务器，AI 助手可以连接到该服务器并查询有关你由 mise 管理的开发环境的信息。该服务器通过 stdin/stdout 使用 JSON-RPC 协议进行通信。
 
 ::: warning
-The MCP feature is experimental and requires enabling experimental features with `MISE_EXPERIMENTAL=1`.
+MCP 功能处于实验阶段，需要通过 `MISE_EXPERIMENTAL=1` 启用实验性功能。
 :::
 
-## Usage
+## 用法
 
-The MCP server is typically launched by AI assistants automatically, but you can also run it manually for testing:
+MCP 服务器通常由 AI 助手自动启动，但你也可以手动运行它进行测试：
 
 ```bash
-# Enable experimental features
+# 启用实验性功能
 export MISE_EXPERIMENTAL=1
 
-# Start the MCP server (it will wait for JSON-RPC input on stdin)
+# 启动 MCP 服务器（它会在 stdin 上等待 JSON-RPC 输入）
 mise mcp
 ```
 
-## Available Resources
+## 可用资源
 
-The MCP server exposes the following read-only resources that AI assistants can query:
+MCP 服务器公开了以下只读资源，AI 助手可以查询这些资源：
 
 ### `mise://tools`
 
-Lists all tools managed by mise in your project, including:
+列出项目中由 mise 管理的所有工具，包括：
 
-- Tool names and versions
-- Installation status
-- Configuration source
+- 工具名称和版本
+- 安装状态
+- 配置来源
 
 ### `mise://tasks`
 
-Shows all available mise tasks with:
+显示所有可用的 mise 任务，包括：
 
-- Task names and descriptions
-- Task dependencies
-- Command definitions
+- 任务名称和描述
+- 任务依赖
+- 命令定义
 
 ### `mise://env`
 
-Displays environment variables defined in your mise configuration:
+显示在你的 mise 配置中定义的环境变量：
 
-- Variable names and values
-- Environment-specific overrides
+- 变量名称和值
+- 特定环境的覆盖设置
 
 ### `mise://config`
 
-Provides information about mise configuration:
+提供有关 mise 配置的信息：
 
-- Active configuration files
-- Project root directory
-- Settings and preferences
+- 当前生效的配置文件
+- 项目根目录
+- 设置和偏好
 
-## Available Tools
+## 可用工具
 
-The following tools are available for AI assistants to call:
+以下工具可供 AI 助手调用：
 
 ### `install_tool`
 
-Install a specific tool version (not yet implemented)
+安装特定版本的工具（尚未实现）
 
 ### `run_task`
 
-Execute a mise task with optional arguments.
+执行一个 mise 任务，可带可选参数。
 
-**Parameters:**
+**参数：**
 
-- `task` (required, string): Name of the task to run
-- `args` (optional, array of strings): Arguments to pass to the task
+- `task`（必需，字符串）：要运行的任务名称
+- `args`（可选，字符串数组）：传递给任务的参数
 
-**Example:**
+**示例：**
 
 ```json
 {
@@ -83,13 +83,13 @@ Execute a mise task with optional arguments.
 }
 ```
 
-When the AI assistant calls this tool, it will execute the specified task and return the output, including stdout, stderr, and the exit status.
+当 AI 助手调用此工具时，它将执行指定的任务并返回输出，包括 stdout、stderr 和退出状态。
 
-## Integration with AI Assistants
+## 与 AI 助手集成
 
 ### Claude Desktop
 
-To use mise with Claude Desktop, add the following to your Claude configuration file:
+要在 Claude Desktop 中使用 mise，请将以下内容添加到你的 Claude 配置文件中：
 
 **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
@@ -109,37 +109,37 @@ To use mise with Claude Desktop, add the following to your Claude configuration 
 }
 ```
 
-After adding this configuration and restarting Claude Desktop, the assistant will be able to:
+添加此配置并重启 Claude Desktop 后，助手将能够：
 
-- Query your installed tools and versions
-- List available tasks in your project
-- Execute tasks directly (e.g., "run the build task")
-- Access environment variables from your mise configuration
-- View your mise configuration structure
+- 查询你已安装的工具和版本
+- 列出项目中可用的任务
+- 直接执行任务（例如，“运行 build 任务”）
+- 访问你 mise 配置中的环境变量
+- 查看你的 mise 配置结构
 
-### Other AI Assistants
+### 其他 AI 助手
 
-The MCP server uses standard JSON-RPC 2.0 over stdio, making it compatible with any AI assistant that supports the Model Context Protocol. Consult your AI assistant's documentation for specific integration instructions.
+MCP 服务器通过 stdio 使用标准的 JSON-RPC 2.0，因此它与任何支持 Model Context Protocol 的 AI 助手都兼容。有关具体的集成说明，请参阅你的 AI 助手文档。
 
-## Examples
+## 示例
 
-When integrated with an AI assistant, you can ask questions like:
+当与 AI 助手集成时，你可以提出如下问题：
 
-- "What version of Node.js is this project using?"
-- "List all the tasks available in this project"
-- "Run the build task"
-- "Execute the test task with verbose output"
-- "What environment variables are set by mise?"
-- "Show me the mise configuration for this project"
+- “这个项目使用的是哪个版本的 Node.js？”
+- “列出这个项目中所有可用的任务”
+- “运行构建任务”
+- “以详细输出执行测试任务”
+- “mise 设置了哪些环境变量？”
+- “向我展示这个项目的 mise 配置”
 
-The AI assistant will query the MCP server to provide accurate, up-to-date information about your development environment and can execute tasks on your behalf.
+AI 助手将查询 MCP 服务器，以提供关于你的开发环境准确、最新的信息，并可以代表你执行任务。
 
-## Technical Details
+## 技术细节
 
-The MCP server implementation can be found in [`src/cli/mcp.rs`](https://github.com/jdx/mise/blob/main/src/cli/mcp.rs). It implements the ServerHandler trait from the rmcp crate to handle:
+MCP 服务器的实现位于 [`src/cli/mcp.rs`](https://github.com/jdx/mise/blob/main/src/cli/mcp.rs)。它实现了 rmcp crate 中的 ServerHandler trait，用于处理：
 
-- Resource listing and reading
-- Tool invocation (task execution)
-- JSON-RPC communication over stdio
+- 资源列表和读取
+- 工具调用（任务执行）
+- 通过 stdio 进行 JSON-RPC 通信
 
-For more information about the Model Context Protocol, visit the [official MCP documentation](https://modelcontextprotocol.io/).
+有关 Model Context Protocol 的更多信息，请访问 [官方 MCP 文档](https://modelcontextprotocol.io/)。

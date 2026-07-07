@@ -1,139 +1,139 @@
-# Using Plugins
+# 使用插件
 
-mise supports plugins that extend its functionality, allowing you to install tools that aren't available in the standard registry. This is particularly useful for:
+mise 支持可扩展其功能的插件，使你能够安装标准注册表中不可用的工具。这对于以下场景尤其有用：
 
-- Installing tools from private repositories
-- Using experimental or niche tools
-- Creating custom tool installations for your team
+- 从私有仓库安装工具
+- 使用实验性或小众工具
+- 为你的团队创建自定义工具安装
 
-## What Are Plugins?
+## 什么是插件？
 
-Plugins are extensions that can install and manage tools not included in mise's built-in registry. They are written in Lua and come in two main types:
+插件是可以安装和管理不包含在 mise 内置注册表中的工具的扩展。它们使用 Lua 编写，并且主要分为两种类型：
 
-### Backend Plugins
+### 后端插件
 
-Backend plugins use enhanced backend methods and support the `plugin:tool` format:
+后端插件使用增强的后端方法，并支持 `plugin:tool` 格式：
 
-- **Multiple Tools**: A single plugin can manage multiple tools
-- **Enhanced Methods**: Backend methods for listing, installing, and environment setup
-- **Format**: Use the `plugin:tool` format (e.g., `vfox-npm:prettier`)
+- **多个工具**：单个插件可以管理多个工具
+- **增强方法**：用于列出、安装和环境设置的后端方法
+- **格式**：使用 `plugin:tool` 格式（例如，`vfox-npm:prettier`）
 
-### Tool Plugins
+### 工具插件
 
-Tool plugins use the traditional hook-based approach:
+工具插件使用传统的基于钩子的方式：
 
-- **Single Tool**: Each plugin manages one tool
-- **Hook-based**: Use hooks like `PreInstall`, `PostInstall`, `Available`, etc.
-- **Format**: Use the tool name directly (e.g., `my-tool`)
+- **单个工具**：每个插件管理一个工具
+- **基于钩子**：使用 `PreInstall`、`PostInstall`、`Available` 等钩子
+- **格式**：直接使用工具名称（例如，`my-tool`）
 
-Both types:
+两种类型都支持：
 
-- Install tools from any source (npm packages, GitHub releases, custom builds)
-- Set up environment variables and PATH entries
-- Handle version management and listing
-- Work across all platforms (Windows, macOS, Linux)
+- 从任何来源安装工具（npm 包、GitHub releases、自定义构建）
+- 设置环境变量和 PATH 条目
+- 处理版本管理和列表
+- 可在所有平台上运行（Windows、macOS、Linux）
 
-## Installing Plugins
+## 安装插件
 
-### From a Git Repository
+### 从 Git 仓库安装
 
 ```bash
-# Install a plugin from a repository
+# 从仓库安装插件
 mise plugin install <plugin-name> <repository-url>
 
-# Example: Installing the vfox-npm plugin
+# 示例：安装 vfox-npm 插件
 mise plugin install vfox-npm https://github.com/jdx/vfox-npm
 ```
 
-### From Zip File
+### 从 Zip 文件安装
 
 ```bash
-# Install a plugin from a zip file over HTTPS
+# 通过 HTTPS 从 zip 文件安装插件
 mise plugin install <plugin-name> <zip-url>
 
-# Example: Installing a plugin from a zip file
+# 示例：从 zip 文件安装插件
 mise plugin install tiny https://github.com/mise-plugins/mise-tiny.git
 ```
 
-### From Local Directory
+### 从本地目录安装
 
 ```bash
-# Link a local plugin for development
+# 链接一个本地插件用于开发
 mise plugin link <plugin-name> /path/to/plugin/directory
 ```
 
-## Using Plugins (Advanced)
+## 使用插件（高级）
 
-Once a plugin is installed, you can use it with the `plugin:tool` format:
+一旦安装了插件，你就可以使用 `plugin:tool` 格式来使用它：
 
 ```bash
-# Install a specific tool using the plugin
+# 使用插件安装特定工具
 mise install vfox-npm:prettier@latest
 
-# Use the tool
+# 使用该工具
 mise use vfox-npm:prettier@3.0.0
 
-# Execute the tool
+# 执行该工具
 mise exec vfox-npm:prettier -- --version
 
-# List available versions
+# 列出可用版本
 mise ls-remote vfox-npm:prettier
 ```
 
-## Plugin:Tool Format
+## 插件：工具格式
 
-The `plugin:tool` format allows a single plugin to manage multiple tools. This is particularly useful for:
+`plugin:tool` 格式允许单个插件管理多个工具。这在以下场景中特别有用：
 
-- **Package managers**: Install different npm packages, Python packages, etc.
-- **Tool families**: Manage related tools from the same ecosystem
-- **Custom builds**: Install different variants of the same tool
+- **包管理器**：安装不同的 npm 包、Python 包等。
+- **工具家族**：管理来自同一生态系统的相关工具
+- **自定义构建**：安装同一工具的不同变体
 
-### Example: npm packages
+### 示例：npm 包
 
 ```bash
-# Install different npm packages using the same plugin
+# 使用同一个插件安装不同的 npm 包
 mise install vfox-npm:prettier@latest
 mise install vfox-npm:eslint@8.0.0
 mise install vfox-npm:typescript@latest
 
-# Use them in your project
+# 在你的项目中使用它们
 mise use vfox-npm:prettier@latest vfox-npm:eslint@8.0.0
 ```
 
-## Managing Plugins
+## 管理插件
 
-### List installed plugins
+### 列出已安装的插件
 
 ```bash
-# Show all plugins
+# 显示所有插件
 mise plugins ls
 
-# Show plugin URLs
+# 显示插件 URL
 mise plugins ls --urls
 ```
 
-### Update plugins
+### 更新插件
 
 ```bash
-# Update a specific plugin
+# 更新特定插件
 mise plugin update vfox-npm
 
-# Update all plugins
+# 更新所有插件
 mise plugin update --all
 ```
 
-### Remove plugins
+### 移除插件
 
 ```bash
-# Remove a plugin
+# 移除一个插件
 mise plugin remove vfox-npm
 
-# This will also remove all tools installed by the plugin
+# 这也会移除该插件安装的所有工具
 ```
 
-## Configuration
+## 配置
 
-Plugins can be configured in your `mise.toml` file:
+可以在你的 `mise.toml` 文件中配置插件：
 
 ```toml
 [plugins]
@@ -144,104 +144,104 @@ vfox-npm = "https://github.com/jdx/vfox-npm"
 "vfox-npm:eslint" = "8.0.0"
 ```
 
-## Finding Plugins
+## 查找插件
 
-While mise doesn't have a centralized registry for community plugins, you can find them:
+虽然 mise 没有用于社区插件的集中式注册表，但你可以在以下地方找到它们：
 
-- **GitHub**: Search for repositories with "vfox-" prefix
-- **Community**: Check mise community discussions and Discord
-- **Company internal**: Your organization may have private plugins
+- **GitHub**：搜索带有 “vfox-” 前缀的仓库
+- **社区**：查看 mise 社区讨论和 Discord
+- **公司内部**：你的组织可能有私有插件
 
-## Plugin Examples
+## 插件示例
 
-### vfox-npm (Example Plugin)
+### vfox-npm（示例插件）
 
-The `vfox-npm` plugin demonstrates how to create a plugin that installs npm packages:
+`vfox-npm` 插件演示了如何创建一个用于安装 npm 包的插件：
 
 ```bash
-# Install the plugin
+# 安装插件
 mise plugin install vfox-npm https://github.com/jdx/vfox-npm
 
-# Install tools
+# 安装工具
 mise install vfox-npm:prettier@latest
 mise install vfox-npm:eslint@latest
 
-# Use them
+# 使用它们
 mise use vfox-npm:prettier@latest
 mise exec vfox-npm:prettier -- --check .
 ```
 
 ::: info
-This is just an example plugin for testing. mise already has built-in npm support that you should use instead: `mise install npm:prettier@latest`
+这只是一个用于测试的示例插件。mise 已经内置了 npm 支持，你应该改用它：`mise install npm:prettier@latest`
 :::
 
-## Backend Plugins (Advanced)
+## 后端插件（高级）
 
-Backend plugins use enhanced backend methods that provide better performance and support for the `plugin:tool` format:
+后端插件使用增强的后端方法，这些方法为 `plugin:tool` 格式提供更好的性能和支持：
 
-- **BackendListVersions**: Lists available versions of a tool
-- **BackendInstall**: Installs a specific version
-- **BackendExecEnv**: Sets up environment variables
+- **BackendListVersions**：列出工具的可用版本
+- **BackendInstall**：安装特定版本
+- **BackendExecEnv**：设置环境变量
 
-This architecture allows plugins to manage multiple tools efficiently while providing a consistent interface.
+这种架构使插件能够高效管理多个工具，同时提供一致的接口。
 
-## Tool Plugins (Advanced)
+## 工具插件（高级）
 
-Tool plugins use the traditional hook-based approach:
+工具插件使用传统的基于钩子的方式：
 
-- **Available**: Lists available versions
-- **PreInstall/PostInstall**: Installation hooks
-- **EnvKeys**: Environment variable setup
-- **Parse**: Version parsing and validation
+- **可用**：列出可用版本
+- **PreInstall/PostInstall**：安装钩子
+- **EnvKeys**：环境变量设置
+- **Parse**：版本解析和验证
 
-Both architectures provide a flexible plugin system that can handle diverse installation and management needs.
+这两种架构都提供了灵活的插件系统，能够处理多样化的安装和管理需求。
 
-## Security Considerations
+## 安全注意事项
 
 ::: danger
-When using plugins, be aware that:
+使用插件时，请注意：
 
-- **Plugins execute arbitrary code** during installation and use
-- **Only install plugins from trusted sources**
-- **Review plugin code** before installation when possible
-- **Use version pinning** to avoid unexpected updates like [`mise.lock`](/dev-tools/mise-lock.md)
+- **插件会在安装和使用过程中执行任意代码**
+- **仅从可信来源安装插件**
+- **尽可能在安装前审查插件代码**
+- **使用版本固定**以避免类似 [`mise.lock`](/dev-tools/mise-lock.md) 的意外更新
 :::
 
-## Troubleshooting
+## 故障排查
 
-### Plugin installation fails
+### 插件安装失败
 
 ```bash
-# Check if the repository URL is correct
+# 检查仓库 URL 是否正确
 mise plugin install vfox-npm https://github.com/jdx/vfox-npm
 
-# Check plugin directory
+# 检查插件目录
 ls ~/.local/share/mise/plugins/
 ```
 
-### Tool installation fails
+### 工具安装失败
 
 ```bash
-# Check plugin logs
+# 检查插件日志
 mise install vfox-npm:prettier@latest --verbose
 
-# Verify plugin is installed
+# 验证插件是否已安装
 mise plugins ls
 ```
 
-### Environment issues
+### 环境问题
 
 ```bash
-# Check if PATH is set correctly
+# 检查 PATH 是否设置正确
 mise exec vfox-npm:prettier env | grep PATH
 
-# Verify tool is installed
+# 验证工具是否已安装
 ls ~/.local/share/mise/installs/vfox-npm/prettier/
 ```
 
-## Next Steps
+## 下一步
 
-- [Learn how to create backend plugins](backend-plugin-development.md)
-- [Learn how to create tool plugins](tool-plugin-development.md)
-- [Explore built-in backends](dev-tools/backends/)
-- [Check the community registry](registry.md)
+- [了解如何创建后端插件](backend-plugin-development.md)
+- [了解如何创建工具插件](tool-plugin-development.md)
+- [探索内置后端](dev-tools/backends/)
+- [查看社区注册表](registry.md)

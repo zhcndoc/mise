@@ -1,26 +1,26 @@
-# Dotnet backend
+# Dotnet 后端
 
-The code for this is inside the mise repository at [`./src/backend/dotnet.rs`](https://github.com/jdx/mise/blob/main/src/backend/dotnet.rs).
+此功能的代码位于 mise 仓库中的 [`./src/backend/dotnet.rs`](https://github.com/jdx/mise/blob/main/src/backend/dotnet.rs)。
 
-::: tip Important
-The dotnet backend requires having the .NET runtime installed. You can install it using mise:
+::: tip 重要
+dotnet 后端需要已安装 .NET 运行时。你可以使用 mise 来安装它：
 
 ```sh
-# Install the latest version
+# 安装最新版本
 mise use dotnet
 
-# Or install a specific version (8, 9, etc.)
+# 或安装指定版本（8、9 等）
 mise use dotnet@8
 mise use dotnet@9
 ```
 
-This will install the .NET runtime, which is required for dotnet tools to work properly.
+这将安装 .NET 运行时，这是 dotnet 工具正常工作的必需组件。
 :::
 
-## Usage
+## 用法
 
-The following installs the latest version of [GitVersion.Tool](https://gitversion.net/) and
-sets it as the active version on PATH:
+以下命令会安装 [GitVersion.Tool](https://gitversion.net/) 的最新版本，并
+将其设为 PATH 上的活动版本：
 
 ```sh
 $ mise use dotnet:GitVersion.Tool@5.12.0
@@ -28,7 +28,7 @@ $ dotnet-gitversion /version
 5.12.0+Branch.support-5.x.Sha.3f75764963eb3d7956dcd5a40488c074dd9faf9e
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+版本将以以下格式设置到 `~/.config/mise/config.toml` 中：
 
 ```toml
 [tools]
@@ -41,37 +41,36 @@ $ dotnet-gitversion /version
 6.1.0+Branch.main.Sha.8856e3041dbb768118a55a31ad4e465ae70c6767
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+版本将以以下格式设置到 `~/.config/mise/config.toml` 中：
 
 ```toml
 [tools]
 "dotnet:GitVersion.Tool" = "latest"
 ```
 
-### Supported Dotnet Syntax
+### 支持的 Dotnet 语法
 
-| Description                           | Usage                           |
+| 描述                           | 用法                           |
 | ------------------------------------- | ------------------------------- |
-| Dotnet shorthand latest version       | `dotnet:GitVersion.Tool`        |
-| Dotnet shorthand for specific version | `dotnet:GitVersion.Tool@5.12.0` |
+| Dotnet 简写最新版本       | `dotnet:GitVersion.Tool`        |
+| Dotnet 指定版本的简写 | `dotnet:GitVersion.Tool@5.12.0` |
 
-## Settings
+## 设置
 
-Set these with `mise settings set [VARIABLE]=[VALUE]` or by setting the environment variable listed.
+使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置所列出的环境变量来配置这些项。
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="dotnet" :level="3" />
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `dotnet` backend—these
-go in `[tools]` in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `dotnet` 后端——这些内容放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
 
-Set environment variables for the `dotnet tool install` command:
+为 `dotnet tool install` 命令设置环境变量：
 
 ```toml
 [tools]
@@ -80,11 +79,11 @@ Set environment variables for the `dotnet tool install` command:
 
 ### `prerelease`
 
-By default, NuGet pre-release versions are excluded from `mise ls-remote` and from `latest` resolution. Set `prerelease = true` to include them:
+默认情况下，NuGet 预发布版本会被排除在 `mise ls-remote` 和 `latest` 解析之外。将 `prerelease = true` 设为包含它们：
 
 ```toml
 [tools]
 "dotnet:GitVersion.Tool" = { version = "latest", prerelease = true }
 ```
 
-The legacy `dotnet.package_flags = ["prerelease"]` setting is deprecated. Prefer the per-tool `prerelease = true` option, or the global `prereleases` setting when every tool should include pre-release versions. Because `dotnet.package_flags` is global, remove it before relying on `prerelease = false` per-tool opt-outs.
+旧的 `dotnet.package_flags = ["prerelease"]` 设置已被弃用。请优先使用按工具配置的 `prerelease = true` 选项，或者在所有工具都应包含预发布版本时使用全局 `prereleases` 设置。由于 `dotnet.package_flags` 是全局配置，在依赖每个工具的 `prerelease = false` 排除选项之前，请先移除它。

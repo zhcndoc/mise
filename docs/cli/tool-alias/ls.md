@@ -5,30 +5,30 @@
 - **Aliases**: `list`
 - **Source code**: [`src/cli/tool_alias/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_alias/ls.rs)
 
-List tool version aliases
-Shows the aliases that can be specified.
-These can come from user config or from plugins in `bin/list-aliases`.
+列出工具版本别名
+显示可以指定的别名。
+这些别名可以来自用户配置，或来自 `bin/list-aliases` 中的插件。
 
-For user config, aliases are defined like the following in `~/.config/mise/config.toml`:
+对于用户配置，别名定义如下，位于 `~/.config/mise/config.toml`：
 
 ```
 [tool_alias.node.versions]
 lts = "22.0.0"
 ```
 
-## Arguments
+## 参数
 
 ### `[TOOL]`
 
-Show aliases for &lt;TOOL>
+显示 &lt;TOOL> 的别名
 
-## Flags
+## 标志
 
 ### `--no-header`
 
-Don't show table header
+不显示表头
 
-Examples:
+示例：
 
 ```
 $ mise tool-alias ls

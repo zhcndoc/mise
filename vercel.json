@@ -1,0 +1,6 @@
+{
+  "framework": null,
+  "buildCommand": "bun run docs:build",
+  "installCommand": "npm install -g bun && bun install",
+  "outputDirectory": "docs/.vitepress/dist"
+}

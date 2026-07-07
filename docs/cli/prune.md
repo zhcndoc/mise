@@ -4,46 +4,46 @@
 - **Usage**: `mise prune [FLAGS] [INSTALLED_TOOL]…`
 - **Source code**: [`src/cli/prune.rs`](https://github.com/jdx/mise/blob/main/src/cli/prune.rs)
 
-Delete unused versions of tools
+删除未使用的工具版本
 
-mise tracks which config files have been used in ~/.local/state/mise/tracked-configs
-Versions which are no longer the latest specified in any of those configs are deleted.
-Versions installed only with environment variables `MISE_<TOOL>_VERSION` will be deleted,
-as will versions only referenced on the command line `mise exec <TOOL>@<VERSION>`.
+mise 会在 ~/.local/state/mise/tracked-configs 中跟踪哪些配置文件被使用过。
+不再是这些配置中任一项所指定的最新版本的版本将被删除。
+仅通过环境变量 `MISE_<TOOL>_VERSION` 安装的版本也会被删除，
+仅在命令行中通过 `mise exec <TOOL>@<VERSION>` 引用的版本也会被删除。
 
-You can list prunable tools with `mise ls --prunable`
+你可以使用 `mise ls --prunable` 查看可清理的工具
 
-## Arguments
+## 参数
 
 ### `[INSTALLED_TOOL]…`
 
-Prune only these tools
+仅清理这些工具
 
-## Flags
+## 标志
 
 ### `-n --dry-run`
 
-Do not actually delete anything
+不实际删除任何内容
 
 ### `--configs`
 
-Prune only tracked and trusted configuration links that point to nonexistent configurations
+仅清理指向不存在配置的已跟踪且受信任的配置链接
 
 ### `--dry-run-code`
 
-Like --dry-run but exits with code 1 if there are tools to prune
+类似于 --dry-run，但如果有可清理的工具则以代码 1 退出
 
-This is useful for scripts to check if tools need to be pruned.
+这对于脚本检查是否需要清理工具很有用。
 
 ### `--monorepo`
 
-Placeholder for future monorepo pruning; `mise prune --monorepo` is not implemented yet.
+未来单仓库清理的占位符；`mise prune --monorepo` 尚未实现。
 
 ### `--tools`
 
-Prune only unused versions of tools
+仅清理未使用的工具版本
 
-Examples:
+示例：
 
 ```
 $ mise prune --dry-run

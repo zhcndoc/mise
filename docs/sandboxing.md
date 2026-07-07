@@ -1,44 +1,44 @@
-# Sandboxing
+# 沙箱化
 
-Mise supports lightweight process sandboxing for `mise exec` and `mise run`, inspired by [zerobox](https://github.com/afshinm/zerobox). Sandboxing restricts filesystem, network, and environment variable access with granular controls. No Docker required, minimal overhead.
+Mise 支持用于 `mise exec` 和 `mise run` 的轻量级进程沙箱化，灵感来自 [zerobox](https://github.com/afshinm/zerobox)。沙箱化可通过细粒度控制限制文件系统、网络和环境变量访问。无需 Docker，开销极小。
 
-## Quick Start
+## 快速开始
 
-Any `--deny-*` or `--allow-*` flag implicitly enables sandboxing:
+任何 `--deny-*` 或 `--allow-*` 标志都会隐式启用沙箱：
 
 ```bash
-# Full lockdown — no writes, no network, no env vars
+# 完全锁定 — 不允许写入、不允许网络、不允许环境变量
 mise x --deny-all -- node script.js
 
-# Block network only
+# 仅阻止网络
 mise x --deny-net -- npm run build
 
-# Block writes except to ./dist
+# 阻止写入，但 ./dist 除外
 mise x --allow-write=./dist -- npm run build
 
-# Block everything, allow specific exceptions
+# 阻止一切，仅允许特定例外
 mise x --deny-all --allow-read=. --allow-write=./dist --allow-net=registry.npmjs.org -- npm install
 ```
 
-## CLI Flags
+## CLI 标志
 
-| Flag                   | Description                                                                                                            |
+| 标志                   | 描述                                                                                                            |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--deny-all`           | Block reads, writes, network, and env vars                                                                             |
-| `--deny-read`          | Block filesystem reads (system libs and tool dirs still accessible)                                                    |
-| `--deny-write`         | Block all filesystem writes (except `/tmp`)                                                                            |
-| `--deny-net`           | Block all network access                                                                                               |
-| `--deny-env`           | Block env var inheritance (only `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG` pass through)                          |
-| `--allow-read=<path>`  | Allow reads from specific path (implies `--deny-read` for everything else)                                             |
-| `--allow-write=<path>` | Allow writes to specific path (implies `--deny-write` for everything else)                                             |
-| `--allow-net=<host>`   | Allow network to specific host (implies `--deny-net` for everything else)                                              |
-| `--allow-env=<var>`    | Allow specific env var through (implies `--deny-env` for everything else). Supports wildcards: `--allow-env='MYAPP_*'` |
+| `--deny-all`           | 阻止读取、写入、网络和环境变量                                                                             |
+| `--deny-read`          | 阻止文件系统读取（系统库和工具目录仍可访问）                                                    |
+| `--deny-write`         | 阻止所有文件系统写入（`/tmp` 除外）                                                                            |
+| `--deny-net`           | 阻止所有网络访问                                                                                               |
+| `--deny-env`           | 阻止环境变量继承（仅 `PATH`、`HOME`、`USER`、`SHELL`、`TERM`、`LANG` 透传）                          |
+| `--allow-read=<path>`  | 允许从特定路径读取（对其他所有内容隐含 `--deny-read`）                                             |
+| `--allow-write=<path>` | 允许向特定路径写入（对其他所有内容隐含 `--deny-write`）                                              |
+| `--allow-net=<host>`   | 允许连接到特定主机（对其他所有内容隐含 `--deny-net`）                                              |
+| `--allow-env=<var>`    | 允许特定环境变量透传（对其他所有内容隐含 `--deny-env`）。支持通配符：`--allow-env='MYAPP_*'` |
 
-These flags work with both `mise exec` (`mise x`) and `mise run`.
+这些标志可同时用于 `mise exec`（`mise x`）和 `mise run`。
 
-## Task Sandboxing
+## 任务沙箱
 
-Tasks defined in `mise.toml` can declare sandbox permissions:
+在 `mise.toml` 中定义的任务可以声明沙箱权限：
 
 ```toml
 [tasks.build]
@@ -59,94 +59,94 @@ allow_write = ["./node_modules"]
 allow_net = ["registry.npmjs.org"]
 ```
 
-CLI flags on `mise run` override task-level config:
+`mise run` 上的 CLI 标志会覆盖任务级配置：
 
 ```bash
-# Run with task's declared sandbox
+# 使用任务声明的沙箱运行
 mise run build
 
-# Override: also allow network to a specific host
+# 覆盖：还允许访问特定主机的网络
 mise run --allow-net=registry.npmjs.org build
 ```
 
-## Implicit Access
+## 隐式访问
 
-When filesystem restrictions are active, certain paths remain accessible so tools can function:
+当文件系统限制处于活动状态时，某些路径仍然可访问，以便工具正常运行：
 
-### Always Readable
+### 始终可读
 
-- **System paths** (Linux): `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/dev`, `/proc`, `/sys`, `/tmp`, `/nix`, `/snap`, `/home/linuxbrew`
-- **System paths** (macOS): `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/dev`, `/etc`, `/var/run`, `/tmp`, `/private`, `/opt/homebrew`, `/nix`
-- **Mise tool dirs**: `~/.local/share/mise/installs/...`
+- **系统路径**（Linux）：`/usr`、`/lib`、`/lib64`、`/bin`、`/sbin`、`/etc`、`/dev`、`/proc`、`/sys`、`/tmp`、`/nix`、`/snap`、`/home/linuxbrew`
+- **系统路径**（macOS）：`/System`、`/Library`、`/usr`、`/bin`、`/sbin`、`/dev`、`/etc`、`/var/run`、`/tmp`、`/private`、`/opt/homebrew`、`/nix`
+- **Mise 工具目录**：`~/.local/share/mise/installs/...`
 
-### Always Writable
+### 始终可写
 
-- `/tmp` (and `/private/tmp` on macOS)
-- `/dev` (for `/dev/null`, `/dev/tty`, etc.)
+- `/tmp`（在 macOS 上为 `/private/tmp`）
+- `/dev`（用于 `/dev/null`、`/dev/tty` 等）
 
-### Implicit Rules
+### 隐式规则
 
-- `--allow-write` paths are implicitly readable
-- `--allow-read` paths include system essentials above
+- `--allow-write` 路径会被隐式视为可读
+- `--allow-read` 路径包含上面的系统必需路径
 
-## Platform Support
+## 平台支持
 
-| Feature                                 | Linux              | macOS    |
+| 功能                                    | Linux              | macOS    |
 | --------------------------------------- | ------------------ | -------- |
-| Deny/allow reads                        | Landlock           | Seatbelt |
-| Deny/allow writes                       | Landlock           | Seatbelt |
-| Deny all network                        | seccomp            | Seatbelt |
-| Per-host network (`--allow-net=<host>`) | Not supported (v1) | Seatbelt |
-| Env filtering                           | Built-in           | Built-in |
-| Docker support                          | Yes                | N/A      |
+| 拒绝/允许读取                          | Landlock           | Seatbelt |
+| 拒绝/允许写入                          | Landlock           | Seatbelt |
+| 拒绝所有网络                            | seccomp            | Seatbelt |
+| 按主机网络（`--allow-net=<host>`）     | 不支持（v1）        | Seatbelt |
+| 环境变量过滤                            | 内置               | 内置     |
+| Docker 支持                             | 是                 | N/A      |
 
 ### Linux
 
-Filesystem sandboxing uses [Landlock](https://landlock.io/) (available since Linux 5.13). Network sandboxing uses [seccomp-bpf](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html) to block inet socket creation while allowing Unix sockets.
+文件系统沙箱使用 [Landlock](https://landlock.io/)（自 Linux 5.13 起可用）。网络沙箱使用 [seccomp-bpf](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html) 阻止创建 inet 套接字，同时允许 Unix 套接字。
 
-If Landlock is unavailable or cannot apply filesystem restrictions, the command fails.
+如果 Landlock 不可用，或无法应用文件系统限制，则命令会失败。
 
-**Limitation**: Per-host network filtering (`--allow-net=<host>`) is not supported on Linux in v1. On Linux, `--allow-net` falls back to allowing all network access. This works on macOS via Seatbelt.
+**限制**：在 v1 中，Linux 不支持按主机网络过滤（`--allow-net=<host>`）。在 Linux 上，`--allow-net` 会回退为允许所有网络访问。这在 macOS 上可通过 Seatbelt 实现。
 
 ### macOS
 
-Uses Apple's `sandbox-exec` (Seatbelt) with a generated profile. Supports all features including per-host network filtering.
+使用 Apple 的 `sandbox-exec`（Seatbelt）和生成的配置文件。支持包括按主机网络过滤在内的所有功能。
 
 ### Windows
 
-Sandboxing is not currently supported on Windows. A warning is printed and the command runs unsandboxed.
+目前 Windows 不支持沙箱。系统会打印警告，命令将在不受沙箱保护的情况下运行。
 
-## Examples
+## 示例
 
-### Run untrusted script with no filesystem writes
+### 运行不允许文件系统写入的不受信任脚本
 
 ```bash
 mise x --deny-write -- bash untrusted-script.sh
 ```
 
-### Build with network isolation
+### 在网络隔离下构建
 
 ```bash
 mise x --deny-net -- make build
 ```
 
-### Run tool with minimal permissions
+### 使用最小权限运行工具
 
 ```bash
 mise x --deny-all --allow-read=./src --allow-write=./dist node@20 -- node build.js
 ```
 
-### Restrict env vars to a namespace
+### 将环境变量限制在某个命名空间
 
 ```bash
-# Only pass through env vars starting with MYAPP_
+# 仅传递以 MYAPP_ 开头的环境变量
 mise x --allow-env='MYAPP_*' -- node app.js
 
-# Allow multiple patterns
+# 允许多个模式
 mise x --allow-env='MYAPP_*' --allow-env='NODE_*' -- node app.js
 ```
 
-### Sandboxed task definition
+### 沙箱化任务定义
 
 ```toml
 [tasks.test]

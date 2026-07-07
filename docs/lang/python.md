@@ -1,24 +1,23 @@
 # Python
 
-Like `pyenv`, `mise` can manage multiple versions of Python on the same system. Mise can also automatically create virtual environments for your projects and integrates with `uv`.
+像 `pyenv` 一样，`mise` 可以在同一系统上管理多个 Python 版本。Mise 还可以为你的项目自动创建虚拟环境，并与 `uv` 集成。
 
-> The following are instructions for using the python mise core plugin. The core plugin will be used
-> so long as no plugin is manually
-> installed named "python" using `mise plugins install python [GIT_URL]`.
+> 以下是使用 python mise 核心插件的说明。只要没有通过 `mise plugins install python [GIT_URL]` 手动
+> 安装名为 "python" 的插件，就会使用核心插件。
 
-The code for this is inside of the mise repository
-at [`./src/plugins/core/python.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/python.rs).
+此功能的代码位于 mise 仓库中
+[`./src/plugins/core/python.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/python.rs)。
 
-## Usage
+## 用法
 
-The following installs the latest version of python-3.15.x and makes it the global
-default:
+以下命令会安装最新版本的 python-3.15.x，并将其设为全局
+默认值：
 
 ```sh
 mise use -g python@3.15
 ```
 
-You can also use multiple versions of python at the same time:
+你也可以同时使用多个版本的 python：
 
 ```sh
 $ mise use -g python@3.14 python@3.15
@@ -28,24 +27,23 @@ $ python3.15 -V
 3.15.0
 ```
 
-You can also install a specific python flavour. To get the latest version from a flavour just use the
-flavour prefix.
+你还可以安装特定的 python 发行版本。要从某个发行版本获取最新版本，只需使用该
+发行版本前缀。
 
 ```sh
-mise use -g python@anaconda         # latest version of anaconda
+mise use -g python@anaconda         # anaconda 的最新版本
 ```
 
-See the [Python Cookbook](/mise-cookbook/python.html) for common tasks and examples.
+有关常见任务和示例，请参阅 [Python Cookbook](/mise-cookbook/python.html)。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `python` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `python` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for python-build, default package installation, and install-time
-verification commands run by the core `python` backend:
+为 python-build、默认包安装以及由核心 `python` 后端运行的安装时验证命令设置环境变量：
 
 ```toml
 [tools]
@@ -54,104 +52,94 @@ python = { version = "latest", install_env = { CONFIGURE_OPTS = "--enable-optimi
 
 ### `patch_sysconfig`
 
-When installing precompiled Python binaries on Unix, mise patches the Python `sysconfig` data by
-default so build-time paths from `python-build-standalone` point at the final mise install path. If
-that patching causes an install problem for a specific Python build, disable it with
-`patch_sysconfig = false`:
+在 Unix 上安装预编译的 Python 二进制文件时，mise 默认会修补 Python 的 `sysconfig` 数据，以便来自 `python-build-standalone` 的构建时路径指向最终的 mise 安装路径。如果这种修补对某个特定的 Python 构建造成安装问题，可以使用 `patch_sysconfig = false` 将其禁用：
 
 ```toml
 [tools]
 python = { version = "3.14", patch_sysconfig = false }
 ```
 
-Disabling this patch can leave stale build-time paths in the installed Python's `sysconfig` data, so
-prefer the default unless you need this as an install workaround.
+禁用此修补可能会使已安装的 Python 的 `sysconfig` 数据中保留过时的构建时路径，因此除非你需要将其作为安装解决方案，否则应优先使用默认设置。
 
-## `.python-version` support
+## `.python-version` 支持
 
-`.python-version`/`.python-versions` files are supported by mise. See [idiomatic version files](/configuration.html#idiomatic-version-files).
+mise 支持 `.python-version`/`.python-versions` 文件。参见[惯用版本文件](/configuration.html#idiomatic-version-files)。
 
-## Automatic virtualenv activation
+## 自动虚拟环境激活
 
-mise has two ways to manage Python virtualenvs:
+mise 有两种方式来管理 Python 虚拟环境：
 
-| Mechanism             | Best for                     | Config location      |
+| 机制                  | 最适合                         | 配置位置          |
 | --------------------- | ---------------------------- | -------------------- |
-| `python.uv_venv_auto` | uv projects (with `uv.lock`) | `[settings]` section |
-| `_.python.venv`       | Projects not using uv        | `[env]` section      |
+| `python.uv_venv_auto` | uv 项目（带有 `uv.lock`）      | `[settings]` 部分   |
+| `_.python.venv`       | 不使用 uv 的项目              | `[env]` 部分        |
 
-**`python.uv_venv_auto`** detects and sources the `.venv` managed by `uv`. Use `"source"` to only activate existing venvs, or `"create|source"` to create if missing. See the [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv) for full examples.
+**`python.uv_venv_auto`** 会检测并加载由 `uv` 管理的 `.venv`。使用 `"source"` 仅激活已存在的 venv，或使用 `"create|source"` 在缺失时创建。完整示例请参见 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
 
-**`_.python.venv`** creates/activates a venv and adds it to PATH. It works with both `mise activate` and `mise exec`. Use this for projects that don't use uv.
+**`_.python.venv`** 会创建/激活一个 venv，并将其添加到 PATH。它既适用于 `mise activate`，也适用于 `mise exec`。对于不使用 uv 的项目，请使用此项。
 
 ::: warning
-These are separate mechanisms with different code paths. Options like `uv_create_args` and `python_create_args` in `_.python.venv` are not used by `python.uv_venv_auto`.
+这些是彼此独立的机制，代码路径不同。`_.python.venv` 中的 `uv_create_args` 和 `python_create_args` 等选项不会被 `python.uv_venv_auto` 使用。
 :::
 
-### `_.python.venv` configuration
+### `_.python.venv` 配置
 
-Use `_.python.venv` in the `[env]` section of `mise.toml`:
+在 `mise.toml` 的 `[env]` 部分使用 `_.python.venv`：
 
 ```toml
 [tools]
-python = "3.15" # [optional] will be used for the venv
+python = "3.15" # [可选] 将用于该虚拟环境
 
 [env]
-_.python.venv = ".venv" # relative to this file's directory
-_.python.venv = "/root/.venv" # can be absolute
-_.python.venv = "{{env.HOME}}/.cache/venv/myproj" # can use templates
-_.python.venv = { path = ".venv", create = true } # create the venv if it doesn't exist
-_.python.venv = { path = ".venv", create = true, python = "3.15" } # use a specific python version
+_.python.venv = ".venv" # 相对于此文件所在目录
+_.python.venv = "/root/.venv" # 可以是绝对路径
+_.python.venv = "{{env.HOME}}/.cache/venv/myproj" # 可以使用模板
+_.python.venv = { path = ".venv", create = true } # 如果不存在则创建该虚拟环境
+_.python.venv = { path = ".venv", create = true, python = "3.15" } # 使用指定的 python 版本
 _.python.venv = {
   path = ".venv", create = true,
-  python_create_args = ["--without-pip"], # pass args to python -m venv
+  python_create_args = ["--without-pip"], # 将参数传递给 python -m venv
 }
 _.python.venv = {
   path = ".venv", create = true,
-  uv_create_args = ["--system-site-packages"], # pass args to uv venv
+  uv_create_args = ["--system-site-packages"], # 将参数传递给 uv venv
 }
-# Install seed packages (pip, setuptools, and wheel) into the virtual environment.
+# 将种子包（pip、setuptools 和 wheel）安装到虚拟环境中。
 _.python.venv = { path = ".venv", create = true, uv_create_args = ['--seed'] }
 ```
 
-The venv will need to be created manually with `python -m venv /path/to/venv` unless `create=true`.
-See [env-directives](https://mise.en.dev/environments/#env-directives) for `_.python.venv`.
+除非设置 `create=true`，否则需要手动使用 `python -m venv /path/to/venv` 创建该 venv。
+有关 `_.python.venv`，请参见 [env-directives](https://mise.en.dev/environments/#env-directives)。
 
 ::: tip
-Virtualenv activation requires `mise activate` or `mise exec`. When using [shims](/dev-tools/shims) alone, the venv's `bin/` directory is not added to PATH, so `which python` will point to the shim rather than the venv's interpreter.
+虚拟环境激活需要使用 `mise activate` 或 `mise exec`。仅使用 [shims](/dev-tools/shims) 时，不会将 venv 的 `bin/` 目录加入 PATH，因此 `which python` 指向的会是 shim，而不是 venv 的解释器。
 :::
 
-### `python.uv_venv_auto` setting
+### `python.uv_venv_auto` 设置
 
-For uv-managed projects (those with a `uv.lock` file), you can use the `python.uv_venv_auto` setting to automatically source or create the `.venv` that uv manages. See the [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv) for full examples.
+对于由 uv 管理的项目（即包含 `uv.lock` 文件的项目），你可以使用 `python.uv_venv_auto` 设置，自动加载或创建由 uv 管理的 `.venv`。完整示例请参见 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
 
 ```toml [mise.toml]
 [settings]
-python.uv_venv_auto = "source"        # activate existing .venv
-# or
-python.uv_venv_auto = "create|source" # create .venv if missing, then activate
+python.uv_venv_auto = "source"        # 激活已存在的 .venv
+# 或
+python.uv_venv_auto = "create|source" # 如果缺失则创建 .venv，然后激活
 ```
 
 ## mise & uv
 
-If you have installed `uv` (for example, with `mise use -g uv@latest`), `mise` will use it to create virtual environments via `_.python.venv`. Otherwise, it will use the built-in `python -m venv` command.
+如果你已经安装了 `uv`（例如，通过 `mise use -g uv@latest`），`mise` 将使用它通过 `_.python.venv` 创建虚拟环境。否则，它将使用内置的 `python -m venv` 命令。
 
-Note that `uv` does not include `pip` by default (as `uv` provides `uv pip` instead). If you need the `pip` package, add the `uv_create_args = ['--seed']` option.
+请注意，`uv` 默认不包含 `pip`（因为 `uv` 提供的是 `uv pip`）。如果你需要 `pip` 包，请添加 `uv_create_args = ['--seed']` 选项。
 
 :::warning
-The `true` value for `python.uv_venv_auto` is considered legacy and will be deprecated in a
-future release (planned for mise 2026.7). Prefer `"source"` or `"create|source"` instead.
-Note: the `python.uv_venv_auto` **setting** itself is not going away — only the `true` value is
-being phased out.
+`python.uv_venv_auto` 的 `true` 值被视为旧版用法，并将在未来版本中弃用（计划在 mise 2026.7 中移除）。请改用 `"source"` 或 `"create|source"`。
+注意：`python.uv_venv_auto` **设置**本身不会被移除——只有 `true` 这个值会逐步淘汰。
 :::
 
-One difference between the legacy `true` value and the newer string values is that `true` also
-exports `UV_PYTHON` (set to just the Python version number). This tells `uv` which Python version
-to use, but does not guarantee that `uv` uses the specific interpreter managed by `mise` — `uv`
-may fall back to a system or self-managed Python of the same version.
+旧版 `true` 值与较新的字符串值之间的一个区别是，`true` 还会导出 `UV_PYTHON`（仅设置为 Python 版本号）。这会告诉 `uv` 使用哪个 Python 版本，但不能保证 `uv` 使用的是由 `mise` 管理的特定解释器——`uv` 可能会回退到同版本的系统 Python 或自管理 Python。
 
-To strictly ensure `uv` uses `mise`'s managed Python interpreter, set `UV_PYTHON` to the actual
-install path instead:
+如果要严格确保 `uv` 使用 `mise` 管理的 Python 解释器，请改为将 `UV_PYTHON` 设置为实际安装路径：
 
 ```toml
 [tools]
@@ -161,23 +149,22 @@ python = "3.15"
 UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
 ```
 
-See the [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv) for more examples.
+更多示例请参见 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
 
-## Default Python packages
+## 默认 Python 包
 
-::: warning Planned deprecation
-Default package files are deprecated. They are still supported for now, but mise will start warning
-in `2026.11.0` and support will be removed in `2027.11.0`.
+::: warning 计划弃用
+默认包文件已被弃用。它们目前仍然受支持，但 mise 将从 `2026.11.0` 开始发出警告，并将在 `2027.11.0` 移除支持。
 
-For Python CLIs, install the tool directly with the [pipx backend](/dev-tools/backends/pipx.html):
+对于 Python CLI，请使用 [pipx backend](/dev-tools/backends/pipx.html) 直接安装该工具：
 
 ```toml
 [tools]
 "pipx:black" = "latest"
 ```
 
-For packages that really should be installed into every Python version, use a tool-level
-`postinstall` hook:
+对于确实应该安装到每个 Python 版本中的包，请使用工具级别的
+`postinstall` 钩子：
 
 ```toml
 [tools]
@@ -186,67 +173,54 @@ python = { version = "3.13", postinstall = "python -m pip install --upgrade ansi
 
 :::
 
-mise can automatically install a default set of Python packages with pip right after installing a
-Python version. To use this legacy feature, provide a `$HOME/.default-python-packages` file that
-lists one package per line, for example:
+mise 可以在安装 Python 版本后，使用 pip 自动安装一组默认的 Python 包。要使用此旧版功能，请提供一个 `$HOME/.default-python-packages` 文件，并在其中每行列出一个包，例如：
 
 ```text
 ansible
 pipenv
 ```
 
-You can specify a non-default location of this file by setting a `MISE_PYTHON_DEFAULT_PACKAGES_FILE`
-variable.
+你可以通过设置 `MISE_PYTHON_DEFAULT_PACKAGES_FILE` 变量来指定该文件的非默认位置。
 
-## Precompiled python binaries
+## 预编译的 Python 二进制文件
 
-By default, mise will
-download [precompiled binaries](https://github.com/astral-sh/python-build-standalone)
-for python instead of compiling them with python-build. This makes installing python much faster.
+默认情况下，mise 会为 Python 下载[预编译二进制文件](https://github.com/astral-sh/python-build-standalone)，而不是使用 python-build 进行编译。这使得安装 Python 快得多。
 
-In addition to being faster, it also means you don't have to install all of the system dependencies
-either.
+除了速度更快之外，这也意味着你不必安装所有系统依赖项。
 
-That said, there are
-some [quirks](https://github.com/astral-sh/python-build-standalone/blob/main/docs/quirks.rst)
-with the precompiled binaries to be aware of.
+不过，需要注意的是，这些预编译二进制文件也有一些[怪癖](https://github.com/astral-sh/python-build-standalone/blob/main/docs/quirks.rst)。
 
-If you'd like to disable these binaries, set `mise settings python.compile=1`.
+如果你想禁用这些二进制文件，请设置 `mise settings python.compile=1`。
 
-These binaries may not work on older CPUs however you may opt into binaries which
-are more compatible with older CPUs by setting `MISE_PYTHON_PRECOMPILED_ARCH` with
-a different version. See <https://gregoryszorc.com/docs/python-build-standalone/main/running.html> for
-more information
-on this option. Set it to "x86_64" for the most compatible binaries.
+不过，这些二进制文件可能无法在较旧的 CPU 上运行；但你可以通过将 `MISE_PYTHON_PRECOMPILED_ARCH` 设置为不同的版本，选择与旧 CPU 更兼容的二进制文件。有关此选项的更多信息，请参见 <https://gregoryszorc.com/docs/python-build-standalone/main/running.html>。将其设置为 "x86_64" 可获得最兼容的二进制文件。
 
 ## python-build
 
-Optionally, mise
-uses [python-build](https://github.com/pyenv/pyenv/tree/master/plugins/python-build) (part of pyenv)
-to compile python runtimes,
-you need to ensure
-its [dependencies](https://github.com/pyenv/pyenv/wiki#suggested-build-environment) are installed
-before installing python with
-python-build.
+可选地，mise
+使用 [python-build](https://github.com/pyenv/pyenv/tree/master/plugins/python-build)（pyenv 的一部分）
+来编译 Python 运行时，
+你需要确保在使用
+python-build 安装 Python 之前，
+其[依赖项](https://github.com/pyenv/pyenv/wiki#suggested-build-environment)已安装。
 
-## Installing free-threaded python
+## 安装无 GIL Python
 
-Free-threaded python can be installed via python-build by running the following:
+可以通过 python-build 按如下方式安装无 GIL Python：
 
 ```bash
 MISE_PYTHON_COMPILE=0 MISE_PYTHON_PRECOMPILED_FLAVOR=freethreaded+pgo-full mise install python
 ```
 
-Or to compile with python-build:
+或者使用 python-build 进行编译：
 
 ```bash
 MISE_PYTHON_COMPILE=1 PYTHON_BUILD_FREE_THREADING=1 mise install python
 ```
 
-## Troubleshooting errors with Homebrew
+## 使用 Homebrew 时排查错误
 
-If you normally use Homebrew and you see errors regarding OpenSSL,
-your best bet might be using the following command to install Python:
+如果你平时使用 Homebrew，并且看到了与 OpenSSL 相关的错误，
+最好的办法可能是使用以下命令来安装 Python：
 
 ```sh
 CFLAGS="-I$(brew --prefix openssl)/include" \
@@ -254,16 +228,16 @@ LDFLAGS="-L$(brew --prefix openssl)/lib" \
 mise install python@latest;
 ```
 
-Homebrew installs its own OpenSSL version, which may collide with system-expected ones.
-You could even add that to your
-`.profile`,
-`.bashrc`,
+Homebrew 会安装它自己的 OpenSSL 版本，这可能会与系统期望的版本发生冲突。
+你甚至可以把它添加到你的
+`.profile`、
+`.bashrc`、
 `.zshrc`...
-to avoid setting them every time
+中，这样就不用每次都手动设置了
 
-Additionally, if you encounter issues with python-build,
-you may benefit from unlinking pkg-config prior to install
-([reason](https://github.com/pyenv/pyenv/issues/2823#issuecomment-1769081965)).
+另外，如果你遇到 python-build 方面的问题，
+在安装之前取消链接 pkg-config 可能会对你有帮助
+([原因](https://github.com/pyenv/pyenv/issues/2823#issuecomment-1769081965))。
 
 ```sh
 brew unlink pkg-config
@@ -271,7 +245,7 @@ mise install python@latest
 brew link pkg-config
 ```
 
-Thus the entire script would look like:
+因此，整个脚本看起来会是这样：
 
 ```sh
 brew unlink pkg-config
@@ -281,13 +255,12 @@ CFLAGS="-I$(brew --prefix openssl)/include" \
 brew link pkg-config
 ```
 
-## Settings
+## 设置
 
-`python-build` already has
-a [handful of settings](https://github.com/pyenv/pyenv/tree/master/plugins/python-build), in
-additional to that python in mise has a few extra configuration variables.
+`python-build` 已经有
+一些[设置项](https://github.com/pyenv/pyenv/tree/master/plugins/python-build)，此外 mise 中的 python 还有一些额外的配置变量。
 
-Set these with `mise settings set [VARIABLE]=[VALUE]` or by setting the environment variable.
+使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置环境变量来进行设置。
 
 <script setup>
 import Settings from '/components/settings.vue';

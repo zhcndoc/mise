@@ -1,55 +1,55 @@
-# GitHub Tokens
+# GitHub 令牌
 
-Many tools in mise are hosted on GitHub. For public releases, mise uses [mise-versions](https://mise-versions.jdx.dev) by default as a shared cache for version lists, release metadata, and GitHub artifact attestations. This avoids most unauthenticated GitHub API calls during normal installs, including CI and Docker builds.
+mise 中的许多工具都托管在 GitHub 上。对于公开发布，mise 默认使用 [mise-versions](https://mise-versions.jdx.dev) 作为共享缓存，用于版本列表、发布元数据和 GitHub 制品证明。这避免了在正常安装期间（包括 CI 和 Docker 构建）的大多数未认证 GitHub API 调用。
 
-GitHub tokens are still useful when mise has to fall back to GitHub's API, when `MISE_USE_VERSIONS_HOST=0` is set, or when installing tools from private repositories, GitHub Enterprise, or custom GitHub API hosts. Unauthenticated requests are subject to low [rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), which can cause `403 Forbidden` errors. This page explains how to configure GitHub authentication in mise.
+当 mise 需要回退到 GitHub 的 API、设置了 `MISE_USE_VERSIONS_HOST=0`，或者从私有仓库、GitHub Enterprise 或自定义 GitHub API 主机安装工具时，GitHub 令牌仍然很有用。未认证请求会受到较低的 [速率限制](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)，这可能导致 `403 Forbidden` 错误。本页解释了如何在 mise 中配置 GitHub 身份验证。
 
-## Token Priority
+## 令牌优先级
 
-mise checks the following sources in order. The first token found wins:
+mise 按以下顺序检查来源。找到的第一个令牌即生效：
 
-**github.com:**
+**github.com：**
 
-| Priority | Source                              |
-| -------- | ----------------------------------- |
-| 1        | `MISE_GITHUB_TOKEN` env var         |
-| 2        | `GITHUB_API_TOKEN` env var          |
-| 3        | `GITHUB_TOKEN` env var              |
-| 4        | `credential_command` (if set)       |
-| 5        | native GitHub OAuth (if configured) |
-| 6        | `github_tokens.toml` (per-host)     |
-| 7        | gh CLI token (from `hosts.yml`)     |
-| 8        | `git credential fill` (if enabled)  |
+| 优先级 | 来源                                 |
+| ------ | ------------------------------------ |
+| 1      | `MISE_GITHUB_TOKEN` 环境变量         |
+| 2      | `GITHUB_API_TOKEN` 环境变量          |
+| 3      | `GITHUB_TOKEN` 环境变量              |
+| 4      | `credential_command`（如果已设置）    |
+| 5      | 原生 GitHub OAuth（如果已配置）       |
+| 6      | `github_tokens.toml`（按主机）        |
+| 7      | gh CLI 令牌（来自 `hosts.yml`）       |
+| 8      | `git credential fill`（如果已启用）   |
 
-**GitHub Enterprise hosts:**
+**GitHub Enterprise 主机：**
 
-| Priority | Source                                                             |
-| -------- | ------------------------------------------------------------------ |
-| 1        | `MISE_GITHUB_ENTERPRISE_TOKEN` env var                             |
-| 2        | `MISE_GITHUB_TOKEN` / `GITHUB_API_TOKEN` / `GITHUB_TOKEN` env vars |
-| 3        | `credential_command` (if set)                                      |
-| 4        | native GitHub OAuth (if configured)                                |
-| 5        | `github_tokens.toml` (per-host)                                    |
-| 6        | gh CLI token (from `hosts.yml`, matched by hostname)               |
-| 7        | `git credential fill` (if enabled)                                 |
+| 优先级 | 来源                                                                |
+| ------ | ------------------------------------------------------------------- |
+| 1      | `MISE_GITHUB_ENTERPRISE_TOKEN` 环境变量                             |
+| 2      | `MISE_GITHUB_TOKEN` / `GITHUB_API_TOKEN` / `GITHUB_TOKEN` 环境变量 |
+| 3      | `credential_command`（如果已设置）                                   |
+| 4      | 原生 GitHub OAuth（如果已配置）                                      |
+| 5      | `github_tokens.toml`（按主机）                                       |
+| 6      | gh CLI 令牌（来自 `hosts.yml`，按主机名匹配）                        |
+| 7      | `git credential fill`（如果已启用）                                  |
 
 ::: tip
-The github.com env vars (`MISE_GITHUB_TOKEN`, etc.) are also used as a fallback for GHE when `MISE_GITHUB_ENTERPRISE_TOKEN` is not set. If you need different tokens for github.com and a GHE instance, set `MISE_GITHUB_ENTERPRISE_TOKEN` explicitly or use the gh CLI integration.
+github.com 的环境变量（`MISE_GITHUB_TOKEN` 等）在未设置 `MISE_GITHUB_ENTERPRISE_TOKEN` 时，也会作为 GHE 的回退方案。如果你需要为 github.com 和某个 GHE 实例使用不同的令牌，请显式设置 `MISE_GITHUB_ENTERPRISE_TOKEN`，或者使用 gh CLI 集成。
 :::
 
-## Setting a Token via Environment Variable
+## 通过环境变量设置令牌
 
-Create a [personal access token](https://github.com/settings/tokens/new?description=MISE_GITHUB_TOKEN) (no scopes required) and set it:
+创建一个 [个人访问令牌](https://github.com/settings/tokens/new?description=MISE_GITHUB_TOKEN)（不需要任何权限范围）并进行设置：
 
 ```sh
 export MISE_GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
 ```
 
-Or, if you already have `GITHUB_TOKEN` set (common in GitHub Actions), mise will use it automatically.
+或者，如果你已经设置了 `GITHUB_TOKEN`（在 GitHub Actions 中很常见），mise 会自动使用它。
 
-## Token File (`github_tokens.toml`)
+## Token 文件（`github_tokens.toml`）
 
-You can store per-host GitHub tokens in a mise-specific config file:
+你可以在 mise 特定的配置文件中为每个主机存储 GitHub token：
 
 ```toml
 # ~/.config/mise/github_tokens.toml
@@ -60,29 +60,29 @@ token = "ghp_xxxxxxxxxxxx"
 token = "ghp_yyyyyyyyyyyy"
 ```
 
-This file is checked after environment variables and `credential_command` but before the gh CLI's `hosts.yml`, making it useful when:
+该文件的检查顺序在环境变量和 `credential_command` 之后，但在 gh CLI 的 `hosts.yml` 之前，因此在以下情况中很有用：
 
-- You don't use the gh CLI, or
-- The gh CLI token has restricted scope (e.g., Coder-provisioned tokens scoped to specific orgs) and you need a broader token for mise, or
-- You want mise-specific tokens that don't interfere with other tools.
+- 你不使用 gh CLI，或者
+- gh CLI token 的作用域受限（例如，Coder 提供的 token 仅限于特定组织），而你需要一个更宽泛的 token 供 mise 使用，或者
+- 你希望使用仅针对 mise 的 token，而不影响其他工具。
 
-The file location follows `MISE_CONFIG_DIR` (defaults to `~/.config/mise`).
-No additional settings are required — mise auto-discovers the file if it exists.
+该文件的位置遵循 `MISE_CONFIG_DIR`（默认为 `~/.config/mise`）。
+无需额外设置——如果该文件存在，mise 会自动发现它。
 
-## gh CLI Integration
+## gh CLI 集成
 
-If you use the [GitHub CLI](https://cli.github.com/) (`gh`), mise can read tokens directly from its `hosts.yml` config file. This is enabled by default and kicks in when no token environment variable is set.
+如果你使用 [GitHub CLI](https://cli.github.com/)（`gh`），mise 可以直接从其 `hosts.yml` 配置文件中读取令牌。此功能默认启用，并且会在未设置令牌环境变量时生效。
 
-mise looks for `hosts.yml` in these locations (first match wins):
+mise 会在以下位置查找 `hosts.yml`（按顺序匹配，先找到先使用）：
 
 1. `$GH_CONFIG_DIR/hosts.yml`
-2. `$XDG_CONFIG_HOME/gh/hosts.yml` (defaults to `~/.config/gh/hosts.yml`)
-3. `~/Library/Application Support/gh/hosts.yml` (macOS only)
+2. `$XDG_CONFIG_HOME/gh/hosts.yml`（默认为 `~/.config/gh/hosts.yml`）
+3. `~/Library/Application Support/gh/hosts.yml`（仅限 macOS）
 
-This is especially useful for **GitHub Enterprise** — the gh CLI stores per-host tokens, so mise can authenticate to multiple GHE instances without juggling environment variables:
+这对 **GitHub Enterprise** 尤其有用——gh CLI 会按主机存储令牌，因此 mise 可以对多个 GHE 实例进行身份验证，而无需来回切换环境变量：
 
 ```yaml
-# ~/.config/gh/hosts.yml (managed by `gh auth login`)
+# ~/.config/gh/hosts.yml（由 `gh auth login` 管理）
 github.com:
   oauth_token: ghp_xxxxxxxxxxxx
   user: you
@@ -92,169 +92,169 @@ github.mycompany.com:
 ```
 
 ::: info
-mise reads the config file directly — it does not shell out to `gh`. If your gh CLI uses a credential helper (e.g., macOS Keychain) instead of storing tokens in `hosts.yml`, the token won't be available via this method. However, mise also supports `git credential fill` (see below), which can retrieve tokens from system keyrings.
+mise 会直接读取配置文件——它不会通过 shell 调用 `gh`。如果你的 gh CLI 使用凭据助手（例如 macOS 钥匙串）而不是将令牌存储在 `hosts.yml` 中，那么通过此方法将无法获取令牌。不过，mise 也支持 `git credential fill`（见下文），它可以从系统密钥环中检索令牌。
 :::
 
-To disable this behavior:
+要禁用此行为：
 
 ```toml
 [settings.github]
 gh_cli_tokens = false
 ```
 
-## Credential Command
+## 凭据命令
 
-You can configure a custom shell command that mise runs to obtain a GitHub token. This is useful when you want a credential source that only mise uses, without affecting git:
+你可以配置一个自定义的 shell 命令，让 mise 运行它来获取 GitHub token。这在你想要一个只被 mise 使用、而不影响 git 的凭据来源时非常有用：
 
 ```toml
 [settings.github]
 credential_command = "op read 'op://Private/GitHub Token/credential'"
 ```
 
-mise executes this command with the configured default inline shell ([`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)) and reads the token from stdout. The hostname is available as `MISE_CREDENTIAL_HOST`, and the provider name (`github`) is available as `MISE_CREDENTIAL_PROVIDER`. For compatibility, recognized sh-compatible shells (`ash`, `bash`, `dash`, `ksh`, `sh`, and `zsh`) also receive the hostname as `$1`/`${1}`. This is checked before `github_tokens.toml` and gh CLI tokens, so it takes priority over file-based sources.
+mise 会使用已配置的默认内联 shell（[`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) 或 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)）执行此命令，并从 stdout 读取 token。主机名可通过 `MISE_CREDENTIAL_HOST` 获取，提供方名称（`github`）可通过 `MISE_CREDENTIAL_PROVIDER` 获取。为兼容起见，识别为 sh 兼容的 shell（`ash`、`bash`、`dash`、`ksh`、`sh` 和 `zsh`）也会将主机名作为 `$1`/`${1}` 传入。此检查优先于 `github_tokens.toml` 和 gh CLI tokens，因此它的优先级高于基于文件的来源。
 
-:::: warning Planned deprecation
-The legacy `$1`/`${1}` hostname argument is deprecated. Use `MISE_CREDENTIAL_HOST` instead. mise will start warning in `2026.11.0`, and `$1` compatibility will be removed in `2027.11.0`.
+:::: warning 计划弃用
+旧的 `$1`/`${1}` 主机名参数已被弃用。请改用 `MISE_CREDENTIAL_HOST`。mise 将在 `2026.11.0` 开始发出警告，而 `$1` 兼容性将在 `2027.11.0` 被移除。
 ::::
 
-### Using ghtkn
+### 使用 ghtkn
 
-[ghtkn](https://github.com/suzuki-shunsuke/ghtkn) can generate short-lived GitHub App user access tokens and print them to stdout, which makes it compatible with `credential_command`.
+[ghtkn](https://github.com/suzuki-shunsuke/ghtkn) 可以生成短期有效的 GitHub App 用户访问 token 并将其打印到 stdout，这使它与 `credential_command` 兼容。
 
-Run `ghtkn get` once manually before relying on it from mise so any browser-based device flow happens intentionally. After that, ghtkn can reuse tokens from your OS secret manager until they need to be regenerated.
+在依赖 mise 使用它之前，请先手动运行一次 `ghtkn get`，这样任何基于浏览器的设备流都会有意触发。之后，ghtkn 可以从你的操作系统密钥管理器中复用 token，直到需要重新生成。
 
-The credential command runs with mise shims removed from `PATH` to avoid recursive mise invocations. If you install `ghtkn` with mise, use `mise which` to find the real executable path and store that in `credential_command` instead of relying on the shim:
+凭据命令运行时会移除 PATH 中的 mise shims，以避免递归调用 mise。如果你使用 mise 安装了 `ghtkn`，请使用 `mise which` 找到真实可执行文件路径，并将其保存到 `credential_command` 中，而不是依赖 shim：
 
 ```sh
 mise settings set github.credential_command="$(mise which ghtkn) get -m 1h"
 ```
 
-Do not make the credential command run `mise x`, `mise exec`, or another command that may need GitHub access to resolve or install `ghtkn`, since that can loop while mise is trying to obtain the GitHub token.
+不要让凭据命令运行 `mise x`、`mise exec`，或其他可能需要 GitHub 访问权限来解析或安装 `ghtkn` 的命令，因为这可能会在 mise 尝试获取 GitHub token 时形成循环。
 
-If `ghtkn` is already available without relying on a mise shim, you can also set it directly:
+如果 `ghtkn` 已经可以在不依赖 mise shim 的情况下直接使用，你也可以直接这样设置：
 
 ```toml
 [settings.github]
 credential_command = "ghtkn get -m 1h"
 ```
 
-Use `mise token github` to confirm mise can resolve the token:
+使用 `mise token github` 来确认 mise 能够解析该 token：
 
 ```sh
 mise token github
 ```
 
-## Native GitHub OAuth
+## 原生 GitHub OAuth
 
-mise can create short-lived GitHub App user access tokens directly with GitHub's OAuth device flow. This does not require a personal access token, GitHub App private key, app client secret, `gh`, `ghtkn`, or any other external credential command.
+mise 可以通过 GitHub 的 OAuth 设备流直接创建短期有效的 GitHub App 用户访问令牌。这不需要个人访问令牌、GitHub App 私钥、应用客户端密钥、`gh`、`ghtkn` 或任何其他外部凭据命令。
 
-The design was inspired by [ghtkn](https://github.com/suzuki-shunsuke/ghtkn) — if you'd rather run a separate process and have mise pick up its token via `credential_command`, see [Using ghtkn](#using-ghtkn) above.
+该设计受 [ghtkn](https://github.com/suzuki-shunsuke/ghtkn) 启发——如果你更愿意运行一个独立进程，并让 mise 通过 `credential_command` 获取其令牌，请参阅上方的 [Using ghtkn](#using-ghtkn)。
 
-Create a GitHub App with device flow enabled, then configure its client ID:
+创建一个启用了设备流的 GitHub App，然后配置其客户端 ID：
 
 ```sh
 mise settings set github.oauth_client_id=Iv1.yourgithubappclientid
 ```
 
-Authorize once:
+授权一次：
 
 ```sh
 mise token github --oauth
 ```
 
-After that, mise reuses the cached token for its own GitHub API calls and refreshes it when GitHub returns a refresh token. While the cached token is valid, mise also exports it to your shell as `GITHUB_TOKEN` (via `mise activate` / `mise hook-env` / `mise env` / `mise exec`) so tools like `gh`, `git`, and `cargo publish` see it without any extra wiring:
+之后，mise 会为自己的 GitHub API 调用复用缓存的令牌，并在 GitHub 返回刷新令牌时对其进行刷新。在缓存令牌有效期间，mise 还会通过 `GITHUB_TOKEN` 将其导出到你的 shell（通过 `mise activate` / `mise hook-env` / `mise env` / `mise exec`），因此像 `gh`、`git` 和 `cargo publish` 这样的工具无需额外配置即可使用它：
 
 ```sh
-gh pr list # uses the OAuth token automatically
+gh pr list # 自动使用 OAuth 令牌
 ```
 
-To use a different variable name (for example, `gh`'s preferred `GH_TOKEN`), set `github.oauth_export_env`. Setting it to an empty string disables the auto-export.
+如果要使用不同的变量名（例如 `gh` 偏好的 `GH_TOKEN`），请设置 `github.oauth_export_env`。将其设置为空字符串可禁用自动导出。
 
-You can still print a raw token explicitly when you need to pipe it somewhere:
+在需要将原始令牌直接传递到某处时，你仍然可以显式输出原始令牌：
 
 ```sh
 export MISE_GITHUB_TOKEN="$(mise token github --oauth --raw)"
 ```
 
-Optional settings:
+可选设置：
 
 ```toml
 [settings.github]
 oauth_client_id = "Iv1.yourgithubappclientid"
-oauth_scopes = "" # usually empty for GitHub App user access tokens
+oauth_scopes = "" # 对于 GitHub App 用户访问令牌通常为空
 oauth_open_browser = true
-oauth_export_env = "GITHUB_TOKEN" # set to "" to disable automatic export
+oauth_export_env = "GITHUB_TOKEN" # 设为 "" 可禁用自动导出
 ```
 
-## Git Credential Helpers
+## Git 凭据助手
 
-mise can use your existing git credential helpers to obtain GitHub tokens. This is **opt-in** and acts as a last-resort fallback after all other token sources.
+mise 可以使用你现有的 git 凭据助手来获取 GitHub 令牌。这是**可选启用**的，并且会在所有其他令牌来源都失败后作为最后的回退方案。
 
-This is especially useful for:
+这在以下场景中特别有用：
 
-- **Devcontainer environments** where tokens are provided via git credential helpers
-- **macOS/Windows** where `gh auth login` stores tokens in the system keyring rather than `hosts.yml`
-- Any environment where git already has credentials configured
+- **Devcontainer 环境**，其中令牌通过 git 凭据助手提供
+- **macOS/Windows**，其中 `gh auth login` 会将令牌存储在系统密钥串中，而不是 `hosts.yml`
+- 任何 git 已经配置了凭据的环境
 
-mise runs `git credential fill` with `GIT_TERMINAL_PROMPT=0` (to prevent interactive prompts) and caches the result per host for the session.
+mise 会使用 `GIT_TERMINAL_PROMPT=0` 运行 `git credential fill`（以防止交互式提示），并在会话期间按主机缓存结果。
 
-To enable this behavior:
+要启用此行为：
 
 ```toml
 [settings.github]
 use_git_credentials = true
 ```
 
-## Debugging Token Resolution
+## 调试 Token 解析
 
-Use `mise token github` to see which token mise would use for a given host:
+使用 `mise token github` 查看 mise 会为给定主机使用哪个 token：
 
 ```sh
-mise token github                           # check github.com (masked)
-mise token github --unmask                  # show full token
-mise token github github.mycompany.com      # check a GHE host
+mise token github                           # 检查 github.com（已隐藏）
+mise token github --unmask                  # 显示完整 token
+mise token github github.mycompany.com      # 检查 GHE 主机
 ```
 
 ## GitHub Enterprise
 
-For self-hosted GitHub instances, set the `api_url` [tool option](/dev-tools/backends/github.html#api-url) on the tool:
+对于自托管的 GitHub 实例，请在工具上设置 `api_url` [工具选项](/dev-tools/backends/github.html#api-url)：
 
 ```toml
 [tools]
 "github:myorg/mytool" = { version = "latest", api_url = "https://github.mycompany.com/api/v3" }
 ```
 
-For authentication, mise checks (in order):
+进行身份验证时，mise 按以下顺序检查：
 
-1. `MISE_GITHUB_ENTERPRISE_TOKEN` env var
-2. `MISE_GITHUB_TOKEN` / `GITHUB_API_TOKEN` / `GITHUB_TOKEN` env vars
-3. `credential_command` for the API hostname
-4. native GitHub OAuth for the configured API hostname
-5. `github_tokens.toml` for the API hostname
-6. gh CLI token for the API hostname
-7. `git credential fill` for the API hostname
+1. `MISE_GITHUB_ENTERPRISE_TOKEN` 环境变量
+2. `MISE_GITHUB_TOKEN` / `GITHUB_API_TOKEN` / `GITHUB_TOKEN` 环境变量
+3. 用于该 API 主机名的 `credential_command`
+4. 配置的 API 主机名对应的原生 GitHub OAuth
+5. 该 API 主机名对应的 `github_tokens.toml`
+6. 该 API 主机名对应的 gh CLI token
+7. 该 API 主机名对应的 `git credential fill`
 
-If you have **multiple** GHE instances, `MISE_GITHUB_ENTERPRISE_TOKEN` (a single value) won't work. Use `github_tokens.toml`, the gh CLI integration, `credential_command`, or git credential helpers instead:
+如果你有**多个** GHE 实例，`MISE_GITHUB_ENTERPRISE_TOKEN`（单个值）将不起作用。请改用 `github_tokens.toml`、gh CLI 集成、`credential_command` 或 git credential helpers：
 
 ```sh
 gh auth login --hostname github.mycompany.com
 gh auth login --hostname github.other-company.com
 ```
 
-## Avoiding Tokens Entirely with Lockfiles
+## 通过 lockfile 完全避免使用 token
 
-If you use [`mise.lock`](/dev-tools/mise-lock.html), mise stores exact download URLs and checksums. Future installs use the lockfile directly — no GitHub API calls needed:
+如果你使用 [`mise.lock`](/dev-tools/mise-lock.html)，mise 会存储准确的下载 URL 和校验和。后续安装将直接使用 lockfile —— 无需 GitHub API 调用：
 
 ```sh
 mise settings lockfile=true
 mise lock
 ```
 
-This is the best approach for CI where you want deterministic builds without configuring tokens. See [mise.lock Lockfile](/dev-tools/mise-lock.html) for details.
+这是 CI 的最佳方案，因为你希望在不配置 token 的情况下获得确定性的构建。详情请参见 [mise.lock Lockfile](/dev-tools/mise-lock.html)。
 
 ## CI / GitHub Actions
 
-In GitHub Actions, `GITHUB_TOKEN` is automatically available. mise picks it up with no extra configuration:
+在 GitHub Actions 中，`GITHUB_TOKEN` 会自动可用。mise 无需额外配置即可获取它：
 
 ```yaml
 - uses: jdx/mise-action@v2
@@ -262,8 +262,8 @@ In GitHub Actions, `GITHUB_TOKEN` is automatically available. mise picks it up w
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-For private repos or higher rate limits, use a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) stored as a repository secret.
+对于私有仓库或更高的速率限制，请使用存储为仓库密钥的 [细粒度个人访问令牌](https://github.com/settings/tokens?type=beta)。
 
 ## .netrc
 
-mise also supports `.netrc` for HTTP Basic auth. Credentials from `.netrc` take precedence over token-based auth headers. See [URL Replacements](/url-replacements.html) for details.
+mise 也支持用于 HTTP Basic 认证的 `.netrc`。来自 `.netrc` 的凭据优先于基于 token 的认证头。有关详细信息，请参见 [URL 替换](/url-replacements.html)。

@@ -1,76 +1,72 @@
 # Ruby
 
-Like `rvm`, `rbenv`, or `asdf`, `mise` can manage multiple versions of [Ruby](https://www.ruby-lang.org/) on the same system.
+与 `rvm`、`rbenv` 或 `asdf` 类似，`mise` 可以在同一系统上管理 Ruby 的多个版本。
 
-> The following are instructions for using the ruby mise core plugin. This is used when there isn't a
-> git plugin installed named "ruby". If you want to use [asdf-ruby](https://github.com/asdf-vm/asdf-ruby)
-> then use `mise plugins install ruby GIT_URL`.
+> 以下是使用 ruby mise 核心插件的说明。当没有安装名为 “ruby” 的 git 插件时会使用它。
+> 如果你想使用 [asdf-ruby](https://github.com/asdf-vm/asdf-ruby)
+> ，则使用 `mise plugins install ruby GIT_URL`。
 
-The code for this is inside the mise repository at
-[`./src/plugins/core/ruby.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/ruby.rs).
+这部分代码位于 mise 仓库中的
+[`./src/plugins/core/ruby.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/ruby.rs)。
 
-## Usage
+## 用法
 
-The following installs the latest version of ruby-3.2.x (if some version of 3.2.x is not already
-installed) and makes it the global default:
+下面的命令会安装 ruby-3.2.x 的最新版本（如果尚未安装 3.2.x 的某个版本），并将其设为全局默认：
 
 ```sh
 mise use -g ruby@3.2
 ```
 
-Behind the scenes, mise uses [`ruby-build`](https://github.com/rbenv/ruby-build) to compile ruby
-from source. Ensure that you have the necessary
-[dependencies](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment) installed.
-You can check its [README](https://github.com/rbenv/ruby-build/blob/master/README.md) for additional settings and some
-troubleshooting.
+在幕后，mise 使用 [`ruby-build`](https://github.com/rbenv/ruby-build) 从源码编译 ruby。
+请确保你已安装必要的
+[依赖项](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment)。
+你可以查看其 [README](https://github.com/rbenv/ruby-build/blob/master/README.md) 以了解更多设置和一些
+故障排除信息。
 
-## Precompiled Binaries
+## 预编译二进制文件
 
-Mise can download precompiled Ruby binaries instead of
-compiling from source. This significantly reduces installation time.
+Mise 可以下载预编译的 Ruby 二进制文件，而不是
+从源代码编译。这会显著减少安装时间。
 
-Precompiled binaries will become the default in 2026.8.0. To opt in now:
+预编译二进制文件将在 2026.8.0 中成为默认选项。要立即启用：
 
 ```sh
 mise settings ruby.compile=false
 mise use ruby@3.4.1
 ```
 
-Precompiled binaries are sourced from [jdx/ruby](https://github.com/jdx/ruby) and are available
-for the following platforms:
+预编译二进制文件来源于 [jdx/ruby](https://github.com/jdx/ruby)，并适用于
+以下平台：
 
-- macOS (arm64/Apple Silicon only)
+- macOS（仅限 arm64/Apple Silicon）
 - Linux arm64
 - Linux x86_64
 
-If a precompiled binary is not available for your platform or Ruby version, mise automatically
-falls back to compiling from source using ruby-build.
+如果你的平台或 Ruby 版本没有可用的预编译二进制文件，mise 会自动
+回退到使用 ruby-build 从源代码编译。
 
-### Precompiled build revisions
+### 预编译构建修订版
 
-Precompiled Ruby binaries are released from `jdx/ruby`. Sometimes the binary for a Ruby version is rebuilt without changing the Ruby version itself. Those rebuilds use build revision release tags like `3.3.11-1` or `3.3.11-2`.
-Mise uses these build revision tags for `jdx/ruby` precompiled binaries instead
-of the floating base release tag.
+预编译的 Ruby 二进制文件由 `jdx/ruby` 发布。有时某个 Ruby 版本的二进制文件会在不更改 Ruby 版本本身的情况下重新构建。这些重新构建会使用类似 `3.3.11-1` 或 `3.3.11-2` 的构建修订版发布标签。
+Mise 会将这些构建修订版标签用于 `jdx/ruby` 预编译二进制文件，
+而不是使用浮动的基础发布标签。
 
-Rebuilds are for changes to the portable binary package, not changes to Ruby's
-own version number. The `jdx/ruby` release history includes rebuilds for
-reasons such as:
+重新构建是为了修复可移植二进制包的变更，而不是 Ruby
+自身版本号的变更。`jdx/ruby` 的发布历史包括以下原因导致的重新构建：
 
-- native gem packaging fixes
-- CA certificate lookup fixes
-- RI documentation packaging changes
-- SLSA/provenance workflow fixes
-- mass regeneration of existing releases
+- 原生 gem 打包修复
+- CA 证书查找修复
+- RI 文档打包变更
+- SLSA/溯源工作流修复
+- 对现有发布的大规模重新生成
 
-This list is not exhaustive.
+此列表并不详尽。
 
-Mise still treats the Ruby version as `3.3.11`. Without a `mise.lock`, mise
-uses the latest available precompiled build revision when resolving the install.
-That means reinstalling the same Ruby version later may pick up a newer rebuild
-if one was published.
+Mise 仍然将 Ruby 版本视为 `3.3.11`。如果没有 `mise.lock`，mise
+在解析安装时会使用最新可用的预编译构建修订版。
+这意味着稍后重新安装相同的 Ruby 版本时，如果发布了更新的重新构建，可能会获取到更新的版本。
 
-With a `mise.lock`, the download URL records which precompiled build revision is
-used:
+使用 `mise.lock` 时，下载 URL 会记录所使用的预编译构建修订版：
 
 ```toml
 [[tools.ruby]]
@@ -80,51 +76,51 @@ version = "3.3.11"
 url = "https://github.com/jdx/ruby/releases/download/3.3.11-1/ruby-3.3.11.x86_64_linux.tar.gz"
 ```
 
-To see which precompiled build revision you have, inspect the release tag in the platform `url`:
+要查看你使用的是哪个预编译构建修订版，请检查平台 `url` 中的发布标签：
 
-- `/releases/download/3.3.11-1/` means build revision `1`
-- `/releases/download/3.3.11-2/` means build revision `2`
+- `/releases/download/3.3.11-1/` 表示构建修订版 `1`
+- `/releases/download/3.3.11-2/` 表示构建修订版 `2`
 
-If the lockfile already points at a build revision such as `3.3.11-1`, mise keeps using that exact revision for reproducibility. To update to the newest precompiled build revision for the same Ruby version, remove the entire Ruby entry from `mise.lock` or remove every Ruby platform `url`, then regenerate the lock entry and reinstall:
+如果锁文件已经指向某个构建修订版，例如 `3.3.11-1`，mise 会继续使用该确切修订版以保证可复现性。要更新到同一 Ruby 版本的最新预编译构建修订版，请删除 `mise.lock` 中整个 Ruby 条目，或删除所有 Ruby 平台的 `url`，然后重新生成锁定条目并重新安装：
 
 ```sh
 mise lock ruby
 mise install --force ruby
 ```
 
-Commit the updated `mise.lock` so other machines and CI use the same precompiled build revision.
+提交更新后的 `mise.lock`，这样其他机器和 CI 就会使用相同的预编译构建修订版。
 
-To always compile from source even when precompiled binaries are available:
+即使有可用的预编译二进制文件，也要始终从源代码编译：
 
 ```sh
 mise settings ruby.compile=true
 ```
 
-You can also use a custom source for precompiled binaries by setting `ruby.precompiled_url` to
-either a GitHub repo (e.g., `owner/repo`) or a full URL template.
+你也可以通过将 `ruby.precompiled_url` 设置为
+GitHub 仓库（例如 `owner/repo`）或完整的 URL 模板，来自定义预编译二进制文件的来源。
 
-You can also install a specific ruby flavour. To get the latest version from a flavour, just use the
-flavour prefix.
+你还可以安装特定的 ruby 变体。要获取某个变体的最新版本，只需使用
+该变体前缀。
 
 ```sh
-mise use -g ruby@truffleruby            # latest version of truffleruby
+mise use -g ruby@truffleruby            # truffleruby 的最新版本
 ```
 
-## Default gems
+## 默认 gem
 
-::: warning Planned deprecation
-Default package files are deprecated. They are still supported for now, but mise will start warning
-in `2026.11.0` and support will be removed in `2027.11.0`.
+::: warning 计划弃用
+默认包文件已弃用。它们目前仍受支持，但 mise 将从 `2026.11.0` 开始发出警告，
+并将在 `2027.11.0` 中移除支持。
 
-For Ruby CLIs, install the tool directly with the [gem backend](/dev-tools/backends/gem.html):
+对于 Ruby CLI，请直接使用 [gem 后端](/dev-tools/backends/gem.html) 安装该工具：
 
 ```toml
 [tools]
 "gem:rubocop" = "latest"
 ```
 
-For gems that really should be installed into every Ruby version, use a tool-level `postinstall`
-hook:
+对于确实应该安装到每个 Ruby 版本中的 gem，请使用工具级别的 `postinstall`
+钩子：
 
 ```toml
 [tools]
@@ -133,66 +129,65 @@ ruby = { version = "3.4", postinstall = "gem install rubocop" }
 
 :::
 
-mise can automatically install a default set of gems right after installing a new ruby version.
-To use this legacy feature, provide a `$HOME/.default-gems` file that lists one gem per line, for
-example:
+mise 可以在安装新的 ruby 版本后自动安装一组默认 gem。
+要使用此旧特性，请提供一个 `$HOME/.default-gems` 文件，每行列出一个 gem，例如：
 
 ```text
-# supports comments
+# 支持注释
 pry
-bcat ~> 0.6.0 # supports version constraints
-rubocop --pre # install prerelease version
+bcat ~> 0.6.0 # 支持版本约束
+rubocop --pre # 安装预发布版本
 ```
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `ruby` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `ruby` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for ruby-build or ruby-install and default gem installation:
+为 ruby-build 或 ruby-install 以及默认 gem 安装设置环境变量：
 
 ```toml
 [tools]
 ruby = { version = "latest", install_env = { RUBY_CONFIGURE_OPTS = "--disable-install-doc" } }
 ```
 
-## `.ruby-version` and `Gemfile` support
+## `.ruby-version` 和 `Gemfile` 支持
 
-mise uses a `mise.toml` or `.tool-versions` file for auto-switching between software versions.
-However, it can also read ruby-specific version files `.ruby-version` or `Gemfile`
-(if it specifies a ruby version).
+mise 使用 `mise.toml` 或 `.tool-versions` 文件在不同软件版本之间自动切换。
+不过，它也可以读取 ruby 特定的版本文件 `.ruby-version` 或 `Gemfile`
+（如果其中指定了 ruby 版本）。
 
-Create a `.ruby-version` file for the current version of ruby:
+为当前版本的 ruby 创建一个 `.ruby-version` 文件：
 
 ```sh
 ruby -v > .ruby-version
 ```
 
-Enable idiomatic version file reading for ruby:
+为 ruby 启用惯用版本文件读取：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools ruby
 ```
 
-See [idiomatic version files](/configuration.html#idiomatic-version-files) for more information.
+有关更多信息，请参阅[惯用版本文件](/configuration.html#idiomatic-version-files)。
 
-## Manually updating ruby-build
+## 手动更新 ruby-build
 
-ruby-build should update daily, however if you find versions do not yet exist you can force an
-update:
+ruby-build 应该会每天更新，不过如果你发现某些版本尚不存在，你可以强制进行
+更新：
 
 ```bash
 mise cache clean
 mise ls-remote ruby
 ```
 
-## Settings
+## 设置
 
-`ruby-build` already has a
-[handful of settings](https://github.com/rbenv/ruby-build?tab=readme-ov-file#custom-build-configuration),
-in additional to that mise has a few extra settings:
+`ruby-build` 已经有一些
+[设置](https://github.com/rbenv/ruby-build?tab=readme-ov-file#custom-build-configuration)，
+此外，mise 还有一些额外的设置：
 
 <script setup>
 import Settings from '/components/settings.vue';

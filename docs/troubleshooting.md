@@ -1,84 +1,67 @@
-# Troubleshooting
+# 故障排除
 
-If you're looking for help with a specific error message, see [Errors](/errors.html) — this
-page is organized by symptom instead.
+如果你正在寻找有关特定错误消息的帮助，请参阅 [错误](/errors.html)——本页面则按症状组织。
 
-## `mise activate` doesn't work in `~/.profile`, `~/.bash_profile`, `~/.zprofile`
+## `mise activate` 不能在 `~/.profile`、`~/.bash_profile`、`~/.zprofile` 中使用
 
-`mise activate` should only be used in `rc` files. These are the interactive ones used when
-a real user is using the terminal. (As opposed to being executed by an IDE or something). The prompt
-isn't displayed in non-interactive environments so PATH won't be modified.
+`mise activate` 只能用于 `rc` 文件中。这些是交互式文件，供真实用户在使用终端时加载。（而不是由 IDE 或其他程序执行时）。在非交互式环境中不会显示提示符，因此 PATH 不会被修改。
 
-For non-interactive setups, consider using shims instead which will route calls to the correct
-directory by looking at `PWD` every time they're executed. You can also call `mise exec` instead of
-expecting things to be directly on PATH. You can also run `mise env` in a non-interactive shell,
-however that
-will only set up the global tools. It won't modify the environment variables when entering into a
-different project.
+对于非交互式场景，建议改用 shims，因为它们每次执行时都会通过查看 `PWD` 将调用路由到正确的目录。你也可以使用 `mise exec`，而不是期望命令直接在 PATH 中可用。你还可以在非交互式 shell 中运行 `mise env`，不过那样
+只会设置全局工具。进入不同项目时，它不会修改环境变量。
 
 ::: warning
-`mise activate --shims` does not support all the features of `mise activate`.<br>
-See [shims vs path](/dev-tools/shims.html#shims-vs-path) for more info.
+`mise activate --shims` 不支持 `mise activate` 的所有功能。<br>
+有关更多信息，请参见 [shims vs path](/dev-tools/shims.html#shims-vs-path)。
 :::
 
-Also see the [shebang](/tips-and-tricks#shebang) example for a way to make scripts call mise to get
-the runtime.
-That is another way to use mise without activation.
+另请参见 [shebang](/tips-and-tricks#shebang) 示例，了解如何让脚本调用 mise 来获取运行时。
+这也是在不进行激活的情况下使用 mise 的另一种方式。
 
-## Slow shell prompts {#slow-shell-prompts}
+## 缓慢的 shell 提示符 {#slow-shell-prompts}
 
-`mise activate` runs a hook on every prompt to check if tools or env vars need updating. This typically takes only a few milliseconds, but if your prompts feel sluggish you can profile it with `MISE_TIMINGS`:
+`mise activate` 会在每次提示符时运行一个 hook，以检查工具或环境变量是否需要更新。这通常只需要几毫秒，但如果你觉得提示符很卡顿，可以使用 `MISE_TIMINGS` 对其进行性能分析：
 
-First deactivate mise so the prompt hook doesn't interfere with your measurement, then run `hook-env` manually with timings:
+先停用 mise，这样提示符 hook 就不会干扰你的测量，然后手动运行带有 timings 的 `hook-env`：
 
 ```sh
 mise deactivate
 
-# Show timing per major step (color-coded: red = slow)
+# 显示每个主要步骤的耗时（按颜色区分：红色 = 慢）
 MISE_TIMINGS=1 mise hook-env -s bash 2>&1 >/dev/null
 
-# Or use =2 for detailed per-step breakdowns with cumulative time
+# 或使用 =2 获取更详细的逐步拆分，以及累计耗时
 MISE_TIMINGS=2 mise hook-env -s bash 2>&1 >/dev/null
 ```
 
-Replace `bash` with your shell. Common causes of slow prompts:
+将 `bash` 替换为你的 shell。提示符变慢的常见原因包括：
 
-- Expensive `_.source` scripts in `mise.toml` — these re-run on every prompt
-- Large numbers of tools or plugins
-- Network-dependent operations in env directives
+- `mise.toml` 中代价很高的 `_.source` 脚本——它们会在每次提示符时重新运行
+- 工具或插件数量很多
+- env 指令中依赖网络的操作
 
-Note that [`mise activate --shims`](/dev-tools/shims) moves the cost from every prompt to every tool invocation, which may or may not be faster depending on your workflow. See [Shims vs PATH](/dev-tools/shims.html#shims-vs-path) for tradeoffs.
+请注意，[`mise activate --shims`](/dev-tools/shims) 会把成本从每次提示符转移到每次工具调用；根据你的工作流，这种方式可能更快，也可能更慢。有关权衡请参见 [Shims vs PATH](/dev-tools/shims.html#shims-vs-path)。
 
-## mise is failing or not working right
+## mise 出现故障或无法正常工作
 
-First try setting `MISE_DEBUG=1` or `MISE_TRACE=1` and see if that gives you more information.
-You can also set `MISE_LOG_FILE_LEVEL=debug MISE_LOG_FILE=/path/to/logfile` to write logs to a file.
+首先尝试设置 `MISE_DEBUG=1` 或 `MISE_TRACE=1`，看看是否能提供更多信息。  
+你也可以设置 `MISE_LOG_FILE_LEVEL=debug MISE_LOG_FILE=/path/to/logfile`，将日志写入文件。
 
-If something is happening with the activate hook, you can try disabling it and
-calling `eval "$(mise hook-env)"` manually.
-It can also be helpful to use `mise env` which will just output environment variables that would be
-set.
-Also consider using [shims](/dev-tools/shims.md) which can be more compatible.
+如果是 activate hook 出现了问题，你可以尝试禁用它，并手动调用 `eval "$(mise hook-env)"`。  
+使用 `mise env` 也会很有帮助，它只会输出将要设置的环境变量。  
+另外也可以考虑使用 [shims](/dev-tools/shims.md)，这通常兼容性更好。
 
-If runtime installation isn't working right, try using the `--raw` flag which will install things in
-series and connect stdin/stdout/stderr directly to the terminal. If a plugin is trying to interact
-with you for some reason this will make it work.
+如果运行时安装无法正常工作，尝试使用 `--raw` 标志，它会按顺序安装内容，并直接将 stdin/stdout/stderr 连接到终端。  
+如果某个插件因为某种原因试图与你交互，这样就能让它正常工作。
 
-Of course check the version of mise with `mise --version` and make sure it is the latest.
-Use `mise self-update`
-to update it. `mise cache clean` can be used to wipe the internal cache and `mise implode` can be
-used
-to remove everything except config.
+当然，也要检查 `mise --version` 的版本，并确保它是最新的。  
+使用 `mise self-update` 来更新它。`mise cache clean` 可用于清空内部缓存，`mise implode` 可用于删除除配置之外的所有内容。
 
-Lastly, there is `mise doctor` which will show diagnostic information and any warnings about issues
-detected with your setup. If you submit a bug report, please include the output of `mise doctor`.
+最后，还有 `mise doctor`，它会显示诊断信息以及检测到的关于你设置的任何警告。  
+如果你提交 bug 报告，请包含 `mise doctor` 的输出。
 
-## The wrong version of a tool is being used
+## 正在使用错误版本的工具
 
-Likely this means that mise isn't first in PATH—using shims or `mise activate`. You can verify if
-this is the case by calling `which -a`, for example, if node@20.0.0 is being used but mise specifies
-node@26.0.0, first make sure that mise has this version installed and active by running `mise ls node`.
-It should not say missing and have the correct "Requested" version:
+这很可能意味着 mise 并不是 PATH 中的第一个——可能是在使用 shims 或 `mise activate`。你可以通过调用 `which -a` 来验证是否如此，例如，如果当前使用的是 node@20.0.0，但 mise 指定的是 node@26.0.0，首先确保 mise 已安装并激活了这个版本，方法是运行 `mise ls node`。它不应显示 missing，并且应有正确的 "Requested" 版本：
 
 ```bash
 $ mise ls node
@@ -86,107 +69,80 @@ Plugin  Version  Config Source       Requested
 node    24.0.0  ~/.mise/config.toml  24.0.0
 ```
 
-If `node -v` isn't showing the right version, make sure mise is activated by running `mise doctor`.
-It should not have a "problem" listed about mise not being activated. Lastly, run `which -a node`.
-If the directory listed is not a mise directory, then mise is not first in PATH. Whichever node is
-being run first needs to have its directory set before mise is. Typically this means setting PATH for
-mise shims at the end of bashrc/zshrc.
+如果 `node -v` 没有显示正确的版本，请通过运行 `mise doctor` 确保 mise 已被激活。它不应在关于 mise 未激活的部分列出 "problem"。最后，运行 `which -a node`。如果列出的目录不是 mise 目录，那么 mise 就不是 PATH 中的第一个。首先被运行的那个 node 的目录需要在 mise 之前设置。通常这意味着要把 PATH 中的 mise shims 设置放在 bashrc/zshrc 的末尾。
 
-If using `mise activate`, you have another option of enabling `MISE_ACTIVATE_AGGRESSIVE=1` which will
-have mise always prepend its tools to be first in PATH. If you're using something that also modifies
-paths dynamically like `mise activate` does, this may not work because the other tool may be modifying
-PATH after mise does.
+如果使用 `mise activate`，你还有另一个选择：启用 `MISE_ACTIVATE_AGGRESSIVE=1`，这样 mise 会始终将其工具前置，使其成为 PATH 中的第一个。如果你使用的是某些也会像 `mise activate` 一样动态修改路径的东西，这可能不会生效，因为另一个工具可能会在 mise 之后修改 PATH。
 
-If nothing else, you can run things with [`mise x --`](/cli/exec) to ensure that the correct version is being used.
+如果没有其他办法，你可以使用 [`mise x --`](/cli/exec) 来运行命令，以确保使用的是正确版本。
 
-## New version of a tool is not available
+## 工具的新版本不可用
 
-There are 2 places that versions are cached so a brand new release might not appear right away.
+版本有两个地方会被缓存，因此一个全新的发布可能不会立刻出现。
 
-The first is that the mise CLI caches versions for. The cache can be cleared with `mise cache clear`.
+第一处是 mise CLI 会缓存版本。可以使用 `mise cache clear` 清除缓存。
 
-The second uses the <https://mise-versions.jdx.dev> host as a centralized
-place to list all of the versions of most plugins. This is intended to speed up mise and also
-get around GitHub rate limits when querying for new versions. Check that repo for your plugin to
-see if it has an updated version. This service can be disabled by
-setting `MISE_USE_VERSIONS_HOST=0`.
+第二处使用 <https://mise-versions.jdx.dev> 主机作为一个集中位置来列出大多数插件的所有版本。这样做的目的是加快 mise 的速度，并且在查询新版本时绕过 GitHub 的速率限制。请检查你的插件对应的仓库，看看是否有更新版本。可以通过设置 `MISE_USE_VERSIONS_HOST=0` 来禁用此服务。
 
-mise also uses the versions host as a shared cache for public GitHub release metadata and
-GitHub artifact attestations. This means normal installs of public `github:` and many
-`aqua:` tools can avoid unauthenticated GitHub API calls even in Docker builds or CI jobs
-that do not have a token configured. If the versions host does not have the requested
-metadata yet, mise falls back to GitHub's API.
+mise 还会把 versions host 用作公共 GitHub release 元数据和 GitHub artifact attestations 的共享缓存。这意味着，公共 `github:` 和许多 `aqua:` 工具的正常安装，即使在没有配置 token 的 Docker 构建或 CI 作业中，也可以避免未认证的 GitHub API 调用。如果 versions host 还没有所请求的元数据，mise 会回退到 GitHub 的 API。
 
-mise-versions itself also struggles with rate limits but you can help it to fetch more frequently by authenticating
-with its [GitHub app](https://github.com/apps/mise-versions). It does not require any permissions since it simply
-fetches public repository information. The more people do this, the quicker
-mise will be able to fetch new versions of tools.
+mise-versions 本身也会受到速率限制的影响，但你可以通过使用其 [GitHub app](https://github.com/apps/mise-versions) 进行认证来帮助它更频繁地获取数据。它不需要任何权限，因为它只是获取公共仓库信息。这样做的人越多，mise 就越能更快地获取工具的新版本。
 
-## Windows problems
+## Windows 问题
 
 ::: warning
-Very basic support for windows is currently available, however because Windows can't support asdf
-plugins, they must use core and vfox only—which means only a handful of tools are available on
-Windows.
+目前对 Windows 仅提供非常基础的支持，不过由于 Windows 不支持 asdf
+插件，它们必须仅使用 core 和 vfox——这意味着 Windows 上只有少数几个工具可用。
 :::
 
-### Path limits
+### 路径长度限制
 
-If you have many tools defined in your `mise.toml` hierarchy, then it is possible that `mise x` will produce a `Path` environment variable that is too long for certain tools to handle, most notably, `cmd.exe`. This will affect `mise` tools that invoke `cmd.exe` (like `npm install`).
+如果你在 `mise.toml` 层级结构中定义了很多工具，那么 `mise x` 可能会生成一个过长的 `Path` 环境变量，以至于某些工具无法处理，最典型的是 `cmd.exe`。这会影响调用 `cmd.exe` 的 `mise` 工具（例如 `npm install`）。
 
-You have a few options:
+你有几种选择：
 
-1. Set the `MISE_INSTALLS_DIR` environment variable to a shorter location, e.g. `C:\.mise-installs`.
-1. Use `powershell.exe` or `pwsh.exe` instead of `cmd.exe`, since they can handle a longer `Path`.
-1. Re-organise the `mise.toml` files in your monorepo, to specify only the tools they need.
+1. 将 `MISE_INSTALLS_DIR` 环境变量设置为更短的路径，例如 `C:\.mise-installs`。
+1. 改用 `powershell.exe` 或 `pwsh.exe`，而不是 `cmd.exe`，因为它们可以处理更长的 `Path`。
+1. 重新组织 monorepo 中的 `mise.toml` 文件，只为它们指定所需的工具。
 
-You can run the following command to test whether you have hit the `cmd.exe` `Path` limitation:
+你可以运行以下命令来测试自己是否已经触发了 `cmd.exe` 的 `Path` 限制：
 
 ```powershell
-# Path is within limits
+# Path 在限制范围内
 ❯ mise x -- cmd.exe /d /s /c "where.exe where"
 C:\Windows\System32\where.exe
-# Path exceeds cmd.exe limits
+# Path 超出了 cmd.exe 的限制
 ❯ mise x -- cmd.exe /d /s /c "where.exe where"
-'where.exe' is not recognized as an internal or external command,
-operable program or batch file.
+'where.exe' 不是内部或外部命令，也不是可运行的程序或批处理文件。
 mise ERROR command failed: exit code 1
 mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
 ```
 
-### Shims leaking into WSL
+### Shim 泄漏到 WSL 中
 
-When `windows_shim_mode` is set to `file`, mise writes an extension-less bash
-script next to each `<tool>.cmd` shim (so Git Bash / Cygwin can resolve the
-tool). WSL's default Windows-PATH interop exposes the shims directory at
-`/mnt/c/...`, where every file is treated as executable, so running a shimmed
-tool inside WSL executes that script natively. mise guards the generated script:
-when it detects WSL it drops the shims directory from `PATH` and runs a native
-Linux tool if one is installed, otherwise it fails with a plain `<tool>: not
-found` rather than recursing endlessly or erroring with `mise: not found`.
+当 `windows_shim_mode` 设置为 `file` 时，mise 会在每个 `<tool>.cmd` shim 旁边写入一个没有扩展名的 bash
+脚本（这样 Git Bash / Cygwin 就能解析该工具）。WSL 默认的 Windows-PATH 互操作会将 shims 目录暴露为
+`/mnt/c/...`，其中每个文件都被视为可执行文件，因此在 WSL 中运行一个 shim 工具实际上会原生执行该脚本。mise 对生成的脚本做了保护：
+当检测到 WSL 时，它会从 `PATH` 中移除 shims 目录，并在已安装原生 Linux 工具时运行该工具；否则它会以普通的 `<tool>: not
+found` 失败，而不是无限递归或报出 `mise: not found`。
 
-The default `exe` mode is not affected: it writes only native `<tool>.exe`
-files, which WSL ignores, so nothing leaks into Linux.
+默认的 `exe` 模式不受影响：它只会写入原生的 `<tool>.exe`
+文件，而 WSL 会忽略这些文件，因此不会泄漏到 Linux 中。
 
-To keep the Windows shims out of WSL entirely, either install/manage the tool
-with mise inside WSL, or disable the Windows-PATH interop in `/etc/wsl.conf`:
+如果想要让 Windows shims 完全不进入 WSL，可以选择在 WSL 内使用 mise 安装/管理该工具，或者在 `/etc/wsl.conf` 中禁用 Windows-PATH 互操作：
 
 ```ini
 [interop]
 appendWindowsPath = false
 ```
 
-### `shell = "bash -c"` task fails with `command not found` from PowerShell
+### 从 PowerShell 运行 `shell = "bash -c"` 的任务时出现 `command not found`
 
-If a task pinned to `shell = "bash -c"` works from Git Bash but fails with
-`command not found` from PowerShell, mise is most likely resolving `bash` to
-the WSL launcher at `C:\Windows\System32\bash.exe` instead of a real POSIX
-bash. The launcher dispatches into the WSL distribution's Linux user-space,
-where mise-managed Windows tools aren't visible.
+如果一个固定使用 `shell = "bash -c"` 的任务从 Git Bash 中可以运行，但从 PowerShell 中运行时却报
+`command not found`，mise 很可能把 `bash` 解析成了 `C:\Windows\System32\bash.exe` 这个 WSL 启动器，而不是真正的 POSIX
+bash。该启动器会进入 WSL 发行版的 Linux 用户空间，而在其中 mise 管理的 Windows 工具是不可见的。
 
-mise prefers a real POSIX bash (Git Bash / MSYS2) automatically when it can
-find one in a standard install location. If yours is installed elsewhere, set
-`MISE_BASH_PATH` to override:
+当 mise 能在标准安装位置找到一个真正的 POSIX bash（Git Bash / MSYS2）时，会自动优先使用它。如果你的 bash 安装在其他位置，请设置
+`MISE_BASH_PATH` 进行覆盖：
 
 ```powershell
 $env:MISE_BASH_PATH = "C:\tools\msys64\usr\bin\bash.exe"
@@ -194,21 +150,18 @@ mise run my-bash-task
 ```
 
 ```toml
-# Alternatively, scope it to one project from mise.toml
+# 或者，从 mise.toml 中将其作用域限制到单个项目
 [env]
 MISE_BASH_PATH = "C:/tools/msys64/usr/bin/bash.exe"
 ```
 
-mise honors an **explicit** bash path as-is. If you set `shell` (in a task) or
-`windows_default_inline_shell_args` to an absolute path such as
-`C:/msys64/usr/bin/bash.exe -c`, mise uses exactly that binary — the
-`MISE_BASH_PATH` override and the Git Bash / MSYS2 auto-detection apply only
-when the shell is the bare name `bash`.
+mise 会原样遵循一个**显式**指定的 bash 路径。如果你设置了 `shell`（在任务中）或
+`windows_default_inline_shell_args` 为绝对路径，例如
+`C:/msys64/usr/bin/bash.exe -c`，mise 会精确使用那个二进制文件——
+`MISE_BASH_PATH` 覆盖以及 Git Bash / MSYS2 的自动检测只在 shell 名称为裸的 `bash` 时才生效。
 
-If your shell path contains spaces (e.g. `C:\Program Files\Git\bin\bash.exe`),
-wrap the program in double quotes so the space is not treated as an argument
-separator. On Windows, backslashes are treated literally, so they need no
-escaping; forward slashes work too:
+如果你的 shell 路径包含空格（例如 `C:\Program Files\Git\bin\bash.exe`），请用双引号将程序包裹起来，这样空格就不会被当作参数分隔符。
+在 Windows 上，反斜杠会被按字面处理，因此不需要转义；正斜杠也可以：
 
 ```toml
 [tasks.build]
@@ -216,164 +169,154 @@ run = "echo hi"
 shell = '"C:\Program Files\Git\bin\bash.exe" -c'
 ```
 
-(On macOS/Linux, `shell` follows POSIX quoting rules instead.)
+（在 macOS/Linux 上，`shell` 则遵循 POSIX 引号规则。）
 
 #### Cygwin
 
-mise also detects Cygwin bash (by a `cygwin` / `cygwin64` / `cygwin32` segment in its path) and
-converts PATH using Cygwin's `/cygdrive/c/...` form instead of Git Bash's `/c/...`,
-so binaries on PATH resolve correctly. Point `MISE_BASH_PATH` at your Cygwin bash so
-the intended one is used:
+mise 还会检测 Cygwin bash（通过其路径中的 `cygwin` / `cygwin64` / `cygwin32` 段），并且
+使用 Cygwin 的 `/cygdrive/c/...` 形式来转换 PATH，而不是 Git Bash 的 `/c/...`，
+这样 PATH 上的二进制文件就能正确解析。请将 `MISE_BASH_PATH` 指向你的 Cygwin bash，以便
+使用预期的那个：
 
 ```powershell
 $env:MISE_BASH_PATH = "C:\cygwin64\bin\bash.exe"
 ```
 
-#### Custom `cygdrive` mount root (Cygwin **and** Git Bash / MSYS2)
+#### 自定义 `cygdrive` 挂载根（Cygwin **以及** Git Bash / MSYS2）
 
-The `cygdrive` automount mechanism is shared by Cygwin and MSYS2 / Git Bash — both let
-you change the mount root in `/etc/fstab` (Cygwin's default is `/cygdrive`, Git Bash /
-MSYS2's is `/`, i.e. `/c/...`). mise does not read `/etc/fstab`, so if you changed it,
-set `MISE_CYGDRIVE_PREFIX` to match — this works for **either** shell:
+`cygdrive` 自动挂载机制是 Cygwin 和 MSYS2 / Git Bash 共享的——它们都允许
+你在 `/etc/fstab` 中更改挂载根（Cygwin 的默认值是 `/cygdrive`，Git Bash /
+MSYS2 的默认值是 `/`，也就是 `/c/...`）。mise 不会读取 `/etc/fstab`，因此如果你修改了它，
+请设置 `MISE_CYGDRIVE_PREFIX` 以匹配——这对**任一** shell 都适用：
 
 ```powershell
-# e.g. for an fstab that mounts drives under /mnt
+# 例如，适用于将驱动器挂载在 /mnt 下的 fstab
 $env:MISE_CYGDRIVE_PREFIX = "/mnt"
 ```
 
-The prefix must be absolute (start with `/`); a relative value like `mnt` is rejected
-with a warning and the shell's default is used instead. `MISE_CYGDRIVE_PREFIX=/`
-collapses to the Git Bash `/c/...` form.
+前缀必须是绝对路径（以 `/` 开头）；像 `mnt` 这样的相对值会被拒绝，
+并给出警告，随后改用 shell 的默认值。`MISE_CYGDRIVE_PREFIX=/`
+会折叠为 Git Bash 的 `/c/...` 形式。
 
-## mise isn't working when calling from tmux or another shell initialization script
+## 在 tmux 或其他 shell 初始化脚本中调用时，mise 不工作
 
-`mise activate` will not update PATH until the shell prompt is displayed. So if you need to access a
-tool provided by mise before the prompt is displayed you can either
-[add the shims to your PATH](/dev-tools/shims.html#how-to-add-mise-shims-to-path) e.g.
+`mise activate` 在 shell 提示符显示之前不会更新 PATH。因此，如果你需要在提示符显示之前访问
+由 mise 提供的工具，你可以选择
+[将 shims 添加到你的 PATH](/dev-tools/shims.html#how-to-add-mise-shims-to-path)，例如：
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
-python --version # will work after adding shims to PATH
+python --version # 在将 shims 添加到 PATH 后即可工作
 ```
 
-Or you can manually call `hook-env`:
+或者你可以手动调用 `hook-env`：
 
 ```bash
 eval "$(mise activate bash)"
 eval "$(mise hook-env)"
-python --version # will work only after calling hook-env explicitly
+python --version # 只有在显式调用 hook-env 之后才会工作
 ```
 
-For more information, see [What does `mise activate` do?](/faq#what-does-mise-activate-do)
+有关更多信息，请参见 [What does `mise activate` do?](/faq#what-does-mise-activate-do)
 
-## Is mise secure?
+## mise 是安全的吗？
 
-Providing a secure supply chain is incredibly important. mise already provides a more secure
-experience when compared to asdf. Security-oriented evaluations and contributions are welcome.
-We also urge users to look after the plugins they use, and urge plugin authors to look after
-the users they serve.
+提供一个安全的供应链非常重要。与 asdf 相比，mise 已经提供了更安全的
+使用体验。欢迎围绕安全进行评估和贡献。我们也敦促用户关注他们使用的插件，并敦促插件作者关注
+他们所服务的用户。
 
-For more details see [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md).
+更多详情请参见 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md)。
 
-## 403 Forbidden when installing a tool
+## 安装工具时出现 403 Forbidden
 
-You may get an error like one of the following:
+你可能会遇到如下错误之一：
 
 ```text
 HTTP status client error (403 Forbidden) for url
 403 API rate limit exceeded for
 ```
 
-This can happen if the tool is hosted on GitHub, and you've hit the API rate limit. This is especially
-common running mise in a CI environment like GitHub Actions.
+如果该工具托管在 GitHub 上，并且你已经触发了 API 速率限制，就可能会发生这种情况。这在 GitHub Actions 之类的 CI 环境中运行 mise 时尤其常见。
 
-By default, mise uses <https://mise-versions.jdx.dev> to avoid most public GitHub API calls
-for release metadata and artifact attestation checks. If you still see this error, it usually
-means the metadata was not available from the versions host yet, `MISE_USE_VERSIONS_HOST=0`
-is set, the tool uses a private repository, or the tool uses GitHub Enterprise/custom API
-settings.
+默认情况下，mise 使用 <https://mise-versions.jdx.dev> 来避免大多数公共 GitHub API 调用，用于获取发布元数据和工件证明检查。如果你仍然看到此错误，通常意味着版本主机上尚未提供该元数据，设置了 `MISE_USE_VERSIONS_HOST=0`，该工具使用的是私有仓库，或者该工具使用了 GitHub Enterprise/自定义 API 设置。
 
-See [GitHub Tokens](/dev-tools/github-tokens.html) for how to configure authentication and avoid rate limits.
+有关如何配置身份验证并避免速率限制，请参阅 [GitHub Tokens](/dev-tools/github-tokens.html)。
 
-## Tool not found after `mise install` or `mise use` in a script
+## 在脚本中执行 `mise install` 或 `mise use` 后找不到工具
 
-If you run `mise use` or `mise install` inside a script and then immediately try to use the
-tool, it may not be found. This is because `mise activate` updates PATH at the next prompt,
-which never happens in a script.
+如果你在脚本中运行 `mise use` 或 `mise install`，然后立即尝试使用该工具，它可能会找不到。这是因为 `mise activate` 会在下一个提示符时更新 PATH，而脚本中不会出现这种情况。
 
-**Solutions:**
+**解决方案：**
 
 ```bash
-# Option 1: Use mise exec (recommended)
+# 选项 1：使用 mise exec（推荐）
 mise install
 mise exec -- my-tool --version
 
-# Option 2: Re-evaluate the environment after install
+# 选项 2：在安装后重新评估环境
 mise install
 eval "$(mise hook-env)"
 my-tool --version
 
-# Option 3: Use shims (they always resolve dynamically)
+# 选项 3：使用 shims（它们始终动态解析）
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 mise install
 my-tool --version
 ```
 
-## Creating `~/.bash_profile` breaks existing `~/.profile` on Ubuntu/Debian
+## 创建 `~/.bash_profile` 会破坏 Ubuntu/Debian 上现有的 `~/.profile`
 
-On many Linux distributions, `~/.profile` sources `~/.bashrc` and sets up your environment.
-However, if `~/.bash_profile` exists, bash reads that **instead of** `~/.profile`.
+在许多 Linux 发行版中，`~/.profile` 会加载 `~/.bashrc` 并设置你的环境。
+但是，如果 `~/.bash_profile` 存在，bash 会读取它，**而不是** `~/.profile`。
 
-If you followed setup instructions that created `~/.bash_profile` for mise, your existing
-`~/.profile` configuration (including PATH, environment variables, etc.) may stop loading.
+如果你按照为 mise 创建 `~/.bash_profile` 的安装说明进行设置，那么你现有的
+`~/.profile` 配置（包括 PATH、环境变量等）可能会停止加载。
 
-**Fix:** Add mise activation to `~/.bashrc` instead, or source `~/.profile` from your
-`~/.bash_profile`:
+**修复方法：** 改为在 `~/.bashrc` 中添加 mise 的激活，或者在你的
+`~/.bash_profile` 中加载 `~/.profile`：
 
 ```bash
 # ~/.bash_profile
 [[ -f ~/.profile ]] && source ~/.profile
 ```
 
-## Tasks with `redact` env vars break `raw` output
+## 带有 `redact` 环境变量的任务会导致 `raw` 输出失效
 
-If you have `redact = true` on any env var in your config, tasks with `raw = true` will appear
-to produce no output. This is because mise intercepts stdout/stderr to perform redaction, which
-conflicts with raw mode.
+如果你在配置中的任何环境变量上设置了 `redact = true`，那么带有 `raw = true` 的任务看起来会
+没有输出。这是因为 mise 会拦截 stdout/stderr 以执行脱敏，这
+与 raw 模式冲突。
 
-**Workaround**: Remove `redact` from env vars that don't need it, or accept that raw tasks
-won't produce visible output when redactions are active.
+**解决方法**：从不需要它的环境变量中移除 `redact`，或者接受在启用脱敏时，raw 任务
+不会产生可见输出。
 
-## `mise activate` in CI / non-interactive shells
+## `mise activate` 在 CI / 非交互式 shell 中
 
-`mise activate` hooks into the shell prompt to update PATH, so historically it didn't work
-in non-interactive shells. With the addition of `chpwd` support, it does work in more
-situations now, but we still recommend these approaches for CI and scripts:
+`mise activate` 会挂钩到 shell 提示符以更新 PATH，因此从历史上看，它在非交互式 shell 中无法工作。随着 `chpwd` 支持的加入，它现在可以在更多场景下工作了，但我们仍然建议在 CI 和脚本中使用这些方法：
 
 ```bash
-# Option 1: Use shims (recommended for CI)
+# 选项 1：使用 shims（推荐用于 CI）
 export PATH="$HOME/.local/share/mise/shims:$PATH"
-# In GitHub Actions, use: echo "$HOME/.local/share/mise/shims" >> $GITHUB_PATH
+# 在 GitHub Actions 中，使用：echo "$HOME/.local/share/mise/shims" >> $GITHUB_PATH
 
-# Option 2: Use mise exec
+# 选项 2：使用 mise exec
 mise exec -- npm test
 
-# Option 3: Manually call hook-env after activate
+# 选项 3：在 activate 之后手动调用 hook-env
 eval "$(mise activate bash)"
 eval "$(mise hook-env)"
 ```
 
-See also the [CI/CD section](/tips-and-tricks.html#ci-cd) in Tips & Tricks.
+另请参阅 Tips & Tricks 中的 [CI/CD 部分](/tips-and-tricks.html#ci-cd)。
 
-## Auto-install on command not found handler does not work for new tools
+## 命令未找到处理器上的自动安装对新工具不起作用
 
-If you are expecting mise to automatically install a tool when you run a command that is not found (using the [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) feature), be aware of an important limitation:
+如果你期望 mise 在运行一个未找到的命令时自动安装工具（使用 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 功能），请注意一个重要限制：
 
-**mise can only auto-install missing versions of tools that already have at least one version installed.**
+**mise 只能自动安装那些至少已经安装过一个版本的工具的缺失版本。**
 
-This is because mise does not have a way of knowing which binaries a tool provides unless there is already an installed (even inactive) version of that tool. If you have never installed any version of a tool, mise cannot determine which tool is responsible for a given binary name, and so it cannot auto-install it on demand.
+这是因为 mise 无法知道某个工具提供了哪些二进制文件，除非该工具已经有一个已安装的（即使是非活动的）版本。如果你从未安装过某个工具的任何版本，mise 就无法判断某个二进制名称对应的是哪个工具，因此也就无法按需自动安装它。
 
-**Workarounds:**
+**解决方法：**
 
-- Manually install at least one version of the tool you want to be auto-installed in the future. After that, the auto-install feature will work for missing versions of that tool.
-- Use [`mise x|exec`](/cli/exec) or [`mise r|run`](/cli/run) to trigger auto-install for missing tools, even if no version is currently installed. These commands will attempt to install the required tool versions automatically.
+- 手动安装你希望将来能自动安装的工具的至少一个版本。之后，自动安装功能就可以为该工具的缺失版本正常工作。
+- 使用 [`mise x|exec`](/cli/exec) 或 [`mise r|run`](/cli/run) 来触发缺失工具的自动安装，即使当前没有安装任何版本。这些命令会尝试自动安装所需的工具版本。

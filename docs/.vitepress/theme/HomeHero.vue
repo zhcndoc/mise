@@ -26,8 +26,8 @@
         <div class="logo-subtitle">en-place</div>
       </div>
       <p class="hero-tagline">
-        The front-end to your dev env
-        <span class="pronunciation">Pronounced "MEEZ ahn plahs"</span>
+        开发环境的前端
+        <span class="pronunciation">发音为 “MEEZ ahn plahs”</span>
       </p>
       <div class="hero-actions">
         <a href="/getting-started" class="action-button primary">
@@ -43,7 +43,7 @@
             >
               <path d="M5 12h14M12 5l7 7-7 7" />
             </svg>
-            Getting Started
+            入门指南
           </span>
         </a>
         <a href="/demo" class="action-button secondary">
@@ -59,22 +59,22 @@
             >
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
-            Watch Demo
+            观看演示
           </span>
         </a>
       </div>
       <div class="hero-stats">
         <div class="stat">
           <div class="stat-value">50+</div>
-          <div class="stat-label">Languages</div>
+          <div class="stat-label">语言</div>
         </div>
         <div class="stat">
-          <div class="stat-value">Fast</div>
-          <div class="stat-label">Performance</div>
+          <div class="stat-value">快速</div>
+          <div class="stat-label">性能</div>
         </div>
         <div class="stat">
-          <div class="stat-value">Simple</div>
-          <div class="stat-label">Configuration</div>
+          <div class="stat-value">简单</div>
+          <div class="stat-label">配置</div>
         </div>
       </div>
     </div>

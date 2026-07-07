@@ -1,58 +1,52 @@
 # Bootstrap <Badge type="warning" text="experimental" />
 
-packages, git repos, dotfiles, mise shell activation, macOS defaults, macOS
-LaunchAgents, Linux systemd user services, the user's login shell, tools, and
-any final project-specific task. You can also add hooks that run at named points
-in the bootstrap sequence.
+包、git 仓库、dotfiles、mise shell 激活、macOS 默认设置、macOS
+LaunchAgents、Linux systemd 用户服务、用户的登录 shell、工具，以及
+任何最终的项目特定任务。你还可以添加在 bootstrap 序列中的命名点运行的钩子。
 
-Use bootstrap for things that are needed before a project or workstation is
-ready, but that do not belong in `[tools]`: native libraries, Homebrew
-formulae, dotfile repositories, shell rc files, editor config, macOS
-preferences, user services, and one-time machine setup.
+对于在项目或工作站就绪之前所需、但不属于 `[tools]` 的内容，请使用 bootstrap：原生库、Homebrew
+公式、dotfile 仓库、shell rc 文件、编辑器配置、macOS
+偏好设置、用户服务，以及一次性机器设置。
 
-## How it runs
+## 它的运行方式
 
-`mise bootstrap` runs these steps in order:
+`mise bootstrap` 按以下顺序执行这些步骤：
 
-1. `mise bootstrap packages apply` installs missing `[bootstrap.packages]`.
-2. `mise bootstrap repos apply` clones or updates `[bootstrap.repos]`.
-3. `mise bootstrap dotfiles apply` applies `[dotfiles]`.
-4. `mise bootstrap mise-shell-activate apply` configures shell activation from
-   `[bootstrap.mise_shell_activate]`.
-5. `mise bootstrap macos defaults apply` writes `[bootstrap.macos.defaults]`.
-6. `mise bootstrap macos launchd-agents apply` writes and loads
-   `[bootstrap.macos.launchd.agents]`.
-7. `mise bootstrap linux systemd-units apply` converges
-   `[bootstrap.linux.systemd.units]`
-   by writing unit files, enabling/disabling them, and starting/stopping them
-   as configured.
-8. `mise bootstrap user apply` applies `[bootstrap.user]`.
-9. `mise install` installs missing `[tools]`.
-10. `mise run bootstrap` runs a task named `bootstrap`, if one exists.
-11. `[bootstrap.hooks.final]` runs after the bootstrap task, if configured.
+1. `mise bootstrap packages apply` 安装缺失的 `[bootstrap.packages]`。
+2. `mise bootstrap repos apply` 克隆或更新 `[bootstrap.repos]`。
+3. `mise bootstrap dotfiles apply` 应用 `[dotfiles]`。
+4. `mise bootstrap mise-shell-activate apply` 配置来自
+   `[bootstrap.mise_shell_activate]` 的 shell 激活。
+5. `mise bootstrap macos defaults apply` 写入 `[bootstrap.macos.defaults]`。
+6. `mise bootstrap macos launchd-agents apply` 写入并加载
+   `[bootstrap.macos.launchd.agents]`。
+7. `mise bootstrap linux systemd-units apply` 通过写入 unit 文件、启用/禁用它们，并按配置启动/停止它们来收敛
+   `[bootstrap.linux.systemd.units]`。
+8. `mise bootstrap user apply` 应用 `[bootstrap.user]`。
+9. `mise install` 安装缺失的 `[tools]`。
+10. `mise run bootstrap` 运行一个名为 `bootstrap` 的任务（如果存在）。
+11. `[bootstrap.hooks.final]` 在 bootstrap 任务之后运行（如果已配置）。
 
-Use `mise bootstrap --skip <part>` to skip specific parts. Supported parts are
-`packages`, `repos`, `dotfiles`, `mise-shell-activate`, `macos-defaults`,
-`macos-launchd-agents`, `linux-systemd-units`, `user`, `tools`, `task`, and
-`final-hook`. The old shorter names `shell`, `defaults`, `launchd`, and
-`systemd` are still accepted as aliases. The flag can be repeated or
-comma-separated, for example `mise bootstrap --skip tools,task`.
+使用 `mise bootstrap --skip <part>` 跳过特定部分。支持的部分包括
+`packages`、`repos`、`dotfiles`、`mise-shell-activate`、`macos-defaults`、
+`macos-launchd-agents`、`linux-systemd-units`、`user`、`tools`、`task` 和
+`final-hook`。旧的较短名称 `shell`、`defaults`、`launchd` 和
+`systemd` 仍然可以作为别名接受。该标志可以重复使用或用逗号分隔，例如
+`mise bootstrap --skip tools,task`。
 
-Use `mise bootstrap --only <part>` to run only specific parts. It supports the
-same part names and can be repeated or comma-separated, for example
-`mise bootstrap --only dotfiles,tools`. `--only` and `--skip` are mutually
-exclusive.
+使用 `mise bootstrap --only <part>` 仅运行特定部分。它支持
+相同的部分名称，并且可以重复使用或用逗号分隔，例如
+`mise bootstrap --only dotfiles,tools`。`--only` 和 `--skip` 互斥。
 
-Hook phases can also run before and after the built-in steps:
-`pre-packages`, `post-packages`, `pre-repos`, `post-repos`, `pre-dotfiles`,
-`post-dotfiles`, `pre-defaults`, `post-defaults`, `pre-user`, `post-user`,
-`pre-tools`, and `post-tools`.
+Hook 阶段也可以在内置步骤之前和之后运行：
+`pre-packages`、`post-packages`、`pre-repos`、`post-repos`、`pre-dotfiles`、
+`post-dotfiles`、`pre-defaults`、`post-defaults`、`pre-user`、`post-user`、
+`pre-tools` 和 `post-tools`。
 
-The declarative steps converge: if a package is already installed, a repo is
-already at the requested ref, a dotfile already matches, or a default is already
-set, mise skips it. The `bootstrap` task runs every time, so keep it idempotent.
+声明式步骤会收敛：如果某个包已经安装，某个仓库已经处于请求的 ref，某个 dotfile 已经匹配，或者某个默认值已经
+设置，mise 就会跳过它。`bootstrap` 任务每次都会运行，因此请保持它具备幂等性。
 
-## Example
+## 示例
 
 ```toml
 [bootstrap.packages]
@@ -96,7 +90,7 @@ args = ["--watch"]
 run_at_load = true
 
 [bootstrap.linux.systemd.units.my-sync]
-description = "sync files"
+description = "同步文件"
 exec_start = "~/.local/bin/my-sync --watch"
 restart = "on-failure"
 
@@ -117,33 +111,31 @@ python = "3.12"
 run = "gh auth status || gh auth login"
 ```
 
-Then run:
+然后运行：
 
 ```sh
 mise bootstrap --yes
 ```
 
-For a dry run:
+进行 dry run：
 
 ```sh
 mise bootstrap --dry-run
 ```
 
-When `mise bootstrap` applies or would apply something that needs user
-follow-up, it prints a final `bootstrap: follow-up` section after a successful
-run. Dry runs use `bootstrap: follow-up if applied`. If a later bootstrap phase
-fails after earlier phases already produced follow-up items, mise prints those
-items before returning the error. The section is omitted when there is nothing
-actionable to report.
+当 `mise bootstrap` 应用或即将应用某些需要用户后续处理的内容时，
+它会在成功运行后打印一个最终的 `bootstrap: follow-up` 部分。dry run
+会使用 `bootstrap: follow-up if applied`。如果后续的某个 bootstrap 阶段
+在前面的阶段已经生成了后续处理项之后失败，mise 会在返回错误之前打印
+这些项。如果没有需要处理的可操作内容，则会省略该部分。
 
-By default, bootstrap refuses dotfile conflicts rather than replacing local
-files. Use `mise bootstrap --force-dotfiles` when you explicitly want the
-dotfiles phase to replace conflicting whole-file dotfile targets.
+默认情况下，bootstrap 会拒绝 dotfile 冲突，而不是替换本地文件。
+当你明确希望 dotfiles 阶段替换冲突的整文件 dotfile 目标时，请使用
+`mise bootstrap --force-dotfiles`。
 
-## Inspecting State
+## 检查状态
 
-Use `mise bootstrap status` to inspect the declarative bootstrap state in one
-place:
+使用 `mise bootstrap status` 在一个地方检查声明式引导状态：
 
 ```sh
 mise bootstrap status
@@ -161,42 +153,31 @@ mise bootstrap linux systemd-units status
 mise bootstrap user status
 ```
 
-`mise bootstrap status --missing` checks the whole declarative bootstrap
-surface in one command. The narrower `mise bootstrap packages status
---missing` and `mise bootstrap dotfiles status --missing` commands are useful when you
-only want to check one part without installing anything.
+`mise bootstrap status --missing` 会通过一个命令检查整个声明式引导范围。更窄的 `mise bootstrap packages status --missing` 和 `mise bootstrap dotfiles status --missing` 命令在你只想检查某一部分而不安装任何东西时很有用。
 
-## What Goes Where
+## 放置位置说明
 
-| Config                             | Use for                                                       |
+| 配置                             | 用途                                                          |
 | ---------------------------------- | ------------------------------------------------------------- |
-| `[bootstrap.packages]`             | OS packages from apk, apt, dnf, pacman, or brew               |
-| `[bootstrap.repos]`                | Git repos cloned before dotfiles are applied                  |
-| `[dotfiles]`                       | Whole-file dotfiles and small managed edits to existing files |
-| `[bootstrap.mise_shell_activate]`  | mise activation snippets in shell startup files               |
-| `[bootstrap.macos.*]`              | Curated macOS preferences for Dock/Finder/keyboard/trackpad   |
-| `[bootstrap.macos.defaults]`       | macOS user preferences written through `defaults write`       |
-| `[bootstrap.macos.launchd.agents]` | macOS user LaunchAgents written and loaded with `launchctl`   |
-| `[bootstrap.linux.systemd.units]`  | Linux systemd user services managed with `systemctl --user`   |
-| `[bootstrap.user]`                 | Current-user settings such as `login_shell`                   |
-| `[bootstrap.hooks]`                | Commands that run at named bootstrap phases                   |
-| `[tools]`                          | Versioned dev tools managed by mise                           |
-| `[tasks.bootstrap]`                | Anything custom that should run after tools are installed     |
+| `[bootstrap.packages]`             | 来自 apk、apt、dnf、pacman 或 brew 的操作系统包               |
+| `[bootstrap.repos]`                | 在应用 dotfiles 之前克隆的 Git 仓库                            |
+| `[dotfiles]`                       | 整文件 dotfiles 以及对现有文件的小型受管编辑                   |
+| `[bootstrap.mise_shell_activate]`  | shell 启动文件中的 mise 激活片段                              |
+| `[bootstrap.macos.*]`              | 面向 macOS 的精选偏好设置，如 Dock/Finder/键盘/触控板         |
+| `[bootstrap.macos.defaults]`       | 通过 `defaults write` 写入的 macOS 用户偏好设置               |
+| `[bootstrap.macos.launchd.agents]` | 使用 `launchctl` 写入并加载的 macOS 用户 LaunchAgents        |
+| `[bootstrap.linux.systemd.units]`  | 使用 `systemctl --user` 管理的 Linux systemd 用户服务         |
+| `[bootstrap.user]`                 | 当前用户设置，例如 `login_shell`                              |
+| `[bootstrap.hooks]`                | 在命名的 bootstrap 阶段运行的命令                              |
+| `[tools]`                          | 由 mise 管理的带版本开发工具                                   |
+| `[tasks.bootstrap]`                | 工具安装后应运行的任何自定义内容                               |
 
-Use declarative sections when mise can inspect and converge the state. Use
-`[tasks.bootstrap]` for imperative setup that does not fit those sections,
-such as running an auth flow, seeding local data, or other one-off project
-setup.
+当 mise 可以检查并收敛状态时，请使用声明式区块。对不适合这些区块的命令式设置，请使用
+`[tasks.bootstrap]`，例如运行认证流程、初始化本地数据，或其他一次性的项目设置。
 
-## Hooks
+## 钩子
 
-Hooks run only during explicit `mise bootstrap` invocations. A hook can be
-specified as a command string, an array of command strings, or a table with a
-`run` field. They use the same default inline shell setting as tasks, stop the
-bootstrap if they fail, and print the command instead of running it during
-`mise bootstrap --dry-run`. Hooks run in the current process environment; use
-`mise exec -- ...` inside a hook, or use `[tasks.bootstrap]`, when the command
-needs tools from `[tools]` on PATH.
+钩子仅在显式 `mise bootstrap` 调用期间运行。钩子可以指定为命令字符串、命令字符串数组，或带有 `run` 字段的表。它们使用与任务相同的默认内联 shell 设置，若失败则会停止 bootstrap，并且在 `mise bootstrap --dry-run` 时会打印命令而不是执行。钩子运行在当前进程环境中；当命令需要使用来自 `[tools]` 且位于 PATH 上的工具时，请在钩子中使用 `mise exec -- ...`，或者使用 `[tasks.bootstrap]`。
 
 ```toml
 [bootstrap.hooks.pre-packages]
@@ -212,57 +193,53 @@ run = [
 run = "gh auth status || gh auth login"
 ```
 
-As shorthand, a hook phase can also be set directly:
+作为简写，也可以直接设置某个钩子阶段：
 
 ```toml
 [bootstrap.hooks]
 post-defaults = "killall Dock || true"
 ```
 
-Hooks merge across the config hierarchy from global to local, so shared config
-can define broad machine setup while a project adds its own phase commands.
+钩子会在全局到本地的配置层级之间合并，因此共享配置可以定义较通用的机器设置，而项目则可以添加自己的阶段命令。
 
-## Common Workflows
+## 常见工作流程
 
-### New Machine
+### 新机器
 
 ```sh
 mise trust
 mise bootstrap --yes
 ```
 
-### Add A Package
+### 添加一个包
 
 ```sh
 mise bootstrap packages use apk:zlib-dev apt:libssl-dev
 ```
 
-This writes `[bootstrap.packages]` and installs what is missing.
+这会写入 `[bootstrap.packages]` 并安装缺失的内容。
 
-### Capture An Edited Dotfile
+### 捕获已编辑的 dotfile
 
 ```sh
 $EDITOR ~/.zshrc
 mise dotfiles add ~/.zshrc
 ```
 
-`mise dotfiles add` stores the live file under `dotfiles.root` and writes an
-explicit `[dotfiles]` entry with `mode`.
+`mise dotfiles add` 会将活动文件存储到 `dotfiles.root` 下，并写入一个带有 `mode` 的显式 `[dotfiles]` 条目。
 
-### Edit A Managed Dotfile
+### 编辑受管理的 dotfile
 
 ```sh
 mise dotfiles edit ~/.zshrc
 mise dotfiles apply ~/.zshrc
 ```
 
-For symlinked dotfiles, `edit` opens the managed source, so it works with the
-default `symlink` mode.
+对于通过符号链接的 dotfile，`edit` 会打开受管理的源文件，因此它可以配合默认的 `symlink` 模式使用。
 
-## Advanced: Self-Managing Config
+## 高级：自管理配置
 
-You can manage the dotfiles repository and the mise global config as
-dotfiles:
+你可以将 dotfiles 仓库和 mise 全局配置作为 dotfiles 来管理：
 
 ```toml
 [settings]
@@ -273,7 +250,4 @@ dotfiles.root = "~/.dotfiles"
 "~/.config/mise/config.toml" = "~/src/dotfiles/mise/config.toml"
 ```
 
-The repo/source must exist before the first apply. Use the real repo path for
-sources needed during the first run; `~/.dotfiles` does not exist until mise
-creates that symlink. Replacing the active global config affects future mise
-invocations, so use this pattern carefully.
+在第一次应用之前，仓库/源必须已存在。对于首次运行期间所需的源，请使用真实的仓库路径；`~/.dotfiles` 在 mise 创建该符号链接之前并不存在。替换当前生效的全局配置会影响后续的 mise 调用，因此请谨慎使用此模式。

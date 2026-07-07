@@ -4,84 +4,83 @@
 - **Usage**: `mise oci push [FLAGS] <REF>`
 - **Source code**: [`src/cli/oci/push.rs`](https://github.com/jdx/mise/blob/main/src/cli/oci/push.rs)
 
-[experimental] Build an OCI image and push it to a registry
+[实验性] 构建 OCI 镜像并将其推送到镜像仓库
 
-Requires `skopeo` (or `crane`) on PATH. If `--image-dir` is not passed,
-builds fresh from the current mise.toml first, then shells out to
-`skopeo copy oci:<dir> docker://<ref>` (or `crane push <dir> <ref>`).
-Authentication is handled by the underlying tool — configure it the same
-way you would for a plain `skopeo` / `crane` push (e.g. `docker login`,
-`REGISTRY_AUTH_FILE`, `~/.config/containers/auth.json`).
+需要 PATH 中有 `skopeo`（或 `crane`）。如果未传入 `--image-dir`，
+则会先基于当前的 mise.toml 构建一个新的镜像，然后调用
+`skopeo copy oci:<dir> docker://<ref>`（或 `crane push <dir> <ref>`）。
+认证由底层工具处理——请按与普通 `skopeo` / `crane` push 相同
+的方式进行配置（例如 `docker login`、
+`REGISTRY_AUTH_FILE`、`~/.config/containers/auth.json`）。
 
-Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
+需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）。
 
-## Arguments
+## 参数
 
 ### `<REF>`
 
-Destination registry reference (e.g. `ghcr.io/me/devenv:latest`)
+目标镜像仓库引用（例如 `ghcr.io/me/devenv:latest`）
 
-## Flags
+## 标志
 
 ### `--from <FROM>`
 
-Base image for the build (ignored with --image-dir)
+构建的基础镜像（与 --image-dir 一起使用时忽略）
 
 ### `--image-dir <IMAGE_DIR>`
 
-Push an already-built OCI image layout (skip the build step)
+推送一个已构建好的 OCI 镜像布局（跳过构建步骤）
 
 ### `--include-global`
 
-Also include tools from the global / system config (default: project-only)
+同时包含全局 / 系统配置中的工具（默认：仅项目）
 
-See `mise oci build --help` for details.
+详情请参见 `mise oci build --help`。
 
 ### `--mount-point <MOUNT_POINT>`
 
-Override in-image mount point (ignored with --image-dir)
+覆盖镜像内挂载点（与 --image-dir 一起使用时忽略）
 
 ### `--no-mise`
 
-Don't embed the mise binary (ignored with --image-dir)
+不嵌入 mise 二进制文件（与 --image-dir 一起使用时忽略）
 
 ### `--owner <UID[:GID]>`
 
-UID[:GID] to assign to every tar entry when building (conflicts with --image-dir)
+构建时分配给每个 tar 条目的 UID[:GID]（与 --image-dir 冲突）
 
-Overrides [oci].user_id / [oci].group_id. Defaults to 0:0. If GID is omitted, it defaults to UID. This affects file ownership only; [oci].user controls the image USER directive.
+覆盖 [oci].user_id / [oci].group_id。默认值为 0:0。如果省略 GID，则默认等于 UID。这只影响文件所有权；[oci].user 控制镜像的 USER 指令。
 
 ### `--tool <TOOL>`
 
-Force the push tool (`auto`, `skopeo`, `crane`). Default `auto`
+强制使用推送工具（`auto`、`skopeo`、`crane`）。默认 `auto`
 
-**Choices:**
+**可选项：**
 
 - `auto`
 - `skopeo`
 - `crane`
 
-**Default:** `auto`
+**默认值：** `auto`
 
-Examples:
+示例：
 
 ```
-Build and push to GHCR:
+构建并推送到 GHCR：
 $ mise oci push ghcr.io/me/devenv:latest
 
-Push an image built earlier:
+推送之前构建的镜像：
 $ mise oci build -o ./img
 $ mise oci push --image-dir ./img ghcr.io/me/devenv:v1
 
-Force a specific push tool:
+强制使用特定的推送工具：
 $ mise oci push --tool crane ghcr.io/me/devenv:latest
 ```
 
-Auth:
+认证：
 
 ```
-mise shells out to skopeo (preferred) or crane; configure registry
-credentials the usual way — `docker login`, `REGISTRY_AUTH_FILE`,
-or `~/.config/containers/auth.json` for skopeo; `crane auth login`
-for crane.
+mise 会调用 skopeo（优先）或 crane；按通常方式配置 registry
+凭据——对于 skopeo 使用 `docker login`、`REGISTRY_AUTH_FILE`
+或 `~/.config/containers/auth.json`；对于 crane 使用 `crane auth login`
 ```

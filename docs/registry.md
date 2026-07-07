@@ -2,90 +2,90 @@
 editLink: false
 ---
 
-# Registry
+# 注册表
 
 <script setup>
 import Registry from '/components/registry.vue';
 </script>
 
-List of all [tools](#tools) aliased by default in `mise`.
+默认在 `mise` 中别名的所有[工具](#tools)列表。
 
-You can use these shorthands with `mise use`. This allows you to use a tool without needing to know the full name. For example, to use the `aws-cli` tool, you can do the following:
+你可以使用这些 `mise use` 的简写。这使你能够使用工具，而无需知道完整名称。例如，要使用 `aws-cli` 工具，你可以这样做：
 
 ```shell
 mise use aws-cli
 ```
 
-instead of
+而不是
 
 ```shell
 mise use aqua:aws/aws-cli
 ```
 
-If a tool is not available in the registry, you can install it by its full name. [github](./dev-tools/backends/github.html) and [aqua](./dev-tools/backends/aqua.html) give you for example access to almost all programs available on GitHub.
+如果某个工具在注册表中不可用，你可以通过其完整名称安装它。[github](./dev-tools/backends/github.html) 和 [aqua](./dev-tools/backends/aqua.html) 例如可以让你访问 GitHub 上几乎所有可用的程序。
 
-## Backends
+## 后端
 
-In addition to built-in [core tools](/core-tools.html), `mise` supports a variety of [backends](/dev-tools/backends/) to install tools.
+除了内置的 [core tools](/core-tools.html) 之外，`mise` 还支持多种用于安装工具的 [后端](/dev-tools/backends/)。
 
-Backends fall into the following acceptance tiers for new registry entries:
+对于新的注册表条目，后端分为以下接受等级：
 
-**Tier 1 — preferred, routinely accepted:**
+**Tier 1 — 首选，通常会被接受：**
 
-- [aqua](./dev-tools/backends/aqua.html) - offers the most features and security while not requiring plugins
-- [github](./dev-tools/backends/github.html) - for tools that are not available in the aqua registry, but are available on GitHub
-- [gitlab](./dev-tools/backends/gitlab.html) - for tools that are not available in the aqua registry, but are available on GitLab
+- [aqua](./dev-tools/backends/aqua.html) - 提供最多的功能和安全性，同时不需要插件
+- [github](./dev-tools/backends/github.html) - 适用于那些无法在 aqua 注册表中找到、但可在 GitHub 上获取的工具
+- [gitlab](./dev-tools/backends/gitlab.html) - 适用于那些无法在 aqua 注册表中找到、但可在 GitLab 上获取的工具
 
-**Tier 2 — high bar, but lower than tier 3:**
+**Tier 2 — 要求较高，但低于 tier 3：**
 
-- [conda](./dev-tools/backends/conda.html) - potentially accepted for tools that can't reasonably be supported via aqua/github. The bar is lower than tier 3 because mise's conda backend does not require a separately-installed package manager — packages are fetched and extracted directly from anaconda.org with no `conda`/`mamba`/`micromamba` needed on PATH.
+- [conda](./dev-tools/backends/conda.html) - 对于那些无法通过 aqua/github 合理支持的工具，可能会被接受。之所以比 tier 3 的门槛更低，是因为 mise 的 conda 后端不需要单独安装包管理器——包会直接从 anaconda.org 获取并解压，PATH 中不需要 `conda`/`mamba`/`micromamba`。
 
-**Tier 3 — very high bar, rarely accepted:**
+**Tier 3 — 要求非常高，很少被接受：**
 
-- [pipx](./dev-tools/backends/pipx.html) - only for python tools, requires `python` on PATH
-- [npm](./dev-tools/backends/npm.html) - only for node tools, requires `node` on PATH
-- [gem](./dev-tools/backends/gem.html) - only for ruby tools, requires `ruby` on PATH
-- [go](./dev-tools/backends/go.html) - only for go tools, requires `go` to be installed to compile. Because go tools can be distributed as a single binary, aqua/github are definitely preferred.
-- [cargo](./dev-tools/backends/cargo.html) - only for rust tools, requires `cargo` to be installed to compile. Because rust tools can be distributed as a single binary, aqua/github are definitely preferred.
-- [dotnet](./dev-tools/backends/dotnet.html) - only for dotnet tools, requires `dotnet` to be installed to compile. Because dotnet tools can be distributed as a single binary, aqua/github are definitely preferred.
+- [pipx](./dev-tools/backends/pipx.html) - 仅适用于 python 工具，要求 `python` 在 PATH 中
+- [npm](./dev-tools/backends/npm.html) - 仅适用于 node 工具，要求 `node` 在 PATH 中
+- [gem](./dev-tools/backends/gem.html) - 仅适用于 ruby 工具，要求 `ruby` 在 PATH 中
+- [go](./dev-tools/backends/go.html) - 仅适用于 go 工具，要求安装 `go` 才能编译。由于 go 工具可以作为单个二进制文件分发，因此显然更推荐 aqua/github。
+- [cargo](./dev-tools/backends/cargo.html) - 仅适用于 rust 工具，要求安装 `cargo` 才能编译。由于 rust 工具可以作为单个二进制文件分发，因此显然更推荐 aqua/github。
+- [dotnet](./dev-tools/backends/dotnet.html) - 仅适用于 dotnet 工具，要求安装 `dotnet` 才能编译。由于 dotnet 工具可以作为单个二进制文件分发，因此显然更推荐 aqua/github。
 
-These all depend on a separately-installed runtime/toolchain on PATH, which is fragile — `npm`/`pipx`/`gem` in particular silently bind tools to whichever `node`/`python`/`ruby` happened to be on PATH at install time.
+这些都依赖于 PATH 中单独安装的运行时/工具链，这很脆弱——尤其是 `npm`/`pipx`/`gem`，它们会在安装时静默地将工具绑定到 PATH 中当时存在的那个 `node`/`python`/`ruby`。
 
-**Not accepted:**
+**不接受：**
 
-- New `vfox` and `asdf` tools are not accepted for supply-chain security reasons — use [`aqua`](./dev-tools/backends/aqua.html) (preferred) or [`github`](./dev-tools/backends/github.html) instead.
-- The `ubi` backend is deprecated and is not accepted for new registry entries.
+- 新的 `vfox` 和 `asdf` 工具由于供应链安全原因不被接受——请改用 [`aqua`](./dev-tools/backends/aqua.html)（首选）或 [`github`](./dev-tools/backends/github.html)。
+- `ubi` 后端已弃用，不接受新的注册表条目。
 
-Users can still install via any backend themselves with explicit syntax (`mise use vfox:owner/repo`, `mise use cargo:name`, etc.) — they just don't get a registry shorthand for it.
+用户仍然可以自行通过任何后端并使用显式语法来安装（`mise use vfox:owner/repo`, `mise use cargo:name` 等）——只是不会为它们提供注册表简写。
 
-### Backends Priority
+### 后端优先级
 
-Each tool can define its own priority if it has more than one backend it supports. If you would like to disable a backend, you can do so with the following command:
+如果一个工具支持多个后端，它可以定义自己的优先级。如果你想禁用某个后端，可以使用以下命令：
 
 ```shell
 mise settings disable_backends=asdf
 ```
 
-This will disable the [asdf](./dev-tools/backends/asdf.html) backend. See [Aliases](/dev-tools/aliases.html) for a way to set a default backend for a tool. Note that the `asdf` backend is disabled by default on Windows.
+这将禁用 [asdf](./dev-tools/backends/asdf.html) 后端。有关为工具设置默认后端的方法，请参见 [Aliases](/dev-tools/aliases.html)。请注意，在 Windows 上，`asdf` 后端默认是禁用的。
 
-You can also specify the full name for a tool using `mise use aqua:1password/cli` if you want to use a specific backend.
+如果你想使用特定后端，也可以使用 `mise use aqua:1password/cli` 这种格式指定工具的完整名称。
 
-### Environment Variable Overrides
+### 环境变量覆盖
 
-You can override the backend for any tool using environment variables with the pattern `MISE_BACKENDS_<TOOL>`. This takes the highest priority and overrides any registry or alias configuration:
+你可以使用形如 `MISE_BACKENDS_<TOOL>` 的环境变量来覆盖任意工具的后端。这具有最高优先级，并会覆盖任何注册表或别名配置：
 
 ```shell
-# Use vfox backend for php
+# 为 php 使用 vfox 后端
 export MISE_BACKENDS_PHP='vfox:mise-plugins/vfox-php'
 mise install php@latest
 ```
 
-The tool name in the environment variable should be in SHOUTY_SNAKE_CASE (uppercase with underscores). For example, `my-tool` becomes `MISE_BACKENDS_MY_TOOL`.
+环境变量中的工具名应使用 SHOUTY_SNAKE_CASE（大写并使用下划线）。例如，`my-tool` 会变成 `MISE_BACKENDS_MY_TOOL`。
 
-Source: <https://github.com/jdx/mise/blob/main/registry/>
+来源：<https://github.com/jdx/mise/blob/main/registry/>
 
-## Tools {#tools}
+## 工具 {#tools}
 
-Note that [`mise registry`](/cli/registry.html) can be used to list all tools in the registry. [`mise use`](/cli/use.html) without any arguments will show a `tui` to select a tool to install.
+请注意，[`mise registry`](/cli/registry.html) 可用于列出注册表中的所有工具。未带任何参数的 [`mise use`](/cli/use.html) 将显示一个 `tui`，用于选择要安装的工具。
 
 <Registry />

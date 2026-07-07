@@ -1,6 +1,6 @@
 # mas <Badge type="warning" text="experimental" />
 
-Mac App Store apps via the [`mas`](https://github.com/mas-cli/mas) CLI.
+通过 [`mas`](https://github.com/mas-cli/mas) CLI 安装 Mac App Store 应用。
 
 ```toml
 [bootstrap.packages]
@@ -8,12 +8,11 @@ Mac App Store apps via the [`mas`](https://github.com/mas-cli/mas) CLI.
 "mas:497799835" = "latest"       # Xcode
 ```
 
-`mas` apps are part of `[bootstrap.packages]`, just like apt packages,
-Homebrew formulae, and casks. The package name is the App Store app ID:
-a numeric ADAM ID accepted by `mas install` and `mas upgrade`.
+`mas` 应用属于 `[bootstrap.packages]`，就像 apt 包、
+Homebrew formulae 和 cask 一样。包名就是 App Store 应用 ID：
+一个可被 `mas install` 和 `mas upgrade` 接受的数字 ADAM ID。
 
-mise does not install `mas` implicitly. Install it yourself first, for
-example with the built-in brew manager:
+mise 不会隐式安装 `mas`。请先自行安装它，例如使用内置的 brew 管理器：
 
 ```toml
 [bootstrap.packages]
@@ -21,13 +20,13 @@ example with the built-in brew manager:
 "mas:497799835" = "latest"
 ```
 
-or with a normal mise tool if you have one configured globally:
+或者，如果你已经在全局配置了一个普通的 mise 工具，也可以这样安装：
 
 ```sh
 mise use -g mas
 ```
 
-## Commands
+## 命令
 
 ```sh
 mise bootstrap packages use mas:497799835
@@ -36,34 +35,30 @@ mise bootstrap packages apply --manager mas
 mise bootstrap packages upgrade --manager mas
 ```
 
-`mise bootstrap packages apply` runs `mas install <id>` for missing apps.
-`mise bootstrap packages upgrade` runs `mas upgrade <id>` for installed apps.
-Both commands require numeric ADAM IDs; bundle identifiers such as
-`com.apple.dt.Xcode` are not valid package names.
+`mise bootstrap packages apply` 会为缺失的应用运行 `mas install <id>`。
+`mise bootstrap packages upgrade` 会为已安装的应用运行 `mas upgrade <id>`。
+这两个命令都需要数字形式的 ADAM ID；像
+`com.apple.dt.Xcode` 这样的 bundle 标识符不是有效的软件包名称。
 
-## Caveats
+## 注意事项
 
-`mas` is macOS-only and must be on `PATH`. On other platforms, or when the
-`mas` command is missing, shared configs list the entries as skipped instead
-of failing. Explicit commands such as `mise bootstrap packages apply
---manager mas` still fail when `mas` is unavailable, matching the other
-package managers.
+`mas` 仅适用于 macOS，且必须位于 `PATH` 中。在其他平台上，或者当
+`mas` 命令缺失时，共享配置会将这些条目标记为跳过，
+而不是失败。像 `mise bootstrap packages apply
+--manager mas` 这样的显式命令在 `mas` 不可用时仍会失败，这与其他
+包管理器的行为一致。
 
-Mac App Store operations may require an Apple Account signed in to the App
-Store, macOS authentication, prior purchase/claiming for paid apps, and valid
-Spotlight indexing. mise surfaces errors from `mas` rather than trying to
-purchase or claim apps itself.
+Mac App Store 操作可能需要已登录 App Store 的 Apple 账户、macOS 身份验证、付费应用的先前购买/认领，以及有效的 Spotlight 索引。mise 会直接展示 `mas` 返回的错误，而不会尝试自行购买或认领应用。
 
-## Finding IDs
+## 查找 ID
 
-Use `mas search` or copy an App Store URL and extract the numeric ID:
+使用 `mas search` 或复制 App Store URL 并提取数字 ID：
 
 ```sh
 mas search xcode
 ```
 
-For example, Xcode's App Store URL contains `id497799835`, so the package
-entry is:
+例如，Xcode 的 App Store URL 包含 `id497799835`，因此包条目为：
 
 ```toml
 [bootstrap.packages]

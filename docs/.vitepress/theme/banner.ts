@@ -45,7 +45,7 @@ function render(b: BannerData): void {
   const el = document.createElement("div");
   el.className = "jdx-banner";
   el.setAttribute("role", "region");
-  el.setAttribute("aria-label", "Site announcement");
+  el.setAttribute("aria-label", "站点公告");
 
   const msg = document.createElement("span");
   msg.textContent = b.message;
@@ -56,7 +56,7 @@ function render(b: BannerData): void {
     a.href = b.link;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = b.linkText || "Learn more";
+    a.textContent = b.linkText || "了解更多";
     el.appendChild(a);
   }
 
@@ -74,7 +74,7 @@ function render(b: BannerData): void {
 
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.setAttribute("aria-label", "Dismiss");
+  btn.setAttribute("aria-label", "关闭");
   btn.textContent = "\u00d7";
   btn.addEventListener("click", () => {
     localStorage.setItem(STORAGE_KEY, b.id);

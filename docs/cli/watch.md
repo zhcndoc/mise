@@ -5,329 +5,310 @@
 - **Aliases**: `w`
 - **Source code**: [`src/cli/watch.rs`](https://github.com/jdx/mise/blob/main/src/cli/watch.rs)
 
-Run task(s) and watch for changes to rerun it
+运行任务并监视更改以重新运行它
 
-This command uses the `watchexec` tool to watch for changes to files and rerun the specified task(s).
-It must be installed for this command to work, but you can install it with `mise use -g watchexec@latest`.
+此命令使用 `watchexec` 工具来监视文件更改并重新运行指定的任务。
+要使此命令生效，必须安装它；你可以使用 `mise use -g watchexec@latest` 来安装。
 
-For more advanced process management (daemon management, auto-restart, readiness checks,
-cron scheduling), see mise's sister project: https://pitchfork.jdx.dev
+如需更高级的进程管理（守护进程管理、自动重启、就绪检查、
+cron 调度），请参阅 mise 的姊妹项目：https://pitchfork.jdx.dev
 
-## Arguments
+## 参数
 
 ### `[TASK]`
 
-Tasks to run
-Can specify multiple tasks by separating with `:::`
-e.g.: `mise run task1 arg1 arg2 ::: task2 arg1 arg2`
+要运行的任务
+可以通过使用 `:::` 分隔来指定多个任务
+例如：`mise run task1 arg1 arg2 ::: task2 arg1 arg2`
 
 ### `[ARGS]…`
 
-Task and arguments to run
+要运行的任务和参数
 
-## Flags
+## 标志
 
 ### `--skip-deps`
 
-Run only the specified tasks skipping all dependencies
+仅运行指定的任务，跳过所有依赖项
 
 ### `-w --watch… <PATH>`
 
-Watch a specific file or directory
+监视特定文件或目录
 
-By default, Watchexec watches the current directory.
+默认情况下，Watchexec 会监视当前目录。
 
-When watching a single file, it's often better to watch the containing directory instead, and filter on the filename. Some editors may replace the file with a new one when saving, and some platforms may not detect that or further changes.
+当监视单个文件时，通常最好改为监视包含该文件的目录，并按文件名进行过滤。某些编辑器在保存时可能会用新文件替换原文件，而某些平台可能无法检测到这种情况或后续更改。
 
-Upon starting, Watchexec resolves a "project origin" from the watched paths. See the help for '--project-origin' for more information.
+启动时，Watchexec 会从被监视的路径中解析出“项目原点”。有关更多信息，请参阅 `--project-origin` 的帮助。
 
-This option can be specified multiple times to watch multiple files or directories.
+此选项可以指定多次，以监视多个文件或目录。
 
-The special value '/dev/null', provided as the only path watched, will cause Watchexec to not watch any paths. Other event sources (like signals or key events) may still be used.
+特殊值 `/dev/null` 仅在作为唯一被监视路径时提供，这将使 Watchexec 不监视任何路径。其他事件源（如信号或按键事件）仍然可以使用。
 
 ### `-W --watch-non-recursive… <PATH>`
 
-Watch a specific directory, non-recursively
+监视一个特定目录，不递归
 
-Unlike '-w', folders watched with this option are not recursed into.
+与 `-w` 不同，使用此选项监视的文件夹不会递归进入其子目录。
 
-This option can be specified multiple times to watch multiple directories non-recursively.
+此选项可以多次指定，以非递归方式监视多个目录。
 
 ### `-F --watch-file <PATH>`
 
-Watch files and directories from a file
+从文件中监视文件和目录
 
-Each line in the file will be interpreted as if given to '-w'.
+文件中的每一行都会被解释为与传给 `-w` 相同。
 
-For more complex uses (like watching non-recursively), use the argfile capability: build a file containing command-line options and pass it to watchexec with `@path/to/argfile`.
+对于更复杂的用法（例如非递归监视），请使用 argfile 功能：创建一个包含命令行选项的文件，并将其传递给 watchexec，使用 `@path/to/argfile`。
 
-The special value '-' will read from STDIN; this in incompatible with '--stdin-quit'.
+特殊值 `-` 将从 STDIN 读取；这与 `--stdin-quit` 不兼容。
 
 ### `-c --clear <MODE>`
 
-Clear screen before running command
+在运行命令前清屏
 
-If this doesn't completely clear the screen, try '--clear=reset'.
+如果这不能完全清空屏幕，请尝试 `--clear=reset`。
 
-**Choices:**
+**选项：**
 
 - `clear`
 - `reset`
 
 ### `-o --on-busy-update <MODE>`
 
-What to do when receiving events while the command is running
+在命令运行时收到事件时该如何处理
 
-Default is to 'do-nothing', which ignores events while the command is running, so that changes that occur due to the command are ignored, like compilation outputs. You can also use 'queue' which will run the command once again when the current run has finished if any events occur while it's running, or 'restart', which terminates the running command and starts a new one. Finally, there's 'signal', which only sends a signal; this can be useful with programs that can reload their configuration without a full restart.
+默认值是 `'do-nothing'`，它会在命令运行时忽略事件，这样由命令引起的更改也会被忽略，例如编译输出。你也可以使用 `'queue'`，如果在当前运行期间发生任何事件，它会在当前运行结束后再次执行命令；或者使用 `'restart'`，它会终止正在运行的命令并启动一个新命令。最后，还有 `'signal'`，它只会发送一个信号；这对于能够在不完全重启的情况下重新加载配置的程序很有用。
 
-The signal can be specified with the '--signal' option.
+该信号可以通过 `'--signal'` 选项指定。
 
-**Choices:**
+**可选值：**
 
 - `queue`
 - `do-nothing`
 - `restart`
 - `signal`
 
-**Default:** `do-nothing`
+**默认值：** `do-nothing`
 
 ### `-r --restart`
 
-Restart the process if it's still running
+如果进程仍在运行，则重新启动它
 
-This is a shorthand for '--on-busy-update=restart'.
+这是 `--on-busy-update=restart` 的简写。
 
 ### `-s --signal <SIGNAL>`
 
-Send a signal to the process when it's still running
+当进程仍在运行时向其发送一个信号
 
-Specify a signal to send to the process when it's still running. This implies '--on-busy-update=signal'; otherwise the signal used when that mode is 'restart' is controlled by '--stop-signal'.
+指定在进程仍在运行时发送给进程的信号。这意味着启用 `--on-busy-update=signal`；否则，当该模式为 `restart` 时使用的信号由 `--stop-signal` 控制。
 
-See the long documentation for '--stop-signal' for syntax.
+有关语法，请参阅 `--stop-signal` 的完整文档。
 
-Signals are not supported on Windows at the moment, and will always be overridden to 'kill'. See '--stop-signal' for more on Windows "signals".
+目前 Windows 不支持信号，并且始终会被覆盖为 `kill`。有关 Windows“信号”的更多信息，请参阅 `--stop-signal`。
 
 ### `--stop-signal <SIGNAL>`
 
-Signal to send to stop the command
+发送给要停止的命令的信号
 
-This is used by 'restart' and 'signal' modes of '--on-busy-update' (unless '--signal' is provided). The restart behaviour is to send the signal, wait for the command to exit, and if it hasn't exited after some time (see '--timeout-stop'), forcefully terminate it.
+这用于 `--on-busy-update` 的 `'restart'` 和 `'signal'` 模式（除非提供了 `'--signal'`）。重启行为是发送该信号，等待命令退出，如果在一段时间后（见 `'--timeout-stop'`）仍未退出，则强制终止它。
 
-The default on unix is "SIGTERM".
+在 unix 上，默认值是 `"SIGTERM"`。
 
-Input is parsed as a full signal name (like "SIGTERM"), a short signal name (like "TERM"), or a signal number (like "15"). All input is case-insensitive.
+输入会被解析为完整信号名（如 `"SIGTERM"`）、简短信号名（如 `"TERM"`）或信号编号（如 `"15"`）。所有输入都不区分大小写。
 
-On Windows this option is technically supported but only supports the "KILL" event, as Watchexec cannot yet deliver other events. Windows doesn't have signals as such; instead it has termination (here called "KILL" or "STOP") and "CTRL+C", "CTRL+BREAK", and "CTRL+CLOSE" events. For portability the unix signals "SIGKILL", "SIGINT", "SIGTERM", and "SIGHUP" are respectively mapped to these.
+在 Windows 上，此选项在技术上受支持，但仅支持 `"KILL"` 事件，因为 Watchexec 目前还不能传递其他事件。Windows 本身没有真正意义上的信号；它只有终止（此处称为 `"KILL"` 或 `"STOP"`）以及 `"CTRL+C"`、`"CTRL+BREAK"` 和 `"CTRL+CLOSE"` 事件。为了可移植性，unix 信号 `"SIGKILL"`、`"SIGINT"`、`"SIGTERM"` 和 `"SIGHUP"` 分别映射到这些事件。
 
 ### `--stop-timeout <TIMEOUT>`
 
-Time to wait for the command to exit gracefully
+等待命令优雅退出的时间
 
-This is used by the 'restart' mode of '--on-busy-update'. After the graceful stop signal is sent, Watchexec will wait for the command to exit. If it hasn't exited after this time, it is forcefully terminated.
+这用于 `--on-busy-update` 的 `restart` 模式。发送优雅停止信号后，Watchexec 会等待命令退出。如果在此时间之后仍未退出，它将被强制终止。
 
-Takes a unit-less value in seconds, or a time span value such as "5min 20s". Providing a unit-less value is deprecated and will warn; it will be an error in the future.
+可以接受不带单位的秒数值，或时间跨度值，例如 `"5min 20s"`。提供不带单位的值已被弃用并会发出警告；将来这会成为错误。
 
-The default is 10 seconds. Set to 0 to immediately force-kill the command.
+默认值是 10 秒。设为 0 可立即强制杀死命令。
 
-This has no practical effect on Windows as the command is always forcefully terminated; see '--stop-signal' for why.
+这在 Windows 上没有实际效果，因为命令总是会被强制终止；原因请参见 `--stop-signal`。
 
-**Default:** `10s`
+**默认：** `10s`
 
 ### `--map-signal… <SIGNAL:SIGNAL>`
 
-Translate signals from the OS to signals to send to the command
+将操作系统信号转换为要发送给命令的信号
 
-Takes a pair of signal names, separated by a colon, such as "TERM:INT" to map SIGTERM to SIGINT. The first signal is the one received by watchexec, and the second is the one sent to the command. The second can be omitted to discard the first signal, such as "TERM:" to not do anything on SIGTERM.
+接受一对用冒号分隔的信号名称，例如 `"TERM:INT"`，表示将 SIGTERM 映射为 SIGINT。第一个信号是 watchexec 接收到的信号，第二个信号是发送给命令的信号。第二个信号可以省略，以丢弃第一个信号，例如 `"TERM:"` 表示在收到 SIGTERM 时不执行任何操作。
 
-If SIGINT or SIGTERM are mapped, then they no longer quit Watchexec. Besides making it hard to quit Watchexec itself, this is useful to send pass a Ctrl-C to the command without also terminating Watchexec and the underlying program with it, e.g. with "INT:INT".
+如果映射了 SIGINT 或 SIGTERM，那么它们将不再退出 Watchexec。除了使退出 Watchexec 本身变得困难之外，这还可用于将 Ctrl-C 传递给命令，而不会同时终止 Watchexec 和底层程序，例如使用 `"INT:INT"`。
 
-This option can be specified multiple times to map multiple signals.
+此选项可以指定多次，以映射多个信号。
 
-Signal syntax is case-insensitive for short names (like "TERM", "USR2") and long names (like "SIGKILL", "SIGHUP"). Signal numbers are also supported (like "15", "31"). On Windows, the forms "STOP", "CTRL+C", and "CTRL+BREAK" are also supported to receive, but Watchexec cannot yet deliver other "signals" than a STOP.
+信号语法对短名称（如 `"TERM"`、`"USR2"`）和长名称（如 `"SIGKILL"`、`"SIGHUP"`）均不区分大小写。也支持信号编号（如 `"15"`、`"31"`）。在 Windows 上，还支持 `"STOP"`、`"CTRL+C"` 和 `"CTRL+BREAK"` 这些形式用于接收，但 Watchexec 目前还不能传递除 STOP 之外的其他“信号”。
 
 ### `-d --debounce <TIMEOUT>`
 
-Time to wait for new events before taking action
+在采取行动之前等待新事件的时间
 
-When an event is received, Watchexec will wait for up to this amount of time before handling it (such as running the command). This is essential as what you might perceive as a single change may actually emit many events, and without this behaviour, Watchexec would run much too often. Additionally, it's not infrequent that file writes are not atomic, and each write may emit an event, so this is a good way to avoid running a command while a file is partially written.
+当接收到一个事件时，Watchexec 会在处理它（例如运行命令）之前，最多等待这段时间。这个功能很重要，因为你认为的一个单独变更，实际上可能会触发许多事件；如果没有这种行为，Watchexec 的运行频率会过高。此外，文件写入并不常常是原子的，每次写入都可能触发一个事件，因此这也是避免在文件只写入了一部分时就执行命令的好方法。
 
-An alternative use is to set a high value (like "30min" or longer), to save power or bandwidth on intensive tasks, like an ad-hoc backup script. In those use cases, note that every accumulated event will build up in memory.
+另一种用途是将其设置为较高的值（如 "30min" 或更长），以便在耗费大量资源的任务中节省电量或带宽，例如临时备份脚本。在这些使用场景下，请注意，所有累积的事件都会在内存中不断堆积。
 
-Takes a unit-less value in milliseconds, or a time span value such as "5sec 20ms". Providing a unit-less value is deprecated and will warn; it will be an error in the future.
+可接受不带单位的毫秒值，或像 "5sec 20ms" 这样的时间跨度值。提供不带单位的值已被弃用，并会发出警告；在未来这将成为错误。
 
-The default is 50 milliseconds. Setting to 0 is highly discouraged.
+默认值为 50 毫秒。强烈不建议设置为 0。
 
-**Default:** `50ms`
+**默认：** `50ms`
 
 ### `--stdin-quit`
 
-Exit when stdin closes
+当 stdin 关闭时退出
 
-This watches the stdin file descriptor for EOF, and exits Watchexec gracefully when it is closed. This is used by some process managers to avoid leaving zombie processes around.
+它会监视 stdin 文件描述符是否出现 EOF，并在其关闭时优雅地退出 Watchexec。这被某些进程管理器用于避免留下僵尸进程。
 
 ### `--no-vcs-ignore`
 
-Don't load gitignores
+不加载 gitignore
 
-Among other VCS exclude files, like for Mercurial, Subversion, Bazaar, DARCS, Fossil. Note that Watchexec will detect which of these is in use, if any, and only load the relevant files. Both global (like '~/.gitignore') and local (like '.gitignore') files are considered.
+包括其他 VCS 排除文件，例如 Mercurial、Subversion、Bazaar、DARCS、Fossil 的文件。请注意，Watchexec 会检测当前使用的是其中哪一种（如果有的话），并且只加载相关文件。全局文件（如 `'~/.gitignore'`）和本地文件（如 `'.gitignore'`）都会被考虑。
 
-This option is useful if you want to watch files that are ignored by Git.
+如果你想监视被 Git 忽略的文件，这个选项很有用。
 
 ### `--no-project-ignore`
 
-Don't load project-local ignores
+不加载项目本地忽略规则
 
-This disables loading of project-local ignore files, like '.gitignore' or '.ignore' in the
-watched project. This is contrasted with '--no-vcs-ignore', which disables loading of Git
-and other VCS ignore files, and with '--no-global-ignore', which disables loading of global
-or user ignore files, like '~/.gitignore' or '~/.config/watchexec/ignore'.
+这会禁用加载项目本地的忽略文件，例如被监视项目中的 `.gitignore` 或 `.ignore`。这与 `--no-vcs-ignore` 不同，后者会禁用加载 Git 和其他 VCS 的忽略文件；也与 `--no-global-ignore` 不同，后者会禁用加载全局或用户级忽略文件，例如 `~/.gitignore` 或 `~/.config/watchexec/ignore`。
 
-Supported project ignore files:
+支持的项目忽略文件：
 
-  - Git: .gitignore at project root and child directories, .git/info/exclude, and the file pointed to by `core.excludesFile` in .git/config.
-  - Mercurial: .hgignore at project root and child directories.
-  - Bazaar: .bzrignore at project root.
-  - Darcs: _darcs/prefs/boring
-  - Fossil: .fossil-settings/ignore-glob
-  - Ripgrep/Watchexec/generic: .ignore at project root and child directories.
+  - Git：项目根目录及子目录中的 `.gitignore`，`.git/info/exclude`，以及 `.git/config` 中 `core.excludesFile` 指向的文件。
+  - Mercurial：项目根目录及子目录中的 `.hgignore`。
+  - Bazaar：项目根目录中的 `.bzrignore`。
+  - Darcs：`_darcs/prefs/boring`
+  - Fossil：`.fossil-settings/ignore-glob`
+  - Ripgrep/Watchexec/通用：项目根目录及子目录中的 `.ignore`。
 
-VCS ignore files (Git, Mercurial, Bazaar, Darcs, Fossil) are only used if the corresponding
-VCS is discovered to be in use for the project/origin. For example, a .bzrignore in a Git
-repository will be discarded.
+VCS 忽略文件（Git、Mercurial、Bazaar、Darcs、Fossil）仅在检测到项目/来源正在使用相应 VCS 时才会使用。例如，Git 仓库中的 `.bzrignore` 会被丢弃。
 
 ### `--no-global-ignore`
 
-Don't load global ignores
+不加载全局忽略
 
-This disables loading of global or user ignore files, like '~/.gitignore',
-'~/.config/watchexec/ignore', or '%APPDATA%\Bazaar\2.0\ignore'. Contrast with
-'--no-vcs-ignore' and '--no-project-ignore'.
+这将禁用全局或用户忽略文件的加载，例如 '~/.gitignore'、
+'~/.config/watchexec/ignore' 或 '%APPDATA%\Bazaar\2.0\ignore'。与
+'--no-vcs-ignore' 和 '--no-project-ignore' 相对。
 
-Supported global ignore files
+支持的全局忽略文件
 
-  - Git (if core.excludesFile is set): the file at that path
-  - Git (otherwise): the first found of $XDG_CONFIG_HOME/git/ignore, %APPDATA%/.gitignore, %USERPROFILE%/.gitignore, $HOME/.config/git/ignore, $HOME/.gitignore.
-  - Bazaar: the first found of %APPDATA%/Bazaar/2.0/ignore, $HOME/.bazaar/ignore.
-  - Watchexec: the first found of $XDG_CONFIG_HOME/watchexec/ignore, %APPDATA%/watchexec/ignore, %USERPROFILE%/.watchexec/ignore, $HOME/.watchexec/ignore.
+  - Git（如果设置了 core.excludesFile）：该路径下的文件
+  - Git（否则）：依次查找 $XDG_CONFIG_HOME/git/ignore、%APPDATA%/.gitignore、%USERPROFILE%/.gitignore、$HOME/.config/git/ignore、$HOME/.gitignore 中首先找到的文件。
+  - Bazaar：依次查找 %APPDATA%/Bazaar/2.0/ignore、$HOME/.bazaar/ignore 中首先找到的文件。
+  - Watchexec：依次查找 $XDG_CONFIG_HOME/watchexec/ignore、%APPDATA%/watchexec/ignore、%USERPROFILE%/.watchexec/ignore、$HOME/.watchexec/ignore 中首先找到的文件。
 
-Like for project files, Git and Bazaar global files will only be used for the corresponding
-VCS as used in the project.
+与项目文件一样，Git 和 Bazaar 的全局文件只会用于项目中所使用的对应
+VCS。
 
 ### `--no-default-ignore`
 
-Don't use internal default ignores
+不要使用内部默认忽略
 
-Watchexec has a set of default ignore patterns, such as editor swap files, `*.pyc`, `*.pyo`, `.DS_Store`, `.bzr`, `_darcs`, `.fossil-settings`, `.git`, `.hg`, `.pijul`, `.svn`, and Watchexec log files.
+Watchexec 有一组默认的忽略模式，例如编辑器交换文件、`*.pyc`、`*.pyo`、`.DS_Store`、`.bzr`、`_darcs`、`.fossil-settings`、`.git`、`.hg`、`.pijul`、`.svn` 以及 Watchexec 日志文件。
 
 ### `--no-discover-ignore`
 
-Don't discover ignore files at all
+完全不发现任何 ignore 文件
 
-This is a shorthand for '--no-global-ignore', '--no-vcs-ignore', '--no-project-ignore', but even more efficient as it will skip all the ignore discovery mechanisms from the get go.
+这是 `--no-global-ignore`、`--no-vcs-ignore`、`--no-project-ignore` 的简写，但效率更高，因为它会从一开始就跳过所有 ignore 发现机制。
 
-Note that default ignores are still loaded, see '--no-default-ignore'.
+请注意，默认的忽略规则仍然会被加载，参见 `--no-default-ignore`。
 
 ### `--ignore-nothing`
 
-Don't ignore anything at all
+完全不忽略任何内容
 
-This is a shorthand for '--no-discover-ignore', '--no-default-ignore'.
+这是 `--no-discover-ignore`、`--no-default-ignore` 的简写。
 
-Note that ignores explicitly loaded via other command line options, such as '--ignore' or '--ignore-file', will still be used.
+请注意，通过其他命令行选项显式加载的忽略规则，例如 `--ignore` 或 `--ignore-file`，仍然会被使用。
 
 ### `-p --postpone`
 
-Wait until first change before running command
+等待首次变更后再运行命令
 
-By default, Watchexec will run the command once immediately. With this option, it will instead wait until an event is detected before running the command as normal.
+默认情况下，Watchexec 会立即运行一次命令。使用此选项后，它将改为等待检测到事件后，再像正常情况一样运行命令。
 
 ### `--delay-run <DURATION>`
 
-Sleep before running the command
+在运行命令之前休眠
 
-This option will cause Watchexec to sleep for the specified amount of time before running the command, after an event is detected. This is like using "sleep 5 && command" in a shell, but portable and slightly more efficient.
+此选项会让 Watchexec 在检测到事件后，在运行命令之前先休眠指定的时间。这类似于在 shell 中使用 `"sleep 5 && command"`，但更具可移植性，也稍微更高效一些。
 
-Takes a unit-less value in seconds, or a time span value such as "2min 5s". Providing a unit-less value is deprecated and will warn; it will be an error in the future.
+接受一个不带单位的秒数值，或像 `"2min 5s"` 这样的时间跨度值。提供不带单位的值已被弃用，并会发出警告；未来将会成为错误。
 
 ### `--poll <INTERVAL>`
 
-Poll for filesystem changes
+轮询文件系统变更
 
-By default, and where available, Watchexec uses the operating system's native file system watching capabilities. This option disables that and instead uses a polling mechanism, which is less efficient but can work around issues with some file systems (like network shares) or edge cases.
+默认情况下，并且在可用时，Watchexec 会使用操作系统原生的文件系统监视能力。此选项会禁用该功能，转而使用轮询机制；这种方式效率较低，但可以绕过某些文件系统（如网络共享）或边缘情况中的问题。
 
-Optionally takes a unit-less value in milliseconds, or a time span value such as "2s 500ms", to use as the polling interval. If not specified, the default is 30 seconds. Providing a unit-less value is deprecated and will warn; it will be an error in the future.
+可选地接受一个无单位的毫秒值，或一个时间跨度值，例如 "2s 500ms"，作为轮询间隔。如果未指定，默认值为 30 秒。提供无单位的值已被弃用并会发出警告；将来这会成为错误。
 
-Aliased as '--force-poll'.
+别名为 '--force-poll'。
 
 ### `--shell <SHELL>`
 
-Use a different shell
+使用不同的 shell
 
-By default, Watchexec will use '$SHELL' if it's defined or a default of 'sh' on Unix-likes, and either 'pwsh', 'powershell', or 'cmd' (CMD.EXE) on Windows, depending on what Watchexec detects is the running shell.
+默认情况下，Watchexec 会使用`$SHELL`（如果已定义），否则在类 Unix 系统上使用默认的`sh`；在 Windows 上则根据 Watchexec 检测到的当前运行 shell，使用`pwsh`、`powershell` 或 `cmd`（CMD.EXE）中的一种。
 
-With this option, you can override that and use a different shell, for example one with more features or one which has your custom aliases and functions.
+使用此选项，你可以覆盖默认行为并使用不同的 shell，例如功能更多的 shell，或包含你自定义别名和函数的 shell。
 
-If the value has spaces, it is parsed as a command line, and the first word used as the shell program, with the rest as arguments to the shell.
+如果该值包含空格，它会被解析为一条命令行，其中第一个单词用作 shell 程序，其余部分作为传递给 shell 的参数。
 
-The command is run with the '-c' flag (except for 'cmd' on Windows, where it's '/C').
+该命令会带上`-c`标志运行（Windows 上的`cmd`除外，此时使用`/C`）。
 
-The special value 'none' can be used to disable shell use entirely. In that case, the command provided to Watchexec will be parsed, with the first word being the executable and the rest being the arguments, and executed directly. Note that this parsing is rudimentary, and may not work as expected in all cases.
+特殊值`none`可用于完全禁用 shell。此时，传给 Watchexec 的命令会被解析，首个单词作为可执行文件，其余作为参数，并直接执行。请注意，这种解析比较粗糙，在所有情况下都可能无法按预期工作。
 
-Using 'none' is a little more efficient and can enable a stricter interpretation of the input, but it also means that you can't use shell features like globbing, redirection, control flow, logic, or pipes.
+使用`none`会稍微更高效一些，并且可以对输入进行更严格的解释，但这也意味着你不能使用诸如 glob、重定向、控制流、逻辑运算或管道等 shell 特性。
 
-Examples:
+示例：
 
-Use without shell:
+不使用 shell：
 
 $ watchexec -n -- zsh -x -o shwordsplit scr
 
-Use with powershell core:
+使用 PowerShell Core：
 
 $ watchexec --shell=pwsh -- Test-Connection localhost
 
-Use with CMD.exe:
+使用 CMD.exe：
 
 $ watchexec --shell=cmd -- dir
 
-Use with a different unix shell:
+使用不同的 Unix shell：
 
 $ watchexec --shell=bash -- 'echo $BASH_VERSION'
 
-Use with a unix shell and options:
+使用带选项的 Unix shell：
 
 $ watchexec --shell='zsh -x -o shwordsplit' -- scr
 
 ### `-n`
 
-Shorthand for '--shell=none'
+`--shell=none` 的简写
 
 ### `--emit-events-to <MODE>`
 
-Configure event emission
+配置事件发射
 
-Watchexec can emit event information when running a command, which can be used by the child
-process to target specific changed files.
+Watchexec 在运行命令时可以发射事件信息，这些信息可供子进程用于定位特定的已更改文件。
 
-One thing to take care with is assuming inherent behaviour where there is only chance.
-Notably, it could appear as if the `RENAMED` variable contains both the original and the new
-path being renamed. In previous versions, it would even appear on some platforms as if the
-original always came before the new. However, none of this was true. It's impossible to
-reliably and portably know which changed path is the old or new, "half" renames may appear
-(only the original, only the new), "unknown" renames may appear (change was a rename, but
-whether it was the old or new isn't known), rename events might split across two debouncing
-boundaries, and so on.
+需要注意的一点是，不要把仅凭概率出现的行为当作固有行为。尤其是，`RENAMED` 变量看起来可能同时包含被重命名的原始路径和新路径。早期版本中，在某些平台上甚至看起来原始路径总是出现在新路径之前。然而，这些都不是真的。实际上，不可能可靠且可移植地知道某个变更路径是旧路径还是新路径，可能会出现“半个”重命名（只有原始路径，或只有新路径），可能会出现“未知”重命名（变更确实是重命名，但不知道它是旧路径还是新路径），重命名事件也可能跨越两个去抖边界被拆分，等等。
 
-This option controls where that information is emitted. It defaults to 'none', which doesn't
-emit event information at all. The other options are 'environment' (deprecated), 'stdio',
-'file', 'json-stdio', and 'json-file'.
+此选项控制这些信息发射到哪里。默认值是 `none`，即完全不发射事件信息。其他选项有 `environment`（已弃用）、`stdio`、`file`、`json-stdio` 和 `json-file`。
 
-The 'stdio' and 'file' modes are text-based: 'stdio' writes absolute paths to the stdin of
-the command, one per line, each prefixed with `create:`, `remove:`, `rename:`, `modify:`,
-or `other:`, then closes the handle; 'file' writes the same thing to a temporary file, and
-its path is given with the $WATCHEXEC_EVENTS_FILE environment variable.
+`stdio` 和 `file` 模式是基于文本的：`stdio` 将绝对路径写入命令的标准输入，每行一个，每个路径前缀为 `create:`、`remove:`、`rename:`、`modify:` 或 `other:`，然后关闭句柄；`file` 则将相同内容写入临时文件，并通过 `$WATCHEXEC_EVENTS_FILE` 环境变量提供其路径。
 
-There are also two JSON modes, which are based on JSON objects and can represent the full
-set of events Watchexec handles. Here's an example of a folder being created on Linux:
+还有两种 JSON 模式，它们基于 JSON 对象，并且可以表示 Watchexec 处理的完整事件集合。以下是在 Linux 上创建文件夹的示例：
 
 ```json
   {
@@ -355,60 +336,49 @@ set of events Watchexec handles. Here's an example of a folder being created on 
   }
 ```
 
-The fields are as follows:
+字段如下：
 
-  - `tags`, structured event data.
-  - `tags[].kind`, which can be:
+  - `tags`，结构化事件数据。
+  - `tags[].kind`，可以是：
 ```
-* 'path', along with:
-  + `absolute`, an absolute path.
-  + `filetype`, a file type if known ('dir', 'file', 'symlink', 'other').
-* 'fs':
-  + `simple`, the "simple" event type ('access', 'create', 'modify', 'remove', or 'other').
-  + `full`, the "full" event type, which is too complex to fully describe here, but looks like 'General(Precise(Specific))'.
-* 'source', along with:
-  + `source`, the source of the event ('filesystem', 'keyboard', 'mouse', 'os', 'time', 'internal').
-* 'keyboard', along with:
-  + `keycode`. Currently only the value 'eof' is supported.
-* 'process', for events caused by processes:
-  + `pid`, the process ID.
-* 'signal', for signals sent to Watchexec:
-  + `signal`, the normalised signal name ('hangup', 'interrupt', 'quit', 'terminate', 'user1', 'user2').
-* 'completion', for when a command ends:
-  + `disposition`, the exit disposition ('success', 'error', 'signal', 'stop', 'exception', 'continued').
-  + `code`, the exit, signal, stop, or exception code.
+* 'path'，并包含：
+  + `absolute`，绝对路径。
+  + `filetype`，如果已知则为文件类型（`dir`、`file`、`symlink`、`other`）。
+* 'fs'：
+  + `simple`，“简单”事件类型（`access`、`create`、`modify`、`remove` 或 `other`）。
+  + `full`，“完整”事件类型，这太复杂，无法在此完全描述，但看起来像 `General(Precise(Specific))`。
+* 'source'，并包含：
+  + `source`，事件来源（`filesystem`、`keyboard`、`mouse`、`os`、`time`、`internal`）。
+* 'keyboard'，并包含：
+  + `keycode`。目前仅支持值 `eof`。
+* 'process'，对于由进程引起的事件：
+  + `pid`，进程 ID。
+* 'signal'，对于发送给 Watchexec 的信号：
+  + `signal`，规范化后的信号名称（`hangup`、`interrupt`、`quit`、`terminate`、`user1`、`user2`）。
+* 'completion'，对于命令结束时：
+  + `disposition`，退出状态（`success`、`error`、`signal`、`stop`、`exception`、`continued`）。
+  + `code`，退出、信号、停止或异常代码。
 ```
-  - `metadata`, additional information about the event.
+  - `metadata`，事件的附加信息。
 
-The 'json-stdio' mode will emit JSON events to the standard input of the command, one per
-line, then close stdin. The 'json-file' mode will create a temporary file, write the
-events to it, and provide the path to the file with the $WATCHEXEC_EVENTS_FILE
-environment variable.
+`json-stdio` 模式会将 JSON 事件写入命令的标准输入，每行一个，然后关闭 stdin。`json-file` 模式会创建一个临时文件，将事件写入其中，并通过 `$WATCHEXEC_EVENTS_FILE` 环境变量提供该文件路径。
 
-Finally, the 'environment' mode was the default until 2.0. It sets environment variables
-with the paths of the affected files, for filesystem events:
+最后，`environment` 模式在 2.0 之前是默认模式。对于文件系统事件，它会将受影响文件的路径设置为环境变量：
 
-$WATCHEXEC_COMMON_PATH is set to the longest common path of all of the below variables,
-and so should be prepended to each path to obtain the full/real path. Then:
+`$WATCHEXEC_COMMON_PATH` 设置为以下所有变量的最长公共路径，因此应将其作为前缀加到每个路径前，以获得完整/真实路径。然后：
 
-  - $WATCHEXEC_CREATED_PATH is set when files/folders were created
-  - $WATCHEXEC_REMOVED_PATH is set when files/folders were removed
-  - $WATCHEXEC_RENAMED_PATH is set when files/folders were renamed
-  - $WATCHEXEC_WRITTEN_PATH is set when files/folders were modified
-  - $WATCHEXEC_META_CHANGED_PATH is set when files/folders' metadata were modified
-  - $WATCHEXEC_OTHERWISE_CHANGED_PATH is set for every other kind of pathed event
+  - `$WATCHEXEC_CREATED_PATH` 在文件/文件夹被创建时设置
+  - `$WATCHEXEC_REMOVED_PATH` 在文件/文件夹被移除时设置
+  - `$WATCHEXEC_RENAMED_PATH` 在文件/文件夹被重命名时设置
+  - `$WATCHEXEC_WRITTEN_PATH` 在文件/文件夹被修改时设置
+  - `$WATCHEXEC_META_CHANGED_PATH` 在文件/文件夹元数据被修改时设置
+  - `$WATCHEXEC_OTHERWISE_CHANGED_PATH` 对其他任何类型的带路径事件设置
 
-Multiple paths are separated by the system path separator, ';' on Windows and ':' on unix.
-Within each variable, paths are deduplicated and sorted in binary order (i.e. neither
-Unicode nor locale aware).
+多个路径之间使用系统路径分隔符分隔，Windows 上为 `;`，Unix 上为 `:`。在每个变量内部，路径会去重并按二进制顺序排序（即不考虑 Unicode 或区域设置）。
 
-This is the legacy mode, is deprecated, and will be removed in the future. The environment
-is a very restricted space, while also limited in what it can usefully represent. Large
-numbers of files will either cause the environment to be truncated, or may error or crash
-the process entirely. The $WATCHEXEC_COMMON_PATH is also unintuitive, as demonstrated by the
-multiple confused queries that have landed in my inbox over the years.
+这是遗留模式，已弃用，并且未来将被移除。环境变量是一个非常受限的空间，同时在可表达的内容上也有限制。大量文件要么会导致环境变量被截断，要么可能会使进程完全报错或崩溃。`$WATCHEXEC_COMMON_PATH` 也很不直观，正如这些年来涌入我收件箱的多封令人困惑的查询所证明的那样。
 
-**Choices:**
+**可选值：**
 
 - `environment`
 - `stdio`
@@ -417,185 +387,185 @@ multiple confused queries that have landed in my inbox over the years.
 - `json-file`
 - `none`
 
-**Default:** `none`
+**默认值：** `none`
 
 ### `--only-emit-events`
 
-Only emit events to stdout, run no commands.
+仅将事件输出到 stdout，不运行任何命令。
 
-This is a convenience option for using Watchexec as a file watcher, without running any commands. It is almost equivalent to using `cat` as the command, except that it will not spawn a new process for each event.
+这是一个便于将 Watchexec 作为文件监视器使用的选项，而无需运行任何命令。它几乎等同于将 `cat` 作为命令，但不会为每个事件启动一个新进程。
 
-This option requires `--emit-events-to` to be set, and restricts the available modes to `stdio` and `json-stdio`, modifying their behaviour to write to stdout instead of the stdin of the command.
+此选项要求设置 `--emit-events-to`，并将可用模式限制为 `stdio` 和 `json-stdio`，同时修改它们的行为，使其将内容写入 stdout，而不是写入命令的 stdin。
 
 ### `-E --env… <KEY=VALUE>`
 
-Add env vars to the command
+将环境变量添加到命令中
 
-This is a convenience option for setting environment variables for the command, without setting them for the Watchexec process itself.
+这是一个便捷选项，用于为命令设置环境变量，而不为 Watchexec 进程本身设置这些变量。
 
-Use key=value syntax. Multiple variables can be set by repeating the option.
+使用 key=value 语法。可通过重复该选项来设置多个变量。
 
 ### `--wrap-process <MODE>`
 
-Configure how the process is wrapped
+配置进程的包装方式
 
-By default, Watchexec will run the command in a process group in Unix, and in a Job Object in Windows.
+默认情况下，Watchexec 会在 Unix 中以进程组的方式运行命令，而在 Windows 中则使用 Job Object。
 
-Some Unix programs prefer running in a session, while others do not work in a process group.
+某些 Unix 程序更喜欢在会话中运行，而另一些则无法在进程组中正常工作。
 
-Use 'group' to use a process group, 'session' to use a process session, and 'none' to run the command directly. On Windows, either of 'group' or 'session' will use a Job Object.
+使用 `group` 表示使用进程组，使用 `session` 表示使用进程会话，使用 `none` 表示直接运行命令。在 Windows 上，`group` 或 `session` 都会使用 Job Object。
 
-**Choices:**
+**可选值：**
 
 - `group`
 - `session`
 - `none`
 
-**Default:** `group`
+**默认值：** `group`
 
 ### `-N --notify`
 
-Alert when commands start and end
+当命令开始和结束时发出提醒
 
-With this, Watchexec will emit a desktop notification when a command starts and ends, on supported platforms. On unsupported platforms, it may silently do nothing, or log a warning.
+使用此选项时，Watchexec 会在受支持的平台上于命令开始和结束时发送桌面通知。在不受支持的平台上，它可能会静默地不执行任何操作，或者记录一条警告。
 
 ### `--color <MODE>`
 
-When to use terminal colours
+何时使用终端颜色
 
-Setting the environment variable `NO_COLOR` to any value is equivalent to `--color=never`.
+将环境变量 `NO_COLOR` 设置为任意值，等同于 `--color=never`。
 
-**Choices:**
+**选项：**
 
 - `auto`
 - `always`
 - `never`
 
-**Default:** `auto`
+**默认值：** `auto`
 
 ### `--timings`
 
-Print how long the command took to run
+打印命令运行所花费的时间
 
-This may not be exactly accurate, as it includes some overhead from Watchexec itself. Use the `time` utility, high-precision timers, or benchmarking tools for more accurate results.
+这可能并不完全准确，因为它包含了 Watchexec 本身带来的一些额外开销。若要获得更精确的结果，请使用 `time` 工具、高精度计时器或基准测试工具。
 
 ### `-q --quiet`
 
-Don't print starting and stopping messages
+不打印启动和停止消息
 
-By default Watchexec will print a message when the command starts and stops. This option disables this behaviour, so only the command's output, warnings, and errors will be printed.
+默认情况下，Watchexec 会在命令启动和停止时打印一条消息。此选项会禁用此行为，因此只会打印命令的输出、警告和错误。
 
 ### `--bell`
 
-Ring the terminal bell on command completion
+在命令完成时响铃终端提示音
 
 ### `--project-origin <DIRECTORY>`
 
-Set the project origin
+设置项目根目录
 
-Watchexec will attempt to discover the project's "origin" (or "root") by searching for a variety of markers, like files or directory patterns. It does its best but sometimes gets it it wrong, and you can override that with this option.
+Watchexec 会尝试通过搜索各种标记（例如文件或目录模式）来发现项目的“origin”（或“root”）。它会尽力而为，但有时也会判断错误，你可以使用此选项进行覆盖。
 
-The project origin is used to determine the path of certain ignore files, which VCS is being used, the meaning of a leading '/' in filtering patterns, and maybe more in the future.
+项目根目录用于确定某些忽略文件的路径、正在使用的 VCS，以及过滤模式中前导“/”的含义，未来可能还会有更多用途。
 
-When set, Watchexec will also not bother searching, which can be significantly faster.
+设置后，Watchexec 也不会再进行搜索，这样速度可能会显著更快。
 
 ### `--workdir <DIRECTORY>`
 
-Set the working directory
+设置工作目录
 
-By default, the working directory of the command is the working directory of Watchexec. You can change that with this option. Note that paths may be less intuitive to use with this.
+默认情况下，命令的工作目录是 Watchexec 的工作目录。你可以使用此选项更改它。请注意，在这种情况下，路径的使用可能不那么直观。
 
 ### `-e --exts… <EXTENSIONS>`
 
-Filename extensions to filter to
+文件扩展名筛选
 
-This is a quick filter to only emit events for files with the given extensions. Extensions can be given with or without the leading dot (e.g. 'js' or '.js'). Multiple extensions can be given by repeating the option or by separating them with commas.
+这是一个快速筛选器，仅为具有给定扩展名的文件发出事件。扩展名可以带前导点或不带前导点（例如 'js' 或 '.js'）。可以通过重复该选项或用逗号分隔的方式提供多个扩展名。
 
 ### `-f --filter… <PATTERN>`
 
-Filename patterns to filter to
+用于筛选的文件名模式
 
-Provide a glob-like filter pattern, and only events for files matching the pattern will be emitted. Multiple patterns can be given by repeating the option. Events that are not from files (e.g. signals, keyboard events) will pass through untouched.
+提供一个类似 glob 的过滤模式，只有匹配该模式的文件事件才会被发出。可以通过重复该选项提供多个模式。非文件事件（例如信号、键盘事件）将不受影响，原样传递。
 
 ### `--filter-file… <PATH>`
 
-Files to load filters from
+从中加载过滤器的文件
 
-Provide a path to a file containing filters, one per line. Empty lines and lines starting with '#' are ignored. Uses the same pattern format as the '--filter' option.
+提供一个包含过滤器的文件路径，每行一个。空行和以 '#' 开头的行将被忽略。使用与 '--filter' 选项相同的模式格式。
 
-This can also be used via the $WATCHEXEC_FILTER_FILES environment variable.
+这也可以通过 $WATCHEXEC_FILTER_FILES 环境变量来使用。
 
 ### `-J --filter-prog… <EXPRESSION>`
 
-[experimental] Filter programs.
+[实验性] 过滤程序。
 
-/!\ This option is EXPERIMENTAL and may change and/or vanish without notice.
+/!\ 此选项为实验性功能，可能会在不通知的情况下更改和/或消失。
 
-Provide your own custom filter programs in jaq (similar to jq) syntax. Programs are given an event in the same format as described in '--emit-events-to' and must return a boolean. Invalid programs will make watchexec fail to start; use '-v' to see program runtime errors.
+使用 jaq（类似于 jq）的语法提供你自己的自定义过滤程序。程序会接收一个事件，格式与 `--emit-events-to` 中所述相同，并且必须返回布尔值。无效的程序会导致 watchexec 启动失败；使用 `-v` 查看程序运行时错误。
 
-In addition to the jaq stdlib, watchexec adds some custom filter definitions:
+除了 jaq 标准库之外，watchexec 还添加了一些自定义过滤定义：
 
-- 'path | file_meta' returns file metadata or null if the file does not exist.
+- `'path | file_meta'` 返回文件元数据；如果文件不存在则返回 null。
 
-- 'path | file_size' returns the size of the file at path, or null if it does not exist.
+- `'path | file_size'` 返回路径处文件的大小；如果文件不存在则返回 null。
 
-- 'path | file_read(bytes)' returns a string with the first n bytes of the file at path. If the file is smaller than n bytes, the whole file is returned. There is no filter to read the whole file at once to encourage limiting the amount of data read and processed.
+- `'path | file_read(bytes)'` 返回路径处文件前 n 个字节组成的字符串。如果文件小于 n 字节，则返回整个文件。没有用于一次性读取整个文件的过滤器，以鼓励限制读取和处理的数据量。
 
-- 'string | hash', and 'path | file_hash' return the hash of the string or file at path. No guarantee is made about the algorithm used: treat it as an opaque value.
+- `'string | hash'` 和 `'path | file_hash'` 返回字符串或路径处文件的哈希值。不保证所使用的算法：请将其视为不透明值。
 
-- 'any | kv_store(key)', 'kv_fetch(key)', and 'kv_clear' provide a simple key-value store. Data is kept in memory only, there is no persistence. Consistency is not guaranteed.
+- `'any | kv_store(key)'`、`'kv_fetch(key)'` 和 `'kv_clear'` 提供一个简单的键值存储。数据仅保留在内存中，不会持久化。不保证一致性。
 
-- 'any | printout', 'any | printerr', and 'any | log(level)' will print or log any given value to stdout, stderr, or the log (levels = error, warn, info, debug, trace), and pass the value through (so '[1] | log("debug") | .[]' will produce a '1' and log '[1]').
+- `'any | printout'`、`'any | printerr'` 和 `'any | log(level)'` 会将任意给定值打印或记录到 stdout、stderr 或日志中（级别 = error、warn、info、debug、trace），并将该值原样传递下去（因此 `"[1] | log("debug") | .[]"` 会输出 `1` 并记录 `[1]`）。
 
-All filtering done with such programs, and especially those using kv or filesystem access, is much slower than the other filtering methods. If filtering is too slow, events will back up and stall watchexec. Take care when designing your filters.
+使用此类程序进行的所有过滤，尤其是使用 kv 或文件系统访问的过滤，都会比其他过滤方法慢得多。如果过滤过慢，事件会堆积并阻塞 watchexec。设计过滤器时请注意。
 
-If the argument to this option starts with an '@', the rest of the argument is taken to be the path to a file containing a jaq program.
+如果此选项的参数以 `@` 开头，则其余部分会被视为包含 jaq 程序的文件路径。
 
-Jaq programs are run in order, after all other filters, and short-circuit: if a filter (jaq or not) rejects an event, execution stops there, and no other filters are run. Additionally, they stop after outputting the first value, so you'll want to use 'any' or 'all' when iterating, otherwise only the first item will be processed, which can be quite confusing!
+Jaq 程序按顺序在所有其他过滤器之后运行，并且会短路：如果某个过滤器（无论是否为 jaq）拒绝了一个事件，执行就会在此处停止，不会运行其他过滤器。此外，它们在输出第一个值后就会停止，因此在迭代时你会想使用 `any` 或 `all`，否则只会处理第一个项，这可能会非常令人困惑！
 
-Find user-contributed programs or submit your own useful ones at &lt;https://github.com/watchexec/watchexec/discussions/592>.
+在 <https://github.com/watchexec/watchexec/discussions/592> 查找用户贡献的程序，或提交你自己有用的程序。
 
-## Examples:
+## 示例：
 
-Regexp ignore filter on paths:
+路径上的正则忽略过滤器：
 
 'all(.tags[] | select(.kind == "path"); .absolute | test("[.]test[.]js$")) | not'
 
-Pass any event that creates a file:
+通过任何会创建文件的事件：
 
 'any(.tags[] | select(.kind == "fs"); .simple == "create")'
 
-Pass events that touch executable files:
+通过触碰可执行文件的事件：
 
 'any(.tags[] | select(.kind == "path" && .filetype == "file"); .absolute | metadata | .executable)'
 
-Ignore files that start with shebangs:
+忽略以 shebang 开头的文件：
 
 'any(.tags[] | select(.kind == "path" && .filetype == "file"); .absolute | read(2) == "#!") | not'
 
 ### `-i --ignore… <PATTERN>`
 
-Filename patterns to filter out
+用于过滤掉的文件名模式
 
-Provide a glob-like filter pattern, and events for files matching the pattern will be excluded. Multiple patterns can be given by repeating the option. Events that are not from files (e.g. signals, keyboard events) will pass through untouched.
+提供一个类似 glob 的过滤模式，匹配该模式的文件事件将被排除。可以通过重复该选项来提供多个模式。不来自文件的事件（例如信号、键盘事件）将原样通过。
 
 ### `--ignore-file… <PATH>`
 
-Files to load ignores from
+要从中加载忽略规则的文件
 
-Provide a path to a file containing ignores, one per line. Empty lines and lines starting with '#' are ignored. Uses the same pattern format as the '--ignore' option.
+提供一个包含忽略规则的文件路径，每行一条。空行以及以 '#' 开头的行会被忽略。使用与 '--ignore' 选项相同的模式格式。
 
-This can also be used via the $WATCHEXEC_IGNORE_FILES environment variable.
+这也可以通过 $WATCHEXEC_IGNORE_FILES 环境变量来使用。
 
 ### `--fs-events… <EVENTS>`
 
-Filesystem events to filter to
+要过滤的文件系统事件
 
-This is a quick filter to only emit events for the given types of filesystem changes. Choose from 'access', 'create', 'remove', 'rename', 'modify', 'metadata'. Multiple types can be given by repeating the option or by separating them with commas. By default, this is all types except for 'access'.
+这是一个快速过滤器，只输出给定类型的文件系统变化事件。可从 'access'、'create'、'remove'、'rename'、'modify'、'metadata' 中选择。可以通过重复该选项或用逗号分隔来提供多个类型。默认情况下，除了 'access' 之外的所有类型都会被包含。
 
-This may apply filtering at the kernel level when possible, which can be more efficient, but may be more confusing when reading the logs.
+在可能的情况下，这可能会在内核级别应用过滤，效率可能更高，但在查看日志时也可能更令人困惑。
 
-**Choices:**
+**可选值：**
 
 - `access`
 - `create`
@@ -604,42 +574,42 @@ This may apply filtering at the kernel level when possible, which can be more ef
 - `modify`
 - `metadata`
 
-**Default:** `create,remove,rename,modify,metadata`
+**默认值：** `create,remove,rename,modify,metadata`
 
 ### `--no-meta`
 
-Don't emit fs events for metadata changes
+不要为元数据变更输出 fs 事件
 
-This is a shorthand for '--fs-events create,remove,rename,modify'. Using it alongside the '--fs-events' option is non-sensical and not allowed.
+这是 '--fs-events create,remove,rename,modify' 的简写。将它与 '--fs-events' 选项一起使用没有意义，也不被允许。
 
 ### `--print-events`
 
-Print events that trigger actions
+打印触发操作的事件
 
-This prints the events that triggered the action when handling it (after debouncing), in a human readable form. This is useful for debugging filters.
+这会在处理时打印触发该操作的事件（在去抖之后），以人类可读的形式输出。这对调试过滤器很有用。
 
-Use '-vvv' instead when you need more diagnostic information.
+当你需要更多诊断信息时，请改用 '-vvv'。
 
 ### `--manual`
 
-Show the manual page
+显示手册页
 
-This shows the manual page for Watchexec, if the output is a terminal and the 'man' program is available. If not, the manual page is printed to stdout in ROFF format (suitable for writing to a watchexec.1 file).
+如果输出是终端并且可用 'man' 程序，这将显示 Watchexec 的手册页。否则，手册页会以 ROFF 格式打印到 stdout（适合写入 watchexec.1 文件）。
 
-Examples:
+示例：
 
 ```
 $ mise watch build
-Runs the "build" tasks. Will re-run the tasks when any of its sources change.
-Uses "sources" from the tasks definition to determine which files to watch.
+运行 "build" 任务。只要其任一源发生变化，就会重新运行这些任务。
+使用任务定义中的 "sources" 来确定要监视哪些文件。
 
 $ mise watch build --glob src/**/*.rs
-Runs the "build" tasks but specify the files to watch with a glob pattern.
-This overrides the "sources" from the tasks definition.
+运行 "build" 任务，但使用 glob 模式指定要监视的文件。
+这会覆盖任务定义中的 "sources"。
 
 $ mise watch build --clear
-Extra arguments are passed to watchexec. See `watchexec --help` for details.
+额外参数会传递给 watchexec。详情请参见 `watchexec --help`。
 
 $ mise watch serve --watch src --exts rs --restart
-Starts an api server, watching for changes to "*.rs" files in "./src" and kills/restarts the server when they change.
+启动一个 API 服务器，监视 "./src" 中 "*.rs" 文件的变化，并在它们变化时终止/重启服务器。
 ```

@@ -1,19 +1,19 @@
-# Mise + Python Cookbook
+# Mise + Python 食谱
 
-Here are some tips on managing [Python](/lang/python.html) projects with mise.
+这里有一些使用 mise 管理 [Python](/lang/python.html) 项目的技巧。
 
-## A Python Project with virtualenv
+## 一个使用 virtualenv 的 Python 项目
 
-Here is an example python project with a `requirements.txt` file.
+这里有一个带有 `requirements.txt` 文件的 Python 项目示例。
 
 ```toml [mise.toml]
 min_version = "2024.9.5"
 
 [env]
-# Use the project name derived from the current directory
+# 使用从当前目录派生的项目名称
 PROJECT_NAME = "{{ config_root | basename }}"
 
-# Automatic virtualenv activation
+# 自动激活 virtualenv
 _.python.venv = { path = ".venv", create = true }
 
 [tools]
@@ -21,35 +21,35 @@ python = "{{ get_env(name='PYTHON_VERSION', default='3.11') }}"
 ruff = "latest"
 
 [tasks.install]
-description = "Install dependencies"
+description = "安装依赖"
 alias = "i"
 run = "uv pip install -r requirements.txt"
 
 [tasks.run]
-description = "Run the application"
+description = "运行应用程序"
 run = "python app.py"
 
 [tasks.test]
-description = "Run tests"
+description = "运行测试"
 run = "pytest tests/"
 
 [tasks.lint]
-description = "Lint the code"
+description = "检查代码"
 run = "ruff src/"
 
 [tasks.info]
-description = "Print project information"
+description = "打印项目信息"
 run = '''
-echo "Project: $PROJECT_NAME"
-echo "Virtual Environment: $VIRTUAL_ENV"
+echo "项目: $PROJECT_NAME"
+echo "虚拟环境: $VIRTUAL_ENV"
 '''
 ```
 
 ## mise + uv
 
-If you are using a `uv` project initialized with `uv init .`, here is how you can use it with mise.
+如果你使用的是通过 `uv init .` 初始化的 `uv` 项目，这里介绍如何将它与 mise 一起使用。
 
-Here is how the `uv` project will look like:
+下面是 `uv` 项目的结构示例：
 
 ```shell [uv-project]
 .
@@ -63,9 +63,9 @@ cat .python-version
 # 3.12
 ```
 
-If you run `uv run main.py` in the `uv` project, `uv` will automatically create a virtual environment for you using the python version specified in the `.python-version` file. This will also create a `uv.lock` file.
+如果你在 `uv` 项目中运行 `uv run main.py`，`uv` 会使用 `.python-version` 文件中指定的 Python 版本自动为你创建一个虚拟环境。这还会创建一个 `uv.lock` 文件。
 
-`mise` will detect the python version in `.python-version`, however, it won't use the virtual env created by `uv` by default. So, using `which python` will show a global python installation from `mise`.
+`mise` 会检测 `.python-version` 中的 Python 版本，不过默认情况下它不会使用 `uv` 创建的虚拟环境。所以，执行 `which python` 时会显示来自 `mise` 的全局 Python 安装。
 
 ```shell
 mise i
@@ -73,41 +73,41 @@ which python
 # ~/.local/share/mise/installs/python/3.12.4/bin/python
 ```
 
-If you want `mise` to use the virtual environment created by `uv`, you can set the [`python.uv_venv_auto`](/lang/python.html#python.uv_venv_auto) setting in your `mise.toml` file.
-Use `"source"` to only source an existing `.venv`, or `"create|source"` to create it if missing and then source it.
-If you prefer `mise deps` to create the venv, keep it at `"source"`, enable `[deps.uv]`, and run `mise deps`.
+如果你希望 `mise` 使用 `uv` 创建的虚拟环境，可以在你的 `mise.toml` 文件中设置 [`python.uv_venv_auto`](/lang/python.html#python.uv_venv_auto) 配置。
+使用 `"source"` 可仅加载现有的 `.venv`，或使用 `"create|source"` 在缺失时创建它，然后再加载。
+如果你更希望由 `mise deps` 来创建虚拟环境，请保持为 `"source"`，启用 `[deps.uv]`，然后运行 `mise deps`。
 
 ```toml [mise.toml]
 [settings]
 python.uv_venv_auto = "source"
-# or, to create if missing
+# 或者，在缺失时创建
 # python.uv_venv_auto = "create|source"
 ```
 
-Using `which python` will now show the python version from the virtual environment created by `uv`.
+此时执行 `which python` 将会显示来自 `uv` 创建的虚拟环境中的 Python 版本。
 
 ```shell
 which python
 # ./uv-project/.venv/bin/python
 ```
 
-Another option is to use `_.python.venv` in your `mise.toml` file to specify the path to the virtual environment created by `uv`.
+另一种方法是在你的 `mise.toml` 文件中使用 `_.python.venv` 来指定 `uv` 创建的虚拟环境路径。
 
 ```toml [mise.toml]
 [env]
 _.python.venv = { path = ".venv" }
 ```
 
-### Syncing python versions installed by mise and uv
+### 同步由 mise 和 uv 安装的 Python 版本
 
-You can use [mise sync python --uv](/cli/sync/python.html#uv) to sync the python version installed by `mise` with the python version specified in the `.python-version` file in the `uv` project.
+你可以使用 [mise sync python --uv](/cli/sync/python.html#uv) 来同步 `mise` 安装的 Python 版本与 `uv` 项目中 `.python-version` 文件指定的 Python 版本。
 
-### uv scripts
+### uv 脚本
 
-You can take advantage of `uv run` in [`shebang`](/tasks/toml-tasks.html#shell-shebang) in toml or file tasks.
-Note that using `--script` is required if the filename does not end in `.py`.
+你可以在 toml 或文件任务的 [`shebang`](/tasks/toml-tasks.html#shell-shebang) 中利用 `uv run`。
+注意：如果文件名不是以 `.py` 结尾，则需要使用 `--script`。
 
-Here is an example toml task:
+下面是一个 toml 任务示例：
 
 ```toml [mise.toml]
 [tools]
@@ -129,7 +129,7 @@ pprint([(k, v["title"]) for k, v in data.items()][:10])
 '''
 ```
 
-Or as a file task:
+或者作为文件任务：
 
 ```python [mise-tasks/print_peps.py]
 #!/usr/bin/env -S uv run --script
@@ -145,7 +145,7 @@ data = resp.json()
 pprint([(k, v["title"]) for k, v in data.items()][:10])
 ```
 
-You can then run it with `mise run print_peps`:
+然后你可以通过 `mise run print_peps` 来运行它：
 
 ```shell
 ❯ mise run print_peps

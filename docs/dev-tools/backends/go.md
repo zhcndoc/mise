@@ -1,27 +1,26 @@
-# Go Backend
+# Go 后端
 
-You may install packages directly via [go install](https://go.dev/doc/install) even if there
-isn't an asdf plugin for it.
+即使没有对应的 asdf 插件，你也可以通过 [go install](https://go.dev/doc/install) 直接安装包。
 
-The code for this is inside of the mise repository at [`./src/backend/go.rs`](https://github.com/jdx/mise/blob/main/src/backend/go.rs).
+这部分的代码位于 mise 仓库中的 [`./src/backend/go.rs`](https://github.com/jdx/mise/blob/main/src/backend/go.rs)。
 
-## Dependencies
+## 依赖项
 
-This relies on having `go` installed. Which you can install via mise:
+这依赖于已安装 `go`。你可以通过 mise 安装：
 
 ```sh
 mise use -g go
 ```
 
 ::: tip
-Any method of installing `go` is fine if you want to install go some other way.
-mise will use whatever `go` is on PATH.
+如果你想用其他方式安装 go，任何安装方法都可以。
+mise 会使用 PATH 中的任意 `go`。
 :::
 
-## Usage
+## 用法
 
-The following installs the latest version of [hivemind](https://github.com/DarthSim/hivemind) and
-sets it as the active version on PATH:
+以下命令会安装 [hivemind](https://github.com/DarthSim/hivemind) 的最新版本，并
+将其设置为 PATH 上的活动版本：
 
 ```sh
 $ mise use -g go:github.com/DarthSim/hivemind
@@ -29,15 +28,14 @@ $ hivemind --help
 Hivemind version 1.1.0
 ```
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `go` backend—these
-go in `[tools]` in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `go` 后端——这些内容放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
 
-Set environment variables for the `go install` command. mise still sets `GOBIN`
-to the tool install directory after applying `install_env`.
+为 `go install` 命令设置环境变量。mise 在应用 `install_env` 之后，仍会将 `GOBIN`
+设置为工具安装目录。
 
 ```toml
 [tools]
@@ -46,7 +44,7 @@ to the tool install directory after applying `install_env`.
 
 ### `tags`
 
-Specify go build tags (passed as `go install -tags`):
+指定 go build 标签（作为 `go install -tags` 传递）：
 
 ```toml
 [tools]

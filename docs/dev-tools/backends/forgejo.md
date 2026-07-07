@@ -1,15 +1,14 @@
-# Forgejo Backend
+# Forgejo 后端
 
-You may install Codeberg and other Forgejo compatible release assets directly using the `forgejo` backend. This backend downloads release assets from Forgejo repositories and is ideal for tools that distribute pre-built binaries through Forgejo releases.
+您可以直接使用 `forgejo` 后端安装 Codeberg 和其他兼容 Forgejo 的发布资源。此后端会从 Forgejo 仓库下载发布资源，非常适合通过 Forgejo 发布分发预编译二进制文件的工具。
 
-By default, the Forgejo backend uses the public Codeberg instance at [https://codeberg.org](https://codeberg.org). For other or self-hosted Forgejo instances, you can specify a custom API URL using the `api_url` tool option.
+默认情况下，Forgejo 后端使用 Codeberg 的公共实例 [https://codeberg.org](https://codeberg.org)。对于其他或自托管的 Forgejo 实例，您可以使用 `api_url` 工具选项指定自定义 API URL。
 
-The code for this is inside of the mise repository at [`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs).
+相关代码位于 mise 仓库中的 [`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs)。
 
-## Usage
+## 用法
 
-The following installs the latest version of a tool from Forgejo releases
-and sets it as the active version on PATH:
+以下命令会从 Forgejo 发行版中安装某个工具的最新版本，并将其设为 PATH 中当前可用的版本：
 
 ```sh
 $ mise use -g forgejo:forgejo/runner[api_url=https://code.forgejo.org/api/v1,bin=forgejo-runner,bin=forgejo-runner]
@@ -17,7 +16,7 @@ $ forgejo-runner -v
 forgejo-runner version v12.4.0
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+该版本将按以下格式写入 `~/.config/mise/config.toml`：
 
 ```toml
 [tools]
@@ -28,35 +27,35 @@ The version will be set in `~/.config/mise/config.toml` with the following forma
 }
 ```
 
-## Authentication
+## 认证
 
-For private repositories or higher API limits, mise supports several Forgejo token sources.
+对于私有仓库或更高的 API 限额，mise 支持多种 Forgejo 令牌来源。
 
-### Token priority
+### 令牌优先级
 
-mise checks these sources in order and uses the first token found:
+mise 按以下顺序检查这些来源，并使用找到的第一个令牌：
 
-1. `MISE_FORGEJO_ENTERPRISE_TOKEN` (for non-`codeberg.org` hosts)
+1. `MISE_FORGEJO_ENTERPRISE_TOKEN`（用于非 `codeberg.org` 主机）
 2. `MISE_FORGEJO_TOKEN`
 3. `FORGEJO_TOKEN`
-4. `credential_command` (if set)
-5. `forgejo_tokens.toml` (per host)
-6. `fj` CLI config (`keys.json`, if enabled)
-7. `git credential fill` (if `forgejo.use_git_credentials=true`)
+4. `credential_command`（如果已设置）
+5. `forgejo_tokens.toml`（按主机）
+6. `fj` CLI 配置（`keys.json`，如果已启用）
+7. `git credential fill`（如果 `forgejo.use_git_credentials=true`）
 
-### Environment variables
+### 环境变量
 
 ```sh
 export MISE_FORGEJO_TOKEN="forgejo-token"
 ```
 
-For self-hosted Forgejo instances:
+对于自托管 Forgejo 实例：
 
 ```sh
 export MISE_FORGEJO_ENTERPRISE_TOKEN="forgejo-enterprise-token"
 ```
 
-### Token file (`forgejo_tokens.toml`)
+### 令牌文件（`forgejo_tokens.toml`）
 
 ```toml
 # ~/.config/mise/forgejo_tokens.toml
@@ -69,47 +68,47 @@ token = "forgejo-enterprise-token"
 
 ### `credential_command`
 
-You can provide a shell command that prints a token to stdout:
+你可以提供一个将令牌打印到 stdout 的 shell 命令：
 
 ```toml
 [settings.forgejo]
 credential_command = "op read 'op://Private/Forgejo Token/credential'"
 ```
 
-mise executes this command with the configured default inline shell. The target hostname is available as `MISE_CREDENTIAL_HOST`, and the provider name (`forgejo`) is available as `MISE_CREDENTIAL_PROVIDER`. For compatibility, recognized sh-compatible shells (`ash`, `bash`, `dash`, `ksh`, `sh`, and `zsh`) also receive the hostname as `$1`/`${1}`.
+mise 会使用已配置的默认内联 shell 执行此命令。目标主机名可通过 `MISE_CREDENTIAL_HOST` 获取，提供者名称（`forgejo`）可通过 `MISE_CREDENTIAL_PROVIDER` 获取。为兼容起见，受支持的 sh 兼容 shell（`ash`、`bash`、`dash`、`ksh`、`sh` 和 `zsh`）也会将主机名作为 `$1`/`${1}` 传入。
 
-:::: warning Planned deprecation
-The legacy `$1`/`${1}` hostname argument is deprecated. Use `MISE_CREDENTIAL_HOST` instead. mise will start warning in `2026.11.0`, and `$1` compatibility will be removed in `2027.11.0`.
+:::: warning 计划弃用
+旧的 `$1`/`${1}` 主机名参数已被弃用。请改用 `MISE_CREDENTIAL_HOST`。mise 将在 `2026.11.0` 开始发出警告，并将在 `2027.11.0` 移除对 `$1` 的兼容性。
 ::::
 
-### `fj` CLI integration
+### `fj` CLI 集成
 
-mise can read tokens from the [`fj` CLI](https://codeberg.org/forgejo-contrib/forgejo-cli) (`keys.json`) as a fallback. It checks:
+mise 可以从 [`fj` CLI](https://codeberg.org/forgejo-contrib/forgejo-cli)（`keys.json`）中读取令牌作为后备方案。它会检查：
 
-1. `$XDG_DATA_HOME/forgejo-cli/keys.json` (defaults to `~/.local/share/forgejo-cli/keys.json`)
-2. `~/Library/Application Support/Cyborus.forgejo-cli/keys.json` (macOS)
+1. `$XDG_DATA_HOME/forgejo-cli/keys.json`（默认为 `~/.local/share/forgejo-cli/keys.json`）
+2. `~/Library/Application Support/Cyborus.forgejo-cli/keys.json`（macOS）
 
-Disable this fallback with:
+可通过以下方式禁用此后备方案：
 
 ```toml
 [settings.forgejo]
 fj_cli_tokens = false
 ```
 
-### `git credential fill` fallback
+### `git credential fill` 后备方案
 
-As a last resort, mise can query git credential helpers:
+作为最后的手段，mise 可以查询 git 凭据助手：
 
 ```toml
 [settings.forgejo]
 use_git_credentials = true
 ```
 
-This uses `git credential fill` and supports credentials stored by helpers such as macOS Keychain.
+这会使用 `git credential fill`，并支持由 macOS 钥匙串等助手存储的凭据。
 
-### Debugging token resolution
+### 调试令牌解析
 
-Use `mise token forgejo` to see which token mise would use for a given host:
+使用 `mise token forgejo` 查看 mise 在给定主机下会使用哪个令牌：
 
 ```sh
 mise token forgejo
@@ -117,34 +116,33 @@ mise token forgejo --unmask
 mise token forgejo forgejo.mycompany.com
 ```
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `forgejo` backend—these
-go in `[tools]` in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `forgejo` 后端——这些内容应放在 `mise.toml` 的 `[tools]` 中。
 
-### Asset Autodetection
+### 资产自动检测
 
-When no `asset_pattern` is specified, mise automatically selects the best asset for your platform. The system scores assets based on:
+当未指定 `asset_pattern` 时，mise 会自动为你的平台选择最佳资产。系统会根据以下因素对资产进行评分：
 
-- **OS compatibility** (linux, macos, windows)
-- **Architecture compatibility** (x64, arm64, x86, arm)
-- **Libc variant** (gnu or musl for Linux, msvc for Windows)
-- **Archive format preference** (tar.gz, zip, etc.)
-- **Build type** (avoids debug/test builds)
+- **操作系统兼容性**（linux、macos、windows）
+- **架构兼容性**（x64、arm64、x86、arm）
+- **Libc 变体**（Linux 使用 gnu 或 musl，Windows 使用 msvc）
+- **归档格式偏好**（tar.gz、zip 等）
+- **构建类型**（避免调试/测试构建）
 
-For most tools, you can simply install without specifying patterns:
+对于大多数工具，你只需直接安装，无需指定模式：
 
 ```sh
 mise install forgejo:user/repo
 ```
 
 ::: tip
-The autodetection logic is implemented in [`src/backend/asset_matcher.rs`](https://github.com/jdx/mise/blob/main/src/backend/asset_matcher.rs), which is shared by the GitHub, GitLab, and Forgejo backends.
+自动检测逻辑实现于 [`src/backend/asset_matcher.rs`](https://github.com/jdx/mise/blob/main/src/backend/asset_matcher.rs)，该逻辑被 GitHub、GitLab 和 Forgejo 后端共享。
 :::
 
 ### `asset_pattern`
 
-Specifies the pattern to match against release asset names. This is useful when there are multiple assets for your OS/arch combination or when you need to override autodetection.
+指定用于匹配发布资源名称的模式。当你的操作系统/架构组合存在多个资源，或者需要覆盖自动检测时，这会很有用。
 
 ```toml
 [tools]
@@ -153,93 +151,87 @@ Specifies the pattern to match against release asset names. This is useful when 
 
 ### `matching`
 
-Narrows asset selection to names containing the given substring, **while keeping platform autodetection**. Unlike [`asset_pattern`](#asset_pattern) (which replaces autodetection entirely), `matching` only refines the candidate set — autodetection still chooses the correct OS/arch from the narrowed list, so a single config stays portable across platforms.
+将资产选择缩小到包含给定子串的名称，**同时保留平台自动检测**。不同于 [`asset_pattern`](#asset_pattern)（它会完全替代自动检测），`matching` 只会细化候选集合——自动检测仍会从缩小后的列表中选择正确的 OS/架构，因此同一份配置可以跨平台使用。
 
-This is the option to reach for when a repository ships **multiple binaries as separate per-platform assets** and autodetection can't tell which one you want.
+当某个仓库将 **多个二进制文件作为按平台分别提供的资产** 发布，而自动检测无法判断你想要哪一个时，就应使用这个选项。
 
 ```toml
 [tools]
-# When a release ships several binaries per platform (e.g. `mytool-cli` and
-# `mytool-server`), matching picks one on every OS/arch without hardcoding a
-# platform-specific asset_pattern.
+# 当某个发布版本为每个平台提供多个二进制文件（例如 `mytool-cli` 和
+# `mytool-server`）时，matching 可以在每个 OS/arch 上选择其一，而无需
+# 硬编码一个特定于平台的 asset_pattern。
 "forgejo:user/repo" = { version = "latest", matching = "mytool-cli" }
 ```
 
-Tool options can also be passed inline on the command line using `[key=value]` syntax:
+工具选项也可以通过命令行使用 `[key=value]` 语法内联传入：
 
 ```sh
 mise use "forgejo:user/repo[matching=mytool-cli]"
 ```
 
-`matching` is a case-sensitive substring test, so a value that is also a substring of another asset's name (e.g. `matching = "tool"` when both `tool-*` and `tool-extras-*` are published) won't uniquely select your binary. Use [`matching_regex`](#matching_regex) with an anchor when you need a precise match.
+`matching` 是区分大小写的子串匹配，因此如果某个值同时也是另一个资产名称的子串（例如当同时发布了 `tool-*` 和 `tool-extras-*` 时，`matching = "tool"`），就无法唯一选中你的二进制文件。需要精确匹配时，请使用带锚点的 [`matching_regex`](#matching_regex)。
 
-If [`asset_pattern`](#asset_pattern) is also set, it takes precedence and `matching`/`matching_regex` are ignored — `asset_pattern` replaces autodetection entirely, so there is no candidate set left for them to narrow. They are ignored silently: when `asset_pattern` is set, a `matching_regex` is never consulted and an invalid one is not reported, since mise does not error on a superseded option.
+如果也设置了 [`asset_pattern`](#asset_pattern)，它将优先生效，而 `matching`/`matching_regex` 会被忽略——`asset_pattern` 会完全替代自动检测，因此不再有可供它们缩小的候选集合。它们会被静默忽略：当设置了 `asset_pattern` 时，`matching_regex` 根本不会被查询，且无效值也不会被报告，因为 mise 不会对被覆盖的选项报错。
 
 ### `matching_regex`
 
-Like [`matching`](#matching), but the asset name must match the given regular expression. Use this when a substring isn't selective enough. The match is case-sensitive; use an inline `(?i)` flag for case-insensitive matching.
+类似于 [`matching`](#matching)，但资产名称必须匹配给定的正则表达式。当子字符串不够有选择性时，请使用此项。匹配区分大小写；如需不区分大小写的匹配，请使用内联 `(?i)` 标志。
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", matching_regex = "^mytool-cli-" }
 ```
 
-If both `matching` and `matching_regex` are set, an asset must satisfy **both** (logical AND)
-to remain a candidate.
+如果同时设置了 `matching` 和 `matching_regex`，则资产必须同时满足**两者**（逻辑与）才能继续作为候选项。
 
 ::: warning
-`matching`/`matching_regex` are **not** part of the install path — it is keyed by the tool
-name (`user/repo`, or a `tool_alias`) and version. To install two binaries from the same
-release, give each its own [`tool_alias`](/dev-tools/backends/github.html#multiple-assets-from-the-same-release)
-so they get distinct install directories; reusing the same `forgejo:user/repo` string with
-different `matching` values resolves to the same directory and the second install overwrites
-the first.
+`matching`/`matching_regex` **不**属于安装路径的一部分——它由工具名称（`user/repo` 或 `tool_alias`）和版本作为键。要从同一个发布版本安装两个二进制文件，请为每个文件分别指定一个 [`tool_alias`](/dev-tools/backends/github.html#multiple-assets-from-the-same-release)，这样它们就会获得不同的安装目录；如果对同一个 `forgejo:user/repo` 字符串使用不同的 `matching` 值，它们会解析到同一个目录，而第二次安装会覆盖第一次。
 :::
 
 ### `version_prefix`
 
-Specifies a custom version prefix for release tags. By default, mise handles the common `v` prefix (e.g., `v1.0.0`), but some repositories use different prefixes like `release-`, `version-`, or no prefix at all.
+指定一个自定义版本前缀用于发布标签。默认情况下，mise 会处理常见的 `v` 前缀（例如 `v1.0.0`），但某些仓库会使用不同的前缀，比如 `release-`、`version-`，或者根本不使用前缀。
 
-When `version_prefix` is configured, mise will:
+配置 `version_prefix` 后，mise 将会：
 
-- Filter available versions with the prefix and strip it
-- Add the prefix when searching for releases
-- Try both prefixed and non-prefixed versions during installation
+- 过滤带有该前缀的可用版本，并去除该前缀
+- 在查找发布版本时添加该前缀
+- 在安装期间同时尝试带前缀和不带前缀的版本
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", version_prefix = "release-" }
 ```
 
-**Examples:**
+**示例：**
 
-- With `version_prefix = "release-"`:
-  - User specifies `1.0.0` → mise searches for `release-1.0.0` tag
-  - Available versions show as `1.0.0` (prefix stripped)
-- With `version_prefix = ""` (empty string):
-  - User specifies `1.0.0` → mise searches for `1.0.0` tag (no prefix)
-  - Useful for repositories that don't use any prefix
+- 当 `version_prefix = "release-"` 时：
+  - 用户指定 `1.0.0` → mise 搜索 `release-1.0.0` 标签
+  - 可用版本显示为 `1.0.0`（已去除前缀）
+- 当 `version_prefix = ""`（空字符串）时：
+  - 用户指定 `1.0.0` → mise 搜索 `1.0.0` 标签（无前缀）
+  - 适用于不使用任何前缀的仓库
 
 ### `prerelease`
 
-By default, releases flagged `prerelease: true` on Forgejo are excluded from `mise ls-remote` and from `latest` resolution. Set `prerelease = true` to include them:
+默认情况下，Forgejo 上标记为 `prerelease: true` 的发布会被排除在 `mise ls-remote` 和 `latest` 解析之外。将 `prerelease = true` 设置为包含它们：
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", prerelease = true }
 ```
 
-When set:
+设置后：
 
-- Pre-release tags (e.g. `v1.0.0-rc1`, `v0.1.2-dev.86`) appear in `mise ls-remote`.
-- `latest` resolves to the newest version across stable and pre-releases, rather than taking the Forgejo `/repos/{owner}/{repo}/releases/latest` shortcut.
-- Fuzzy version queries (e.g. `1.2`) match pre-release tags under that prefix.
+- 预发布标签（例如 `v1.0.0-rc1`、`v0.1.2-dev.86`）会出现在 `mise ls-remote` 中。
+- `latest` 会解析为稳定版和预发布版中的最新版本，而不是使用 Forgejo 的 `/repos/{owner}/{repo}/releases/latest` 快捷方式。
+- 模糊版本查询（例如 `1.2`）会匹配该前缀下的预发布标签。
 
-Draft releases are always excluded.
+草稿发布始终会被排除。
 
-### Platform-specific Asset Patterns
+### 按平台区分的资产模式
 
-For different asset patterns per platform:
+针对不同平台的资产模式：
 
 ```toml
 [tools."forgejo:user/repo"]
@@ -252,7 +244,7 @@ macos-arm64 = { asset_pattern = "tool_*_macOS_arm64.tar.gz" }
 
 ### `checksum`
 
-Verify the downloaded file with a checksum:
+使用校验和验证已下载的文件：
 
 ```toml
 [tools."forgejo:owner/repo"]
@@ -261,9 +253,9 @@ asset_pattern = "tool-1.0.0-x64.tar.gz"
 checksum = "sha256:a1b2c3d4e5f6789..."
 ```
 
-_Instead of specifying the checksum here, you can use [mise.lock](/dev-tools/mise-lock) to manage checksums._
+_你也可以使用 [mise.lock](/dev-tools/mise-lock) 来管理校验和，而不是在这里指定校验和。_
 
-### Platform-specific Checksums
+### 特定平台校验和
 
 ```toml
 [tools."forgejo:user/repo"]
@@ -282,7 +274,7 @@ macos-arm64 = {
 
 ### `size`
 
-Verify the downloaded asset size:
+验证下载的资源大小：
 
 ```toml
 [tools]
@@ -291,7 +283,7 @@ Verify the downloaded asset size:
 
 ### `strip_components`
 
-Number of directory components to strip when extracting archives:
+解压归档时要剥离的目录层级数：
 
 ```toml
 [tools]
@@ -299,41 +291,41 @@ Number of directory components to strip when extracting archives:
 ```
 
 ::: info
-If `strip_components` is not explicitly set, mise will automatically detect when to apply `strip_components = 1`. This happens when the extracted archive contains exactly one directory at the root level and no files. This is common with tools like ripgrep that package their binaries in a versioned directory (e.g., `mytool-14.1.0-x86_64-unknown-linux-musl/mytool`). The auto-detection ensures the binary is placed directly in the install path where mise expects it.
+如果未显式设置 `strip_components`，mise 会自动检测何时应用 `strip_components = 1`。当解压后的归档在根级别恰好只包含一个目录且没有文件时，就会发生这种情况。这在像 ripgrep 这类工具中很常见，它们会将二进制文件打包在一个带版本号的目录中（例如，`mytool-14.1.0-x86_64-unknown-linux-musl/mytool`）。这种自动检测可确保二进制文件被直接放置到 mise 预期的安装路径中。
 :::
 
 ### `bin`
 
-Rename the downloaded binary to a specific name. This is useful when downloading single binaries that have platform-specific names:
+将下载的二进制文件重命名为特定名称。当下载具有平台特定名称的单个二进制文件时，这很有用：
 
 ```toml
 [tools."forgejo:user/repo"]
 version = "2.29.1"
-bin = "my-tool"  # Rename the downloaded binary to my-tool
+bin = "my-tool"  # 将下载的二进制文件重命名为 my-tool
 ```
 
 ::: info
-When downloading single binaries (not archives), mise automatically removes OS/arch suffixes from the filename. For example, `docker-compose-linux-x86_64` becomes `docker-compose` automatically. Use the `bin` option only when you need a specific custom name.
+当下载单个二进制文件（不是压缩包）时，mise 会自动从文件名中移除操作系统/架构后缀。例如，`docker-compose-linux-x86_64` 会自动变为 `docker-compose`。只有在你需要特定的自定义名称时，才使用 `bin` 选项。
 :::
 
 ### `rename_exe`
 
-Rename the executable after extraction from an archive. This is useful when the archive contains a binary with a platform-specific name that you want to rename:
+在从压缩包中解压后重命名可执行文件。当压缩包中包含一个带有平台特定名称的二进制文件，而你希望将其重命名时，这很有用：
 
 ```toml
 [tools."forgejo:user/repo"]
 version = "latest"
 asset_pattern = "tool_linux.zip"
-rename_exe = "tool"  # Rename the extracted binary to tool
+rename_exe = "tool"  # 将解压出的二进制文件重命名为 tool
 ```
 
 ::: tip
-Use `rename_exe` for archives where the binary inside has a different name than desired. Use `bin` for single binary downloads (non-archives).
+对于压缩包中二进制文件的名称与期望名称不同的情况，请使用 `rename_exe`。对于单个二进制文件下载（非压缩包），请使用 `bin`。
 :::
 
 ### `no_app`
 
-Skip macOS .app bundle assets during autodetection and prefer standalone CLI binaries instead. This is useful when a repository provides both a macOS .app bundle (often an Xcode extension or GUI application) and a standalone command-line tool:
+在自动检测期间跳过 macOS .app 捆绑包资源，改为优先选择独立的 CLI 二进制文件。当一个仓库同时提供 macOS .app 捆绑包（通常是 Xcode 扩展或图形界面应用）和独立的命令行工具时，这会很有用：
 
 ```toml
 [tools."forgejo:user/repo"]
@@ -341,17 +333,17 @@ version = "latest"
 no_app = true
 ```
 
-When `no_app = true`:
+当 `no_app = true` 时：
 
-- Assets containing `.app.` (e.g., `Tool.app.zip`, `Tool.for.Xcode.app.zip`) are penalized during autodetection
-- Standalone archives are preferred
-- This is mainly useful for macOS asset selection; non-macOS `.app.` assets are already penalized by platform matching
-- Only affects autodetection; explicit `asset_pattern` values are used as-is
+- 包含 `.app.` 的资源（例如 `Tool.app.zip`、`Tool.for.Xcode.app.zip`）在自动检测期间会被降权
+- 会优先选择独立压缩包
+- 这主要适用于 macOS 资源的选择；非 macOS 的 `.app.` 资源已经会因平台匹配而被降权
+- 仅影响自动检测；显式的 `asset_pattern` 值会按原样使用
 
 ### `bin_path`
 
 ::: v-pre
-Specify the directory containing binaries within the extracted archive, or where to place the downloaded file. This supports Tera templating with variables like `{{ version }}`, `{{ os }}`, `{{ arch }}`, and arch aliases (`{{ darwin_os }}`, `{{ amd64_arch }}`, `{{ x86_64_arch }}`, `{{ gnu_arch }}`):
+指定压缩包解压后包含二进制文件的目录，或下载文件的放置位置。这支持使用 Tera 模板以及诸如 `{{ version }}`、`{{ os }}`、`{{ arch }}` 和架构别名（`{{ darwin_os }}`、`{{ amd64_arch }}`、`{{ x86_64_arch }}`、`{{ gnu_arch }}`）等变量：
 :::
 
 ```toml
@@ -360,52 +352,52 @@ version = "latest"
 bin_path = "tool-{{ version }}/bin" # expands to tool-1.0.0/bin
 ```
 
-**Binary path lookup order:**
+**二进制路径查找顺序：**
 
-1. If `bin_path` is specified, use that directory
-2. If `bin_path` is not set, look for a `bin/` directory in the install path
-3. If the install path root contains an executable file, use the install path root
-4. If no `bin/` directory exists, search subdirectories for `bin/` directories
-5. If no `bin/` directories are found, searches immediate subdirectories for any executable files. If an executable is found directly within a subdirectory, that entire subdirectory is considered a binary path.
-6. If no executables are found, use the root of the extracted directory
+1. 如果指定了 `bin_path`，则使用该目录
+2. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
+3. 如果安装路径根目录包含可执行文件，则使用安装路径根目录
+4. 如果不存在 `bin/` 目录，则搜索子目录中的 `bin/` 目录
+5. 如果未找到任何 `bin/` 目录，则搜索直接子目录中是否有可执行文件。如果在子目录中直接找到可执行文件，则将该整个子目录视为二进制路径。
+6. 如果未找到可执行文件，则使用解压目录的根目录
 
 ### `filter_bins`
 
-Comma-separated list of binaries to symlink into a filtered `.mise-bins` directory. This is useful when the tool comes with extra binaries that you do not want to expose on PATH.
+以逗号分隔的二进制文件列表，将其符号链接到一个经过过滤的 `.mise-bins` 目录中。当工具附带了你不想暴露在 PATH 上的额外二进制文件时，这很有用。
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", filter_bins = "tool" }
 ```
 
-When enabled:
+启用后：
 
-- A `.mise-bins` subdirectory is created with symlinks only to the specified binaries
-- Other binaries (like `tool-helper` or `tool-server`) are not exposed on PATH
+- 会创建一个 `.mise-bins` 子目录，其中只包含指向指定二进制文件的符号链接
+- 其他二进制文件（例如 `tool-helper` 或 `tool-server`）不会暴露在 PATH 上
 
 ### `api_url`
 
-For other Forgejo compatible or self-hosted instances, specify the API URL. mise uses this URL for release listing and release asset lookup, and may also use it to download assets when browser download URLs are not reachable or when using custom/private instances:
+对于其他 Forgejo 兼容实例或自托管实例，请指定 API URL。mise 会使用此 URL 进行发布列表和发布资产查找，并且在浏览器下载 URL 无法访问或使用自定义/私有实例时，也可能用它来下载资产：
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", api_url = "https://forgejo.mycompany.com/api/v1" }
 ```
 
-## Self-hosted Forgejo
+## 自托管 Forgejo
 
-If you are using a self-hosted Forgejo instance, set the `api_url` tool option and optionally the `MISE_FORGEJO_ENTERPRISE_TOKEN` environment variable for authentication:
+如果你正在使用自托管的 Forgejo 实例，请设置 `api_url` 工具选项，并可选择设置 `MISE_FORGEJO_ENTERPRISE_TOKEN` 环境变量进行身份验证：
 
 ```sh
 export MISE_FORGEJO_ENTERPRISE_TOKEN="your-token"
 ```
 
-## Supported Forgejo Syntax
+## 支持的 Forgejo 语法
 
-- **Forgejo shorthand for latest release version:** `forgejo:user/repo`
-- **Forgejo shorthand for specific release version:** `forgejo:user/repo@2.40.1`
+- **Forgejo 最新发布版本的简写：** `forgejo:user/repo`
+- **Forgejo 特定发布版本的简写：** `forgejo:user/repo@2.40.1`
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

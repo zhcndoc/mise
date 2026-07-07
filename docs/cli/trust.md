@@ -4,52 +4,45 @@
 - **Usage**: `mise trust [FLAGS] [CONFIG_FILE]`
 - **Source code**: [`src/cli/trust.rs`](https://github.com/jdx/mise/blob/main/src/cli/trust.rs)
 
-Marks a config file as trusted
+将一个配置文件标记为受信任
 
-This means mise is allowed to parse the file when it needs to read config
-that may execute code or affect the environment. mise checks trust before
-parsing `mise.toml`. Without trust, mise may prompt, skip the config in some
-discovery paths, fail with an untrusted-config error when it cannot prompt,
-or assume trust in detected CI unless paranoid mode is enabled.
+这意味着 mise 在需要读取可能会执行代码或影响环境的配置时，允许解析该文件。mise 会在解析 `mise.toml` 之前检查信任状态。若未受信任，mise 可能会提示用户、在某些发现路径中跳过该配置、在无法提示时以不受信任配置错误失败，或者在检测到 CI 时默认假定受信任，除非启用了偏执模式。
 
-Safe config files do not require trust: files that only contain
-`min_version`, `[tools]` entries with plain version strings (or arrays
-of them), and `[tasks]` (no templates and no tool options) are loaded
-without prompting, since nothing in them executes code at load time —
-tools install and tasks run only on explicit commands like `mise install`
-or `mise run`.
+安全的配置文件不需要信任：仅包含
+`min_version`、带有普通版本字符串（或其数组）的 `[tools]` 条目，以及 `[tasks]`（不含模板且不含工具选项）的文件，会在不提示的情况下加载，因为其中没有任何内容会在加载时执行代码——工具安装和任务运行只会在显式命令（如 `mise install`
+或 `mise run`）下执行。
 
-## Arguments
+## 参数
 
 ### `[CONFIG_FILE]`
 
-The config file to trust
+要信任的配置文件
 
-## Flags
+## 标志
 
 ### `-a --all`
 
-Trust all config files in the current directory and its parents
+信任当前目录及其父目录中的所有配置文件
 
 ### `--ignore`
 
-Do not trust this config and ignore it in the future
+不再信任此配置，并在将来忽略它
 
 ### `--show`
 
-Show the trusted status of config files from the current directory and its parents.
-Does not trust or untrust any files.
+显示当前目录及其父目录中配置文件的受信任状态。
+不会信任或取消信任任何文件。
 
 ### `--untrust`
 
-No longer trust this config, will prompt in the future
+不再信任此配置，将来会提示
 
-Examples:
+示例：
 
 ```
-# trusts ~/some_dir/mise.toml
+# 信任 ~/some_dir/mise.toml
 $ mise trust ~/some_dir/mise.toml
 
-# trusts mise.toml in the current or parent directory
+# 信任当前目录或父目录中的 mise.toml
 $ mise trust
 ```

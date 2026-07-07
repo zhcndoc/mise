@@ -1,8 +1,6 @@
-# Shell Activation <Badge type="warning" text="experimental" />
+# Shell 激活 <Badge type="warning" text="experimental" />
 
-mise can declaratively add shell activation snippets for bash, zsh, and fish
-with `[bootstrap.mise_shell_activate]`. Configure startup-file targets directly
-when you want separate shims and normal activation setup:
+mise 可以通过 `[bootstrap.mise_shell_activate]` 声明式地为 bash、zsh 和 fish 添加 shell 激活片段。当你希望将 shims 和普通激活设置分开时，可以直接配置启动文件目标：
 
 ```toml
 [bootstrap.mise_shell_activate]
@@ -13,7 +11,7 @@ bashrc = "activate"
 fish = "activate"
 ```
 
-Use compact table form when you want a shape that can accept future options:
+当你想要一种能够接受未来选项的紧凑表形式时，请使用：
 
 ```toml
 [bootstrap.mise_shell_activate]
@@ -21,16 +19,16 @@ zprofile = {enabled = true, mode = "shims"}
 zshrc = {enabled = true, mode = "activate"}
 ```
 
-Shell keys are shortcuts. For example, `zsh = true` expands to
-`zprofile = "shims"` and `zshrc = "activate"`.
+Shell 键是快捷方式。例如，`zsh = true` 会展开为
+`zprofile = "shims"` 和 `zshrc = "activate"`。
 
-Any target can use either `"activate"` or `"shims"`. Boolean `true` enables the
-target with its default mode, and `false` disables it.
+任何目标都可以使用 `"activate"` 或 `"shims"`。布尔值 `true` 会以默认模式启用该
+目标，而 `false` 则会禁用它。
 
-`mise bootstrap mise-shell-activate apply` writes marker-delimited blocks to the shell rc
-file:
+`mise bootstrap mise-shell-activate apply` 会向 shell rc
+文件写入由标记分隔的代码块：
 
-| Target         | Shell | Default mode | Target file                  | Block                                  |
+| 目标           | Shell | 默认模式     | 目标文件                     | 代码块                                 |
 | -------------- | ----- | ------------ | ---------------------------- | -------------------------------------- |
 | `bash_profile` | bash  | `shims`      | `~/.bash_profile`            | `eval "$(mise activate bash --shims)"` |
 | `bashrc`       | bash  | `activate`   | `~/.bashrc`                  | `eval "$(mise activate bash)"`         |
@@ -39,7 +37,7 @@ file:
 | `zshenv`       | zsh   | `shims`      | `~/.zshenv`                  | `eval "$(mise activate zsh --shims)"`  |
 | `fish`         | fish  | `activate`   | `~/.config/fish/config.fish` | `mise activate fish \| source`         |
 
-The markers are the same edit markers used by [Dotfiles](/dotfiles.html):
+这些标记与 [Dotfiles](/dotfiles.html) 使用的编辑标记相同：
 
 ```sh
 # >>> mise:activate >>> managed by mise - do not edit between markers
@@ -47,40 +45,29 @@ eval "$(mise activate zsh)"
 # <<< mise:activate <<<
 ```
 
-## Semantics
+## 语义
 
-`[bootstrap.mise_shell_activate]` follows the same manual, idempotent model as
-other bootstrap sections:
+`[bootstrap.mise_shell_activate]` 遵循与其他 bootstrap 部分相同的手动、幂等模型：
 
-- **Per-target override** - a project config can override a global setting for
-  one startup file with `zshrc = false` without changing `zprofile`.
-- **Manual application only** - mise never edits shell rc files implicitly.
-  Only `mise bootstrap mise-shell-activate apply` and `mise bootstrap` apply this section.
-- **Marker-owned edits** - mise only owns the block between its markers. Other
-  content in the rc file is left untouched.
-- **Shims stay out of `zshenv` by default** - `zshenv` is supported when
-  configured explicitly, but shell shortcuts do not write it because zsh reads
-  it for every invocation, including scripts.
-- **Explicit dotfiles win** - if `[dotfiles]` already manages the same rc file
-  as a whole file, or defines an edit for the same target/id such as
-  `"~/.zshrc/activate"`, mise skips the generated shell activation entry for
-  that shell.
+- **按目标覆盖** - 项目配置可以通过 `zshrc = false` 覆盖某个启动文件的全局设置，而不会更改 `zprofile`。
+- **仅手动应用** - mise 从不隐式编辑 shell 的 rc 文件。只有 `mise bootstrap mise-shell-activate apply` 和 `mise bootstrap` 会应用此部分。
+- **基于标记的编辑归属** - mise 只拥有其标记之间的块。rc 文件中的其他内容保持不变。
+- **默认情况下，shims 不会进入 `zshenv`** - 当显式配置时支持 `zshenv`，但 shell shortcuts 不会写入它，因为 zsh 会在每次调用时读取它，包括脚本。
+- **显式 dotfiles 优先** - 如果 `[dotfiles]` 已经将同一个 rc 文件作为整体文件管理，或者为同一目标/id 定义了编辑，例如 `"~/.zshrc/activate"`，mise 会跳过该 shell 的生成式 shell activation 条目。
 
-For fully managed rc files or custom activation blocks, use `[dotfiles]`
-directly instead.
+对于完全由其管理的 rc 文件或自定义激活块，请直接改用 `[dotfiles]`。
 
-## Commands
+## 命令
 
 ```sh
-mise bootstrap mise-shell-activate status            # shows activation block state
-mise bootstrap mise-shell-activate status --json     # machine-readable
-mise bootstrap mise-shell-activate status --missing  # exit 1 if anything is out of sync
+mise bootstrap mise-shell-activate status            # 显示激活块状态
+mise bootstrap mise-shell-activate status --json     # 机器可读
+mise bootstrap mise-shell-activate status --missing  # 如果有任何内容不同步则退出 1
 
-mise bootstrap mise-shell-activate apply           # writes missing/different blocks
-mise bootstrap mise-shell-activate apply --dry-run # print the edits instead
-mise bootstrap mise-shell-activate apply --yes     # skip the confirmation prompt
+mise bootstrap mise-shell-activate apply           # 写入缺失/不同的块
+mise bootstrap mise-shell-activate apply --dry-run # 直接打印编辑内容
+mise bootstrap mise-shell-activate apply --yes     # 跳过确认提示
 ```
 
-JSON status entries include `target`, `shell`, `path`, `mode`, and `state`.
-`state` is `"missing" | "applied" | "differs" | "source_missing"`. Entries
-with `state = "differs"` also include a `reason` field.
+JSON 状态条目包括 `target`、`shell`、`path`、`mode` 和 `state`。
+`state` 的值为 `"missing" | "applied" | "differs" | "source_missing"`。`state = "differs"` 的条目还包括一个 `reason` 字段。

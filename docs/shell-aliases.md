@@ -1,10 +1,10 @@
-# Shell Aliases
+# Shell 别名
 
-mise can manage shell aliases that are set dynamically when you enter a directory and unset when you leave, similar to how environment variables work.
+mise 可以管理 shell 别名，这些别名会在你进入某个目录时动态设置，在离开时取消设置，类似于环境变量的工作方式。
 
-## Configuration
+## 配置
 
-Shell aliases are defined in `mise.toml` under the `[shell_alias]` section:
+Shell 别名在 `mise.toml` 的 `[shell_alias]` 部分中定义：
 
 ```toml
 [shell_alias]
@@ -14,40 +14,40 @@ gs = "git status"
 gc = "git commit"
 ```
 
-When you enter a directory with this configuration, these aliases will be automatically set in your shell. When you leave the directory (and the new directory doesn't have the same aliases), they will be unset.
+当你进入具有此配置的目录时，这些别名会自动在你的 shell 中设置。当你离开该目录时（并且新目录没有相同的别名），它们将被取消设置。
 
-## Supported Shells
+## 支持的 Shell
 
-Shell aliases are currently supported in:
+当前支持以下 Shell 中的别名：
 
-- **bash** - Uses `alias`/`unalias` commands
-- **zsh** - Uses `alias`/`unalias` commands
-- **fish** - Uses `alias`/`functions -e` commands
+- **bash** - 使用 `alias`/`unalias` 命令
+- **zsh** - 使用 `alias`/`unalias` 命令
+- **fish** - 使用 `alias`/`functions -e` 命令
 
-Other shells (nushell, elvish, xonsh, powershell) do not currently support shell aliases.
+其他 Shell（nushell、elvish、xonsh、powershell）目前不支持 Shell 别名。
 
-## Dynamic Behavior
+## 动态行为
 
-Shell aliases work similarly to environment variables managed by mise:
+Shell 别名的工作方式与 mise 管理的环境变量类似：
 
-1. **Set on entry**: When you `cd` into a directory with `[shell_alias]` config, the aliases are set
-2. **Updated on change**: If an alias value changes in your config, it will be updated
-3. **Unset on exit**: When you leave the directory (or the alias is removed from config), it will be unset
+1. **进入时设置**：当你 `cd` 进入一个带有 `[shell_alias]` 配置的目录时，别名会被设置
+2. **变更时更新**：如果你在配置中更改了某个别名的值，它会被更新
+3. **退出时取消设置**：当你离开该目录（或从配置中移除了该别名）时，它会被取消设置
 
 ```bash
 $ cd ~/myproject
-# mise sets: alias ll='ls -la'
+# mise 设置：alias ll='ls -la'
 
 $ ll
-# Runs: ls -la
+# 运行：ls -la
 
 $ cd ~
-# mise runs: unalias ll
+# mise 运行：unalias ll
 ```
 
-## Hierarchy
+## 层级
 
-Like other mise config, shell aliases from parent directories are available in child directories. A child directory can override a parent's alias:
+与其他 mise 配置一样，来自父目录的 shell 别名在子目录中也可用。子目录可以覆盖父目录的别名：
 
 ```toml
 # ~/projects/mise.toml
@@ -56,12 +56,12 @@ build = "make build"
 
 # ~/projects/myapp/mise.toml
 [shell_alias]
-build = "npm run build"  # Overrides parent
+build = "npm run build"  # 覆盖父级
 ```
 
-## Templates
+## 模板
 
-Alias values support [templates](/templates), allowing dynamic values:
+别名值支持 [模板](/templates)，允许动态值：
 
 ```toml
 [shell_alias]
@@ -69,11 +69,11 @@ proj = "cd {{config_root}}"
 node_version = "echo {{exec(command='node --version')}}"
 ```
 
-## Use Cases
+## 使用场景
 
-### Project-Specific Shortcuts
+### 项目特定快捷方式
 
-Define shortcuts that only make sense within a specific project:
+定义只在特定项目中有意义的快捷方式：
 
 ```toml
 [shell_alias]
@@ -83,9 +83,9 @@ build = "npm run build"
 deploy = "./scripts/deploy.sh"
 ```
 
-### Tool Wrappers
+### 工具包装器
 
-Create aliases that wrap tools with project-specific defaults:
+创建使用项目特定默认值封装工具的别名：
 
 ```toml
 [shell_alias]
@@ -93,7 +93,7 @@ docker-compose = "docker compose -f docker-compose.dev.yml"
 terraform = "terraform -chdir=./infrastructure"
 ```
 
-### Quick Navigation
+### 快速导航
 
 ```toml
 [shell_alias]
@@ -102,18 +102,18 @@ tests = "cd {{config_root}}/tests"
 docs = "cd {{config_root}}/docs"
 ```
 
-## Limitations
+## 限制
 
-- **Not available in tasks**: Shell aliases are only active in interactive shells where `mise activate` is running. They are **not** available inside TOML task `run` blocks or file tasks, since tasks run in non-interactive subshells. Use the underlying command directly in tasks, or add wrapper scripts to your `PATH` via [`env._.path`](/environments/#path).
-- **Shell support**: Only bash, zsh, fish, and xonsh are supported. See the [shell feature compatibility matrix](/getting-started.html#shell-feature-compatibility) for details.
+- **在任务中不可用**：Shell 别名仅在运行 `mise activate` 的交互式 shell 中可用。它们在 TOML 任务 `run` 块或文件任务中**不可用**，因为任务运行在非交互式子 shell 中。请在任务中直接使用底层命令，或者通过 [`env._.path`](/environments/#path) 将包装脚本添加到你的 `PATH`。
+- **Shell 支持**：仅支持 bash、zsh、fish 和 xonsh。详情请参见 [shell 功能兼容性矩阵](/getting-started.html#shell-feature-compatibility)。
 
-## Comparison to Tool Aliases
+## 与工具别名的比较
 
-mise has two different alias features that serve different purposes:
+mise 有两种不同的别名功能，它们用于不同的目的：
 
-| Feature           | Purpose                                                | Config Key      |
+| 功能              | 目的                                                   | 配置键          |
 | ----------------- | ------------------------------------------------------ | --------------- |
-| **Shell Aliases** | Define shell command shortcuts (`alias ll='ls -la'`)   | `[shell_alias]` |
-| **Tool Aliases**  | Define version aliases for tools (`node@lts` → `20.x`) | `[tool_alias]`  |
+| **Shell 别名**    | 定义 shell 命令快捷方式 (`alias ll='ls -la'`)         | `[shell_alias]` |
+| **工具别名**      | 为工具定义版本别名（`node@lts` → `20.x`）              | `[tool_alias]`  |
 
-See [Tool Aliases](/dev-tools/aliases) for documentation on aliasing tool versions.
+请参阅 [工具别名](/dev-tools/aliases) 以获取有关工具版本别名的文档。

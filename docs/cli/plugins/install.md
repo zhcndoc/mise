@@ -5,58 +5,58 @@
 - **Aliases**: `i`, `a`, `add`
 - **Source code**: [`src/cli/plugins/install.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/install.rs)
 
-Install a plugin
+安装一个插件
 
-note that mise can automatically install plugins when you install a tool
-e.g.: `mise install cmake@3.30` will autoinstall the cmake plugin
+注意，mise 在你安装工具时可以自动安装插件
+例如：`mise install cmake@3.30` 将自动安装 cmake 插件
 
-This behavior can be modified in ~/.config/mise/config.toml
+此行为可以在 ~/.config/mise/config.toml 中修改
 
-## Arguments
+## 参数
 
 ### `[NEW_PLUGIN]`
 
-The name of the plugin to install
-e.g.: cmake, poetry
-Can specify multiple plugins: `mise plugins install cmake poetry`
+要安装的插件名称  
+例如：cmake, poetry  
+可以指定多个插件：`mise plugins install cmake poetry`
 
 ### `[GIT_URL]`
 
-The git url of the plugin
+插件的 git url
 
-## Flags
+## 标志
 
 ### `-a --all`
 
-Install all missing plugins
-This will only install plugins that have matching shorthands.
-i.e.: they don't need the full git repo url
+安装所有缺失的插件  
+这将只安装具有匹配简写名的插件。  
+即：它们不需要完整的 git 仓库 URL
 
 ### `-f --force`
 
-Reinstall even if plugin exists
+即使插件已存在也重新安装
 
 ### `-j --jobs <JOBS>`
 
-Number of jobs to run in parallel
+并行运行的任务数量
 
 ### `-v --verbose…`
 
-Show installation output
+显示安装输出
 
-Examples:
+示例：
 
 ```
-# install the poetry via shorthand
+# 通过简写名安装 poetry
 $ mise plugins install poetry
 
-# install the poetry plugin using a specific git url
+# 使用特定的 git URL 安装 poetry 插件
 $ mise plugins install poetry https://github.com/mise-plugins/mise-poetry.git
 
-# install the poetry plugin using the git url only
-# (poetry is inferred from the url)
+# 仅使用 git URL 安装 poetry 插件
+#（poetry 会从 URL 中推断）
 $ mise plugins install https://github.com/mise-plugins/mise-poetry.git
 
-# install the poetry plugin using a specific ref
+# 使用特定的 ref 安装 poetry 插件
 $ mise plugins install poetry https://github.com/mise-plugins/mise-poetry.git#11d0c1e
 ```

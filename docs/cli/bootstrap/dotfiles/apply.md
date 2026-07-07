@@ -4,34 +4,33 @@
 - **Usage**: `mise bootstrap dotfiles apply [FLAGS] [TARGET]…`
 - **Source code**: [`src/cli/bootstrap/dotfiles/apply.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/dotfiles/apply.rs)
 
-Apply dotfiles from `[dotfiles]`
+从 `[dotfiles]` 应用点文件
 
-Applies configured whole-file entries and edits that aren't in their
-desired state. Whole-file entries may symlink, copy, or render templates.
-Edit entries manage a marker-delimited block or a single line in a file
-mise doesn't otherwise own.
+应用已配置的整文件条目，以及不处于其
+期望状态的编辑条目。整文件条目可以进行符号链接、复制，或渲染模板。
+编辑条目管理文件中由标记分隔的块，或在 mise 其余部分不拥有的文件中的单行。
 
-## Arguments
+## 参数
 
 ### `[TARGET]…`
 
-Only apply these targets
+仅应用这些目标
 
-## Flags
+## 标志
 
 ### `-f --force`
 
-Overwrite existing files that conflict with whole-file dotfile entries
+覆盖与整文件 dotfile 条目冲突的现有文件
 
 ### `-n --dry-run`
 
-Print the actions that would run without writing anything
+打印将要执行的操作，但不进行任何写入
 
 ### `-y --yes`
 
-Skip the confirmation prompt
+跳过确认提示
 
-Examples:
+示例：
 
 ```
 mise bootstrap dotfiles apply

@@ -1,11 +1,11 @@
-# Continuous integration
+# 持续集成
 
-You can use Mise in continuous integration environments to provision the environment with the tools the project needs.
-We recommend that your project pins the tools to a specific version to ensure the environment is reproducible.
+你可以在持续集成环境中使用 Mise 来为项目所需的工具提供环境。
+我们建议你的项目将工具固定到特定版本，以确保环境可复现。
 
-## Any CI provider
+## 任何 CI 提供商
 
-Continuous integration pipelines allow running arbitrary commands. You can use this to install Mise and run `mise install` to install the tools:
+持续集成流水线允许运行任意命令。你可以利用这一点安装 Mise，并运行 `mise install` 来安装工具：
 
 ```yaml
 script: |
@@ -13,24 +13,24 @@ script: |
   mise install
 ```
 
-To ensure you run the version of the tools installed by Mise, make sure you run them through the `mise x` command:
+为了确保你运行的是由 Mise 安装的工具版本，请务必通过 `mise x` 命令来执行它们：
 
 ```yaml
 script: |
   mise x -- npm test
 ```
 
-Alternatively, you can add the [shims](/dev-tools/shims.md) directory to your `PATH`, if the CI provider allows it.
+或者，如果 CI 提供商允许，你可以将 [shims](/dev-tools/shims.md) 目录添加到你的 `PATH` 中。
 
-### Bootstrapping
+### 引导
 
-An alternative to calling `curl https://mise.run | sh` is to use [`mise generate bootstrap`](/cli/generate/bootstrap.html) to generate a script that runs and install `mise`.
+除了调用 `curl https://mise.run | sh` 之外，还可以使用 [`mise generate bootstrap`](/cli/generate/bootstrap.html) 生成一个用于运行并安装 `mise` 的脚本。
 
 ```shell
 mise generate bootstrap -l -w
 ```
 
-Add the `.mise/` to your `.gitignore` and commit the generated `./bin/mise` file. You can now use `./bin/mise` to install and run `mise` directly in CI.
+将 `.mise/` 添加到你的 `.gitignore` 中，并提交生成的 `./bin/mise` 文件。现在你可以直接在 CI 中使用 `./bin/mise` 来安装和运行 `mise`。
 
 ```yaml
 script: |
@@ -40,7 +40,7 @@ script: |
 
 ## GitHub Actions
 
-If you use GitHub Actions, we provide a [mise-action](https://github.com/jdx/mise-action) that wraps the installation of Mise and the tools. All you need to do is to add the action to your workflow:
+如果你使用 GitHub Actions，我们提供了一个 [mise-action](https://github.com/jdx/mise-action)，用于封装 Mise 以及各工具的安装。你只需要将该 action 添加到你的工作流中：
 
 ```yaml
 name: test
@@ -58,15 +58,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: jdx/mise-action@v3
         with:
-          version: 2024.12.14 # [default: latest] mise version to install
-          install: true # [default: true] run `mise install`
-          cache: true # [default: true] cache mise using GitHub's cache
-          experimental: true # [default: false] enable experimental features
-          # automatically write this mise.toml file
+          version: 2024.12.14 # [default: latest] 要安装的 mise 版本
+          install: true # [default: true] 运行 `mise install`
+          cache: true # [default: true] 使用 GitHub 的缓存缓存 mise
+          experimental: true # [default: false] 启用实验性功能
+          # 自动写入这个 mise.toml 文件
           mise_toml: |
             [tools]
             shellcheck = "0.9.0"
-          # or, if you prefer .tool-versions:
+          # 或者，如果你更喜欢 .tool-versions：
           tool_versions: |
             shellcheck 0.9.0
       - run: shellcheck scripts/*.sh
@@ -74,16 +74,16 @@ jobs:
 
 ## GitLab CI
 
-You can use any docker image with `mise` installed to run your CI jobs.
-Here's an example using `debian-slim` as base image:
-::: details Example Dockerfile
+你可以使用任何安装了 `mise` 的 docker 镜像来运行你的 CI 作业。
+下面是一个使用 `debian-slim` 作为基础镜像的示例：
+::: details 示例 Dockerfile
 
 ```dockerfile
 FROM debian:12-slim
 
 RUN apt-get update  \
     && apt-get -y --no-install-recommends install  \
-      # install any tools you need
+      # 安装你需要的任何工具
       sudo curl git ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -92,18 +92,18 @@ RUN curl https://mise.run | MISE_VERSION=v... MISE_INSTALL_PATH=/usr/local/bin/m
 
 :::
 
-When configuring your job, you can cache some of the [Mise directories](/directories).
+在配置作业时，你可以缓存一些 [Mise 目录](/directories)。
 
 ```yaml
 build-job:
   stage: build
-  image: mise-debian-slim # Use the image you created
+  image: mise-debian-slim # 使用你创建的镜像
   variables:
     MISE_DATA_DIR: $CI_PROJECT_DIR/.mise/mise-data
   cache:
     - key:
         prefix: mise-
-        files: ["mise.toml", "mise.lock"] # mise.lock is optional, only if using `lockfile = true`
+        files: ["mise.toml", "mise.lock"] # mise.lock 是可选的，仅当使用 `lockfile = true` 时需要
       paths:
         - $MISE_DATA_DIR
   script:
@@ -111,17 +111,17 @@ build-job:
     - mise exec --command 'npm build'
 ```
 
-### Example with the bootstrap script
+### 使用 bootstrap 脚本的示例
 
-An alternative is to use [`mise generate bootstrap`](/cli/generate/bootstrap.html) to easily [bootstrap](#bootstrapping) `mise` on GitLab CI.
+另一种方法是使用 [`mise generate bootstrap`](/cli/generate/bootstrap.html) 来在 GitLab CI 上轻松 [引导](#bootstrapping) `mise`。
 
 ```
 mise generate bootstrap -l -w
 ```
 
-You can now use a generic docker image such as this one to run and install `mise` in CI.
+你现在可以使用一个通用的 docker 镜像，例如下面这个，在 CI 中运行并安装 `mise`。
 
-::: details Example Dockerfile
+::: details 示例 Dockerfile
 
 ```dockerfile
 FROM debian:12-slim
@@ -133,7 +133,7 @@ RUN apt-get update  \
 
 :::
 
-Here's an example of a `.gitlab-ci.yml` file:
+下面是一个 `.gitlab-ci.yml` 文件示例：
 
 ```yaml
 .mise-cache: &mise-cache
@@ -146,7 +146,7 @@ Here's an example of a `.gitlab-ci.yml` file:
 
 build-job:
   stage: build
-  image: my-debian-slim-image # Use the image you created
+  image: my-debian-slim-image # 使用你创建的镜像
   cache:
     - <<: *mise-cache
       policy: pull-push
@@ -157,15 +157,14 @@ build-job:
 
 ## Xcode Cloud
 
-If you are using Xcode Cloud, you can use custom `ci_post_clone.sh` [build script](https://developer.apple.com/documentation/xcode/writing-custom-build-scripts) to install Mise. Here's an example:
+如果你正在使用 Xcode Cloud，你可以使用自定义的 `ci_post_clone.sh` [构建脚本](https://developer.apple.com/documentation/xcode/writing-custom-build-scripts) 来安装 Mise。下面是一个示例：
 
 ```bash
 #!/bin/sh
 curl https://mise.run | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-mise install # Installs the tools in mise.toml
-eval "$(mise activate bash --shims)" # Adds the activated tools to $PATH
-
+mise install # 安装 mise.toml 中的工具
+eval "$(mise activate bash --shims)" # 将已激活的工具添加到 $PATH
 swiftlint {args}
 ```

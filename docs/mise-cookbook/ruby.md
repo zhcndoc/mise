@@ -1,36 +1,36 @@
-# Mise + Ruby Cookbook
+# Mise + Ruby 食谱
 
-Here are some tips on managing Ruby projects with mise.
+以下是使用 mise 管理 Ruby 项目的一些技巧。
 
-## A Ruby on Rails Project
+## 一个 Ruby on Rails 项目
 
 ```toml [mise.toml]
 min_version = "2024.9.5"
 
 [env]
-# Project information
+# 项目信息
 PROJECT_NAME = "{{ config_root | basename }}"
 
 [tools]
-# Install Ruby with the specified version
+# 使用指定版本安装 Ruby
 ruby = "{{ get_env(name='RUBY_VERSION', default='3.3.3') }}"
 
 [tasks."bundle:install"]
-description = "Install gem dependencies"
+description = "安装 gem 依赖"
 run = "bundle install"
 
 [tasks.server]
-description = "Start the Rails server"
+description = "启动 Rails 服务器"
 alias = "s"
 run = "rails server"
 
 [tasks.test]
-description = "Run tests"
+description = "运行测试"
 alias = "t"
 run = "rails test"
 
 [tasks.lint]
-description = "Run lint using Rubocop"
+description = "使用 Rubocop 进行 lint 检查"
 alias = "l"
 run = "rubocop"
 ```

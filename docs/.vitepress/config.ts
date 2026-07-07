@@ -25,75 +25,77 @@ const latestVersion = versionMatch?.[1] ?? "0.0.0";
 // https://vitepress.dev/reference/site-config
 export default withMermaid(
   defineConfig({
-    title: "mise-en-place",
-    description: "mise-en-place documentation",
-    lang: "en-US",
+    title: "Mise 中文文档",
+    description: "Mise 中文文档：管理本地开发运行时、环境变量和任务的工具",
+    lang: "zh-CN",
+    titleTemplate: ":title - Mise 中文文档",
     lastUpdated: true,
     appearance: true,
     mermaid: {},
     sitemap: {
-      hostname: "https://mise.jdx.dev",
+      hostname: "https://mise.zhcndoc.com",
     },
     themeConfig: {
       // https://vitepress.dev/reference/default-theme-config
       logo: { light: "/logo-light.svg", dark: "/logo-dark.svg" },
-      outline: "deep",
+      outline: { level: "deep", label: "本页目录" },
       nav: [
-        { text: "mise-versions", link: "https://mise-versions.jdx.dev/" },
-        { text: "Dev Tools", link: "/dev-tools/" },
-        { text: "Environments", link: "/environments/" },
-        { text: "Tasks", link: "/tasks/" },
+        { text: "mise 版本", link: "https://mise-versions.jdx.dev/" },
+        { text: "开发工具", link: "/dev-tools/" },
+        { text: "环境变量", link: "/environments/" },
+        { text: "任务", link: "/tasks/" },
         {
           text: `v${latestVersion}`,
           link: "https://github.com/jdx/mise/releases",
         },
+        { text: "简中文档", link: "https://www.zhcndoc.com" },
       ],
       sidebar: [
         {
-          text: "Guides",
+          text: "指南",
           items: [
-            { text: "Demo", link: "/demo" },
-            { text: "Getting Started", link: "/getting-started" },
-            { text: "Walkthrough", link: "/walkthrough" },
-            { text: "Installing mise", link: "/installing-mise" },
-            { text: "IDE Integration", link: "/ide-integration" },
-            { text: "Continuous Integration", link: "/continuous-integration" },
+            { text: "演示", link: "/demo" },
+            { text: "入门指南", link: "/getting-started" },
+            { text: "演练", link: "/walkthrough" },
+            { text: "安装 mise", link: "/installing-mise" },
+            { text: "IDE 集成", link: "/ide-integration" },
+            { text: "持续集成", link: "/continuous-integration" },
           ],
         },
         {
-          text: "Configuration",
+          text: "配置",
           items: [
             { text: "mise.toml", link: "/configuration" },
-            { text: "Settings", link: "/configuration/settings" },
+            { text: "设置", link: "/configuration/settings" },
             {
-              text: "Configuration Environments",
+              text: "配置环境",
               link: "/configuration/environments",
             },
           ],
         },
         {
-          text: "Dev Tools",
+          text: "开发工具",
           items: [
-            { text: "Dev Tools Overview", link: "/dev-tools/" },
+            { text: "开发工具概览", link: "/dev-tools/" },
             {
-              text: "Comparison to asdf",
+              text: "与 asdf 对比",
               link: "/dev-tools/comparison-to-asdf",
             },
-            { text: "Shims", link: "/dev-tools/shims" },
-            { text: "Tool Aliases", link: "/dev-tools/aliases" },
-            { text: "Tool Stubs", link: "/dev-tools/tool-stubs" },
-            { text: "Registry", link: "/registry" },
-            { text: "GitHub Tokens", link: "/dev-tools/github-tokens" },
-            { text: "mise.lock Lockfile", link: "/dev-tools/mise-lock" },
-            { text: "Security", link: "/security" },
-            { text: "OCI Images (experimental)", link: "/dev-tools/mise-oci" },
-            { text: "Deps", link: "/dev-tools/deps" },
+            { text: "命令垫片", link: "/dev-tools/shims" },
+            { text: "工具别名", link: "/dev-tools/aliases" },
+            { text: "工具存根", link: "/dev-tools/tool-stubs" },
+            { text: "注册表", link: "/registry" },
+            { text: "GitHub 令牌", link: "/dev-tools/github-tokens" },
+            { text: "mise.lock 锁文件", link: "/dev-tools/mise-lock" },
+            { text: "安全", link: "/security" },
+            { text: "OCI 镜像（实验性）", link: "/dev-tools/mise-oci" },
+            { text: "依赖", link: "/dev-tools/deps" },
             {
-              text: "Backend Architecture",
+              text: "后端架构",
               link: "/dev-tools/backend_architecture",
             },
             {
-              text: "Core tools",
+              text: "核心工具",
               link: "/core-tools",
               collapsed: true,
               items: [
@@ -112,7 +114,7 @@ export default withMermaid(
               ],
             },
             {
-              text: "Backends",
+              text: "后端",
               link: "/dev-tools/backends/",
               collapsed: true,
               items: [
@@ -138,11 +140,11 @@ export default withMermaid(
           ],
         },
         {
-          text: "Bootstrap (experimental)",
+          text: "Bootstrap（实验性）",
           items: [
-            { text: "Overview", link: "/bootstrap" },
+            { text: "概览", link: "/bootstrap" },
             {
-              text: "Bootstrap Packages",
+              text: "Bootstrap 包",
               link: "/bootstrap/packages/",
               collapsed: true,
               items: [
@@ -154,7 +156,7 @@ export default withMermaid(
               ],
             },
             {
-              text: "Repos",
+              text: "仓库",
               link: "/bootstrap/repos",
             },
             {
@@ -162,11 +164,11 @@ export default withMermaid(
               link: "/dotfiles",
             },
             {
-              text: "Shell Activation",
+              text: "Shell 激活",
               link: "/bootstrap/shell",
             },
             {
-              text: "macOS Defaults",
+              text: "macOS 默认设置",
               link: "/bootstrap/macos-defaults",
             },
             {
@@ -174,18 +176,18 @@ export default withMermaid(
               link: "/bootstrap/launchd",
             },
             {
-              text: "User Login Shell",
+              text: "用户登录 Shell",
               link: "/bootstrap/user",
             },
           ],
         },
         {
-          text: "Environments",
+          text: "环境变量",
           items: [
-            { text: "Environment Variables", link: "/environments/" },
-            { text: "Shell Aliases", link: "/shell-aliases" },
+            { text: "环境变量", link: "/environments/" },
+            { text: "Shell 别名", link: "/shell-aliases" },
             {
-              text: "Secrets",
+              text: "密钥",
               link: "/environments/secrets/",
               collapsed: true,
               items: [
@@ -193,57 +195,57 @@ export default withMermaid(
                 { text: "age", link: "/environments/secrets/age" },
               ],
             },
-            { text: "Hooks", link: "/hooks" },
+            { text: "钩子", link: "/hooks" },
             { text: "direnv", link: "/direnv" },
           ],
         },
         {
-          text: "Tasks",
+          text: "任务",
           items: [
-            { text: "Task Overview", link: "/tasks/" },
-            { text: "Task Architecture", link: "/tasks/architecture" },
-            { text: "Running Tasks", link: "/tasks/running-tasks" },
-            { text: "TOML Tasks", link: "/tasks/toml-tasks" },
-            { text: "File Tasks", link: "/tasks/file-tasks" },
-            { text: "Task Arguments", link: "/tasks/task-arguments" },
-            { text: "Task Configuration", link: "/tasks/task-configuration" },
-            { text: "Task Templates", link: "/tasks/templates" },
-            { text: "Monorepo Tasks", link: "/tasks/monorepo" },
-            { text: "Sandboxing", link: "/sandboxing" },
+            { text: "任务概览", link: "/tasks/" },
+            { text: "任务架构", link: "/tasks/architecture" },
+            { text: "运行任务", link: "/tasks/running-tasks" },
+            { text: "TOML 任务", link: "/tasks/toml-tasks" },
+            { text: "文件任务", link: "/tasks/file-tasks" },
+            { text: "任务参数", link: "/tasks/task-arguments" },
+            { text: "任务配置", link: "/tasks/task-configuration" },
+            { text: "任务模板", link: "/tasks/templates" },
+            { text: "Monorepo 任务", link: "/tasks/monorepo" },
+            { text: "沙箱", link: "/sandboxing" },
           ],
         },
         {
-          text: "Plugins",
+          text: "插件",
           items: [
-            { text: "Plugin Overview", link: "/plugins" },
-            { text: "Using Plugins", link: "/plugin-usage" },
+            { text: "插件概览", link: "/plugins" },
+            { text: "使用插件", link: "/plugin-usage" },
             {
-              text: "Backend Plugin Development",
+              text: "后端插件开发",
               link: "/backend-plugin-development",
             },
             {
-              text: "Tool Plugin Development",
+              text: "工具插件开发",
               link: "/tool-plugin-development",
             },
             {
-              text: "Environment Plugin Development",
+              text: "环境插件开发",
               link: "/env-plugin-development",
             },
-            { text: "Plugin Lua Modules", link: "/plugin-lua-modules" },
-            { text: "Plugin Publishing", link: "/plugin-publishing" },
-            { text: "asdf (Legacy) Plugins", link: "/asdf-legacy-plugins" },
+            { text: "插件 Lua 模块", link: "/plugin-lua-modules" },
+            { text: "插件发布", link: "/plugin-publishing" },
+            { text: "asdf（旧版）插件", link: "/asdf-legacy-plugins" },
           ],
         },
         {
-          text: "About",
+          text: "关于",
           items: [
-            { text: "About mise", link: "/about" },
-            { text: "mise-en-place: The Song", link: "/mise-en-place" },
-            { text: "Glossary", link: "/glossary" },
-            { text: "FAQs", link: "/faq" },
-            { text: "Troubleshooting", link: "/troubleshooting" },
-            { text: "Errors", link: "/errors" },
-            { text: "Tips & Tricks", link: "/tips-and-tricks" },
+            { text: "关于 mise", link: "/about" },
+            { text: "mise-en-place：歌曲", link: "/mise-en-place" },
+            { text: "术语表", link: "/glossary" },
+            { text: "常见问题", link: "/faq" },
+            { text: "故障排查", link: "/troubleshooting" },
+            { text: "错误", link: "/errors" },
+            { text: "技巧", link: "/tips-and-tricks" },
             {
               text: "Cookbook",
               link: "/mise-cookbook/",
@@ -255,32 +257,32 @@ export default withMermaid(
                 { text: "Ruby", link: "/mise-cookbook/ruby" },
                 { text: "Terraform", link: "/mise-cookbook/terraform" },
                 { text: "Python", link: "/mise-cookbook/python" },
-                { text: "Presets", link: "/mise-cookbook/presets" },
-                { text: "Shell tricks", link: "/mise-cookbook/shell-tricks" },
+                { text: "预设", link: "/mise-cookbook/presets" },
+                { text: "Shell 技巧", link: "/mise-cookbook/shell-tricks" },
               ],
             },
-            { text: "Team", link: "/team" },
-            { text: "Contributing", link: "/contributing" },
-            { text: "External Resources", link: "/external-resources" },
+            { text: "团队", link: "/team" },
+            { text: "贡献指南", link: "/contributing" },
+            { text: "外部资源", link: "/external-resources" },
           ],
         },
         {
-          text: "Advanced",
+          text: "高级",
           items: [
-            { text: "Architecture", link: "/architecture" },
-            { text: "Paranoid", link: "/paranoid" },
-            { text: "Templates", link: "/templates" },
-            { text: "URL Replacements", link: "/url-replacements" },
-            { text: "Model Context Protocol", link: "/mcp" },
-            { text: "Directory Structure", link: "/directories" },
-            { text: "Cache Behavior", link: "/cache-behavior" },
+            { text: "架构", link: "/architecture" },
+            { text: "偏执模式", link: "/paranoid" },
+            { text: "模板", link: "/templates" },
+            { text: "URL 替换", link: "/url-replacements" },
+            { text: "模型上下文协议", link: "/mcp" },
+            { text: "目录结构", link: "/directories" },
+            { text: "缓存行为", link: "/cache-behavior" },
           ],
         },
         {
-          text: "CLI Reference",
+          text: "CLI 参考",
           collapsed: true,
           items: [
-            { text: "CLI Overview", link: "/cli/" },
+            { text: "CLI 概览", link: "/cli/" },
             ...cliReference(commands),
           ],
         },
@@ -292,8 +294,23 @@ export default withMermaid(
       ],
 
       editLink: {
-        pattern: "https://github.com/jdx/mise/edit/main/docs/:path",
+        pattern: "https://github.com/zhcndoc/mise/edit/main/docs/:path",
+        text: "在 GitHub 上编辑此页",
       },
+      lastUpdated: {
+        text: "最后更新于",
+      },
+      docFooter: {
+        prev: "上一页",
+        next: "下一页",
+      },
+      sidebarMenuLabel: "菜单",
+      returnToTopLabel: "返回顶部",
+      langMenuLabel: "切换语言",
+      darkModeSwitchLabel: "外观",
+      lightModeSwitchTitle: "切换到浅色模式",
+      darkModeSwitchTitle: "切换到深色模式",
+      skipToContentLabel: "跳转到内容",
       search: {
         provider: "algolia",
         options: {
@@ -301,13 +318,51 @@ export default withMermaid(
           appId: "1452G4RPSJ",
           apiKey: "ad09b96a7d2a30eddc2771800da7a1cf",
           insights: true,
+          translations: {
+            button: {
+              buttonText: "搜索",
+              buttonAriaLabel: "搜索文档",
+            },
+            modal: {
+              searchBox: {
+                resetButtonTitle: "清除搜索条件",
+                resetButtonAriaLabel: "清除搜索条件",
+                cancelButtonText: "取消",
+                cancelButtonAriaLabel: "取消搜索",
+              },
+              startScreen: {
+                recentSearchesTitle: "最近搜索",
+                noRecentSearchesText: "没有最近搜索",
+                saveRecentSearchButtonTitle: "保存此搜索",
+                removeRecentSearchButtonTitle: "从历史记录中移除此搜索",
+                favoriteSearchesTitle: "收藏搜索",
+                removeFavoriteSearchButtonTitle: "从收藏中移除此搜索",
+              },
+              errorScreen: {
+                titleText: "无法获取结果",
+                helpText: "请检查网络连接。",
+              },
+              footer: {
+                selectText: "选择",
+                navigateText: "导航",
+                closeText: "关闭",
+                searchByText: "搜索提供方",
+              },
+              noResultsScreen: {
+                noResultsText: "没有找到结果：",
+                suggestedQueryText: "可以尝试搜索：",
+                reportMissingResultsText: "认为这个查询应该有结果？",
+                reportMissingResultsLinkText: "告诉我们。",
+              },
+            },
+          },
         },
       },
       footer: false,
-      carbonAds: {
-        code: "CWYIPKQN",
-        placement: "misejdxdev",
-      },
+      // carbonAds: {
+      //   code: "CWYIPKQN",
+      //   placement: "misejdxdev",
+      // },
     },
     markdown: {
       languages: [
@@ -338,6 +393,11 @@ export default withMermaid(
     vite: {
       build: {
         target: "es2022",
+      },
+      optimizeDeps: {
+        esbuildOptions: {
+          target: "es2022",
+        },
       },
       plugins: [
         groupIconVitePlugin({
@@ -408,25 +468,17 @@ export default withMermaid(
         "script",
         {
           async: "",
-          src: "https://www.googletagmanager.com/gtag/js?id=G-B69G389C8T",
+          src: "https://www.zhcndoc.com/js/common.js",
         },
       ],
-      [
-        "script",
-        {},
-        `window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-B69G389C8T');`,
-      ],
       // Open Graph
-      ["meta", { property: "og:site_name", content: "mise-en-place" }],
+      ["meta", { property: "og:site_name", content: "Mise 中文文档" }],
       ["meta", { property: "og:type", content: "website" }],
       [
         "meta",
         {
           property: "og:image",
-          content: "https://mise.jdx.dev/android-chrome-512x512.png",
+          content: "https://mise.zhcndoc.com/android-chrome-512x512.png",
         },
       ],
       ["meta", { name: "twitter:card", content: "summary" }],
@@ -434,12 +486,12 @@ export default withMermaid(
         "meta",
         {
           name: "twitter:image",
-          content: "https://mise.jdx.dev/android-chrome-512x512.png",
+          content: "https://mise.zhcndoc.com/android-chrome-512x512.png",
         },
       ],
     ],
     transformPageData(pageData) {
-      const canonicalUrl = `https://mise.jdx.dev/${pageData.relativePath}`
+      const canonicalUrl = `https://mise.zhcndoc.com/${pageData.relativePath}`
         .replace(/index\.md$/, "")
         .replace(/\.md$/, ".html");
 
@@ -452,7 +504,7 @@ export default withMermaid(
         "link",
         {
           rel: "sitemap",
-          href: "https://mise.jdx.dev/sitemap.xml",
+          href: "https://mise.zhcndoc.com/sitemap.xml",
           type: "application/xml",
           title: "Sitemap",
         },

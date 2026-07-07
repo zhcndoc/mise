@@ -1,10 +1,10 @@
-# Presets
+# 预设
 
-You can create your own presets by leveraging [mise tasks](../tasks/index.md) to reduce boilerplate and make it easier to set up new projects.
+你可以通过利用 [mise tasks](../tasks/index.md) 来创建自己的预设，从而减少样板代码，并更轻松地设置新项目。
 
-## Example python preset
+## Python 预设示例
 
-Here is an example of how to create your python preset that creates a `mise.toml` file to work with `python` and `pdm`
+这里有一个示例，展示如何创建你的 python 预设，它会生成一个 `mise.toml` 文件，以便与 `python` 和 `pdm` 一起使用
 
 ```shell [~/.config/mise/tasks/preset/python]
 #!/usr/bin/env bash
@@ -27,7 +27,7 @@ mise use pdm@latest
 mise config set hooks.postinstall "pdm sync"
 ```
 
-Then in any directory, you can run `mise preset:pdm 3.10` to scaffold a new project with `python` and `pdm`:
+然后在任意目录下，你可以运行 `mise preset:pdm 3.10` 来为 `python` 和 `pdm` 搭建一个新项目：
 
 ```shell
 cd my-project
@@ -45,10 +45,10 @@ mise preset:pdm 3.10
 # Activate with: source .venv/bin/activate.fish
 
 ~/my-project via 🐍 v3.10.15 (.venv)
-# we are in the virtual environment ^
+# 我们现在处于虚拟环境中 ^
 ```
 
-Here is the generated `mise.toml` file:
+下面是生成的 `mise.toml` 文件：
 
 ```toml [mise.toml]
 [tools]

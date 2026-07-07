@@ -1,45 +1,43 @@
 # Node
 
-Like `nvm`, (or `volta`, `fnm` or `asdf`...), `mise` can manage multiple versions of Node.js on the same system.
+像 `nvm`、`volta`、`fnm` 或 `asdf`……一样，`mise` 可以在同一系统上管理多个版本的 Node.js。
 
-> The following are instructions for using the node mise core plugin. This is used when there isn't a
-> git plugin installed named "node".
-> If you want to use [asdf-nodejs](https://github.com/asdf-vm/asdf-nodejs)
-> then run `mise plugins install node https://github.com/asdf-vm/asdf-nodejs`
+> 以下是使用 node mise 核心插件的说明。当没有安装名为 "node" 的 git 插件时会使用它。
+> 如果你想使用 [asdf-nodejs](https://github.com/asdf-vm/asdf-nodejs)
+> 那么运行 `mise plugins install node https://github.com/asdf-vm/asdf-nodejs`
 
-The code for this is inside the mise repository at [`./src/plugins/core/node.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/node.rs).
+这部分的代码位于 mise 仓库中的 [`./src/plugins/core/node.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/node.rs)。
 
-## Usage
+## 用法
 
-The following installs the latest version of node-26.x and makes it the global
-default:
+以下命令会安装最新版本的 node-26.x 并将其设为全局
+默认值：
 
 ```sh
 mise use -g node@26
 ```
 
-See the [Node.JS Cookbook](/mise-cookbook/nodejs.html) for common tasks and examples.
+有关常见任务和示例，请参阅 [Node.JS Cookbook](/mise-cookbook/nodejs.html)。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `node` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `node` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for source builds, default package installation, Corepack setup, and
-install-time verification commands run by the core `node` backend:
+为源码构建、默认包安装、Corepack 设置以及由核心 `node` 后端运行的安装时验证命令设置环境变量：
 
 ```toml
 [tools]
 node = { version = "latest", install_env = { CFLAGS = "-O2" } }
 ```
 
-## Pinning npm version
+## 固定 npm 版本
 
-By default, Node.js ships with a bundled version of npm. If you need a specific npm version
-(e.g. to keep your entire team on the same version and avoid `package-lock.json` conflicts),
-you can pin it alongside Node in your `mise.toml`:
+默认情况下，Node.js 会附带一个捆绑的 npm 版本。如果你需要特定的 npm 版本
+（例如，为了让整个团队保持一致的版本，并避免 `package-lock.json` 冲突），
+你可以在 `mise.toml` 中将其与 Node 一起固定：
 
 ```toml [mise.toml]
 [tools]
@@ -47,13 +45,13 @@ node = "26"
 npm = "11"
 ```
 
-To pin both to exact versions:
+要将两者都固定为精确版本：
 
 ```sh
 mise use --pin node@lts npm@latest
 ```
 
-This resolves aliases like `lts` and `latest` to exact version numbers in `mise.toml`, e.g.:
+这会将像 `lts` 和 `latest` 这样的别名解析为 `mise.toml` 中的精确版本号，例如：
 
 ```toml [mise.toml]
 [tools]
@@ -61,25 +59,25 @@ node = "26.1.0"
 npm = "11.12.1"
 ```
 
-The pinned npm version takes precedence over the one bundled with Node, so `npm --version` will
-always return the version specified in `mise.toml`.
+固定的 npm 版本优先于 Node 自带的版本，因此 `npm --version` 将
+始终返回 `mise.toml` 中指定的版本。
 
-## `.nvmrc`, `.node-version` and `package.json` support
+## `.nvmrc`、`.node-version` 和 `package.json` 支持
 
-By default, mise uses a `mise.toml` file for auto-switching between software versions.
+默认情况下，mise 使用 `mise.toml` 文件来在不同软件版本之间自动切换。
 
-It also supports `.tool-versions` file to specify versions for ASDF compatibility. Additionally, `.nvmrc`, `.node-version`, and the `devEngines` field in `package.json` are supported but require explicit enabling (see tip below).
+它也支持使用 `.tool-versions` 文件来指定版本，以兼容 ASDF。此外，`.nvmrc`、`.node-version` 以及 `package.json` 中的 `devEngines` 字段也受到支持，但需要显式启用（见下方提示）。
 
-This makes it a drop-in replacement for `nvm`. See [idiomatic version files](/configuration.html#idiomatic-version-files) for more information.
+这使它可以直接替代 `nvm`。有关更多信息，请参阅[惯用版本文件](/configuration.html#idiomatic-version-files)。
 
 ::: tip
-Idiomatic version files (`.nvmrc`, `.node-version`, `devEngines` field in `package.json`) are disabled by default and must be explicitly enabled:
+惯用版本文件（`.nvmrc`、`.node-version`、`package.json` 中的 `devEngines` 字段）默认是禁用的，必须显式启用：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools node
 ```
 
-Or in `~/.config/mise/config.toml`:
+或者在 `~/.config/mise/config.toml` 中：
 
 ```toml
 [settings]
@@ -88,21 +86,21 @@ idiomatic_version_file_enable_tools = ["node"]
 
 :::
 
-## Default node packages
+## 默认 node 包
 
-::: warning Planned deprecation
-Default package files are deprecated. They are still supported for now, but mise will start warning
-in `2026.11.0` and support will be removed in `2027.11.0`.
+::: warning 计划弃用
+默认包文件已弃用。目前它们仍然受支持，但 mise 将从 `2026.11.0` 开始发出警告，
+并将在 `2027.11.0` 中移除支持。
 
-For npm CLIs, install the tool directly with the [npm backend](/dev-tools/backends/npm.html):
+对于 npm CLI，请使用 [npm 后端](/dev-tools/backends/npm.html) 直接安装该工具：
 
 ```toml
 [tools]
 "npm:typescript" = "latest"
 ```
 
-For packages that really should be installed into every Node.js version, use a tool-level
-`postinstall` hook:
+对于确实应该安装到每个 Node.js 版本中的包，请使用工具级别的
+`postinstall` 钩子：
 
 ```toml
 [tools]
@@ -111,9 +109,7 @@ node = { version = "22", postinstall = "npm install -g typescript" }
 
 :::
 
-mise-node can automatically install a default set of npm packages right after installing a node
-version. To use this legacy feature, provide a `$HOME/.default-npm-packages` file that lists one
-package per line, for example:
+mise-node 可以在安装完 node 版本后自动安装一组默认的 npm 包。要使用此旧功能，请提供一个 `$HOME/.default-npm-packages` 文件，每行列出一个包，例如：
 
 ```text
 lodash
@@ -121,51 +117,45 @@ request
 express
 ```
 
-You can specify a non-default location of this file by setting a `MISE_NODE_DEFAULT_PACKAGES_FILE` variable.
+你可以通过设置 `MISE_NODE_DEFAULT_PACKAGES_FILE` 变量来指定该文件的非默认位置。
 
-## "nodejs" -> "node" Alias
+## "nodejs" -> "node" 别名
 
-You cannot install/use a plugin named "nodejs". If you attempt this, mise will just rename it to
-"node". See the [FAQ](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go)
-for an explanation.
+你不能安装/使用名为 "nodejs" 的插件。如果你尝试这样做，mise 只会将其重命名为
+"node"。有关说明，请参阅 [FAQ](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go)。
 
-## Building from source
+## 从源代码构建
 
-If compiling from source, see [BUILDING.md](https://github.com/nodejs/node/blob/main/BUILDING.md#building-nodejs-on-supported-platforms) in node's documentation for
-required system dependencies.
+如果从源代码编译，请参阅 node 文档中的 [BUILDING.md](https://github.com/nodejs/node/blob/main/BUILDING.md#building-nodejs-on-supported-platforms)，了解
+所需的系统依赖项。
 
 ```shell
 mise settings node.compile=1
 mise use node@latest
 ```
 
-## Unofficial Builds
+## 非官方构建
 
-Nodejs.org offers a set of [unofficial builds](https://unofficial-builds.nodejs.org/) which are
-compatible with some platforms that are not supported by the official binaries. These are a nice alternative to
-compiling from source for these platforms.
+Nodejs.org 提供了一组 [非官方构建](https://unofficial-builds.nodejs.org/)，它们与某些官方二进制文件不支持的平台兼容。对于这些平台来说，这些构建是从源码编译之外的一个不错替代方案。
 
-To use, first set the mirror url to point to the unofficial builds:
+要使用它们，首先将镜像 URL 设置为指向非官方构建：
 
 ```sh
 mise settings node.mirror_url=https://unofficial-builds.nodejs.org/download/release/
 ```
 
-If your goal is to simply support an alternative arch/os like linux-loong64 or linux-armv6l, this is
-all that is required. Node also provides flavors such as musl or glibc-217 (an older glibc version
-than what the official binaries are built with).
+如果你的目标只是支持像 linux-loong64 或 linux-armv6l 这样的替代架构/操作系统，那么这就是所需的全部配置。Node 还提供诸如 musl 或 glibc-217 之类的 flavor（glibc-217 使用的 glibc 版本比官方二进制文件所构建时使用的版本更旧）。
 
-To use these, set `node.flavor`:
+要使用这些，请设置 `node.flavor`：
 
 ```sh
 mise settings node.flavor=musl
 mise settings node.flavor=glibc-217
 ```
 
-For the common musl case, `mise settings libc=musl` also selects Node's `musl`
-flavor when `node.flavor` is unset.
+对于常见的 musl 情况，当未设置 `node.flavor` 时，`mise settings libc=musl` 也会选择 Node 的 `musl` flavor。
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

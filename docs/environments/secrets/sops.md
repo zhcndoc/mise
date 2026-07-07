@@ -1,11 +1,11 @@
 # sops <Badge type="warning" text="experimental" />
 
-mise reads encrypted secret files and makes values available as environment variables via `env._.file`.
+mise 会读取加密的密钥文件，并通过 `env._.file` 将值作为环境变量提供。
 
-- **Formats**: `.env.json`, `.env.yaml`, `.env.toml`
-- **Encryption**: [sops](https://getsops.io) backed by [age](https://github.com/FiloSottile/age)
+- **格式**: `.env.json`、`.env.yaml`、`.env.toml`
+- **加密**: 由 [age](https://github.com/FiloSottile/age) 提供支持的 [sops](https://getsops.io)
 
-## Example
+## 示例
 
 ```json
 {
@@ -19,87 +19,87 @@ mise reads encrypted secret files and makes values available as environment vari
 _.file = ".env.json"
 ```
 
-mise will automatically decrypt the file if it is sops-encrypted.
+如果该文件使用 sops 加密，mise 将自动解密该文件。
 
-## Encrypt with sops
+## 使用 sops 加密
 
 :::: info
-Currently age is the only sops encryption method supported.
+目前 age 是唯一受支持的 sops 加密方法。
 ::::
 
 :::: warning
-The external `sops` CLI does not currently support TOML input/output. mise can decrypt SOPS-encrypted `.env.toml` files only with the default `sops.rops = true` setting. If you set `sops.rops = false`, mise shells out to the `sops` CLI and encrypted TOML env files fail with a configuration error. Use `.env.json` or `.env.yaml` when you need the external CLI path.
+外部 `sops` CLI 目前不支持 TOML 输入/输出。mise 只能在默认 `sops.rops = true` 设置下解密 SOPS 加密的 `.env.toml` 文件。如果你将 `sops.rops = false`，mise 会调用外部 `sops` CLI，而加密的 TOML 环境文件会因配置错误而失败。在需要使用外部 CLI 路径时，请使用 `.env.json` 或 `.env.yaml`。
 ::::
 
-1. Install tools: `mise use -g sops age`
+1. 安装工具：`mise use -g sops age`
 
-2. Generate an age key and note the public key:
+2. 生成一个 age 密钥并记录公钥：
 
 ```sh
 age-keygen -o ~/.config/mise/age.txt
-# Public key: <public key>
+# 公钥: <公钥>
 ```
 
-3. Encrypt the file:
+3. 加密文件：
 
 ```sh
-sops encrypt -i --age "<public key>" .env.json
+sops encrypt -i --age "<公钥>" .env.json
 ```
 
 :::: tip
-The `-i` overwrites the file. The encrypted file is safe to commit. Set `SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` or `MISE_SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` to decrypt/edit with sops.
+`-i` 会覆盖原文件。加密后的文件可以安全提交到仓库。设置 `SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` 或 `MISE_SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` 可使用 sops 解密/编辑。
 ::::
 
-4. Reference it in config:
+4. 在配置中引用它：
 
 ```toml
 [env]
 _.file = ".env.json"
 ```
 
-Now `mise env` exposes the values.
+现在 `mise env` 会暴露这些值。
 
-## Environment Variables
+## 环境变量
 
-mise supports both mise-specific environment variables and standard SOPS ones:
+mise 同时支持 mise 专用环境变量和标准的 SOPS 变量：
 
-**Mise-specific variables (highest priority):**
+**mise 专用变量（最高优先级）：**
 
-- `MISE_SOPS_AGE_KEY` - Age private key content directly
-- `MISE_SOPS_AGE_KEY_FILE` - Path to age private key file
+- `MISE_SOPS_AGE_KEY` - 直接提供 Age 私钥内容
+- `MISE_SOPS_AGE_KEY_FILE` - Age 私钥文件路径
 
-**Standard SOPS variables (fallback):**
+**标准 SOPS 变量（回退）：**
 
-- `SOPS_AGE_KEY_FILE` - Path to age private key file
-- `SOPS_AGE_KEY` - Age private key content directly
+- `SOPS_AGE_KEY_FILE` - Age 私钥文件路径
+- `SOPS_AGE_KEY` - 直接提供 Age 私钥内容
 
-**Precedence order:**
+**优先级顺序：**
 
-1. `MISE_SOPS_AGE_KEY` (mise setting or env var, checked first)
-2. `MISE_SOPS_AGE_KEY_FILE` or `sops.age_key_file` (mise setting or env var)
-3. `SOPS_AGE_KEY_FILE` (standard)
-4. `SOPS_AGE_KEY` (standard, direct key content)
-5. Default: `~/.config/mise/age.txt`
+1. `MISE_SOPS_AGE_KEY`（mise 设置或环境变量，优先检查）
+2. `MISE_SOPS_AGE_KEY_FILE` 或 `sops.age_key_file`（mise 设置或环境变量）
+3. `SOPS_AGE_KEY_FILE`（标准）
+4. `SOPS_AGE_KEY`（标准，直接密钥内容）
+5. 默认：`~/.config/mise/age.txt`
 
-This allows you to override SOPS settings specifically for mise while keeping your standard SOPS configuration intact for other tools.
+这样你就可以专门为 mise 覆盖 SOPS 设置，同时为其他工具保留原有的标准 SOPS 配置。
 
-## Redaction
+## 脱敏
 
-Mark secrets from files as sensitive:
+将文件中的密钥标记为敏感：
 
 ```toml
 [env]
 _.file = { path = ".env.json", redact = true }
 ```
 
-Work with redacted values:
+使用已脱敏的值：
 
 ```bash
 mise env --redacted
 mise env --redacted --values
 ```
 
-### CI masking (GitHub Actions)
+### CI 掩码处理（GitHub Actions）
 
 ```yaml
 - name: Mask secrets
@@ -112,9 +112,9 @@ mise env --redacted --values
     mise exec -- ./deploy.sh
 ```
 
-If you use [mise-action](https://github.com/jdx/mise-action), values marked `redact = true` are masked automatically.
+如果你使用 [mise-action](https://github.com/jdx/mise-action)，标记为 `redact = true` 的值会自动被掩码处理。
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

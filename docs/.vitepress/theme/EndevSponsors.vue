@@ -5,8 +5,8 @@
     class="EndevSponsors"
   >
     <div class="EndevSponsorsInner">
-      <p id="endev-sponsors-title" class="EndevSponsorsTitle">sponsors</p>
-      <p v-if="error" class="EndevSponsorsError">Sponsor feed unavailable.</p>
+      <p id="endev-sponsors-title" class="EndevSponsorsTitle">赞助商</p>
+      <p v-if="error" class="EndevSponsorsError">赞助商信息暂不可用。</p>
       <div v-else class="EndevSponsorsLogos">
         <a
           v-for="(sponsor, index) in sponsors"
@@ -25,7 +25,7 @@
         </a>
       </div>
       <a class="EndevSponsorsCta" href="https://jdx.dev/sponsors.html">
-        View all sponsors
+        查看全部赞助商
       </a>
     </div>
   </section>

@@ -1,35 +1,34 @@
 # Bun
 
-`mise` can be used to install and manage multiple versions of [bun](https://bun.sh/) on the same system.
+`mise` 可用于在同一系统上安装和管理 [bun](https://bun.sh/) 的多个版本。
 
-> The following are instructions for using the bun mise core plugin. This is used when there isn't a
-> git plugin installed named "bun".
+> 以下是使用 bun mise 核心插件的说明。当没有安装名为 "bun" 的 git 插件时，会使用它。
 
-The code for this is inside the mise repository at
-[`./src/plugins/core/bun.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/bun.rs).
+其代码位于 mise 仓库中的
+[`./src/plugins/core/bun.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/bun.rs)。
 
-## Usage
+## 用法
 
-The following installs bun and makes it the global default:
+以下命令将安装 bun 并将其设为全局默认：
 
 ```sh
-mise use -g bun@0.7     # install bun 0.7.x
-mise use -g bun@latest  # install latest bun
+mise use -g bun@0.7     # 安装 bun 0.7.x
+mise use -g bun@latest  # 安装最新的 bun
 ```
 
-See available versions with `mise ls-remote bun`.
+使用 `mise ls-remote bun` 查看可用版本。
 
 > [!NOTE]
-> Avoid using `bun upgrade` to upgrade bun as `mise` will not be aware of the change.
+> 避免使用 `bun upgrade` 来升级 bun，因为 `mise` 将不会感知到这一更改。
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `bun` backend.
-These options go in the `[tools]` section in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `bun` 后端。
+这些选项放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`
 
-Set environment variables for install-time commands run by the core `bun` backend:
+为核心 `bun` 后端运行的安装时命令设置环境变量：
 
 ```toml
 [tools]

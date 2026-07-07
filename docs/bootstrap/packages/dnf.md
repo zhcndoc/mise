@@ -1,29 +1,29 @@
 # dnf <Badge type="warning" text="experimental" />
 
-System packages for RedHat-family Linux (Fedora, RHEL, CentOS Stream, Rocky,
-Alma, ...).
+适用于 RedHat 系 Linux（Fedora、RHEL、CentOS Stream、Rocky、
+Alma 等）的系统包。
 
 ```toml
 [bootstrap.packages]
 "dnf:openssl-devel" = "latest"
 "dnf:postgresql-server" = "latest"
-"dnf:bash" = "5.2.26-3.fc40" # version or version-release pin
+"dnf:bash" = "5.2.26-3.fc40" # 版本或 版本-发布 版本锁定
 ```
 
-## Behavior
+## 行为
 
-- Package state is checked with `rpm -q` (read-only, never elevates).
-- Missing packages are installed with `dnf install -y`, elevated with sudo
-  when necessary (see [sudo](/bootstrap/packages/#sudo)).
-- Version pins are passed to dnf as its native `name-version` /
-  `name-version-release` syntax; a version-only pin is satisfied by any
-  release of that version.
-- `mise bootstrap packages apply --update` adds `--refresh` to force a metadata
-  refresh; otherwise dnf manages its own metadata expiry.
-- `mise bootstrap packages upgrade` runs `dnf upgrade -y --refresh` for the configured
-  packages — only already-installed packages are touched.
+- 软件包状态通过 `rpm -q` 检查（只读，绝不提权）。
+- 缺失的软件包使用 `dnf install -y` 安装，必要时通过 sudo 提权
+  （见 [sudo](/bootstrap/packages/#sudo)）。
+- 版本固定值会以 dnf 原生的 `name-version` /
+  `name-version-release` 语法传入；仅版本固定值对该版本的任意
+  发布版都算满足。
+- `mise bootstrap packages apply --update` 会添加 `--refresh` 以强制进行元数据
+  刷新；否则 dnf 会自行管理其元数据过期。
+- `mise bootstrap packages upgrade` 会对已配置的
+  软件包运行 `dnf upgrade -y --refresh` —— 只会处理已安装的软件包。
 
 ::: info
-Only `dnf` is supported — not legacy `yum`-only systems. On RHEL/CentOS 8+
-and all current Fedora releases `dnf` is the default.
+仅支持 `dnf`——不支持仅有旧版 `yum` 的系统。在 RHEL/CentOS 8+
+以及当前所有 Fedora 版本中，`dnf` 都是默认值。
 :::

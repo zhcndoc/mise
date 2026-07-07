@@ -1,38 +1,33 @@
-# About
+# 关于
 
-`mise` (pronounced "meez") or "mise-en-place" is a development environment setup tool.
-The name refers to a French culinary phrase that roughly translates to "setup" or "put in place".
-The idea is that before one begins cooking, they should have all their utensils and ingredients
-ready to go in their place.
+`mise`（读作 "meez"）或 "mise-en-place" 是一个开发环境设置工具。
+这个名字来自一个法语烹饪短语，大致可翻译为“准备”或“摆放到位”。
+其理念是：在开始烹饪之前，人们应该把所有的器具和食材都准备好并放在合适的位置。
 
-`mise` does the same for your projects. Using its `mise.toml` config file,
-you'll have a consistent way to setup and interact with your projects no matter what
-language they're written in.
+`mise` 也为你的项目做同样的事情。使用它的 `mise.toml` 配置文件，
+无论项目使用何种语言，你都能以一致的方式进行设置并与之交互。
 
-Its functionality is grouped into 3 categories described below.
+它的功能分为下面 3 类。
 
-`mise` installs and manages dev tools/runtimes like node, python, or terraform both
-simplifying installing these tools and allowing you to specify which version of these
-tools to use in different projects. `mise` supports [hundreds](/plugins.md) of dev tools.
+`mise` 可以安装和管理 node、python 或 terraform 等开发工具/运行时，
+既简化了这些工具的安装，又允许你指定在不同项目中使用这些工具的哪个版本。
+`mise` 支持[数百种](/plugins.md)开发工具。
 
-`mise` manages environment variables letting you specify configuration like
-`AWS_ACCESS_KEY_ID` that may differ between projects. It can also be used to
-automatically activate a [Python virtualenv](/lang/python) when entering projects too.
+`mise` 管理环境变量，让你可以指定像
+`AWS_ACCESS_KEY_ID` 这类可能因项目而异的配置。它也可以用于在进入项目时自动激活一个[Python 虚拟环境](/lang/python)。
 
-`mise` is a task runner that can be used to share common tasks within
-a project among developers and make things like running tasks on file changes
-easy.
+`mise` 还是一个任务运行器，可用于在开发者之间共享项目中的常见任务，
+并让诸如在文件变更时运行任务之类的事情变得简单。
 
-## Contact
+## 联系方式
 
-`mise` was initially created by [Jeff Dickey](https://jdx.dev). The goal is
-to make local development of software easy and consistent across languages. Jeff
-has spent many years building dev tools and thinking about the problems that `mise`
-addresses.
+`mise` 最初由 [Jeff Dickey](https://jdx.dev) 创建。其目标是
+让软件的本地开发在不同语言之间都变得简单且一致。Jeff
+多年来一直在构建开发工具，并思考 `mise`
+所解决的问题。
 
-This project is simply a labor of love. Jeff created it because he wanted to make
-your life as a developer easier. We hope you find it useful. Feedback is a massive
-driver for us. If you have anything positive or negative to say-even if it's just
-to say hi-please reach out to me either on [Twitter](https://twitter.com/jdxcode),
+这个项目纯粹出于热爱。Jeff 创建它是因为他想让
+你作为开发者的生活更轻松。我们希望你会觉得它有用。反馈是
+推动我们前进的重要动力。如果你有什么正面或负面的想法——哪怕只是想打个招呼——请通过 [Twitter](https://twitter.com/jdxcode),
 [Mastodon](https://fosstodon.org/@jdx), [Discord](https://discord.gg/UBa7pJUN7Z),
-or `jdx at this domain`.
+或这个域名下的 `jdx at this domain` 联系我。

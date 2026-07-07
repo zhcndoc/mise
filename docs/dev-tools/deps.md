@@ -1,38 +1,38 @@
-# Deps <Badge type="warning" text="experimental" />
+# 依赖 <Badge type="warning" text="experimental" />
 
-The `mise deps` command manages project dependencies by hashing source files
-(e.g., `package-lock.json`) and running install commands when changes are detected.
-It can also add and remove individual packages.
+`mise deps` 命令通过对源文件进行哈希处理来管理项目依赖
+（例如，`package-lock.json`），并在检测到更改时运行安装命令。
+它还可以添加和移除单个包。
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Enable experimental features
+# 启用实验性功能
 export MISE_EXPERIMENTAL=1
 
-# Install all project dependencies
+# 安装所有项目依赖
 mise deps
 
-# Add a package
+# 添加一个包
 mise deps add npm:react
 
-# Add a dev dependency
+# 添加一个开发依赖
 mise deps add -D npm:vitest
 
-# Remove a package
+# 移除一个包
 mise deps remove npm:lodash
 ```
 
-## Configuration
+## 配置
 
-Configure deps providers in `mise.toml`:
+在 `mise.toml` 中配置 deps providers：
 
 ```toml
-# Built-in npm provider (auto-detects lockfile)
+# 内置 npm provider（自动检测 lockfile）
 [deps.npm]
-auto = true  # Auto-run before mise x/run
+auto = true  # 在 mise x/run 之前自动运行
 
-# Built-in providers for other package managers
+# 适用于其他包管理器的内置 providers
 [deps.yarn]
 [deps.pnpm]
 [deps.bun]
@@ -45,24 +45,24 @@ auto = true  # Auto-run before mise x/run
 [deps.bundler]
 [deps.composer]
 
-# Disable specific providers
+# 禁用特定 providers
 [deps]
 disable = ["npm"]
 ```
 
-## Built-in Providers
+## 内置提供者
 
-mise includes built-in providers for common package managers:
+mise 为常见的包管理器提供了内置提供者：
 
-| Provider   | Sources                                                | Outputs               | Command                              |
-| ---------- | ------------------------------------------------------ | --------------------- | ------------------------------------ |
+| 提供者      | 源文件                                                 | 输出                | 命令                                 |
+| ---------- | ------------------------------------------------------ | ------------------- | ------------------------------------ |
 | `npm`      | `package.json`, `package-lock.json`                    | `node_modules/`       | `npm install`                        |
 | `yarn`     | `package.json`, `yarn.lock`                            | `node_modules/`       | `yarn install`                       |
 | `pnpm`     | `package.json`, `pnpm-lock.yaml`                       | `node_modules/`       | `pnpm install`                       |
 | `bun`      | `package.json`, `bun.lock`, `bun.lockb`                | `node_modules/`       | `bun install`                        |
 | `deno`     | `deno.json`, `deno.jsonc`, `package.json`, `deno.lock` | `node_modules/`       | `deno install`                       |
-| `aube`     | `package.json`, `aube-lock.yaml`                       | `node_modules/`       | `aube install`                       |
-| `go`       | `go.mod`                                               | `vendor/` or `go.sum` | `go mod vendor` or `go mod download` |
+| `aube`     | `package.json`, `aube-lock.yaml`                       | `node_modules/`       | `aube install`                        |
+| `go`       | `go.mod`                                               | `vendor/` 或 `go.sum` | `go mod vendor` 或 `go mod download` |
 | `pip`      | `requirements.txt`                                     | `.venv/`              | `pip install -r requirements.txt`    |
 | `poetry`   | `pyproject.toml`, `poetry.lock`                        | `.venv/`              | `poetry install`                     |
 | `uv`       | `pyproject.toml`, `uv.lock`                            | `.venv/`              | `uv sync`                            |
@@ -71,36 +71,34 @@ mise includes built-in providers for common package managers:
 | `dart`     | `pubspec.yaml`, `pubspec.lock`                         | `.dart_tool/`         | `dart pub get`                       |
 | `flutter`  | `pubspec.yaml`, `pubspec.lock`                         | `.dart_tool/`         | `flutter pub get`                    |
 
-Built-in providers are only active when explicitly configured in `mise.toml` and their lockfile exists.
+只有在 `mise.toml` 中显式配置且其锁文件存在时，内置提供者才会启用。
 
-## Adding and Removing Packages
+## 添加和移除包
 
-The `mise deps add` and `mise deps remove` commands let you manage individual packages
-using the `ecosystem:package` syntax:
+`mise deps add` 和 `mise deps remove` 命令让你可以使用 `ecosystem:package` 语法管理单个包：
 
 ```bash
-# Add packages
+# 添加包
 mise deps add npm:react
 mise deps add npm:@types/react@19
-mise deps add -D npm:vitest        # dev dependency
+mise deps add -D npm:vitest        # 开发依赖
 
-# Remove packages
+# 移除包
 mise deps remove npm:lodash
 ```
 
-The ecosystem prefix tells mise which package manager to use. Currently supported
-ecosystems for add/remove: `npm`, `yarn`, `pnpm`, `bun`, `deno`, `aube`, `dart`, `flutter`.
+ecosystem 前缀告诉 mise 使用哪个包管理器。目前支持用于 add/remove 的 ecosystem 有：`npm`、`yarn`、`pnpm`、`bun`、`deno`、`aube`、`dart`、`flutter`。
 
-## Custom Providers
+## 自定义提供者
 
-Create custom providers for project-specific build steps:
+为项目特定的构建步骤创建自定义提供者：
 
 ```toml
 [deps.codegen]
 sources = ["schema/*.graphql", "codegen.yml"]
 outputs = ["src/generated/"]
 run = "npm run codegen"
-description = "Generate GraphQL types"
+description = "生成 GraphQL 类型"
 
 [deps.prisma]
 sources = ["prisma/schema.prisma"]
@@ -108,101 +106,98 @@ outputs = ["node_modules/.prisma/"]
 run = "npx prisma generate"
 ```
 
-### Provider Options
+### 提供者选项
 
-| Option        | Type     | Description                                                               |
-| ------------- | -------- | ------------------------------------------------------------------------- |
-| `auto`        | bool     | Auto-run before `mise x` and `mise run` (default: false)                  |
-| `sources`     | string[] | Files/patterns to check for changes                                       |
-| `outputs`     | string[] | Files/directories that must exist for the provider to be considered fresh |
-| `run`         | string   | Command to run when stale                                                 |
-| `env`         | table    | Environment variables to set                                              |
-| `dir`         | string   | Working directory for the command                                         |
-| `description` | string   | Description shown in output                                               |
-| `depends`     | string[] | Other provider names that must complete before this one runs              |
-| `timeout`     | string   | Timeout for the run command, e.g., `"30s"`, `"5m"` (default: no timeout)  |
+| 选项          | 类型      | 描述                                                                  |
+| ------------- | --------- | --------------------------------------------------------------------- |
+| `auto`        | bool      | 在 `mise x` 和 `mise run` 之前自动运行（默认：false）                  |
+| `sources`     | string[]  | 要检查变更的文件/模式                                                   |
+| `outputs`     | string[]  | 该提供者被视为最新时必须存在的文件/目录                                     |
+| `run`         | string    | 变旧时要运行的命令                                                     |
+| `env`         | table     | 要设置的环境变量                                                       |
+| `dir`         | string    | 命令的工作目录                                                         |
+| `description` | string    | 输出中显示的描述                                                       |
+| `depends`     | string[]  | 在此提供者运行前必须完成的其他提供者名称                                     |
+| `timeout`     | string    | `run` 命令的超时时间，例如 `"30s"`、`"5m"`（默认：无超时）               |
 
-## Freshness Checking
+## 新鲜度检查
 
-mise uses blake3 content hashing to determine if sources have changed since the last
-successful run. Hashes are stored in `$MISE_STATE_DIR/deps/<hash>.toml`, keyed by
-project root (so nothing is written inside the project directory).
+mise 使用 blake3 内容哈希来判断自上次成功运行以来源文件是否发生了变化。哈希会存储在 `$MISE_STATE_DIR/deps/<hash>.toml` 中，并按项目根目录作为键（因此不会在项目目录内写入任何内容）。
 
-1. Compute blake3 hashes of all source files
-2. Compare against stored hashes from the last successful run
-3. If any file was added, removed, or changed, the provider is stale
+1. 计算所有源文件的 blake3 哈希
+2. 与上次成功运行时存储的哈希进行比较
+3. 如果有任何文件被添加、删除或更改，则 provider 处于过期状态
 
-This means:
+这意味着：
 
-- If you modify `package-lock.json`, `node_modules/` will be considered stale
-- If `node_modules/` doesn't exist, the provider is always stale
-- If sources don't exist, the provider is considered fresh (nothing to do)
-- On first run (no stored state), the provider is always considered stale
+- 如果你修改了 `package-lock.json`，`node_modules/` 将被视为过期
+- 如果 `node_modules/` 不存在，provider 总是处于过期状态
+- 如果源文件不存在，则 provider 被视为新鲜状态（无需处理）
+- 首次运行时（没有已存储状态），provider 总是被视为过期状态
 
-## Auto-Install
+## 自动安装
 
-When `auto = true` is set on a provider, it will automatically run before:
+当在 provider 上设置 `auto = true` 时，它会在以下命令之前自动运行：
 
-- `mise run` (task execution)
-- `mise x` (exec command)
+- `mise run`（任务执行）
+- `mise x`（执行命令）
 
-This ensures dependencies are always up-to-date before running tasks or commands.
+这确保在运行任务或命令之前，依赖始终保持最新。
 
-To skip auto-install for a single invocation:
+要在单次调用中跳过自动安装：
 
 ```bash
 mise run --no-deps build
 mise x --no-deps -- npm test
 ```
 
-## Staleness Warnings
+## 过期警告
 
-When using `mise activate`, mise will warn you if any auto-enabled providers have stale dependencies:
+当使用 `mise activate` 时，如果任何自动启用的提供者存在过期依赖，mise 会发出警告：
 
 ```
 mise WARN deps: npm may need update, run `mise deps`
 ```
 
-This can be disabled with:
+可以通过以下方式禁用：
 
 ```toml
 [settings]
 status.show_deps_stale = false
 ```
 
-## CLI Usage
+## CLI 用法
 
 ```bash
-# Install all project dependencies
+# 安装所有项目依赖
 mise deps
 
-# Install only a specific provider
+# 仅安装特定提供程序
 mise deps install npm
 
-# Show why a provider is fresh or stale
+# 显示某个提供程序为何是最新或过期
 mise deps install npm --explain
 
-# Show what would run without executing
+# 显示将要执行的内容，但不实际运行
 mise deps install --dry-run
 
-# Force run even if outputs are fresh
+# 即使输出是最新的也强制运行
 mise deps install --force
 
-# List available deps providers
+# 列出可用的 deps 提供程序
 mise deps install --list
 
-# Skip specific providers
+# 跳过特定提供程序
 mise deps install --skip npm
 
-# Add/remove packages
+# 添加/移除包
 mise deps add npm:react
 mise deps remove npm:lodash
 ```
 
-## Dependencies
+## 依赖
 
-Providers can declare dependencies on other providers using the `depends` field. A provider
-will wait for all its dependencies to complete successfully before running.
+提供者可以使用 `depends` 字段声明对其他提供者的依赖。提供者会在运行前等待其所有依赖成功完成。
 
 ```toml
 [deps.uv]
@@ -216,28 +211,26 @@ sources = ["requirements.yml"]
 outputs = [".galaxy-installed"]
 ```
 
-In this example, `ansible-galaxy` will wait for `uv` to finish before starting.
+在这个示例中，`ansible-galaxy` 会在开始之前等待 `uv` 完成。
 
-Providers without `depends` run in parallel as before. If a dependency fails, all providers
-that depend on it are skipped. Circular dependencies are detected and the affected providers
-are skipped with a warning.
+没有 `depends` 的提供者仍然会像以前一样并行运行。如果某个依赖失败，所有依赖它的提供者都会被跳过。系统会检测循环依赖，并跳过受影响的提供者，同时给出警告。
 
-## Parallel Execution
+## 并行执行
 
-Deps providers run in parallel, respecting the `jobs` setting for concurrency limits.
-This speeds up installation when multiple providers need to run (e.g., both npm and pip).
-Providers with `depends` will wait for their dependencies to complete before starting,
-while independent providers run concurrently.
+依赖提供程序会并行运行，并遵守 `jobs` 设置所定义的并发限制。
+当多个提供程序需要运行时（例如 npm 和 pip 同时需要运行），这可以加快安装速度。
+带有 `depends` 的提供程序会等待其依赖项完成后再开始，
+而相互独立的提供程序则会并发运行。
 
 ```toml
 [settings]
-jobs = 4  # Run up to 4 providers in parallel
+jobs = 4  # 同时最多运行 4 个提供程序
 ```
 
-## Example: Full-Stack Project
+## 示例：全栈项目
 
 ```toml
-# mise.toml for a project with Node.js frontend and Python backend
+# 面向具有 Node.js 前端和 Python 后端的项目的 mise.toml
 
 [deps.npm]
 auto = true
@@ -247,17 +240,17 @@ auto = true
 
 [deps.prisma]
 auto = true
-depends = ["npm"]  # needs node_modules first
+depends = ["npm"]  # 需要先有 node_modules
 sources = ["prisma/schema.prisma"]
 outputs = ["node_modules/.prisma/"]
 run = "npx prisma generate"
 
 [deps.frontend-codegen]
-depends = ["npm"]  # needs node_modules first
+depends = ["npm"]  # 需要先有 node_modules
 sources = ["schema.graphql", "codegen.ts"]
 outputs = ["src/generated/"]
 run = "npm run codegen"
 ```
 
-Running `mise deps` will install npm and poetry dependencies in parallel, then run prisma
-and frontend-codegen (also in parallel, since they only depend on npm, not each other).
+运行 `mise deps` 会并行安装 npm 和 poetry 依赖，然后运行 prisma
+和 frontend-codegen（同样是并行运行，因为它们只依赖于 npm，而不依赖彼此）。

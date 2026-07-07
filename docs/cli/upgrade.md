@@ -5,114 +5,114 @@
 - **Aliases**: `up`
 - **Source code**: [`src/cli/upgrade.rs`](https://github.com/jdx/mise/blob/main/src/cli/upgrade.rs)
 
-Upgrades outdated tools
+升级过时的工具
 
-By default, this keeps the range specified in mise.toml. So if you have node@20 set, it will
-upgrade to the latest 20.x.x version available. See the `--bump` flag to use the latest version
-and bump the version in mise.toml.
+默认情况下，这会保持 mise.toml 中指定的版本范围不变。因此，如果你设置了 node@20，它将
+升级到可用的最新 20.x.x 版本。请参阅 `--bump` 标志以使用最新版本
+并更新 mise.toml 中的版本。
 
-This will update mise.lock if it is enabled, see <https://mise.en.dev/configuration/settings.html#lockfile>
+如果启用了 mise.lock，这将更新它，参见 <https://mise.en.dev/configuration/settings.html#lockfile>
 
-## Arguments
+## 参数
 
 ### `[INSTALLED_TOOL@VERSION]…`
 
-Tool(s) to upgrade
-e.g.: node@20 python@3.10
-If not specified, all current tools will be upgraded
+要升级的工具
+例如：node@20 python@3.10
+如果未指定，则所有当前工具都将被升级
 
-## Flags
+## 标志
 
 ### `-i --interactive`
 
-Display multiselect menu to choose which tools to upgrade
+显示多选菜单以选择要升级的工具
 
 ### `-j --jobs <JOBS>`
 
-Number of jobs to run in parallel
-[default: 4]
+要并行运行的任务数
+[默认: 4]
 
 ### `-l --bump`
 
-Upgrades to the latest version available, bumping the version in mise.toml
+升级到可用的最新版本，并将 mise.toml 中的版本提升为该版本
 
-For example, if you have `node = "20.0.0"` in your mise.toml but 22.1.0 is the latest available,
-this will install 22.1.0 and set `node = "22.1.0"` in your config.
+例如，如果你的 mise.toml 中有 `node = "20.0.0"`，但 22.1.0 是当前可用的最新版本，
+这将安装 22.1.0，并将你的配置设置为 `node = "22.1.0"`。
 
-It keeps the same precision as what was there before, so if you instead had `node = "20"`, it
-would change your config to `node = "22"`.
+它会保持与之前相同的精度，所以如果你之前写的是 `node = "20"`，它会
+将你的配置改为 `node = "22"`。
 
 ### `-n --dry-run`
 
-Just print what would be done, don't actually do it
+只打印将要执行的操作，不真正执行
 
 ### `-x --exclude… <INSTALLED_TOOL>`
 
-Tool(s) to exclude from upgrading
-e.g.: go python
+要从升级中排除的工具
+例如：go python
 
 ### `--dry-run-code`
 
-Like --dry-run but exits with code 1 if there are outdated tools
+类似于 --dry-run，但如果有过时的工具则以代码 1 退出
 
-This is useful for scripts to check if tools need to be upgraded.
+这对于脚本检查工具是否需要升级很有用。
 
 ### `--inactive`
 
-Upgrade all tools, including installed-but-inactive tools not present in the current config
+升级所有工具，包括已安装但未激活、当前配置中不存在的工具
 
 ### `--local`
 
-Only upgrade tools defined in local config files
+仅升级在本地配置文件中定义的工具
 
-This will only upgrade tools that are defined in project-local mise.toml and
-will skip tools defined in the global config (~/.config/mise/config.toml).
+这将只升级在项目本地 mise.toml 中定义的工具，并
+跳过在全局配置（~/.config/mise/config.toml）中定义的工具。
 
 ### `--minimum-release-age <MINIMUM_RELEASE_AGE>`
 
-Only upgrade to versions released before this date or older than this duration
+仅升级到在此日期之前发布或早于此时长的版本
 
-Supports absolute dates like "2024-06-01" and relative durations like "90d" or "1y".
-This can be useful for reproducibility or security purposes.
+支持像 "2024-06-01" 这样的绝对日期，以及像 "90d" 或 "1y" 这样的相对时长。
+这对于可复现性或安全性目的可能很有用。
 
-This only affects fuzzy version matches like "20" or "latest".
-Explicitly pinned versions like "22.5.0" are not filtered.
+这只影响像 "20" 或 "latest" 这样的模糊版本匹配。
+像 "22.5.0" 这样明确固定的版本不会被过滤。
 
 ### `--monorepo`
 
-Placeholder for future monorepo upgrades; `mise upgrade --monorepo` is not implemented yet.
+用于未来单体仓库升级的占位符；`mise upgrade --monorepo` 目前尚未实现。
 
 ### `--raw`
 
-Connect backend install command stdin/stdout/stderr directly to the terminal Implies --jobs=1
+将后端安装命令的 stdin/stdout/stderr 直接连接到终端，隐含 `--jobs=1`
 
-Examples:
+示例：
 
 ```
-# Upgrades node to the latest version matching the range in mise.toml
+# 将 node 升级到与 mise.toml 中范围匹配的最新版本
 $ mise upgrade node
 
-# Upgrades node to the latest version and bumps the version in mise.toml
+# 将 node 升级到最新版本并将 mise.toml 中的版本提升为该版本
 $ mise upgrade node --bump
 
-# Upgrades all tools to the latest versions
+# 将所有工具升级到最新版本
 $ mise upgrade
 
-# Upgrades all tools to the latest versions and bumps the version in mise.toml
+# 将所有工具升级到最新版本，并将 mise.toml 中的版本提升为该版本
 $ mise upgrade --bump
 
-# Just print what would be done, don't actually do it
+# 只打印将要执行的操作，不真正执行
 $ mise upgrade --dry-run
 
-# Upgrades node and python to the latest versions
+# 将 node 和 python 升级到最新版本
 $ mise upgrade node python
 
-# Upgrade all tools except go
+# 升级除 go 之外的所有工具
 $ mise upgrade --exclude go
 
-# Show a multiselect menu to choose which tools to upgrade
+# 显示多选菜单以选择要升级的工具
 $ mise upgrade --interactive
 
-# Only upgrade tools defined in local mise.toml, not global ones
+# 仅升级本地 mise.toml 中定义的工具，不升级全局配置中的工具
 $ mise upgrade --local
 ```

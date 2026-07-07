@@ -1,83 +1,66 @@
-# Comparison to asdf
+# 与 asdf 的比较
 
-mise can be used as a drop-in replacement for asdf. It supports the same `.tool-versions` files that
-you may have used with asdf and can use asdf plugins through
-the [asdf backend](/dev-tools/backends/asdf.html).
+mise 可以作为 asdf 的直接替代品使用。它支持与 asdf 相同的 `.tool-versions` 文件，这些文件可能是你在使用 asdf 时用过的，并且可以通过 [asdf 后端](/dev-tools/backends/asdf.html) 使用 asdf 插件。
 
-It will not, however, reuse existing asdf directories
-(so you'll need to either reinstall them or move them), and 100% compatibility is not a design goal.
-That said,
-if you're coming from asdf-bash (0.15 and below), mise actually
-has [fewer breaking changes than asdf-go (0.16 and above)](https://asdf-vm.com/guide/upgrading-to-v0-16.html)
-despite 100% compatibility not being a design goal of mise.
+不过，它不会复用现有的 asdf 目录
+（因此你需要重新安装它们，或者将它们移动过去），而且 100% 兼容性并不是设计目标。
+话虽如此，
+如果你是从 asdf-bash（0.15 及以下）迁移过来的，mise 实际上
+[比 asdf-go（0.16 及以上）拥有更少的破坏性变更](https://asdf-vm.com/guide/upgrading-to-v0-16.html)
+，尽管 100% 兼容性并不是 mise 的设计目标。
 
-Casual users coming from asdf have generally found mise to just be a faster, easier to use asdf.
+从 asdf 过来的普通用户通常会发现，mise 只是一个更快、更易用的 asdf。
 
 :::tip
-Make sure you have a look at [environments](/environments/) and [tasks](/tasks/) which
-are major portions of mise that have no asdf equivalent.
+请务必查看 [environments](/environments/) 和 [tasks](/tasks/)，它们
+是 mise 的主要组成部分，而 asdf 中没有对应功能。
 :::
 
-## Migrate from asdf to mise
+## 从 asdf 迁移到 mise
 
-If you're moving from asdf to mise, please
-review [#how-do-i-migrate-from-asdf](/faq.html#how-do-i-migrate-from-asdf) for guidance.
+如果你要从 asdf 迁移到 mise，请
+查看 [#我如何从 asdf 迁移](/faq.html#how-do-i-migrate-from-asdf) 以获取指导。
 
-## asdf in go (0.16+)
+## go 版 asdf（0.16+）
 
-asdf has gone through a rewrite in go. Because this is quite new as of this writing (2025-01-01),
-I'm going to keep information about 0.16+ asdf versions (which I call "asdf-go" vs "asdf-bash") in
-this section and the rest of this doc will apply to asdf-bash (0.15 and below).
+asdf 已经用 go 进行了重写。由于截至本文撰写时（2025-01-01）这还是个相当新的变化，
+我会把 0.16+ 版本的 asdf（我称之为“asdf-go”，区别于“asdf-bash”）的信息保留在
+这一节，而本文其余部分将适用于 asdf-bash（0.15 及以下）。
 
-In terms of performance, mise is still faster than the go asdf, however the difference is much
-closer. asdf is likely fast enough that the difference in overhead between asdf-go and mise may not
-even be enough to notice for you—after all there are plenty of people still using asdf-bash that
-claim they don't even notice how slow it is (don't ask me how):
+就性能而言，mise 仍然比 go 版 asdf 更快，不过差距已经
+小得多了。asdf 的速度很可能已经足够快，以至于 asdf-go 和 mise 之间的开销差异
+对你来说甚至都不一定能察觉——毕竟还有很多人仍在使用 asdf-bash，
+并声称自己甚至感觉不到它有多慢（别问我是怎么知道的）：
 
-![asdf vs mise exec performance comparison chart](./asdf-mise-exec-perf.jpg)
+![asdf vs mise exec 性能对比图](./asdf-mise-exec-perf.jpg)
 
-I don't think performance is a good enough reason to switch though now that asdf-go is a thing. It's
-a reason, but it's a minor one. The improved security in mise, better DX, and lack of reliance on
-shims are all more important than performance.
+不过，我认为仅凭性能还不足以成为切换的充分理由，尤其是现在有了 asdf-go 之后。它
+算是一个理由，但只是次要理由。mise 更好的安全性、更好的开发体验，以及不依赖
+shims，这些都比性能更重要。
 
-Given they went through the trouble of rewriting asdf—that's also an indication they want to keep
-working on it (which is awesome that they're doing that btw). This does mean that some of what's
-written here may go out of date if they address some of the problems
-with asdf.
+考虑到他们费了这么大劲重写 asdf——这也说明他们希望继续
+维护它（顺便说一句，他们这么做很棒）。这也意味着，如果他们解决了 asdf 的一些问题，
+这里写的部分内容可能会过时。
 
-## Supply chain security
+## 供应链安全
 
-asdf plugins are not secure. This is explained
-in [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md), but the quick explanation is
-that asdf plugins involve shell code which can essentially do anything on your machine. It's
-dangerous code. What's worse is asdf plugins are rarely written by the tool vendor (who you need to
-trust anyway to use the tool), which means for every asdf plugin you use you'll be trusting a random
-developer to not go rogue and to not get hacked themselves and publish changes to a plugin with an
-exploit.
+asdf 插件并不安全。这个问题在 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md) 中有解释，但简要来说就是，asdf 插件涉及 shell 代码，而这些代码本质上可以在你的机器上执行几乎任何操作。这是危险的代码。更糟糕的是，asdf 插件很少由工具供应商编写（而你无论如何都需要信任供应商才能使用该工具），这意味着你使用的每一个 asdf 插件，都需要信任某个随机开发者不会失控，也不会被黑客入侵后向插件发布带有漏洞利用的变更。
 
-mise still uses asdf plugins for some tools, but we're actively reducing that count as well as
-moving things into the [mise-plugins org](https://github.com/mise-plugins). It looks like asdf has a
-similar model with their asdf-community org, but it isn't. asdf gives plugin authors commit access
-to their plugin in [asdf-community](https://github.com/asdf-community) when they move it in, which I
-feel like defeats the purpose of having a dedicated org in the first place. By the end of 2025 I
-would like for there to no longer be any asdf plugins in the registry that aren't owned by me.
+mise 仍然在某些工具上使用 asdf 插件，但我们正在积极减少这一数量，同时把相关内容迁移到 [mise-plugins 组织](https://github.com/mise-plugins)。看起来 asdf 也有类似的模型，通过他们的 asdf-community 组织来管理，不过事实并非如此。asdf 在插件作者将插件迁入 [asdf-community](https://github.com/asdf-community) 时，会给予他们该插件的提交权限，我觉得这在某种程度上违背了最初设立专门组织的目的。到 2025 年底，我希望注册表中不再存在任何不归我所有的 asdf 插件。
 
-I've also been adopting extra security verification steps when vendors offer that ability such as
-gpg verification on node installs, and native Cosign/SLSA/Minisign/GitHub attestation verification for aqua tools.
+当供应商提供额外的安全验证能力时，我也一直在采用这些步骤，例如在 node 安装中进行 gpg 验证，以及为 aqua 工具提供原生的 Cosign/SLSA/Minisign/GitHub 证明验证。
 
-## UX
+## 用户体验
 
 ![CleanShot 2024-01-28 at 12 36 20@2x](https://github.com/jdx/mise-docs/assets/216188/47f381d7-1566-4b78-9260-3b85a21dd6ec)
 
-Some commands are the same in asdf but others have been changed. Everything that's possible
-in asdf should be possible in mise but may use slightly different syntax. mise has more forgiving
-commands,
-such as using fuzzy-matching, e.g.: `mise install node@20`. While in asdf you _can_ run
-`asdf install node latest:20`, you can't use `latest:20` in a `.tool-versions` file or many other
-places.
-In `mise` you can use fuzzy-matching everywhere.
+有些命令在 asdf 中是相同的，但其他命令已经改过了。asdf 中所有可行的事情，在 mise 中也都应该可行，但语法可能会略有不同。mise 的命令更宽容，
+比如支持模糊匹配，例如：`mise install node@20`。而在 asdf 中，虽然你 _可以_ 运行
+`asdf install node latest:20`，但你不能在 `.tool-versions` 文件或许多其他
+地方使用 `latest:20`。
+在 `mise` 中，你可以在任何地方使用模糊匹配。
 
-asdf requires several steps to install a new runtime if the plugin isn't installed, e.g.:
+如果插件还没有安装，asdf 需要几个步骤来安装一个新的运行时，例如：
 
 ```sh
 asdf plugin add node
@@ -85,105 +68,80 @@ asdf install node latest:20
 asdf local node latest:20
 ```
 
-In `mise` this can all be done in a single step which installs the plugin, installs the runtime,
-and sets the version:
+在 `mise` 中，这一切都可以通过单个步骤完成：安装插件、安装运行时，
+并设置版本：
 
 ```sh
 mise use node@20
 ```
 
-If you have an existing `.tool-versions` file, or `.mise.toml`, you can install all plugins
-and runtimes with a single command:
+如果你已经有一个现成的 `.tool-versions` 文件，或者 `.mise.toml`，你可以用单个命令
+安装所有插件和运行时：
 
 ```sh
 mise install
 ```
 
-I've found asdf to be particularly rigid and difficult to learn. It also made strange decisions like
-having `asdf list all` but `asdf latest --all` (why is one a flag and one a positional argument?).
-`mise` makes heavy use of aliases so you don't need to remember if it's `mise plugin add node` or
-`mise plugin install node`. If I can guess what you meant, then I'll try to get mise to respond
-in the right way.
+我发现 asdf 尤其僵硬，而且难学。它还会做出一些奇怪的决定，比如
+有 `asdf list all` 却又有 `asdf latest --all`（为什么一个是标志位，另一个却是位置参数？）。
+`mise` 大量使用别名，所以你不需要记住到底是 `mise plugin add node` 还是
+`mise plugin install node`。如果我能猜到你的意思，我就会尽量让 mise 以正确的方式响应。
 
-That said, there are a lot of great things about asdf. It's the best multi-runtime manager out there
-and I've really been impressed with the plugin system. Most of the design decisions the authors made
-were very good. I really just have 2 complaints: the shims and the fact it's written in Bash.
+话虽如此，asdf 也有很多很棒的地方。它是目前最好的多运行时管理器，
+而且它的插件系统让我印象非常深刻。作者做出的多数设计决定都非常好。
+我真正只有两个抱怨：shims，以及它是用 Bash 写的。
 
-## Performance
+## 性能
 
-asdf made (what I consider) a poor design decision to use shims that go between a call to a runtime
-and the runtime itself. e.g.: when you call `node` it will call an asdf shim file
-`~/.asdf/shims/node`,
-which then calls `asdf exec`, which then calls the correct version of node.
+asdf 做出了一个（在我看来）不太好的设计决定：使用位于运行时调用和运行时本身之间的 shim。比如：当你调用 `node` 时，它会调用一个 asdf shim 文件 `~/.asdf/shims/node`，然后这个文件再调用 `asdf exec`，接着才调用正确版本的 node。
 
-These shims have terrible performance, adding ~120ms to every runtime call. `mise activate` does not
-use shims and instead
-updates `PATH` so that it doesn't have any overhead when simply calling binaries. These shims are
-the main reason that I wrote this. Note that in the demo GIF at the top of this README
-that `mise` isn't actually used when calling `node -v` for this reason. The performance is
-identical to running node without using mise.
+这些 shim 的性能很差，每次运行时调用都会额外增加大约 120ms。`mise activate` 不使用 shim，而是直接更新 `PATH`，因此在直接调用二进制文件时不会有任何开销。正是这些 shim 让我写了这个工具。需要注意的是，在本 README 顶部的演示 GIF 中，出于这个原因，调用 `node -v` 时实际上并没有使用 `mise`。其性能与不使用 mise 直接运行 node 完全相同。
 
-I don't think it's possible for asdf to fix these issues. The author of asdf did a great writeup
-of [performance problems](https://stratus3d.com/blog/2022/08/11/asdf-performance/). asdf is written
-in bash which certainly makes it challenging to be performant, however I think the real problem is
-the
-shim design. I don't think it's possible to fix that without a complete rewrite.
+我认为 asdf 不可能修复这些问题。asdf 的作者写过一篇很棒的关于[性能问题](https://stratus3d.com/blog/2022/08/11/asdf-performance/)的文章。asdf 是用 bash 编写的，这当然使它很难做到高性能，不过我认为真正的问题在于 shim 的设计。我不认为在不彻底重写的情况下能修复这一点。
 
-mise does call an internal command `mise hook-env` every time the directory has changed, but because
-it's written in Rust, this is very quick—taking ~10ms on my machine. 4ms if there are no changes,
-14ms if it's
-a full reload.
+mise 确实会在目录发生变化时调用一个内部命令 `mise hook-env`，但因为它是用 Rust 编写的，所以非常快——在我的机器上大约需要 10ms。如果没有变化，则为 4ms；如果是完整重新加载，则为 14ms。
 
-tl;dr: asdf adds overhead (~120ms) when calling a runtime, mise adds a small amount of overhead (~
-5ms)
-when the prompt loads.
+总之：asdf 在调用运行时时会增加开销（约 120ms），而 mise 只会在提示符加载时增加少量开销（约 5ms）。
 
-## Windows support
+## Windows 支持
 
-asdf does not run on Windows at all. With mise, tools using non-asdf backends can support Windows.
-Of course, this means the tool
-vendor must provide Windows binaries but if they do, and the backend isn't asdf, the tool should
-work on Windows.
+asdf 完全无法在 Windows 上运行。使用 mise 时，采用非 asdf 后端的工具可以支持 Windows。
+当然，这意味着工具
+供应商必须提供 Windows 二进制文件，但如果他们提供了，而且后端不是 asdf，那么该工具就应该
+能在 Windows 上运行。
 
-## Security
+## 安全性
 
-asdf plugins are insecure. They typically are written by individuals with no ties to the vendors
-that provide the underlying tool.
-Where possible, mise does not use asdf plugins and instead uses backends like aqua and github which do
-not require separate plugins.
+asdf 插件是不安全的。它们通常由与提供底层工具的供应商没有任何关联的个人编写。
+在可能的情况下，mise 不使用 asdf 插件，而是使用 aqua 和 github 等后端，
+这些后端不需要单独的插件。
 
-Aqua tools include native Cosign/SLSA/Minisign/GitHub attestation verification built into mise.
-See [SECURITY](https://github.com/jdx/mise/blob/main/SECURITY.md) for more information.
+Aqua 工具包含原生的 Cosign/SLSA/Minisign/GitHub 证明验证功能，并内置于 mise 中。
+有关更多信息，请参见 [SECURITY](https://github.com/jdx/mise/blob/main/SECURITY.md)。
 
-## Command Compatibility
+## 命令兼容性
 
-In nearly all places you can use the exact syntax that works in asdf, however this likely won't
-show up in the help or CLI reference. If you're coming from asdf and comfortable with that way of
-working you can almost always use the same syntax with mise, e.g.:
+在几乎所有地方，你都可以使用在 asdf 中可用的完全相同的语法，不过这大概不会
+出现在帮助信息或 CLI 参考中。如果你来自 asdf，并且习惯那种工作方式，你几乎总是可以在 mise 中使用相同的语法，例如：
 
 ```sh
 mise install node 20.0.0
 mise local node 20.0.0
 ```
 
-UPDATE (2025-01-01): asdf-go (0.16+) actually got rid of `asdf global|local` entirely in favor of
-`asdf set` which we can't support since we already have a command named `mise set`. mise command
-compatibility will likely not be as good with asdf-go 0.16+.
+更新（2025-01-01）：asdf-go（0.16+）实际上已经完全移除了 `asdf global|local`，转而支持
+`asdf set`，而我们无法支持这一点，因为我们已经有一个名为 `mise set` 的命令。mise 命令
+对 asdf-go 0.16+ 的兼容性可能不会那么好。
 
-It's not recommended though. You almost always want to modify config files and install things so
-`mise use node@20` saves an extra command. Also, the "@" in the command is preferred since it allows
-you to install multiple tools at once: `mise use|install node@20 node@18`. Also, there are edge
-cases
-where it's not possible—or at least very challenging—for us to definitively know which syntax is
-being
-used and so we default to mise-style. While there aren't many of these, asdf-compatibility is done
-as a "best-effort" in order to make transitioning from asdf feel familiar for those users who can
-rely on their muscle memory. Ensuring asdf-syntax works with everything is not a design goal.
+不过并不建议这样做。你几乎总是希望修改配置文件并安装工具，因此
+`mise use node@20` 可以省去一个额外命令。另外，命令中的 “@” 更受推荐，因为它允许
+你一次安装多个工具：`mise use|install node@20 node@18`。此外，还有一些边缘
+情况，
+我们无法明确判断到底使用的是哪种语法——或者至少要做到这一点非常有挑战——因此我们默认采用 mise 风格。虽然这类情况并不多，但 asdf 兼容性是以“尽力而为”的方式实现的，目的是让从 asdf 迁移过来的用户在依赖肌肉记忆时感觉更熟悉。确保 asdf 语法在所有场景下都可用并不是设计目标。
 
-## Extra backends
+## 额外的后端
 
-mise has support for backends other than asdf plugins. For example you can install CLIs
-directly from cargo and npm:
+mise 除了支持 asdf 插件之外，还支持其他后端。例如，你可以直接从 cargo 和 npm 安装 CLI：
 
 ```sh
 mise use -g cargo:ripgrep@14

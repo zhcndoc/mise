@@ -5,74 +5,73 @@
 - **Aliases**: `dep`
 - **Source code**: [`src/cli/deps/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/deps/mod.rs)
 
-[experimental] Manage project dependencies
+[experimental] 管理项目依赖
 
-Runs all applicable dependency install steps for the current project.
-This checks if dependency lockfiles are newer than installed outputs
-(e.g., package-lock.json vs node_modules/) and runs install commands
-if needed.
+运行当前项目所有适用的依赖安装步骤。
+这会检查依赖锁文件是否比已安装的输出更新
+（例如，package-lock.json vs node_modules/），并在需要时运行安装命令。
 
-Providers with `auto = true` are automatically invoked before `mise x` and `mise run`
-unless skipped with the --no-deps flag.
+当 `auto = true` 时，提供者会在 `mise x` 和 `mise run` 之前自动调用，
+除非使用 `--no-deps` 标志跳过。
 
-## Arguments
+## 参数
 
 ### `[PROVIDER]`
 
-Provider to operate on (runs only this provider, or use with --explain)
+要操作的提供程序（仅运行此提供程序，或与 --explain 一起使用）
 
-## Flags
+## 标志
 
 ### `--explain`
 
-Show why a provider is fresh or stale (requires a provider argument)
+显示提供程序为何是最新或已过期（需要提供程序参数）
 
 ### `-f --force`
 
-Force run all deps steps even if outputs are fresh
+即使输出已是最新，也强制运行所有依赖步骤
 
 ### `-n --dry-run`
 
-Only check if deps install is needed, don't run commands
+只检查是否需要安装依赖，不运行命令
 
 ### `--list`
 
-Show what deps providers are available
+显示可用的依赖提供程序
 
 ### `--only… <ONLY>`
 
-Run specific deps rule(s) only
+仅运行特定的依赖规则
 
 ### `--skip… <SKIP>`
 
-Skip specific deps rule(s)
+跳过特定的依赖规则
 
-## Subcommands
+## 子命令
 
 - [`mise deps add [-D --dev] <PACKAGES>…`](/cli/deps/add.md)
 - [`mise deps install [FLAGS] [PROVIDER]`](/cli/deps/install.md)
 - [`mise deps remove <PACKAGES>…`](/cli/deps/remove.md)
 
-Examples:
+示例：
 
 ```
-mise deps                    # Install all project dependencies
-mise deps install            # Same as bare `mise deps`
-mise deps install --force    # Force reinstall even if fresh
-mise deps install --dry-run  # Show what would run
-mise deps add npm:react      # Add a dependency
-mise deps add -D npm:vitest  # Add a dev dependency
-mise deps remove npm:lodash  # Remove a dependency
+mise deps                    # 安装所有项目依赖
+mise deps install            # 与直接运行 `mise deps` 相同
+mise deps install --force    # 即使是最新的也强制重新安装
+mise deps install --dry-run  # 显示将要运行的内容
+mise deps add npm:react      # 添加一个依赖
+mise deps add -D npm:vitest  # 添加一个开发依赖
+mise deps remove npm:lodash  # 移除一个依赖
 ```
 
-Configuration:
+配置：
 
 ```toml
-# Built-in npm provider (auto-detects lockfile)
+# 内置 npm 提供器（自动检测 lockfile）
 [deps.npm]
-auto = true              # Auto-run before mise x/run
+auto = true              # 在 mise x/run 之前自动运行
 
-# Custom provider
+# 自定义提供器
 [deps.codegen]
 auto = true
 sources = ["schema/*.graphql"]
@@ -80,5 +79,5 @@ outputs = ["src/generated/"]
 run = "npm run codegen"
 
 [deps]
-disable = ["npm"]        # Disable specific providers at runtime
+disable = ["npm"]        # 在运行时禁用特定提供器
 ```

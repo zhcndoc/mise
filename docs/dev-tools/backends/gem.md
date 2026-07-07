@@ -1,64 +1,63 @@
-# gem Backend
+# gem 后端
 
-mise can be used to install CLIs from RubyGems. The code for this is inside of the mise repository at [`./src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs).
+mise 可用于从 RubyGems 安装 CLI。其代码位于 mise 仓库中的 [`./src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs)。
 
-## Dependencies
+## 依赖
 
-This relies on having `gem` (provided with ruby) installed. You can install it with or without mise.
-Here is how to install `ruby` with mise:
+这依赖于已安装 `gem`（由 ruby 提供）。你可以使用 mise 安装，也可以不使用 mise 安装。
+以下是使用 mise 安装 `ruby` 的方法：
 
 ```sh
 mise use -g ruby
 ```
 
-## Usage
+## 用法
 
-The following installs the latest version of [rubocop](https://rubygems.org/gems/rubocop) and sets it as the active version on PATH:
+以下命令会安装 [rubocop](https://rubygems.org/gems/rubocop) 的最新版本，并将其设为 PATH 中的当前激活版本：
 
 ```sh
 mise use -g gem:rubocop
 rubocop --version
 ```
 
-The version will be set in `~/.config/mise/config.toml` with the following format:
+该版本将以如下格式写入 `~/.config/mise/config.toml`：
 
 ```toml
 [tools]
 "gem:rubocop" = "latest"
 ```
 
-## Ruby upgrades
+## Ruby 升级
 
-If the ruby version used by a gem package changes, (by mise or system ruby), you may need to
-reinstall the gem. This can be done with:
+如果某个 gem 包使用的 ruby 版本发生变化（由 mise 或系统 ruby 提供），你可能需要
+重新安装该 gem。可以使用以下命令：
 
 ```sh
 mise install -f gem:rubocop
 ```
 
-Or you can reinstall all gems with:
+或者你也可以重新安装所有 gem：
 
 ```sh
 mise install -f "gem:*"
 ```
 
-## Settings
+## 设置
 
-Set these with `mise settings set [VARIABLE]=[VALUE]` or by setting the environment variable listed.
+使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置下方列出的环境变量来进行配置。
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="gem" :level="3" />
 
-## Tool Options
+## 工具选项
 
-The following [tool-options](/dev-tools/#tool-options) are available for the `gem` backend—these
-go in `[tools]` in `mise.toml`.
+以下 [tool-options](/dev-tools/#tool-options) 适用于 `gem` 后端——这些内容应放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
 
-Set environment variables for the `gem install` command:
+为 `gem install` 命令设置环境变量：
 
 ```toml
 [tools]

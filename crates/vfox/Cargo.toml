@@ -1,6 +1,6 @@
 [package]
 name = "vfox"
-version = "2026.5.0"
+version = "2026.7.2"
 edition = "2024"
 license = "MIT"
 description = "Interface to vfox plugins"
@@ -28,11 +28,12 @@ name = "vfox-cli"
 path = "src/bin.rs"
 
 [dependencies]
+glob = "0.3"
 homedir = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 itertools = "0.15"
 log = "0.4"
-mlua = { version = "0.11", features = [
+mlua = { version = "0.12", features = [
   "async",
   "lua51",
   "macros",
@@ -49,7 +50,12 @@ toml = "1.0"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "fs", "io-util", "time"] }
 url = "2"
-xx = { version = "2", default-features = false, features = ["archive", "hash"] }
+xx = { version = "2", default-features = false, features = [
+  "archive",
+  "hash",
+  "hash_sha1",
+  "hash_md5",
+] }
 
 # cli dependencies
 env_logger = { version = "0.11", optional = true }

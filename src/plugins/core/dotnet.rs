@@ -76,7 +76,7 @@ impl DotnetPlugin {
         let sdks = CmdLineRunner::new(DOTNET_BIN)
             .with_pr(ctx.pr.as_ref())
             .arg("--list-sdks")
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .envs(self.exec_env(&ctx.config, &ctx.ts, tv).await?)
             .prepend_path(self.list_bin_paths(&ctx.config, tv).await?)?
             .read()
@@ -155,10 +155,6 @@ impl Backend for DotnetPlugin {
             .collect())
     }
 
-    async fn _idiomatic_filenames(&self) -> Result<Vec<String>> {
-        Ok(vec!["global.json".into()])
-    }
-
     async fn _parse_idiomatic_file(&self, path: &Path) -> Result<Vec<String>> {
         let content = file::read_to_string(path)?;
         let global_json: GlobalJson = serde_json::from_str(&content)?;
@@ -209,7 +205,7 @@ impl Backend for DotnetPlugin {
             .set_message(format!("Installing .NET {} {}", install_type, tv.version));
         install_cmd(&script_path, &install_dir, &tv.version, runtime.as_deref())
             .with_pr(ctx.pr.as_ref())
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .envs(self.exec_env(&ctx.config, &ctx.ts, &tv).await?)
             .execute()?;
 

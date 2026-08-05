@@ -6,6 +6,7 @@ mise.file = ['.test-env']
 EOF
 echo FOO_FROM_FILE=foo_from_file >.test-env
 echo TEST_ENV2=foo >.test-env2
+assert_contains "mise env 2>&1" "deprecated [config.env.mise]"
 assert "mise x -- env | grep FOO_FROM_FILE" "FOO_FROM_FILE=foo_from_file"
 assert "MISE_ENV_FILE=.test-env2 mise x -- env | grep TEST_ENV2" "TEST_ENV2=foo"
 
@@ -27,7 +28,16 @@ cat <<EOF >mise.toml
 _.file = { value = 'b.json' }
 EOF
 echo '{"B": 2}' >b.json
+assert_contains "mise env 2>&1" "deprecated [config.directive.value]"
 assert "mise env | grep -v PATH" "export B=2"
+
+cat <<EOF >mise.toml
+[env]
+_.file = { values = ['a', 'b.json'] }
+EOF
+assert_contains "mise env 2>&1" "deprecated [config.directive.values]"
+assert "mise env | grep -v PATH" "export A=1
+export B=2"
 
 cat <<EOF >mise.toml
 [env]
@@ -60,6 +70,17 @@ echo 'export A=1' >a
 echo '{"B": 2}' >b.json
 assert "mise env | grep -v PATH" "export A=1
 export B=2"
+
+# Structured env files are data, so shell-like values must remain literal even
+# when matching variables exist in the process environment.
+cat <<EOF >mise.toml
+[env]
+_.file = 'password-hash.json'
+EOF
+# shellcheck disable=SC2016
+echo '{"FOO": "$6$salt$hash"}' >password-hash.json
+assert_contains "salt=changed hash=changed mise env -s bash 2>&1" "export FOO='\$6\$salt\$hash'"
+assert_not_contains "mise env -s bash 2>&1" "env var 'salt' is not defined"
 
 cat <<EOF >mise.toml
 [env]

@@ -1,8 +1,7 @@
-use crate::exit;
-use crate::task::task_output::TaskOutput;
 use crate::task::task_output_handler::OutputHandler;
 use crate::task::{FailedTasks, Task};
 use crate::ui::{style, time};
+use crate::{Result, request_exit};
 
 /// Handles display of task execution results and failure summaries
 pub struct TaskResultsDisplay {
@@ -10,6 +9,7 @@ pub struct TaskResultsDisplay {
     failed_tasks: FailedTasks,
     continue_on_error: bool,
     show_timings: bool,
+    interrupted: bool,
 }
 
 impl TaskResultsDisplay {
@@ -18,28 +18,36 @@ impl TaskResultsDisplay {
         failed_tasks: FailedTasks,
         continue_on_error: bool,
         show_timings: bool,
+        interrupted: bool,
     ) -> Self {
         Self {
             output_handler,
             failed_tasks,
             continue_on_error,
             show_timings,
+            interrupted,
         }
     }
 
     /// Display final results and handle failures
-    pub fn display_results(&self, num_tasks: usize, timer: std::time::Instant) {
+    pub fn display_results(&self, num_tasks: usize, timer: std::time::Instant) -> Result<()> {
         self.display_keep_order_output();
         self.display_timing_summary(num_tasks, timer);
+        if self.interrupted {
+            return Err(request_exit(130));
+        }
         self.maybe_print_failure_summary();
-        self.exit_if_failed();
+        self.exit_if_failed()?;
+        Ok(())
     }
 
-    /// Flush any remaining keep-order output (safety net)
+    /// Flush any remaining keep-order output (safety net).
+    ///
+    /// No task context is available here, so flush unconditionally rather than
+    /// gating on the run-wide output mode: `flush_all` is a no-op when nothing
+    /// was buffered, and per-task `output = "keep-order"` overrides must still be
+    /// drained even when the global default isn't keep-order.
     fn display_keep_order_output(&self) {
-        if self.output_handler.output(None) != TaskOutput::KeepOrder {
-            return;
-        }
         self.output_handler
             .keep_order_state
             .lock()
@@ -51,7 +59,7 @@ impl TaskResultsDisplay {
     fn display_timing_summary(&self, num_tasks: usize, timer: std::time::Instant) {
         if self.show_timings && num_tasks > 1 {
             let msg = format!("Finished in {}", time::format_duration(timer.elapsed()));
-            let _ = calm_io::stderrln!("{}", style::edim(msg));
+            safe_eprintln!("{}", style::edim(msg));
         }
     }
 
@@ -67,7 +75,7 @@ impl TaskResultsDisplay {
         }
 
         let count = failed.len();
-        let _ = calm_io::stderrln!("{} {} task(s) failed:", style::ered("ERROR"), count);
+        safe_eprintln!("{} {} task(s) failed:", style::ered("ERROR"), count);
         for (task, status) in &failed {
             let prefix = task.estyled_prefix();
             let status_str = status
@@ -77,8 +85,8 @@ impl TaskResultsDisplay {
         }
     }
 
-    /// Exit if any tasks failed
-    fn exit_if_failed(&self) {
+    /// Request a failing exit status if any tasks failed
+    fn exit_if_failed(&self) -> Result<()> {
         if let Some((task, status)) = self.failed_tasks.lock().unwrap().first() {
             let prefix = task.estyled_prefix();
             self.eprint(
@@ -86,8 +94,9 @@ impl TaskResultsDisplay {
                 &prefix,
                 &format!("{} task failed", style::ered("ERROR")),
             );
-            exit(status.unwrap_or(1));
+            return Err(request_exit(status.unwrap_or(1)));
         }
+        Ok(())
     }
 
     /// Print error message for a task

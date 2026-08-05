@@ -26,13 +26,11 @@
             inputsFrom = [ mise ];
 
             nativeBuildInputs = with pkgs; [
-              just
               clippy
               rustfmt
               shellcheck
               shfmt
               nodejs
-              cargo-release
               cargo-insta
             ];
           };

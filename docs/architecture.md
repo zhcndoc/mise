@@ -25,9 +25,9 @@ mise 是一个基于 Rust 的工具，采用模块化架构，围绕三个核心
 CLI 层提供用户界面，并将请求委派给核心功能：
 
 - **模块化命令**：每个命令都是一个独立模块（[`install.rs`](https://github.com/jdx/mise/blob/main/src/cli/install.rs)、[`use.rs`](https://github.com/jdx/mise/blob/main/src/cli/use.rs)、[`run.rs`](https://github.com/jdx/mise/blob/main/src/cli/run.rs) 等）
-- **参数解析**：利用 [`clap`](https://clap.rs) 进行稳健的 CLI 解析和校验
+- **参数解析**：利用 [`clap`](https://docs.rs/clap) 实现健壮的 CLI 解析与验证
 - **异步命令执行**：所有命令都支持并发操作
-- **统一错误处理**：在所有命令之间保持一致的错误报告
+- **统一错误处理**：所有命令采用一致的错误报告方式
 
 **关键命令架构：**
 
@@ -46,7 +46,7 @@ pub trait Backend: Debug + Send + Sync {
     async fn list_remote_versions(&self, config: &Arc<Config>) -> Result<Vec<String>>;
     async fn install_version(&self, ctx: &InstallContext, tv: ToolVersion) -> Result<ToolVersion>;
     async fn uninstall_version(&self, tv: &ToolVersion) -> Result<()>;
-    // ... 其他生命周期管理方法
+    // ... other lifecycle management methods
 }
 ```
 
@@ -54,7 +54,7 @@ pub trait Backend: Debug + Send + Sync {
 
 - **核心后端**：原生 Rust 实现，性能最高
 - **语言包管理器**：npm、pipx、cargo、gem、go modules
-- **通用安装器**：github（GitHub releases）、aqua（综合包管理）
+- **通用安装器**：github（GitHub 发布版本）、aqua（综合包管理）
 - **插件系统**：[后端插件](backend-plugin-development.md)（增强方法）、[工具插件](tool-plugin-development.md)（基于 hook）、[asdf 插件](asdf-legacy-plugins.md)（传统）
 
 有关实现新后端的指导，请参见 [贡献指南](contributing.md#adding-backends)。有关后端系统的详细设计，请参见 [后端架构](dev-tools/backend_architecture.md)。
@@ -71,7 +71,7 @@ pub trait ConfigFile: Debug + Send + Sync {
     fn to_tool_request_set(&self) -> Result<ToolRequestSet>;
     fn env_entries(&self) -> Result<Vec<EnvDirective>>;
     fn tasks(&self) -> Vec<&Task>;
-    // ... 其他配置方法
+    // ... other configuration methods
 }
 ```
 
@@ -133,7 +133,7 @@ pub trait ConfigFile: Debug + Send + Sync {
 
 支持多种插件架构的扩展层：
 
-**Plugin Trait：**
+**插件 Trait：**
 
 ```rust
 pub trait Plugin: Debug + Send {
@@ -141,7 +141,7 @@ pub trait Plugin: Debug + Send {
     fn path(&self) -> PathBuf;
     async fn install(&self, config: &Arc<Config>, pr: &dyn SingleReport) -> Result<()>;
     async fn update(&self, pr: &dyn SingleReport, gitref: Option<String>) -> Result<()>;
-    // ... 生命周期管理方法
+    // ... lifecycle management methods
 }
 ```
 
@@ -164,7 +164,7 @@ pub trait Shell: Display {
     fn activate(&self, opts: ActivateOptions) -> String;
     fn set_env(&self, k: &str, v: &str) -> String;
     fn unset_env(&self, k: &str) -> String;
-    // ... Shell 特定方法
+    // ... shell-specific methods
 }
 ```
 
@@ -189,7 +189,7 @@ pub trait Shell: Display {
 - `CacheManager<T>` - 支持 TTL 的通用缓存
 - 数据使用 msgpack 序列化并通过 zstd 压缩，以实现高效存储
 - 基于文件时间戳的自动缓存失效
-- 每个后端独立缓存隔离，保障数据完整性
+- 每个后端独立缓存隔离，保障数据完整性。
 
 ## 测试架构
 
@@ -401,4 +401,4 @@ cargo test
 如需更深入地了解特定子系统：
 
 - **[任务架构](tasks/architecture.md)** - 任务依赖系统、并行执行引擎以及任务发现机制的详细设计
-- **[后端架构](dev-tools/backend_architecture.md)** - 后端类型、trait 系统以及不同安装方式工作原理的深入指南
+- **[后端架构](dev-tools/backend_architecture.md)** - 后端类型、trait 系统以及不同安装方式工作原理的深入指南。

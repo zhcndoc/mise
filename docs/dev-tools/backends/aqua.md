@@ -9,10 +9,14 @@
 这里有一个包条目的示例：[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml)。
 mise 内置了一个 aqua 的重新实现，它知道如何处理这些文件来安装工具。
 
-截至本文撰写时，aqua 对 mise 来说还相对较新，而且由于许多工具正从
-asdf 转换到 aqua，aqua 工具中可能还有一些需要进一步收紧的配置。
-我在下面列出了一些常见问题；如果你发现问题，非常强烈建议你把修改贡献回 aqua registry。
-维护者响应非常迅速，也很容易合作。
+默认情况下，使用内置的快照。启用
+[`registry_floating`](/configuration/settings.html#registry_floating) 设置后，会先检查当前的
+官方 aqua registry，同时保留内置快照作为备用。它还会让 mise 的简写 registry 跟随更新；
+有关其中的权衡和缓存行为，请参阅[浮动 registry](/registry.html#floating-registries)。
+
+截至目前，aqua 对 mise 来说还比较新，并且由于许多工具正在从
+asdf 转换为 aqua，aqua 工具中的一些配置可能需要进一步完善。下面列出了一些常见问题，
+如果你发现问题，强烈建议将修改贡献回 aqua registry。维护者响应非常迅速，也非常乐于合作。
 
 如果其他方法都失败了，你可以通过 [`MISE_DISABLE_BACKENDS=aqua`](/configuration/settings.html#disable_backends) 完全禁用 aqua。
 
@@ -24,8 +28,8 @@ asdf 转换到 aqua，aqua 工具中可能还有一些需要进一步收紧的�
 
 ## 自定义注册表
 
-将 [`aqua.registries`](/configuration/settings.html#aqua-registries) 设置为在内置注册表之前检查自定义 aqua
-注册表仓库：
+设置 [`aqua.registries`](/configuration/settings.html#aqua-registries)，即可在内置注册表之前检查自定义 aqua
+注册表源：
 
 ```toml
 [settings]
@@ -42,9 +46,22 @@ aqua.registries = [
 ]
 ```
 
-mise 会从每个仓库根目录下载 `registry.yaml`，如有需要则回退到 `registry.yml`。
-下载的注册表源会根据 [`aqua.registry_cache_ttl`](/configuration/settings.html#aqua-registry_cache_ttl) 缓存到
-`MISE_CACHE_DIR` 下，默认值为一周。在 `MISE_AQUA_REGISTRIES` 中，多个注册表 URL 之间用逗号分隔。
+每个源可以是仓库 URL、直接指向 `registry.yaml` 或 `registry.yml` 文件的 URL，或者使用绝对路径
+`file://` URL 指定的本地目录或注册表文件：
+
+```toml
+[settings]
+aqua.registries = [
+  "file:///absolute/path/to/aqua-registry",
+  "file:///absolute/path/to/registry.yaml",
+  "https://example.com/registry.yaml",
+]
+```
+
+对于仓库和目录源，mise 会从源根目录加载 `registry.yaml`，如有需要则回退到 `registry.yml`。远程注册表源会根据
+[`aqua.registry_cache_ttl`](/configuration/settings.html#aqua-registry_cache_ttl) 缓存到
+`MISE_CACHE_DIR` 下，该设置默认为一周。本地 `file://` 源会绕过下载源缓存，因此注册表下次加载时会读取
+更改后的内容。在 `MISE_AQUA_REGISTRIES` 中，请使用逗号分隔多个注册表 URL。
 
 当刷新后的注册表源被下载后，mise 会对该源进行哈希处理，并使用该哈希作为编译后注册表缓存路径的一部分。
 当新的编译缓存成功加载或写入时，会清理同一注册表 URL 的旧编译缓存。
@@ -132,9 +149,9 @@ import Settings from '/components/settings.vue';
 
 Aqua 后端支持多种安全验证方法，以确保下载工具的完整性和真实性。mise 为所有验证方法提供了**原生 Rust 实现**，无需依赖 `cosign`、`slsa-verifier` 或 `gh` 等外部 CLI 工具。
 
-### GitHub Artifact Attestations
+### GitHub 制品证明
 
-GitHub Artifact Attestations 提供加密证明，表明制品是由特定的 GitHub Actions 工作流构建的。mise 原生验证这些证明，以确保下载工具的真实性和完整性。
+GitHub 制品证明提供加密证明，表明制品是由特定的 GitHub Actions 工作流构建的。mise 原生验证这些证明，以确保下载工具的真实性和完整性。
 
 **要求：**
 
@@ -144,7 +161,7 @@ GitHub Artifact Attestations 提供加密证明，表明制品是由特定的 Gi
 **配置：**
 
 ```bash
-# 启用/禁用 GitHub artifact attestations 验证（默认：true）
+# 启用/禁用 GitHub 制品证明验证（默认：true）
 export MISE_AQUA_GITHUB_ATTESTATIONS=true
 ```
 
@@ -204,7 +221,7 @@ Aqua 还支持：
 
 ```
 ✓ 已下载 cli/cli v2.50.0
-✓ GitHub artifact attestations 已验证
+✓ GitHub 制品证明已验证
 ✓ 工具安装成功
 ```
 
@@ -232,18 +249,18 @@ export MISE_AQUA_SLSA=false
 export MISE_AQUA_MINISIGN=false
 ```
 
-## Common aqua issues
+## 常见的 aqua 问题
 
 以下是我在使用 aqua 工具时见过的一些常见问题。
 
-### Supported env missing
+### 缺少受支持的环境
 
 aqua 注册表为每个工具定义了 os/arch 的支持环境。我注意到其中一些
 只是缺少实际上受支持的 os/arch 组合——这可能是因为该工具的注册表创建之后才加入的。
 
 修复很简单，只需编辑相关工具 `registry.yaml` 中的 `supported_envs` 部分即可。
 
-### Using `version_filter` instead of `version_prefix`
+### 使用 `version_filter` 而不是 `version_prefix`
 
 这是一个很奇怪的问题，会在 mise 中引发奇怪的故障。一般来说，在 mise 里我们喜欢像
 `1.2.3` 这样的版本号，不带 `v1.2.3` 或 `cli-v1.2.3` 之类的装饰。这种一致性不仅让 `mise.toml`

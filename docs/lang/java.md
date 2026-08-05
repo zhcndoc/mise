@@ -2,7 +2,7 @@
 
 像 `sdkman` 一样，`mise` 可以在同一系统上管理多个版本的 Java。
 
-> 以下是使用 java mise 核心插件的说明。当没有安装名为“java”的 git 插件时，会使用它。如果你想使用 [asdf-java](https://github.com/halcyon/asdf-java) ，
+> 以下是使用 mise 的 java 核心插件的说明。当没有安装名为“java”的 Git 插件时，会使用它。如果你想使用 [asdf-java](https://github.com/halcyon/asdf-java)，
 > 那么请使用 `mise plugins install java GIT_URL`。
 
 这部分代码位于 mise 仓库中的
@@ -91,7 +91,7 @@ ln -s ~/.sdkman/candidates/java/21.0.1-open ~/.local/share/mise/installs/java/21
 cp ~/.local/share/mise/installs/java/21.0.1-open/lib/libjli.dylib ~/.local/share/mise/installs/java/21.0.1-open/Contents/MacOS/libjli.dylib
 ```
 
-4. 不要忘记通过确保在 [mise 缓存](https://mise.en.dev/directories.html#cache-mise) 中你的版本存在一个 **空** 目录，来保证缓存被阻止且有效：
+4. 别忘了确保缓存被阻止且有效，方法是确保 [mise 缓存](https://mise.jdx.dev/directories.html#cache-mise) 中存在一个与你的版本对应的**空**目录：
    例如：
 
 ```sh
@@ -108,7 +108,7 @@ mise/java/21.0.1-open:
 
 ### `install_env`
 
-为 core `java` 后端运行的安装时命令设置环境变量：
+为核心 `java` 后端运行的安装时命令设置环境变量：
 
 ```toml
 [tools]

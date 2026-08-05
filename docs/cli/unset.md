@@ -2,6 +2,7 @@
 # `mise unset`
 
 - **用法**: `mise unset [-f --file <FILE>] [-g --global] [ENV_KEY]…`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/unset.rs`](https://github.com/jdx/mise/blob/main/src/cli/unset.rs)
 
 从配置文件中移除环境变量。
@@ -12,8 +13,8 @@
 
 ### `[ENV_KEY]…`
 
-要删除的环境变量
-例如：NODE_ENV
+要删除的环境变量  
+例如：NODE_ENV。
 
 ## 标志
 
@@ -21,7 +22,9 @@
 
 指定要使用的文件，而不是 `mise.toml`
 
-默认为 [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) 环境变量，或 `mise.toml`。使用 [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) 来选择不同的全局配置路径。
+可以是文件路径或目录。如果提供的是目录，将在该目录中创建或使用 mise.toml。
+
+默认为 [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) 环境变量，或 `mise.toml`。使用 [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) 选择其他全局配置路径。
 
 ### `-g --global`
 

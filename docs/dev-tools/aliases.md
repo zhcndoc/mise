@@ -4,7 +4,7 @@
 `[alias]` 已重命名为 `[tool_alias]`，以将其与 `[shell_alias]` 区分开来。
 旧的 `[alias]` 键仍然有效，但已被弃用。
 
-对于 shell 命令别名（如 `alias ll='ls -la'`），请参见 [Shell Aliases](/shell-aliases)。
+对于 shell 命令别名（如 `alias ll='ls -la'`），请参见 [Shell 别名](/shell-aliases)。
 :::
 
 ## 别名后端
@@ -16,6 +16,20 @@
 node = 'github:company/our-custom-node'   # https://github.com/company/our-custom-node 的简写
 erlang = 'aqua:company/our-custom-erlang' # 使用一个 aqua 注册表条目
 ```
+
+这也可以用于从同一个 GitHub 版本中安装多个工具：
+
+```toml [~/.config/mise/config.toml]
+[tool_alias]
+dhall-json = 'github:dhall-lang/dhall-haskell'
+dhall-lsp = 'github:dhall-lang/dhall-haskell'
+
+[tools]
+dhall-json = { version = "v1.42.2", matching = "dhall-json" }
+dhall-lsp = { version = "latest", matching = "dhall-lsp-server" }
+```
+
+上面的示例使用了 [GitHub 后端的 `matching`](backends/github#matching) 功能，从同一个 GitHub 仓库的不同版本中下载两个不同的二进制文件。
 
 ## 别名版本
 

@@ -35,7 +35,7 @@ run = "pytest --cov"  # 在保留 tools、depends 的同时覆盖 run
 
 ## 模板命名
 
-模板使用冒号（`:`）分隔符进行命名空间划分，类似于 monorepo 中的任务命名约定：
+模板使用冒号（`:`）分隔符进行命名空间划分，类似于单体仓库中的任务命名约定：
 
 - `python:build`
 - `python:test`
@@ -46,18 +46,19 @@ run = "pytest --cov"  # 在保留 tools、depends 的同时覆盖 run
 
 当一个任务扩展一个模板时，字段会按照以下规则进行合并：
 
-| 字段                                              | 行为                                                     |
-| ------------------------------------------------- | -------------------------------------------------------- |
-| `run`, `run_windows`                              | 本地覆盖完全替换                                         |
-| `tools`                                           | 深度合并（本地工具会追加/覆盖模板）                       |
-| `env`                                             | 深度合并（本地环境变量会追加/覆盖模板）                   |
-| `depends`, `depends_post`, `wait_for`             | 本地覆盖完全替换（不合并）                                |
-| `dir`                                             | 本地覆盖；如果模板中未设置，则默认使用 config_root       |
-| `sources`, `outputs`                              | 本地覆盖完全替换                                         |
-| Sandbox deny 字段                                 | 与任务本地设置组合                                       |
-| Sandbox allow 字段                                | 模板和值任务本地值会合并                                 |
-| `description`, `shell`, `timeout`, 等             | 本地覆盖模板（如果已设置）                               |
-| `quiet`, `hide`, `raw`, `interactive`, `raw_args` | 模板不支持（需在每个任务中显式设置）                       |
+| 字段                                              | 行为                                                        |
+| ------------------------------------------------- | ----------------------------------------------------------- |
+| `run`, `run_windows`                              | 本地设置完全覆盖                                            |
+| `tools`                                           | 深度合并（添加本地工具，或覆盖模板中的工具）                |
+| `env`                                             | 深度合并（添加本地环境变量，或覆盖模板中的环境变量）        |
+| `depends`, `depends_post`, `wait_for`             | 本地设置完全覆盖（不合并）                                  |
+| `dir`                                             | 本地设置覆盖；如果模板中未设置，则默认为 config_root        |
+| `sources`, `outputs`, `cache`                     | 本地设置完全覆盖                                            |
+| `output`                                          | 本地设置覆盖模板设置（如果已设置）                          |
+| 沙箱拒绝字段                                      | 与任务本地设置组合                                          |
+| 沙箱允许字段                                      | 合并模板值和任务本地值                                      |
+| `description`, `shell`, `timeout` 等              | 本地设置覆盖模板设置（如果已设置）                          |
+| `quiet`, `hide`, `raw`, `interactive`, `raw_args` | 模板不支持（在每个任务上显式设置）                          |
 
 ### 示例：Tools 的深度合并
 
@@ -112,7 +113,7 @@ env = { PROJECT = "{{ config_root | basename }}" }
 - <code v-pre>{{ config_root }}</code> - 使用该模板的项目（不是定义模板的位置）
 - <code v-pre>{{ env.VAR }}</code> - 环境变量
 - <code v-pre>{{ cwd }}</code> - 当前工作目录
-- <code v-pre>{{ vars.* }}</code> - 来自配置的用户定义变量
+- <code v-pre>{{ vars.* }}</code> - 来自配置的用户定义变量。
 
 ## 单仓库使用
 
@@ -169,4 +170,4 @@ extends = "python:lint"
 - **全局模板**：在 `~/.config/mise/config.toml` 中定义模板，以便在所有项目中使用
 - **模板包**：从外部来源导入模板
 - **模式匹配规则**：根据文件检测自动应用模板（例如，当存在 `pyproject.toml` 时自动应用 `python:*` 模板）
-- **文件任务模板**：将模板定义为独立的脚本文件，类似于 [文件任务](/tasks/file-tasks)
+- **文件任务模板**：将模板定义为独立的脚本文件，类似于 [文件任务](/tasks/file-tasks)。

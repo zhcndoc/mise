@@ -1,12 +1,11 @@
 use crate::config::{Config, Settings};
-use crate::exit::exit;
 use crate::task::TaskOutput;
 use crate::ui::{self, ctrlc};
-use crate::{Result, backend};
+use crate::{Result, backend, request_exit};
 use crate::{cli::args::ToolArg, path::PathExt};
 use crate::{hook_env as hook_env_module, logger, migrate, shims};
-use clap::{ArgAction, CommandFactory, Parser, Subcommand};
-use eyre::bail;
+use clap::{ArgAction, CommandFactory, Subcommand};
+use eyre::{Report, bail};
 use std::path::PathBuf;
 
 mod activate;
@@ -36,6 +35,7 @@ mod hook_not_found;
 mod tool_alias;
 
 pub use hook_env::HookReason;
+mod command_effects;
 mod deps;
 pub(crate) mod edit;
 mod implode;
@@ -67,7 +67,7 @@ mod shell;
 mod shell_alias;
 mod sponsors;
 mod sync;
-mod system;
+pub(crate) mod system;
 mod tasks;
 mod test_tool;
 mod token;
@@ -211,7 +211,7 @@ pub enum Commands {
     Asdf(asdf::Asdf),
     Backends(backends::Backends),
     BinPaths(bin_paths::BinPaths),
-    Bootstrap(bootstrap::Bootstrap),
+    Bootstrap(bootstrap::DeferredBootstrap),
     Cache(cache::Cache),
     Completion(completion::Completion),
     Config(config::Config),
@@ -278,6 +278,15 @@ pub enum Commands {
     Which(which::Which),
 }
 
+/// Expand command sections that are deferred during normal startup. Use this
+/// only for full-tree introspection such as generated docs and validation.
+pub(crate) fn expand_deferred_subcommands(mut command: clap::Command) -> clap::Command {
+    *command
+        .find_subcommand_mut("bootstrap")
+        .expect("bootstrap command is registered") = bootstrap::full_command();
+    command
+}
+
 impl Commands {
     pub async fn run(self) -> Result<()> {
         match self {
@@ -287,7 +296,7 @@ impl Commands {
             Self::Backends(cmd) => cmd.run().await,
             Self::BinPaths(cmd) => cmd.run().await,
             Self::Bootstrap(cmd) => cmd.run().await,
-            Self::Cache(cmd) => cmd.run(),
+            Self::Cache(cmd) => cmd.run().await,
             Self::Completion(cmd) => cmd.run().await,
             Self::Config(cmd) => cmd.run().await,
             Self::Current(cmd) => cmd.run().await,
@@ -419,8 +428,55 @@ fn escape_args_after_separator(args: &[String], separator_idx: usize) -> Vec<Str
     result
 }
 
-fn first_non_global_arg_idx(cmd: &clap::Command, args: &[String]) -> Option<usize> {
-    let (flags_with_values, _) = get_global_flags(cmd);
+/// Long and short forms of the top-level flags that consume a following argument.
+///
+/// Hardcoded rather than derived because `env.rs` needs it from `Lazy` statics
+/// during startup — before anything has parsed arguments — and deriving it means
+/// building the entire clap tree, which costs ~3.1M instructions. Doing that
+/// there is what made every mise command ~6.3M instructions more expensive.
+///
+/// `test_global_flags_with_values_matches_clap` asserts this equals what clap
+/// reports, so adding a value-taking flag to [`Cli`] without updating this list
+/// fails CI rather than silently mis-parsing arguments.
+pub(crate) const GLOBAL_FLAGS_WITH_VALUES: &[&str] = &[
+    "--cd",
+    "-C",
+    "--env",
+    "-E",
+    "--jobs",
+    "-j",
+    "--profile",
+    "-P",
+    "--shell",
+    "-s",
+    "--tool",
+    "-t",
+    "--log-level",
+    "--output",
+];
+
+/// Index of the first argument that is not a global flag or one of its values.
+///
+/// Takes a `&Command` so callers that have already built one (argument parsing)
+/// use its real flag set. Callers without one want
+/// [`first_non_global_arg_idx_cached`].
+pub(crate) fn first_non_global_arg_idx(cmd: &clap::Command, args: &[String]) -> Option<usize> {
+    let flags = get_global_flags(cmd).0;
+    first_non_global_arg_idx_with(|f| flags.iter().any(|x| x == f), args)
+}
+
+/// As [`first_non_global_arg_idx`], against [`GLOBAL_FLAGS_WITH_VALUES`].
+///
+/// For callers with no `Command` to hand, which would otherwise build the whole
+/// tree just to read its top-level arguments.
+pub(crate) fn first_non_global_arg_idx_cached(args: &[String]) -> Option<usize> {
+    first_non_global_arg_idx_with(|f| GLOBAL_FLAGS_WITH_VALUES.contains(&f), args)
+}
+
+fn first_non_global_arg_idx_with(
+    takes_value: impl Fn(&str) -> bool,
+    args: &[String],
+) -> Option<usize> {
     let mut i = 1;
     while i < args.len() {
         let arg = &args[i];
@@ -433,12 +489,12 @@ fn first_non_global_arg_idx(cmd: &clap::Command, args: &[String]) -> Option<usiz
             return Some(i);
         }
 
-        let flag_takes_value = if arg.starts_with("--") {
+        let flag_takes_separate_value = if arg.starts_with("--") {
             if arg.contains('=') {
                 false
             } else {
                 let flag_name = arg.split('=').next().unwrap();
-                flags_with_values.iter().any(|f| f == flag_name)
+                takes_value(flag_name)
             }
         } else if let Some(flag_name) = arg.get(..2) {
             // `arg.get(..2)` (not `&arg[..2]`) avoids panicking when the arg is
@@ -446,12 +502,12 @@ fn first_non_global_arg_idx(cmd: &clap::Command, args: &[String]) -> Option<usiz
             // malformed byte becomes a multi-byte U+FFFD and byte index 2 may not
             // be a char boundary. A short flag is always ASCII, so a non-ASCII
             // prefix simply matches no value-taking flag.
-            flags_with_values.iter().any(|f| f == flag_name)
+            arg.len() == 2 && takes_value(flag_name)
         } else {
             false
         };
 
-        if flag_takes_value && i + 1 < args.len() {
+        if flag_takes_separate_value && i + 1 < args.len() {
             i += 2;
         } else {
             i += 1;
@@ -473,8 +529,8 @@ fn uses_deprecated_backends_alias(cmd: &clap::Command, args: &[String]) -> bool 
     )
 }
 
-fn warn_deprecated_backends_alias(cmd: &clap::Command, args: &[String]) {
-    if uses_deprecated_backends_alias(cmd, args) {
+fn warn_deprecated_backends_alias(uses_alias: bool) {
+    if uses_alias {
         deprecated_at!(
             "2026.4.0",
             "2027.4.0",
@@ -628,6 +684,10 @@ fn preprocess_args_for_naked_run(cmd: &clap::Command, args: &[String]) -> Vec<St
 
 impl Cli {
     pub async fn run(args: &Vec<String>) -> Result<()> {
+        run_with_exit_signal(Self::run_inner(args), ctrlc::exit_signal()).await
+    }
+
+    async fn run_inner(args: &Vec<String>) -> Result<()> {
         crate::env::ARGS.write().unwrap().clone_from(args);
         // Load .miserc.toml early, before MISE_ENV and other early settings are accessed.
         // This allows setting MISE_ENV in a config file instead of only via env vars.
@@ -638,30 +698,48 @@ impl Cli {
         // Fast-path for hook-env: exit early if nothing has changed
         // This avoids expensive backend::load_tools() and config loading
         if hook_env_module::should_exit_early_fast() {
+            measure!("logger", { logger::init() });
+            Settings::flush_deprecated_warnings_for_fast_exit();
             return Ok(());
         }
         measure!("logger", { logger::init() });
         check_working_directory();
         measure!("handle_shim", { shims::handle_shim().await })?;
-        ctrlc::init();
         let print_version = version::print_version_if_requested(args)?;
-        let _ = measure!("backend::load_tools", { backend::load_tools().await });
-
+        // Clap's tool argument parsers consult installed plugin/tool metadata while
+        // resolving registry options. Initialize that filesystem-only state before
+        // parsing, while leaving full backend loading until after registry refresh.
+        if !print_version {
+            measure!("install_state::init", {
+                crate::toolset::install_state::init().await?
+            });
+        }
         // Pre-process args to handle naked runs before clap parsing
-        let cmd = Cli::command();
+        let cmd = measure!("build_cli_command", { Cli::command() });
         let processed_args = preprocess_args_for_naked_run(&cmd, args);
         // Escape flags after task names so they go to tasks, not mise
         let processed_args = escape_task_args(&cmd, &processed_args);
+        let deprecated_backends_alias = uses_deprecated_backends_alias(&cmd, args);
 
+        // Reuse the already-built clap command rather than letting
+        // `Cli::parse_from` construct the whole tree a second time.
         let cli = measure!("get_matches_from", {
-            Cli::parse_from(processed_args.iter())
-        });
+            let matches = cmd
+                .try_get_matches_from(processed_args.iter())
+                .map_err(clap_error)?;
+            <Cli as clap::FromArgMatches>::from_arg_matches(&matches)
+                .map_err(|err| clap_error(err.format(&mut Cli::command())))
+        })?;
         // Validate --cd path BEFORE Settings processes it and changes the directory
         validate_cd_path(&cli.cd)?;
         measure!("add_cli_matches", { Settings::add_cli_matches(&cli) });
         let _ = measure!("settings", { Settings::try_get() });
         measure!("logger", { logger::init() });
-        warn_deprecated_backends_alias(&cmd, args);
+        if !print_version {
+            measure!("registry::refresh", { crate::registry::refresh().await });
+            let _ = measure!("backend::load_tools", { backend::load_tools().await });
+        }
+        warn_deprecated_backends_alias(deprecated_backends_alias);
         measure!("migrate", { migrate::run().await });
         if let Err(err) = crate::cache::auto_prune() {
             warn!("auto_prune failed: {err:?}");
@@ -671,7 +749,7 @@ impl Cli {
         trace!("MISE_BIN: {}", crate::env::MISE_BIN.display_user());
         if print_version {
             version::show_latest().await;
-            exit(0);
+            return Err(request_exit(0));
         }
         let cmd = cli.get_command().await?;
         measure!("run {cmd}", { cmd.run().await })
@@ -685,7 +763,7 @@ impl Cli {
                 // Handle special case: "help", "-h", or "--help" as task should print help
                 if task == "help" || task == "-h" || task == "--help" {
                     Cli::command().print_help()?;
-                    exit(0);
+                    return Err(request_exit(0));
                 }
 
                 let config = Config::get().await?;
@@ -706,6 +784,11 @@ impl Cli {
                         task,
                         args: self.task_args.unwrap_or_default(),
                         args_last: self.task_args_last,
+                        affected: false,
+                        affected_base: None,
+                        affected_head: None,
+                        affected_explain: false,
+                        affected_json: false,
                         cd: self.cd,
                         continue_on_error: self.continue_on_error,
                         dry_run: self.dry_run,
@@ -725,6 +808,10 @@ impl Cli {
                         context_builder: Default::default(),
                         executor: None,
                         no_cache: Default::default(),
+                        task_cache: crate::task::TaskCacheMode::from_env()?,
+                        task_cache_explain: false,
+                        task_cache_explain_json: false,
+                        task_cache_stats: false,
                         timeout: None,
                         skip_deps: false,
                         skip_tools: false,
@@ -750,12 +837,30 @@ impl Cli {
                             .chain(self.task_args_last)
                             .collect(),
                     )?;
-                    exit(0);
+                    return Err(request_exit(0));
                 }
             }
             Cli::command().print_help()?;
-            exit(1)
+            Err(request_exit(1))
         }
+    }
+}
+
+async fn run_with_exit_signal<T>(
+    command: impl std::future::Future<Output = Result<T>>,
+    exit_signal: impl std::future::Future<Output = i32>,
+) -> Result<T> {
+    tokio::select! {
+        result = command => result,
+        code = exit_signal => Err(request_exit(code)),
+    }
+}
+
+fn clap_error(err: clap::Error) -> Report {
+    let code = err.exit_code();
+    match err.print() {
+        Ok(()) => request_exit(code),
+        Err(err) => err.into(),
     }
 }
 
@@ -832,7 +937,51 @@ fn validate_cd_path(cd: &Option<PathBuf>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// Guards [`GLOBAL_FLAGS_WITH_VALUES`]. It is hardcoded so that startup does
+    /// not have to build the clap tree; this keeps it honest. If you added a
+    /// value-taking flag to `Cli`, add it to that list too.
+    #[test]
+    fn test_global_flags_with_values_matches_clap() {
+        let derived = get_global_flags(&Cli::command()).0;
+        let mut derived_sorted = derived.clone();
+        derived_sorted.sort();
+        let mut hardcoded: Vec<String> = GLOBAL_FLAGS_WITH_VALUES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        hardcoded.sort();
+        assert_eq!(
+            hardcoded, derived_sorted,
+            "GLOBAL_FLAGS_WITH_VALUES is stale; clap reports {derived:?}"
+        );
+    }
     use super::*;
+
+    #[tokio::test]
+    async fn exit_signal_drops_command_future_before_returning() {
+        struct DropGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = DropGuard(dropped.clone());
+        let command = async move {
+            let _guard = guard;
+            std::future::pending::<Result<()>>().await
+        };
+
+        let err = run_with_exit_signal(command, std::future::ready(42))
+            .await
+            .unwrap_err();
+
+        assert_eq!(crate::exit::requested_exit_code(&err), Some(42));
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
 
     #[test]
     fn test_subcommands_are_sorted() {
@@ -842,6 +991,97 @@ mod tests {
             if subcmd.get_name() != "watch" {
                 clap_sort::assert_sorted(subcmd);
             }
+        }
+        let cmd = expand_deferred_subcommands(Cli::command());
+        let bootstrap = cmd
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "bootstrap")
+            .unwrap();
+        for subcommand in bootstrap.get_subcommands() {
+            clap_sort::assert_sorted(subcommand);
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_command_tree_is_deferred_until_parsing() {
+        let cmd = Cli::command();
+        let bootstrap = cmd
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "bootstrap")
+            .unwrap();
+        assert_eq!(bootstrap.get_subcommands().count(), 0);
+
+        let alias_args = vec![
+            "mise".to_string(),
+            "bs".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ];
+        assert_eq!(preprocess_args_for_naked_run(&cmd, &alias_args), alias_args);
+        assert!(cmd.clone().try_get_matches_from(alias_args).is_ok());
+
+        assert!(
+            cmd.try_get_matches_from(["mise", "bootstrap", "status", "--json"])
+                .is_ok()
+        );
+    }
+
+    /// Commands that name a config file to write to accept both spellings, so it
+    /// does not matter which one you remember. See
+    /// <https://github.com/jdx/mise/discussions/4881>.
+    ///
+    /// Asserted through clap rather than end-to-end because several of these
+    /// commands install or apply something when actually run.
+    #[test]
+    fn test_config_target_options_accept_both_names() {
+        // (command path, argument id, expected alias, available on this platform)
+        let cases: &[(&[&str], &str, &str, bool)] = &[
+            (&["use"], "path", "file", true),
+            (&["unuse"], "path", "file", true),
+            (&["set"], "file", "path", true),
+            (&["unset"], "file", "path", true),
+            (&["config", "get"], "file", "path", true),
+            (&["config", "set"], "file", "path", true),
+            (&["dotfiles", "add"], "path", "file", true),
+            (&["bootstrap", "packages", "use"], "path", "file", true),
+            (&["bootstrap", "packages", "import"], "path", "file", true),
+            // the brew manager is not registered on Windows
+            (
+                &["bootstrap", "packages", "brew", "tap"],
+                "path",
+                "file",
+                cfg!(not(windows)),
+            ),
+            (
+                &["bootstrap", "packages", "brew", "untap"],
+                "path",
+                "file",
+                cfg!(not(windows)),
+            ),
+        ];
+        let root = expand_deferred_subcommands(Cli::command());
+
+        for (path, arg_name, alias, available) in cases {
+            if !available {
+                continue;
+            }
+            let command = path.iter().fold(&root, |command, name| {
+                command
+                    .get_subcommands()
+                    .find(|subcommand| subcommand.get_name() == *name)
+                    .unwrap_or_else(|| panic!("missing command path {}", path.join(" ")))
+            });
+            let arg = command
+                .get_arguments()
+                .find(|arg| arg.get_id() == *arg_name)
+                .unwrap_or_else(|| panic!("missing --{arg_name} on {}", path.join(" ")));
+
+            assert!(
+                arg.get_visible_aliases()
+                    .is_some_and(|aliases| aliases.contains(alias)),
+                "missing visible --{alias} alias for --{arg_name} on {}",
+                path.join(" ")
+            );
         }
     }
 
@@ -937,6 +1177,26 @@ mod tests {
         ];
 
         assert!(!uses_deprecated_backends_alias(&cmd, &args));
+    }
+
+    #[test]
+    fn test_first_non_global_arg_idx_handles_attached_short_flag_values() {
+        let cmd = Cli::command();
+        let args = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>()
+        };
+
+        for args in [
+            args(&["mise", "-C", "/tmp", "lock"]),
+            args(&["mise", "-C/tmp", "lock"]),
+            args(&["mise", "-C=/tmp", "lock"]),
+            args(&["mise", "-j8", "lock"]),
+        ] {
+            let idx = first_non_global_arg_idx(&cmd, &args).unwrap();
+            assert_eq!(args[idx], "lock");
+        }
     }
 
     #[test]

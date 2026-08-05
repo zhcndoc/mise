@@ -1,4 +1,4 @@
-# mas <Badge type="warning" text="experimental" />
+# mas
 
 通过 [`mas`](https://github.com/mas-cli/mas) CLI 安装 Mac App Store 应用。
 
@@ -12,15 +12,10 @@
 Homebrew formulae 和 cask 一样。包名就是 App Store 应用 ID：
 一个可被 `mas install` 和 `mas upgrade` 接受的数字 ADAM ID。
 
-mise 不会隐式安装 `mas`。请先自行安装它，例如使用内置的 brew 管理器：
-
-```toml
-[bootstrap.packages]
-"brew:mas" = "latest"
-"mas:497799835" = "latest"
-```
-
-或者，如果你已经在全局配置了一个普通的 mise 工具，也可以这样安装：
+mise 不会隐式安装 `mas`。请先自行安装——上面示例中的
+`"brew:mas"` 条目通过内置的
+[brew 管理器](/bootstrap/packages/brew.html)完成安装——或者将其作为普通
+mise 工具安装：
 
 ```sh
 mise use -g mas

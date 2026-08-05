@@ -16,6 +16,9 @@ use crate::hooks::backend_list_versions::BackendListVersionsContext;
 use crate::hooks::env_keys::{EnvKey, EnvKeysContext};
 use crate::hooks::mise_env::{MiseEnvContext, MiseEnvResult};
 use crate::hooks::mise_path::MisePathContext;
+use crate::hooks::package::{
+    PackageActionContext, PackageActionResponse, PackageInstalledContext, PackageInstalledResponse,
+};
 use crate::hooks::parse_legacy_file::ParseLegacyFileResponse;
 use crate::hooks::post_install::PostInstallContext;
 use crate::hooks::pre_install::{PreInstall, PreInstallAttestation, VerifiedAttestation};
@@ -244,19 +247,32 @@ impl Vfox {
         version: &str,
         install_dir: ID,
     ) -> Result<InstallResult> {
+        self.install_with_download_dir(sdk, version, install_dir, &self.download_dir)
+            .await
+    }
+
+    pub async fn install_with_download_dir<ID: AsRef<Path>, DD: AsRef<Path>>(
+        &self,
+        sdk: &str,
+        version: &str,
+        install_dir: ID,
+        download_dir: DD,
+    ) -> Result<InstallResult> {
         self.install_plugin(sdk)?;
         let sdk = self.get_sdk_with_env(sdk)?;
         let pre_install = sdk.pre_install(version).await?;
         let install_dir = install_dir.as_ref();
+        let download_dir = download_dir.as_ref();
         trace!("{pre_install:?}");
         let mut verified_attestation = None;
         let mut checksum_verified = false;
         if let Some(url) = pre_install.url.as_ref().map(|s| Url::from_str(s)) {
-            let file = self.download(&url?, &sdk, version).await?;
+            let file = self.download(&url?, &sdk, version, download_dir).await?;
             verified_attestation = self.verify(&pre_install, &file).await?;
             self.extract(&file, install_dir)?;
-            // Note: sha1/md5 intentionally excluded — they are unimplemented! and
-            // not considered strong enough to satisfy the checksum_verified semantic.
+            // Note: sha1/md5 are verified in `verify`, but intentionally excluded here.
+            // mise stands this flag in for attestation when restoring lockfile provenance,
+            // so it guards against downgrades; a collision-broken hash must not satisfy it.
             checksum_verified = pre_install.sha256.is_some() || pre_install.sha512.is_some();
         }
 
@@ -264,7 +280,7 @@ impl Vfox {
             let sdk_info = sdk.sdk_info(version.to_string(), install_dir.to_path_buf())?;
             sdk.post_install(PostInstallContext {
                 root_path: install_dir.to_path_buf(),
-                runtime_version: self.runtime_version.clone(),
+                runtime_version: version.to_string(),
                 sdk_info: BTreeMap::from([(sdk_info.name.clone(), sdk_info)]),
             })
             .await?;
@@ -460,6 +476,30 @@ impl Vfox {
         plugin.backend_exec_env(ctx).await.map(|r| r.env_vars)
     }
 
+    pub async fn package_installed(
+        &self,
+        sdk: &str,
+        ctx: PackageInstalledContext,
+    ) -> Result<PackageInstalledResponse> {
+        self.get_sdk_with_env(sdk)?.package_installed(ctx).await
+    }
+
+    pub async fn package_install(
+        &self,
+        sdk: &str,
+        ctx: PackageActionContext,
+    ) -> Result<PackageActionResponse> {
+        self.get_sdk_with_env(sdk)?.package_install(ctx).await
+    }
+
+    pub async fn package_upgrade(
+        &self,
+        sdk: &str,
+        ctx: PackageActionContext,
+    ) -> Result<PackageActionResponse> {
+        self.get_sdk_with_env(sdk)?.package_upgrade(ctx).await
+    }
+
     pub async fn mise_path<T: serde::Serialize>(
         &self,
         sdk: &str,
@@ -490,16 +530,15 @@ impl Vfox {
         sdk.parse_legacy_file(file).await
     }
 
-    async fn download(&self, url: &Url, sdk: &Plugin, version: &str) -> Result<PathBuf> {
+    async fn download(
+        &self,
+        url: &Url,
+        sdk: &Plugin,
+        version: &str,
+        download_dir: &Path,
+    ) -> Result<PathBuf> {
         self.log_emit(format!("Downloading {url}"));
-        let filename = url
-            .path_segments()
-            .and_then(|mut s| s.next_back())
-            .ok_or("No filename in URL")?;
-        let path = self
-            .download_dir
-            .join(format!("{sdk}-{version}"))
-            .join(filename);
+        let path = Self::download_path_for(download_dir, &sdk.name, version, url)?;
         let url_str = url.to_string();
         let bytes = retry_async(&url_str, || async {
             let resp = CLIENT.get(url.clone()).send().await?;
@@ -514,6 +553,19 @@ impl Vfox {
         Ok(path)
     }
 
+    fn download_path_for(
+        download_dir: &Path,
+        sdk: &str,
+        version: &str,
+        url: &Url,
+    ) -> Result<PathBuf> {
+        let filename = url
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .ok_or("No filename in URL")?;
+        Ok(download_dir.join(format!("{sdk}-{version}")).join(filename))
+    }
+
     async fn verify(
         &self,
         pre_install: &PreInstall,
@@ -526,15 +578,16 @@ impl Vfox {
         if let Some(sha512) = &pre_install.sha512 {
             xx::hash::ensure_checksum_sha512(file, sha512)?;
         }
-        if let Some(_sha1) = &pre_install.sha1 {
-            unimplemented!("sha1")
+        if let Some(sha1) = &pre_install.sha1 {
+            ensure_checksum(file, "sha1", sha1, &xx::hash::file_hash_sha1(file)?)?;
         }
-        if let Some(_md5) = &pre_install.md5 {
-            unimplemented!("md5")
+        if let Some(md5) = &pre_install.md5 {
+            ensure_checksum(file, "md5", md5, &xx::hash::file_hash_md5(file)?)?;
         }
         let mut verified: Option<VerifiedAttestation> = None;
-        // Only skip attestation verification when the plugin provides a checksum
-        // (sha256/sha512) — otherwise there would be no integrity check at all.
+        // Only skip attestation verification when the plugin provides a strong checksum
+        // (sha256/sha512) — otherwise there would be no meaningful integrity check left.
+        // sha1/md5 are verified above but do not qualify: both are collision-broken.
         let has_checksum = pre_install.sha256.is_some() || pre_install.sha512.is_some();
         if let Some(attestation) = &pre_install.attestation
             && !(self.skip_verification && has_checksum)
@@ -702,6 +755,24 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Compare a checksum a plugin supplied against one computed from the downloaded file.
+///
+/// `xx::hash` ships `ensure_checksum_*` for sha256/sha512 only, so sha1 and md5 compare here.
+/// The expected value is lowercased because upstream checksum files are inconsistent about case
+/// while `xx::hash` always returns lowercase hex — the same normalisation mise's own
+/// `hash::ensure_checksum` applies, whose message this reuses.
+fn ensure_checksum(file: &Path, algo: &str, expected: &str, actual: &str) -> Result<()> {
+    let expected = expected.to_lowercase();
+    if actual != expected {
+        return Err(format!(
+            "Checksum mismatch for file {}:\nExpected: {algo}:{expected}\nActual:   {algo}:{actual}",
+            file.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,6 +794,68 @@ mod tests {
                 log_tx: None,
             }
         }
+    }
+
+    /// Canonical single-block test vectors for the ASCII string `abc`: SHA-1 from FIPS 180-1,
+    /// MD5 from RFC 1321 appendix A.5.
+    const ABC: &[u8] = b"abc";
+    const ABC_SHA1: &str = "a9993e364706816aba3e25717850c26c9cd0d89d";
+    const ABC_MD5: &str = "900150983cd24fb0d6963f7d28e17f72";
+
+    fn pre_install_with(sha1: Option<&str>, md5: Option<&str>) -> PreInstall {
+        PreInstall {
+            version: "1.0.0".to_string(),
+            url: None,
+            note: None,
+            sha256: None,
+            md5: md5.map(str::to_string),
+            sha1: sha1.map(str::to_string),
+            sha512: None,
+            // no attestation, so `verify` returns as soon as the checksums are done
+            attestation: None,
+        }
+    }
+
+    async fn verify_abc(pre_install: PreInstall) -> Result<()> {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("artifact.bin");
+        std::fs::write(&file, ABC).unwrap();
+        let vfox = Vfox::test();
+        vfox.verify(&pre_install, &file).await.map(|_| ())
+    }
+
+    /// Both of these arms used to be `unimplemented!()`, so a plugin returning either checksum
+    /// aborted the process — reported as `task N panicked with message "not implemented: sha1"`
+    /// in #5283.
+    #[tokio::test]
+    async fn verify_accepts_sha1_and_md5_checksums() {
+        verify_abc(pre_install_with(Some(ABC_SHA1), Some(ABC_MD5)))
+            .await
+            .unwrap();
+        // upstream checksum files are not consistent about case
+        verify_abc(pre_install_with(Some(&ABC_SHA1.to_uppercase()), None))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_a_mismatched_sha1() {
+        let err = verify_abc(pre_install_with(Some(&"0".repeat(40)), None))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Checksum mismatch"), "{err}");
+        assert!(err.contains(&format!("sha1:{ABC_SHA1}")), "{err}");
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_a_mismatched_md5() {
+        let err = verify_abc(pre_install_with(None, Some(&"0".repeat(32))))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Checksum mismatch"), "{err}");
+        assert!(err.contains(&format!("md5:{ABC_MD5}")), "{err}");
     }
 
     #[tokio::test]
@@ -765,6 +898,17 @@ mod tests {
         assert_eq!(keys[0].value, expected.to_string_lossy().into_owned());
     }
 
+    #[test]
+    fn test_download_path_for_uses_download_dir() {
+        let url = Url::parse("https://example.com/releases/tool.tar.gz").unwrap();
+        let download_dir = PathBuf::from("custom/downloads/vfox-dummy/1.0.0");
+        let path = Vfox::download_path_for(&download_dir, "dummy", "1.0.0", &url).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("custom/downloads/vfox-dummy/1.0.0/dummy-1.0.0/tool.tar.gz")
+        );
+    }
+
     #[tokio::test]
     async fn test_install_plugin() {
         let vfox = Vfox::test();
@@ -782,6 +926,11 @@ mod tests {
         vfox.install("dummy", "1.0.0", &install_dir).await.unwrap();
         // dummy plugin doesn't actually install binaries, so we just check the directory
         assert!(vfox.install_dir.join("dummy").join("1.0.0").exists());
+        assert_eq!(
+            file::read_to_string(vfox.install_dir.join("dummy").join("1.0.0").join("VERSION"))
+                .unwrap(),
+            "1.0.0"
+        );
         vfox.uninstall("dummy", "1.0.0").unwrap();
         assert!(!vfox.install_dir.join("dummy").join("1.0.0").exists());
         file::remove_dir_all(vfox.install_dir).unwrap();

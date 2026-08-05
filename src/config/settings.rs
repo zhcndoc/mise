@@ -1,5 +1,4 @@
 use crate::cli::Cli;
-use crate::config::ALL_TOML_CONFIG_FILES;
 use crate::duration;
 use crate::file::FindUp;
 use crate::platform::Platform;
@@ -22,8 +21,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{
     collections::{BTreeSet, HashSet},
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
+
+use super::{TOML_CONFIG_FILENAMES, load_config_paths};
 use url::Url;
 
 // settings are generated from settings.toml in the project root
@@ -48,6 +49,7 @@ pub struct SettingsMeta {
     // pub key: String,
     pub type_: SettingsType,
     pub description: &'static str,
+    pub env: Option<&'static str>,
     pub deprecated: Option<&'static str>,
     pub deprecated_warn_at: Option<&'static str>,
     pub deprecated_remove_at: Option<&'static str>,
@@ -97,8 +99,35 @@ pub enum NpmPackageManager {
     Auto,
     Npm,
     Aube,
+    AubeCli,
     Bun,
     Pnpm,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    Default,
+    strum::EnumString,
+    strum::Display,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SystemDepsMode {
+    /// prompt to install missing plugin system dependencies (falls back to `warn` non-interactively)
+    #[default]
+    Prompt,
+    /// install missing plugin system dependencies without prompting
+    Auto,
+    /// print missing plugin system dependencies and continue
+    Warn,
+    /// skip the plugin system dependency check
+    Ignore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -203,7 +232,16 @@ impl serde::Serialize for PythonUvVenvAuto {
 pub type SettingsPartial = <Settings as Config>::Layer;
 
 static BASE_SETTINGS: RwLock<Option<Arc<Settings>>> = RwLock::new(None);
+/// Caches the resolved `safe` value from the most recent settings load so
+/// `safe_mode()` answers correctly during the config parse pass that runs before
+/// settings are (re)loaded — e.g. after `Config::reset()`. This captures `safe`
+/// set via global config, which the `MISE_SAFE` env-var fallback cannot see.
+/// 0 = false, 1 = true, 2 = never loaded (fall back to the env var).
+static LAST_SAFE: AtomicU8 = AtomicU8::new(2);
 static CLI_SETTINGS: Mutex<Option<SettingsPartial>> = Mutex::new(None);
+static PENDING_DEPRECATED_SETTINGS: Lazy<Mutex<BTreeSet<&'static str>>> =
+    Lazy::new(Default::default);
+static DEPRECATED_WARNINGS_READY: AtomicBool = AtomicBool::new(false);
 static DEFAULT_SETTINGS: Lazy<SettingsPartial> = Lazy::new(|| {
     let mut s = SettingsPartial::empty();
     s.python.default_packages_file = Some(env::HOME.join(".default-python-packages"));
@@ -225,7 +263,115 @@ pub struct SettingsFile {
     pub settings: SettingsPartial,
 }
 
-fn warn_deprecated(key: &str) {
+fn parse_boolish_toml_value(value: &toml::Value) -> Option<bool> {
+    match value {
+        toml::Value::Boolean(value) => Some(*value),
+        toml::Value::Integer(0) => Some(false),
+        toml::Value::Integer(1) => Some(true),
+        toml::Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" | "true" | "1" | "on" => Some(true),
+            "n" | "no" | "false" | "0" | "off" => Some(false),
+            _ => None,
+        },
+        toml::Value::Table(table) => table.get("value").and_then(parse_boolish_toml_value),
+        _ => None,
+    }
+}
+
+fn tera_v1_from_env_config(raw: &toml::Value) -> Option<bool> {
+    raw.get("env")
+        .and_then(toml::Value::as_table)
+        .and_then(|env| env.get("MISE_TERA_V1"))
+        .and_then(parse_boolish_toml_value)
+}
+
+fn deprecated_settings_in_toml_table(settings: &toml::Table) -> Vec<&'static str> {
+    SETTINGS_META
+        .iter()
+        .filter_map(|(key, meta)| {
+            meta.deprecated?;
+            let value = nested_toml_value(settings, key)?;
+            should_warn_deprecated_value(value).then_some(*key)
+        })
+        .collect()
+}
+
+fn deprecated_settings_in_env_directives(raw: &toml::Value) -> Vec<&'static str> {
+    tera_v1_from_env_config(raw)
+        .is_some()
+        .then_some("tera_v1")
+        .into_iter()
+        .collect()
+}
+
+fn deprecated_settings_in_toml_config(raw: &toml::Value) -> Vec<&'static str> {
+    let mut deprecated = Vec::new();
+    if let Some(settings) = raw.get("settings").and_then(toml::Value::as_table) {
+        deprecated.extend(deprecated_settings_in_toml_table(settings));
+    }
+    deprecated.extend(deprecated_settings_in_env_directives(raw));
+    deprecated
+}
+
+fn warn_deprecated_env_settings() {
+    for (key, meta) in SETTINGS_META.iter() {
+        let Some(env_key) = meta.env else {
+            continue;
+        };
+        if meta.deprecated.is_some()
+            && env::var_os(env_key).is_some_and(|value| !value.as_os_str().is_empty())
+        {
+            warn_deprecated(key);
+        }
+    }
+}
+
+fn queue_deprecated(key: &'static str) {
+    PENDING_DEPRECATED_SETTINGS.lock().unwrap().insert(key);
+}
+
+fn queue_deprecated_settings(keys: impl IntoIterator<Item = &'static str>) {
+    for key in keys {
+        warn_deprecated(key);
+    }
+}
+
+fn nested_toml_value<'a>(table: &'a toml::Table, key: &str) -> Option<&'a toml::Value> {
+    let mut parts = key.split('.').collect_vec();
+    let last = parts.pop()?;
+    let mut current = table;
+    for part in parts {
+        current = current.get(part)?.as_table()?;
+    }
+    current.get(last)
+}
+
+fn should_warn_deprecated_value(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(value) => !value.is_empty(),
+        toml::Value::Array(value) => !value.is_empty(),
+        toml::Value::Table(value) => {
+            if value.get("unset").and_then(toml::Value::as_bool) == Some(true) {
+                return false;
+            }
+            match value.get("value") {
+                Some(value) => should_warn_deprecated_value(value),
+                None => !value.is_empty(),
+            }
+        }
+        _ => true,
+    }
+}
+
+fn warn_deprecated(key: &'static str) {
+    if !DEPRECATED_WARNINGS_READY.load(Ordering::SeqCst) {
+        queue_deprecated(key);
+        return;
+    }
+    warn_deprecated_now(key);
+}
+
+fn warn_deprecated_now(key: &'static str) {
     if let Some(meta) = SETTINGS_META.get(key)
         && let (Some(msg), Some(warn_at), Some(remove_at)) = (
             meta.deprecated,
@@ -307,6 +453,13 @@ impl Settings {
     }
 
     pub fn warn_default_package_file_deprecated(id: &'static str, package_type: &str) {
+        if SETTINGS_META
+            .get(id)
+            .is_some_and(|m| m.deprecated.is_some())
+        {
+            warn_deprecated(id);
+            return;
+        }
         deprecated_at!(
             "2026.11.0",
             "2027.11.0",
@@ -330,8 +483,10 @@ impl Settings {
                 CLI_SETTINGS.lock().unwrap().clone().unwrap_or_default(),
             ))
             .env();
+        time!("try_get builder1+env");
 
         let mut settings = sb.load()?;
+        time!("try_get load1");
         if let Some(mut cd) = settings.cd {
             static ORIG_PATH: Lazy<std::io::Result<PathBuf>> = Lazy::new(env::current_dir);
             if cd.is_relative() {
@@ -346,12 +501,16 @@ impl Settings {
                 CLI_SETTINGS.lock().unwrap().clone().unwrap_or_default(),
             ))
             .env();
+        time!("try_get builder2+env");
         for file in Self::all_settings_files() {
             sb = sb.preloaded(file);
         }
+        time!("try_get all_settings_files");
         sb = sb.preloaded(DEFAULT_SETTINGS.clone());
+        time!("try_get default_settings");
 
         settings = sb.load()?;
+        time!("try_get load2");
         if !settings.legacy_version_file {
             settings.idiomatic_version_file = Some(false);
         }
@@ -429,11 +588,35 @@ impl Settings {
         if cfg!(test) {
             settings.experimental = true;
         }
+        trace!("Settings: {:#?}", redacted_settings_for_debug(&settings));
         let settings = Arc::new(settings);
+        LAST_SAFE.store(u8::from(settings.safe), Ordering::Relaxed);
         *BASE_SETTINGS.write().unwrap() = Some(settings.clone());
         time!("try_get done");
-        trace!("Settings: {:#?}", settings);
         Ok(settings)
+    }
+
+    pub fn flush_deprecated_warnings() {
+        if CLI_SETTINGS.lock().unwrap().is_none() {
+            return;
+        }
+        Self::flush_deprecated_warnings_now();
+    }
+
+    pub fn flush_deprecated_warnings_for_fast_exit() {
+        Self::flush_deprecated_warnings_now();
+    }
+
+    fn flush_deprecated_warnings_now() {
+        DEPRECATED_WARNINGS_READY.store(true, Ordering::SeqCst);
+        warn_deprecated_env_settings();
+        let pending = {
+            let mut pending = PENDING_DEPRECATED_SETTINGS.lock().unwrap();
+            std::mem::take(&mut *pending)
+        };
+        for key in pending {
+            warn_deprecated_now(key);
+        }
     }
 
     /// Sets deprecated settings to new names
@@ -579,18 +762,31 @@ impl Settings {
     pub fn parse_settings_file(path: &Path) -> Result<SettingsPartial> {
         let raw = file::read_to_string(path)?;
         let mut raw: toml::Value = toml::from_str(&raw)?;
+        let tera_v1_from_env = tera_v1_from_env_config(&raw);
         if let Some(settings) = raw.get_mut("settings").and_then(toml::Value::as_table_mut) {
             strip_local_only_settings(settings, path, crate::config::is_global_config(path));
         }
+        let deprecated = deprecated_settings_in_toml_config(&raw);
         let settings_file: SettingsFile = raw.try_into()?;
-
-        Ok(normalize_hidden_config_aliases(settings_file.settings))
+        queue_deprecated_settings(deprecated);
+        let mut settings = normalize_hidden_config_aliases(settings_file.settings);
+        if settings.tera_v1.is_none() {
+            settings.tera_v1 = tera_v1_from_env;
+        }
+        Ok(settings)
     }
 
     fn all_settings_files() -> Vec<SettingsPartial> {
-        ALL_TOML_CONFIG_FILES
-            .iter()
-            .map(|p| Self::parse_settings_file(p))
+        // In safe mode, ignore `[settings]` from project (non-global) config so
+        // an untrusted repo cannot change mise's behavior during resolution
+        // (e.g. disable verification, redirect a backend/registry). Global and
+        // system config is operator-owned and still applies. A specific setting
+        // could be allowlisted here later if it is safe and necessary.
+        let safe_mode = Settings::safe_mode();
+        load_config_paths(&TOML_CONFIG_FILENAMES, false)
+            .into_iter()
+            .filter(|p| !safe_mode || crate::config::is_global_config(p))
+            .map(|p| Self::parse_settings_file(&p))
             .filter_map(|cfg| match cfg {
                 Ok(cfg) => Some(cfg),
                 Err(e) => {
@@ -621,6 +817,12 @@ impl Settings {
         *CLI_SETTINGS.lock().unwrap() = cli_settings;
         *BASE_SETTINGS.write().unwrap() = None;
         // Clear caches that depend on settings and environment
+        crate::config::config_file::config_root::reset();
+    }
+
+    /// Invalidate settings loaded from config files without discarding CLI overrides.
+    pub fn reload() {
+        *BASE_SETTINGS.write().unwrap() = None;
         crate::config::config_file::config_root::reset();
     }
 
@@ -701,7 +903,8 @@ impl Settings {
 
     pub fn as_dict(&self) -> eyre::Result<toml::Table> {
         let s = toml::to_string(self)?;
-        let table = toml::from_str(&s)?;
+        let mut table = toml::from_str(&s)?;
+        redact_settings_table(&mut table);
         Ok(table)
     }
 
@@ -711,7 +914,29 @@ impl Settings {
     }
 
     pub fn fetch_remote_versions_timeout(&self) -> Duration {
+        let timeout = self.configured_fetch_remote_versions_timeout();
+        if self.bound_remote_version_lookups() {
+            timeout.min(Duration::from_secs(3))
+        } else {
+            timeout
+        }
+    }
+
+    pub fn configured_fetch_remote_versions_timeout(&self) -> Duration {
         duration::parse_duration(&self.fetch_remote_versions_timeout).unwrap()
+    }
+
+    /// Whether remote-version lookups should use the aggressive fast-path budget
+    /// (a single ~3s attempt with no retries). This is on under `prefer_offline`
+    /// so shims and shell activation never stall — but NOT for commands whose
+    /// whole job is to enumerate remote versions/tags (`mise lock`, `ls-remote`,
+    /// `outdated`, `upgrade`), which must honor the full configured
+    /// `fetch_remote_versions_timeout` and retry budget even when
+    /// `prefer_offline` is set.
+    ///
+    /// See <https://github.com/jdx/mise/discussions/11185>.
+    pub fn bound_remote_version_lookups(&self) -> bool {
+        self.prefer_offline() && !env::REMOTE_FETCH_COMMAND.load(Ordering::Relaxed)
     }
 
     /// duration that remote version cache is kept for
@@ -729,6 +954,21 @@ impl Settings {
 
     pub fn http_timeout(&self) -> Duration {
         duration::parse_duration(&self.http_timeout).unwrap()
+    }
+
+    pub fn http_download_timeout(&self) -> Duration {
+        duration::parse_duration(&self.http_download_timeout).unwrap()
+    }
+
+    /// Fast-path commands should make at most one network attempt before falling
+    /// back to cached/local behavior. In particular, shims must not multiply a
+    /// stalled resolver timeout by the configured retry count.
+    pub fn http_retries(&self) -> i64 {
+        if self.bound_remote_version_lookups() {
+            0
+        } else {
+            self.http_retries
+        }
     }
 
     /// Returns true if offline mode is enabled via setting or CLI flag/env var.
@@ -757,6 +997,15 @@ impl Settings {
             .unwrap_or(crate::aqua::aqua_registry_wrapper::DEFAULT_AQUA_REGISTRY_CACHE_TTL)
     }
 
+    pub fn registry_cache_ttl(&self) -> Duration {
+        self.registry_cache_ttl
+            .as_deref()
+            .map(duration::parse_duration)
+            .transpose()
+            .unwrap()
+            .unwrap_or(duration::HOURLY)
+    }
+
     pub fn task_timeout_duration(&self) -> Option<Duration> {
         self.task
             .timeout
@@ -778,7 +1027,8 @@ impl Settings {
 
     pub fn partial_as_dict(partial: &SettingsPartial) -> eyre::Result<toml::Table> {
         let s = toml::to_string(partial)?;
-        let table = toml::from_str(&s)?;
+        let mut table = toml::from_str(&s)?;
+        redact_settings_table(&mut table);
         Ok(table)
     }
 
@@ -794,7 +1044,9 @@ impl Settings {
                 Self::UNIX_DEFAULT_INLINE_SHELL_ARGS,
             )
         };
-        split_default_shell_or_fallback(sa, fallback)
+        let mut shell = split_default_shell_or_fallback(sa, fallback)?;
+        self.maybe_no_profile(&mut shell);
+        Ok(shell)
     }
 
     pub fn default_file_shell(&self) -> Result<Vec<String>> {
@@ -809,7 +1061,17 @@ impl Settings {
                 Self::UNIX_DEFAULT_FILE_SHELL_ARGS,
             )
         };
-        split_default_shell_or_fallback(sa, fallback)
+        let mut shell = split_default_shell_or_fallback(sa, fallback)?;
+        self.maybe_no_profile(&mut shell);
+        Ok(shell)
+    }
+
+    /// Inject `-NoProfile` into a PowerShell shell command when
+    /// `windows_powershell_no_profile` is enabled. No-op for other shells.
+    pub fn maybe_no_profile(&self, shell: &mut Vec<String>) {
+        if self.windows_powershell_no_profile {
+            crate::path::inject_powershell_no_profile(shell);
+        }
     }
 
     pub fn os(&self) -> &str {
@@ -868,6 +1130,62 @@ impl Settings {
                     .iter()
                     .take_while(|a| *a != "--")
                     .any(|a| a == "--no-hooks")
+    }
+
+    /// Whether safe mode (`MISE_SAFE=1` or the `safe` setting) is active.
+    ///
+    /// Safe to call during the config parse pass: it reads the loaded setting
+    /// when settings are available, otherwise falls back to the `MISE_SAFE`
+    /// environment variable. This avoids triggering a recursive settings load
+    /// from `trust_check` (which runs while config files are being parsed,
+    /// before settings are loaded, e.g. after `Config::reset`). `safe` is
+    /// global-only, so it can only come from the environment or global config;
+    /// the env fallback covers the common `MISE_SAFE=1` case in that window.
+    pub fn safe_mode() -> bool {
+        if is_loaded() {
+            return Settings::get().safe;
+        }
+        // Settings not loaded (e.g. the config parse pass after Config::reset).
+        // Use the value cached from the last full load, which captures `safe`
+        // set via global config; before any load, fall back to the env var.
+        match LAST_SAFE.load(Ordering::Relaxed) {
+            0 => false,
+            1 => true,
+            _ => crate::env::var_is_true("MISE_SAFE"),
+        }
+    }
+
+    /// Errors when safe mode (`MISE_SAFE=1`) is enabled. Call this before any
+    /// operation that would execute code controlled by project configuration.
+    /// Safe mode is a security boundary: blocked operations must fail loudly,
+    /// never silently fall back to something that executes.
+    pub fn ensure_not_safe(operation: &str) -> Result<()> {
+        if Settings::safe_mode() {
+            bail!(
+                "{operation} is disabled in safe mode (MISE_SAFE=1)\nSee https://mise.jdx.dev/configuration/settings.html#safe"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn redacted_settings_for_debug(settings: &Settings) -> Settings {
+    let mut debug_settings = settings.clone();
+    if debug_settings.task.cache_remote_token.is_some() {
+        debug_settings.task.cache_remote_token = Some("[redacted]".to_string());
+    }
+    debug_settings
+}
+
+fn redact_settings_table(table: &mut toml::Table) {
+    let Some(task) = table.get_mut("task").and_then(toml::Value::as_table_mut) else {
+        return;
+    };
+    if task.contains_key("cache_remote_token") {
+        task.insert(
+            "cache_remote_token".to_string(),
+            toml::Value::String("[redacted]".to_string()),
+        );
     }
 }
 
@@ -1063,6 +1381,29 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn debug_settings_redact_remote_cache_token() {
+        let mut settings = Settings::default();
+        settings.task.cache_remote_token = Some("super-secret-token".to_string());
+
+        let debug = format!("{:?}", redacted_settings_for_debug(&settings));
+
+        assert!(!debug.contains("super-secret-token"));
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn settings_dictionary_redacts_remote_cache_token() {
+        let mut settings = Settings::default();
+        settings.task.cache_remote_token = Some("super-secret-token".to_string());
+
+        let table = settings.as_dict().unwrap();
+        let encoded = toml::to_string(&table).unwrap();
+
+        assert!(!encoded.contains("super-secret-token"));
+        assert!(encoded.contains("[redacted]"));
+    }
+
     fn credential_command_settings_table() -> toml::Table {
         toml::from_str::<toml::Value>(
             r#"
@@ -1074,6 +1415,21 @@ mod tests {
 
             [forgejo]
             credential_command = "echo forgejo-token"
+            "#,
+        )
+        .unwrap()
+        .as_table()
+        .unwrap()
+        .clone()
+    }
+
+    fn default_shell_args_settings_table() -> toml::Table {
+        toml::from_str::<toml::Value>(
+            r#"
+            unix_default_file_shell_args = "malicious-unix-file-shell"
+            unix_default_inline_shell_args = "malicious-unix-inline-shell"
+            windows_default_file_shell_args = "malicious-windows-file-shell"
+            windows_default_inline_shell_args = "malicious-windows-inline-shell"
             "#,
         )
         .unwrap()
@@ -1162,6 +1518,44 @@ mod tests {
     }
 
     #[test]
+    fn test_local_config_strips_default_shell_args() {
+        let path = Path::new("/tmp/.mise.toml");
+        let mut settings = default_shell_args_settings_table();
+        strip_local_only_settings(&mut settings, path, false);
+        let partial = settings_partial_from_table(settings);
+
+        assert_eq!(partial.unix_default_file_shell_args, None);
+        assert_eq!(partial.unix_default_inline_shell_args, None);
+        assert_eq!(partial.windows_default_file_shell_args, None);
+        assert_eq!(partial.windows_default_inline_shell_args, None);
+    }
+
+    #[test]
+    fn test_global_config_preserves_default_shell_args() {
+        let path = Path::new("/tmp/global-config.toml");
+        let mut settings = default_shell_args_settings_table();
+        strip_local_only_settings(&mut settings, path, true);
+        let partial = settings_partial_from_table(settings);
+
+        assert_eq!(
+            partial.unix_default_file_shell_args.as_deref(),
+            Some("malicious-unix-file-shell")
+        );
+        assert_eq!(
+            partial.unix_default_inline_shell_args.as_deref(),
+            Some("malicious-unix-inline-shell")
+        );
+        assert_eq!(
+            partial.windows_default_file_shell_args.as_deref(),
+            Some("malicious-windows-file-shell")
+        );
+        assert_eq!(
+            partial.windows_default_inline_shell_args.as_deref(),
+            Some("malicious-windows-inline-shell")
+        );
+    }
+
+    #[test]
     fn test_parse_settings_file_strips_non_global_trust_controls() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".mise.toml");
@@ -1183,6 +1577,122 @@ mod tests {
         assert_eq!(partial.paranoid, None);
         assert_eq!(partial.trusted_config_paths, None);
         assert_eq!(partial.yes, None);
+    }
+
+    #[test]
+    fn test_parse_settings_file_reads_tera_v1_from_env_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mise.toml");
+        std::fs::write(
+            &path,
+            r#"
+            env.MISE_TERA_V1 = true
+            "#,
+        )
+        .unwrap();
+
+        let partial = Settings::parse_settings_file(&path).unwrap();
+
+        assert_eq!(partial.tera_v1, Some(true));
+    }
+
+    #[test]
+    fn test_parse_settings_file_reads_tera_v1_from_env_value_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mise.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [env]
+            MISE_TERA_V1 = { value = "1" }
+            "#,
+        )
+        .unwrap();
+
+        let partial = Settings::parse_settings_file(&path).unwrap();
+
+        assert_eq!(partial.tera_v1, Some(true));
+    }
+
+    #[test]
+    fn test_parse_settings_file_prefers_explicit_tera_v1_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mise.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [settings]
+            tera_v1 = false
+
+            [env]
+            MISE_TERA_V1 = true
+            "#,
+        )
+        .unwrap();
+
+        let partial = Settings::parse_settings_file(&path).unwrap();
+
+        assert_eq!(partial.tera_v1, Some(false));
+    }
+
+    #[test]
+    fn test_deprecated_settings_in_toml_table_detects_nested_settings() {
+        let settings = toml::from_str::<toml::Value>(
+            r#"
+            tera_v1 = true
+
+            [aqua]
+            registry_url = "https://example.com/aqua-registry"
+            "#,
+        )
+        .unwrap()
+        .as_table()
+        .unwrap()
+        .clone();
+
+        let deprecated = deprecated_settings_in_toml_table(&settings);
+
+        assert!(deprecated.contains(&"tera_v1"));
+        assert!(deprecated.contains(&"aqua.registry_url"));
+    }
+
+    #[test]
+    fn test_deprecated_settings_in_env_directives_detects_setting_env() {
+        let raw = toml::from_str::<toml::Value>(
+            r#"
+            [env]
+            MISE_TERA_V1 = true
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(deprecated_settings_in_env_directives(&raw), vec!["tera_v1"]);
+    }
+
+    #[test]
+    fn test_deprecated_settings_in_env_directives_ignores_unset_env() {
+        let raw = toml::from_str::<toml::Value>(
+            r#"
+            [env]
+            MISE_TERA_V1 = { unset = true }
+            "#,
+        )
+        .unwrap();
+
+        assert!(deprecated_settings_in_env_directives(&raw).is_empty());
+    }
+
+    #[test]
+    fn test_deprecated_settings_in_env_directives_ignores_child_only_env() {
+        let raw = toml::from_str::<toml::Value>(
+            r#"
+            [env]
+            MISE_SHORTHANDS_FILE = "~/.mise-shorthands"
+            "#,
+        )
+        .unwrap();
+
+        assert!(deprecated_settings_in_env_directives(&raw).is_empty());
     }
 
     #[test]
@@ -1311,12 +1821,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cargo_binstall_quickinstall_setting() {
+        let settings = Settings::builder().load().unwrap();
+        assert!(!settings.cargo.binstall_quickinstall);
+
+        let meta = SETTINGS_META
+            .get("cargo.binstall_quickinstall")
+            .expect("cargo.binstall_quickinstall setting should exist");
+        assert_eq!(meta.env, Some("MISE_CARGO_BINSTALL_QUICKINSTALL"));
+    }
+
+    #[test]
     fn test_offline_setting_enables_offline() {
         let mut partial = SettingsPartial::empty();
         partial.offline = Some(true);
         Settings::reset(Some(partial));
         let settings = Settings::get();
         assert!(settings.offline());
+        Settings::reset(None);
+    }
+
+    #[test]
+    fn test_reload_preserves_cli_settings() {
+        let mut partial = SettingsPartial::empty();
+        partial.offline = Some(true);
+        Settings::reset(Some(partial));
+        assert!(Settings::get().offline());
+
+        Settings::reload();
+        assert!(Settings::get().offline());
         Settings::reset(None);
     }
 

@@ -42,14 +42,14 @@ impl<'a> GoOptions<'a> {
         }
     }
 
-    fn tags(&self) -> Option<&'a str> {
-        self.values.str("tags")
+    fn tags(&self) -> Option<String> {
+        self.values.comma_joined("tags")
     }
 
     fn lockfile_options(&self) -> BTreeMap<String, String> {
         let mut result = BTreeMap::new();
         if let Some(value) = self.tags() {
-            result.insert("tags".to_string(), value.to_string());
+            result.insert("tags".to_string(), value);
         }
         result
     }
@@ -97,13 +97,24 @@ impl Backend for GoBackend {
                     return Ok(versions);
                 }
 
-                // Fall back to `go list -m -versions` for GOPROXY=direct
-                match self.fetch_go_module_versions(config, &tool_name).await {
-                    Ok(Some(versions)) if !versions.is_empty() => return Ok(versions),
-                    Ok(_) => {}
-                    Err(err) => {
-                        warn!("failed to list Go module versions for {tool_name}: {err:#}");
+                // Fall back to `go list -m -versions` for GOPROXY=direct. Package
+                // paths are not necessarily module paths, so walk their prefixes
+                // just as the proxy resolver does. `go list` runs with
+                // GOTOOLCHAIN=local (see go_list_env), so it is safe against
+                // untrusted config and does not need a safe-mode gate.
+                let mut resolution_error = None;
+                for mod_path in module_path_candidates(&tool_name) {
+                    match self.fetch_go_module_versions(config, &mod_path).await {
+                        Ok(Some(versions)) if !versions.is_empty() => return Ok(versions),
+                        Ok(_) => {}
+                        Err(err) => {
+                            debug!("failed to resolve Go module candidate {mod_path}: {err:#}");
+                            resolution_error.get_or_insert(err);
+                        }
                     }
+                }
+                if let Some(err) = resolution_error {
+                    warn!("failed to resolve Go module path for {tool_name}: {err:#}");
                 }
 
                 Ok(vec![])
@@ -111,6 +122,18 @@ impl Backend for GoBackend {
             Settings::get().fetch_remote_versions_timeout(),
         )
         .await
+    }
+
+    async fn resolve_exact_version(
+        &self,
+        _config: &Arc<Config>,
+        version: &str,
+    ) -> eyre::Result<Option<String>> {
+        // Go module versions are strict semver, so a full semver request is
+        // exact. `go install mod@vX.Y.Z` validates the version against the
+        // module proxy and fails when it does not exist.
+        let version = version.strip_prefix('v').unwrap_or(version);
+        Ok(versions::SemVer::new(version).map(|_| version.to_string()))
     }
 
     async fn install_version_(
@@ -134,8 +157,12 @@ impl Backend for GoBackend {
         let raw_opts = tv.request.options();
         let opts = GoOptions::new(&raw_opts);
 
+        // Hoisted: the closure below runs twice (with and without a `v` prefix), and the
+        // program does not change between attempts.
+        let go = self.spawn_program(&ctx.config, Some(&ctx.ts), "go").await;
+
         let install = async |v| {
-            let mut cmd = CmdLineRunner::new("go").arg("install").arg("-mod=readonly");
+            let mut cmd = CmdLineRunner::new(&go).arg("install").arg("-mod=readonly");
 
             if let Some(tags) = opts.tags() {
                 cmd = cmd.arg("-tags").arg(tags);
@@ -144,7 +171,7 @@ impl Backend for GoBackend {
             cmd.arg(format!("{}@{v}", self.tool_name()))
                 .with_pr(ctx.pr.as_ref())
                 .envs(self.dependency_env(&ctx.config).await?)
-                .envs(tv.install_env())
+                .env_values(tv.install_env())
                 .env("GOBIN", tv.install_path().join("bin"))
                 .execute()
         };
@@ -203,11 +230,7 @@ impl GoBackend {
             return Ok(None);
         }
 
-        let parts: Vec<&str> = tool_name.split('/').collect();
-        let candidates: Vec<String> = (1..=parts.len())
-            .rev()
-            .map(|i| parts[..i].join("/"))
-            .collect();
+        let candidates = module_path_candidates(tool_name);
 
         let mut join_set = tokio::task::JoinSet::new();
         for (idx, path) in candidates.iter().enumerate() {
@@ -271,6 +294,20 @@ impl GoBackend {
         Ok(None)
     }
 
+    /// Environment for `go list` metadata queries.
+    ///
+    /// Adds `GOTOOLCHAIN=local` on top of the normal dependency env so that an
+    /// untrusted project `go.mod` cannot make `go` download and re-exec a
+    /// different toolchain (Go >= 1.21). This is what lets `go list` run under
+    /// safe mode: version listing then only performs module-metadata queries
+    /// (including VCS access for GOPROXY=direct) without any toolchain
+    /// download-and-execute step.
+    async fn go_list_env(&self, config: &Arc<Config>) -> eyre::Result<BTreeMap<String, String>> {
+        let mut env = self.dependency_env(config).await?;
+        env.insert("GOTOOLCHAIN".to_string(), "local".to_string());
+        Ok(env)
+    }
+
     async fn fetch_go_module_versions(
         &self,
         config: &Arc<Config>,
@@ -290,8 +327,9 @@ impl GoBackend {
 
         cache
             .get_or_try_init_async(async || {
+                let go = self.spawn_program(config, None, "go").await;
                 let raw = match cmd!(
-                    "go",
+                    go,
                     "list",
                     "-mod=readonly",
                     "-m",
@@ -299,7 +337,7 @@ impl GoBackend {
                     "-json",
                     mod_path
                 )
-                .full_env(self.dependency_env(config).await?)
+                .full_env(self.go_list_env(config).await?)
                 .read()
                 {
                     Ok(raw) => raw,
@@ -330,9 +368,10 @@ impl GoBackend {
         config: &Arc<Config>,
         mod_path: &str,
     ) -> eyre::Result<Option<Vec<VersionInfo>>> {
-        let env = self.dependency_env(config).await?;
+        let env = self.go_list_env(config).await?;
+        let go = self.spawn_program(config, None, "go").await;
         let raw = cmd!(
-            "go",
+            go,
             "list",
             "-mod=readonly",
             "-m",
@@ -354,7 +393,7 @@ impl GoBackend {
         mod_path: &str,
         versions: &[String],
     ) -> Vec<VersionInfo> {
-        let env = match self.dependency_env(config).await {
+        let env = match self.go_list_env(config).await {
             Ok(env) => env,
             Err(_) => {
                 return versions
@@ -367,6 +406,12 @@ impl GoBackend {
             }
         };
 
+        // Resolved once for every batch below. Metadata is best-effort — a failed batch
+        // leaves those versions with defaults rather than failing the listing — so without
+        // this the whole enrichment step would silently no-op on a Windows go that is not
+        // spawnable by bare name.
+        let go = self.spawn_program(config, None, "go").await;
+
         let mut metadata_by_version = HashMap::with_capacity(versions.len());
         for chunk in versions.chunks(GO_LIST_VERSION_INFO_BATCH_SIZE) {
             let mut args = vec![
@@ -378,7 +423,7 @@ impl GoBackend {
             for version in chunk {
                 args.push(format!("{mod_path}@{version}").into());
             }
-            let Ok(raw) = cmd("go", args).full_env(&env).read() else {
+            let Ok(raw) = cmd(&go, args).full_env(&env).read() else {
                 continue;
             };
             let Ok(infos) = Deserializer::from_str(&raw)
@@ -403,6 +448,14 @@ impl GoBackend {
             })
             .collect()
     }
+}
+
+fn module_path_candidates(tool_name: &str) -> Vec<String> {
+    let parts: Vec<&str> = tool_name.split('/').collect();
+    (1..=parts.len())
+        .rev()
+        .map(|i| parts[..i].join("/"))
+        .collect()
 }
 
 enum ProxyListResult {
@@ -629,6 +682,47 @@ mod tests {
     use super::*;
     use crate::toolset::ToolVersionOptions;
 
+    #[tokio::test]
+    async fn exact_semver_versions_resolve_without_remote_discovery() {
+        let config = Config::get().await.unwrap();
+        let backend = GoBackend::from_arg("go:github.com/example/tool".into());
+
+        assert_eq!(
+            backend
+                .resolve_exact_version(&config, "1.2.3")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1.2.3")
+        );
+        // "v" prefixes are normalized away, matching how versions are listed.
+        assert_eq!(
+            backend
+                .resolve_exact_version(&config, "v1.2.3")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1.2.3")
+        );
+    }
+
+    #[tokio::test]
+    async fn fuzzy_versions_require_remote_discovery() {
+        let config = Config::get().await.unwrap();
+        let backend = GoBackend::from_arg("go:github.com/example/tool".into());
+
+        for version in ["latest", "1", "1.2", "^1.2.3", "main"] {
+            assert_eq!(
+                backend
+                    .resolve_exact_version(&config, version)
+                    .await
+                    .unwrap(),
+                None,
+                "{version} should use remote discovery"
+            );
+        }
+    }
+
     #[test]
     fn go_options_reads_tags() {
         let mut opts = ToolVersionOptions::default();
@@ -637,7 +731,26 @@ mod tests {
             toml::Value::String("sqlite,fts5".to_string()),
         );
 
-        assert_eq!(GoOptions::new(&opts).tags(), Some("sqlite,fts5"));
+        assert_eq!(GoOptions::new(&opts).tags().as_deref(), Some("sqlite,fts5"));
+        assert_eq!(
+            GoOptions::new(&opts).lockfile_options(),
+            BTreeMap::from([("tags".to_string(), "sqlite,fts5".to_string())])
+        );
+    }
+
+    #[test]
+    fn go_options_accepts_array_tags() {
+        let mut opts = ToolVersionOptions::default();
+        opts.opts.insert(
+            "tags".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("sqlite".to_string()),
+                toml::Value::Integer(1),
+                toml::Value::String("fts5".to_string()),
+            ]),
+        );
+
+        assert_eq!(GoOptions::new(&opts).tags().as_deref(), Some("sqlite,fts5"));
         assert_eq!(
             GoOptions::new(&opts).lockfile_options(),
             BTreeMap::from([("tags".to_string(), "sqlite,fts5".to_string())])
@@ -672,6 +785,20 @@ mod tests {
         let info: GoModuleVersionMetadata = serde_json::from_str(raw).unwrap();
         assert_eq!(info.version, "v1.2.3");
         assert_eq!(info.time, Some("2026-04-08T12:56:30Z".to_string()));
+    }
+
+    #[test]
+    fn module_candidates_are_deepest_first() {
+        assert_eq!(
+            module_path_candidates("github.com/example/tool/cmd/tool"),
+            vec![
+                "github.com/example/tool/cmd/tool",
+                "github.com/example/tool/cmd",
+                "github.com/example/tool",
+                "github.com/example",
+                "github.com",
+            ]
+        );
     }
 
     #[test]

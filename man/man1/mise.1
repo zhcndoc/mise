@@ -143,19 +143,67 @@ List built\-in backends
 List all the active runtime bin paths
 .TP
 \fBbootstrap\fR
-[experimental] Set up a machine for the current config in one command
+Set up a machine for the current config in one command
+.RS
+\fIAliases: \fRbs
+.RE
+.TP
+\fBbootstrap accounts\fR
+Manage Linux users and groups from `[bootstrap.users]` and `[bootstrap.groups]`
+.TP
+\fBbootstrap accounts apply\fR
+Apply configured Linux users and groups
+.TP
+\fBbootstrap accounts status\fR
+Show configured Linux user and group state
+.TP
+\fBbootstrap compose\fR
+Manage Docker Compose projects from `[bootstrap.compose]`
+.TP
+\fBbootstrap compose apply\fR
+Apply configured Docker Compose project state
+.TP
+\fBbootstrap compose status\fR
+Show configured Docker Compose project state
 .TP
 \fBbootstrap dotfiles\fR
 Manage dotfiles from `[dotfiles]`
 .TP
+\fBbootstrap dotfiles add\fR
+Add or update dotfiles in `[dotfiles]`
+.TP
 \fBbootstrap dotfiles apply\fR
 Apply dotfiles from `[dotfiles]`
+.TP
+\fBbootstrap dotfiles edit\fR
+Edit a managed dotfile source
 .TP
 \fBbootstrap dotfiles status\fR
 Show the status of dotfiles from `[dotfiles]`
 .RS
 \fIAliases: \fRls
 .RE
+.TP
+\fBbootstrap dotfiles unapply\fR
+Remove dotfiles applied from `[dotfiles]`
+.TP
+\fBbootstrap files\fR
+Manage privileged files and directories from `[bootstrap.files]` and `[bootstrap.directories]`
+.TP
+\fBbootstrap files apply\fR
+Apply configured privileged files and directories
+.TP
+\fBbootstrap files status\fR
+Show configured privileged file and directory state
+.TP
+\fBbootstrap firewall\fR
+Manage the Linux host firewall from `[bootstrap.linux.firewall]`
+.TP
+\fBbootstrap firewall apply\fR
+Apply the configured Linux host firewall
+.TP
+\fBbootstrap firewall status\fR
+Show configured Linux host firewall state
 .TP
 \fBbootstrap linux\fR
 Manage Linux bootstrap config from `[bootstrap.linux]`
@@ -236,12 +284,44 @@ Add bootstrap packages to [bootstrap.packages] and install them
 \fIAliases: \fRu
 .RE
 .TP
+\fBbootstrap plan\fR
+Show the changes declarative bootstrap resources would make
+.TP
+\fBbootstrap plugins\fR
+Manage package manager plugins declared in `[bootstrap.plugins]`
+.TP
+\fBbootstrap plugins apply\fR
+.TP
+\fBbootstrap plugins status\fR
+.TP
+\fBbootstrap remote\fR
+Bootstrap one or more machines over OpenSSH
+.TP
 \fBbootstrap repos\fR
 Manage git repo checkouts from `[bootstrap.repos]`
 .TP
 \fBbootstrap repos apply\fR
 .TP
+\fBbootstrap repos exec\fR
+.TP
 \fBbootstrap repos status\fR
+.TP
+\fBbootstrap repos update\fR
+.TP
+\fBbootstrap secrets\fR
+Inspect bootstrap secret inputs without revealing their values
+.TP
+\fBbootstrap secrets status\fR
+Show whether declared bootstrap secret inputs are available
+.TP
+\fBbootstrap services\fR
+Manage Linux system services from `[bootstrap.services]`
+.TP
+\fBbootstrap services apply\fR
+Apply configured Linux system service state
+.TP
+\fBbootstrap services status\fR
+Show configured Linux system service state
 .TP
 \fBbootstrap status\fR
 Show the aggregate bootstrap status
@@ -277,6 +357,9 @@ Removes stale mise cache files
 \fIAliases: \fRp
 .RE
 .TP
+\fBcache task\fR
+Inspect output cache entries for a task
+.TP
 \fBcompletion\fR
 Generate shell completions
 .TP
@@ -300,24 +383,6 @@ Set the value of a setting in a mise.toml file
 .TP
 \fBdeactivate\fR
 Disable mise for current shell session
-.TP
-\fBdotfiles\fR
-[experimental] Manage dotfiles from `[dotfiles]`
-.TP
-\fBdotfiles add\fR
-Add or update dotfiles in `[dotfiles]`
-.TP
-\fBdotfiles apply\fR
-Apply dotfiles from `[dotfiles]`
-.TP
-\fBdotfiles edit\fR
-Edit a managed dotfile source
-.TP
-\fBdotfiles status\fR
-Show the status of dotfiles from `[dotfiles]`
-.RS
-\fIAliases: \fRls
-.RE
 .TP
 \fBdoctor\fR
 Check mise installation for possible problems
@@ -604,6 +669,9 @@ Display a tree visualization of a dependency graph
 \fBtasks edit\fR
 Edit a task with $EDITOR
 .TP
+\fBtasks graph\fR
+[experimental] Inspect the workspace project graph
+.TP
 \fBtasks info\fR
 Get information about a task
 .TP
@@ -728,7 +796,7 @@ Effectively the same as:
     PATH="$HOME/.local/share/mise/shims:$PATH"
 
 `mise activate \-\-shims` does not support all the features of `mise activate`.
-See https://mise.en.dev/dev\-tools/shims.html#shims\-vs\-path for more information
+See https://mise.jdx.dev/dev\-tools/shims.html#shims\-vs\-path for more information
 .TP
 \fB\-\-status\fR
 Show "mise: <TOOL>@<VERSION>" message when changing directories
@@ -840,34 +908,45 @@ Output executable entries in JSON format (implies \-\-bin\-names)
 Tool(s) to look up
 e.g.: ruby@3
 .SH "MISE BOOTSTRAP"
-[experimental] Set up a machine for the current config in one command
+Set up a machine for the current config in one command
 
 Runs the bootstrap steps for the current config in order:
 
-0. `[bootstrap.hooks.pre\-packages]` — optional setup hook
-1. `mise bootstrap packages apply` — install missing
-   `[bootstrap.packages]`
-   then `[bootstrap.hooks.post\-packages]`
-2. `mise bootstrap repos apply` — clone/update `[bootstrap.repos]`
+0. `mise bootstrap accounts apply` — converge `[bootstrap.users]` and
+   `[bootstrap.groups]` (Linux)
+1. `mise bootstrap plugins apply` — install `[bootstrap.plugins]`
+   1.7. `[bootstrap.hooks.pre\-packages]` — optional setup hook
+2. Install built\-in\-manager entries from `[bootstrap.packages]`
+3. `mise bootstrap files apply` — converge `[bootstrap.files]` and
+   `[bootstrap.directories]`
+4. `mise bootstrap services apply` — converge `[bootstrap.services]`
+   systemd system services (Linux)
+5. `mise bootstrap firewall apply` — converge `[bootstrap.linux.firewall]`
+   host firewall policy and rules (Linux)
+6. `mise bootstrap compose apply` — converge `[bootstrap.compose]`
+   Docker Compose projects
+7. `mise bootstrap repos apply` — clone/converge `[bootstrap.repos]`
    surrounded by `pre\-repos`/`post\-repos` hooks
-3. `mise bootstrap dotfiles apply` — apply dotfiles from `[dotfiles]`
+8. `mise bootstrap dotfiles apply` — apply dotfiles from `[dotfiles]`
    surrounded by `pre\-dotfiles`/`post\-dotfiles` hooks
-4. `mise bootstrap mise\-shell\-activate apply` — configure shell activation
+9. `mise bootstrap mise\-shell\-activate apply` — configure shell activation
    from `[bootstrap.mise_shell_activate]`
-5. `mise bootstrap macos defaults apply` — write
-   `[bootstrap.macos.defaults]` entries (macOS)
-   surrounded by `pre\-defaults`/`post\-defaults` hooks
-6. `mise bootstrap macos launchd\-agents apply` — install/load
-   `[bootstrap.macos.launchd.agents]`
-7. `mise bootstrap linux systemd\-units apply` — install/start
-   `[bootstrap.linux.systemd.units]`
-8. `mise bootstrap user apply` — set `[bootstrap.user].login_shell`
-   (Unix)
-   surrounded by `pre\-user`/`post\-user` hooks
-9. `mise install` — install missing tools from `[tools]`
-   surrounded by `pre\-tools`/`post\-tools` hooks
-10. `mise run bootstrap` — if a task named `bootstrap` is defined
-11. `[bootstrap.hooks.final]` — optional final hook
+10. `mise bootstrap macos defaults apply` — write
+    `[bootstrap.macos.defaults]` entries (macOS)
+    surrounded by `pre\-defaults`/`post\-defaults` hooks
+11. `mise bootstrap macos launchd\-agents apply` — install/load
+    `[bootstrap.macos.launchd.agents]`
+12. `mise bootstrap linux systemd\-units apply` — install/start
+    `[bootstrap.linux.systemd.units]`
+13. `mise bootstrap user apply` — set `[bootstrap.user].login_shell`
+    (Unix)
+    surrounded by `pre\-user`/`post\-user` hooks
+14. `mise install` — install missing tools from `[tools]`
+    surrounded by `pre\-tools`/`post\-tools` hooks; package\-plugin entries
+    from `[bootstrap.packages]` install afterward, followed by
+    `[bootstrap.hooks.post\-packages]`
+15. `mise run bootstrap` — if a task named `bootstrap` is defined
+16. `[bootstrap.hooks.final]` — optional final hook
 
 The declarative steps converge — anything already in its desired state
 is skipped, so re\-running is safe. The `bootstrap` task runs on every
@@ -898,13 +977,111 @@ Run only one or more bootstrap parts
 
 Can be passed multiple times or as a comma\-separated list. Cannot be used with `\-\-skip`.
 .TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
+.TP
 \fB\-\-skip\fR \fI<SKIP>\fR
 Skip one or more bootstrap parts
 
 Can be passed multiple times or as a comma\-separated list.
 .TP
 \fB\-\-update\fR
-Refresh system package manager metadata first (apk: `\-\-update\-cache`, apt: `apt\-get update`)
+Refresh package manager metadata and update configured repos
+.SH "MISE BOOTSTRAP ACCOUNTS APPLY"
+Apply configured Linux users and groups
+.PP
+\fBUsage:\fR mise bootstrap accounts apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would change without changing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.SH "MISE BOOTSTRAP ACCOUNTS STATUS"
+Show configured Linux user and group state
+.PP
+\fBUsage:\fR mise bootstrap accounts status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 when any account is not converged
+.SH "MISE BOOTSTRAP COMPOSE APPLY"
+Apply configured Docker Compose project state
+.PP
+\fBUsage:\fR mise bootstrap compose apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would change without changing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.SH "MISE BOOTSTRAP COMPOSE STATUS"
+Show configured Docker Compose project state
+.PP
+\fBUsage:\fR mise bootstrap compose status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 when any Compose project is not converged
+.SH "MISE BOOTSTRAP DOTFILES ADD"
+Add or update dotfiles in `[dotfiles]`
+
+If the target is already managed, this updates its source from the live
+target. Otherwise it creates a `[dotfiles]` entry and seeds the source
+under `dotfiles.root` unless `\-\-source` is provided.
+.PP
+\fBUsage:\fR mise bootstrap dotfiles add [OPTIONS] <TARGET> ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-f, \-\-force\fR
+Overwrite existing sources without prompting
+.TP
+\fB\-g, \-\-global\fR
+Write to the global config
+.TP
+\fB\-l, \-\-local\fR
+Write to the local config instead of the global config
+.TP
+\fB\-m, \-\-mode\fR \fI<MODE>\fR
+Dotfile mode to write
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the config/source updates without writing anything
+.TP
+\fB\-\-no\-apply\fR
+Add the entry without applying it
+.TP
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
+Write to this config file or directory
+.TP
+\fB\-s, \-\-source\fR \fI<PATH>\fR
+Source path to use for a single target
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+\fBArguments:\fR
+.PP
+.TP
+\fB<TARGET>\fR
+Targets to add or update
 .SH "MISE BOOTSTRAP DOTFILES APPLY"
 Apply dotfiles from `[dotfiles]`
 
@@ -931,6 +1108,30 @@ Skip the confirmation prompt
 .TP
 \fB<TARGET>\fR
 Only apply these targets
+.SH "MISE BOOTSTRAP DOTFILES EDIT"
+Edit a managed dotfile source
+.PP
+\fBUsage:\fR mise bootstrap dotfiles edit [OPTIONS] <TARGET>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-apply\fR
+Apply this target after the editor exits
+.TP
+\fB\-m, \-\-mode\fR \fI<MODE>\fR
+Dotfile mode to use if the target is not yet managed
+.TP
+\fB\-s, \-\-source\fR \fI<PATH>\fR
+Source path to use if the target is not yet managed
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt when adding an unmanaged target
+\fBArguments:\fR
+.PP
+.TP
+\fB<TARGET>\fR
+Target to edit
 .SH "MISE BOOTSTRAP DOTFILES STATUS"
 Show the status of dotfiles from `[dotfiles]`
 .PP
@@ -950,6 +1151,89 @@ state (missing, source missing, differs)
 .TP
 \fB<TARGET>\fR
 Only show these targets
+.SH "MISE BOOTSTRAP DOTFILES UNAPPLY"
+Remove dotfiles applied from `[dotfiles]`
+
+Removes configured whole\-file entries and edits while preserving files
+mise cannot identify as managed. Modified copies, templates, and plain\-line
+edits require `\-\-force`.
+.PP
+\fBUsage:\fR mise bootstrap dotfiles unapply [OPTIONS] [<TARGET>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-f, \-\-force\fR
+Remove modified or otherwise ambiguous managed files and lines
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the actions that would run without writing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+\fBArguments:\fR
+.PP
+.TP
+\fB<TARGET>\fR
+Only unapply these targets
+.SH "MISE BOOTSTRAP FILES APPLY"
+Apply configured privileged files and directories
+.PP
+\fBUsage:\fR mise bootstrap files apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would change without changing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
+.SH "MISE BOOTSTRAP FILES STATUS"
+Show configured privileged file and directory state
+.PP
+\fBUsage:\fR mise bootstrap files status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 when any resource is not converged
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
+.SH "MISE BOOTSTRAP FIREWALL APPLY"
+Apply the configured Linux host firewall
+.PP
+\fBUsage:\fR mise bootstrap firewall apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would change without changing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.SH "MISE BOOTSTRAP FIREWALL STATUS"
+Show configured Linux host firewall state
+.PP
+\fBUsage:\fR mise bootstrap firewall status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 when the firewall is not converged
 .SH "MISE BOOTSTRAP LINUX SYSTEMD-UNITS APPLY"
 \fBUsage:\fR mise bootstrap linux systemd\-units apply [OPTIONS]
 .PP
@@ -1042,8 +1326,8 @@ Exit with code 1 if any configured shell activation is not in its desired state
 Apply system packages from `[bootstrap.packages]`
 
 Checks which configured packages are missing and installs them with the
-system package manager. This may elevate with sudo when not running as
-root (see the `system_packages.sudo` setting).
+system package manager. Built\-in system managers may elevate with sudo when
+not running as root (see `system_packages.sudo`); package plugins never do.
 
 Packages can also be given explicitly in `manager:package` form (e.g.
 `apk:zlib\-dev`, `apt:curl`, `brew:jq`); they are installed whether or not they appear in
@@ -1056,7 +1340,7 @@ only. `install` is accepted as an alias for this command.
 .PP
 .TP
 \fB\-m, \-\-manager\fR \fI<MANAGER>\fR
-Only install packages for this manager, e.g. `apk`, `apt`, `brew`, `brew\-cask`, or `mas`
+Only install packages for this built\-in or plugin manager
 .TP
 \fB\-n, \-\-dry\-run\fR
 Print the commands that would run without running them
@@ -1085,7 +1369,7 @@ Write to the local config instead of the global config
 \fB\-n, \-\-dry\-run\fR
 Print the config change without writing it
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Write to this config file or directory
 \fBArguments:\fR
 .PP
@@ -1109,7 +1393,7 @@ Write to the local config instead of the global config
 \fB\-n, \-\-dry\-run\fR
 Print the config change without writing it
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Write to this config file or directory
 \fBArguments:\fR
 .PP
@@ -1146,7 +1430,7 @@ Import every linked formula, including dependencies
 \fB\-n, \-\-dry\-run\fR
 Print the config change without writing config
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Write to this config file or directory
 .SH "MISE BOOTSTRAP PACKAGES PRUNE"
 Prune installed system packages no longer declared in `[bootstrap.packages]`
@@ -1191,7 +1475,7 @@ Refreshes package manager metadata and upgrades the configured packages
 that are already installed: apk/apt/dnf/pacman upgrade to the newest available
 version (apk, apt, and dnf honor a version pinned in config), brew pours the
 formula's current bottle and replaces the old keg, brew\-cask installs
-the current cask artifact, and mas upgrades App Store apps. Packages that
+the current cask artifact, flatpak updates applications and runtimes, and mas upgrades App Store apps. Packages that
 are not installed yet are skipped — use `mise bootstrap packages apply`
 for those.
 
@@ -1203,7 +1487,7 @@ Packages can also be given explicitly in `manager:package` form.
 .PP
 .TP
 \fB\-m, \-\-manager\fR \fI<MANAGER>\fR
-Only upgrade packages for this manager, e.g. `apk`, `apt`, `brew`, `brew\-cask`, or `mas`
+Only upgrade packages for this built\-in or plugin manager
 .TP
 \fB\-n, \-\-dry\-run\fR
 Print the commands that would run without running them
@@ -1242,7 +1526,7 @@ Write to the global config (~/.config/mise/config.toml) instead of the local one
 \fB\-n, \-\-dry\-run\fR
 Print the commands that would run without writing config or installing
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Write to this config file or directory
 .TP
 \fB\-y, \-\-yes\fR
@@ -1252,6 +1536,116 @@ Skip the confirmation prompt
 .TP
 \fB<PACKAGE>\fR
 Packages in `manager:package[@version]` form
+.SH "MISE BOOTSTRAP PLAN"
+Show the changes declarative bootstrap resources would make
+.PP
+\fBUsage:\fR mise bootstrap plan [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output a stable machine\-readable plan in JSON format
+.TP
+\fB\-\-detailed\-exitcode\fR
+Exit 2 when the plan contains changes, 0 when unchanged, and 1 on errors
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
+.SH "MISE BOOTSTRAP PLUGINS APPLY"
+\fBUsage:\fR mise bootstrap plugins apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would happen without installing plugins
+.SH "MISE BOOTSTRAP PLUGINS STATUS"
+\fBUsage:\fR mise bootstrap plugins status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-missing\fR
+Exit with code 1 if a declared plugin is missing
+.SH "MISE BOOTSTRAP REMOTE"
+Bootstrap one or more machines over OpenSSH
+.PP
+\fBUsage:\fR mise bootstrap remote [OPTIONS] [<TARGET>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-all\fR
+Select every configured inventory host
+.TP
+\fB\-\-bootstrap\-command\fR \fI<COMMAND>\fR
+Explicit remote shell command that installs mise and places it on PATH
+.TP
+\fB\-\-connect\-timeout\fR \fI<CONNECT_TIMEOUT>\fR
+SSH connection timeout in seconds
+.RS
+\fIDefault: \fR10
+.RE
+.TP
+\fB\-\-exclude\fR \fI<PATTERN>\fR
+Additional archive pattern to exclude; repeat for multiple patterns
+.TP
+\fB\-\-fail\-fast\fR
+Stop after the first failed target
+.TP
+\fB\-\-force\-dotfiles\fR
+Allow remote dotfile conflicts to be replaced
+.TP
+\fB\-\-host\fR \fI<[USER@]HOST>\fR
+Ad\-hoc SSH destination (`[user@]host`); repeat for multiple hosts
+.TP
+\fB\-i, \-\-identity\-file\fR \fI<IDENTITY_FILE>\fR
+SSH identity file override
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the remote bootstrap changes without applying them
+.TP
+\fB\-\-keep\-staging\fR
+Keep the remote staging directory for debugging
+.TP
+\fB\-\-mise\-bin\fR \fI<MISE_BIN>\fR
+Local mise binary to upload (escape hatch for custom architectures)
+.TP
+\fB\-\-only\fR \fI<ONLY>\fR
+Run only one or more remote bootstrap parts
+.TP
+\fB\-\-port\fR \fI<PORT>\fR
+SSH port override
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing secret inputs on the remote host
+.TP
+\fB\-\-remote\-mise\fR \fI<COMMAND>\fR
+Existing mise executable name or path; relative paths use the staged project
+.TP
+\fB\-\-skip\fR \fI<SKIP>\fR
+Skip one or more remote bootstrap parts
+.TP
+\fB\-\-source\fR \fI<SOURCE>\fR
+Local directory archived and sent to each target
+.TP
+\fB\-\-ssh\-option\fR \fI<OPTION>\fR
+OpenSSH `\-o` option; repeat for multiple options
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+Select configured hosts with this tag; repeat to match any tag
+.TP
+\fB\-\-update\fR
+Refresh package manager metadata and update configured repos remotely
+.TP
+\fB\-y, \-\-yes\fR
+Skip remote confirmation prompts
+\fBArguments:\fR
+.PP
+.TP
+\fB<TARGET>\fR
+Inventory host names from `[bootstrap.remote.hosts]`
 .SH "MISE BOOTSTRAP REPOS APPLY"
 \fBUsage:\fR mise bootstrap repos apply [OPTIONS]
 .PP
@@ -1263,6 +1657,25 @@ Print the commands that would run without running them
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt
+.SH "MISE BOOTSTRAP REPOS EXEC"
+\fBUsage:\fR mise bootstrap repos exec [OPTIONS] [<PATH>] ... <COMMAND> ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-c, \-\-continue\-on\-error\fR
+Continue running in other repos after a command fails
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the commands that would run without running them
+\fBArguments:\fR
+.PP
+.TP
+\fB<PATH>\fR
+Run only in matching configured or expanded paths
+.TP
+\fB<COMMAND>\fR
+Command and arguments to run in each repo
 .SH "MISE BOOTSTRAP REPOS STATUS"
 \fBUsage:\fR mise bootstrap repos status [OPTIONS]
 .PP
@@ -1274,6 +1687,61 @@ Output in JSON format
 .TP
 \fB\-\-missing\fR
 Exit with code 1 if any configured repo is not in its desired state
+.SH "MISE BOOTSTRAP REPOS UPDATE"
+\fBUsage:\fR mise bootstrap repos update [OPTIONS] [<PATH>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the commands that would run without running them
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+\fBArguments:\fR
+.PP
+.TP
+\fB<PATH>\fR
+Update only matching configured or expanded paths
+.SH "MISE BOOTSTRAP SECRETS STATUS"
+Show whether declared bootstrap secret inputs are available
+.PP
+\fBUsage:\fR mise bootstrap secrets status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 if a declared secret input is unavailable
+.SH "MISE BOOTSTRAP SERVICES APPLY"
+Apply configured Linux system service state
+.PP
+\fBUsage:\fR mise bootstrap services apply [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would change without changing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.SH "MISE BOOTSTRAP SERVICES STATUS"
+Show configured Linux system service state
+.PP
+\fBUsage:\fR mise bootstrap services status [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-missing\fR
+Exit with code 1 when any service is not converged
 .SH "MISE BOOTSTRAP STATUS"
 Show the aggregate bootstrap status
 .PP
@@ -1287,6 +1755,9 @@ Output in JSON format
 .TP
 \fB\-\-missing\fR
 Exit with code 1 if any configured bootstrap state is not in its desired state
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
 .SH "MISE BOOTSTRAP USER APPLY"
 \fBUsage:\fR mise bootstrap user apply [OPTIONS]
 .PP
@@ -1319,6 +1790,9 @@ Deletes all cache files in mise
 .TP
 \fB\-\-outdate\fR
 Mark all cache files as old
+.TP
+\fB\-\-task\fR \fI<TASK>\fR
+Clear output cache entries for a task name or pattern
 \fBArguments:\fR
 .PP
 .TP
@@ -1345,6 +1819,21 @@ Just show what would be pruned
 .TP
 \fB<TOOL>\fR
 Tool(s) to prune cache for e.g.: node, python
+.SH "MISE CACHE TASK"
+Inspect output cache entries for a task
+.PP
+\fBUsage:\fR mise cache task [OPTIONS] <TASK>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+\fBArguments:\fR
+.PP
+.TP
+\fB<TASK>\fR
+Task name or pattern to inspect
 .SH "MISE COMPLETION"
 Generate shell completions
 .PP
@@ -1398,8 +1887,10 @@ Display the value of a setting in a mise.toml file
 \fBOptions:\fR
 .PP
 .TP
-\fB\-f, \-\-file\fR \fI<FILE>\fR
-The path to the mise.toml file to edit
+\fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
+The path to the mise.toml file to read
+
+Can be a file path or directory. If a directory is provided, the config file in that directory is used.
 
 If not provided, the nearest mise.toml file will be used
 \fBArguments:\fR
@@ -1431,8 +1922,10 @@ Set the value of a setting in a mise.toml file
 \fBOptions:\fR
 .PP
 .TP
-\fB\-f, \-\-file\fR \fI<FILE>\fR
+\fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
 The path to the mise.toml file to edit
+
+Can be a file path or directory. If a directory is provided, the config file in that directory is used.
 
 If not provided, the nearest mise.toml file will be used
 .TP
@@ -1448,115 +1941,6 @@ The path of the config to display
 .TP
 \fB<VALUE>\fR
 The value to set the key to (optional if provided as KEY=VALUE)
-.SH "MISE DOTFILES ADD"
-Add or update dotfiles in `[dotfiles]`
-
-If the target is already managed, this updates its source from the live
-target. Otherwise it creates a `[dotfiles]` entry and seeds the source
-under `dotfiles.root` unless `\-\-source` is provided.
-.PP
-\fBUsage:\fR mise dotfiles add [OPTIONS] <TARGET> ...
-.PP
-\fBOptions:\fR
-.PP
-.TP
-\fB\-f, \-\-force\fR
-Overwrite existing sources without prompting
-.TP
-\fB\-g, \-\-global\fR
-Write to the global config
-.TP
-\fB\-l, \-\-local\fR
-Write to the local config instead of the global config
-.TP
-\fB\-m, \-\-mode\fR \fI<MODE>\fR
-Dotfile mode to write
-.TP
-\fB\-n, \-\-dry\-run\fR
-Print the config/source updates without writing anything
-.TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
-Write to this config file or directory
-.TP
-\fB\-s, \-\-source\fR \fI<PATH>\fR
-Source path to use for a single target
-.TP
-\fB\-y, \-\-yes\fR
-Skip the confirmation prompt
-\fBArguments:\fR
-.PP
-.TP
-\fB<TARGET>\fR
-Targets to add or update
-.SH "MISE DOTFILES APPLY"
-Apply dotfiles from `[dotfiles]`
-
-Applies configured whole\-file entries and edits that aren't in their
-desired state. Whole\-file entries may symlink, copy, or render templates.
-Edit entries manage a marker\-delimited block or a single line in a file
-mise doesn't otherwise own.
-.PP
-\fBUsage:\fR mise dotfiles apply [OPTIONS] [<TARGET>] ...
-.PP
-\fBOptions:\fR
-.PP
-.TP
-\fB\-f, \-\-force\fR
-Overwrite existing files that conflict with whole\-file dotfile entries
-.TP
-\fB\-n, \-\-dry\-run\fR
-Print the actions that would run without writing anything
-.TP
-\fB\-y, \-\-yes\fR
-Skip the confirmation prompt
-\fBArguments:\fR
-.PP
-.TP
-\fB<TARGET>\fR
-Only apply these targets
-.SH "MISE DOTFILES EDIT"
-Edit a managed dotfile source
-.PP
-\fBUsage:\fR mise dotfiles edit [OPTIONS] <TARGET>
-.PP
-\fBOptions:\fR
-.PP
-.TP
-\fB\-\-apply\fR
-Apply this target after the editor exits
-.TP
-\fB\-m, \-\-mode\fR \fI<MODE>\fR
-Dotfile mode to use if the target is not yet managed
-.TP
-\fB\-s, \-\-source\fR \fI<PATH>\fR
-Source path to use if the target is not yet managed
-.TP
-\fB\-y, \-\-yes\fR
-Skip the confirmation prompt when adding an unmanaged target
-\fBArguments:\fR
-.PP
-.TP
-\fB<TARGET>\fR
-Target to edit
-.SH "MISE DOTFILES STATUS"
-Show the status of dotfiles from `[dotfiles]`
-.PP
-\fBUsage:\fR mise dotfiles status [OPTIONS] [<TARGET>] ...
-.PP
-\fBOptions:\fR
-.PP
-.TP
-\fB\-J, \-\-json\fR
-Output in JSON format
-.TP
-\fB\-\-missing\fR
-Exit with code 1 if any configured dotfiles are not in their desired
-state (missing, source missing, differs)
-\fBArguments:\fR
-.PP
-.TP
-\fB<TARGET>\fR
-Only show these targets
 .SH "MISE DOCTOR"
 Check mise installation for possible problems
 .PP
@@ -1853,6 +2237,7 @@ inserts the documentation into an existing file
 This will look for a special comment, `<!\-\- mise\-tasks \-\->`, and replace it with the generated documentation.
 It will replace everything between the comment and the next comment, `<!\-\- /mise\-tasks \-\->` so it can be
 run multiple times on the same file to update the documentation.
+The file must already contain both comments; mise errors instead of modifying the file if they are missing.
 .TP
 \fB\-I, \-\-index\fR
 write only an index of tasks, intended for use with `\-\-multi`
@@ -2167,6 +2552,28 @@ Comma\-separated list of platforms to target
 e.g.: linux\-x64,macos\-arm64,windows\-x64
 If not specified, all platforms already in lockfile will be updated
 .TP
+\fB\-\-bump\fR
+Re\-resolve fuzzy version selectors against the latest available versions
+
+By default, `mise lock` refreshes metadata for the currently locked versions.
+With this flag, selectors like "latest", "lts", or prefixes like "20" are
+re\-resolved against the latest matching remote versions, so the lockfile
+advances without installing anything. Config files are never modified:
+exactly pinned versions resolve to themselves and stay unchanged
+(use `mise upgrade \-\-bump` to rewrite pins in mise.toml).
+.TP
+\fB\-\-json\fR
+Output version changes as JSON
+
+Prints an array of objects describing lockfile version changes:
+name, backend, lockfile, old_versions, new_versions.
+Version lists keep config/lockfile order; they are not sorted.
+Only version\-level changes are reported: checksum/URL refreshes for
+unchanged versions produce no entries, so plain `mise lock \-\-json`
+typically prints `[]` while still updating the lockfile.
+Suppresses the human\-readable output. Combine with `\-\-dry\-run` to
+detect available updates without writing the lockfile.
+.TP
 \fB\-\-local\fR
 Update mise.local.lock instead of mise.lock
 Use for tools defined in .local.toml configs
@@ -2309,6 +2716,9 @@ Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
 \fBOptions:\fR
 .PP
 .TP
+\fB\-\-copy\fR \fI<HOST_PATH:IMAGE_PATH>\fR
+Copy a host file, directory, or symlink into the image (repeatable, HOST:IMAGE)
+.TP
 \fB\-o, \-\-output\fR \fI<OUTPUT>\fR
 Output directory for the OCI image layout
 .RS
@@ -2339,12 +2749,21 @@ Overrides [oci].user_id / [oci].group_id. Defaults to 0:0. If GID is omitted, it
 .SH "MISE OCI PUSH"
 [experimental] Build an OCI image and push it to a registry
 
-Requires `skopeo` (or `crane`) on PATH. If `\-\-image\-dir` is not passed,
-builds fresh from the current mise.toml first, then shells out to
-`skopeo copy oci:<dir> docker://<ref>` (or `crane push <dir> <ref>`).
-Authentication is handled by the underlying tool — configure it the same
-way you would for a plain `skopeo` / `crane` push (e.g. `docker login`,
-`REGISTRY_AUTH_FILE`, `~/.config/containers/auth.json`).
+Pushes with mise's built\-in registry client — no skopeo/crane/docker
+required. If `\-\-image\-dir` is not passed, builds fresh from the current
+mise.toml first. Only blobs the registry doesn't already have are
+uploaded, so repeat pushes of mostly\-unchanged toolsets are cheap.
+
+Tool layers whose tool, version, mount point, and file owner match the
+previously pushed image (or `\-\-cache\-from`) are reused without being
+rebuilt — those tools don't even need to be installed locally. Pass
+`\-\-no\-cache` to force a full local rebuild.
+
+Credentials are read from the same places docker and podman use:
+`$REGISTRY_AUTH_FILE`, `$XDG_RUNTIME_DIR/containers/auth.json`,
+`~/.config/containers/auth.json`, and `~/.docker/config.json`
+(including credential helpers) — so `docker login` / `podman login`
+is all the setup needed.
 
 Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
 .PP
@@ -2352,6 +2771,11 @@ Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
 .PP
 \fBOptions:\fR
 .PP
+.TP
+\fB\-\-cache\-from\fR \fI<REF>\fR
+Reuse unchanged tool layers from this image instead of the destination ref
+
+Must live in the same repository as the destination. Useful when each push gets a unique tag (e.g. per\-commit tags in CI): `\-\-cache\-from ghcr.io/me/dev:latest ghcr.io/me/dev:$SHA`.
 .TP
 \fB\-\-from\fR \fI<FROM>\fR
 Base image for the build (ignored with \-\-image\-dir)
@@ -2367,6 +2791,9 @@ See `mise oci build \-\-help` for details.
 \fB\-\-mount\-point\fR \fI<MOUNT_POINT>\fR
 Override in\-image mount point (ignored with \-\-image\-dir)
 .TP
+\fB\-\-no\-cache\fR
+Don't reuse tool layers from the previously pushed image
+.TP
 \fB\-\-no\-mise\fR
 Don't embed the mise binary (ignored with \-\-image\-dir)
 .TP
@@ -2375,11 +2802,10 @@ UID[:GID] to assign to every tar entry when building (conflicts with \-\-image\-
 
 Overrides [oci].user_id / [oci].group_id. Defaults to 0:0. If GID is omitted, it defaults to UID. This affects file ownership only; [oci].user controls the image USER directive.
 .TP
-\fB\-\-tool\fR \fI<TOOL>\fR
-Force the push tool (`auto`, `skopeo`, `crane`). Default `auto`
-.RS
-\fIDefault: \fRauto
-.RE
+\fB\-\-update\-index\fR
+Maintain the tag as a multi\-arch image index
+
+Pushes this build's manifest by digest and points the tag at an OCI image index containing one entry per platform, preserving entries other architectures pushed. Run `mise oci push \-\-update\-index` from one runner per platform to assemble a multi\-arch tag.
 \fBArguments:\fR
 .PP
 .TP
@@ -2389,12 +2815,12 @@ Destination registry reference (e.g. `ghcr.io/me/devenv:latest`)
 [experimental] Build an OCI image from the current mise.toml and run a command in it
 
 Equivalent to `mise oci build` followed by `docker run` / `podman run`.
-The built image is loaded into the local container engine (podman is
-preferred; docker works via skopeo) and the given command is executed
-inside it with stdin/stdout/stderr inherited.
+The built image is loaded into the local container engine (podman pulls
+the OCI layout natively; docker receives it via `docker load`) and the
+given command is executed inside it with stdin/stdout/stderr inherited.
 
 Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`) and
-one of: `podman`, `docker+skopeo`.
+one of: `podman`, `docker`.
 .PP
 \fBUsage:\fR mise oci run [OPTIONS] [<CMD>] ...
 .PP
@@ -2723,6 +3149,12 @@ Only check if deps install is needed, don't run commands
 \fB\-\-list\fR
 Show what deps providers are available
 .TP
+\fB\-\-monorepo\fR
+Install dependencies from every [monorepo].config_roots config root
+
+Requires monorepo_root = true plus explicit [monorepo].config_roots in
+the monorepo root config. Providers are named like //apps/api:uv.
+.TP
 \fB\-\-only\fR \fI<ONLY>\fR
 Run specific deps rule(s) only
 .TP
@@ -2774,6 +3206,12 @@ Only check if deps install is needed, don't run commands
 \fB\-\-list\fR
 Show what deps providers are available
 .TP
+\fB\-\-monorepo\fR
+Install dependencies from every [monorepo].config_roots config root
+
+Requires monorepo_root = true plus explicit [monorepo].config_roots in
+the monorepo root config. Providers are named like //apps/api:uv.
+.TP
 \fB\-\-only\fR \fI<ONLY>\fR
 Run specific deps rule(s) only
 .TP
@@ -2804,6 +3242,9 @@ mise tracks which config files have been used in ~/.local/state/mise/tracked\-co
 Versions which are no longer the latest specified in any of those configs are deleted.
 Versions installed only with environment variables `MISE_<TOOL>_VERSION` will be deleted,
 as will versions only referenced on the command line `mise exec <TOOL>@<VERSION>`.
+
+Tool stubs that have been executed are tracked in ~/.local/state/mise/tracked\-stubs.
+Versions still referenced by a tracked stub are not deleted.
 
 You can list prunable tools with `mise ls \-\-prunable`
 .PP
@@ -2925,6 +3366,23 @@ The name of the script will be the name of the tasks.
 \fBOptions:\fR
 .PP
 .TP
+\fB\-\-affected\fR
+Run matching tasks only for projects affected by Git changes
+.TP
+\fB\-\-affected\-base\fR \fI<REV>\fR
+Git base revision for \-\-affected
+Defaults to MISE_AFFECTED_BASE, CI metadata, or HEAD~1
+.TP
+\fB\-\-affected\-explain\fR
+Explain why projects and tasks were selected by \-\-affected
+.TP
+\fB\-\-affected\-head\fR \fI<REV>\fR
+Git head revision for \-\-affected
+Defaults to MISE_AFFECTED_HEAD, CI metadata, or HEAD
+.TP
+\fB\-\-affected\-json\fR
+Output affected projects and tasks as JSON without running tasks
+.TP
 \fB\-c, \-\-continue\-on\-error\fR
 Continue running tasks even if one fails
 .TP
@@ -3025,6 +3483,27 @@ Skip installing tools before running tasks
 Can also be set persistently with the `task.run_auto_install` setting
 or `MISE_TASK_RUN_AUTO_INSTALL=false` env var
 .TP
+\fB\-\-task\-cache\fR \fI<TASK_CACHE>\fR
+Set task output cache access for this run
+
+\- `read\-write` \- Read cached results and write new results
+\- `read\-only` \- Read cached results without writing new results
+\- `write\-only` \- Write new results without reading cached results
+\- `off` \- Disable task output caching
+\- `local\-only` \- Read and write only the local cache; currently equivalent to `read\-write`
+.RS
+\fIDefault: \fRread\-write
+.RE
+.TP
+\fB\-\-task\-cache\-explain\fR
+Explain the inputs that produced each task's output cache key
+.TP
+\fB\-\-task\-cache\-explain\-json\fR
+Output cache\-key input details as JSON Lines without running tasks
+.TP
+\fB\-\-task\-cache\-stats\fR
+Report task output cache hits, restored bytes, and time saved
+.TP
 \fB\-\-timeout\fR \fI<TIMEOUT>\fR
 Timeout for the task to complete
 e.g.: 30s, 5m
@@ -3069,7 +3548,9 @@ Uses the GitHub Releases API to find the latest release and binary.
 By default, this will also update any installed plugins.
 Uses mise's GitHub token resolution chain for authenticated requests.
 
-This command is not available if mise is installed via a package manager.
+Packagers can disable this command so that mise is updated through the
+package manager instead. See
+https://mise.jdx.dev/contributing.html#packaging\-and\-self\-update\-instructions
 .PP
 \fBUsage:\fR mise self\-update [OPTIONS] [<VERSION>]
 .PP
@@ -3095,7 +3576,7 @@ Set environment variables in mise.toml
 By default, this command modifies `mise.toml` in the current directory.
 If multiple config files exist (e.g., both `mise.toml` and `mise.local.toml`),
 the lowest precedence file (`mise.toml`) will be used.
-See https://mise.en.dev/configuration.html#target\-file\-for\-write\-operations
+See https://mise.jdx.dev/configuration.html#target\-file\-for\-write\-operations
 
 Use `\-E <env>` to create/modify environment\-specific config files like `mise.<env>.toml`.
 .PP
@@ -3131,12 +3612,12 @@ Can be used multiple times. Requires \-\-age\-encrypt.
 \fB\-\-complete\fR
 Render completions
 .TP
-\fB\-\-file\fR \fI<FILE>\fR
+\fB\-\-file, \-\-path\fR \fI<FILE>\fR
 The TOML file to update
 
 Can be a file path or directory. If a directory is provided, will create/use mise.toml in that directory.
-Defaults to [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) environment variable, or `mise.toml`.
-Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) to choose a different global config path.
+Defaults to [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) environment variable, or `mise.toml`.
+Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) to choose a different global config path.
 .TP
 \fB\-\-no\-redact\fR
 Show raw values instead of redacting secrets
@@ -3278,7 +3759,7 @@ Add/update a setting
 
 This modifies the contents of ~/.config/mise/config.toml by default.
 With `\-\-local`, modifies the local config file instead.
-See https://mise.en.dev/configuration.html#target\-file\-for\-write\-operations
+See https://mise.jdx.dev/configuration.html#target\-file\-for\-write\-operations
 .PP
 \fBUsage:\fR mise settings set [OPTIONS] <SETTING> [<VALUE>]
 .PP
@@ -3498,7 +3979,7 @@ Task name to get info of
 Create a new task
 
 Adds a task to the local mise.toml file.
-See https://mise.en.dev/configuration.html#target\-file\-for\-write\-operations
+See https://mise.jdx.dev/configuration.html#target\-file\-for\-write\-operations
 .PP
 \fBUsage:\fR mise tasks add [OPTIONS] <TASK> [<RUN>] ...
 .PP
@@ -3562,6 +4043,9 @@ Display a tree visualization of a dependency graph
 \fBOptions:\fR
 .PP
 .TP
+\fB\-\-compact\fR
+Collapse repeated dependencies after their first occurrence
+.TP
 \fB\-\-dot\fR
 Display dependencies in DOT format
 .TP
@@ -3591,6 +4075,22 @@ Display the path to the task instead of editing it
 .TP
 \fB<TASK>\fR
 Task to edit
+.SH "MISE TASKS GRAPH"
+[experimental] Inspect the workspace project graph
+.PP
+\fBUsage:\fR mise tasks graph [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output the project graph as JSON
+.TP
+\fB\-\-explain\fR
+Explain provider attribution for inferred projects and tasks
+.TP
+\fB\-\-no\-header\fR
+Do not print table headers
 .SH "MISE TASKS INFO"
 Get information about a task
 .PP
@@ -3686,6 +4186,23 @@ The name of the script will be the name of the tasks.
 .PP
 \fBOptions:\fR
 .PP
+.TP
+\fB\-\-affected\fR
+Run matching tasks only for projects affected by Git changes
+.TP
+\fB\-\-affected\-base\fR \fI<REV>\fR
+Git base revision for \-\-affected
+Defaults to MISE_AFFECTED_BASE, CI metadata, or HEAD~1
+.TP
+\fB\-\-affected\-explain\fR
+Explain why projects and tasks were selected by \-\-affected
+.TP
+\fB\-\-affected\-head\fR \fI<REV>\fR
+Git head revision for \-\-affected
+Defaults to MISE_AFFECTED_HEAD, CI metadata, or HEAD
+.TP
+\fB\-\-affected\-json\fR
+Output affected projects and tasks as JSON without running tasks
 .TP
 \fB\-c, \-\-continue\-on\-error\fR
 Continue running tasks even if one fails
@@ -3786,6 +4303,27 @@ Skip installing tools before running tasks
 
 Can also be set persistently with the `task.run_auto_install` setting
 or `MISE_TASK_RUN_AUTO_INSTALL=false` env var
+.TP
+\fB\-\-task\-cache\fR \fI<TASK_CACHE>\fR
+Set task output cache access for this run
+
+\- `read\-write` \- Read cached results and write new results
+\- `read\-only` \- Read cached results without writing new results
+\- `write\-only` \- Write new results without reading cached results
+\- `off` \- Disable task output caching
+\- `local\-only` \- Read and write only the local cache; currently equivalent to `read\-write`
+.RS
+\fIDefault: \fRread\-write
+.RE
+.TP
+\fB\-\-task\-cache\-explain\fR
+Explain the inputs that produced each task's output cache key
+.TP
+\fB\-\-task\-cache\-explain\-json\fR
+Output cache\-key input details as JSON Lines without running tasks
+.TP
+\fB\-\-task\-cache\-stats\fR
+Report task output cache hits, restored bytes, and time saved
 .TP
 \fB\-\-timeout\fR \fI<TIMEOUT>\fR
 Timeout for the task to complete
@@ -3970,7 +4508,7 @@ tool = "node" version = "20.0.0" bin = "node"
 
 The stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub.
 
-For more information, see: https://mise.en.dev/dev\-tools/tool\-stubs.html
+For more information, see: https://mise.jdx.dev/dev\-tools/tool\-stubs.html
 .PP
 \fBUsage:\fR mise tool\-stub <FILE> [<ARGS>] ...
 .PP
@@ -4001,6 +4539,11 @@ of them), and `[tasks]` (no templates and no tool options) are loaded
 without prompting, since nothing in them executes code at load time —
 tools install and tasks run only on explicit commands like `mise install`
 or `mise run`.
+
+Trust is shared across git worktrees: a config file inside a linked
+worktree is trusted when the equivalent path in the repository's main
+checkout has been trusted. Paranoid mode disables this sharing since
+worktrees can check out branches with different config contents.
 .PP
 \fBUsage:\fR mise trust [OPTIONS] [<CONFIG_FILE>]
 .PP
@@ -4008,7 +4551,10 @@ or `mise run`.
 .PP
 .TP
 \fB\-a, \-\-all\fR
-Trust all config files in the current directory and its parents
+Trust all config files in the current directory, its parents, and its subdirectories
+
+Subdirectories are walked respecting .gitignore, skipping hidden directories
+and common build/dependency directories (node_modules, vendor, target, dist, build).
 .TP
 \fB\-\-ignore\fR
 Do not trust this config and ignore it in the future
@@ -4059,10 +4605,12 @@ By default, this command modifies `mise.toml` in the current directory.
 \fBOptions:\fR
 .PP
 .TP
-\fB\-f, \-\-file\fR \fI<FILE>\fR
+\fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
 Specify a file to use instead of `mise.toml`
 
-Defaults to [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) environment variable, or `mise.toml`. Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) to choose a different global config path.
+Can be a file path or directory. If a directory is provided, will create/use mise.toml in that directory.
+
+Defaults to [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) environment variable, or `mise.toml`. Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) to choose a different global config path.
 .TP
 \fB\-g, \-\-global\fR
 Use the global config file
@@ -4088,17 +4636,17 @@ Removes installed tool versions from mise.toml
 By default, this will use the `mise.toml` file that has the tool defined.
 If multiple config files exist (e.g., both `mise.toml` and `mise.local.toml`),
 the lowest precedence file (`mise.toml`) will be used.
-See https://mise.en.dev/configuration.html#target\-file\-for\-write\-operations
+See https://mise.jdx.dev/configuration.html#target\-file\-for\-write\-operations
 
 In the following order:
   \- If `\-\-global` is set, it will use the global config file.
   \- If `\-\-path` is set, it will use the config file at the given path.
   \- If `\-\-env` is set, it will use `mise.<env>.toml`.
-  \- If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
+  \- If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
   \- If `MISE_OVERRIDE_CONFIG_FILENAMES` is set, it will the first from that list.
   \- Otherwise just "mise.toml" or global config if cwd is home directory.
 
-Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) to choose a different global config path.
+Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) to choose a different global config path.
 
 Will also prune the installed version if no other configurations are using it.
 .PP
@@ -4113,7 +4661,7 @@ Create/modify an environment\-specific config file like .mise.<env>.toml
 \fB\-g, \-\-global\fR
 Use the global config file (`~/.config/mise/config.toml`) instead of the local one
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Specify a path to a config file or directory
 
 If a directory is specified, it will look for a config file in that directory following the rules above.
@@ -4132,7 +4680,7 @@ By default, this keeps the range specified in mise.toml. So if you have node@20 
 upgrade to the latest 20.x.x version available. See the `\-\-bump` flag to use the latest version
 and bump the version in mise.toml.
 
-This will update mise.lock if it is enabled, see https://mise.en.dev/configuration/settings.html#lockfile
+This will update mise.lock if it is enabled, see https://mise.jdx.dev/configuration/settings.html#lockfile
 .PP
 \fBUsage:\fR mise upgrade [OPTIONS] [<INSTALLED_TOOL@VERSION>] ...
 .PP
@@ -4188,6 +4736,13 @@ Explicitly pinned versions like "22.5.0" are not filtered.
 \fB\-\-monorepo\fR
 Placeholder for future monorepo upgrades; `mise upgrade \-\-monorepo` is not implemented yet.
 .TP
+\fB\-\-no\-prune\fR
+Do not uninstall the versions that were upgraded away from
+
+By default the old version is removed once the new one installs, unless another
+tracked config or tool stub still needs it. Use this to keep it anyway, e.g. when
+something outside of mise points at the old install directory.
+.TP
 \fB\-\-raw\fR
 Connect backend install command stdin/stdout/stderr directly to the terminal Implies \-\-jobs=1
 \fBArguments:\fR
@@ -4204,17 +4759,17 @@ This will install the tool version if it is not already installed.
 By default, this will use a `mise.toml` file in the current directory.
 If multiple config files exist (e.g., both `mise.toml` and `mise.local.toml`),
 the lowest precedence file (`mise.toml`) will be used.
-See https://mise.en.dev/configuration.html#target\-file\-for\-write\-operations
+See https://mise.jdx.dev/configuration.html#target\-file\-for\-write\-operations
 
 In the following order:
   \- If `\-\-global` is set, it will use the global config file.
   \- If `\-\-path` is set, it will use the config file at the given path.
   \- If `\-\-env` is set, it will use `mise.<env>.toml`.
-  \- If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
+  \- If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
   \- If `MISE_OVERRIDE_CONFIG_FILENAMES` is set, it will the first from that list.
   \- Otherwise just "mise.toml" or global config if cwd is home directory.
 
-Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) to choose a different global config path.
+Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) to choose a different global config path.
 
 Use the `\-\-global` flag to use the global config file instead.
 .PP
@@ -4239,7 +4794,7 @@ Number of jobs to run in parallel
 \fB\-n, \-\-dry\-run\fR
 Perform a dry run, showing what would be installed and modified without making changes
 .TP
-\fB\-p, \-\-path\fR \fI<PATH>\fR
+\fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Specify a path to a config file or directory
 
 If a directory is specified, it will look for a config file in that directory following the rules above.
@@ -4266,7 +4821,7 @@ e.g.: `mise use \-\-pin node@20` will save 20.0.0 as the version
 Set `MISE_PIN=1` to make this the default behavior
 
 Consider using mise.lock as a better alternative to pinning in mise.toml:
-https://mise.en.dev/configuration/settings.html#lockfile
+https://mise.jdx.dev/configuration/settings.html#lockfile
 .TP
 \fB\-\-raw\fR
 Connect backend install command stdin/stdout/stderr directly to the terminal Implies `\-\-jobs=1`
@@ -4683,14 +5238,11 @@ Use key=value syntax. Multiple variables can be set by repeating the option.
 \fB\-\-wrap\-process\fR \fI<MODE>\fR
 Configure how the process is wrapped
 
-By default, Watchexec will run the command in a process group in Unix, and in a Job Object in Windows.
+By default, Watchexec will run the command in a session on macOS, in a process group on other Unix platforms, and in a Job Object in Windows.
 
 Some Unix programs prefer running in a session, while others do not work in a process group.
 
 Use 'group' to use a process group, 'session' to use a process session, and 'none' to run the command directly. On Windows, either of 'group' or 'session' will use a Job Object.
-.RS
-\fIDefault: \fRgroup
-.RE
 .TP
 \fB\-N, \-\-notify\fR
 Alert when commands start and end

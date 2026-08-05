@@ -2,11 +2,15 @@
 # `mise bootstrap dotfiles`
 
 - **用法**: `mise bootstrap dotfiles <SUBCOMMAND>`
-- **源代码**: [`src/cli/bootstrap/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/mod.rs)
+- **效果**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-管理 `[dotfiles]` 中的 dotfiles
+管理 `[dotfiles]` 中的点文件
 
 ## 子命令
 
+- [`mise bootstrap dotfiles add [FLAGS] <TARGET>…`](/cli/bootstrap/dotfiles/add.md)
 - [`mise bootstrap dotfiles apply [FLAGS] [TARGET]…`](/cli/bootstrap/dotfiles/apply.md)
+- [`mise bootstrap dotfiles edit [FLAGS] <TARGET>`](/cli/bootstrap/dotfiles/edit.md)
 - [`mise bootstrap dotfiles status [-J --json] [--missing] [TARGET]…`](/cli/bootstrap/dotfiles/status.md)
+- [`mise bootstrap dotfiles unapply [FLAGS] [TARGET]…`](/cli/bootstrap/dotfiles/unapply.md)

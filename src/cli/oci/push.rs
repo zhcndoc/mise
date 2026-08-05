@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use clap::ValueHint;
 use eyre::{Context, Result, bail};
@@ -7,17 +6,25 @@ use tempfile::TempDir;
 
 use crate::cli::oci::common::perform_build;
 use crate::config::Settings;
-use crate::file;
-use crate::oci::{BuildOptions, LayerOwner};
+use crate::oci::{BuildOptions, LayerOwner, registry};
 
 /// [experimental] Build an OCI image and push it to a registry
 ///
-/// Requires `skopeo` (or `crane`) on PATH. If `--image-dir` is not passed,
-/// builds fresh from the current mise.toml first, then shells out to
-/// `skopeo copy oci:<dir> docker://<ref>` (or `crane push <dir> <ref>`).
-/// Authentication is handled by the underlying tool — configure it the same
-/// way you would for a plain `skopeo` / `crane` push (e.g. `docker login`,
-/// `REGISTRY_AUTH_FILE`, `~/.config/containers/auth.json`).
+/// Pushes with mise's built-in registry client — no skopeo/crane/docker
+/// required. If `--image-dir` is not passed, builds fresh from the current
+/// mise.toml first. Only blobs the registry doesn't already have are
+/// uploaded, so repeat pushes of mostly-unchanged toolsets are cheap.
+///
+/// Tool layers whose tool, version, mount point, and file owner match the
+/// previously pushed image (or `--cache-from`) are reused without being
+/// rebuilt — those tools don't even need to be installed locally. Pass
+/// `--no-cache` to force a full local rebuild.
+///
+/// Credentials are read from the same places docker and podman use:
+/// `$REGISTRY_AUTH_FILE`, `$XDG_RUNTIME_DIR/containers/auth.json`,
+/// `~/.config/containers/auth.json`, and `~/.docker/config.json`
+/// (including credential helpers) — so `docker login` / `podman login`
+/// is all the setup needed.
 ///
 /// Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
 #[derive(Debug, clap::Args)]
@@ -26,6 +33,14 @@ pub struct Push {
     /// Destination registry reference (e.g. `ghcr.io/me/devenv:latest`)
     #[clap(value_name = "REF")]
     reference: String,
+
+    /// Reuse unchanged tool layers from this image instead of the destination ref
+    ///
+    /// Must live in the same repository as the destination. Useful when each
+    /// push gets a unique tag (e.g. per-commit tags in CI):
+    /// `--cache-from ghcr.io/me/dev:latest ghcr.io/me/dev:$SHA`.
+    #[clap(long, value_name = "REF", conflicts_with_all = &["no_cache", "image_dir"])]
+    cache_from: Option<String>,
 
     /// Base image for the build (ignored with --image-dir)
     #[clap(long)]
@@ -45,6 +60,10 @@ pub struct Push {
     #[clap(long)]
     mount_point: Option<String>,
 
+    /// Don't reuse tool layers from the previously pushed image
+    #[clap(long)]
+    no_cache: bool,
+
     /// Don't embed the mise binary (ignored with --image-dir)
     #[clap(long)]
     no_mise: bool,
@@ -57,24 +76,20 @@ pub struct Push {
     #[clap(long, value_name = "UID[:GID]")]
     owner: Option<LayerOwner>,
 
-    /// Force the push tool (`auto`, `skopeo`, `crane`). Default `auto`.
-    #[clap(long, default_value = "auto")]
-    tool: Tool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
-enum Tool {
-    Auto,
-    Skopeo,
-    Crane,
+    /// Maintain the tag as a multi-arch image index
+    ///
+    /// Pushes this build's manifest by digest and points the tag at an OCI
+    /// image index containing one entry per platform, preserving entries
+    /// other architectures pushed. Run `mise oci push --update-index` from
+    /// one runner per platform to assemble a multi-arch tag.
+    #[clap(long)]
+    update_index: bool,
 }
 
 impl Push {
     pub async fn run(self) -> Result<()> {
         Settings::get().ensure_experimental("mise oci push")?;
 
-        // Validate arguments BEFORE we go looking for an external tool,
-        // so argument errors always win over "tool not installed" errors.
         if !self.reference.contains('/') {
             bail!(
                 "push destination must be a fully-qualified reference \
@@ -85,6 +100,7 @@ impl Push {
         // Keep the temp dir alive for the duration of the push — it removes
         // itself on drop, so multi-hundred-megabyte image layouts don't
         // accumulate in /tmp.
+        let mut reused_layers = 0;
         let (image_dir, _tempdir_guard): (PathBuf, Option<TempDir>) =
             if let Some(d) = &self.image_dir {
                 if !d.join("index.json").is_file() {
@@ -105,75 +121,75 @@ impl Push {
                     mount_point: self.mount_point.clone(),
                     owner: self.owner,
                     include_mise: !self.no_mise,
+                    copy: vec![],
+                    reuse_from: self.fetch_layer_cache().await?,
                 };
                 let built = perform_build(opts, self.include_global).await?;
+                reused_layers = built.tool_layers.iter().filter(|l| l.reused).count();
                 info!("built image: {}", built.manifest_digest);
                 (out_dir, Some(td))
             };
 
-        // Resolve tool after argument validation so bad args don't mask
-        // "tool missing" errors (and vice versa).
-        let tool = select_tool(self.tool)?;
-
-        match tool {
-            Tool::Skopeo => {
-                let src = format!("oci:{}", image_dir.display());
-                let dst = format!("docker://{}", self.reference);
-                info!("skopeo copy {src} {dst}");
-                let status = Command::new("skopeo")
-                    .args(["copy", &src, &dst])
-                    .status()
-                    .wrap_err("running `skopeo copy`")?;
-                if !status.success() {
-                    bail!("skopeo copy exited with {status:?}");
-                }
-            }
-            Tool::Crane => {
-                // `crane push <dir> <ref>` takes an OCI image layout directly.
-                info!("crane push {} {}", image_dir.display(), self.reference);
-                let status = Command::new("crane")
-                    .arg("push")
-                    .arg(&image_dir)
-                    .arg(&self.reference)
-                    .status()
-                    .wrap_err("running `crane push`")?;
-                if !status.success() {
-                    bail!("crane push exited with {status:?}");
-                }
-            }
-            Tool::Auto => unreachable!(),
+        let summary = registry::push_image(&image_dir, &self.reference, self.update_index).await?;
+        let mut extras = String::new();
+        if summary.mounted > 0 {
+            extras.push_str(&format!(", {} mounted from base repo", summary.mounted));
         }
-
-        miseprintln!("pushed {} to {}", image_dir.display(), self.reference);
+        if reused_layers > 0 {
+            extras.push_str(&format!(
+                ", {reused_layers} tool layer(s) reused from previous image"
+            ));
+        }
+        miseprintln!(
+            "pushed {} to {} ({} blob(s) uploaded, {} already present{extras})",
+            summary.manifest_digest,
+            self.reference,
+            summary.uploaded,
+            summary.skipped
+        );
+        if let Some(index_digest) = &summary.index_digest {
+            miseprintln!("updated image index: {index_digest}");
+        }
         Ok(())
     }
-}
 
-fn select_tool(requested: Tool) -> Result<Tool> {
-    match requested {
-        Tool::Skopeo => {
-            if file::which("skopeo").is_none() {
-                bail!("--tool skopeo requested but `skopeo` was not found on PATH");
-            }
-            Ok(Tool::Skopeo)
+    /// Fetch the layer-reuse cache image: `--cache-from` if given, otherwise
+    /// the destination ref itself (the previously pushed image under this
+    /// tag). Returns `None` with `--no-cache`, when no previous image exists,
+    /// or when the lookup fails — a broken cache must never fail the push.
+    async fn fetch_layer_cache(&self) -> Result<Option<registry::RemoteImage>> {
+        if self.no_cache {
+            return Ok(None);
         }
-        Tool::Crane => {
-            if file::which("crane").is_none() {
-                bail!("--tool crane requested but `crane` was not found on PATH");
-            }
-            Ok(Tool::Crane)
-        }
-        Tool::Auto => {
-            if file::which("skopeo").is_some() {
-                Ok(Tool::Skopeo)
-            } else if file::which("crane").is_some() {
-                Ok(Tool::Crane)
-            } else {
+        let cache_ref = self.cache_from.as_deref().unwrap_or(&self.reference);
+        if let Some(cache_from) = &self.cache_from {
+            // Reused layer blobs are never uploaded — they must already live
+            // in the destination repository, so a cache image from a
+            // different repo would produce a manifest referencing blobs the
+            // destination doesn't have.
+            let dest = registry::Reference::parse(&self.reference)?;
+            let cache = registry::Reference::parse(cache_from)?;
+            if dest.registry != cache.registry || dest.repository != cache.repository {
                 bail!(
-                    "no supported push tool found. Install one of:\n  \
-                       - skopeo (recommended)\n  \
-                       - crane\nand configure registry auth for it."
-                )
+                    "--cache-from must reference the same repository as the destination \
+                     (got {}/{}, destination is {}/{})",
+                    cache.registry,
+                    cache.repository,
+                    dest.registry,
+                    dest.repository
+                );
+            }
+        }
+        match registry::fetch_remote_image(cache_ref).await {
+            Ok(remote) => {
+                if remote.is_none() {
+                    debug!("no previous image at {cache_ref} — building all layers locally");
+                }
+                Ok(remote)
+            }
+            Err(e) => {
+                warn!("could not fetch layer cache from {cache_ref}: {e} — building all layers");
+                Ok(None)
             }
         }
     }
@@ -189,14 +205,13 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
     $ <bold>mise oci build -o ./img</bold>
     $ <bold>mise oci push --image-dir ./img ghcr.io/me/devenv:v1</bold>
 
-    Force a specific push tool:
-    $ <bold>mise oci push --tool crane ghcr.io/me/devenv:latest</bold>
-
 <bold><underline>Auth:</underline></bold>
 
-    mise shells out to <bold>skopeo</bold> (preferred) or <bold>crane</bold>; configure registry
-    credentials the usual way — `docker login`, `REGISTRY_AUTH_FILE`,
-    or `~/.config/containers/auth.json` for skopeo; `crane auth login`
-    for crane.
+    Credentials are resolved the same way docker/podman resolve them:
+    <bold>$REGISTRY_AUTH_FILE</bold>, <bold>$XDG_RUNTIME_DIR/containers/auth.json</bold>,
+    <bold>~/.config/containers/auth.json</bold>, then <bold>~/.docker/config.json</bold>
+    (inline auths and credential helpers). Log in with either:
+    $ <bold>docker login ghcr.io</bold>
+    $ <bold>podman login ghcr.io</bold>
 "#
 );

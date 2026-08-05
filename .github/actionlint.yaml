@@ -1,6 +1,7 @@
 self-hosted-runner:
   # Labels of self-hosted runner in array of strings.
   labels:
+    - bamboo-perf
     - macos-14
     - namespace-profile-endev-macos-arm64
     - namespace-profile-endev-macos-arm64-large
@@ -8,10 +9,14 @@ self-hosted-runner:
     - namespace-profile-endev-macos-arm64-large;overrides.cache-tag=mise-release-rust-macos
     - namespace-profile-endev-linux-amd64
     - namespace-profile-endev-linux-amd64-large
+    - namespace-profile-endev-linux-amd64-xlarge
     - namespace-profile-endev-linux-amd64;overrides.cache-tag=mise-pr-rust-linux
     - namespace-profile-endev-linux-amd64;overrides.cache-tag=mise-pr-rust-linux-nightly
     - namespace-profile-endev-linux-amd64;overrides.cache-tag=mise-release-plz-rust-linux
     - namespace-profile-endev-linux-amd64-large;overrides.cache-tag=mise-pr-rust-linux
+    # perf.yml pushes refs/notes/tak, so it must not share a cache volume
+    # with perf-pr.yml, which builds pull-request code.
+    - namespace-profile-endev-linux-amd64-large;overrides.cache-tag=mise-perf-main
     - namespace-profile-endev-linux-amd64-large;overrides.cache-tag=mise-release-rust-linux
     - buildjet-32vcpu-ubuntu-2204-arm
     - buildjet-16vcpu-ubuntu-2204-arm
@@ -28,3 +33,10 @@ self-hosted-runner:
 # organization. `null` means disabling configuration variables check.
 # Empty array means no configuration variable is allowed.
 config-variables: null
+
+paths:
+  .github/workflows/test.yml:
+    # actionlint 1.7.12 predates GitHub's native parallel step groups.
+    # Remove this once actionlint recognizes the `parallel` keyword.
+    ignore:
+      - 'step must run script with "run" section or run action with "uses" section'

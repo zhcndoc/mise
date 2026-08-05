@@ -19,7 +19,7 @@
 - 默认：`${XDG_CACHE_HOME:-$HOME/.cache}/mise`，_macOS：`~/Library/Caches/mise`。_
 
 存储 mise 用于诸如某个插件的所有可用版本列表之类用途的内部缓存。不要在不同机器之间共享此缓存。你可以在 mise 没有正在主动安装任何内容时随时删除该目录。使用 `mise cache clear` 执行此操作。
-有关更多信息，请参见 [Cache Behavior](/cache-behavior)。
+有关更多信息，请参见 [缓存行为](/cache-behavior)。
 
 ## `~/.local/state/mise`
 
@@ -69,7 +69,10 @@ latest -> ./20.15.0
 
 你可以设置 `MISE_INSTALLS_DIR` 环境变量来覆盖这个位置。
 
+`MISE_INSTALLS_DIR` 会在 mise 启动时读取。请在调用 mise 之前将其设置到环境中，并在之后调用 mise 以及 shim 时保持设置状态。不要将它设置在 `mise.toml` 的 `[env]` 部分中：`[env]` 描述的是 mise 导出的环境，而此时 mise 已经选择好了其安装目录。
+将它设置在那里可能会导致安装过程使用一个目录，而后续命令和 shim 则在另一个目录中查找。
+
 ### `~/.local/share/mise/shims`
 
-这是 mise 放置 shims 的位置。通常这些用于 IDE 集成，或者在 `mise activate`
+这是 mise 放置 shim 的位置。通常这些用于 IDE 集成，或者在 `mise activate`
 由于某些原因无法正常工作时使用。

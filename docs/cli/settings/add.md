@@ -2,12 +2,13 @@
 # `mise settings add`
 
 - **用法**: `mise settings add [-l --local] <SETTING> [VALUE]`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/settings/add.rs`](https://github.com/jdx/mise/blob/main/src/cli/settings/add.rs)
 
 向配置文件添加一个设置
 
 与数组设置一起使用时，这会将该值追加到数组中。
-这会修改 ~/.config/mise/config.toml 的内容
+这会修改 ~/.config/mise/config.toml 的内容。
 
 ## 参数
 

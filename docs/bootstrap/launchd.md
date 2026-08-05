@@ -1,45 +1,57 @@
-# launchd <Badge type="warning" text="experimental" />
+# launchd
 
 mise 可以在
-`[bootstrap.macos.launchd.agents]` 中声明 macOS 用户 LaunchAgents，并使用
-`mise bootstrap macos launchd-agents apply` 应用它们：
+`[bootstrap.macos.launchd.agents]` 中声明 macOS 用户 LaunchAgent，并通过
+`mise bootstrap macos launchd-agents apply` 或作为
+[`mise bootstrap`](/bootstrap.html) 的一部分应用：
 
 ```toml
 [bootstrap.macos.launchd.agents.my-sync]
 program = "~/.local/bin/my-sync"
 args = ["--watch"]
 run_at_load = true
-start_interval = 300
+start_calendar_interval = { hour = 2, minute = 0 }
 environment = { PATH = "/opt/homebrew/bin:/usr/bin:/bin" }
 working_directory = "~"
 stdout_path = "~/Library/Logs/my-sync.log"
 stderr_path = "~/Library/Logs/my-sync.err.log"
 ```
 
-每个 agent 都会写入 `~/Library/LaunchAgents/dev.mise.<name>.plist`，并通过
+每个代理都会写入 `~/Library/LaunchAgents/dev.mise.<name>.plist`，并通过
 `launchctl bootstrap gui/$UID
-~/Library/LaunchAgents/dev.mise.<name>.plist` 加载。Agent 名称可以包含字母、
+~/Library/LaunchAgents/dev.mise.<name>.plist` 加载。代理名称可以包含字母、
 数字、`.`、`_` 和 `-`。mise 仅拥有它创建的、带有
 `dev.mise.` 标签前缀的 plist 文件。
 
 ## 支持的键
 
-| TOML 键             | launchd 键               |
-| ------------------- | ------------------------- |
-| `program`           | `ProgramArguments[0]`     |
-| `args`              | `ProgramArguments[1..]`   |
-| `run_at_load`       | `RunAtLoad`               |
-| `keep_alive`       | `KeepAlive`               |
-| `start_interval`    | `StartInterval`           |
-| `environment`       | `EnvironmentVariables`    |
-| `working_directory` | `WorkingDirectory`        |
-| `stdout_path`       | `StandardOutPath`         |
-| `stderr_path`       | `StandardErrorPath`       |
-| `kickstart`         | 运行 `launchctl kickstart` |
+| TOML key                  | launchd key               |
+| ------------------------- | ------------------------- |
+| `program`                 | `ProgramArguments[0]`     |
+| `args`                    | `ProgramArguments[1..]`   |
+| `run_at_load`             | `RunAtLoad`               |
+| `keep_alive`              | `KeepAlive`               |
+| `start_interval`          | `StartInterval`           |
+| `start_calendar_interval` | `StartCalendarInterval`   |
+| `environment`             | `EnvironmentVariables`    |
+| `working_directory`       | `WorkingDirectory`        |
+| `stdout_path`             | `StandardOutPath`         |
+| `stderr_path`             | `StandardErrorPath`       |
+| `kickstart`               | 运行 `launchctl kickstart` |
 
-`program`、`working_directory`、`stdout_path` 和 `stderr_path` 会在写入 plist 之前将不带内容的
-`~` 和 `~/` 展开为当前用户的主目录。
-`args` 会严格按原样传递。
+在写入 plist 之前，`program`、`working_directory`、`stdout_path` 和
+`stderr_path` 会将单独出现的 `~` 和 `~/` 展开为当前用户的主目录。
+`args` 会完全按照原样传递。
+`start_calendar_interval` 接受 `minute`（0-59）、`hour`（0-23）、`day`
+（1-31）、`weekday`（0-7）和 `month`（1-12），并写入对应的
+launchd 日历键。对于多个相互独立的日历计划，请使用内联表数组：
+
+```toml
+start_calendar_interval = [{ hour = 3 }, { hour = 12, weekday = 1 }]
+```
+
+`start_interval` 和 `start_calendar_interval` 是相互独立的 launchd
+触发器。如果两者都设置，launchd 可以根据任一计划启动代理。
 
 ## 语义
 

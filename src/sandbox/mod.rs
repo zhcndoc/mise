@@ -24,6 +24,10 @@ pub struct SandboxConfig {
     pub allow_write: Vec<PathBuf>,
     pub allow_net: Vec<String>,
     pub allow_env: Vec<String>,
+    /// Environment patterns that survive an active env sandbox without enabling it themselves.
+    pub pass_through_env: Vec<String>,
+    /// Exact hashed environment names that survive an active env sandbox.
+    pub cache_env: Vec<String>,
 }
 
 /// Minimal env vars inherited when deny_env is active.
@@ -51,6 +55,19 @@ fn env_pattern_matches(pattern: &str, key: &str) -> bool {
 }
 
 impl SandboxConfig {
+    /// Build sandbox configuration by combining persistent deny settings with CLI options.
+    pub fn from_settings_and_cli(
+        settings: &crate::config::settings::SettingsSandbox,
+        cli_deny_all: bool,
+        mut cli: Self,
+    ) -> Self {
+        cli.deny_read |= settings.deny_all || settings.deny_read || cli_deny_all;
+        cli.deny_write |= settings.deny_all || settings.deny_write || cli_deny_all;
+        cli.deny_net |= settings.deny_all || settings.deny_net || cli_deny_all;
+        cli.deny_env |= settings.deny_all || settings.deny_env || cli_deny_all;
+        cli
+    }
+
     /// Returns true if any sandbox restriction is configured.
     pub fn is_active(&self) -> bool {
         self.deny_read
@@ -115,7 +132,13 @@ impl SandboxConfig {
         if !self.effective_deny_env() {
             return env.clone();
         }
-        let env_matches = |k: &str| self.allow_env.iter().any(|pat| env_pattern_matches(pat, k));
+        let env_patterns = self.allow_env.iter().chain(&self.pass_through_env);
+        let env_matches = |k: &str| {
+            self.cache_env.iter().any(|name| name == k)
+                || env_patterns
+                    .clone()
+                    .any(|pattern| env_pattern_matches(pattern, k))
+        };
         let mut filtered: std::collections::BTreeMap<String, String> = env
             .iter()
             .filter(|(k, _)| DEFAULT_ENV_KEYS.contains(&k.as_str()) || env_matches(k))
@@ -123,9 +146,9 @@ impl SandboxConfig {
             .collect();
         // Pull in allowed vars from parent env that might not be in mise's env map.
         // For wildcard patterns, check all parent env vars; for exact names, check directly.
-        for pattern in &self.allow_env {
+        for pattern in self.allow_env.iter().chain(&self.pass_through_env) {
             if pattern.contains('*') {
-                for (key, val) in std::env::vars() {
+                for (key, val) in crate::env::vars_safe() {
                     if !filtered.contains_key(&key) && env_pattern_matches(pattern, &key) {
                         filtered.insert(key, val);
                     }
@@ -134,6 +157,13 @@ impl SandboxConfig {
                 && let Ok(val) = std::env::var(pattern)
             {
                 filtered.insert(pattern.clone(), val);
+            }
+        }
+        for key in &self.cache_env {
+            if !filtered.contains_key(key)
+                && let Ok(val) = std::env::var(key)
+            {
+                filtered.insert(key.clone(), val);
             }
         }
         // Also ensure essential vars from parent env are present
@@ -252,6 +282,7 @@ pub async fn macos_generate_profile(config: &SandboxConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::settings::SettingsSandbox;
     use std::collections::BTreeMap;
 
     #[test]
@@ -311,6 +342,70 @@ mod tests {
     }
 
     #[test]
+    fn test_pass_through_env_only_filters_when_env_is_denied() {
+        let mut env = BTreeMap::new();
+        env.insert("PASSED_SECRET".to_string(), "secret".to_string());
+        env.insert("OTHER_VAR".to_string(), "other".to_string());
+        let loose = SandboxConfig {
+            pass_through_env: vec!["PASSED_*".to_string()],
+            ..Default::default()
+        };
+
+        assert!(!loose.effective_deny_env());
+        assert_eq!(loose.filter_env(&env), env);
+
+        let strict = SandboxConfig {
+            deny_env: true,
+            ..loose
+        };
+        let filtered = strict.filter_env(&env);
+        assert_eq!(
+            filtered.get("PASSED_SECRET").map(String::as_str),
+            Some("secret")
+        );
+        assert!(!filtered.contains_key("OTHER_VAR"));
+    }
+
+    #[test]
+    fn test_cache_env_uses_exact_names() {
+        let config = SandboxConfig {
+            deny_env: true,
+            cache_env: vec!["HASHED_*".to_string(), "EXACT".to_string()],
+            ..Default::default()
+        };
+        let env = BTreeMap::from([
+            ("HASHED_VALUE".to_string(), "not-selected".to_string()),
+            ("EXACT".to_string(), "selected".to_string()),
+        ]);
+
+        let filtered = config.filter_env(&env);
+        assert!(!filtered.contains_key("HASHED_VALUE"));
+        assert_eq!(filtered.get("EXACT").map(String::as_str), Some("selected"));
+    }
+
+    /// filter_env() walks the parent environment for wildcard allow_env
+    /// patterns; a non-UTF-8 parent var must be skipped, not panic (#5370).
+    #[cfg(unix)]
+    #[test]
+    fn test_filter_env_wildcard_skips_invalid_utf8_parent_var() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let key = "MISE_TEST_SANDBOX_INVALID";
+        let config = SandboxConfig {
+            allow_env: vec!["MISE_TEST_SANDBOX_*".to_string()],
+            ..Default::default()
+        };
+        // restores the environment on drop, even if the assertion below fails
+        let mut guard = crate::test::EnvVarGuard::new();
+        guard.set(key, OsString::from_vec(vec![0xff]));
+
+        let filtered = config.filter_env(&BTreeMap::new());
+
+        assert!(!filtered.contains_key(key));
+    }
+
+    #[test]
     fn test_resolve_paths_drops_empty_paths() {
         let mut config = SandboxConfig {
             allow_read: vec![PathBuf::new()],
@@ -322,5 +417,44 @@ mod tests {
 
         assert!(config.allow_read.is_empty());
         assert!(config.allow_write.is_empty());
+    }
+
+    #[test]
+    fn test_from_settings_and_cli_combines_denies() {
+        let settings = SettingsSandbox {
+            deny_read: true,
+            deny_net: true,
+            ..Default::default()
+        };
+        let config = SandboxConfig::from_settings_and_cli(
+            &settings,
+            false,
+            SandboxConfig {
+                deny_write: true,
+                allow_env: vec!["ALLOWED".to_string()],
+                ..Default::default()
+            },
+        );
+
+        assert!(config.deny_read);
+        assert!(config.deny_write);
+        assert!(config.deny_net);
+        assert!(!config.deny_env);
+        assert_eq!(config.allow_env, ["ALLOWED"]);
+    }
+
+    #[test]
+    fn test_from_settings_and_cli_expands_deny_all() {
+        let settings = SettingsSandbox {
+            deny_all: true,
+            ..Default::default()
+        };
+        let config =
+            SandboxConfig::from_settings_and_cli(&settings, false, SandboxConfig::default());
+
+        assert!(config.deny_read);
+        assert!(config.deny_write);
+        assert!(config.deny_net);
+        assert!(config.deny_env);
     }
 }

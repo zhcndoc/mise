@@ -9,7 +9,7 @@
 - **可复现构建**：确保团队中的每个人都使用完全相同的工具版本
 - **安全性**：在后端支持时，通过校验和验证工具完整性
 - **版本固定**：将工具锁定到特定版本，同时仍允许在 `mise.toml` 中保持灵活性
-- **避免 API 速率限制**：通过存储下载 URL，未来的安装会使用锁文件，而不需要调用 GitHub（或其他提供商），从而避免速率限制，并且在大多数情况下无需 `GITHUB_TOKEN`
+- **避免 API 速率限制**：通过存储下载 URL，未来的安装会使用锁文件，而不需要调用 GitHub（或其他提供商），从而避免速率限制，并且在大多数情况下无需 `GITHUB_TOKEN`。
 
 ## 启用锁文件
 
@@ -28,7 +28,7 @@ lockfile = true
 
 1. **锁文件更新**：一旦存在 `mise.lock` 文件，运行 `mise install` 或 `mise use` 会用已安装的确切版本更新它
 2. **版本解析**：如果存在 `mise.lock`，mise 会优先使用锁定的版本，而不是 `mise.toml` 中的版本范围
-3. **校验和验证**：对于受支持的后端，mise 会存储并验证已下载工具的校验和
+3. **校验和验证**：对于受支持的后端，mise 会存储并验证已下载工具的校验和。
 
 ## 文件格式
 
@@ -82,13 +82,29 @@ size = 1234567
 - **`options`**（可选）：用于标识制品的后端特定选项（例如 `{exe = "rg", matching = "musl"}`）
 - **`platforms`**（可选）：特定于平台的元数据（校验和、URL、大小）
 
+当工具的制品标识不仅取决于平台键时，同一版本可以有多个条目。例如，Swift 会针对不同发行版发布不同的 Linux tarball，因此其条目会记录各自对应的发行版：
+
+```toml
+[[tools.swift]]
+version = "6.3.1"
+backend = "core:swift"
+options = { swift_platform = "ubuntu24.04" }
+
+[[tools.swift]]
+version = "6.3.1"
+backend = "core:swift"
+options = { swift_platform = "fedora39" }
+```
+
+条目会根据选项进行精确匹配，因此机器只会根据为其自身发行版编写的条目进行验证。设置 `swift.platform`，可以让每台 Linux 机器解析到相同的制品，并提交它生成的条目。如果某个平台的制品并未由工具发布——例如 `ubi9` 没有 arm64 构建版本——则该平台会被报告为已跳过，而不是被锁定。
+
 ### 平台键
 
 平台键的格式通常为 `os-arch`，但可以由后端自定义：
 
 - **标准格式**：`linux-x64`、`macos-arm64`、`windows-x64`
 - **后端特定**：某些后端（如 Java）可能使用更具体的平台标识符
-- **工具特定**：像 `ubi` 这样的后端可能会在平台键中包含额外的工具特定信息
+- **工具特定**：像 `ubi` 这样的后端可能会在平台键中包含额外的工具特定信息。
 
 ## 环境特定锁文件
 
@@ -105,7 +121,7 @@ size = 1234567
 例如，在 `MISE_ENV=test` 时：
 
 ```sh
-MISE_ENV=test mise lock  # creates mise.lock AND mise.test.lock
+MISE_ENV=test mise lock  # 创建 mise.lock 和 mise.test.lock
 ```
 
 `mise.toml` 中的工具会进入 `mise.lock`，`mise.test.toml` 中的工具会进入 `mise.test.lock`。
@@ -206,7 +222,46 @@ mise use node@26
 # 这将同时更新安装和 mise.lock
 ```
 
-### 锁定已锁定的版本
+### 更新锁定版本
+
+`mise lock --bump` 会根据最新的匹配版本重新解析模糊版本选择器（如 `latest`、`lts` 或 `"22"` 这样的前缀），并更新锁文件——不会安装任何内容，也不会修改 `mise.toml`。精确固定的版本保持不变（使用 [`mise upgrade --bump`](/cli/upgrade.html) 可重写 `mise.toml` 中的固定版本）。
+
+```sh
+# mise.toml 中的 node = "22" 锁定为 22.14.0；此后发布了 22.15.0
+mise lock --bump             # 锁文件现在固定为 22.15.0，mise.toml 仍为 "22"
+mise lock --bump node        # 仅更新 node
+mise lock --bump --dry-run   # 显示将发生的更改，但不写入文件
+```
+
+此功能专为自动化依赖更新而设计：按计划在 CI 中运行，并在锁文件发生更改时创建 PR。`--json` 会以机器可读的格式输出更改（并抑制人类可读的消息）。只会报告版本级别的更改——未变化版本的校验和/URL 刷新不会生成条目——版本列表会保留配置文件/锁文件中的顺序，而不会进行排序。从配置中移除的工具会以空的 `new_versions` 报告：
+
+```sh
+mise lock --bump --dry-run --json
+```
+
+```json
+[
+  {
+    "name": "node",
+    "backend": "core:node",
+    "lockfile": "~/src/myproj/mise.lock",
+    "old_versions": ["22.14.0"],
+    "new_versions": ["22.15.0"]
+  }
+]
+```
+
+::: tip 在安全模式下运行更新自动化
+当任务针对你无法控制的配置运行时——最常见的情况是机器人在拉取请求分支上更新
+`mise.lock`——请设置 [`MISE_SAFE=1`](/security.html#safe-mode)，以防止项目配置执行代码。安全模式会拒绝模板 `exec()`、`_.source` 脚本、钩子、任务、asdf 插件脚本和插件安装，而基于 HTTP 的后端仍可正常进行 `--bump` 版本解析：
+
+```sh
+MISE_SAFE=1 mise lock --bump --json
+```
+
+:::
+
+### 固定锁定版本
 
 你可以在保持 `mise.toml` 中模糊版本说明的同时，在锁文件中固定某个特定版本：
 
@@ -222,25 +277,26 @@ mise lock node@22.15.0      # 仅更新 mise.lock，不重新安装
 
 下表显示了每个命令如何与 `mise.toml` 和 `mise.lock` 交互：
 
-| 命令                        | 安装 | 更新 `mise.toml`                 | 更新 `mise.lock`                        |
-| --------------------------- | ---- | --------------------------------- | --------------------------------------- |
-| `mise use node@22`          | 是   | 是（设置 `node = "22"`）         | 是                                      |
-| `mise install`              | 是   | 否                                | 是                                      |
-| `mise install node`         | 是   | 否                                | 是（安装 node 的配置版本）              |
-| `mise install node@22.15.0` | 是   | 否                                | 否（一次性安装，不由配置驱动）          |
-| `mise upgrade`              | 是   | 否                                | 是                                      |
-| `mise upgrade node`         | 是   | 否                                | 是（在其范围内升级 node）               |
-| `mise upgrade node@22.15.0` | 是   | 仅当版本不匹配前缀时           | 是                                      |
-| `mise upgrade --bump`       | 是   | 是（提升前缀以匹配）             | 是                                      |
-| `mise lock`                 | 否   | 否                                | 是（为所有工具重新生成）                |
-| `mise lock node@22.15.0`    | 否   | 仅当版本不匹配前缀时           | 是                                      |
+| 命令                        | 安装   | 更新 `mise.toml`                    | 更新 `mise.lock`                         |
+| --------------------------- | ------ | ----------------------------------- | ---------------------------------------- |
+| `mise use node@22`          | 是     | 是（设置 `node = "22"`）            | 是                                       |
+| `mise install`              | 是     | 否                                  | 是                                       |
+| `mise install node`         | 是     | 否                                  | 是（安装 node 的配置版本）              |
+| `mise install node@22.15.0` | 是     | 否                                  | 否（一次性安装，不由配置驱动）           |
+| `mise upgrade`              | 是     | 否                                  | 是                                       |
+| `mise upgrade node`         | 是     | 否                                  | 是（在其版本范围内升级 node）            |
+| `mise upgrade node@22.15.0` | 是     | 仅当版本不匹配前缀时                | 是                                       |
+| `mise upgrade --bump`       | 是     | 是（更新前缀以匹配）                 | 是                                       |
+| `mise lock`                 | 否     | 否                                  | 是（为所有工具重新生成）                 |
+| `mise lock --bump`          | 否     | 否                                  | 是（将选择器重新解析为最新版本）         |
+| `mise lock node@22.15.0`    | 否     | 仅当版本不匹配前缀时                | 是                                       |
 
 **要点：**
 
-- **`mise use`** 用于更改你想在配置中使用的版本——它总是会写入 `mise.toml`
-- **`mise install`** 会安装配置中的内容，但不会更改它——`mise install node` 会安装配置里 node 的版本并更新锁文件，而 `mise install node@22.15.0` 是一次性操作，不会
-- **`mise upgrade`** 会在工具配置的范围内升级工具并更新锁文件——传入 `tool@version` 可让你针对特定版本
-- **`mise lock`** 会在不安装的情况下重新生成锁文件条目——传入 `tool@version` 可让你锁定到特定版本
+- **`mise use`** 用于更改配置中所需的版本——它总是会写入 `mise.toml`
+- **`mise install`** 安装配置中的内容，但不会修改配置——`mise install node` 安装配置中的 node 版本并更新锁文件，而 `mise install node@22.15.0` 是一次性安装，不会更新锁文件
+- **`mise upgrade`** 在配置的版本范围内升级工具并更新锁文件——传入 `tool@version` 可指定目标版本
+- **`mise lock`** 重新生成锁文件条目，但不会进行安装——传入 `tool@version` 可固定特定版本，而 `--bump` 会将模糊选择器推进到最新匹配版本
 
 ## 后端支持
 
@@ -252,7 +308,7 @@ mise lock node@22.15.0      # 仅更新 mise.lock，不重新安装
 - ⚠️ **部分支持**（版本 + 校验和 + 大小）：`ubi`
 - 📝 **基础支持**（版本 + 校验和）：`core`（部分工具）
 - 📝 **仅版本**：`asdf`、`npm`、`cargo`、`pipx`
-- 📝 **计划中**：随着时间推移，更多后端将添加完整的资产跟踪支持
+- 📝 **计划中**：随着时间推移，更多后端将添加完整的资产跟踪支持。
 
 ## 最佳实践
 
@@ -397,4 +453,4 @@ minimum_release_age = "7d"  # 覆盖默认的 24h 延迟
 
 - [配置设置](/configuration/settings) - 所有可用设置
 - [工具版本管理](/dev-tools/) - 工具版本的工作原理
-- [后端](/dev-tools/backends/) - 特定后端的校验和支持
+- [后端](/dev-tools/backends/) - 特定后端的校验和支持。

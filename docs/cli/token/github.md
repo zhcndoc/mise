@@ -2,9 +2,10 @@
 # `mise token github`
 
 - **用法**: `mise token github [FLAGS] [HOST]`
+- **作用**: 只读
 - **源代码**: [`src/cli/token/github.rs`](https://github.com/jdx/mise/blob/main/src/cli/token/github.rs)
 
-GitHub 令牌
+GitHub 令牌。
 
 ## 参数
 

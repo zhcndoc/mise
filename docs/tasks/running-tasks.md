@@ -14,7 +14,13 @@
 通过逐行输出，我们可以避免并行执行时输出交错。不过，如果
 --jobs == 1，输出将设置为 `interleave`。
 
-若只想直接打印 stdout/stderr，请使用 `--interleave`、`task.output` 设置，或 `MISE_TASK_OUTPUT=interleave`。
+要直接输出 stdout/stderr，请使用 `--output interleave`、`task.output` 设置或 `MISE_TASK_OUTPUT=interleave`。
+
+输出的 _样式_（`prefix`、`interleave`、`keep-order` 等）独立于输出的 _详细程度_
+（`--quiet`/`--silent`、`quiet`/`silent` 设置，或每个任务的 `quiet`/`silent` 字段）。
+两者可以组合使用：例如，`MISE_TASK_OUTPUT=prefix` 配合 `--quiet` 会保留任务名称前缀，同时
+抑制 mise 自身的消息。`--quiet` 不再强制使用无前缀输出——如果你想要旧版的无前缀行为，请使用
+`--output quiet`（或 `-o interleave`）。
 
 默认不会读取 stdin。要启用此功能，请在需要它的任务上设置 `raw = true`。这会阻止
 它与任何其他任务并行运行——在这种情况下会使用 RWMutex 的写锁。这也会阻止对输出应用脱敏处理。
@@ -25,7 +31,19 @@
 mise run build --release
 ```
 
-如果有多个命令，参数只会传递给最后一个命令。
+如需一个精确且经过验证的任务接口，请使用
+[`usage` 字段](/tasks/task-arguments#usage-field)定义参数和标志。如果没有 `usage` 规范，
+额外参数将根据任务的执行方式进行传递：
+
+- 如果 `run` 是数组，参数只会传递给数组中的最后一项。
+- 对于常规的内联 shell 命令，参数会追加到命令文本末尾。
+- [shebang 任务](/tasks/toml-tasks#shell-shebang)会作为脚本文件执行，因此其解释器会像通常一样
+  提供这些参数——例如，在 Bash 中可以使用 `$1` 和 `$@`。
+
+由于任务名称之后的所有内容都属于任务，mise 自身的标志必须放在任务名称
+_之前_——应使用 `mise run --silent build`，而不是 `mise run build --silent`；后者会将
+`--silent` 传递给任务，除非任务定义了该标志，否则会因 `unexpected word: --silent` 而失败。
+这也意味着任务可以自由定义与 mise 标志同名的标志，例如，任务可以拥有自己的 `--env`。
 
 :::tip
 你可以为任务定义参数/标志，这将提供验证、解析、自动补全和文档。
@@ -76,17 +94,29 @@ run = 'cargo test --lib'
 可用的通配符模式：
 
 - `?` 匹配任意单个字符
-- `*` 匹配 0 个或多个字符
-- `**` 匹配 0 个或多个组
-- `{glob1,glob2,...}` 匹配任何以逗号分隔的 glob 模式
-- `[ab,...]` 匹配字符集或范围 `[a-z]` 中的任意字符
+- `*` 匹配单个以 `:` 分隔的组中的 0 个或多个字符
+- `**` 匹配 0 个或多个完整的以 `:` 分隔的组
+- `{glob1,glob2,...}` 匹配逗号分隔的 glob 模式中的任意一个
+- `[ab,...]` 匹配指定字符或范围 `[a-z]` 中的任意字符
 - `[!ab,...]` 匹配不在字符集中的任意字符
 
 ### 示例
 
 `mise run generate:{completions,docs:*}`
 
-以及带依赖项的情况：
+对于分组任务，当只有一个组可能发生变化时使用 `*`，当匹配可能跨越多个组时使用 `**`：
+
+```bash
+# 匹配 test:units:local，但不匹配 test:e2e:happy:local
+mise run 'test:*:local'
+
+# 同时匹配 test:units:local 和 test:e2e:happy:local
+mise run 'test:**:local'
+```
+
+如果某个模式依赖于旧版本 mise 中 `*` 匹配嵌套任务组的行为，请将其替换为 `**` 以保留递归行为。
+
+对于依赖项也是如此：
 
 ```toml
 [tasks."lint:eslint"] # 使用 ":" 时，我们需要加上引号

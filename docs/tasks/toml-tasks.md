@@ -60,7 +60,7 @@ file = 'scripts/release.sh' # 执行外部脚本
 [env]
 VERBOSE_ARGS = '--verbose'
 
-# Vars 可以在任务之间像环境变量一样共享，
+# 变量可以在任务之间像环境变量一样共享，
 # 但它们不会作为环境变量传递给脚本
 [vars]
 e2e_args = '--headless'
@@ -236,7 +236,24 @@ cargo clippy
 '''
 ```
 
-通过使用 `shebang`（或 `shell`），你可以用不同的语言运行任务（例如 Python、Node.js、Ruby 等）：
+Shebang 任务会作为脚本文件执行。未在
+[`usage` 规范](/tasks/task-arguments#usage-field)中定义的额外参数会作为普通脚本参数传递，
+例如 Bash 中的 `$1` 和 `$@`：
+
+```mise-toml
+[tasks.greet]
+run = '''
+#!/usr/bin/env bash
+echo "hello $1"
+'''
+```
+
+```shell
+$ mise run greet world
+hello world
+```
+
+通过使用 `shebang`（或 `shell`），你可以使用不同的语言运行任务（例如 Python、Node.js、Ruby 等）：
 
 ::: code-group
 
@@ -381,7 +398,7 @@ file = "https://example.com/build.sh"
 
 请注意，该文件将被下载并执行。请确保你信任该来源。
 
-#### Git <Badge type="warning" text="experimental" />
+#### Git <Badge type="warning" text="实验性" />
 
 ::: code-group
 
@@ -422,7 +439,7 @@ URL 格式必须遵循以下模式 `git::<protocol>://<url>//<path>?<ref>`
 ## 参数
 
 ::: tip
-有关任务参数的完整信息，请参阅专门的 [Task Arguments](/tasks/task-arguments) 页面。
+有关任务参数的完整信息，请参阅专门的 [任务参数](/tasks/task-arguments) 页面。
 :::
 
 默认情况下，参数会传递给 `run` 数组中的最后一个脚本。因此，如果一个任务定义为：
@@ -451,7 +468,7 @@ run = 'cargo test ${usage_file?} --format ${usage_format?}'
 
 在 usage 字段中定义的参数可作为以 `usage_` 为前缀的环境变量使用。
 
-完整文档请参阅 [Task Arguments](/tasks/task-arguments#usage-field) 页面。
+完整文档请参阅 [任务参数](/tasks/task-arguments#usage-field) 页面。
 
 ### Tera 模板函数 <Badge type="danger" text="deprecated" />
 
@@ -493,8 +510,8 @@ run = [
 ```mise-toml
 [tasks.test]
 run = 'cargo test {{arg(name="file")}}'
-# execute: mise run test my-test-file
-# runs: cargo test my-test-file
+# 执行：mise run test my-test-file
+# 运行：cargo test my-test-file
 ```
 
 - `i`：参数的索引。可用于指定参数顺序。默认值为
@@ -513,8 +530,8 @@ run = 'cargo test {{arg(name="file")}}'
 ```mise-toml
 [tasks.test]
 run = 'cargo test {{option(name="file")}}'
-# execute: mise run test --file my-test-file
-# runs: cargo test my-test-file
+# 执行：mise run test --file my-test-file
+# 运行：cargo test my-test-file
 ```
 
 - `name`：参数的名称。用于帮助/错误消息。
@@ -531,8 +548,8 @@ run = 'cargo test {{option(name="file")}}'
 ```mise-toml
 [tasks.echo]
 run = 'echo {{flag(name="myflag")}}'
-# execute: mise run echo --myflag
-# runs: echo true
+# 执行：mise run echo --myflag
+# 运行：echo true
 ```
 
 ```mise-toml
@@ -542,8 +559,8 @@ if [ '{{flag(name='clean')}}' = 'true' ]; then
   echo 'cleaning'
 fi
 '''
-# execute: mise run maybeClean --clean
-# runs: echo cleaning
+# 执行：mise run maybeClean --clean
+# 运行：echo cleaning
 ```
 
 - `name`：标志的名称。用于帮助/错误消息。

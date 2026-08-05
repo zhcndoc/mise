@@ -22,8 +22,9 @@ MCP 服务器提供以下访问：
 - mise://config - 显示配置文件和项目根目录
 
 可用工具：
-- install_tool - 安装一个带可选版本的工具（尚未实现）
-- run_task - 执行一个 mise 任务，可带可选参数
+- list_commands - 每个 mise 命令及其声明的对世界的影响
+- install_tool - 安装一个可选版本的工具（尚未实现）
+- run_task - 执行一个可选带参数的 mise 任务
 
 注意：这主要用于与 Claude、Cursor 或其他支持模型上下文协议的 AI 助手集成。
 
@@ -55,7 +56,9 @@ $ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 - mise://config - 显示配置信息
 
 # 可用工具：
+- list_commands - 每个 mise 命令及其运行效果
+  示例：{"include_hidden": false}
 - install_tool - 安装一个工具（尚未实现）
-- run_task - 执行一个 mise 任务，可带可选参数
+- run_task - 执行一个可选带参数的 mise 任务
   示例：{"task": "build", "args": ["--verbose"]}
 ```

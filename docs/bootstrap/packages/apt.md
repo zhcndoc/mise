@@ -1,4 +1,4 @@
-# apt <Badge type="warning" text="experimental" />
+# apt
 
 适用于 Debian 系 Linux（Debian、Ubuntu、Mint 等）的系统包。
 

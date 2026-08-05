@@ -62,6 +62,10 @@ GitHub artifact attestations），即使 lockfile 中已经有一个
 此行为也可以通过
 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 设置单独启用。
 
-## 还有吗？
+## 另请参阅
+
+[安全模式](/security.html#safe-mode)（`MISE_SAFE=1`）是一项相关但不同的控制机制：paranoid 模式收紧的是_信任_（加载哪些配置并重新验证），而安全模式则是针对在你不控制的配置下运行 mise 时的_代码执行_设置的一道硬边界。
+
+## 更多？
 
 如果你对可以添加到 paranoid 的更多内容有建议，请告诉我。

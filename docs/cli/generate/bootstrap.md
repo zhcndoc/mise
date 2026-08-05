@@ -2,6 +2,7 @@
 # `mise generate bootstrap`
 
 - **用法**: `mise generate bootstrap [FLAGS]`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/generate/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/bootstrap.rs)
 
 生成一个用于下载并执行 mise 的脚本

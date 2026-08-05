@@ -7,7 +7,6 @@ use console::{Term, style};
 use eyre::{Result, bail, eyre};
 use itertools::Itertools;
 use jiff::Timestamp;
-use path_absolutize::Absolutize;
 
 use crate::cli::args::{BackendArg, ToolArg};
 use crate::config::config_file::ConfigFile;
@@ -28,17 +27,17 @@ use crate::{config, env, exit, file};
 /// By default, this will use a `mise.toml` file in the current directory.
 /// If multiple config files exist (e.g., both `mise.toml` and `mise.local.toml`),
 /// the lowest precedence file (`mise.toml`) will be used.
-/// See https://mise.en.dev/configuration.html#target-file-for-write-operations
+/// See https://mise.jdx.dev/configuration.html#target-file-for-write-operations
 ///
 /// In the following order:
 ///   - If `--global` is set, it will use the global config file.
 ///   - If `--path` is set, it will use the config file at the given path.
 ///   - If `--env` is set, it will use `mise.<env>.toml`.
-///   - If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.en.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
+///   - If [`MISE_DEFAULT_CONFIG_FILENAME`](https://mise.jdx.dev/configuration.html#mise_default_config_filename) is set, it will use that instead.
 ///   - If `MISE_OVERRIDE_CONFIG_FILENAMES` is set, it will the first from that list.
 ///   - Otherwise just "mise.toml" or global config if cwd is home directory.
 ///
-/// Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.en.dev/configuration.html#mise_global_config_file) to choose a different global config path.
+/// Use [`MISE_GLOBAL_CONFIG_FILE`](https://mise.jdx.dev/configuration.html#mise_global_config_file) to choose a different global config path.
 ///
 /// Use the `--global` flag to use the global config file instead.
 #[derive(Debug, clap::Args)]
@@ -80,7 +79,7 @@ pub struct Use {
     ///
     /// If a directory is specified, it will look for a config file in that directory following
     /// the rules above.
-    #[clap(short, long, overrides_with_all = & ["global", "env"], value_hint = clap::ValueHint::FilePath)]
+    #[clap(short, long, visible_alias = "file", overrides_with_all = & ["global", "env"], value_hint = clap::ValueHint::FilePath)]
     path: Option<PathBuf>,
 
     /// Like --dry-run but exits with code 1 if there are changes to make
@@ -107,7 +106,7 @@ pub struct Use {
     /// Set `MISE_PIN=1` to make this the default behavior
     ///
     /// Consider using mise.lock as a better alternative to pinning in mise.toml:
-    /// https://mise.en.dev/configuration/settings.html#lockfile
+    /// https://mise.jdx.dev/configuration/settings.html#lockfile
     #[clap(long, verbatim_doc_comment, overrides_with = "fuzzy")]
     pin: bool,
 
@@ -147,6 +146,7 @@ impl Use {
             use_locked_version: true,
             before_date: self.get_before_date()?,
             before_date_from_default: false,
+            filter_installed_versions_by_release_date: false,
             offline: false,
             refresh_remote_versions: false,
             inactive: false,
@@ -247,26 +247,15 @@ impl Use {
 
     async fn get_config_file(&self) -> Result<Arc<dyn ConfigFile>> {
         let cwd = env::current_dir()?;
-
-        // Handle special case for --path that needs absolutize logic for compatibility
-        let path = if let Some(p) = &self.path {
-            let from_dir = config::config_file_from_dir(p).absolutize()?.to_path_buf();
-            if from_dir.starts_with(&cwd) {
-                from_dir
-            } else {
-                p.clone()
-            }
-        } else {
-            let opts = ConfigPathOptions {
-                global: self.global,
-                path: None, // handled above
-                env: self.env.clone(),
-                cwd: Some(cwd),
-                prefer_toml: false, // mise use supports .tool-versions and other formats
-                prevent_home_local: true, // When in HOME, use global config
-            };
-            resolve_target_config_path(opts)?
+        let opts = ConfigPathOptions {
+            global: self.global,
+            path: self.path.clone(),
+            env: self.env.clone(),
+            cwd: Some(cwd),
+            prefer_toml: false, // mise use supports .tool-versions and other formats
+            prevent_home_local: true, // When in HOME, use global config
         };
+        let path = resolve_target_config_path(opts)?;
 
         config_file::parse_or_init(&path).await
     }
@@ -325,7 +314,7 @@ impl Use {
                     );
                 }
                 if self.dry_run_code {
-                    exit::exit(1);
+                    return Err(exit::request(1));
                 }
             }
         } else if !quiet {

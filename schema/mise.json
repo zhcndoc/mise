@@ -1,5 +1,5 @@
 {
-  "$id": "https://mise.en.dev/schema/mise.json",
+  "$id": "https://mise.jdx.dev/schema/mise.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mise",
   "type": "object",
@@ -33,6 +33,10 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "optional": {
+              "description": "do not fail when the task name or pattern has no matches",
+              "type": "boolean"
             }
           },
           "required": ["task"],
@@ -60,13 +64,47 @@
         }
       ]
     },
+    "tool_alias_versions": {
+      "description": "tool version aliases",
+      "type": "object",
+      "additionalProperties": {
+        "description": "version alias points to",
+        "type": "string"
+      }
+    },
+    "tool_alias_entry": {
+      "oneOf": [
+        {
+          "description": "where the alias goes",
+          "type": "string"
+        },
+        {
+          "description": "tool to set aliases for",
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "where the alias goes",
+              "type": "string"
+            },
+            "versions": {
+              "$ref": "#/$defs/tool_alias_versions"
+            }
+          },
+          "additionalProperties": {
+            "description": "version alias points to",
+            "type": "string"
+          }
+        }
+      ]
+    },
     "env_value": {
+      "description": "environment variable value; false removes the variable",
       "oneOf": [
         {
           "type": "string"
         },
         {
-          "type": "number"
+          "type": "integer"
         },
         {
           "type": "boolean"
@@ -95,6 +133,11 @@
     "env_tools": {
       "type": "boolean",
       "description": "load tools before resolving"
+    },
+    "env_file_expand": {
+      "type": "boolean",
+      "default": false,
+      "description": "enable shell-style variable expansion for values loaded by env._.file"
     },
     "env_redact": {
       "type": "boolean",
@@ -150,6 +193,9 @@
         },
         "tools": {
           "$ref": "#/$defs/env_tools"
+        },
+        "expand": {
+          "$ref": "#/$defs/env_file_expand"
         },
         "redact": {
           "$ref": "#/$defs/env_redact"
@@ -285,13 +331,7 @@
             "description": "[experimental] age-encrypted environment variable"
           },
           {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
+            "$ref": "#/$defs/env_value"
           }
         ]
       },
@@ -553,7 +593,7 @@
               "type": "boolean"
             },
             "registries": {
-              "description": "Aqua registry repositories to fetch before the baked-in registry.",
+              "description": "Aqua registry sources to load before the baked-in registry.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -614,9 +654,18 @@
               "description": "Use cargo-binstall instead of cargo install if available",
               "type": "boolean"
             },
+            "binstall_native": {
+              "description": "Use mise's native cargo binary installer when cargo-binstall is unavailable.",
+              "type": "boolean"
+            },
             "binstall_only": {
               "default": false,
-              "description": "Only use cargo-binstall for installation, fail if not available.",
+              "description": "Require cargo-binstall for Cargo tools without an explicit Git source. Fail if no prebuilt binary is available or if tool options require cargo install.",
+              "type": "boolean"
+            },
+            "binstall_quickinstall": {
+              "default": false,
+              "description": "Allow cargo-binstall to use third-party cargo-quickinstall artifacts.",
               "type": "boolean"
             },
             "registry_name": {
@@ -1022,7 +1071,7 @@
           "deprecated": true
         },
         "gpg_verify": {
-          "description": "Use gpg to verify all tool signatures.",
+          "description": "Verify OpenPGP signatures for all tools (built-in, no external gpg required). Set to false to disable.",
           "type": "boolean"
         },
         "hook_env": {
@@ -1041,20 +1090,33 @@
             }
           }
         },
+        "http_download_timeout": {
+          "default": "30m",
+          "description": "Total time allowed for an HTTP download, including retries.",
+          "type": "string"
+        },
         "http_retries": {
           "default": 3,
           "description": "Number of retries for transient HTTP failures in mise.",
-          "type": "number"
+          "type": "integer"
         },
         "http_timeout": {
           "default": "30s",
-          "description": "Timeout in seconds for all HTTP requests in mise.",
+          "description": "Timeout for connecting or waiting between reads during HTTP requests.",
           "type": "string"
         },
         "idiomatic_version_file": {
           "description": "Set to false to disable the idiomatic version files such as .node-version, .ruby-version, etc.",
           "type": "boolean",
           "deprecated": true
+        },
+        "idiomatic_version_file_disable_files": {
+          "default": [],
+          "description": "Specific idiomatic version files to disable for a tool.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "idiomatic_version_file_disable_tools": {
           "default": [],
@@ -1100,7 +1162,7 @@
         "jobs": {
           "default": 8,
           "description": "How many jobs to run concurrently such as tool installs.",
-          "type": "number"
+          "type": "integer"
         },
         "legacy_version_file": {
           "default": true,
@@ -1197,7 +1259,7 @@
             },
             "concurrency": {
               "description": "How many jobs should be used in compilation.",
-              "type": "number"
+              "type": "integer"
             },
             "configure_opts": {
               "description": "Additional ./configure options.",
@@ -1217,7 +1279,7 @@
               "type": "string"
             },
             "gpg_verify": {
-              "description": "Use gpg to verify node tool signatures.",
+              "description": "Verify OpenPGP signatures for node (built-in, no external gpg required). Set to false to disable.",
               "type": "boolean"
             },
             "make": {
@@ -1280,7 +1342,12 @@
               "default": "auto",
               "description": "Package manager to use for installing npm packages.",
               "type": "string",
-              "enum": ["auto", "npm", "aube", "bun", "pnpm"]
+              "enum": ["auto", "npm", "aube", "aube_cli", "bun", "pnpm"]
+            },
+            "shell_out": {
+              "default": false,
+              "description": "Shell out to the npm CLI for `npm:` version metadata and installs instead of mise's built-in aube-based implementation.",
+              "type": "boolean"
             }
           }
         },
@@ -1297,6 +1364,13 @@
               "default": "/mise",
               "description": "Path inside OCI images where mise tools are installed.",
               "type": "string"
+            },
+            "insecure_registries": {
+              "description": "Registries (host or host:port) contacted over plain HTTP instead of HTTPS.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
@@ -1453,6 +1527,15 @@
           "description": "Connect stdin/stdout/stderr to child processes.",
           "type": "boolean"
         },
+        "registry_cache_ttl": {
+          "description": "How long to cache the floating mise registry.",
+          "type": "string"
+        },
+        "registry_floating": {
+          "default": false,
+          "description": "Fetch the latest released mise registry and current aqua registry instead of using only the snapshots baked into this mise release.",
+          "type": "boolean"
+        },
         "ruby": {
           "type": "object",
           "unevaluatedProperties": false,
@@ -1462,7 +1545,7 @@
               "type": "string"
             },
             "compile": {
-              "description": "Set to true to compile ruby from source, false to use precompiled binaries.",
+              "description": "If true, compile ruby from source. If false, require precompiled binaries. If not set, use precompiled binaries if available.",
               "type": "boolean"
             },
             "default_packages_file": {
@@ -1531,6 +1614,42 @@
             "rustup_home": {
               "description": "Path to the rustup home directory. Defaults to `~/.rustup` or `%USERPROFILE%\\.rustup`",
               "type": "string"
+            }
+          }
+        },
+        "safe": {
+          "default": false,
+          "description": "Prevent project configuration from executing code during config loading and version resolution.",
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "deny_all": {
+              "default": false,
+              "description": "Deny filesystem reads and writes, network access, and environment variable inheritance by default for `mise run` and `mise exec`.",
+              "type": "boolean"
+            },
+            "deny_env": {
+              "default": false,
+              "description": "Deny environment variable inheritance by default for `mise run` and `mise exec`.",
+              "type": "boolean"
+            },
+            "deny_net": {
+              "default": false,
+              "description": "Deny network access by default for `mise run` and `mise exec`.",
+              "type": "boolean"
+            },
+            "deny_read": {
+              "default": false,
+              "description": "Deny filesystem reads by default for `mise run` and `mise exec`.",
+              "type": "boolean"
+            },
+            "deny_write": {
+              "default": false,
+              "description": "Deny filesystem writes by default for `mise run` and `mise exec`.",
+              "type": "boolean"
             }
           }
         },
@@ -1628,7 +1747,7 @@
           "unevaluatedProperties": false,
           "properties": {
             "gpg_verify": {
-              "description": "Use gpg to verify swift tool signatures.",
+              "description": "Verify OpenPGP signatures for swift (built-in, no external gpg required). Set to false to disable.",
               "type": "boolean"
             },
             "platform": {
@@ -1641,12 +1760,18 @@
           "description": "Path to the system mise config file. Default is `/etc/mise/config.toml`. This must be an env var.",
           "type": "string"
         },
+        "system_deps": {
+          "default": "prompt",
+          "description": "How to handle a plugin's declared system dependencies before installing a tool.",
+          "type": "string",
+          "enum": ["prompt", "auto", "warn", "ignore"]
+        },
         "system_packages": {
           "type": "object",
           "unevaluatedProperties": false,
           "properties": {
             "managers": {
-              "description": "[experimental] Restrict which system package managers mise will use.",
+              "description": "Restrict which system package managers mise will use.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -1654,7 +1779,7 @@
             },
             "sudo": {
               "default": true,
-              "description": "[experimental] Allow `mise bootstrap packages apply` to elevate with sudo when not running as root.",
+              "description": "Allow `mise bootstrap packages apply` to elevate with sudo when not running as root.",
               "type": "boolean"
             }
           }
@@ -1663,6 +1788,52 @@
           "type": "object",
           "unevaluatedProperties": false,
           "properties": {
+            "auto_infer": {
+              "default": [],
+              "description": "[experimental] Workspace providers from which to automatically infer tasks.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cache_dir": {
+              "description": "[experimental] Directory for task output cache artifacts.",
+              "type": "string"
+            },
+            "cache_max_age": {
+              "description": "[experimental] Maximum age of task output cache entries since their last access.",
+              "type": "string"
+            },
+            "cache_max_size": {
+              "description": "[experimental] Maximum total size of task output cache entries.",
+              "type": "string"
+            },
+            "cache_remote_mode": {
+              "default": "read-write",
+              "description": "[experimental] Remote task cache access mode.",
+              "type": "string",
+              "enum": ["read-write", "read-only", "write-only"]
+            },
+            "cache_remote_namespace": {
+              "description": "[experimental] Namespace sent to the remote task cache.",
+              "type": "string"
+            },
+            "cache_remote_oidc_audience": {
+              "description": "[experimental] Audience for an automatically acquired remote cache OIDC token.",
+              "type": "string"
+            },
+            "cache_remote_token": {
+              "description": "[experimental] Bearer token for remote task cache authentication.",
+              "type": "string"
+            },
+            "cache_remote_token_file": {
+              "description": "[experimental] File containing a remote task cache bearer token.",
+              "type": "string"
+            },
+            "cache_remote_url": {
+              "description": "[experimental] Base URL for the remote task cache service.",
+              "type": "string"
+            },
             "disable_paths": {
               "default": [],
               "description": "Paths that mise will not look for tasks in.",
@@ -1679,7 +1850,7 @@
             "monorepo_depth": {
               "default": 5,
               "description": "Maximum depth to search for task files in monorepo subdirectories.",
-              "type": "number"
+              "type": "integer"
             },
             "monorepo_exclude_dirs": {
               "default": [],
@@ -1803,6 +1974,12 @@
           "type": "boolean",
           "deprecated": true
         },
+        "tera_v1": {
+          "default": false,
+          "description": "Use Tera v1 instead of Tera v2 for template rendering.",
+          "type": "boolean",
+          "deprecated": true
+        },
         "terminal_progress": {
           "default": true,
           "description": "Enable terminal progress indicators (OSC 9;4) for compatible terminals.",
@@ -1873,6 +2050,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "windows_powershell_no_profile": {
+          "default": true,
+          "description": "Pass `-NoProfile` to PowerShell (`pwsh`/`powershell`) shells that mise spawns for tasks and inline commands, so startup profiles are skipped.",
+          "type": "boolean"
         },
         "windows_shim_mode": {
           "default": "exe",
@@ -2028,6 +2210,37 @@
             "type": "string"
           },
           {
+            "description": "value of variable",
+            "type": "integer"
+          },
+          {
+            "description": "value of variable",
+            "const": true
+          },
+          {
+            "type": "object",
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "const": true
+                  }
+                ]
+              },
+              "redact": {
+                "$ref": "#/$defs/env_redact"
+              }
+            },
+            "required": ["value"],
+            "unevaluatedProperties": false
+          },
+          {
             "type": "object",
             "properties": {
               "default": {
@@ -2039,6 +2252,64 @@
             },
             "required": ["default"],
             "unevaluatedProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redact": {
+                "$ref": "#/$defs/env_redact"
+              },
+              "required": {
+                "oneOf": [
+                  {
+                    "const": true
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": ["required"],
+            "unevaluatedProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "age": {
+                "$ref": "#/$defs/env_age"
+              },
+              "redact": {
+                "$ref": "#/$defs/env_redact"
+              }
+            },
+            "required": ["age"],
+            "unevaluatedProperties": false,
+            "description": "[experimental] age-encrypted variable"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "age": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "$ref": "#/$defs/env_age_value"
+                  },
+                  "format": {
+                    "$ref": "#/$defs/env_age_format"
+                  },
+                  "redact": {
+                    "$ref": "#/$defs/env_redact"
+                  }
+                },
+                "required": ["value"],
+                "unevaluatedProperties": false,
+                "description": "[experimental] age-encrypted value (complex format)"
+              }
+            },
+            "required": ["age"],
+            "unevaluatedProperties": false
           }
         ]
       }
@@ -2048,9 +2319,80 @@
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
+        "cascade": {
+          "default": false,
+          "description": "cascade task configuration to descendant config roots",
+          "type": "boolean"
+        },
         "dir": {
           "description": "default directory to run tasks in defined in this file",
           "type": "string"
+        },
+        "shell": {
+          "description": "default shell to run tasks with in this config scope",
+          "type": "string"
+        },
+        "cache": {
+          "description": "default experimental local artifact cache configuration for eligible tasks with sources and explicit outputs",
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "store and restore eligible task outputs from the local mise cache",
+              "type": "boolean"
+            },
+            "audit": {
+              "default": false,
+              "description": "report project files read or written outside declared cache sources and outputs",
+              "type": "boolean"
+            },
+            "env": {
+              "description": "ambient environment variable names whose values affect eligible task cache keys",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "command_inputs": {
+              "description": "commands whose stdout and stderr affect eligible task cache keys",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        },
+        "global_env": {
+          "description": "experimental ambient environment variable names added to every enabled task cache key in this config scope",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "global_pass_through_env": {
+          "description": "experimental ambient environment variable names preserved under environment denial without affecting task cache keys",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "global_inputs": {
+          "description": "experimental config-root-relative source patterns added to every task in this config scope; entries may reference input groups with @group:<name>",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_groups": {
+          "description": "experimental reusable config-root-relative source groups referenced with @group:<name>",
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
         },
         "includes": {
           "description": "files/directories to include searching for tasks. Can be local paths or git repository URLs using git:: prefix (e.g., git::https://github.com/org/repo.git//path?ref=branch)",
@@ -2081,6 +2423,62 @@
         "lockfile": {
           "description": "Use a single lockfile at the monorepo root for descendant config roots. true opts in now, false keeps lockfiles next to subproject configs, and unset keeps the current behavior until the scheduled default flip.",
           "type": "boolean"
+        },
+        "task_defaults": {
+          "description": "Experimental task defaults applied by task name across inferred and explicit workspace projects",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/task_template"
+          }
+        },
+        "projects": {
+          "description": "Experimental explicit additions, removals, and overrides applied to provider-inferred workspace projects",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "unevaluatedProperties": false,
+            "properties": {
+              "remove": {
+                "description": "Remove this project and every dependency edge connected to it",
+                "type": "boolean"
+              },
+              "root": {
+                "description": "Add the project at this workspace-relative root or replace its inferred root",
+                "type": "string"
+              },
+              "metadata": {
+                "description": "Replace provider-inferred project metadata",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "depends": {
+                "description": "Replace the complete provider-inferred dependency set",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "depends_add": {
+                "description": "Add dependency edges after an optional depends replacement",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "depends_remove": {
+                "description": "Remove dependency edges after an optional depends replacement",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              }
+            }
+          }
         }
       }
     },
@@ -2100,17 +2498,7 @@
                 "install_env": {
                   "type": "object",
                   "additionalProperties": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
+                    "$ref": "#/$defs/env_value"
                   },
                   "description": "environment variables during tool installation"
                 },
@@ -2166,11 +2554,36 @@
           "description": "version of the tool to install",
           "type": "string"
         },
+        "path": {
+          "description": "path to a custom compiled version",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "version prefix to resolve",
+          "type": "string"
+        },
+        "ref": {
+          "description": "version control reference to compile",
+          "type": "string"
+        },
         "os": {
           "$ref": "#/$defs/os_filter"
         }
       },
-      "required": ["version"],
+      "oneOf": [
+        {
+          "required": ["version"]
+        },
+        {
+          "required": ["path"]
+        },
+        {
+          "required": ["prefix"]
+        },
+        {
+          "required": ["ref"]
+        }
+      ],
       "type": "object"
     },
     "hook_run_string": {
@@ -2222,30 +2635,90 @@
         "type": "string"
       }
     },
-    "hook_script_table": {
+    "hook_current_shell_script_table": {
       "unevaluatedProperties": false,
       "properties": {
         "script": {
-          "description": "current-shell script/scripts for enter/leave/cd hooks",
+          "description": "script or scripts to evaluate in the active shell for enter/leave/cd hooks",
           "$ref": "#/$defs/hook_script_value"
         },
         "shell": {
-          "description": "current shell name for script hooks, such as \"bash\"",
+          "description": "active shell name for current-shell hooks, such as \"bash\"",
+          "type": "string"
+        }
+      },
+      "required": ["script", "shell"],
+      "type": "object"
+    },
+    "hook_current_shell_scripts_table": {
+      "unevaluatedProperties": false,
+      "properties": {
+        "scripts": {
+          "description": "scripts to evaluate in the active shell for enter/leave/cd hooks",
+          "$ref": "#/$defs/hook_scripts_value"
+        },
+        "shell": {
+          "description": "active shell name for current-shell hooks, such as \"bash\"",
+          "type": "string"
+        }
+      },
+      "required": ["scripts", "shell"],
+      "type": "object"
+    },
+    "hook_spawned_script_table": {
+      "deprecated": true,
+      "unevaluatedProperties": false,
+      "properties": {
+        "script": {
+          "deprecated": true,
+          "description": "deprecated alias for run when an enter/leave/cd hook has no shell",
+          "$ref": "#/$defs/hook_script_value"
+        }
+      },
+      "required": ["script"],
+      "type": "object"
+    },
+    "hook_spawned_scripts_table": {
+      "deprecated": true,
+      "unevaluatedProperties": false,
+      "properties": {
+        "scripts": {
+          "deprecated": true,
+          "description": "deprecated alias for run when an enter/leave/cd hook has no shell",
+          "$ref": "#/$defs/hook_scripts_value"
+        }
+      },
+      "required": ["scripts"],
+      "type": "object"
+    },
+    "hook_install_script_table": {
+      "deprecated": true,
+      "unevaluatedProperties": false,
+      "properties": {
+        "script": {
+          "deprecated": true,
+          "description": "deprecated alias for run in preinstall/postinstall hooks; executes in a subprocess",
+          "$ref": "#/$defs/hook_script_value"
+        },
+        "shell": {
+          "description": "ignored for this deprecated form; use a run hook to select an inline shell",
           "type": "string"
         }
       },
       "required": ["script"],
       "type": "object"
     },
-    "hook_scripts_table": {
+    "hook_install_scripts_table": {
+      "deprecated": true,
       "unevaluatedProperties": false,
       "properties": {
         "scripts": {
-          "description": "current-shell scripts for enter/leave/cd hooks",
+          "deprecated": true,
+          "description": "deprecated alias for run in preinstall/postinstall hooks; joins the scripts and executes them in a subprocess",
           "$ref": "#/$defs/hook_scripts_value"
         },
         "shell": {
-          "description": "current shell name for script hooks, such as \"bash\"",
+          "description": "ignored for this deprecated form; use a run hook to select an inline shell",
           "type": "string"
         }
       },
@@ -2272,10 +2745,16 @@
           "$ref": "#/$defs/hook_run_table"
         },
         {
-          "$ref": "#/$defs/hook_script_table"
+          "$ref": "#/$defs/hook_current_shell_script_table"
         },
         {
-          "$ref": "#/$defs/hook_scripts_table"
+          "$ref": "#/$defs/hook_current_shell_scripts_table"
+        },
+        {
+          "$ref": "#/$defs/hook_spawned_script_table"
+        },
+        {
+          "$ref": "#/$defs/hook_spawned_scripts_table"
         },
         {
           "$ref": "#/$defs/hook_task_ref"
@@ -2296,12 +2775,60 @@
         }
       ]
     },
+    "hook_install_definition_item": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hook_run_string"
+        },
+        {
+          "$ref": "#/$defs/hook_run_table"
+        },
+        {
+          "$ref": "#/$defs/hook_install_script_table"
+        },
+        {
+          "$ref": "#/$defs/hook_install_scripts_table"
+        },
+        {
+          "$ref": "#/$defs/hook_task_ref"
+        }
+      ]
+    },
+    "hook_install_definition": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hook_install_definition_item"
+        },
+        {
+          "description": "install hooks to run",
+          "items": {
+            "$ref": "#/$defs/hook_install_definition_item"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "hooks": {
       "description": "hooks to run",
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/hook_definition"
-      }
+      "properties": {
+        "enter": {
+          "$ref": "#/$defs/hook_definition"
+        },
+        "leave": {
+          "$ref": "#/$defs/hook_definition"
+        },
+        "cd": {
+          "$ref": "#/$defs/hook_definition"
+        },
+        "preinstall": {
+          "$ref": "#/$defs/hook_install_definition"
+        },
+        "postinstall": {
+          "$ref": "#/$defs/hook_install_definition"
+        }
+      },
+      "additionalProperties": false
     },
     "watch_files": {
       "description": "files to watch for changes",
@@ -2329,7 +2856,7 @@
                 }
               }
             },
-            "required": ["run"]
+            "required": ["run", "patterns"]
           },
           {
             "unevaluatedProperties": false,
@@ -2346,7 +2873,7 @@
                 }
               }
             },
-            "required": ["task"]
+            "required": ["task", "patterns"]
           }
         ]
       }
@@ -2360,31 +2887,17 @@
           "description": "Auto-run before `mise x` and `mise run`"
         },
         "sources": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Files/patterns to check for changes"
         },
         "outputs": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Files/directories that should be newer than sources"
         },
         "run": {
@@ -2420,6 +2933,18 @@
       },
       "unevaluatedProperties": false,
       "description": "Prepare provider configuration"
+    },
+    "task_watch": {
+      "description": "options used by `mise watch` for this task",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "no_vcs_ignore": {
+          "default": false,
+          "description": "do not load VCS ignore files such as `.gitignore` when watching this task",
+          "type": "boolean"
+        }
+      }
     },
     "task_props": {
       "description": "common task properties",
@@ -2528,27 +3053,7 @@
         "tools": {
           "description": "tools to install/activate before running this task",
           "additionalProperties": {
-            "oneOf": [
-              {
-                "description": "version of the tool to install",
-                "type": "string"
-              },
-              {
-                "allOf": [
-                  {
-                    "$ref": "#/$defs/tool_options"
-                  }
-                ],
-                "type": "object",
-                "unevaluatedProperties": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    }
-                  ]
-                }
-              }
-            ]
+            "$ref": "#/$defs/tool"
           },
           "type": "object"
         },
@@ -2560,15 +3065,15 @@
         "outputs": {
           "oneOf": [
             {
-              "description": "files created by this task",
+              "description": "files created by this task (entries starting with `!` are excluded; use `\\!` to escape a literal `!` prefix)",
               "items": {
-                "description": "glob pattern or path to files created by this task",
+                "description": "glob pattern or path to files created by this task (entries starting with `!` are excluded)",
                 "type": "string"
               },
               "type": "array"
             },
             {
-              "description": "glob pattern or path to files created by this task",
+              "description": "glob pattern or path to files created by this task (entries starting with `!` are excluded)",
               "type": "string"
             },
             {
@@ -2584,6 +3089,50 @@
               "type": "object"
             }
           ]
+        },
+        "cache": {
+          "description": "experimental local artifact cache for declared task outputs",
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "store and restore task outputs from the local mise cache",
+              "type": "boolean"
+            },
+            "audit": {
+              "default": false,
+              "description": "report project files read or written outside declared cache sources and outputs",
+              "type": "boolean"
+            },
+            "env": {
+              "description": "ambient environment variable names whose values affect the cache key",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "command_inputs": {
+              "description": "commands whose stdout and stderr affect the cache key",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        },
+        "output": {
+          "description": "output style for this task (prefix, interleave, keep-order, replacing, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
+          "enum": [
+            "prefix",
+            "interleave",
+            "keep-order",
+            "replacing",
+            "timed",
+            "quiet",
+            "silent"
+          ],
+          "type": "string"
         },
         "quiet": {
           "default": false,
@@ -2664,6 +3213,9 @@
             }
           ]
         },
+        "watch": {
+          "$ref": "#/$defs/task_watch"
+        },
         "shell": {
           "description": "specify a shell command to run the script with",
           "type": "string"
@@ -2728,6 +3280,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "pass_through_env": {
+          "description": "experimental ambient env vars preserved under environment denial without affecting the task cache key",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -2750,6 +3309,103 @@
       ],
       "unevaluatedProperties": false,
       "type": "object"
+    },
+    "launchd_calendar_interval": {
+      "type": "object",
+      "description": "calendar schedule fields for launchd StartCalendarInterval",
+      "properties": {
+        "minute": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 59
+        },
+        "hour": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        },
+        "day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31
+        },
+        "weekday": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "month": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "bootstrap_hook": {
+      "description": "command or commands to run for a bootstrap phase",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "required": ["run"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "bootstrap_shell_activation": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "description": "enable the target with its default mode, or disable it"
+        },
+        {
+          "type": "string",
+          "enum": ["activate", "shims"],
+          "description": "enable the target with the selected activation mode"
+        },
+        {
+          "type": "object",
+          "description": "shell activation settings for the target",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "whether to manage the activation block"
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["activate", "shims"],
+              "description": "activation mode; defaults according to the target"
+            }
+          },
+          "required": ["enabled"],
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "unevaluatedProperties": false,
@@ -2760,40 +3416,14 @@
       "description": "custom shorthands",
       "type": "object",
       "additionalProperties": {
-        "oneOf": [
-          {
-            "description": "where the alias goes",
-            "type": "string"
-          },
-          {
-            "description": "tool to set aliases for",
-            "type": "object",
-            "additionalProperties": {
-              "description": "version alias points to",
-              "type": "string"
-            }
-          }
-        ]
+        "$ref": "#/$defs/tool_alias_entry"
       }
     },
     "tool_alias": {
       "description": "Tool version aliases",
       "type": "object",
       "additionalProperties": {
-        "oneOf": [
-          {
-            "description": "where the alias goes",
-            "type": "string"
-          },
-          {
-            "description": "tool to set aliases for",
-            "type": "object",
-            "additionalProperties": {
-              "description": "version alias points to",
-              "type": "string"
-            }
-          }
-        ]
+        "$ref": "#/$defs/tool_alias_entry"
       }
     },
     "shell_alias": {
@@ -3020,6 +3650,30 @@
           "type": "string",
           "description": "Override where mise installs go in the image (default /mise)"
         },
+        "copy": {
+          "type": "array",
+          "description": "Host files or directories copied into the image as independent layers",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "host path to copy, relative to the config file when not absolute"
+              },
+              "image": {
+                "type": "string",
+                "pattern": "^/.*[^/]",
+                "not": {
+                  "pattern": "(^|/)\\.{1,2}(/|$)"
+                },
+                "description": "absolute non-root image path without `.` or `..` components"
+              }
+            },
+            "required": ["host", "image"],
+            "additionalProperties": false
+          }
+        },
         "env": {
           "type": "object",
           "additionalProperties": {
@@ -3043,7 +3697,7 @@
     },
     "dotfiles": {
       "type": "object",
-      "description": "[experimental] dotfiles applied with `mise dotfiles apply` or `mise bootstrap`, keyed by target path",
+      "description": "dotfiles applied with `mise dotfiles apply` or `mise bootstrap`, keyed by target path",
       "additionalProperties": {
         "oneOf": [
           {
@@ -3069,6 +3723,13 @@
                     "type": "string"
                   }
                 ]
+              },
+              "exclude": {
+                "type": "array",
+                "description": "glob patterns to skip when the mode walks a source directory (symlink-each, or copy with a directory source); a pattern without \"/\" matches any path component, one with \"/\" is anchored to the source root",
+                "items": {
+                  "type": "string"
+                }
               },
               "block": {
                 "type": "string",
@@ -3101,8 +3762,16 @@
     },
     "bootstrap": {
       "type": "object",
-      "description": "[experimental] machine-global bootstrapping (system packages, repos, macOS defaults, launchd agents, login shell)",
+      "description": "machine-global bootstrapping (system packages, repos, macOS defaults, launchd agents, login shell)",
       "properties": {
+        "plugins": {
+          "type": "object",
+          "description": "package manager plugins to install with `mise bootstrap plugins apply`, keyed by manager name",
+          "additionalProperties": {
+            "type": "string",
+            "description": "plugin git URL"
+          }
+        },
         "packages": {
           "type": "object",
           "description": "system packages to install with `mise bootstrap packages apply`, keyed by \"manager:package\" (e.g. \"apt:libssl-dev\", \"brew:postgresql@17\", \"dnf:openssl-devel\", \"pacman:base-devel\")",
@@ -3307,6 +3976,21 @@
                         "minimum": 0,
                         "description": "write StartInterval in seconds"
                       },
+                      "start_calendar_interval": {
+                        "description": "write one or more StartCalendarInterval schedules",
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/launchd_calendar_interval"
+                          },
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                              "$ref": "#/$defs/launchd_calendar_interval"
+                            }
+                          }
+                        ]
+                      },
                       "environment": {
                         "type": "object",
                         "description": "environment variables for EnvironmentVariables",
@@ -3342,13 +4026,120 @@
           "type": "object",
           "description": "Linux-specific bootstrap config",
           "properties": {
+            "firewall": {
+              "type": "object",
+              "description": "Linux host firewall policy and rules managed with `mise bootstrap firewall`",
+              "additionalProperties": false,
+              "properties": {
+                "backend": {
+                  "type": "string",
+                  "description": "firewall backend; auto reuses managed or active host infrastructure",
+                  "enum": ["auto", "ufw", "firewalld", "nftables"],
+                  "default": "auto"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "desired lifecycle of mise-managed firewall state",
+                  "enum": ["enabled", "disabled", "absent"],
+                  "default": "enabled"
+                },
+                "default_incoming": {
+                  "type": "string",
+                  "description": "default action for incoming traffic",
+                  "enum": ["allow", "deny", "reject"],
+                  "default": "deny"
+                },
+                "default_outgoing": {
+                  "type": "string",
+                  "description": "default action for outgoing traffic",
+                  "enum": ["allow", "deny", "reject"],
+                  "default": "allow"
+                },
+                "exclusive": {
+                  "type": "boolean",
+                  "description": "treat the declared rules as the complete owned ruleset; UFW reset also removes unrelated UFW rules",
+                  "default": false
+                },
+                "allow_lockout": {
+                  "type": "boolean",
+                  "description": "allow default-deny or reject over SSH without a rule covering the connected peer",
+                  "default": false
+                },
+                "rules": {
+                  "type": "array",
+                  "description": "named firewall rules reconciled without deleting undeclared managed rules",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "stable managed rule identifier",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": ["present", "absent"],
+                        "default": "present"
+                      },
+                      "direction": {
+                        "type": "string",
+                        "enum": ["incoming", "outgoing"],
+                        "default": "incoming"
+                      },
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny", "reject"],
+                        "default": "allow"
+                      },
+                      "port": {
+                        "description": "single port number or inclusive range",
+                        "oneOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]+[-:][0-9]+$"
+                          }
+                        ]
+                      },
+                      "protocol": {
+                        "type": "string",
+                        "enum": ["tcp", "udp", "sctp", "dccp"]
+                      },
+                      "source": {
+                        "type": "string",
+                        "description": "source IPv4 or IPv6 CIDR network"
+                      },
+                      "destination": {
+                        "type": "string",
+                        "description": "destination IPv4 or IPv6 CIDR network"
+                      },
+                      "interface": {
+                        "type": "string",
+                        "description": "network interface (nftables and UFW only)",
+                        "minLength": 1,
+                        "maxLength": 15,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      }
+                    },
+                    "required": ["name"]
+                  }
+                }
+              }
+            },
             "systemd": {
               "type": "object",
-              "description": "systemd user service bootstrap config",
+              "description": "systemd user service and timer bootstrap config",
               "properties": {
                 "units": {
                   "type": "object",
-                  "description": "systemd user services to write and start with `mise bootstrap linux systemd-units apply`",
+                  "description": "systemd user services and timers to write and start with `mise bootstrap linux systemd-units apply`",
                   "propertyNames": {
                     "pattern": "^[A-Za-z0-9._@-]+$"
                   },
@@ -3379,6 +4170,44 @@
                         "pattern": ".*\\S.*",
                         "description": "write ExecStart in the [Service] section"
                       },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "simple",
+                          "exec",
+                          "forking",
+                          "oneshot",
+                          "dbus",
+                          "notify",
+                          "notify-reload",
+                          "idle"
+                        ],
+                        "description": "write Type in the [Service] section"
+                      },
+                      "remain_after_exit": {
+                        "type": "boolean",
+                        "description": "write RemainAfterExit in the [Service] section"
+                      },
+                      "exec_stop": {
+                        "type": "string",
+                        "description": "write ExecStop in the [Service] section"
+                      },
+                      "timeout_start_sec": {
+                        "type": "string",
+                        "description": "write TimeoutStartSec in the [Service] section"
+                      },
+                      "timeout_stop_sec": {
+                        "type": "string",
+                        "description": "write TimeoutStopSec in the [Service] section"
+                      },
+                      "no_new_privileges": {
+                        "type": "boolean",
+                        "description": "write NoNewPrivileges in the [Service] section"
+                      },
+                      "private_tmp": {
+                        "type": "boolean",
+                        "description": "write PrivateTmp in the [Service] section"
+                      },
                       "environment": {
                         "type": "object",
                         "description": "environment variables for Environment entries",
@@ -3406,9 +4235,41 @@
                         "type": "string",
                         "description": "write StandardError in the [Service] section"
                       },
+                      "on_boot_sec": {
+                        "type": "string",
+                        "description": "write OnBootSec in the [Timer] section"
+                      },
+                      "on_unit_active_sec": {
+                        "type": "string",
+                        "description": "write OnUnitActiveSec in the [Timer] section"
+                      },
+                      "on_unit_inactive_sec": {
+                        "type": "string",
+                        "description": "write OnUnitInactiveSec in the [Timer] section"
+                      },
+                      "on_calendar": {
+                        "type": "string",
+                        "description": "write OnCalendar in the [Timer] section"
+                      },
+                      "randomized_delay_sec": {
+                        "type": "string",
+                        "description": "write RandomizedDelaySec in the [Timer] section"
+                      },
+                      "accuracy_sec": {
+                        "type": "string",
+                        "description": "write AccuracySec in the [Timer] section"
+                      },
+                      "persistent": {
+                        "type": "boolean",
+                        "description": "write Persistent in the [Timer] section"
+                      },
+                      "unit": {
+                        "type": "string",
+                        "description": "write Unit in the [Timer] section"
+                      },
                       "start": {
                         "type": "boolean",
-                        "description": "restart the service after writing it; when false, stop the service after writing it"
+                        "description": "restart the unit after writing it; when false, stop the unit after writing it"
                       },
                       "wanted_by": {
                         "type": "array",
@@ -3418,7 +4279,109 @@
                         }
                       }
                     },
-                    "required": ["exec_start"]
+                    "oneOf": [
+                      {
+                        "title": "systemd service",
+                        "required": ["exec_start"],
+                        "not": {
+                          "anyOf": [
+                            {
+                              "required": ["on_boot_sec"]
+                            },
+                            {
+                              "required": ["on_unit_active_sec"]
+                            },
+                            {
+                              "required": ["on_unit_inactive_sec"]
+                            },
+                            {
+                              "required": ["on_calendar"]
+                            },
+                            {
+                              "required": ["randomized_delay_sec"]
+                            },
+                            {
+                              "required": ["accuracy_sec"]
+                            },
+                            {
+                              "required": ["persistent"]
+                            },
+                            {
+                              "required": ["unit"]
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "title": "systemd timer",
+                        "anyOf": [
+                          {
+                            "required": ["on_boot_sec"]
+                          },
+                          {
+                            "required": ["on_unit_active_sec"]
+                          },
+                          {
+                            "required": ["on_unit_inactive_sec"]
+                          },
+                          {
+                            "required": ["on_calendar"]
+                          }
+                        ],
+                        "not": {
+                          "anyOf": [
+                            {
+                              "required": ["exec_start"]
+                            },
+                            {
+                              "required": ["type"]
+                            },
+                            {
+                              "required": ["remain_after_exit"]
+                            },
+                            {
+                              "required": ["exec_stop"]
+                            },
+                            {
+                              "required": ["timeout_start_sec"]
+                            },
+                            {
+                              "required": ["timeout_stop_sec"]
+                            },
+                            {
+                              "required": ["no_new_privileges"]
+                            },
+                            {
+                              "required": ["private_tmp"]
+                            },
+                            {
+                              "required": ["environment"],
+                              "properties": {
+                                "environment": {
+                                  "type": "object",
+                                  "minProperties": 1
+                                }
+                              }
+                            },
+                            {
+                              "required": ["working_directory"]
+                            },
+                            {
+                              "required": ["restart"]
+                            },
+                            {
+                              "required": ["restart_sec"]
+                            },
+                            {
+                              "required": ["standard_output"]
+                            },
+                            {
+                              "required": ["standard_error"]
+                            }
+                          ]
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -3448,6 +4411,119 @@
               }
             }
           }
+        },
+        "hooks": {
+          "type": "object",
+          "description": "commands to run before and after bootstrap phases",
+          "properties": {
+            "pre-packages": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_packages": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-packages": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_packages": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre-repos": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_repos": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-repos": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_repos": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre-dotfiles": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_dotfiles": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-dotfiles": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_dotfiles": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre-defaults": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_defaults": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-defaults": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_defaults": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre-user": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_user": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-user": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_user": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre-tools": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "pre_tools": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post-tools": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "post_tools": {
+              "$ref": "#/$defs/bootstrap_hook"
+            },
+            "final": {
+              "$ref": "#/$defs/bootstrap_hook"
+            }
+          },
+          "additionalProperties": false
+        },
+        "mise_shell_activate": {
+          "type": "object",
+          "description": "declarative mise shell activation snippets, applied with `mise bootstrap mise-shell-activate apply`",
+          "properties": {
+            "bash": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "zsh": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "fish": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "bash_profile": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "bashrc": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "zshenv": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "zprofile": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            },
+            "zshrc": {
+              "$ref": "#/$defs/bootstrap_shell_activation"
+            }
+          },
+          "additionalProperties": false
         }
       }
     },

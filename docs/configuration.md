@@ -46,9 +46,9 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
 
 ```
 /
-├── etc/mise/                         # 系统范围配置（最高优先级）
+├── etc/mise/                         # 系统范围配置（最低优先级）
 │   ├── conf.d/*.toml                 # 系统分片，按字母顺序加载
-│   ├── config.toml                   # 系统默认值
+│   ├── config.toml                   # 系统默认配置
 │   └── config.<env>.toml             # 特定环境的系统配置（MISE_ENV 或 -E）
 └── home/user/
     ├── .config/mise/
@@ -65,7 +65,7 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
             ├── mise.<env>.toml       # 特定环境的项目配置
             ├── mise.<env>.local.toml # 特定环境的项目本地覆盖
             └── backend/
-                └── mise.toml         # 服务特定配置（最低优先级）
+                └── mise.toml         # 特定服务配置（最高优先级）
 ```
 
 ### 按部分划分的合并行为
@@ -215,8 +215,22 @@ node = "https://github.com/my-org/mise-node.git#DEADBEEF" # 支持特定 gitref
 如果你只是想从某个特定 URL 安装一次插件，最好使用
 `mise plugin install <NAME> <GIT_URL>`。如果你想与项目中的其他开发者共享插件位置/修订版本，请将此部分添加到 `mise.toml` 中。
 
-这取代了已弃用的 `settings.shorthands_file` / `MISE_SHORTHANDS_FILE` 机制：将
-相同的 `shortname = "backend-or-url"` 条目放在 `[plugins]` 下，而不是单独的 TOML 文件中。
+本地插件目录同样受支持。绝对路径和以 `~/` 开头的路径会直接使用。以 `./` 或 `../`
+开头的显式相对路径，会相对于声明它们的文件所在配置根目录进行解析：
+
+```toml
+[plugins]
+example = "./plugins/mise-example"
+```
+
+本地插件会以符号链接的形式链接到 mise 的插件目录中，其行为与
+`mise plugins link` 一致，因此源目录中的更改会立即生效。
+与远程条目一样，`[plugins]` 只会影响新安装。运行
+`mise plugins install --force <NAME>`，可使用配置的本地源替换现有插件。
+`file://` 源仍然是 Git 仓库，并且会被克隆。
+
+这取代了已弃用的 `settings.shorthands_file` / `MISE_SHORTHANDS_FILE` 机制：将相同的
+`shortname = "backend-or-url"` 条目放在 `[plugins]` 下，而不是放在单独的 TOML 文件中。
 
 ### `[tool_alias]` - 工具版本别名
 
@@ -296,9 +310,9 @@ monorepo_root = true
 
 ### `mise.toml` 架构
 
-- 你可以在 [schema/mise.json](https://github.com/jdx/mise/blob/main/schema/mise.json) 或 <https://mise.en.dev/schema/mise.json> 中找到 `mise.toml` 的 JSON 架构。
-- 一些编辑器可以自动加载它，以便在编辑 `mise.toml` 文件时提供自动补全和校验（[VSCode](https://code.visualstudio.com/docs/languages/json#_json-schemas-and-settings)、[IntelliJ](https://www.jetbrains.com/help/idea/json.html#ws_json_using_schemas)、[neovim](https://github.com/b0o/SchemaStore.nvim) 等）。它也可在 [JSON schema store](https://www.schemastore.org/) 中获取。
-- 请注意，对于“包含的任务”（见 [任务配置](/tasks/task-configuration)），还有另一个架构：<https://mise.en.dev/schema/mise-task.json>
+- 你可以在 [schema/mise.json](https://github.com/jdx/mise/blob/main/schema/mise.json) 或 <https://mise.jdx.dev/schema/mise.json> 中找到 `mise.toml` 的 JSON 架构。
+- 一些编辑器可以在编辑 `mise.toml` 文件时自动加载该架构，以提供自动补全和验证功能（[VSCode](https://code.visualstudio.com/docs/languages/json#_json-schemas-and-settings)、[IntelliJ](https://www.jetbrains.com/help/idea/json.html#ws_json_using_schemas)、[neovim](https://github.com/b0o/SchemaStore.nvim) 等）。它也可以在 [JSON 架构存储库](https://www.schemastore.org/) 中找到。
+- 请注意，对于“包含的任务”（参见[任务配置](/tasks/task-configuration)），还有另一个架构：<https://mise.jdx.dev/schema/mise-task.json>。
 
 ## 全局配置：`~/.config/mise/config.toml`
 
@@ -354,8 +368,8 @@ go          prefix:1.19  # 使用最新的 1.19.x 版本——在 "1.19" 恰好�
 shfmt       path:./shfmt # 使用自定义运行时
 node        lts          # 使用 node 的 lts 版本（并非所有插件都支持）
 
-node        sub-2:lts      # 安装比最新 lts 落后 2 个版本的版本（例如：如果 lts 是 20，则为 18）
-python      sub-0.1:latest # 如果最新版本是 3.11，则安装 python-3.10
+node        sub-2:lts      # 从解析出的主版本号中减去 2（例如：20 变为 18）
+python      sub-0.1:latest # 从解析出的次版本号中减去 1（例如：3.11 变为 3.10）
 ```
 
 有关此文件格式的更多信息，请参见 [asdf 文档](https://asdf-vm.com/manage/configuration.html#tool-versions)。
@@ -364,14 +378,14 @@ python      sub-0.1:latest # 如果最新版本是 3.11，则安装 python-3.10
 
 `mise.toml` 和 `.tool-versions` 都支持“作用域”，用于修改版本的行为：
 
-- `ref:<SHA>` - 从一个 vcs（通常是 git）引用编译
-- `prefix:<PREFIX>` - 使用匹配该前缀的最新版本。对于 Go 很有用，因为 `1.20`
-  只会精确匹配 `1.20`，而 `prefix:1.20` 会匹配 `1.20.1`、`1.20.2` 等。
-- `path:<PATH>` - 使用给定路径下自定义编译的版本。一个用途是复用
+- `ref:<SHA>` - 从版本控制系统（通常是 git）的引用编译
+- `prefix:<PREFIX>` - 使用与此前缀匹配的最新版本。对 Go 很有用，因为 `1.20`
+  只能精确匹配 `1.20`，而 `prefix:1.20` 将匹配 `1.20.1`、`1.20.2` 等版本。
+- `path:<PATH>` - 使用指定路径中自定义编译的版本。一个使用场景是重新使用
   Homebrew 工具（例如：`path:/opt/homebrew/opt/node@20`）。
-- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 从 ORIG_VERSION 中减去 PARTIAL_VERSION。这
-  可用于表达类似“落后 lts 2 个版本”这样的含义，例如 `sub-2:lts`。或者表示比最新版本
-  落后 1 个小版本：`sub-0.1:latest`。
+- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 解析 `ORIG_VERSION`，从解析得到的版本组件中减去
+  `PARTIAL_VERSION` 中对应的数字组件，然后将结果作为版本前缀再次解析。例如，`sub-2:lts` 会解析
+  `lts`，并从其主版本组件中减去 2（`20` 变为 `18`）；而 `sub-0.1:latest` 会从解析得到的次版本组件中减去 1（`3.11` 变为 `3.10`）。这是数字版本运算，而不是请求第 N 个之前发布的版本。
 
 ## 惯用版本文件
 
@@ -383,42 +397,72 @@ mise 支持像 asdf 一样的“惯用版本文件”。它们是语言特定的
 它们支持别名，这意味着你可以使用一个包含 `lts/hydrogen` 的 `.nvmrc` 文件，并且它会在
 mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 
-| 插件       | 惯用文件                                   |
-| ---------- | ------------------------------------------ |
-| atmos      | `.atmos-version`                           |
-| bun        | `.bun-version`, `package.json`             |
-| crystal    | `.crystal-version`                         |
-| deno       | `.deno-version`, `package.json`            |
-| dotnet     | `global.json`                              |
-| elixir     | `.exenv-version`                           |
-| go         | `.go-version`                              |
-| java       | `.java-version`, `.sdkmanrc`               |
-| node       | `.nvmrc`, `.node-version`, `package.json`  |
-| npm        | `package.json`                             |
-| opentofu   | `.opentofu-version`                        |
-| packer     | `.packer-version`                          |
-| perl       | `.perl-version`                            |
-| pnpm       | `package.json`                             |
-| python     | `.python-version`, `.python-versions`      |
-| ruby       | `.ruby-version`, `Gemfile`                 |
-| rust       | `rust-toolchain.toml`                      |
-| terraform  | `.terraform-version`                       |
-| terragrunt | `.terragrunt-version`                      |
-| terramate  | `.terramate-version`                       |
-| yarn       | `.yvmrc`, `package.json`                   |
+<!-- mise:idiomatic-version-files:start -->
+
+| 插件          | 惯用文件                                                                                                                                                                                                                                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| atmos         | `.atmos-version`                                                                                                                                                                                                                                                                                           |
+| bun           | `.bun-version`, `package.json`                                                                                                                                                                                                                                                                             |
+| chezmoi       | `.chezmoiversion`                                                                                                                                                                                                                                                                                          |
+| cmake         | `CMakeLists.txt`                                                                                                                                                                                                                                                                                           |
+| crystal       | `.crystal-version`                                                                                                                                                                                                                                                                                         |
+| dagger        | `dagger.json`                                                                                                                                                                                                                                                                                              |
+| deno          | `.deno-version`, `package.json`                                                                                                                                                                                                                                                                            |
+| dotnet        | `global.json`                                                                                                                                                                                                                                                                                              |
+| earthly       | `Earthfile`                                                                                                                                                                                                                                                                                                |
+| elixir        | `.exenv-version`                                                                                                                                                                                                                                                                                           |
+| go            | `.go-version`, `go.mod`                                                                                                                                                                                                                                                                                    |
+| golangci-lint | `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`                                                                                                                                                                                                                                      |
+| goreleaser    | `.config/goreleaser.yml`, `.config/goreleaser.yaml`, `.goreleaser.yml`, `.goreleaser.yaml`, `goreleaser.yml`, `goreleaser.yaml`                                                                                                                                                                            |
+| java          | `.java-version`, `.sdkmanrc`                                                                                                                                                                                                                                                                               |
+| lefthook      | `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, `.lefthook.yaml`, `lefthook.toml`, `.lefthook.toml`, `lefthook.json`, `.lefthook.json`, `lefthook.jsonc`, `.lefthook.jsonc`, `.config/lefthook.yml`, `.config/lefthook.yaml`, `.config/lefthook.toml`, `.config/lefthook.json`, `.config/lefthook.jsonc` |
+| node          | `.nvmrc`, `.node-version`, `package.json`                                                                                                                                                                                                                                                                  |
+| npm           | `package.json`                                                                                                                                                                                                                                                                                             |
+| opentofu      | `.opentofu-version`                                                                                                                                                                                                                                                                                        |
+| packer        | `.packer-version`                                                                                                                                                                                                                                                                                          |
+| perl          | `.perl-version`                                                                                                                                                                                                                                                                                            |
+| pixi          | `pixi.toml`, `pyproject.toml`                                                                                                                                                                                                                                                                              |
+| pnpm          | `package.json`                                                                                                                                                                                                                                                                                             |
+| pre-commit    | `.pre-commit-config.yaml`                                                                                                                                                                                                                                                                                  |
+| python        | `.python-version`, `.python-versions`                                                                                                                                                                                                                                                                      |
+| ruby          | `.ruby-version`, `Gemfile`                                                                                                                                                                                                                                                                                 |
+| ruff          | `ruff.toml`, `.ruff.toml`                                                                                                                                                                                                                                                                                  |
+| rust          | `rust-toolchain.toml`                                                                                                                                                                                                                                                                                      |
+| swift         | `.swift-version`                                                                                                                                                                                                                                                                                           |
+| task          | `Taskfile.yml`, `Taskfile.yaml`, `taskfile.yml`, `taskfile.yaml`                                                                                                                                                                                                                                           |
+| terraform     | `.terraform-version`                                                                                                                                                                                                                                                                                       |
+| terragrunt    | `.terragrunt-version`                                                                                                                                                                                                                                                                                      |
+| terramate     | `.terramate-version`                                                                                                                                                                                                                                                                                       |
+| yarn          | `.yvmrc`, `package.json`                                                                                                                                                                                                                                                                                   |
+| zig           | `.zig-version`                                                                                                                                                                                                                                                                                             |
+
+<!-- mise:idiomatic-version-files:end -->
+
+由注册表支持的工具还可以描述 mise 应如何从结构化的惯用文件中提取版本。注册表条目可以使用与 [HTTP 后端](/dev-tools/backends/http.html#version-listing)相同的 `version_regex`、`version_json_path` 和 `version_expr` 解析器。
+这使得通过 `aqua:` 和 `github:` 等后端安装的工具能够支持 JSON 清单和其他工具专用的版本文件，而无需 asdf 或 vfox 插件。
+
+有些文件声明的是最低兼容版本或配置格式主版本，而不是确切的二进制版本。mise 会将该值视为普通的版本请求，因此像 `3.25` 这样的值会选择最新的 CMake 3.25 版本，而 GoReleaser 配置中的 `version: 2` 会选择最新的 GoReleaser 2.x 版本。
+
+对于 `go.mod`，如果存在 `toolchain goX.Y.Z` 指令（精确的工具链固定版本），则会使用该指令。
+否则会使用 `go X.Y` 指令；由于它只声明了所需 Go 版本的_最低值_，mise 会将其解析为匹配的最新补丁版本（例如，`go 1.22` → 最新的 `1.22.x`）。
 
 在 mise 中，这些默认是禁用的，原因说明见 <https://github.com/jdx/mise/discussions/4345>。
 
 - `mise settings add idiomatic_version_file_enable_tools python` 用于启用特定工具，例如 Python ([文档](/configuration/settings.html#idiomatic_version_file_enable_tools))
 
-当这些文件被解析时，会有一定的性能开销，因为这是由插件在
-`bin/parse-version-file` 中执行的。不过，这些内容会被[缓存](/cache-behavior)，所以影响并不大。
-你甚至可能不会注意到。
+可以通过 `tool:filename` 组合为某个工具禁用单个文件。例如，要让 node 使用
+`.nvmrc`，同时让包管理器继续使用 `package.json`：
+
+```sh
+mise settings add idiomatic_version_file_disable_files node:package.json
+```
+
+发现并解析这些文件会产生少量性能开销。注册表解析器会在进程内运行；由插件提供的文件可能会调用插件的解析器。结果会被[缓存](/cache-behavior)，因此通常不会明显影响性能。
 
 ::: info
-asdf 将这些称为“legacy version files”。我认为这是个糟糕的命名，因为它暗示
-这些文件不应该被使用——而在我看来显然并非如此。我更喜欢“idiomatic”
-version files 这个术语，因为它们并不是 asdf/mise 独有的版本文件，也可以被其他工具使用。
+asdf 将这些称为“旧版版本文件（legacy version files）”。我认为这是个糟糕的命名，因为它暗示
+这些文件不应该被使用——而在我看来显然并非如此。我更喜欢“惯用版本文件（idiomatic
+version files）”这个术语，因为它们并不是 asdf/mise 独有的版本文件，也可以被其他工具使用。
 （`.nvmrc` 是一个值得注意的例外，因为它绑定于某个特定工具。）
 :::
 
@@ -557,6 +601,21 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 插件接受输入，或者看起来没有正确安装，请使用此项。
 
 设置 `MISE_JOBS=1`，因为同一时间只能执行 1 个插件脚本。
+
+### `MISE_TERM_WIDTH`
+
+覆盖 mise 用于渲染表格和列表（例如 `mise ls`）的终端宽度。
+默认情况下，mise 会从终端检测宽度。这在 CI 或其他非交互式环境中很有用，
+因为这些环境中的检测可能会返回错误值（例如 CircleCI 会将宽度报告为 `0`），
+从而导致输出出现异常换行。
+
+如果未设置 `MISE_TERM_WIDTH`，mise 会回退到常用的 `COLUMNS`
+环境变量，最后才使用自动检测。该覆盖值会被严格遵守，
+因此你也可以强制使用更窄的宽度：
+
+```sh
+MISE_TERM_WIDTH=120 mise ls
+```
 
 ### `MISE_FISH_AUTO_ACTIVATE=1`
 

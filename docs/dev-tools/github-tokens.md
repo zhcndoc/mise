@@ -76,8 +76,10 @@ token = "ghp_yyyyyyyyyyyy"
 mise 会在以下位置查找 `hosts.yml`（按顺序匹配，先找到先使用）：
 
 1. `$GH_CONFIG_DIR/hosts.yml`
-2. `$XDG_CONFIG_HOME/gh/hosts.yml`（默认为 `~/.config/gh/hosts.yml`）
+2. `$XDG_CONFIG_HOME/gh/hosts.yml`（设置该变量时）
 3. `~/Library/Application Support/gh/hosts.yml`（仅限 macOS）
+4. `%APPDATA%\GitHub CLI\hosts.yml`（仅限 Windows——这是 gh 在 Windows 上的默认位置）
+5. `~/.config/gh/hosts.yml`
 
 这对 **GitHub Enterprise** 尤其有用——gh CLI 会按主机存储令牌，因此 mise 可以对多个 GHE 实例进行身份验证，而无需来回切换环境变量：
 
@@ -148,7 +150,7 @@ mise token github
 
 mise 可以通过 GitHub 的 OAuth 设备流直接创建短期有效的 GitHub App 用户访问令牌。这不需要个人访问令牌、GitHub App 私钥、应用客户端密钥、`gh`、`ghtkn` 或任何其他外部凭据命令。
 
-该设计受 [ghtkn](https://github.com/suzuki-shunsuke/ghtkn) 启发——如果你更愿意运行一个独立进程，并让 mise 通过 `credential_command` 获取其令牌，请参阅上方的 [Using ghtkn](#using-ghtkn)。
+该设计受 [ghtkn](https://github.com/suzuki-shunsuke/ghtkn) 启发——如果你更愿意运行一个独立进程，并让 mise 通过 `credential_command` 获取其令牌，请参阅上方的 [使用 ghtkn](#using-ghtkn)。
 
 创建一个启用了设备流的 GitHub App，然后配置其客户端 ID：
 
@@ -193,8 +195,31 @@ mise 可以使用你现有的 git 凭据助手来获取 GitHub 令牌。这是**
 这在以下场景中特别有用：
 
 - **Devcontainer 环境**，其中令牌通过 git 凭据助手提供
-- **macOS/Windows**，其中 `gh auth login` 会将令牌存储在系统密钥串中，而不是 `hosts.yml`
-- 任何 git 已经配置了凭据的环境
+- **macOS/Windows**，其中 `gh auth login` 会将令牌存储在系统钥匙串中（macOS 钥匙串、
+  Windows 凭据管理器），而不是存储在 `hosts.yml` 中。在这种情况下，`hosts.yml` 虽然存在，但没有
+  `oauth_token` 键，因此读取它无法提供帮助。运行 `mise token github` 可以帮助区分这两种情况：如果它
+  输出 `(none)`，而 `gh auth status` 可以正常工作，那么你需要启用此设置，或者使用一个调用 gh 的
+  `github.credential_command`。
+
+  如果只有一个账户，`credential_command = "gh auth token"` 就足够了。如果你登录了多个主机（GitHub
+  Enterprise），请传入 mise 当前请求的主机，因为直接运行 `gh auth token` 会返回 gh 自身当前活动主机的令牌。
+  mise 会将其导出为 `MISE_CREDENTIAL_HOST`，并通过平台的内联 shell 运行该命令，因此插值方式有所不同：
+
+  在 macOS 和 Linux 上：
+
+  ```toml
+  [settings.github]
+  credential_command = 'gh auth token --hostname "$MISE_CREDENTIAL_HOST"'
+  ```
+
+  在 Windows 上，`cmd` 是默认的内联 shell，不会展开 `$VAR`：
+
+  ```toml
+  [settings.github]
+  credential_command = 'gh auth token --hostname %MISE_CREDENTIAL_HOST%'
+  ```
+
+- 任何已经配置好 git 凭据的环境
 
 mise 会使用 `GIT_TERMINAL_PROMPT=0` 运行 `git credential fill`（以防止交互式提示），并在会话期间按主机缓存结果。
 

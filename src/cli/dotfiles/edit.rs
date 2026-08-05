@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use eyre::{Result, bail};
 
 use super::add::DotfilesAdd;
-use crate::config::{Config, Settings};
+use crate::config::Config;
 use crate::file;
 use crate::system;
 use crate::system::edits::{BlockSource, EditOp};
@@ -36,7 +36,6 @@ pub struct DotfilesEdit {
 
 impl DotfilesEdit {
     pub async fn run(self) -> Result<()> {
-        Settings::get().ensure_experimental("mise dotfiles")?;
         let mut config = Config::get().await?;
         let target = system::files::resolve_target_arg(&self.target);
 
@@ -67,6 +66,7 @@ impl DotfilesEdit {
             local: false,
             path: None,
             dry_run: false,
+            no_apply: true,
             force: false,
             yes: true,
         }
@@ -156,7 +156,7 @@ async fn apply_target(target: &str) -> Result<()> {
             dry_run: false,
             verbose: false,
             force: false,
-            force_hint: "use `mise dotfiles apply --force`",
+            force_hint: "use `mise bootstrap dotfiles apply --force`",
             yes: true,
         };
         system::files::apply(&config, &files, &opts)?;
@@ -175,7 +175,7 @@ async fn apply_target(target: &str) -> Result<()> {
 static AFTER_LONG_HELP: &str = color_print::cstr!(
     r#"<bold><underline>Examples:</underline></bold>
 
-    $ <bold>mise dotfiles edit ~/.zshrc</bold>
-    $ <bold>mise dotfiles edit --apply ~/.config/starship.toml</bold>
+    $ <bold>mise bootstrap dotfiles edit ~/.zshrc</bold>
+    $ <bold>mise bootstrap dotfiles edit --apply ~/.config/starship.toml</bold>
 "#
 );

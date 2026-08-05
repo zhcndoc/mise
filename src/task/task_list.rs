@@ -1,7 +1,8 @@
 use crate::config::{self, Config};
 use crate::file::display_path;
 use crate::task::{
-    GetMatchingExt, Task, TaskLoadContext, extract_monorepo_path, resolve_task_pattern,
+    GetMatchingExt, Task, TaskLoadContext, extract_monorepo_path, is_workspace_project_task,
+    resolve_task_pattern,
 };
 use crate::ui::ctrlc;
 use crate::ui::{prompt, style};
@@ -63,7 +64,9 @@ fn validate_monorepo_setup(config: &Arc<Config>) -> Result<()> {
             Then create task files in subdirectories that will be automatically discovered.\n\
             See {} for more information.",
             style::eyellow("  monorepo_root = true"),
-            style::eunderline("https://mise.en.dev/tasks/task-configuration.html#monorepo-support")
+            style::eunderline(
+                "https://mise.jdx.dev/tasks/task-configuration.html#monorepo-support"
+            )
         );
     }
 
@@ -176,7 +179,78 @@ fn append_available_tasks(
 }
 
 /// Show an error when a task is not found, with helpful suggestions
-async fn err_no_task(config: &Config, name: &str) -> Result<()> {
+async fn make_task_executable(
+    config: &Arc<Config>,
+    name: &str,
+    task_context: Option<&TaskLoadContext>,
+) -> Result<Option<Task>> {
+    if cfg!(windows) {
+        return Ok(None);
+    }
+    let Some(cwd) = &*dirs::CWD else {
+        return Ok(None);
+    };
+    let (task_dir, task_name) = if let Some(name) = name.strip_prefix("//") {
+        let Some((scope, task_name)) = name.split_once(':') else {
+            return Ok(None);
+        };
+        let Some(monorepo_root) = config
+            .config_files
+            .values()
+            .find(|cf| cf.monorepo_root() == Some(true))
+            .and_then(|cf| cf.project_root())
+        else {
+            return Ok(None);
+        };
+        (monorepo_root.join(scope), task_name)
+    } else {
+        (cwd.clone(), name.strip_prefix(':').unwrap_or(name))
+    };
+    let includes = config::task_includes_for_dir(&task_dir, &config.config_files)?;
+    let Some(path) = includes.iter().find_map(|root| {
+        find_non_executable_task_files(std::slice::from_ref(root))
+            .into_iter()
+            .find(|path| {
+                Task::new(path, root, &task_dir).is_ok_and(|task| task.is_match(task_name))
+            })
+    }) else {
+        return Ok(None);
+    };
+
+    warn!(
+        "no task {} found, but a non-executable file exists at {}",
+        style::ered(name),
+        display_path(&path)
+    );
+    let confirmed = config::Settings::get().yes
+        || prompt::confirm("Mark this file as executable to allow it to be run as a task?")?;
+    if !confirmed {
+        return Ok(None);
+    }
+
+    file::make_executable(&path)?;
+    info!("marked as executable");
+    let all_tasks = config.reload_tasks_with_context(task_context).await?;
+    let tasks_with_aliases = crate::task::build_task_ref_map(all_tasks.iter());
+    let task = tasks_with_aliases
+        .get_matching(name)?
+        .into_iter()
+        .next()
+        .map(|task| (*task).clone());
+    ensure!(
+        task.is_some(),
+        "task {} was not found after marking {} as executable",
+        style::ered(name),
+        display_path(&path)
+    );
+    Ok(task)
+}
+
+async fn err_no_task(
+    config: &Arc<Config>,
+    name: &str,
+    task_context: Option<&TaskLoadContext>,
+) -> Result<Option<Task>> {
     // Check early if the name looks like a mistyped CLI subcommand
     let similar_cmds = suggest_similar_commands(name);
     let (tasks_for_error, showing_all_tasks) = tasks_for_missing_task_error(config, name).await?;
@@ -199,11 +273,15 @@ async fn err_no_task(config: &Config, name: &str) -> Result<()> {
             use crate::config::config_file::{config_trust_root, is_trusted};
             use crate::config::{config_files_in_dir, is_tool_versions_file};
 
+            // In safe mode, config is inert and trust is not required, so there
+            // are no untrusted configs to warn about.
+            let safe_mode = config::Settings::safe_mode();
             let config_files = config_files_in_dir(cwd);
             let untrusted_configs: Vec<_> = config_files
                 .iter()
                 .filter(|p| {
-                    !is_tool_versions_file(p)
+                    !safe_mode
+                        && !is_tool_versions_file(p)
                         && !is_trusted(&config_trust_root(p))
                         && !is_trusted(p)
                 })
@@ -216,11 +294,15 @@ async fn err_no_task(config: &Config, name: &str) -> Result<()> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 bail!(
-                    "Config file(s) in {} are not trusted: {}\nTrust them with `mise trust`. See https://mise.en.dev/cli/trust.html for more information.",
+                    "Config file(s) in {} are not trusted: {}\nTrust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.",
                     display_path(cwd),
                     paths
                 );
             }
+        }
+
+        if let Some(task) = make_task_executable(config, name, task_context).await? {
+            return Ok(Some(task));
         }
 
         // Check if there are non-executable files in task include directories
@@ -257,27 +339,8 @@ async fn err_no_task(config: &Config, name: &str) -> Result<()> {
             display_path(dirs::CWD.clone().unwrap_or_default())
         );
     }
-    if let Some(cwd) = &*dirs::CWD {
-        let includes = config::task_includes_for_dir(cwd, &config.config_files)?;
-        let path = includes
-            .iter()
-            .map(|d| d.join(name))
-            .find(|d| d.is_file() && !file::is_executable(d));
-        if let Some(path) = path
-            && !cfg!(windows)
-        {
-            warn!(
-                "no task {} found, but a non-executable file exists at {}",
-                style::ered(name),
-                display_path(&path)
-            );
-            let yn =
-                prompt::confirm("Mark this file as executable to allow it to be run as a task?")?;
-            if yn {
-                file::make_executable(&path)?;
-                info!("marked as executable, try running this task again");
-            }
-        }
+    if let Some(task) = make_task_executable(config, name, task_context).await? {
+        return Ok(Some(task));
     }
 
     // Suggest similar tasks using fuzzy matching for monorepo tasks
@@ -310,7 +373,7 @@ async fn prompt_for_task() -> Result<Task> {
     ensure!(
         !tasks.is_empty(),
         "no tasks defined. see {url}",
-        url = style::eunderline("https://mise.en.dev/tasks/")
+        url = style::eunderline("https://mise.jdx.dev/tasks/")
     );
     let theme = crate::ui::theme::get_theme();
     let mut s = Select::new("Tasks")
@@ -372,7 +435,11 @@ pub async fn get_task_lists(
         let monorepo_patterns: Vec<&str> = args
             .iter()
             .filter_map(|(t, _)| {
-                if t.starts_with("//") || t.contains("...") || t.starts_with(':') {
+                if t.starts_with("//")
+                    || t.contains("...")
+                    || t.starts_with(':')
+                    || is_workspace_project_task(t)
+                {
                     Some(t.as_str())
                 } else {
                     None
@@ -473,8 +540,11 @@ pub async fn get_task_lists(
             let is_default_task = t == "default" || {
                 t.starts_with("//") && t.ends_with(":default") && t[2..].matches(':').count() == 1
             };
-            if !is_default_task || !prompt || !console::user_attended_stderr() {
-                err_no_task(config, &t).await?;
+            if (!is_default_task || !prompt || !console::user_attended_stderr())
+                && let Some(task) = err_no_task(config, &t, effective_context.as_ref()).await?
+            {
+                tasks.push(task.with_args(args));
+                continue;
             }
             tasks.push(prompt_for_task().await?);
         } else {

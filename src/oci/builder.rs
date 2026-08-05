@@ -13,15 +13,23 @@ use indexmap::{IndexMap, IndexSet};
 use crate::backend::backend_type::BackendType;
 use crate::config::{Config, Settings};
 use crate::file;
-use crate::oci::OciConfig;
 use crate::oci::layer::{self, LayerBlob, LayerOwner};
 use crate::oci::layout::ImageLayout;
 use crate::oci::manifest::{self, Descriptor, ImageConfig, ImageManifest, Platform, RootFs};
 use crate::oci::packages;
 use crate::oci::registry;
+use crate::oci::{OciConfig, OciCopy};
 use crate::system::ManagerPackages;
 use crate::system::files::{FileMode, FileRequest};
 use crate::toolset::{ToolVersion, Toolset};
+
+/// Annotations mise writes on tool layer descriptors. Together they form the
+/// cache key for reusing a layer from a previously pushed image: same tool,
+/// same version, same in-image prefix, same file ownership.
+pub const ANNOTATION_TOOL_SHORT: &str = "dev.mise.tool.short";
+pub const ANNOTATION_TOOL_VERSION: &str = "dev.mise.tool.version";
+pub const ANNOTATION_LAYER_PREFIX: &str = "dev.mise.layer.prefix";
+pub const ANNOTATION_LAYER_OWNER: &str = "dev.mise.layer.owner";
 
 /// Options passed to the builder from the CLI.
 #[derive(Debug, Clone)]
@@ -38,6 +46,67 @@ pub struct BuildOptions {
     pub owner: Option<LayerOwner>,
     /// Embed the current mise binary at /usr/local/bin/mise.
     pub include_mise: bool,
+    /// CLI-provided host paths copied after config-provided entries.
+    pub copy: Vec<OciCopy>,
+    /// A previously pushed image to reuse unchanged tool layers from
+    /// (`mise oci push` only). Reused layers skip the local tar/gzip build
+    /// entirely — and the tool doesn't even need to be installed locally.
+    /// NOTE: the resulting layout omits reused layer blobs, so it is only
+    /// valid to push to the repository the cache image came from.
+    pub reuse_from: Option<registry::RemoteImage>,
+}
+
+/// Cache key for tool-layer reuse. All four parts must match — a layer built
+/// for a different mount point or file owner has different bytes even for
+/// the same tool version.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ReuseKey {
+    short: String,
+    version: String,
+    prefix: String,
+    owner: String,
+}
+
+/// A tool layer taken verbatim from the remote cache image.
+#[derive(Debug, Clone)]
+struct ReusedLayer {
+    media_type: String,
+    digest: String,
+    size: u64,
+    diff_id: String,
+}
+
+/// Index a remote image's tool layers by their reuse cache key. Layers
+/// missing any key annotation (e.g. images pushed by older mise versions)
+/// are simply not reusable.
+fn build_reuse_index(remote: &registry::RemoteImage) -> IndexMap<ReuseKey, ReusedLayer> {
+    let mut index = IndexMap::new();
+    for (layer, diff_id) in remote.manifest.layers.iter().zip(&remote.diff_ids) {
+        let a = &layer.annotations;
+        let (Some(short), Some(version), Some(prefix), Some(owner)) = (
+            a.get(ANNOTATION_TOOL_SHORT),
+            a.get(ANNOTATION_TOOL_VERSION),
+            a.get(ANNOTATION_LAYER_PREFIX),
+            a.get(ANNOTATION_LAYER_OWNER),
+        ) else {
+            continue;
+        };
+        index.insert(
+            ReuseKey {
+                short: short.clone(),
+                version: version.clone(),
+                prefix: prefix.clone(),
+                owner: owner.clone(),
+            },
+            ReusedLayer {
+                media_type: layer.media_type.clone(),
+                digest: layer.digest.clone(),
+                size: layer.size,
+                diff_id: diff_id.clone(),
+            },
+        );
+    }
+    index
 }
 
 pub struct Builder {
@@ -61,6 +130,8 @@ pub struct ToolLayerInfo {
     pub version: String,
     pub digest: String,
     pub size: u64,
+    /// Taken verbatim from the remote cache image instead of built locally.
+    pub reused: bool,
 }
 
 impl Builder {
@@ -115,6 +186,7 @@ impl Builder {
         }
 
         let owner = resolve_layer_owner(self.opts.owner, &self.oci);
+        let copies: Vec<&OciCopy> = self.oci.copy.iter().chain(&self.opts.copy).collect();
 
         // --- 1. Base image (optional) ---
         let from_ref = self
@@ -190,23 +262,56 @@ impl Builder {
             base_config_json = Some(pull.config_json);
         }
 
-        // --- 2. Validate tool installs before any package work ---
+        // --- 2. Decide layer reuse and validate tool installs ---
+        // A tool layer is reused from the remote cache image when tool,
+        // version, in-image prefix, and file owner all match — in that case
+        // the layer is never built locally and the tool doesn't need to be
+        // installed at all.
+        let owner_str = format!("{}:{}", owner.uid, owner.gid);
+        let reuse_index = self
+            .opts
+            .reuse_from
+            .as_ref()
+            .map(build_reuse_index)
+            .unwrap_or_default();
+        let tool_reuse: Vec<Option<ReusedLayer>> = versions
+            .iter()
+            .map(|(_, tv)| {
+                reuse_index
+                    .get(&ReuseKey {
+                        short: tv.ba().short.clone(),
+                        version: tv.version.clone(),
+                        prefix: tool_tar_prefix(&mount_point, tv),
+                        owner: owner_str.clone(),
+                    })
+                    .cloned()
+            })
+            .collect();
+
         // Tool installs are host-native binaries. On non-linux hosts they'll
         // fail at runtime inside the linux container with `Exec format error`
         // — emit a single warning up front so the user isn't surprised after
         // the image appears to build successfully. (`--no-mise` silences the
         // mise-binary warning below but doesn't help with tool binaries; only
         // running the build on a linux host does.)
-        if !versions.is_empty() && std::env::consts::OS != "linux" {
+        // Count only layers actually built on this host; reused layers came
+        // from the cache image and aren't rebuilt, so they don't carry
+        // host-native binaries. Warning on reused-only pushes (the CI re-push
+        // the reuse feature speeds up) would be a false alarm.
+        let built_tool_count = tool_reuse.iter().filter(|r| r.is_none()).count();
+        if built_tool_count > 0 && std::env::consts::OS != "linux" {
             warn!(
-                "building on {host} host — the {n} tool layer(s) contain {host} binaries that \
+                "building on {host} host — {n} tool layer(s) contain {host} binaries that \
                  will fail with `Exec format error` inside a linux container. Run \
                  `mise oci build` on a linux host (or in a linux container) for a working image.",
                 host = std::env::consts::OS,
-                n = versions.len()
+                n = built_tool_count
             );
         }
-        for (_, tv) in &versions {
+        for (i, (_, tv)) in versions.iter().enumerate() {
+            if tool_reuse[i].is_some() {
+                continue; // layer comes from the cache image; no install needed
+            }
             let install_path = tv.install_path();
             if !install_path.is_dir() {
                 bail!(
@@ -229,16 +334,61 @@ impl Builder {
         )?;
 
         // --- 4. Per-tool layers ---
-        let mut tool_layers: Vec<(String, String, LayerBlob)> = Vec::new();
-        for (_, tv) in &versions {
-            let install_path = tv.install_path();
+        struct ToolLayerEntry {
+            short: String,
+            version: String,
+            prefix: String,
+            layer: ToolLayer,
+        }
+        enum ToolLayer {
+            Built(LayerBlob),
+            Reused(ReusedLayer),
+        }
+        let mut tool_layers: Vec<ToolLayerEntry> = Vec::new();
+        for (i, (_, tv)) in versions.iter().enumerate() {
             let tv_prefix = tool_tar_prefix(&mount_point, tv);
-            let blob = layer::build_layer_from_dir(&install_path, &tv_prefix, owner)
-                .wrap_err_with(|| format!("building layer for {}", tv.style()))?;
-            tool_layers.push((tv.ba().short.clone(), tv.version.clone(), blob));
+            let layer = if let Some(reused) = &tool_reuse[i] {
+                info!(
+                    "oci: reusing {} layer from the cache image (unchanged)",
+                    tv.style()
+                );
+                ToolLayer::Reused(reused.clone())
+            } else {
+                let blob = layer::build_layer_from_dir(&tv.install_path(), &tv_prefix, owner)
+                    .wrap_err_with(|| format!("building layer for {}", tv.style()))?;
+                ToolLayer::Built(blob)
+            };
+            tool_layers.push(ToolLayerEntry {
+                short: tv.ba().short.clone(),
+                version: tv.version.clone(),
+                prefix: tv_prefix,
+                layer,
+            });
         }
 
-        // --- 5. mise binary layer (optional) ---
+        // --- 5. Arbitrary host-path layers ---
+        let mut copy_layers: Vec<(&OciCopy, LayerBlob)> = Vec::new();
+        for copy in copies {
+            copy.validate().map_err(eyre::Report::msg)?;
+            warn!(
+                "mise oci build: copying host path {} into the image at {} — review its \
+                 contents for secrets or credentials before sharing the image",
+                copy.host.display(),
+                copy.image
+            );
+            let blob = layer::build_layer_from_path(&copy.host, &copy.image, owner).wrap_err_with(
+                || {
+                    format!(
+                        "copying host path {} to {}",
+                        copy.host.display(),
+                        copy.image
+                    )
+                },
+            )?;
+            copy_layers.push((copy, blob));
+        }
+
+        // --- 6. mise binary layer (optional) ---
         let mut mise_layer: Option<LayerBlob> = None;
         if self.opts.include_mise {
             // OCI images are linux-targeted in v1 (we normalize `os` to
@@ -314,11 +464,55 @@ impl Builder {
             all_diff_ids.push(blob.diff_id.clone());
         }
 
-        for (short, version, blob) in &tool_layers {
+        for entry in &tool_layers {
+            let mut annotations = IndexMap::new();
+            annotations.insert(ANNOTATION_TOOL_SHORT.to_string(), entry.short.clone());
+            annotations.insert(ANNOTATION_TOOL_VERSION.to_string(), entry.version.clone());
+            annotations.insert(ANNOTATION_LAYER_PREFIX.to_string(), entry.prefix.clone());
+            annotations.insert(ANNOTATION_LAYER_OWNER.to_string(), owner_str.clone());
+            let (media_type, digest, size, diff_id, reused) = match &entry.layer {
+                ToolLayer::Built(blob) => {
+                    layout.write_blob_with_digest(&blob.digest, &blob.bytes)?;
+                    (
+                        manifest::MEDIA_TYPE_OCI_LAYER_GZIP.to_string(),
+                        blob.digest.clone(),
+                        blob.size,
+                        blob.diff_id.clone(),
+                        false,
+                    )
+                }
+                // Reused layers reference the remote blob; no local bytes
+                // exist, which is fine because the push destination (where
+                // the cache image lives) already has them.
+                ToolLayer::Reused(r) => (
+                    r.media_type.clone(),
+                    r.digest.clone(),
+                    r.size,
+                    r.diff_id.clone(),
+                    true,
+                ),
+            };
+            manifest_layers.push(Descriptor {
+                media_type,
+                size,
+                digest: digest.clone(),
+                annotations,
+                platform: None,
+            });
+            all_diff_ids.push(diff_id);
+            tool_layer_infos.push(ToolLayerInfo {
+                short: entry.short.clone(),
+                version: entry.version.clone(),
+                digest,
+                size,
+                reused,
+            });
+        }
+
+        for (copy, blob) in &copy_layers {
             layout.write_blob_with_digest(&blob.digest, &blob.bytes)?;
             let mut annotations = IndexMap::new();
-            annotations.insert("dev.mise.tool.short".to_string(), short.clone());
-            annotations.insert("dev.mise.tool.version".to_string(), version.clone());
+            annotations.insert("dev.mise.copy".to_string(), copy.image.clone());
             manifest_layers.push(Descriptor {
                 media_type: manifest::MEDIA_TYPE_OCI_LAYER_GZIP.to_string(),
                 size: blob.size,
@@ -327,12 +521,6 @@ impl Builder {
                 platform: None,
             });
             all_diff_ids.push(blob.diff_id.clone());
-            tool_layer_infos.push(ToolLayerInfo {
-                short: short.clone(),
-                version: version.clone(),
-                digest: blob.digest.clone(),
-                size: blob.size,
-            });
         }
 
         if let Some(blob) = &dotfiles_layer {
@@ -384,12 +572,22 @@ impl Builder {
         };
 
         // --- 9. Manifest ---
+        // Record the base image (standard annotation) so `mise oci push` can
+        // attempt cross-repository blob mounts when the base lives on the
+        // destination registry.
+        let mut manifest_annotations: IndexMap<String, String> = Default::default();
+        if let Some(ref_) = &from_ref {
+            manifest_annotations.insert(
+                crate::oci::registry::ANNOTATION_BASE_NAME.to_string(),
+                ref_.clone(),
+            );
+        }
         let image_manifest = ImageManifest {
             schema_version: 2,
             media_type: manifest::MEDIA_TYPE_OCI_MANIFEST.to_string(),
             config: config_descriptor,
             layers: manifest_layers,
-            annotations: Default::default(),
+            annotations: manifest_annotations,
         };
         let (manifest_digest, manifest_size) = layout.write_manifest(&image_manifest)?;
 
@@ -990,6 +1188,69 @@ fn sanitize_label(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layer(annotations: &[(&str, &str)], digest: &str) -> Descriptor {
+        Descriptor {
+            media_type: manifest::MEDIA_TYPE_OCI_LAYER_GZIP.to_string(),
+            size: 100,
+            digest: digest.to_string(),
+            annotations: annotations
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            platform: None,
+        }
+    }
+
+    #[test]
+    fn reuse_index_keys_on_all_four_annotations() {
+        let full = [
+            (ANNOTATION_TOOL_SHORT, "jq"),
+            (ANNOTATION_TOOL_VERSION, "1.8.1"),
+            (ANNOTATION_LAYER_PREFIX, "mise/installs/jq/1.8.1"),
+            (ANNOTATION_LAYER_OWNER, "0:0"),
+        ];
+        // Second layer lacks prefix/owner (pushed by an older mise) —
+        // not reusable.
+        let partial = [
+            (ANNOTATION_TOOL_SHORT, "node"),
+            (ANNOTATION_TOOL_VERSION, "20.0.0"),
+        ];
+        let remote = registry::RemoteImage {
+            manifest: ImageManifest {
+                schema_version: 2,
+                media_type: manifest::MEDIA_TYPE_OCI_MANIFEST.to_string(),
+                config: layer(&[], "sha256:cfg"),
+                layers: vec![layer(&full, "sha256:aaa"), layer(&partial, "sha256:bbb")],
+                annotations: Default::default(),
+            },
+            diff_ids: vec!["sha256:diff-a".into(), "sha256:diff-b".into()],
+        };
+
+        let index = build_reuse_index(&remote);
+        assert_eq!(index.len(), 1);
+        let hit = index
+            .get(&ReuseKey {
+                short: "jq".into(),
+                version: "1.8.1".into(),
+                prefix: "mise/installs/jq/1.8.1".into(),
+                owner: "0:0".into(),
+            })
+            .unwrap();
+        assert_eq!(hit.digest, "sha256:aaa");
+        assert_eq!(hit.diff_id, "sha256:diff-a");
+        // Different owner -> miss.
+        assert!(
+            index
+                .get(&ReuseKey {
+                    short: "jq".into(),
+                    version: "1.8.1".into(),
+                    prefix: "mise/installs/jq/1.8.1".into(),
+                    owner: "1000:1000".into(),
+                })
+                .is_none()
+        );
+    }
 
     #[test]
     fn resolve_layer_owner_defaults_to_root() {

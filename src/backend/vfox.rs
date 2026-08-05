@@ -34,6 +34,22 @@ pub struct VfoxBackend {
     pathname: String,
     tool_name: Option<String>,
     metadata_deps: OnceLock<Vec<String>>,
+    system_deps: OnceLock<Vec<crate::system::deps::SystemDep>>,
+}
+
+fn remove_env_var(env: &mut indexmap::IndexMap<String, String>, key: &str) {
+    #[cfg(windows)]
+    {
+        if let Some(existing) = env
+            .keys()
+            .find(|existing| existing.eq_ignore_ascii_case(key))
+            .cloned()
+        {
+            env.shift_remove(&existing);
+        }
+    }
+    #[cfg(not(windows))]
+    env.shift_remove(key);
 }
 
 #[async_trait]
@@ -61,6 +77,20 @@ impl Backend for VfoxBackend {
             })
         });
         Ok(deps.iter().map(|s| s.as_str()).collect())
+    }
+
+    fn system_dependencies(&self) -> Vec<crate::system::deps::SystemDep> {
+        self.system_deps
+            .get_or_init(|| {
+                self.load_system_deps().unwrap_or_else(|e| {
+                    warn!(
+                        "failed to load vfox plugin system dependencies for {}: {e}",
+                        self.pathname
+                    );
+                    vec![]
+                })
+            })
+            .clone()
     }
 
     fn mark_prereleases_from_version_pattern(&self) -> bool {
@@ -146,7 +176,18 @@ impl Backend for VfoxBackend {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        cmd_env.extend(tv.install_env());
+        let mut install_env_removals = Vec::new();
+        for (key, value) in tv.install_env() {
+            match value.into_string() {
+                Some(value) => {
+                    cmd_env.insert(key, value);
+                }
+                None => {
+                    remove_env_var(&mut cmd_env, &key);
+                    install_env_removals.push(key);
+                }
+            }
+        }
         // Surface `tools = true` `[env]` *value* directives (e.g.
         // `CLOUDSDK_PYTHON = "{{ tools.python.path }}/bin/python3"`) so the plugin's
         // install hooks (including os.execute) see the resolved value during a
@@ -157,7 +198,7 @@ impl Backend for VfoxBackend {
         // ctx.ts: ctx.ts is the raw install toolset (`Toolset::from(ToolRequestSet)`)
         // whose `.versions` are empty until `resolve()` runs *after* installs, so its
         // `tools.*` tera map is empty and `{{ tools.python.path }}` would render "".
-        // `install_value_toolset` is resolved offline and includes both backend deps
+        // `install_dependency_toolset` is resolved offline and includes both backend deps
         // and the per-tool mise.toml `depends` option (`gcloud = { depends =
         // ["python"] }`) with real install paths, and is install-safe (it uses
         // `get_tool_request_set()`, not the deadlock-prone `config.get_toolset()`).
@@ -166,7 +207,7 @@ impl Backend for VfoxBackend {
         // `dependency_env`. (#10282, follow-up to #10432)
         {
             let base: EnvMap = cmd_env.clone().into_iter().collect();
-            let tool_vals = match self.install_value_toolset(&ctx.config, &tv).await {
+            let tool_vals = match self.install_dependency_toolset(&ctx.config, &tv).await {
                 Ok(dep_ts) => dep_ts.tool_val_env(&ctx.config, &base).await,
                 Err(e) => Err(e),
             };
@@ -188,6 +229,9 @@ impl Backend for VfoxBackend {
                 }
                 Err(e) => debug!("vfox: skipping tools=true value directives: {e:#}"),
             }
+        }
+        for key in install_env_removals {
+            remove_env_var(&mut cmd_env, &key);
         }
         if !cmd_env.is_empty() {
             vfox.cmd_env = Some(cmd_env);
@@ -231,7 +275,12 @@ impl Backend for VfoxBackend {
 
         // Use default vfox behavior for traditional plugins
         let result = vfox
-            .install(&self.pathname, &tv.version, tv.install_path())
+            .install_with_download_dir(
+                &self.pathname,
+                &tv.version,
+                tv.install_path(),
+                tv.download_path(),
+            )
             .await?;
 
         // Record provenance if attestation verification succeeded
@@ -273,7 +322,7 @@ impl Backend for VfoxBackend {
 
         // Store checksum for rolling version tracking
         if let Some(sha256) = result.sha256
-            && let Err(e) = install_state::write_checksum(&self.ba.short, &tv.version, &sha256)
+            && let Err(e) = install_state::write_checksum(&tv.install_path(), &sha256)
         {
             warn!("failed to write checksum for {}: {e}", tv);
         }
@@ -466,6 +515,7 @@ impl VfoxBackend {
             pathname,
             tool_name,
             metadata_deps: OnceLock::new(),
+            system_deps: OnceLock::new(),
         }
     }
 
@@ -477,6 +527,26 @@ impl VfoxBackend {
         let plugin = vfox::Plugin::from_dir(&plugin_path)?;
         let metadata = plugin.get_metadata()?;
         Ok(metadata.depends)
+    }
+
+    fn load_system_deps(&self) -> eyre::Result<Vec<crate::system::deps::SystemDep>> {
+        let plugin_path = dirs::PLUGINS.join(&self.pathname);
+        if !plugin_path.exists() {
+            return Ok(vec![]);
+        }
+        let plugin = vfox::Plugin::from_dir(&plugin_path)?;
+        let metadata = plugin.get_metadata()?;
+        let mut deps = vec![];
+        for raw in metadata.system_dependencies {
+            match crate::system::deps::SystemDep::try_from(raw) {
+                Ok(dep) => deps.push(dep),
+                Err(e) => warn!(
+                    "ignoring invalid systemDependencies entry in vfox plugin {}: {e}",
+                    self.pathname
+                ),
+            }
+        }
+        Ok(deps)
     }
 
     async fn _exec_env(

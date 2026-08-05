@@ -49,7 +49,7 @@ impl DenoPlugin {
         CmdLineRunner::new(self.deno_bin(tv))
             .with_pr(pr)
             .arg("-V")
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .execute()
     }
 
@@ -118,10 +118,6 @@ impl Backend for DenoPlugin {
             .sorted_by_cached_key(|v| (Versioning::new(&v.version), v.version.clone()))
             .collect();
         Ok(versions)
-    }
-
-    async fn _idiomatic_filenames(&self) -> Result<Vec<String>> {
-        Ok(vec![".deno-version".into(), "package.json".into()])
     }
 
     async fn install_version_(
@@ -200,7 +196,7 @@ impl Backend for DenoPlugin {
             .ok_or_else(|| eyre::eyre!("Failed to get deno tarball URL"))?;
 
         // Deno provides .sha256sum files alongside each zip
-        let checksum_url = format!("{}.sha256sum", &url);
+        let checksum_url = format!("{}.sha256sum", url);
         let checksum = fetch_checksum_from_file(&checksum_url, "sha256").await;
 
         Ok(PlatformInfo {

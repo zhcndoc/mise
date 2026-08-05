@@ -2,9 +2,10 @@
 # `mise edit`
 
 - **用法**: `mise edit [FLAGS] [PATH]`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/edit.rs`](https://github.com/jdx/mise/blob/main/src/cli/edit.rs)
 
-交互式编辑 mise.toml
+交互式编辑 mise.toml。
 
 ## 参数
 

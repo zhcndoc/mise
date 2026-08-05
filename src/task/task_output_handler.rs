@@ -1,7 +1,7 @@
 use crate::config::Settings;
-use crate::task::Task;
 use crate::task::task_helpers::task_needs_permit;
 use crate::task::task_output::TaskOutput;
+use crate::task::{Task, TaskCacheOutput};
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::progress_report::SingleReport;
 use indexmap::IndexMap;
@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 type TaskPrMap = Arc<Mutex<IndexMap<Task, Arc<Box<dyn SingleReport>>>>>;
+type TimedOutputMap = Arc<Mutex<IndexMap<String, (SystemTime, Vec<String>)>>>;
 
 /// A single line of output, tagged by stream.
 pub enum KeepOrderLine {
@@ -183,7 +184,7 @@ pub struct OutputHandlerConfig {
 pub struct OutputHandler {
     pub keep_order_state: Arc<Mutex<KeepOrderState>>,
     pub task_prs: TaskPrMap,
-    pub timed_outputs: Arc<Mutex<IndexMap<String, (SystemTime, String)>>>,
+    pub timed_outputs: TimedOutputMap,
 
     // Configuration from CLI args
     output: Option<TaskOutput>,
@@ -254,44 +255,50 @@ impl OutputHandler {
         }
     }
 
-    /// Determine the output mode for a task
+    /// Determine the output *style* for a task.
+    ///
+    /// This resolves the stream-rendering style only (prefix/interleave/…) and
+    /// never returns `Quiet`. Verbosity ("quiet") is a separate axis applied via
+    /// [`quiet`](Self::quiet) at mise's own metadata print sites, so styles and
+    /// quietness combine freely (e.g. `output = "prefix"` + `quiet = true` prints
+    /// prefixed task lines with none of mise's own chatter). Full-silent is the
+    /// one verbosity level that still shows up here, because it nulls both streams.
     pub fn output(&self, task: Option<&Task>) -> TaskOutput {
-        // Check for full silent mode (both streams)
-        // Only Silent::Bool(true) means completely silent, not Silent::Stdout or Silent::Stderr
-        if let Some(task_ref) = task
-            && matches!(task_ref.silent, crate::task::Silent::Bool(true))
-        {
+        // Full-silent (null BOTH streams) is terminal. This must stay distinct
+        // from *partial* per-task silent (`silent = "stdout"`/`"stderr"`), which
+        // falls through to a real style and is nulled per-stream in the executor —
+        // hence the explicit `Silent::Bool(true)` check rather than `silent(task)`.
+        //
+        // The global `task.output = "silent"` setting is deliberately NOT part of
+        // this guard: it's a *style default* and must be overridable by a per-task
+        // `output` field (step 2). When there is no override it is still honored by
+        // step 3, which maps it back to `Silent` via `style_with_raw`.
+        let full_silent = self.silent
+            || Settings::get().silent
+            || self.output.is_some_and(|o| o.is_silent())
+            || task.is_some_and(|t| matches!(t.silent, crate::task::Silent::Bool(true)))
+            || task.is_some_and(|t| t.output == Some(TaskOutput::Silent));
+        if full_silent {
             return TaskOutput::Silent;
         }
 
-        // Check global output settings
+        // Resolve a STYLE only, in precedence order. `Quiet` values map to
+        // `Interleave` (their historical stream behavior); the quiet-ness is kept
+        // by the `quiet()` predicate independently.
+        // 1. CLI `--output` / `MISE_TASK_OUTPUT`
         if let Some(o) = self.output {
-            return o;
-        } else if let Some(task_ref) = task {
-            // Fall through to other checks if silent is Off
-            if self.silent_bool() {
-                return TaskOutput::Silent;
-            }
-            if self.quiet(Some(task_ref)) {
-                return TaskOutput::Quiet;
-            }
-        } else if self.silent_bool() {
-            return TaskOutput::Silent;
-        } else if self.quiet(task) {
-            return TaskOutput::Quiet;
+            return o.style_with_raw(self.raw(task));
         }
-
-        if let Some(output) = Settings::get().task.output {
-            // Silent/quiet from config override raw (output suppression takes precedence)
-            // Other modes (prefix, etc.) allow raw to take precedence for stdin/stdout
-            if output.is_silent() || output.is_quiet() {
-                output
-            } else if self.raw(task) {
-                TaskOutput::Interleave
-            } else {
-                output
-            }
-        } else if self.raw(task) || self.jobs() == 1 || self.is_linear {
+        // 2. per-task `output` style field
+        if let Some(o) = task.and_then(|t| t.output) {
+            return o.style_with_raw(self.raw(task));
+        }
+        // 3. global `task.output` setting (raw downgrades non-suppression styles)
+        if let Some(o) = Settings::get().task.output {
+            return o.style_with_raw(self.raw(task));
+        }
+        // 4. defaults
+        if self.raw(task) || self.jobs() == 1 || self.is_linear {
             TaskOutput::Interleave
         } else {
             TaskOutput::Prefix
@@ -320,6 +327,87 @@ impl OutputHandler {
         }
     }
 
+    /// Replay cached task output through the currently selected output style.
+    pub(crate) fn replay_cached_output(
+        &self,
+        task: &Task,
+        prefix: &str,
+        output: &[TaskCacheOutput],
+    ) {
+        let mode = self.output(Some(task));
+        if mode == TaskOutput::Timed && !task.silent.suppresses_stdout() {
+            let stdout = output
+                .iter()
+                .filter_map(|line| match line {
+                    TaskCacheOutput::Stdout(line) => Some(line.clone()),
+                    TaskCacheOutput::Stderr(_) => None,
+                })
+                .collect::<Vec<_>>();
+            if !stdout.is_empty() {
+                self.timed_outputs
+                    .lock()
+                    .unwrap()
+                    .insert(prefix.to_string(), (SystemTime::now(), stdout));
+            }
+        }
+        for line in output {
+            match line {
+                TaskCacheOutput::Stdout(_) if task.silent.suppresses_stdout() => continue,
+                TaskCacheOutput::Stderr(_) if task.silent.suppresses_stderr() => continue,
+                _ => {}
+            }
+            match (mode, line) {
+                (TaskOutput::Silent, _) => {}
+                (TaskOutput::Prefix, TaskCacheOutput::Stdout(line)) => {
+                    print_stdout(prefix, line);
+                }
+                (TaskOutput::Prefix, TaskCacheOutput::Stderr(line))
+                | (TaskOutput::Timed, TaskCacheOutput::Stderr(line)) => {
+                    print_stderr(prefix, line);
+                }
+                (TaskOutput::KeepOrder, TaskCacheOutput::Stdout(line)) => {
+                    self.keep_order_state.lock().unwrap().on_stdout(
+                        task,
+                        prefix.to_string(),
+                        line.clone(),
+                    );
+                }
+                (TaskOutput::KeepOrder, TaskCacheOutput::Stderr(line)) => {
+                    self.keep_order_state.lock().unwrap().on_stderr(
+                        task,
+                        prefix.to_string(),
+                        line.clone(),
+                    );
+                }
+                (TaskOutput::Replacing, TaskCacheOutput::Stdout(line)) => {
+                    if !line.trim().is_empty() {
+                        self.get_or_init_task_pr(task).set_message(line.clone());
+                    }
+                }
+                (TaskOutput::Replacing, TaskCacheOutput::Stderr(line)) => {
+                    if !line.trim().is_empty() {
+                        self.get_or_init_task_pr(task).println(line.clone());
+                    }
+                }
+                (TaskOutput::Timed, TaskCacheOutput::Stdout(_)) => {}
+                (TaskOutput::Interleave | TaskOutput::Quiet, TaskCacheOutput::Stdout(line)) => {
+                    if console::colors_enabled() {
+                        println!("{line}\x1b[0m");
+                    } else {
+                        println!("{line}");
+                    }
+                }
+                (TaskOutput::Interleave | TaskOutput::Quiet, TaskCacheOutput::Stderr(line)) => {
+                    if console::colors_enabled_stderr() {
+                        eprintln!("{line}\x1b[0m");
+                    } else {
+                        eprintln!("{line}");
+                    }
+                }
+            }
+        }
+    }
+
     fn silent_bool(&self) -> bool {
         self.silent
             || Settings::get().silent
@@ -328,7 +416,9 @@ impl OutputHandler {
     }
 
     pub fn silent(&self, task: Option<&Task>) -> bool {
-        self.silent_bool() || task.is_some_and(|t| t.silent.is_silent())
+        self.silent_bool()
+            || task.is_some_and(|t| t.silent.is_silent())
+            || task.is_some_and(|t| t.output.is_some_and(|o| o.is_silent()))
     }
 
     pub fn quiet(&self, task: Option<&Task>) -> bool {
@@ -337,6 +427,7 @@ impl OutputHandler {
             || self.output.is_some_and(|o| o.is_quiet())
             || Settings::get().task.output.is_some_and(|o| o.is_quiet())
             || task.is_some_and(|t| t.quiet)
+            || task.is_some_and(|t| t.output.is_some_and(|o| o.is_quiet()))
             || self.silent(task)
     }
 
@@ -353,5 +444,35 @@ impl OutputHandler {
         } else {
             self.jobs.unwrap_or(Settings::get().jobs)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_timed_output_preserves_all_stdout_lines() {
+        let handler = OutputHandler::new(OutputHandlerConfig {
+            output: Some(TaskOutput::Timed),
+            silent: false,
+            quiet: false,
+            raw: false,
+            is_linear: true,
+            jobs: None,
+        });
+        let task = Task::default();
+
+        handler.replay_cached_output(
+            &task,
+            "build",
+            &[
+                TaskCacheOutput::Stdout("first".into()),
+                TaskCacheOutput::Stdout("second".into()),
+            ],
+        );
+
+        let outputs = handler.timed_outputs.lock().unwrap();
+        assert_eq!(outputs.get("build").unwrap().1, ["first", "second"]);
     }
 }

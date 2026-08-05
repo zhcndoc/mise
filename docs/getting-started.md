@@ -4,7 +4,7 @@
 
 在几分钟内上手 mise。
 
-## 1. 安装 `mise` CLI {#installing-mise-cli}
+## 1. 安装 `mise` CLI {#installing-mise}
 
 有关安装 mise 的其他方式（`macport`、`apt`、`yum`、`nix` 等），请参见[安装 mise](/installing-mise)。
 
@@ -26,12 +26,6 @@ curl https://mise.run | sh
 
 - `~/.local/bin` 不需要在 `PATH` 中。mise 在[激活](#activate-mise)时会自动将其自身目录添加到 `PATH`
   中。
-
-== Brew
-
-```shell
-brew install mise
-```
 
 == Windows
 ::: code-group
@@ -184,7 +178,7 @@ Invoke-Item $profile
 
 - 如果不使用 PowerShell，请将 `<homedir>\AppData\Local\mise\shims` 添加到 `PATH`。
 
-== Other package managers
+== 其他包管理器
 
 ::: code-group
 
@@ -313,7 +307,7 @@ rg --version
 
 你也可以直接编辑 `mise.toml`，而不是使用 `mise use`——效果是一样的。编辑后运行 `mise install` 来安装这些工具。
 
-更多生态系统和细节请参见 [Backends](/dev-tools/backends/)。
+更多生态系统和细节请参见 [后端](/dev-tools/backends/)。
 
 ## 信任配置文件 {#trust}
 
@@ -382,14 +376,14 @@ mise 会在运行任务之前自动安装 `mise.toml` 中的所有工具。
 
 ## 7. 下一步 {#next-steps}
 
-请按照 [walkthrough](/walkthrough) 查看更多关于如何使用 mise 的示例。
+请按照 [操作指南](/walkthrough) 查看更多关于如何使用 mise 的示例。
 
 ### 设置自动补全 {#autocompletion}
 
-请参阅 [autocompletion](/installing-mise.html#autocompletion) 了解如何为你的 shell 设置自动补全。
+请参阅 [自动补全](/installing-mise.html#autocompletion) 了解如何为你的 shell 设置自动补全。
 
 ### GitHub API 速率限制 {#github-api-rate-limiting}
 
 ::: warning
-mise 中的许多工具都需要 GitHub API。未认证的请求通常会受到速率限制——如果你看到 4xx 错误，请参阅 [GitHub Tokens](/dev-tools/github-tokens.html) 了解如何配置身份验证。
+mise 中的许多工具都需要 GitHub API。未认证的请求通常会受到速率限制——如果你看到 4xx 错误，请参阅 [GitHub 令牌](/dev-tools/github-tokens.html) 了解如何配置身份验证。
 :::

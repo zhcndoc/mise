@@ -2,6 +2,7 @@
 # `mise uninstall`
 
 - **用法**: `mise uninstall [FLAGS] [INSTALLED_TOOL@VERSION]…`
+- **作用**: 破坏性操作 — 可能会删除或不可逆地覆盖
 - **源代码**: [`src/cli/uninstall.rs`](https://github.com/jdx/mise/blob/main/src/cli/uninstall.rs)
 
 移除已安装的工具版本

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::sync::Arc;
 
 use clap::ValueHint;
 use duct::IntoExecutablePath;
@@ -17,7 +18,7 @@ use crate::env;
 use crate::env_diff::EnvDiff;
 use crate::sandbox::SandboxConfig;
 use crate::toolset::env_cache::CachedEnv;
-use crate::toolset::{InstallOptions, ResolveOptions, ToolsetBuilder};
+use crate::toolset::{InstallOptions, ResolveOptions, Toolset, ToolsetBuilder};
 
 /// Execute a command with tool(s) set
 ///
@@ -109,7 +110,7 @@ impl Exec {
             env::reset_env_cache_key();
         }
 
-        let mut config = Config::get().await?;
+        let config = Config::get().await?;
 
         // Check if any tool arg explicitly specified @latest
         // If so, resolve to the actual latest version from the registry (not just latest installed)
@@ -128,7 +129,7 @@ impl Exec {
             Default::default()
         };
 
-        let mut ts = measure!("toolset", {
+        let ts = measure!("toolset", {
             ToolsetBuilder::new()
                 .with_args(&self.tool)
                 .with_default_to_latest(true)
@@ -137,6 +138,28 @@ impl Exec {
                 .await?
         });
 
+        self.run_with_context(config, ts, resolve_options, has_explicit_latest)
+            .await
+    }
+
+    /// Execute with a toolset that the shim path has already resolved while
+    /// locating the delegated binary.
+    pub(crate) async fn run_with_toolset(
+        self,
+        config: Arc<Config>,
+        ts: Toolset,
+    ) -> eyre::Result<()> {
+        self.run_with_context(config, ts, ResolveOptions::default(), false)
+            .await
+    }
+
+    async fn run_with_context(
+        self,
+        mut config: Arc<Config>,
+        mut ts: Toolset,
+        resolve_options: ResolveOptions,
+        has_explicit_latest: bool,
+    ) -> eyre::Result<()> {
         let opts = InstallOptions {
             force: false,
             jobs: self.jobs,
@@ -234,17 +257,23 @@ impl Exec {
             args.insert(0, "-C".into());
         }
 
-        // Build sandbox config from CLI flags.
-        let mut sandbox = SandboxConfig {
-            deny_read: self.deny_all || self.deny_read,
-            deny_write: self.deny_all || self.deny_write,
-            deny_net: self.deny_all || self.deny_net,
-            deny_env: self.deny_all || self.deny_env,
-            allow_read: self.allow_read,
-            allow_write: self.allow_write,
-            allow_net: self.allow_net,
-            allow_env: self.allow_env,
-        };
+        // Build sandbox config from settings and CLI flags.
+        let mut sandbox = SandboxConfig::from_settings_and_cli(
+            &Settings::get().sandbox,
+            self.deny_all,
+            SandboxConfig {
+                deny_read: self.deny_read,
+                deny_write: self.deny_write,
+                deny_net: self.deny_net,
+                deny_env: self.deny_env,
+                allow_read: self.allow_read,
+                allow_write: self.allow_write,
+                allow_net: self.allow_net,
+                allow_env: self.allow_env,
+                pass_through_env: vec![],
+                cache_env: vec![],
+            },
+        );
         sandbox.resolve_paths();
 
         if sandbox.is_active() {
@@ -272,10 +301,20 @@ where
     U: IntoIterator,
     U::Item: Into<OsString>,
 {
+    // Capture the marker before deny-env removes variables from the process.
+    // The lazy state must retain the dispatching shim for candidate filtering.
+    drop(env::MISE_SHIM_PATH.read().unwrap());
     if sandbox.effective_deny_env() {
-        // When env is sandboxed, clear all vars and only set the filtered ones
-        for (k, _) in std::env::vars() {
-            if !env.contains_key(&k) {
+        // When env is sandboxed, clear all vars and only set the filtered ones.
+        //
+        // Deliberately iterates vars_os() rather than env::vars_safe(): vars_safe()
+        // drops a pair when *either* the key or the value is not valid UTF-8, so a
+        // variable with a non-UTF-8 value (e.g. SECRET=<binary>) would never be
+        // visited here and would survive --deny-env into the sandboxed child.
+        // A key that is not valid UTF-8 can never be present in `env` (a
+        // BTreeMap<String, String>), so treating it as "not allowed" is correct.
+        for (k, _) in std::env::vars_os() {
+            if !k.to_str().is_some_and(|key| env.contains_key(key)) {
                 env::remove_var(&k);
             }
         }
@@ -300,34 +339,51 @@ where
             // User-configured paths (_.path/venv) maintain their position
             // relative to tool paths since both are "mise-added".
             // The child process still inherits the full unmodified PATH.
-            let user_shims = &*crate::dirs::SHIMS;
-            let sys_shims = crate::env::MISE_SYSTEM_DATA_DIR.join("shims");
-            let is_shims_dir = |p: &std::path::PathBuf| {
-                let expanded = crate::file::replace_path(p);
-                crate::file::paths_eq(&expanded, user_shims)
-                    || crate::file::paths_eq(&expanded, &sys_shims)
-            };
             let pristine: std::collections::HashSet<_> = crate::env::PATH.iter().collect();
             let all_paths: Vec<_> = std::env::split_paths(&OsString::from(path_val)).collect();
             // Mise-added paths first (preserving relative order)
             let mise_added: Vec<_> = all_paths
                 .iter()
-                .filter(|p| !pristine.contains(p))
+                .filter(|p| !pristine.contains(p) && !crate::file::is_mise_shims_dir(p))
                 .cloned()
                 .collect();
             // Then original system paths (minus shims)
             let original: Vec<_> = all_paths
                 .iter()
-                .filter(|p| pristine.contains(p) && !is_shims_dir(p))
+                .filter(|p| pristine.contains(p) && !crate::file::is_mise_shims_dir(p))
                 .cloned()
                 .collect();
             std::env::join_paths(mise_added.iter().chain(original.iter())).unwrap()
         });
-        match which::which_in(&program, lookup_path, cwd) {
-            Ok(resolved) => resolved.into_os_string(),
+        let program_name = program.to_string_lossy().into_owned();
+        let is_shim_dispatch = env::MISE_SHIM_PATH.read().unwrap().is_some();
+        match which::which_in_all(&program, lookup_path, cwd) {
+            Ok(mut candidates) => {
+                match candidates.find(|candidate| !crate::file::is_active_mise_shim(candidate)) {
+                    Some(resolved) => resolved.into_os_string(),
+                    // When invoked as a shim (`__MISE_SHIM_PATH` set), give the
+                    // actionable `which_shim`-style error rather than the opaque
+                    // `cannot find binary path` (discussion #11183).
+                    None if is_shim_dispatch => {
+                        return Err(crate::shims::err_shim_not_found(&program_name).await);
+                    }
+                    None => program, // Fall back to original if resolution fails
+                }
+            }
+            Err(which::Error::CannotFindBinaryPath) if is_shim_dispatch => {
+                return Err(crate::shims::err_shim_not_found(&program_name).await);
+            }
+            Err(err) if is_shim_dispatch => return Err(err.into()),
             Err(_) => program, // Fall back to original if resolution fails
         }
     };
+    if crate::file::is_active_mise_shim(std::path::Path::new(&program)) {
+        return Err(eyre::eyre!(
+            "recursive shim invocation detected: {}",
+            program.to_string_lossy()
+        ));
+    }
+    env::remove_var(env::MISE_SHIM_PATH_ENV);
     // Apply sandbox (Landlock/seccomp on Linux, sandbox-exec on macOS)
     let args_str: Vec<String> = args
         .iter()
@@ -369,13 +425,6 @@ where
     // Reorder PATH for program resolution: mise-added paths first, then
     // original system paths (minus shims). See Unix version for full rationale.
     let lookup_path = env.get(&*env::PATH_KEY).map(|path_val| {
-        let user_shims = &*crate::dirs::SHIMS;
-        let sys_shims = crate::env::MISE_SYSTEM_DATA_DIR.join("shims");
-        let is_shims = |p: &std::path::PathBuf| {
-            let expanded = crate::file::replace_path(p);
-            crate::file::paths_eq(&expanded, user_shims)
-                || crate::file::paths_eq(&expanded, &sys_shims)
-        };
         let pristine: std::collections::HashSet<_> = crate::env::PATH
             .iter()
             .map(|p| {
@@ -393,7 +442,7 @@ where
                     .to_string_lossy()
                     .to_lowercase()
                     .replace('/', "\\");
-                !pristine.contains(&normalized)
+                !pristine.contains(&normalized) && !crate::file::is_mise_shims_dir(p)
             })
             .cloned()
             .collect();
@@ -404,13 +453,36 @@ where
                     .to_string_lossy()
                     .to_lowercase()
                     .replace('/', "\\");
-                pristine.contains(&normalized) && !is_shims(p)
+                pristine.contains(&normalized) && !crate::file::is_mise_shims_dir(p)
             })
             .cloned()
             .collect();
         std::env::join_paths(mise_added.iter().chain(original.iter())).unwrap()
     });
-    let program = which::which_in(program, lookup_path, cwd)?;
+    // Capture the requested program name before `which_in_all` consumes it, so
+    // a resolution failure while dispatching a shim can name the tool.
+    let program_name = program.to_string_lossy().into_owned();
+    let is_shim_dispatch = env::MISE_SHIM_PATH.read().unwrap().is_some();
+    let resolved = match which::which_in_all(program, lookup_path, cwd) {
+        Ok(mut candidates) => {
+            candidates.find(|candidate| !crate::file::is_active_mise_shim(candidate))
+        }
+        Err(which::Error::CannotFindBinaryPath) if is_shim_dispatch => {
+            return Err(crate::shims::err_shim_not_found(&program_name).await);
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let program = match resolved {
+        Some(program) => program,
+        // When invoked as a shim (`__MISE_SHIM_PATH` set), give the actionable
+        // `which_shim`-style error instead of the opaque `cannot find binary
+        // path` (discussion #11183).
+        None if is_shim_dispatch => {
+            return Err(crate::shims::err_shim_not_found(&program_name).await);
+        }
+        None => return Err(which::Error::CannotFindBinaryPath.into()),
+    };
+    env::remove_var(env::MISE_SHIM_PATH_ENV);
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
 
     // Windows does not support exec in the same way as Unix,
@@ -424,18 +496,16 @@ where
     // `mise exec -- cmd /c "echo one" two` is not reinterpreted as a shell body.
     // cwd is intentionally inherited from the process here, matching the duct
     // fallback below; the resolved `cwd` above governs program lookup only.
-    if shell_body_mode {
-        if let (Some(prog), [.., last]) = (program.to_str(), args.as_slice()) {
-            let flags: Vec<String> = args[..args.len() - 1]
-                .iter()
-                .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-            let body = last.to_string_lossy();
-            if let Some(mut c) = crate::path::cmd_verbatim_command(prog, &flags, &body) {
-                match c.status()?.code() {
-                    Some(code) => std::process::exit(code),
-                    None => return Err(eyre!("command failed: terminated by signal")),
-                }
+    if shell_body_mode && let (Some(prog), [.., last]) = (program.to_str(), args.as_slice()) {
+        let flags: Vec<String> = args[..args.len() - 1]
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let body = last.to_string_lossy();
+        if let Some(mut c) = crate::path::cmd_verbatim_command(prog, &flags, &body) {
+            match c.status()?.code() {
+                Some(code) => return Err(crate::request_exit(code)),
+                None => return Err(eyre!("command failed: terminated by signal")),
             }
         }
     }
@@ -443,9 +513,7 @@ where
     let cmd = cmd::cmd(program, args);
     let res = cmd.unchecked().run()?;
     match res.status.code() {
-        Some(code) => {
-            std::process::exit(code);
-        }
+        Some(code) => Err(crate::request_exit(code)),
         None => Err(eyre!("command failed: terminated by signal")),
     }
 }

@@ -60,8 +60,8 @@ pub struct AquaPackage {
     pub url: String,
     pub description: Option<String>,
     pub format: String,
-    pub rosetta2: bool,
-    pub windows_arm_emulation: bool,
+    pub rosetta2: Option<bool>,
+    pub windows_arm_emulation: Option<bool>,
     pub complete_windows_ext: Option<bool>,
     pub windows_ext: String,
     pub append_ext: Option<bool>,
@@ -87,7 +87,8 @@ pub struct AquaPackage {
     version_constraint: String,
     #[rkyv(omit_bounds)]
     pub version_overrides: Vec<AquaPackage>,
-    pub no_asset: bool,
+    pub no_asset: Option<bool>,
+    pub private: bool,
     pub error_message: Option<String>,
     pub path: Option<String>,
     #[serde(skip)]
@@ -381,8 +382,8 @@ impl Default for AquaPackage {
             url: String::new(),
             description: None,
             format: String::new(),
-            rosetta2: false,
-            windows_arm_emulation: false,
+            rosetta2: None,
+            windows_arm_emulation: None,
             complete_windows_ext: None,
             windows_ext: String::new(),
             append_ext: None,
@@ -403,7 +404,8 @@ impl Default for AquaPackage {
             overrides: Vec::new(),
             version_constraint: String::new(),
             version_overrides: Vec::new(),
-            no_asset: false,
+            no_asset: None,
+            private: false,
             error_message: None,
             path: None,
             var_values: HashMap::new(),
@@ -476,18 +478,28 @@ impl AquaPackage {
     }
 
     fn version_override(&self, versions: &[&str]) -> Option<&AquaPackage> {
+        // Aqua treats a package without a top-level constraint as unconditional.
+        // In that case version overrides are not considered.
+        if self.version_constraint.is_empty() {
+            return Some(self);
+        }
         let expressions = versions
             .iter()
-            .map(|v| (self.expr_parser(v), self.expr_ctx(v)))
+            .map(|v| (*v, self.expr_parser(v), self.expr_ctx(v)))
             .collect_vec();
         vec![self]
             .into_iter()
             .chain(self.version_overrides.iter())
             .find(|vo| {
-                if vo.version_constraint.is_empty() {
-                    true
-                } else {
-                    expressions.iter().any(|(expr, ctx)| {
+                expressions.iter().any(|(version, expr, ctx)| {
+                    let version_prefix =
+                        vo.version_prefix.as_ref().or(self.version_prefix.as_ref());
+                    if version_prefix.is_some_and(|prefix| !version.starts_with(prefix)) {
+                        return false;
+                    }
+                    if vo.version_constraint.is_empty() {
+                        true
+                    } else {
                         expr.eval(&vo.version_constraint, ctx)
                             .map_err(|e| {
                                 log::debug!("error parsing {}: {e}", vo.version_constraint)
@@ -495,8 +507,8 @@ impl AquaPackage {
                             .unwrap_or(false.into())
                             .as_bool()
                             .unwrap()
-                    })
-                }
+                    }
+                })
             })
     }
 
@@ -710,8 +722,8 @@ impl AquaPackage {
     }
 
     fn actual_arch<'a>(&self, os: &str, arch: &'a str) -> &'a str {
-        if (os == "darwin" && arch == "arm64" && self.rosetta2)
-            || (os == "windows" && arch == "arm64" && self.windows_arm_emulation)
+        if (os == "darwin" && arch == "arm64" && self.rosetta2.unwrap_or(false))
+            || (os == "windows" && arch == "arm64" && self.windows_arm_emulation.unwrap_or(false))
         {
             "amd64"
         } else {
@@ -992,11 +1004,11 @@ fn apply_override(mut orig: AquaPackage, avo: &AquaPackage) -> AquaPackage {
     if !avo.format.is_empty() {
         orig.format = avo.format.clone();
     }
-    if avo.rosetta2 {
-        orig.rosetta2 = true;
+    if avo.rosetta2.is_some() {
+        orig.rosetta2 = avo.rosetta2;
     }
-    if avo.windows_arm_emulation {
-        orig.windows_arm_emulation = true;
+    if avo.windows_arm_emulation.is_some() {
+        orig.windows_arm_emulation = avo.windows_arm_emulation;
     }
     if avo.complete_windows_ext.is_some() {
         orig.complete_windows_ext = avo.complete_windows_ext;
@@ -1082,8 +1094,8 @@ fn apply_override(mut orig: AquaPackage, avo: &AquaPackage) -> AquaPackage {
         }
     }
 
-    if avo.no_asset {
-        orig.no_asset = true;
+    if avo.no_asset.is_some() {
+        orig.no_asset = avo.no_asset;
     }
     if let Some(error_message) = avo.error_message.clone() {
         orig.error_message = Some(error_message);
@@ -1488,6 +1500,145 @@ packages:
     }
 
     #[test]
+    fn test_registry_package_private_defaults_to_false() {
+        let pkg = first_registry_package("packages:\n  - type: github_release\n");
+
+        assert!(!pkg.private);
+    }
+
+    #[test]
+    fn test_registry_package_preserves_private() {
+        let pkg =
+            first_registry_package("packages:\n  - type: github_release\n    private: true\n");
+
+        assert!(pkg.private);
+    }
+
+    #[test]
+    fn test_registry_package_private_survives_version_override() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - type: github_release
+    private: true
+    version_constraint: "false"
+    version_overrides:
+      - version_constraint: "true"
+        asset: tool.tar.gz
+"#,
+        )
+        .with_version(&["1.0.0"], "linux", "amd64");
+
+        assert!(pkg.private);
+    }
+
+    #[test]
+    fn test_emulation_flags_can_be_disabled_by_version_override() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - asset: tool-{{.OS}}-{{.Arch}}
+    rosetta2: true
+    windows_arm_emulation: true
+    version_constraint: "false"
+    version_overrides:
+      - version_constraint: "true"
+        rosetta2: false
+        windows_arm_emulation: false
+"#,
+        )
+        .with_version(&["1.0.0"], "darwin", "arm64");
+
+        assert_eq!(pkg.rosetta2, Some(false));
+        assert_eq!(pkg.windows_arm_emulation, Some(false));
+        assert_eq!(
+            pkg.asset("1.0.0", "darwin", "arm64").unwrap(),
+            "tool-darwin-arm64"
+        );
+        assert_eq!(
+            pkg.asset("1.0.0", "windows", "arm64").unwrap(),
+            "tool-windows-arm64.exe"
+        );
+    }
+
+    #[test]
+    fn test_emulation_flags_can_be_disabled_by_platform_override() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - asset: tool-{{.OS}}-{{.Arch}}
+    rosetta2: true
+    overrides:
+      - goos: darwin
+        rosetta2: false
+"#,
+        )
+        .with_version(&["1.0.0"], "darwin", "arm64");
+
+        assert_eq!(pkg.rosetta2, Some(false));
+        assert_eq!(
+            pkg.asset("1.0.0", "darwin", "arm64").unwrap(),
+            "tool-darwin-arm64"
+        );
+    }
+
+    #[test]
+    fn test_no_asset_can_be_disabled_by_version_override() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - no_asset: true
+    version_constraint: "false"
+    version_overrides:
+      - version_constraint: "true"
+        no_asset: false
+"#,
+        )
+        .with_version(&["1.0.0"], "linux", "amd64");
+
+        assert_eq!(pkg.no_asset, Some(false));
+    }
+
+    #[test]
+    fn test_omitted_emulation_flags_preserve_base_values() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - asset: tool-{{.OS}}-{{.Arch}}
+    rosetta2: true
+    version_constraint: "false"
+    version_overrides:
+      - version_constraint: "true"
+        format: raw
+"#,
+        )
+        .with_version(&["1.0.0"], "darwin", "arm64");
+
+        assert_eq!(pkg.rosetta2, Some(true));
+        assert_eq!(
+            pkg.asset("1.0.0", "darwin", "arm64").unwrap(),
+            "tool-darwin-amd64"
+        );
+    }
+
+    #[test]
+    fn test_omitted_no_asset_preserves_base_value() {
+        let pkg = first_registry_package(
+            r#"
+packages:
+  - no_asset: true
+    version_constraint: "false"
+    version_overrides:
+      - version_constraint: "true"
+        format: raw
+"#,
+        )
+        .with_version(&["1.0.0"], "linux", "amd64");
+
+        assert_eq!(pkg.no_asset, Some(true));
+    }
+
+    #[test]
     fn test_github_artifact_attestations_predicate_type() {
         let pkg = first_registry_package(
             r#"
@@ -1785,6 +1936,79 @@ packages:
         // which sorts before numeric versions.
         assert!(result.error_message.is_some());
         assert!(result.asset.is_empty());
+    }
+
+    #[test]
+    fn test_version_override_matches_version_prefix() {
+        let pkg = AquaPackage {
+            version_constraint: "false".to_string(),
+            version_overrides: vec![
+                AquaPackage {
+                    version_constraint: "semver(\">= 1.17.0\")".to_string(),
+                    version_prefix: Some("oxlint_v".to_string()),
+                    error_message: Some("unavailable".to_string()),
+                    ..Default::default()
+                },
+                AquaPackage {
+                    version_constraint: "true".to_string(),
+                    version_prefix: Some("apps_v".to_string()),
+                    asset: "oxlint.tar.gz".to_string(),
+                    format: "tar.gz".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let apps = pkg.version_override(&["apps_v1.76.0"]).unwrap();
+        assert_eq!(apps.version_prefix.as_deref(), Some("apps_v"));
+        assert!(apps.error_message.is_none());
+        assert_eq!(apps.asset, "oxlint.tar.gz");
+
+        let oxlint = pkg.version_override(&["oxlint_v1.76.0"]).unwrap();
+        assert_eq!(oxlint.version_prefix.as_deref(), Some("oxlint_v"));
+        assert_eq!(oxlint.error_message.as_deref(), Some("unavailable"));
+    }
+
+    #[test]
+    fn test_unconditional_version_override_matches_version_prefix() {
+        let pkg = AquaPackage {
+            version_constraint: "false".to_string(),
+            version_overrides: vec![
+                AquaPackage {
+                    version_prefix: Some("old_v".to_string()),
+                    error_message: Some("unavailable".to_string()),
+                    ..Default::default()
+                },
+                AquaPackage {
+                    version_prefix: Some("new_v".to_string()),
+                    asset: "tool.tar.gz".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let old = pkg.version_override(&["old_v1.0.0"]).unwrap();
+        assert_eq!(old.version_prefix.as_deref(), Some("old_v"));
+        assert_eq!(old.error_message.as_deref(), Some("unavailable"));
+
+        let new = pkg.version_override(&["new_v1.0.0"]).unwrap();
+        assert_eq!(new.version_prefix.as_deref(), Some("new_v"));
+        assert_eq!(new.asset, "tool.tar.gz");
+    }
+
+    #[test]
+    fn test_unconditional_package_ignores_version_prefix() {
+        let pkg = AquaPackage {
+            version_prefix: Some("jq-".to_string()),
+            asset: "jq-{{.OS}}-{{.Arch}}".to_string(),
+            ..Default::default()
+        };
+
+        let resolved = pkg.version_override(&["1.8.1"]).unwrap();
+        assert_eq!(resolved.version_prefix.as_deref(), Some("jq-"));
+        assert_eq!(resolved.asset, "jq-{{.OS}}-{{.Arch}}");
     }
 
     #[test]

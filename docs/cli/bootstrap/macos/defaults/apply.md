@@ -1,8 +1,9 @@
 <!-- 由 usage-cli 根据 usage 规范生成 -->
 # `mise bootstrap macos defaults apply`
 
-- **用法**: `mise bootstrap macos defaults apply [-n --dry-run] [-y --yes]`
-- **源代码**: [`src/cli/bootstrap/macos/defaults/apply.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/macos/defaults/apply.rs)
+- **用法**：`mise bootstrap macos defaults apply [-n --dry-run] [-y --yes]`
+- **作用**：修改状态
+- **源代码**：[`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

@@ -1,4 +1,4 @@
-# 依赖 <Badge type="warning" text="experimental" />
+# 依赖 <Badge type="warning" text="实验性" />
 
 `mise deps` 命令通过对源文件进行哈希处理来管理项目依赖
 （例如，`package-lock.json`），并在检测到更改时运行安装命令。
@@ -25,14 +25,14 @@ mise deps remove npm:lodash
 
 ## 配置
 
-在 `mise.toml` 中配置 deps providers：
+在 `mise.toml` 中配置依赖提供程序：
 
 ```toml
-# 内置 npm provider（自动检测 lockfile）
+# 内置 npm 提供程序（自动检测锁文件）
 [deps.npm]
 auto = true  # 在 mise x/run 之前自动运行
 
-# 适用于其他包管理器的内置 providers
+# 适用于其他包管理器的内置提供程序
 [deps.yarn]
 [deps.pnpm]
 [deps.bun]
@@ -45,7 +45,7 @@ auto = true  # 在 mise x/run 之前自动运行
 [deps.bundler]
 [deps.composer]
 
-# 禁用特定 providers
+# 禁用特定提供程序
 [deps]
 disable = ["npm"]
 ```
@@ -72,6 +72,39 @@ mise 为常见的包管理器提供了内置提供者：
 | `flutter`  | `pubspec.yaml`, `pubspec.lock`                         | `.dart_tool/`         | `flutter pub get`                    |
 
 只有在 `mise.toml` 中显式配置且其锁文件存在时，内置提供者才会启用。
+
+## Monorepo
+
+默认情况下，`mise deps` 只运行当前配置根目录中的提供程序。要运行每个显式配置的 monorepo 根目录中的提供程序，请使用 `--monorepo`：
+
+```toml
+monorepo_root = true
+
+[monorepo]
+config_roots = ["apps/*", "packages/*"]
+```
+
+```bash
+mise deps --monorepo
+```
+
+这要求显式设置 [`[monorepo].config_roots`](/tasks/monorepo.html#explicit-config-roots)；mise 不会搜索任意子目录中的依赖提供程序。monorepo 根配置中的提供程序也会被包含，因为该配置属于每个选定配置根目录的层级结构，这与 `mise install --monorepo` 的行为一致。
+
+Monorepo 提供程序 ID 包含其配置根目录，因此同一个提供程序可以出现在多个项目中。例如，两个 uv 提供程序分别命名为 `//apps/api:uv` 和 `//apps/worker:uv`。在使用 `--only`、`--skip` 或位置参数形式的提供程序参数时，请使用限定名称：
+
+```bash
+mise deps --monorepo --only //apps/api:uv
+mise deps install //apps/worker:uv --monorepo
+```
+
+不带 `//` 前缀的提供程序依赖项会在同一配置根目录中解析。因此，`apps/api` 中配置了 `depends = ["uv"]` 的提供程序依赖于 `//apps/api:uv`。
+
+对于单个嵌套项目，`dir` 选项仍然是更简单的替代方案：
+
+```toml
+[deps.uv]
+dir = "apps/api"
+```
 
 ## 添加和移除包
 
@@ -108,17 +141,17 @@ run = "npx prisma generate"
 
 ### 提供者选项
 
-| 选项          | 类型      | 描述                                                                  |
-| ------------- | --------- | --------------------------------------------------------------------- |
-| `auto`        | bool      | 在 `mise x` 和 `mise run` 之前自动运行（默认：false）                  |
-| `sources`     | string[]  | 要检查变更的文件/模式                                                   |
-| `outputs`     | string[]  | 该提供者被视为最新时必须存在的文件/目录                                     |
-| `run`         | string    | 变旧时要运行的命令                                                     |
-| `env`         | table     | 要设置的环境变量                                                       |
-| `dir`         | string    | 命令的工作目录                                                         |
-| `description` | string    | 输出中显示的描述                                                       |
-| `depends`     | string[]  | 在此提供者运行前必须完成的其他提供者名称                                     |
-| `timeout`     | string    | `run` 命令的超时时间，例如 `"30s"`、`"5m"`（默认：无超时）               |
+| 选项          | 类型     | 描述                                                                 |
+| ------------- | -------- | -------------------------------------------------------------------- |
+| `auto`        | bool     | 在 `mise x` 和 `mise run` 之前自动运行（默认：false）                |
+| `sources`     | string[] | 用于检查变更的文件/模式                                               |
+| `outputs`     | string[] | 提供者被视为最新时必须存在的文件/目录                                  |
+| `run`         | string   | 过时时要运行的命令                                                    |
+| `env`         | table    | 要设置的环境变量                                                      |
+| `dir`         | string   | sources、outputs 和命令的基础目录                                     |
+| `description` | string   | 输出中显示的描述                                                      |
+| `depends`     | string[] | 此提供者运行前必须完成的其他提供者名称                                |
+| `timeout`     | string   | 运行命令的超时时间，例如 `"30s"`、`"5m"`（默认：无超时）              |
 
 ## 新鲜度检查
 
@@ -133,7 +166,7 @@ mise 使用 blake3 内容哈希来判断自上次成功运行以来源文件是�
 - 如果你修改了 `package-lock.json`，`node_modules/` 将被视为过期
 - 如果 `node_modules/` 不存在，provider 总是处于过期状态
 - 如果源文件不存在，则 provider 被视为新鲜状态（无需处理）
-- 首次运行时（没有已存储状态），provider 总是被视为过期状态
+- 首次运行时（没有已存储状态），provider 总是被视为过期状态。
 
 ## 自动安装
 

@@ -1,4 +1,4 @@
-# brew <Badge type="warning" text="experimental" />
+# brew
 
 Homebrew 配方和 cask —— **无需安装 Homebrew**。
 
@@ -16,7 +16,7 @@ Linux 上是 `/home/linuxbrew/.linuxbrew`。它会从
 formulae.brew.sh API 获取元数据，解析运行时依赖闭包，从 ghcr.io 下载
 预编译的 bottles（会验证 sha256 校验和），并执行与 `brew` 倒入 bottle
 时相同的重定位、代码签名和链接工作。没有可用 bottle 的配方也会从源代码构建，
-同样不需要 Homebrew（见 [Source formulae](#source-formulae)）。mise
+同样不需要 Homebrew（见 [源代码配方](#source-formulae)）。mise
 对 homebrew/core 配方从不调用 `brew`。
 
 当第三方 tap 发布了 Homebrew API 元数据（`api/formula/<name>.json`
@@ -52,7 +52,7 @@ mise bootstrap packages brew tap acme/tools https://github.com/acme/homebrew-too
 mise bootstrap packages brew untap acme/tools
 ```
 
-## Casks
+## Cask
 
 Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 tap API 元数据）获取 cask 元数据，下载制品，在 cask 提供 sha256 时验证其 sha256，解压归档文件，并将应用程序包安装到 `/Applications`，同时将版本记录在 `<prefix>/Caskroom` 中。
 
@@ -62,7 +62,9 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 "brew-cask:homebrew/cask/visual-studio-code" = "latest"
 ```
 
-`brew-cask` 当前支持应用程序包 cask（`app` 制品）、二进制 cask（`binary` 制品）以及来自 dmg 和常见归档格式的简单 macOS 安装包（`pkg` 制品）。二进制制品会在 Caskroom 中暂存，并链接到 Homebrew 前缀中，通常位于 `<prefix>/bin`。包安装程序会通过 mise 的常规系统包 sudo 路径运行，因此非交互式运行永远不会因等待密码而挂起。Pkg cask 必须在其 `uninstall` 或 `zap` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写到 Caskroom 之外后验证已安装状态。需要自定义安装选项、服务或其他 cask 制品类型的 cask 会直接失败，并返回清晰的“不支持的制品”错误，而不会委托给 Homebrew。诸如 `preflight` 和 `postflight` 之类的生命周期元数据不会执行，生成的 shell 补全也不会安装。
+`brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制文件和生成的命令包装器 cask（`binary` 和 `command_wrapper` 制品）、简单的 macOS 安装器软件包（`pkg` 制品），以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。软件包安装器会通过 mise 的常规系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而挂起。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，以便在安装器将文件写入 Caskroom 之外后，mise 能够验证其安装状态。`zap` 的 `pkgutil` ID 被视为清理元数据，而不是安装收据。对于包含生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持结构化的 `preflight_steps` 和 `postflight_steps`，用于针对 `staged_path` 执行 `move`/`remove` 操作，使用 Homebrew 序列化命令基础、参数、环境、守卫条件和 sudo 设置执行 `run` 操作，以及执行具有与 Homebrew 兼容的名称/完整匹配、重试、通知和失败策略的 `terminate_process` 操作。需要自定义安装器选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会明确报告不受支持的制品错误，而不是委托给 Homebrew。
+
+直接执行的 cask 安装仍由 mise 管理。其完成状态会记录在 `.mise-cask.toml` 中；mise 不会生成 Homebrew 私有的 `.metadata` 收据。如果某个 cask 已存在 Homebrew 元数据，mise 会保留这些元数据，并在进行修改前失败，而不是接管 Homebrew 的生命周期状态。状态检查使用已记录的安装事实，而不是根据更新后的 cask 定义重新构建这些事实；缺失或未知的收据以及待处理的事务会被报告为不健康状态，以便下一次应用操作能够协调它们。
 
 之所以存在这一点，是因为共享库包——postgres、ffmpeg、imagemagick、php——从根本上说无法由 mise 的按项目后端（如 `aqua:` 或 `github:`）提供：它们的瓶装包是针对固定安装路径和共享依赖树构建的。将它们安装到 Homebrew 的标准前缀，才是让它们正常工作的关键。
 
@@ -84,7 +86,11 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 
 mise 会像 brew 一样将瓶装包倒入 Cellar，并在每个 keg 中写入与 brew 兼容的 `INSTALL_RECEIPT.json` 文件。对于真正的 Homebrew 安装来说，mise 倒入的 keg 看起来就像它自己安装的一样：`brew list`、`brew upgrade` 和 `brew uninstall` 都可以对它们正常工作。反过来，mise 的状态检查会直接读取 Cellar，因此由 brew 安装的 formulae 也会被视为已安装。
 
-mise 会直接读取 Homebrew 前缀，无论这些 formulae 是由 mise 倒入的，还是由真正的 Homebrew 倒入的。它绝不会覆盖前缀中不是自己创建的文件——链接冲突会失败，并列出有问题的文件，而不是直接覆盖它们。
+对于非 keg-only formula，mise 会在 `opt` 记录旁维护 Homebrew 的
+`<prefix>/var/homebrew/linked/<name>` 记录。对于已配置的 formula，如果任一记录缺失，`mise bootstrap packages
+apply` 会在不重新倒入 keg 或替换其公共链接的情况下恢复该记录。只有当旧版 mise 安装现有的公共链接与 keg 的布局匹配时，才会将其识别为已链接。不会执行依赖闭包迁移。
+
+无论 formula 是由 mise 还是由真正的 Homebrew 倒入的，mise 都会直接读取 Homebrew 前缀。它绝不会覆盖前缀中并非由它创建的文件——链接冲突会列出冲突文件并失败，而不会强行覆盖它们。
 
 ## 导入和清理
 
@@ -113,7 +119,7 @@ Homebrew 前缀中的活动 `opt` 链接，并写入如下条目：
 
 `mise bootstrap packages prune --manager brew` 会将当前配置以及可信、可加载、已跟踪的配置作为事实来源。它会移除那些不在已解析依赖闭包中的已链接 Homebrew formulae，这些闭包对应于已配置的 `brew:` 条目，包括由真实 Homebrew 安装的 formulae。
 
-prune 会移除活动 keg、`opt` 链接，以及指向该 keg 的前缀符号链接。使用 `--dry-run` 预览，使用 `--yes` 跳过确认提示。
+Prune 会移除活动 keg、其 `opt` 和已链接 keg 记录，以及指向该 keg 的前缀符号链接。使用 `--dry-run` 可预览操作，使用 `--yes` 可跳过确认提示。
 
 这个命令是 mise 针对 bootstrap packages 的声明式清理，类似于
 [`brew bundle cleanup`](https://docs.brew.sh/Manpage)。它不是上游的
@@ -123,12 +129,12 @@ prune 会移除活动 keg、`opt` 链接，以及指向该 keg 的前缀符号�
 
 对于依赖闭包中的每个公式（先处理依赖项）：
 
-1. **获取** 适用于你的平台的 bottle，来源于 ghcr.io，并根据 API 元数据验证其 sha256。
-2. **提取** 到 Cellar 内的临时目录中（未完成的倒入永远不会作为已安装的软件包可见）。
-3. **重定位**：bottle 会嵌入诸如 `@@HOMEBREW_PREFIX@@` 之类的占位路径。mise 会将它们重写为真实路径——在文本文件中直接替换，在 Mach-O 二进制文件中就地重写并重写 load command（必要时将 load command 扩展到头部填充中，完全像 brew 的 ruby-macho 那样）。在 Linux 上，ELF 解释器和 rpath 的补丁方式与 brew 的 PatchELF gem 相同：无法容纳的新字符串会被移到二进制末尾追加的新段中，解释器则指向 `<prefix>/lib/ld.so`（这是 mise 维护的一个符号链接，指向系统的动态加载器；如果安装了 brewed glibc，则指向它）。
-4. **重新签名**（macOS）：任何被修改过的二进制文件都会使用 `codesign` 进行 ad-hoc 重新签名——这在 arm64 上是必需的，因为内核会终止那些签名不匹配的二进制。
-5. **收据**：写入一个与 brew 兼容的 `INSTALL_RECEIPT.json`。
-6. **链接**：创建 `<prefix>/opt/<name>`，并将 keg 的 `bin`、`lib`、`include`、`share` 等通过符号链接连接到 prefix 中——[keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) 公式会获得 `opt` 链接，但不会像 brew 一样链接到 prefix 中。
+1. **获取**适用于你平台的瓶子（来自 ghcr.io），并根据 API 元数据验证其 sha256 值。
+2. **提取**到 Cellar 内的临时目录中（未完成的倒酒过程永远不会显示为已安装的软件包）。
+3. **重定位**：瓶子中嵌入了类似 `@@HOMEBREW_PREFIX@@` 的占位路径。mise 会将其重写为实际路径——在文本文件和二进制文件支持的可执行文件（例如 zipapp）的 shebang 前导部分中进行纯文本替换，同时保持其负载内容不变；并在 Mach-O 二进制文件中原地重写和重写加载命令（必要时将加载命令扩展到头部填充区域中），其行为与 brew 的 ruby-macho 完全一致。在 Linux 上，ELF 解释器和 rpath 会按照 brew 的 PatchELF gem 的方式进行修补：如果字符串不再适合原位置，就会将其移动到附加在二进制文件末尾的新段中，并将解释器指向 `<prefix>/lib/ld.so`（mise 会维护一个符号链接，将其指向系统的动态加载器；如果安装了通过 brew 构建的 glibc，则指向该 glibc）。
+4. **重新签名**（macOS）：任何被修改的二进制文件都会使用 `codesign` 进行临时签名——在 arm64 上这是必需的，因为内核会终止签名不匹配的二进制文件。
+5. **写入收据**：写入兼容 brew 的 `INSTALL_RECEIPT.json`。
+6. **链接**：创建 `<prefix>/opt/<name>`，并将 keg 的 `bin`、`lib`、`include`、`share` 等目录符号链接到 prefix 中。对于非 keg-only 公式，还会创建 Homebrew 的 linked-keg 记录。[keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) 公式会获得 `opt` 链接，但不会链接到 prefix 中，与 brew 的行为相同。
 
 ## 源码公式
 
@@ -137,7 +143,7 @@ prune 会移除活动 keg、`opt` 链接，以及指向该 keg 的前缀符号�
 1. **Ruby** — 由于公式本身就是 Ruby 代码，mise 会通过其常规工具机制提供一个由 mise 管理的 ruby（预编译、速度快；如果你已配置了 ruby，则会遵循你的配置）。
 2. **Formula** — 该公式的 `.rb` 会从 homebrew/core 下载，并固定到生成 API 元数据时对应的精确 commit，同时使用 API 提供的 sha256 进行校验。
 3. **Source** — 会下载稳定版源码归档，并使用 API 提供的 sha256 进行校验。
-4. **Build deps** — 该公式的构建依赖（cmake、pkgconf、...）会被加入安装闭包，并优先作为常规 bottle 安装。
+4. **Build deps** — 该公式的构建依赖（cmake、pkgconf、……）会被加入安装闭包，并优先作为常规 bottle 安装。
 5. **Build** — mise 使用自己的 Formula-DSL shim 对公式进行求值，并在规范前缀下运行 `def install`，同时将 `PATH`、`PKG_CONFIG_PATH` 和编译器标志指向依赖的 keg。该 keg 会获得与已倒入 bottle 相同、兼容 brew 的收据，并带有 `poured_from_bottle: false`——这与 brew 标记其自身源码构建的方式完全一致。
 
 该 shim 实现了 Formula DSL 中常用的子集
@@ -152,11 +158,11 @@ prune 会移除活动 keg、`opt` 链接，以及指向该 keg 的前缀符号�
 ## 限制
 
 - **Cask 资源覆盖范围故意保持得很窄。** `brew-cask` 支持
-  app bundle、二进制资源，以及来自 dmg 和常见
+  应用包、二进制资源，以及来自 dmg 和常见
   归档格式的简单 pkg 安装器。其他资源类型、不带 `pkgutil` ID 的 pkg 安装器，
   以及带有自定义选项的 pkg 安装器都会明确失败。
 - **未实现 `brew services`。**
-- **未实现 Cask 导入/清理。** 在 cask 卸载语义能够对 app 和 pkg 资源安全之前，`import` 和 `prune` 仅适用于 formula。
+- **未实现 Cask 导入/清理。** 在 cask 卸载语义能够对应用和 pkg 资源安全之前，`import` 和 `prune` 仅适用于 formula。
 - **源码构建覆盖常见的 formula 形态。** mise 的 formula shim
   实现了广泛使用的 DSL 子集（参见
   [源代码 formulae](#source-formulae)）；超出该范围的 formulae 会失败，并清楚地报出不受支持的功能名称。

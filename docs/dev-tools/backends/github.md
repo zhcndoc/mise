@@ -56,6 +56,33 @@ mise install github:user/repo
 "github:cli/cli" = { version = "latest", asset_pattern = "gh_*_linux_x64.tar.gz" }
 ```
 
+::: v-pre
+支持与 [`bin_path`](#bin_path) 相同的模板：`{{ version }}` 以及
+`{{ os() }}` / `{{ arch() }}` 函数（可选的重映射关键字参数）。
+:::
+
+### `additional_asset_patterns`
+
+从同一版本下载其他归档，并按照列出的顺序将其解压到主要资源的安装目录中。当上游项目将一个安装包分发为一个基础归档和一个或多个补充归档时，请使用此选项。
+
+例如，Ollama 将其 Linux AMD64 ROCm 支持发布为一个归档，该归档必须覆盖到常规 Ollama 归档之上：
+
+```toml
+[tools."github:ollama/ollama"]
+version = "latest"
+
+[tools."github:ollama/ollama".platforms]
+linux-x64 = {
+  additional_asset_patterns = ["ollama-linux-amd64-rocm.tar.zst"],
+}
+```
+
+每个模式必须恰好选择一个归档。模式支持与
+[`asset_pattern`](#asset_pattern) 相同的模板语法。补充资源必须是归档；不支持裸二进制文件。解压补充归档时，不会应用主要资源的
+`strip_components`、`bin` 或 `rename_exe` 选项。如果补充归档包含与较早归档相同的路径，则后续归档中的文件会覆盖之前的文件。
+
+启用锁定文件时，mise 会记录每个补充构件的 URL 和校验和，以及任何可用的来源元数据。对于当前平台，来源信息会经过加密验证；跨平台的锁定条目会记录检测到的来源信息，以便在安装时进行验证。`--locked` 安装只会使用已记录的构件列表，如果该列表不完整则会失败。
+
 ### `matching`
 
 将资产选择缩小到名称中包含给定子字符串的项，**同时保留平台自动检测**。不同于 [`asset_pattern`](#asset_pattern)（它会完全替换自动检测），`matching` 只是缩小候选集——自动检测仍会从缩小后的列表中选择正确的 OS/arch，因此同一份配置可以在各个平台上保持可移植性。
@@ -117,7 +144,7 @@ mise use "github:oxc-project/oxc[matching=oxlint,rename_exe=oxlint]@apps_v1.69.0
   - 可用版本显示为 `1.0.0`（已去除前缀）
 - 当 `version_prefix = ""`（空字符串）时：
   - 用户指定 `1.0.0` → mise 搜索 `1.0.0` 标签（无前缀）
-  - 适用于不使用任何前缀的仓库
+  - 适用于不使用任何前缀的仓库。
 
 ### 按平台的特定资源模式
 
@@ -134,7 +161,12 @@ macos-arm64 = { asset_pattern = "gh_*_macOS_arm64.tar.gz" }
 
 ### 同一发布中的多个资产
 
-GitHub 后端为每个工具安装一个 release 资产。如果某个仓库在同一个发布中将多个二进制文件作为单独的资产发布，请为每个二进制文件定义一个工具别名，并将每个别名指向同一个 `github:owner/repo` 后端，然后将每个别名限定到各自的二进制文件。
+存在两种不同的情况：
+
+- 如果这些资产属于同一个安装包，请使用
+  [`additional_asset_patterns`](#additional_asset_patterns)。补充归档文件会被叠加到同一个安装目录中。
+- 如果这些资产是应拥有独立安装目录的独立工具，请为每个二进制文件定义一个工具别名，并将每个别名指向同一个
+  `github:owner/repo` 后端。
 
 优先使用 [`matching`](#matching)（或 [`matching_regex`](#matching_regex)）：它会缩小候选集合，同时**保留平台自动检测**，因此一份配置可在所有操作系统/架构上工作。当按平台区分的资产名称无法以可移植的方式模板化时，这是正确的选择（例如 Rust 的 target triple，如 `oxlint-aarch64-apple-darwin.tar.gz`）。
 
@@ -157,12 +189,15 @@ rename_exe = "oxfmt"
 ```
 
 ::: warning
-每个二进制文件都**必须**有一个独立的别名，这不只是为了整洁。`matching`/`matching_regex` **不属于**安装路径的一部分——安装路径是以工具名称（别名，或者未设置别名时的 `owner/repo`）和版本为键的。用不同的 `matching` 值两次安装同一个 `github:owner/repo` 后端字符串（例如先执行 `mise use "github:owner/repo[matching=tool-a]"`，再执行 `mise use "github:owner/repo[matching=tool-b]"`）会解析到**同一个**目录，因此第二次安装会覆盖第一次。为每个二进制文件提供各自的别名，能让它们拥有各自的安装目录，因此可以共存。
+别名不是叠加机制。每个别名都会创建一个独立的安装目录。
+请将它们用于 `oxlint` 和 `oxfmt` 等独立二进制文件；当两个归档文件必须组合成一个可运行的工具时，请使用
+`additional_asset_patterns`。
 :::
 
 如果二进制文件的名称不是你想要的调用名称，可以添加 [`rename_exe`](#rename_exe)（重命名从压缩包中提取出的可执行文件）或 [`bin`](#bin)（选择/重命名二进制文件，包括单个裸露的非压缩包二进制文件）。
 
-只有在你需要完全手动控制且能够以可移植的方式命名资产时，才使用 [`asset_pattern`](#asset_pattern)（它会替换自动检测，因此任何 `{{os}}`/`{{arch}}` 模板都必须覆盖你目标的所有平台）：
+仅当你需要完全的手动控制，并且能够以可移植的方式命名资产时，才使用 [`asset_pattern`](#asset_pattern)；它会替代自动检测，因此任何 <code v-pre>{{ os() }}</code>/<code v-pre>{{ arch() }}</code>
+模板化都必须覆盖你所针对的每个平台：
 
 ```toml
 [tools.tool-a]
@@ -251,6 +286,17 @@ asset_pattern = "yt-dlp_linux.zip"
 rename_exe = "yt-dlp"  # 将解压后的二进制文件重命名为 yt-dlp
 ```
 
+字符串形式会重命名工具的主要二进制文件（根据仓库名称匹配）。当压缩包中包含**多个**你希望以简洁名称提供的二进制文件时，请改用表格形式——每个键是源文件名（精确文件名或 glob），每个值是新名称：
+
+```toml
+[tools."github:DanielGavin/ols"]
+version = "latest"
+# 压缩包包含 ols-x86_64-unknown-linux-gnu 和 odinfmt-x86_64-unknown-linux-gnu
+rename_exe = { "ols-*" = "ols", "odinfmt-*" = "odinfmt" }
+```
+
+两个二进制文件都会被重命名，并可通过 PATH 使用。如果找不到源文件，将跳过该文件并显示警告；对于丢失可执行位的压缩包（例如 ZIP），系统会恢复其可执行位。
+
 ::: tip
 对于压缩包中内部二进制文件名称与期望名称不同的情况，请使用 `rename_exe`。对于单个二进制文件下载（非压缩包），请使用 `bin`。
 :::
@@ -280,14 +326,31 @@ no_app = true  # 跳过 SwiftFormat.for.Xcode.app.zip，改用 swiftformat.zip
 ### `bin_path`
 
 ::: v-pre
-指定解压后的归档包中包含二进制文件的目录，或下载文件应放置的位置。这支持使用 Tera 模板，并可使用诸如 `{{ version }}`、`{{ os }}`、`{{ arch }}` 以及架构别名（`{{ darwin_os }}`、`{{ amd64_arch }}`、`{{ x86_64_arch }}`、`{{ gnu_arch }}`）等变量：
+指定提取归档文件中包含二进制文件的目录，或存放下载文件的位置。此项支持使用 `{{ version }}` 进行 Tera 模板化，以及使用 `{{ os() }}` / `{{ arch() }}` 函数：
 :::
 
 ```toml
 [tools."github:cli/cli"]
 version = "latest"
-bin_path = "cli-{{ version }}/bin" # expands to cli-1.0.0/bin
+bin_path = "cli-{{ version }}/bin" # 展开为 cli-1.0.0/bin
 ```
+
+这两个函数都接受关键字参数，用于重新映射 mise 将输出的值（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），以适应上游项目使用不同目录名称的情况：
+
+```toml
+[tools."github:pizlonator/fil-c"]
+version = "latest"
+# 展开为 filc-0.681-linux-x86_64/build/bin
+bin_path = 'filc-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/build/bin'
+```
+
+::: tip
+当模板包含双引号时，请像上面一样使用单引号包裹的 TOML 字符串。
+:::
+
+::: v-pre
+不存在单独的 `{{ os }}` / `{{ arch }}` 变量，也不存在 `{{ x86_64_arch }}` 风格的别名——如需获取这些名称，应使用 `{{ arch(x64="x86_64", arm64="aarch64") }}`。
+:::
 
 **二进制路径查找顺序：**
 
@@ -296,15 +359,16 @@ bin_path = "cli-{{ version }}/bin" # expands to cli-1.0.0/bin
 3. 如果安装路径根目录包含可执行文件，则使用安装路径根目录
 4. 如果不存在 `bin/` 目录，则在子目录中搜索 `bin/` 目录
 5. 如果未找到任何 `bin/` 目录，则搜索直接子目录中的任意可执行文件。如果在某个子目录中直接找到可执行文件，则整个子目录都被视为二进制路径。
-6. 如果未找到可执行文件，则使用解压目录的根目录
+6. 如果未找到可执行文件，则使用解压目录的根目录。
 
 ### `filter_bins`
 
-以逗号分隔的二进制文件列表，这些文件将被符号链接到一个经过过滤的 `.mise-bins` 目录中。当工具附带你不想暴露在 PATH 上的额外二进制文件时，这很有用。
+要链接到经过筛选的 `.mise-bins` 目录中的二进制文件列表。当工具包含你不希望暴露在 PATH 中的额外二进制文件时，此选项非常有用。
 
 ```toml
 [tools]
 "github:jgm/pandoc" = { version = "latest", filter_bins = "pandoc" }
+"github:owner/repo" = { version = "latest", filter_bins = ["tool", "helper"] }
 ```
 
 启用后：

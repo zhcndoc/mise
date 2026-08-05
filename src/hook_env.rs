@@ -1,6 +1,7 @@
 use std::io::prelude::*;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -16,7 +17,7 @@ use std::sync::LazyLock as Lazy;
 use crate::cli::HookReason;
 use crate::config::{Config, DEFAULT_CONFIG_FILENAMES, Settings, config_file};
 use crate::env::PATH_KEY;
-use crate::env_diff::{EnvDiffOperation, EnvDiffPatches, EnvMap};
+use crate::env_diff::{EnvDiff, EnvDiffOperation, EnvDiffPatches, EnvMap};
 use crate::errors::Error;
 use crate::hash::hash_to_str;
 use crate::shell::Shell;
@@ -57,6 +58,29 @@ fn write_last_full_check(timestamp: u128) {
     if let Err(e) = std::fs::write(last_check_file_for_dir(cwd), timestamp.to_string()) {
         trace!("failed to write last check file: {e}");
     }
+}
+
+/// Set when [`should_exit_early_fast`] determines a full hook-env run is
+/// required because something looks stale.
+///
+/// [`should_exit_early`] consults this so a run the fast path forced always
+/// reaches [`build_session`], which is what rewrites `latest_update`. The two
+/// checks are not identical — the fast path also compares config-search
+/// directory mtimes, which the slow path has no equivalent for — so without
+/// this the slow path could exit early on a run the fast path forced, leaving
+/// `latest_update` stale and forcing another full run on the next prompt,
+/// forever.
+///
+/// Both functions run in the same process for a given `mise hook-env`:
+/// `should_exit_early_fast` from `cli::run` before config is loaded, and
+/// `should_exit_early` from `cli::hook_env::HookEnv::run` after.
+static FAST_PATH_FORCED_FULL_RUN: AtomicBool = AtomicBool::new(false);
+
+/// Record that the fast path requires a full run and return `false`, so call
+/// sites can `return force_full_run();` in place of a bare `return false`.
+fn force_full_run() -> bool {
+    FAST_PATH_FORCED_FULL_RUN.store(true, Ordering::Relaxed);
+    false
 }
 
 /// Convert a SystemTime to milliseconds since Unix epoch
@@ -175,6 +199,9 @@ pub fn should_exit_early_fast() -> bool {
     if args.len() < 2 || args[1] != "hook-env" {
         return false;
     }
+    if has_preclap_logging_flag(&args) {
+        return false;
+    }
     // Can't exit early if no previous session
     // Check for dir being set as a proxy for "has valid session"
     // (loaded_configs can be empty if there are no config files)
@@ -225,6 +252,11 @@ pub fn should_exit_early_fast() -> bool {
     if have_mise_env_vars_been_modified() {
         return false;
     }
+    // Restore only environment state previously owned by mise. User-added
+    // variables and PATH entries do not affect this check.
+    if has_managed_env_drift(&env::__MISE_DIFF, &current_managed_env(&env::__MISE_DIFF)) {
+        return false;
+    }
 
     // chpwd_only mode: skip on precmd if directory hasn't changed
     // This significantly reduces stat operations on slow filesystems like NFS
@@ -241,16 +273,18 @@ pub fn should_exit_early_fast() -> bool {
         return true;
     }
 
+    // Every staleness check below returns via force_full_run() so the slow path
+    // knows this run must reach build_session and refresh the session.
     // Check if any loaded config files have been modified
     for config_path in &PREV_SESSION.loaded_configs {
         if let Ok(metadata) = config_path.metadata() {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return false;
+                return force_full_run();
             }
         } else if !config_path.exists() {
-            return false;
+            return force_full_run();
         }
     }
     // Check if any files accessed by tera template functions have been modified
@@ -259,10 +293,10 @@ pub fn should_exit_early_fast() -> bool {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return false;
+                return force_full_run();
             }
         } else if !path.exists() {
-            return false;
+            return force_full_run();
         }
     }
     // Check if any files from [[watch_files]] patterns have been modified
@@ -271,31 +305,33 @@ pub fn should_exit_early_fast() -> bool {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return false;
+                return force_full_run();
             }
         } else if !path.exists() {
-            return false;
+            return force_full_run();
         }
     }
     if have_trust_state_dirs_been_modified() {
-        return false;
+        return force_full_run();
     }
     // Check if data dir has been modified (new tools installed, etc.)
     // Also check if it's been deleted - this requires a full update
     if !dirs::DATA.exists() {
-        return false;
+        return force_full_run();
     }
     if let Ok(metadata) = dirs::DATA.metadata()
         && let Ok(modified) = metadata.modified()
         && mtime_to_millis(modified) > PREV_SESSION.latest_update
     {
-        return false;
+        return force_full_run();
     }
     // Check if any directory in the config search path has been modified
-    // This catches new config files created anywhere in the hierarchy
+    // This catches new config files created anywhere in the hierarchy.
+    // The slow path has no equivalent check, which is exactly why the
+    // FAST_PATH_FORCED_FULL_RUN handshake exists.
     for modified in config_search_dir_mtimes() {
         if mtime_to_millis(modified) > PREV_SESSION.latest_update {
-            return false;
+            return force_full_run();
         }
     }
     // Filesystem checks passed - update the last check timestamp so subsequent
@@ -341,6 +377,16 @@ pub fn should_exit_early(
         return false;
     }
     if have_mise_env_vars_been_modified() {
+        return false;
+    }
+    if has_managed_env_drift(&env::__MISE_DIFF, &current_managed_env(&env::__MISE_DIFF)) {
+        return false;
+    }
+    // The fast path already decided this run is necessary. Check it only after
+    // the slow-path checks above, since they also record modified watch files
+    // and schedule hooks as side effects.
+    if FAST_PATH_FORCED_FULL_RUN.load(Ordering::Relaxed) {
+        trace!("fast-path forced a full run, not exiting early");
         return false;
     }
     trace!("early-exit");
@@ -403,8 +449,58 @@ fn have_trust_state_dirs_been_modified() -> bool {
     false
 }
 
+fn has_preclap_logging_flag(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        matches!(arg.as_str(), "-q" | "--quiet" | "--silent" | "--log-level")
+            || arg.starts_with("--log-level=")
+    })
+}
+
 fn have_mise_env_vars_been_modified() -> bool {
     get_mise_env_vars_hashed() != PREV_SESSION.env_var_hash
+}
+
+fn current_managed_env(diff: &EnvDiff) -> EnvMap {
+    let mut current: EnvMap = diff
+        .new
+        .keys()
+        .filter_map(|key| env::var(key).ok().map(|value| (key.clone(), value)))
+        .collect();
+    if !diff.path.is_empty()
+        && let Ok(path) = env::var(&*PATH_KEY)
+    {
+        current.insert(PATH_KEY.to_string(), path);
+    }
+    current
+}
+
+fn has_managed_env_drift(diff: &EnvDiff, current: &EnvMap) -> bool {
+    for (key, expected) in &diff.new {
+        if current.get(key) != Some(expected) {
+            trace!("mise-managed environment variable changed: {key}");
+            return true;
+        }
+    }
+
+    if diff.path.is_empty() {
+        return false;
+    }
+
+    // PATH ownership is set-based: shells such as fish deduplicate entries when
+    // applying the environment, so requiring the serialized occurrence count
+    // would report permanent drift even though the managed path is present.
+    let current_paths = current
+        .get(&*PATH_KEY)
+        .map(|path| env::split_paths(path).collect::<std::collections::HashSet<PathBuf>>())
+        .unwrap_or_default();
+    diff.path.iter().any(|path| {
+        if !current_paths.contains(path) {
+            trace!("mise-managed PATH entry changed: {}", path.display());
+            true
+        } else {
+            false
+        }
+    })
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -743,4 +839,132 @@ pub fn build_alias_commands(
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FAST_PATH_FORCED_FULL_RUN, force_full_run, has_managed_env_drift, has_preclap_logging_flag,
+    };
+    use crate::env::PATH_KEY;
+    use crate::env_diff::{EnvDiff, EnvMap};
+    use indexmap::indexmap;
+    use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn force_full_run_records_the_decision_and_reports_not_exiting_early() {
+        let prev = FAST_PATH_FORCED_FULL_RUN.swap(false, Ordering::Relaxed);
+
+        // Returns false so callers can `return force_full_run();` directly, and
+        // leaves the flag set for should_exit_early to observe.
+        assert!(!force_full_run());
+        assert!(FAST_PATH_FORCED_FULL_RUN.load(Ordering::Relaxed));
+
+        FAST_PATH_FORCED_FULL_RUN.store(prev, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn detects_logging_flags_that_need_clap_before_fast_exit() {
+        assert!(has_preclap_logging_flag(&args(&[
+            "mise", "hook-env", "-s", "bash", "--quiet"
+        ])));
+        assert!(has_preclap_logging_flag(&args(&["mise", "hook-env", "-q"])));
+        assert!(has_preclap_logging_flag(&args(&[
+            "mise", "hook-env", "--silent"
+        ])));
+        assert!(has_preclap_logging_flag(&args(&[
+            "mise",
+            "hook-env",
+            "--log-level",
+            "error"
+        ])));
+        assert!(has_preclap_logging_flag(&args(&[
+            "mise",
+            "hook-env",
+            "--log-level=error"
+        ])));
+    }
+
+    #[test]
+    fn ignores_logging_flags_that_do_not_suppress_warnings() {
+        assert!(!has_preclap_logging_flag(&args(&[
+            "mise", "hook-env", "-s", "bash"
+        ])));
+        assert!(!has_preclap_logging_flag(&args(&[
+            "mise", "hook-env", "--trace"
+        ])));
+        assert!(!has_preclap_logging_flag(&args(&[
+            "mise", "hook-env", "--debug"
+        ])));
+        assert!(!has_preclap_logging_flag(&args(&[
+            "mise",
+            "hook-env",
+            "--verbose"
+        ])));
+    }
+
+    fn managed_diff() -> EnvDiff {
+        EnvDiff {
+            new: indexmap! {
+                "MANAGED".into() => "expected".into(),
+            },
+            path: vec![PathBuf::from("/managed/bin"), PathBuf::from("/managed/bin")],
+            ..Default::default()
+        }
+    }
+
+    fn current_env(entries: &[(&str, &str)]) -> EnvMap {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).into(), (*value).into()))
+            .collect()
+    }
+
+    #[test]
+    fn detects_changed_or_missing_managed_variables() {
+        let diff = managed_diff();
+        let path = std::env::join_paths(["/managed/bin", "/managed/bin"])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let changed = current_env(&[("MANAGED", "changed"), (PATH_KEY.as_str(), &path)]);
+        assert!(has_managed_env_drift(&diff, &changed));
+
+        let missing = current_env(&[(PATH_KEY.as_str(), &path)]);
+        assert!(has_managed_env_drift(&diff, &missing));
+    }
+
+    #[test]
+    fn ignores_unmanaged_variables_path_order_and_duplicate_managed_entries() {
+        let diff = managed_diff();
+        let path = std::env::join_paths(["/user/after", "/managed/bin", "/user/before"])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let current = current_env(&[
+            ("MANAGED", "expected"),
+            ("UNMANAGED", "changed"),
+            (PATH_KEY.as_str(), &path),
+        ]);
+
+        assert!(!has_managed_env_drift(&diff, &current));
+    }
+
+    #[test]
+    fn detects_missing_managed_path() {
+        let diff = managed_diff();
+        let path = std::env::join_paths(["/user/bin"])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let current = current_env(&[("MANAGED", "expected"), (PATH_KEY.as_str(), &path)]);
+
+        assert!(has_managed_env_drift(&diff, &current));
+    }
 }

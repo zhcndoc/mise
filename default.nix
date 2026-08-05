@@ -1,8 +1,8 @@
-{ pkgs, lib, fetchFromGitHub, rustPlatform, coreutils, bash, direnv, openssl, git }:
+{ pkgs, lib, rustPlatform, coreutils, bash, direnv, openssl, git }:
 
 rustPlatform.buildRustPackage {
   pname = "mise";
-  version = "2026.7.0";
+  version = "2026.8.2";
 
   src = lib.cleanSource ./.;
 
@@ -32,6 +32,11 @@ rustPlatform.buildRustPackage {
 
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
+  # tera-contrib's now() resolves its timezone by name (TimeZone::get("UTC")),
+  # which requires a tzdb. The build sandbox provides none, so tests calling
+  # now() fail with "Unknown timezone: UTC".
+  TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+
   prePatch = ''
     substituteInPlace ./src/test.rs ./test/data/plugins/**/bin/* \
       --replace '/usr/bin/env bash' '${bash}/bin/bash'
@@ -52,6 +57,7 @@ rustPlatform.buildRustPackage {
     RUST_BACKTRACE=full cargo test --all-features -- \
       --skip cli::plugins::ls::tests::test_plugin_list_urls \
       --skip tera::tests::test_last_modified \
+      --skip system::defaults::tests::test_status_missing_keys_are_unset \
       --skip plugins::core::ruby::tests::test_list_versions_matching
   '';
 

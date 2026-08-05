@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use crate::backend::{ABackend, VersionInfo};
 use crate::cli::args::BackendArg;
+use crate::config::env_directive::EnvValue;
 use crate::config::{Config, Settings};
 #[cfg(windows)]
 use crate::file;
@@ -40,23 +41,30 @@ pub struct ToolVersion {
     /// Effective install-before cutoff used to resolve this version.
     pub before_date: Option<Timestamp>,
     locked: bool,
+    resolved_from_lockfile: bool,
     pub lock_platforms: BTreeMap<String, PlatformInfo>,
     pub install_path: Option<PathBuf>,
     /// Conda packages resolved during installation: (platform, basename) -> CondaPackageInfo
     pub conda_packages: BTreeMap<(String, String), CondaPackageInfo>,
     /// pkgx packages resolved during installation: (platform, package@version) -> PkgxPackageInfo
     pub pkgx_packages: BTreeMap<(String, String), PkgxPackageInfo>,
+    /// Install satisfaction computed during dry-run installs.
+    pub install_satisfied: Option<bool>,
 }
 
 impl ToolVersion {
     fn no_versions_found(backend: &ABackend, before_date: Option<Timestamp>) -> eyre::Report {
+        let id = backend.id();
+        // The version list is also empty when fetching it failed, in which case
+        // no filter was ever applied — blaming the date filter sends users
+        // looking for a cutoff that isn't the problem.
+        if let Some(cause) = crate::backend::version_listing_failure(backend.ba()) {
+            return eyre::eyre!("unable to fetch versions for {id}: {cause}");
+        }
         let msg = if before_date.is_some() {
-            format!(
-                "no versions found for {} matching date filter",
-                backend.id()
-            )
+            format!("no versions found for {id} matching date filter")
         } else {
-            format!("no versions found for {}", backend.id())
+            format!("no versions found for {id}")
         };
         eyre::eyre!(msg)
     }
@@ -67,10 +75,12 @@ impl ToolVersion {
             version,
             before_date: None,
             locked: false,
+            resolved_from_lockfile: false,
             lock_platforms: Default::default(),
             install_path: None,
             conda_packages: Default::default(),
             pkgx_packages: Default::default(),
+            install_satisfied: None,
         }
     }
 
@@ -150,8 +160,13 @@ impl ToolVersion {
         // the original request options so config/core install behavior survives.
         let mut tv = Self::new(request, lt.version);
         tv.locked = true;
+        tv.resolved_from_lockfile = true;
         tv.lock_platforms = lt.platforms;
         tv
+    }
+
+    pub(crate) fn resolved_from_lockfile(&self) -> bool {
+        self.resolved_from_lockfile
     }
 
     pub fn ba(&self) -> &BackendArg {
@@ -212,7 +227,7 @@ impl ToolVersion {
         path
     }
 
-    pub fn install_env(&self) -> IndexMap<String, String> {
+    pub fn install_env(&self) -> IndexMap<String, EnvValue> {
         self.request.options().core.install_env
     }
 
@@ -269,25 +284,20 @@ impl ToolVersion {
             use_locked_version: false,
             before_date: base_opts.before_date,
             before_date_from_default: base_opts.before_date_from_default,
+            filter_installed_versions_by_release_date: base_opts
+                .filter_installed_versions_by_release_date,
             offline: base_opts.offline,
             refresh_remote_versions: base_opts.refresh_remote_versions,
             inactive: base_opts.inactive,
         };
         let tv = self.request.resolve(config, &opts).await?;
-        // map cargo backend specific prefixes to ref
-        let version = match tv.request.version().split_once(':') {
-            Some((_ref_type @ ("tag" | "branch" | "rev"), r)) => {
-                format!("ref:{r}")
-            }
-            _ => tv.version,
-        };
-        Ok(version)
+        Ok(tv.version)
     }
     pub fn style(&self) -> String {
         format!(
             "{}{}",
             style(&self.ba().short).blue().for_stderr(),
-            style(&format!("@{}", &self.version)).for_stderr()
+            style(&format!("@{}", self.version)).for_stderr()
         )
     }
     pub fn tv_pathname(&self) -> String {
@@ -295,7 +305,9 @@ impl ToolVersion {
             ToolRequest::Version { .. } => self.version.to_string(),
             ToolRequest::Prefix { .. } => self.version.to_string(),
             ToolRequest::Sub { .. } => self.version.to_string(),
-            ToolRequest::Ref { ref_: r, .. } => format!("ref-{r}"),
+            ToolRequest::Ref {
+                ref_: r, ref_type, ..
+            } => format!("{ref_type}-{r}"),
             ToolRequest::Path { path: p, .. } => format!("path-{}", hash_to_str(p)),
             ToolRequest::System { .. } => {
                 // Only show deprecation warning if not from .tool-versions file
@@ -313,10 +325,13 @@ impl ToolVersion {
         }
         .replace([':', '/'], "-")
     }
-    fn runtime_pathname(&self) -> Option<String> {
+    pub(crate) fn runtime_pathname(&self) -> Option<String> {
         let pathname = match &self.request {
-            ToolRequest::Version { version, .. } if version != &self.version => version,
-            ToolRequest::Prefix { prefix, .. } => prefix,
+            ToolRequest::Version { version, .. } if version != &self.version => version.clone(),
+            ToolRequest::Prefix { prefix, .. } => prefix.clone(),
+            ToolRequest::Sub { .. } if self.request.version() != self.version => {
+                self.request.version()
+            }
             _ => return None,
         };
         Some(pathname.replace([':', '/'], "-"))
@@ -333,9 +348,19 @@ impl ToolVersion {
         // Re-check the lockfile after alias resolution (e.g., "lts" → "24")
         // The initial lockfile check in resolve() uses the unresolved alias which
         // won't match lockfile entries like "24.13.0".starts_with("lts")
+        // If the alias resolved to a `prefix:` selector, match on the bare
+        // prefix with separator-boundary matching — the lockfile stores
+        // concrete versions (#5781). Config-level `prefix:...` strings always
+        // parse into ToolRequest::Prefix, so a Version request only carries
+        // this scheme via an alias.
+        let (lock_query, lock_prefix_boundary) = match v.strip_prefix("prefix:") {
+            Some(p) => (p, true),
+            None => (v.as_str(), false),
+        };
         if opts.use_locked_version
             && !has_linked_version(request.ba())
-            && let Some(lt) = request.lockfile_resolve_with_prefix(config, &v)?
+            && let Some(lt) =
+                request.lockfile_resolve_with_prefix(config, lock_query, lock_prefix_boundary)?
         {
             return Ok(Self::from_lockfile(request.clone(), lt));
         }
@@ -387,17 +412,12 @@ impl ToolVersion {
         let is_offline = settings.offline() || opts.offline;
         let prefer_offline =
             settings.prefer_offline() && !matches!(request.source(), ToolSource::Argument);
-        let prefer_offline_without_offline = prefer_offline && !is_offline;
-        let should_filter_installed_versions =
-            opts.filters_installed_versions() && !is_offline && !prefer_offline;
-
+        let should_filter_installed_versions = opts.filter_installed_versions_by_release_date
+            && opts.before_date.is_some()
+            && !opts.before_date_from_default
+            && !is_offline
+            && !prefer_offline;
         if v == "latest" {
-            if prefer_offline_without_offline
-                && !opts.latest_versions
-                && let Some(v) = backend.latest_installed_version(None)?
-            {
-                return build(v);
-            }
             if !opts.latest_versions
                 && !should_filter_installed_versions
                 && let Some(v) = backend.latest_installed_version(None)?
@@ -445,12 +465,6 @@ impl ToolVersion {
             // zig@master), never an unrelated installed release, so we don't
             // short-circuit zig@master to a stable version that happens to be
             // installed.
-            if prefer_offline
-                && !opts.latest_versions
-                && let Some(installed) = backend.latest_installed_channel_version(&v)
-            {
-                return build(installed);
-            }
             if !opts.latest_versions
                 && !should_filter_installed_versions
                 && let Some(installed) = backend.latest_installed_channel_version(&v)
@@ -486,15 +500,6 @@ impl ToolVersion {
                 if crate::config::config_file::idiomatic_version::package_json::is_package_json(path)
         ) && crate::semver::is_npm_semver_range_query(&v)
         {
-            if prefer_offline && !opts.latest_versions {
-                let installed_versions = backend.list_installed_versions();
-                if let Some(matches) =
-                    crate::semver::npm_semver_range_filter(&installed_versions, &v)
-                    && let Some(v) = matches.last()
-                {
-                    return build(v.clone());
-                }
-            }
             if !opts.latest_versions && !should_filter_installed_versions {
                 let installed_versions = backend.list_installed_versions();
                 if let Some(matches) =
@@ -542,10 +547,12 @@ impl ToolVersion {
         if prefer_offline && !opts.latest_versions && v.matches('.').count() >= 2 {
             return build(v);
         }
-        // Exact pinned GitHub versions do not need the full releases list when
-        // the backend can cheaply prove the tag exists. If it cannot, fall
-        // through to normal prefix resolution so requests like "1.2.3" can
-        // still resolve to "1.2.3.4" when that is the latest matching version.
+        // Exact pinned versions do not need the full versions list when the
+        // backend can validate them directly or defer validation to its
+        // installer. This also keeps explicit pins outside release-age
+        // filtering. If the backend returns None, fall through to normal
+        // prefix resolution so requests like "1.2.3" can still resolve to
+        // "1.2.3.4" when that is the latest matching version.
         if v.matches('.').count() >= 2
             && let Some(v) = backend.resolve_exact_version(config, &v).await?
         {
@@ -588,6 +595,15 @@ impl ToolVersion {
     ) -> Result<Self> {
         let backend = request.backend()?;
         if v == "latest" && opts.offline {
+            let pathname = request.version().replace([':', '/'], "-");
+            let path = backend.ba().installs_path.join(&pathname);
+            let path = env::find_in_shared_installs(path, &backend.ba().tool_dir_name(), &pathname);
+            if let Ok(Some(target)) = crate::file::resolve_symlink(&path)
+                && target.starts_with("./")
+                && let Some(version) = target.file_name().map(|v| v.to_string_lossy().to_string())
+            {
+                return Box::pin(Self::resolve_version(config, request, &version, opts)).await;
+            }
             // Can't resolve sub-N:latest offline (no remote latest, and
             // applying version_sub to latest_installed_version would shift
             // one step too low). Return the raw spec; callers that care
@@ -623,14 +639,11 @@ impl ToolVersion {
         let is_offline = settings.offline() || opts.offline;
         let prefer_offline =
             settings.prefer_offline() && !matches!(request.source(), ToolSource::Argument);
-        let should_filter_installed_versions =
-            opts.filters_installed_versions() && !is_offline && !prefer_offline;
-        if prefer_offline
-            && !opts.latest_versions
-            && let Some(v) = backend.list_installed_versions_matching(prefix).last()
-        {
-            return Ok(Self::new(request, v.to_string()));
-        }
+        let should_filter_installed_versions = opts.filter_installed_versions_by_release_date
+            && opts.before_date.is_some()
+            && !opts.before_date_from_default
+            && !is_offline
+            && !prefer_offline;
         if !opts.latest_versions
             && !should_filter_installed_versions
             && let Some(v) = backend.list_installed_versions_matching(prefix).last()
@@ -686,7 +699,7 @@ impl ToolVersion {
 
 impl Display for ToolVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}@{}", &self.ba().full(), &self.version)
+        write!(f, "{}@{}", self.ba().full(), self.version)
     }
 }
 
@@ -728,10 +741,13 @@ pub struct ResolveOptions {
     pub before_date: Option<Timestamp>,
     /// `before_date` came from the built-in default release age rather than
     /// explicit configuration (CLI flag, per-tool option, or the
-    /// `minimum_release_age` setting). The default only gates which versions
-    /// remote resolution may pick — it must not disable installed-version
-    /// fast paths (https://github.com/jdx/mise/discussions/10308).
+    /// `minimum_release_age` setting). This provenance is included in trace
+    /// output to distinguish the implicit policy from a user-selected cutoff.
     pub before_date_from_default: bool,
+    /// Resolve fuzzy installed matches against release metadata when a cutoff
+    /// is active. This is reserved for discovery flows such as lockfile
+    /// generation; ordinary resolution treats installed versions as eligible.
+    pub filter_installed_versions_by_release_date: bool,
     /// Additive to `Settings::offline()` — either being true skips remote version listing.
     pub offline: bool,
     /// Ignore cached remote version lists while resolving this request.
@@ -749,6 +765,7 @@ impl Default for ResolveOptions {
             use_locked_version: true,
             before_date: None,
             before_date_from_default: false,
+            filter_installed_versions_by_release_date: false,
             offline: false,
             refresh_remote_versions: false,
             inactive: false,
@@ -785,13 +802,6 @@ impl ResolveOptions {
             }
         }
         Ok(())
-    }
-
-    /// An explicit cutoff means fuzzy requests must resolve date-aware even
-    /// when an installed version matches; the built-in default must not force
-    /// that remote resolution.
-    fn filters_installed_versions(&self) -> bool {
-        self.before_date.is_some() && !self.before_date_from_default
     }
 }
 
@@ -902,6 +912,30 @@ mod tests {
     }
 
     #[test]
+    fn ref_pathname_preserves_selector_type() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(test_backend(temp_dir.path().join("installs")));
+
+        for (version, pathname) in [
+            ("ref:main", "ref-main"),
+            ("rev:abc123", "rev-abc123"),
+            ("tag:v1.0.0", "tag-v1.0.0"),
+            ("branch:main", "branch-main"),
+        ] {
+            let (ref_type, ref_) = version.split_once(':').unwrap();
+            let request = ToolRequest::Ref {
+                backend: backend.clone(),
+                ref_: ref_.to_string(),
+                ref_type: ref_type.to_string(),
+                options: ToolVersionOptions::default(),
+                source: ToolSource::Argument,
+            };
+            let tv = ToolVersion::new(request, version.to_string());
+            assert_eq!(tv.tv_pathname(), pathname);
+        }
+    }
+
+    #[test]
     fn from_lockfile_applies_backend_and_preserves_request_options() {
         let backend = Arc::new(BackendArg::new("npm".to_string(), None));
         let mut options = ToolVersionOptions {
@@ -913,7 +947,7 @@ mod tests {
         };
         options.install_env.insert(
             "NODE_OPTIONS".to_string(),
-            "--enable-source-maps".to_string(),
+            EnvValue::from("--enable-source-maps"),
         );
         options.opts.insert(
             "registry".to_string(),
@@ -937,11 +971,12 @@ mod tests {
 
         assert_eq!(tv.version, "11.17.0");
         assert!(tv.locked);
+        assert!(tv.resolved_from_lockfile());
         assert_eq!(tv.ba().full_without_opts(), "npm:npm");
         assert_eq!(options.depends, Some(vec!["node".to_string()]));
         assert_eq!(
-            options.install_env.get("NODE_OPTIONS").map(String::as_str),
-            Some("--enable-source-maps")
+            options.install_env.get("NODE_OPTIONS"),
+            Some(&EnvValue::String("--enable-source-maps".to_string()))
         );
         assert_eq!(
             options.opts.get("registry"),
@@ -1124,6 +1159,7 @@ mod tests {
             source: ToolSource::Argument,
         };
         let tv = ToolVersion::new(request, "3.14.6".into());
+        assert!(!tv.resolved_from_lockfile());
 
         // Without locking, runtime_path() follows the stale fuzzy runtime symlink, so
         // it does NOT resolve to the version just installed -- the bug behavior. (This
@@ -1134,6 +1170,7 @@ mod tests {
         // fuzzy runtime symlink, so the postinstall hook sees 3.14.6 (#10347).
         assert_eq!(tv.clone().with_locked().runtime_path(), install_path);
         assert_eq!(tv.clone().with_locked().runtime_path(), tv.install_path());
+        assert!(!tv.with_locked().resolved_from_lockfile());
 
         Ok(())
     }

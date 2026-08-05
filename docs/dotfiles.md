@@ -1,4 +1,8 @@
-# Dotfiles <Badge type="warning" text="experimental" />
+# 点文件
+
+> [!WARNING]
+> 顶层的 `mise dotfiles` 命令已弃用，并且不会在帮助信息中显示。它将在 mise 2027.2.0 中开始发出警告，并在 mise 2028.2.0 中移除。请改用
+> `mise bootstrap dotfiles`。
 
 mise 可以管理 `mise.toml` 中 `[dotfiles]` 部分的配置文件。
 每个条目可以拥有整个文件或目录，也可以管理由其他所有者拥有的文件中的一小部分内容。
@@ -19,9 +23,11 @@ dotfiles.default_mode = "symlink"
 "~/hosts/dev" = { line = "127.0.0.1 dev.local" }                     # 编辑 ~/hosts 中的一行
 ```
 
-Dotfiles 只会在明确请求时应用，使用
-`mise dotfiles apply` 或 [`mise bootstrap`](/cli/bootstrap.html)。它们
-不会被 `mise install` 或 `mise bootstrap packages` 隐式应用。
+新条目通过 `mise bootstrap dotfiles add` 捕获并应用；传入
+`--no-apply` 可仅捕获它们。现有条目可以通过 `mise bootstrap dotfiles apply` 显式应用，也可以作为
+[`mise bootstrap`](/bootstrap.html) 的一部分应用。它们不会由 `mise install` 或 `mise bootstrap packages` 隐式应用。
+嵌套的 apply 命令会运行已配置的
+`pre-dotfiles` 和 `post-dotfiles` bootstrap 钩子。
 
 ## 整文件条目
 
@@ -32,11 +38,13 @@ mise 会在 `dotfiles.root` 下镜像相对于主目录的目标路径：`~/.zsh
 `~/.dotfiles/.config/foo.toml`。`$HOME` 之外的目标必须指定
 `source`。
 
-字符串条目是显式源与 `dotfiles.default_mode` 的简写。写入 `[dotfiles]` 的命令始终会以带有 `mode` 的表格形式写入，即使它是默认值也是如此：
+字符串条目是使用 `dotfiles.default_mode` 的显式源的简写形式。
+`mise bootstrap dotfiles add` 会省略隐含的源和内置的 `symlink` 模式，
+但会保留通过 `--mode` 显式选择的模式：
 
 ```toml
 [dotfiles]
-"~/.zshrc" = { mode = "symlink" }
+"~/.zshrc" = {}
 "~/.ssh/config" = { source = "ssh/config", mode = "copy" }
 ```
 
@@ -53,24 +61,41 @@ mise 会在 `dotfiles.root` 下镜像相对于主目录的目标路径：`~/.zsh
 "~/.config/theme-[ab].toml" = "dotfiles/config/theme-[ab].toml"
 ```
 
+## 排除文件
+
+遍历源目录的模式——`symlink-each`，以及源为目录的
+`copy`——接受一个 glob 模式列表 `exclude`。当你要将一个并不完全由你管理的目录作为条目指向目标时，可以使用此方式，例如该目录中包含
+`mise.toml` 文件：
+
+```toml
+[dotfiles]
+"~" = { source = ".", mode = "symlink-each", exclude = ["mise.toml", "*.md", ".git"] }
+```
+
+不包含 `/` 的模式会匹配任意单个路径组件，因此 `"mise.toml"`
+会跳过目录树中出现的该文件，而 `"*.md"` 会跳过所有
+Markdown 文件。包含 `/` 的模式会锚定到源目录根路径：
+`"nvim/spell"` 只会跳过该路径。匹配目录的任一类型模式都会跳过该目录下的所有内容。
+
+排除一个 mise 已经应用的文件，会在下一次应用时移除它留下的内容，效果与删除源文件相同。
+
 ## 模式
 
-| 模式           | 行为                                                                                                                                                                                                                                               |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `symlink`      | 将目标以符号链接的方式链接到源。适用于文件和目录——目录源只为整个目录创建一个链接。这是默认值。                                                                                                     |
-| `symlink-each` | 源必须是目录：在目标下重建其目录结构，并逐个为每个文件创建符号链接，因此目标目录（例如 `~/.config`）也可以保留 mise 不管理的文件。                                                  |
-| `copy`         | 复制源文件（或目录，递归复制）。当目标必须是真实文件时使用——例如会原地重写配置的工具。目录复制是追加式的：匹配的文件会被覆盖，mise 不管理的文件会保留在原处。 |
-| `template`     | 通过 [mise 模板引擎](/templates.html) 渲染源文件并写入结果。权限会从源文件继承（如果发生偏移则会被修复）。                                                                                   |
+| 模式           | 行为                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `symlink`      | 将目标链接到源。适用于文件和目录——目录源会为整个目录创建一个链接。这是默认模式。                                                                                                                                                                                                                                                                                                                      |
+| `symlink-each` | 源必须是目录：在目标下重新创建其目录结构，并分别为每个文件创建符号链接，因此目标目录（例如 `~/.config`）也可以存放 mise 不管理的文件。在下一次应用时，删除源文件会移除其留下的链接；mise 未创建的文件和链接永远不会被触碰。受管理的链接会记录在 `$MISE_STATE_DIR/dotfiles` 下，因此共享目标在首次应用后不会被递归扫描。 |
+| `copy`         | 复制源文件（或递归复制目录）。当目标必须是真实文件时使用此模式——例如某些会就地重写其配置的工具。目录复制是累加式的：匹配的文件会被覆盖，mise 不管理的文件会保留。复制内容永远不会被清理，因此删除源文件后，副本仍会保留。                                                                                                                                       |
+| `template`     | 通过 [mise 模板引擎](/templates.html) 渲染源文件并写入结果。权限取自源文件（如果权限发生偏移，也会进行修复）。                                                                                                                                                                                                                                                                                                    |
 
 模板与其他 mise 模板（`env`、`vars`、
-`exec()` 等）使用相同的上下文，这也是使用它们的主要原因：一个源文件，
-按机器生成输出。
+`exec()` 等）使用相同的上下文，这也是使用模板的主要原因：根据机器为一个源文件
+生成输出。
 
-检测模板输出是否发生偏移需要先渲染它，因此
-`mise dotfiles status` 和真正的应用都会从你受信任的配置中计算模板——包括所有
+要检测模板的输出是否发生偏移，必须对其进行渲染，因此
+`mise bootstrap dotfiles status` 和实际应用都会从你信任的配置中评估模板——包括任何
 `exec()` 调用——就像 `[env]` 模板一样。
-`--dry-run` 是个例外：它承诺不会执行任何操作，所以会跳过
-模板渲染，并将这些条目标记为 `(if changed)`。
+`--dry-run` 是例外：它承诺不执行任何操作，因此会跳过模板渲染，并将这些条目列为 `(if changed)`。
 
 ## 编辑条目
 
@@ -105,56 +130,72 @@ id 可以包含字母、数字、`_`、`-` 和 `.`。标记注释前缀会根据
 
 ## 语义
 
-- **声明式且可叠加** — 条目会跨越
-  [配置层级](/configuration.html)（全局 → 项目）进行合并。整文件
-  条目按目标路径合并；编辑条目按 `(path, id)` 合并。
-- **仅手动应用** — 不会隐式写入任何内容。只有
-  `mise dotfiles apply` 或 [`mise bootstrap`](/cli/bootstrap.html) 会应用
-  dotfiles。
-- **幂等** — 已经处于目标状态的条目会被跳过；
-  重复运行始终是安全的。
-- **未知的模式和操作会被忽略并给出警告**，因此使用较新 mise 版本功能的配置仍然可以解析。
+- **声明式且可叠加** — 条目会跨
+  [配置层级](/configuration.html)（全局 → 项目）合并。整文件条目按目标路径合并；编辑条目按
+  `(path, id)` 合并。
+- **显式应用** — `mise bootstrap dotfiles add` 会应用其捕获的条目，除非设置了
+  `--no-apply`。未被 `add` 捕获的条目将由 `mise bootstrap dotfiles apply` 或 [`mise bootstrap`](/bootstrap.html) 应用。
+- **幂等** — 已处于目标状态的条目会被跳过；重复运行始终是安全的。
+- **未知模式和操作会被忽略并发出警告**，因此使用较新 mise 版本功能的配置仍可解析。
 
 ## 冲突
 
-mise 不会 _替换_ 它不管理的现有文件：如果本应放置符号链接的位置已经存在一个真实文件或目录，或者如果本应放置文件的位置已经存在一个目录，这些都会被视为错误，并列出冲突路径。传入 `mise dotfiles apply --force` 可将其替换。
+mise 拒绝_替换_它不管理的现有文件：符号链接应指向的位置存在真实文件或目录，或文件应位于的位置存在目录，都会被视为错误，并列出冲突路径。传入
+`mise bootstrap dotfiles apply --force` 可替换它们。
 
-对于符号链接条目，如果现有的普通文件内容与源文件完全相同，则无需 `--force` 也会通过将其替换为所请求的符号链接来完成收敛。如果内容不同，mise 仍会将其视为冲突。
+在独立的符号链接应用过程中，真实文件和目录始终需要使用 `--force`，即使它们的可见内容和权限完全匹配。可移植的文件系统 API 无法比较所有权、ACL、扩展属性、标志和安全标签。`mise bootstrap dotfiles add` 会在创建符号链接之前，将每个捕获的真实路径移动到其源路径，从而避免这种破坏性比较；跨文件系统移动则会回退为保留符号链接和权限的复制操作。
 
 内容更新不属于冲突：`copy` 或 `template` 条目会在不使用 `--force` 的情况下覆盖目标文件内容——这正是这些模式所声明的意图。符号链接会被自由重新指向，因为符号链接本身不是数据。
 
 `edit` 条目永远不需要 `--force`：一个 block 只拥有标记之间的内容，而一行内容只会追加。以下两种情况会直接报错而不是去猜测：损坏的标记，以及目标是符号链接。通过符号链接进行编辑会修改链接指向的内容，通常是一个 `[dotfiles]` 源文件，因此应将编辑指向真实文件。
 
-从配置中移除某个条目，不会删除其文件、block 或行，因为 mise 不保存状态数据库。请手动删除未受管理的残留项。
+从配置中移除条目会保留其文件、区块或行，因为活动配置仍定义着哪些状态属于某个条目。当你希望 mise 清理其可观察到的痕迹时，请在移除条目之前运行
+`mise bootstrap dotfiles unapply`。
+
+## 取消应用
+
+`mise bootstrap dotfiles unapply` 会移除已配置的目标，但不会删除其 `[dotfiles]` 条目或源文件。它会使用当前配置、文件系统以及记录的 `symlink-each` 状态来确定该条目所拥有的内容：
+
+- 只有在 `symlink` 目标仍然指向已配置的源时，才会将其移除。
+- `symlink-each` 会移除从源到目标的精确链接，包括已删除源文件对应的悬空链接。目标下的其他链接和文件会保留。
+- 只有在文件副本和渲染后的模板内容仍然匹配时，才会将其移除。已修改的目标需要使用 `--force`。
+- 目录副本会逐个文件移除。未受管理的相邻文件始终会保留，并且只有在目录为空时才会移除目录。
+- 由标记分隔的代码块会连同其标记一起移除。普通的行编辑没有所有权标记，需要使用 `--force`。
+
+取消应用采取审慎策略，因为 `copy` 和 `template` 条目没有应用清单。尤其是，在追加式目录复制中，如果源文件已被删除，就无法再识别出某个复制的文件。请手动移除这些残留文件。先使用 `--dry-run` 检查可识别的移除项；模板的试运行不会渲染模板或执行模板函数。
 
 ## 命令
 
 ```sh
-mise dotfiles status            # 显示已应用/缺失/有差异/源缺失
-mise dotfiles status --missing  # 如果有任何不同步的内容则退出 1
+mise bootstrap dotfiles status            # 显示已应用/缺失/不一致/源文件缺失
+mise bootstrap dotfiles status --missing  # 如果存在任何不同步内容则退出并返回 1
 
-mise dotfiles apply                     # 应用文件和编辑
-mise dotfiles apply --dry-run           # 输出将要执行的内容
-mise dotfiles apply --dry-run --verbose # 包括类似 diff 的详细信息
-mise dotfiles apply --yes               # 跳过确认提示
-mise dotfiles apply --force             # 同时替换冲突文件
+mise bootstrap dotfiles apply                     # 应用文件和编辑
+mise bootstrap dotfiles apply --dry-run           # 显示将要执行的操作
+mise bootstrap dotfiles apply --dry-run --verbose # 包含类似 diff 的详细信息
+mise bootstrap dotfiles apply --yes               # 跳过确认提示
+mise bootstrap dotfiles apply --force             # 同时替换冲突文件
 
-mise dotfiles add ~/.zshrc       # 将一个实时文件捕获到 dotfiles.root 中
-mise dotfiles edit ~/.zshrc      # 编辑受管理的源或所属配置
-mise dotfiles edit --apply ~/.zshrc
+mise bootstrap dotfiles unapply             # 移除可识别的受管理目标
+mise bootstrap dotfiles unapply --dry-run   # 预览移除操作
+mise bootstrap dotfiles unapply --force     # 同时移除已修改/有歧义的目标
+
+mise bootstrap dotfiles add ~/.zshrc       # 将实时文件捕获到 dotfiles.root
+mise bootstrap dotfiles edit ~/.zshrc      # 编辑受管理的源文件或所属配置
+mise bootstrap dotfiles edit --apply ~/.zshrc
 ```
 
-`mise dotfiles status` 会将每个条目标记为 `applied`、`missing`、
+`mise bootstrap dotfiles status` 会将每个条目标记为 `applied`、`missing`、
 带有原因的 `differs`，或 `source missing`。
 
 ## 捕获更改
 
-如果你直接编辑了一个已复制的 dotfile，并想把这些更改重新保存回
-你的 dotfiles 中，再次运行 `mise dotfiles add`：
+如果你就地编辑了复制的点文件，并希望将这些更改保存回
+你的点文件中，请再次运行 `mise bootstrap dotfiles add`：
 
 ```sh
 $EDITOR ~/.config/starship.toml
-mise dotfiles add ~/.config/starship.toml
+mise bootstrap dotfiles add ~/.config/starship.toml
 ```
 
 对于未受管理的目标，`add` 会创建一个 `[dotfiles]` 条目，并将
@@ -174,12 +215,13 @@ dotfiles.root = "~/.dotfiles"
 "~/.config/mise/config.toml" = "~/src/dotfiles/mise/config.toml"
 ```
 
-这是一种引导启动模式：在第一次执行 `mise dotfiles apply` 或 `mise bootstrap` 之前，先克隆真实仓库（例如
+这是一种引导模式：在首次运行 `mise bootstrap dotfiles apply` 或
+`mise bootstrap` 之前，先克隆实际仓库（例如
 `~/src/dotfiles`）。
-第一次运行时所需的源文件请使用真实仓库路径；`~/.dotfiles`
-在 mise 创建该符号链接之前并不存在。
-替换 `~/.config/mise/config.toml` 会影响未来的 mise 调用，因此
-在应用之前，请确保源文件包含有效的配置。
+首次运行所需的源文件应使用实际仓库路径；在 mise 创建该符号链接之前，
+`~/.dotfiles` 并不存在。
+替换 `~/.config/mise/config.toml` 会影响后续的 mise 调用，因此请确保在应用配置之前，
+源文件中包含有效的配置。
 
 ## 由 root 拥有的文件
 

@@ -20,7 +20,7 @@ asdf 插件与 mise 的现代插件系统相比有若干局限：
 - **性能**：Shell 脚本执行速度比 mise 的原生后端更慢
 - **功能**：与 aqua、github 或工具/后端插件等现代后端相比功能有限
 - **维护**：更难维护和调试
-- **安全性**：不如沙盒化的现代后端安全
+- **安全性**：不如沙盒化的现代后端安全。
 
 ## 何时使用 asdf（旧版）插件
 
@@ -36,7 +36,7 @@ asdf 插件与 mise 的现代插件系统相比有若干局限：
 2. [github 后端](dev-tools/backends/github.md) - 简单的 GitHub release
 3. [语言包管理器](dev-tools/backends/) - npm、pipx、cargo、gem 等
 4. [后端插件](backend-plugin-development.md) - 带有后端方法的增强型插件
-5. [工具插件](tool-plugin-development.md) - 基于 hook 的跨平台插件
+5. [工具插件](tool-plugin-development.md) - 基于 hook 的跨平台插件。
 
 ## 安装 asdf（旧版）插件
 
@@ -215,7 +215,7 @@ asdf 插件可以访问以下环境变量：
 - `ASDF_PLUGIN_PATH` - 插件目录
 - `ASDF_PLUGIN_PREV_REF` - 之前的 git 引用（用于更新）
 - `ASDF_PLUGIN_POST_REF` - 新的 git 引用（用于更新）
-- `ASDF_CMD_FILE` - 正在运行的可执行文件路径
+- `ASDF_CMD_FILE` - 正在运行的可执行文件路径。
 
 ## 最佳实践
 
@@ -328,17 +328,17 @@ chmod +x "$ASDF_INSTALL_PATH/bin/tool"
 
 考虑从 asdf 插件迁移到现代替代方案：
 
-1. **检查工具是否可在 [aqua registry](https://aquaproj.github.io/aqua-registry/) 中找到**
-2. **对简单的 GitHub 发布版本使用 [github backend](dev-tools/backends/github.md)**
-3. **为复杂工具创建一个 [mise 插件](tool-plugin-development.md)** - 使用 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 进行快速入门
-4. **使用特定语言的包管理器**（npm、pipx、cargo、gem）
+1. **检查工具是否在 [aqua 注册表](https://github.com/aquaproj/aqua-registry) 中**
+2. **对于简单的 GitHub 发布版本，使用 [GitHub 后端](dev-tools/backends/github.md)**
+3. **对于复杂的工具，创建一个 [mise 插件](tool-plugin-development.md)** - 使用 [mise 工具插件模板](https://github.com/jdx/mise-tool-plugin-template) 快速开始
+4. **使用特定语言的软件包管理器**（npm、pipx、cargo、gem）
 
 ## 社区资源
 
 - **[asdf 插件列表](https://github.com/asdf-vm/asdf-plugins)** - 官方 asdf 插件注册表
 - **[mise-plugins 组织](https://github.com/mise-plugins)** - 社区维护的插件
 - **[插件模板（asdf）](https://github.com/asdf-vm/asdf-plugin-template)** - 用于创建 asdf 插件的模板
-- **[插件模板（mise）](https://github.com/jdx/mise-tool-plugin-template)** - 使用 Lua 创建 mise 插件的现代模板
+- **[插件模板（mise）](https://github.com/jdx/mise-tool-plugin-template)** - 使用 Lua 创建 mise 插件的现代模板。
 
 ## 安全注意事项
 
@@ -354,4 +354,4 @@ asdf 插件会执行任意 shell 脚本，这会带来安全风险：
 - [探索现代后端](dev-tools/backends/)以寻找更好的替代方案
 - [了解后端插件](backend-plugin-development.md)以增强功能
 - [了解工具插件](tool-plugin-development.md)以获得跨平台支持
-- [查看注册表](registry.md)以获取可用工具
+- [查看注册表](registry.md)以获取可用工具。

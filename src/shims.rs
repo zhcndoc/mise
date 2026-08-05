@@ -1,4 +1,4 @@
-use crate::exit;
+use crate::request_exit;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use crate::cli::exec::Exec;
 use crate::config::{Config, Settings};
 use crate::file::display_path;
 use crate::lock_file::LockFile;
-use crate::toolset::{ToolVersion, Toolset, ToolsetBuilder};
+use crate::toolset::{ResolveOptions, ToolVersion, Toolset, ToolsetBuilder};
 use crate::{backend, dirs, env, fake_asdf, file};
 use color_eyre::eyre::{Result, bail, eyre};
 use eyre::WrapErr;
@@ -28,14 +28,32 @@ pub async fn handle_shim() -> Result<()> {
     if env::is_mise_binary(bin_name) || cfg!(test) {
         return Ok(());
     }
+    #[cfg(windows)]
+    {
+        let shim_path = invoked_shim_path();
+        if env::var_path(env::MISE_SHIM_PATH_ENV)
+            .as_ref()
+            .is_some_and(|previous| {
+                file::paths_eq(
+                    &file::canonicalize_or_self(previous),
+                    &file::canonicalize_or_self(&shim_path),
+                )
+            })
+        {
+            bail!(
+                "recursive shim invocation detected for {bin_name}: {}",
+                display_path(&shim_path)
+            );
+        }
+        *env::MISE_SHIM_PATH.write().unwrap() = Some(shim_path.clone());
+        env::set_var(env::MISE_SHIM_PATH_ENV, &shim_path);
+    }
     let mut config = Config::get().await?;
     let mut args = env::ARGS.read().unwrap().clone();
     env::PREFER_OFFLINE.store(true, Ordering::Relaxed);
     trace!("shim[{bin_name}] args: {}", args.join(" "));
-    args[0] = which_shim(&mut config, &env::MISE_BIN_NAME)
-        .await?
-        .to_string_lossy()
-        .to_string();
+    let (bin, ts) = which_shim(&mut config, &env::MISE_BIN_NAME, &args).await?;
+    args[0] = bin.to_string_lossy().to_string();
     env::set_var("__MISE_SHIM", "1");
     let exec = Exec {
         tool: vec![],
@@ -56,12 +74,79 @@ pub async fn handle_shim() -> Result<()> {
         allow_env: vec![],
     };
     time!("shim exec");
-    exec.run().await?;
-    exit(0);
+    exec.run_with_toolset(config, ts).await?;
+    Err(request_exit(0))
 }
 
-async fn which_shim(config: &mut Arc<Config>, bin_name: &str) -> Result<PathBuf> {
-    let mut ts = ToolsetBuilder::new().build(config).await?;
+#[cfg(windows)]
+fn invoked_shim_path() -> PathBuf {
+    let argv0 = PathBuf::from(&*env::ARGV0);
+    if argv0.is_absolute() {
+        return argv0;
+    }
+    if argv0.components().count() > 1 {
+        return argv0
+            .absolutize()
+            .map(|path| path.into_owned())
+            .unwrap_or(argv0);
+    }
+    which::which(&argv0)
+        .ok()
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or(argv0)
+}
+
+async fn which_shim(
+    config: &mut Arc<Config>,
+    bin_name: &str,
+    args: &[String],
+) -> Result<(PathBuf, Toolset)> {
+    // Shell completion invokes `usage complete-word` through the `usage` shim.
+    // It should use the installed CLI or fail locally, never resolve a floating
+    // tool version or auto-install over the network while the user is pressing
+    // tab. On Windows the shim is invoked as `usage.exe`, so strip the platform
+    // executable suffix before comparing.
+    let bin_stem = bin_name
+        .strip_suffix(std::env::consts::EXE_SUFFIX)
+        .unwrap_or(bin_name);
+    let completion_offline =
+        bin_stem == "usage" && args.get(1).is_some_and(|arg| arg == "complete-word");
+    let resolve_options = if completion_offline {
+        ResolveOptions {
+            offline: true,
+            ..Default::default()
+        }
+    } else {
+        ResolveOptions::default()
+    };
+    let mut ts = ToolsetBuilder::new()
+        .with_resolve_options(resolve_options)
+        .build(config)
+        .await?;
+    // A configured tool may intentionally override an executable bundled by another installed
+    // tool (for example, a pinned npm overrides Node's npm). Install a missing provider declared
+    // by the registry before resolving an incidental installed provider.
+    if !completion_offline
+        && Settings::get().not_found_auto_install
+        && ts
+            .should_install_missing_registry_bin_provider(config, bin_name)
+            .await?
+    {
+        for tv in ts
+            .install_missing_bin(config, bin_name)
+            .await?
+            .unwrap_or_default()
+        {
+            let p = tv.backend()?;
+            if let Some(bin) = p.which(config, &tv, bin_name).await? {
+                trace!(
+                    "shim[{bin_name}] REGISTRY ToolVersion: {tv} bin: {bin}",
+                    bin = display_path(&bin)
+                );
+                return Ok((bin, ts));
+            }
+        }
+    }
     if let Some((p, tv)) = ts.which(config, bin_name).await
         && let Some(bin) = p.which(config, &tv, bin_name).await?
     {
@@ -69,9 +154,11 @@ async fn which_shim(config: &mut Arc<Config>, bin_name: &str) -> Result<PathBuf>
             "shim[{bin_name}] ToolVersion: {tv} bin: {bin}",
             bin = display_path(&bin)
         );
-        return Ok(bin);
+        return Ok((bin, ts));
     }
-    if Settings::get().not_found_auto_install {
+    // Auto-installing here would download a tool over the network; skip it for
+    // offline completion so `usage complete-word` fails locally instead.
+    if !completion_offline && Settings::get().not_found_auto_install {
         for tv in ts
             .install_missing_bin(config, bin_name)
             .await?
@@ -83,35 +170,59 @@ async fn which_shim(config: &mut Arc<Config>, bin_name: &str) -> Result<PathBuf>
                     "shim[{bin_name}] NOT_FOUND ToolVersion: {tv} bin: {bin}",
                     bin = display_path(&bin)
                 );
-                return Ok(bin);
+                return Ok((bin, ts));
             }
         }
     }
     // fallback for "system"
     let mise_bin = file::canonicalize_or_self(&env::MISE_BIN);
-    let user_shims = file::canonicalize_cached(&dirs::SHIMS);
-    let sys_shims = {
-        let p = env::MISE_SYSTEM_DATA_DIR.join("shims");
-        file::canonicalize_cached(&p)
-    };
     for path in &*env::PATH {
-        if let Some(canon_path) = file::canonicalize_cached(path)
-            && (user_shims.as_ref() == Some(&canon_path) || sys_shims.as_ref() == Some(&canon_path))
-        {
+        if file::is_mise_shims_dir(path) {
             continue;
         }
         let bin = path.join(bin_name);
         if bin.exists() {
+            if file::is_active_mise_shim(&bin) {
+                continue;
+            }
             // Skip if this binary is a mise shim (symlink pointing to the mise binary)
             if file::canonicalize_cached(&bin).is_some_and(|bin| bin == mise_bin) {
                 continue;
             }
             trace!("shim[{bin_name}] SYSTEM {bin}", bin = display_path(&bin));
-            return Ok(bin);
+            return Ok((bin, ts));
         }
     }
     let tvs = ts.list_rtvs_with_bin(config, bin_name).await?;
-    err_no_version_set(config, ts, bin_name, tvs).await
+    match err_no_version_set(config, ts, bin_name, tvs).await {
+        Ok(_) => unreachable!("err_no_version_set always returns an error"),
+        Err(err) => Err(err),
+    }
+}
+
+/// Build the actionable, `which_shim`-style resolution error for a bin that a
+/// shim failed to resolve while dispatching through `mise x` (the exe-mode shim
+/// on Windows, invoked with `__MISE_SHIM_PATH` set). Without this, that path
+/// surfaces the opaque `cannot find binary path`; symlink shims already get
+/// this message directly from `which_shim`. See discussion #11183.
+#[cfg(not(test))]
+pub async fn err_shim_not_found(bin_name: &str) -> color_eyre::Report {
+    // Windows exe shims are invoked as `<tool>.exe`; name `<tool>` in the message.
+    let bin_stem = bin_name
+        .strip_suffix(std::env::consts::EXE_SUFFIX)
+        .unwrap_or(bin_name);
+    let build = async {
+        let config = Config::get().await?;
+        let ts = ToolsetBuilder::new().build(&config).await?;
+        let tvs = ts.list_rtvs_with_bin(&config, bin_stem).await?;
+        // err_no_version_set always returns Err; map its Ok arm defensively.
+        err_no_version_set(&config, ts, bin_stem, tvs)
+            .await
+            .map(|_| eyre!("cannot find binary path: {bin_stem}"))
+    };
+    match build.await {
+        Ok(report) | Err(report) => report,
+    }
 }
 
 pub async fn reshim(config: &Arc<Config>, ts: &Toolset, force: bool) -> Result<()> {
@@ -179,7 +290,8 @@ pub async fn reshim(config: &Arc<Config>, ts: &Toolset, force: bool) -> Result<(
             BTreeSet::new(),
         )
     } else {
-        get_shim_diffs(config, &mise_bin, ts).await?
+        let diffs = get_shim_diffs(config, &mise_bin, ts).await?;
+        (diffs.missing, diffs.extra)
     };
 
     for shim in shims_to_add {
@@ -332,8 +444,14 @@ fn bash_shim_script(tool: &str) -> String {
     formatdoc! {r#"
         #!/bin/bash
 
+        shim_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+        shim_path="$shim_dir/${{0##*/}}"
+        if [ "${{__MISE_SHIM_PATH:-}}" = "$shim_path" ]; then
+          echo "mise: recursive shim invocation detected for {tool}: $shim_path" >&2
+          exit 1
+        fi
+
         if [ -n "${{WSL_DISTRO_NAME:-}}" ] || [ -n "${{WSL_INTEROP:-}}" ] || [ -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
-          shim_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
           new_path=
           # disable globbing so a PATH entry containing * ? [ is not expanded
           set -f
@@ -348,6 +466,7 @@ fn bash_shim_script(tool: &str) -> String {
           exec {tool} "$@"
         fi
 
+        export __MISE_SHIM_PATH="$shim_path"
         exec mise x -- {tool} "$@"
         "#}
 }
@@ -390,6 +509,12 @@ fn add_shim(mise_bin: &Path, symlink_path: &Path, shim: &str) -> Result<()> {
                 formatdoc! {r#"
         @echo off
         setlocal
+        set "shim_path=%~f0"
+        if /I "%__MISE_SHIM_PATH%"=="%shim_path%" (
+          echo mise: recursive shim invocation detected for {shim}: %shim_path% 1>&2
+          exit /b 1
+        )
+        set "__MISE_SHIM_PATH=%shim_path%"
         mise x -- {shim} %*
         "#},
             )
@@ -433,26 +558,33 @@ fn add_shim(mise_bin: &Path, symlink_path: &Path, _shim: &str) -> Result<()> {
     Ok(())
 }
 
+pub struct ShimDiffs {
+    pub missing: BTreeSet<String>,
+    pub extra: BTreeSet<String>,
+    pub desired: HashSet<String>,
+}
+
 // get_shim_diffs contrasts the actual shims on disk
 // with the desired shims specified by the Toolset
-// and returns a tuple of (missing shims, extra shims)
 pub async fn get_shim_diffs(
     config: &Arc<Config>,
     mise_bin: impl AsRef<Path>,
     toolset: &Toolset,
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+) -> Result<ShimDiffs> {
     let mise_bin = mise_bin.as_ref();
     let (actual_shims, desired_shims) = tokio::join!(
         get_actual_shims(mise_bin),
         get_desired_shims(config, mise_bin, toolset)
     );
     let (actual_shims, desired_shims) = (actual_shims?, desired_shims?);
-    let out: (BTreeSet<String>, BTreeSet<String>) = (
-        desired_shims.difference(&actual_shims).cloned().collect(),
-        actual_shims.difference(&desired_shims).cloned().collect(),
-    );
-    time!("get_shim_diffs sizes: ({},{})", out.0.len(), out.1.len());
-    Ok(out)
+    let missing: BTreeSet<_> = desired_shims.difference(&actual_shims).cloned().collect();
+    let extra: BTreeSet<_> = actual_shims.difference(&desired_shims).cloned().collect();
+    time!("get_shim_diffs sizes: ({},{})", missing.len(), extra.len());
+    Ok(ShimDiffs {
+        missing,
+        extra,
+        desired: desired_shims,
+    })
 }
 
 async fn get_actual_shims(mise_bin: impl AsRef<Path>) -> Result<HashSet<String>> {
@@ -654,6 +786,9 @@ async fn err_no_version_set(
         .filter(|t| missing_plugins.contains(t.ba()))
         .collect_vec();
     if missing_tools.is_empty() {
+        if let Some(msg) = unavailable_configured_tool_message(config, &ts, bin_name) {
+            return Err(eyre!(msg));
+        }
         let mut msg = format!("No version is set for shim: {bin_name}\n");
         msg.push_str("Set a global default version with one of the following:\n");
         for tv in tvs {
@@ -674,9 +809,68 @@ async fn err_no_version_set(
     }
 }
 
+pub(crate) fn unavailable_configured_tool_message(
+    config: &Arc<Config>,
+    ts: &Toolset,
+    bin_name: &str,
+) -> Option<String> {
+    let versions = ts
+        .list_current_versions()
+        .into_iter()
+        .filter(|(backend, tv)| {
+            tv.ba().matches_bin_name(bin_name) && backend.is_version_installed(config, tv, true)
+        })
+        .map(|(_, tv)| tv)
+        .collect_vec();
+    if versions.is_empty() {
+        return None;
+    }
+
+    let mut msg = format!("No executable found for configured tool: {bin_name}\n");
+    msg.push_str(
+        "The installed version does not provide this executable with its current backend metadata.\n",
+    );
+    msg.push_str("Reinstall it with:\n");
+    for tv in versions {
+        msg.push_str(&format!(
+            "mise install --force {}@{}\n",
+            tv.ba(),
+            tv.version
+        ));
+    }
+    Some(msg.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::args::BackendArg;
+    use crate::toolset::{ToolRequest, ToolSource, ToolVersionList};
+
+    #[tokio::test]
+    async fn unavailable_tool_message_prefers_matching_configured_tool() {
+        let config = Config::get().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut ts = Toolset::new(ToolSource::Argument);
+
+        for name in ["codex", "node"] {
+            let ba = Arc::new(BackendArg::from(name));
+            let request = ToolRequest::new(ba.clone(), "1.0.0", ToolSource::Argument).unwrap();
+            let mut tv = ToolVersion::new(request.clone(), "1.0.0".into());
+            let install_path = temp.path().join(name);
+            file::create_dir_all(&install_path).unwrap();
+            tv.install_path = Some(install_path);
+
+            let mut tvl = ToolVersionList::new(ba.clone(), ToolSource::Argument);
+            tvl.requests.push(request);
+            tvl.versions.push(tv);
+            ts.versions.insert(ba, tvl);
+        }
+
+        let msg = unavailable_configured_tool_message(&config, &ts, "codex").unwrap();
+        assert!(msg.contains("mise install --force codex@1.0.0"));
+        assert!(!msg.contains("node@1.0.0"));
+    }
 
     #[cfg(windows)]
     #[test]
@@ -690,6 +884,10 @@ mod tests {
         assert!(script.contains(r#"shim_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)"#));
         // globbing disabled while splitting PATH so wildcard entries are not expanded
         assert!(script.contains("set -f"));
+        // The shim identifies its actual location even if MISE_DATA_DIR is absent.
+        assert!(script.contains(r#"shim_path="$shim_dir/${0##*/}""#));
+        assert!(script.contains(r#"export __MISE_SHIM_PATH="$shim_path""#));
+        assert!(script.contains("recursive shim invocation detected"));
         // In WSL: drop the shim dir and run the native tool directly.
         assert!(script.contains(r#"exec gh "$@""#));
         // Outside WSL: defer to mise as before.

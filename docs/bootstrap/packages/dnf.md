@@ -1,13 +1,13 @@
-# dnf <Badge type="warning" text="experimental" />
+# dnf
 
-适用于 RedHat 系 Linux（Fedora、RHEL、CentOS Stream、Rocky、
-Alma 等）的系统包。
+适用于基于 RedHat 的 Linux 系统（Fedora、RHEL、CentOS Stream、Rocky、
+Alma 等）的系统软件包。
 
 ```toml
 [bootstrap.packages]
 "dnf:openssl-devel" = "latest"
 "dnf:postgresql-server" = "latest"
-"dnf:bash" = "5.2.26-3.fc40" # 版本或 版本-发布 版本锁定
+"dnf:bash" = "5.2.26-3.fc40" # 锁定版本或版本-发行版组合
 ```
 
 ## 行为

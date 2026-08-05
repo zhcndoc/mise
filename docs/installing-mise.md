@@ -6,16 +6,15 @@
 
 本页面列出了在系统上安装 `mise` 的多种方式。
 
-| 平台                  | 推荐方式       | 备选方式        |
-| --------------------- | -------------- | --------------- |
-| macOS                 | Homebrew       | mise.run        |
-| Linux (Debian/Ubuntu) | apt            | mise.run        |
-| Linux (Fedora/RHEL)   | dnf            | mise.run        |
-| Linux (Arch)          | pacman         | mise.run        |
-| Linux (Alpine)        | apk            | mise.run        |
-| Windows               | Scoop          | winget          |
-| 任意（Rust 用户）      | cargo binstall | cargo install   |
-| CI/Docker             | mise.run       | GitHub Releases |
+| 平台             | 推荐方式       | 备选方式       |
+| ---------------- | -------------- | -------------- |
+| macOS            | mise.run       | Homebrew        |
+| Linux            | mise.run       | 系统软件包     |
+| Windows          | Scoop          | winget          |
+| 任意平台（Rust 用户） | cargo binstall | cargo install   |
+| CI/Docker        | mise.run       | GitHub Releases |
+
+通过 `mise.run` 安装的官方单文件二进制版本，是 macOS 和 Linux 上的首选方式。这些二进制文件使用 mise 优化的发布配置构建，并且可以立即通过 `mise self-update` 更新。包括 Homebrew 在内的软件包管理器构建版本可能优化程度较低，并且在 mise 发布新版本后，可能无法那么快地提供。
 
 ::: tip 哪些方式会自动更新？
 包管理器（apt、dnf、brew、pacman 等）会在你更新系统软件包时更新 mise。其他方式可以通过 `mise self-update` 更新。
@@ -27,7 +26,7 @@ mise 会连接许多外部注册表和后端，例如 aqua、GitHub releases、�
 项目和组织通常应在需要更高版本的 mise 功能时设置 [`min_version`](/configuration.html#minimum-mise-version)，而不是将每个用户都锁定到某个特定的 mise 可执行文件。虽然有方法可以固定或引导安装特定版本的 mise，但一般不建议将用户锁定在某一个 mise 版本。将 mise 版本固定回旧版，就像阻止 `apt update` 或 `brew update` 刷新包元数据一样：它可能隐藏弃用提示，并导致与上游集成（如 aqua-registry）出现陈旧失效。除非经过漫长的弃用流程，否则会避免破坏性变更，因此保持最新通常风险较低。
 :::
 
-### <https://mise.run>
+### <https://mise.run> {#mise-run}
 
 请注意，`mise` 不必位于 `PATH` 中。如果你在 shell 的 rc 文件中运行激活脚本，mise 会自动将自己添加到 `PATH`。
 
@@ -75,8 +74,9 @@ curl https://mise.run/fish | sh
 
 - `MISE_DEBUG=1` – 启用调试日志
 - `MISE_QUIET=1` – 禁用非错误输出
-- `MISE_INSTALL_PATH=/some/path` – 更改二进制路径（默认：`~/.local/bin/mise`）
+- `MISE_INSTALL_PATH=/some/path` – 更改二进制文件路径（默认：`~/.local/bin/mise`）
 - `MISE_VERSION=v2025.12.0` – 安装指定版本
+- `MISE_INSTALL_SKIP_IF_EXISTS=1` – 如果安装路径中的 mise 二进制文件已经与请求的版本匹配，则跳过下载和安装
 
 如果你想验证安装脚本没有被篡改：
 
@@ -144,7 +144,7 @@ sudo apt install -y mise
 sudo pacman -S mise
 ```
 
-[Arch 包](https://archlinux.org/packages/extra/x86_64/mise/)
+[Arch 软件包](https://archlinux.org/packages/extra/x86_64/mise/)
 
 ### Cargo
 
@@ -185,7 +185,7 @@ dnf copr enable jdxcode/mise centos-stream+epel-next-9
 dnf install mise
 ```
 
-[COPR 包页面](https://copr.fedorainfracloud.org/coprs/jdxcode/mise/)
+[COPR 软件包页面](https://copr.fedorainfracloud.org/coprs/jdxcode/mise/)
 
 ### Snap（Linux）
 
@@ -221,6 +221,10 @@ RUN mise trust -a && mise install
 :::
 
 ### Homebrew
+
+::: warning
+Homebrew 配方使用方便，但不是首选的安装方式。Homebrew 会独立构建 mise，而不是使用官方、优化程度更高的发布版二进制文件。为了获得最佳性能并最快获取新版本，请改用 [`mise.run`](#mise-run) 安装程序。
+:::
 
 ```sh
 brew install mise
@@ -261,7 +265,7 @@ chmod +x /usr/local/bin/mise
 sudo port install mise
 ```
 
-[MacPorts port](https://ports.macports.org/port/mise/)
+[MacPorts 端口](https://ports.macports.org/port/mise/)
 
 ### nix
 
@@ -316,7 +320,7 @@ winget install jdx.mise
 ### Windows - Chocolatey
 
 ::: info
-chocolatey 版本目前已过时。
+Chocolatey 版本目前已过时。
 :::
 
 ```sh
@@ -329,7 +333,7 @@ choco install mise
 
 如果你的 shell 不支持 `mise activate`，你需要编辑 PATH，将 shims 目录包含进去（默认：`%LOCALAPPDATA%\mise\shims`）。
 
-## Shells
+## Shell
 
 ### Bash
 
@@ -350,7 +354,7 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 ```
 
 ::: tip
-对于 homebrew 以及其他一些安装方式，mise 会自动激活，因此
+对于 Homebrew 以及其他一些安装方式，mise 会自动激活，因此
 这一步不是必需的。
 
 更多信息请参见 [`MISE_FISH_AUTO_ACTIVATE=1`](/configuration#mise-fish-auto-activate-1)。
@@ -359,7 +363,7 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 ### PowerShell
 
 ::: warning
-请查看 [about_Profiles](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles) 文档，以找到你实际的 profile 位置。
+请查看 [about_Profiles](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles) 文档，以找到你实际的配置文件位置。
 如果父目录不存在，你需要先创建它。
 :::
 
@@ -370,8 +374,8 @@ echo '(&mise activate pwsh) | Out-String | Invoke-Expression' >> $HOME\Documents
 ### Nushell
 
 Nu
-不[支持 `eval`](https://www.nushell.sh/book/how_nushell_code_gets_run.html#eval-function)
-通过追加 `env.nu` 和 `config.nu` 来安装 Mise：
+不[支持 `eval`](https://www.nushell.sh/book/how_nushell_code_gets_run.html#eval-function)，
+可以通过追加到 `env.nu` 和 `config.nu` 来安装 mise：
 
 ```nushell
 '
@@ -381,7 +385,7 @@ let mise_path = $nu.default-config-dir | path join mise.nu
 "\nuse ($nu.default-config-dir | path join mise.nu)" | save $nu.config-path --append
 ```
 
-如果你更希望保持 dotfiles 整洁，可以把它保存到其他目录，然后
+如果你更希望保持点文件整洁，可以将其保存到其他目录，然后
 更新 `$env.NU_LIB_DIRS`：
 
 ```nushell
@@ -429,8 +433,8 @@ edit:add-var mise~ {|@args| mise:mise $@args }
 
 ### 其他 shell？
 
-添加一个新的 shell 一点也不难，因为这个项目里很少有 shell 代码。
-[看这里](https://github.com/jdx/mise/tree/main/src/shell)了解其他 shell 是如何实现的。如果你的 shell 目前不受支持，
+添加一个新的 shell 一点也不难，因为这个项目中很少有 shell 代码。
+[点击这里](https://github.com/jdx/mise/tree/main/src/shell)了解其他 shell 是如何实现的。如果你的 shell 目前不受支持，
 我很乐意帮你把它集成进去。
 
 ## 自动补全

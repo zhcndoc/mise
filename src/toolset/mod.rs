@@ -2,7 +2,9 @@ use crate::backend::Backend;
 use crate::cli::args::BackendArg;
 use crate::config::Config;
 use crate::config::settings::{Settings, SettingsStatusMissingTools};
+use crate::config::tracking::Tracker;
 use crate::env::TERM_WIDTH;
+use crate::file::display_path;
 use crate::lockfile::{Lockfile, lockfile_path_for_config};
 use crate::registry::REGISTRY;
 use crate::registry::tool_enabled;
@@ -31,14 +33,15 @@ use tokio::sync::OnceCell;
 
 pub use install_options::InstallOptions;
 pub use tool_request::ToolRequest;
-pub use tool_request_set::{ToolRequestSet, ToolRequestSetBuilder, tool_env_vars};
+pub use tool_request_set::{
+    ToolRequestSet, ToolRequestSetBuilder, tool_env_var_name, tool_env_vars, tool_from_env_var_name,
+};
 pub use tool_source::ToolSource;
 pub use tool_version::{ResolveOptions, ToolVersion};
 pub use tool_version_list::ToolVersionList;
 pub use tool_version_options::{
     CoreToolOptions, EPHEMERAL_OPT_KEYS, RawBackendOptions, ResolvedToolOptions, ToolOptionSource,
-    ToolOptions, ToolVersionOptions, parse_tool_options, serialize_tool_options,
-    try_parse_tool_options,
+    ToolOptions, ToolVersionOptions, parse_tool_options, try_parse_tool_options,
 };
 
 mod builder;
@@ -135,7 +138,9 @@ impl Toolset {
             .collect::<Vec<_>>();
         let tvls = parallel::parallel(versions, |(config, ba, mut tvl, opts)| async move {
             if let Err(err) = tvl.resolve(&config, &opts).await {
-                warn!("Failed to resolve tool version list for {ba}: {err}");
+                // warn_once: a command may resolve the same toolset more than
+                // once, and repeating an identical failure adds no information.
+                warn_once!("Failed to resolve tool version list for {ba}: {err}");
             }
             Ok((ba, tvl))
         })
@@ -163,11 +168,35 @@ impl Toolset {
     pub async fn list_missing_versions(&self, config: &Arc<Config>) -> Vec<ToolVersion> {
         trace!("list_missing_versions");
         measure!("toolset::list_missing_versions", {
-            self.list_current_versions()
+            let versions = self.list_current_versions().into_iter().collect::<Vec<_>>();
+            let parallel_versions = versions
+                .clone()
                 .into_iter()
-                .filter(|(p, tv)| !p.is_version_installed(config, tv, true))
-                .map(|(_, tv)| tv)
-                .collect()
+                .map(|(backend, tv)| (config.clone(), backend, tv))
+                .collect::<Vec<_>>();
+            match parallel::parallel(parallel_versions, |(config, backend, tv)| async move {
+                Ok((!backend
+                    .is_install_satisfied_or_false(&config, &tv, true)
+                    .await)
+                    .then_some(tv))
+            })
+            .await
+            {
+                Ok(missing) => missing.into_iter().flatten().collect(),
+                Err(err) => {
+                    warn!("Error checking missing tool versions: {err:#}");
+                    let mut missing = vec![];
+                    for (backend, tv) in versions {
+                        if !backend
+                            .is_install_satisfied_or_false(config, &tv, true)
+                            .await
+                        {
+                            missing.push(tv);
+                        }
+                    }
+                    missing
+                }
+            }
         })
     }
 
@@ -177,7 +206,7 @@ impl Toolset {
             .into_iter()
             .map(|(p, tv)| {
                 (
-                    (p.ba().installs_path.clone(), tv.version.clone()),
+                    (p.ba().installs_path.clone(), tv.tv_pathname()),
                     (p.clone(), tv),
                 )
             })
@@ -258,24 +287,9 @@ impl Toolset {
         self.list_versions_by_plugin()
             .iter()
             .flat_map(|(p, v)| {
-                v.iter().filter(|v| v.request.is_os_supported()).map(|v| {
-                    // map cargo backend specific prefixes to ref
-                    let tv = match v.version.split_once(':') {
-                        Some((ref_type @ ("tag" | "branch" | "rev"), r)) => {
-                            let request = ToolRequest::Ref {
-                                backend: p.ba().clone(),
-                                ref_: r.to_string(),
-                                ref_type: ref_type.to_string(),
-                                options: v.request.options().clone(),
-                                source: v.request.source().clone(),
-                            };
-                            let version = format!("ref:{r}");
-                            ToolVersion::new(request, version)
-                        }
-                        _ => v.clone(),
-                    };
-                    (p.clone(), tv)
-                })
+                v.iter()
+                    .filter(|v| v.request.is_os_supported())
+                    .map(|v| (p.clone(), v.clone()))
             })
             .collect()
     }
@@ -566,6 +580,25 @@ impl Toolset {
         None
     }
 
+    /// [`Self::which_bin`] narrowed to a path the OS can spawn, for
+    /// [`Backend::spawn_program`] and [`Backend::spawnable_dependency`]. `which_bin` itself
+    /// is untouched because `mise which`, shim dispatch and auto-install all depend on its
+    /// answer.
+    pub async fn which_bin_spawnable(
+        &self,
+        config: &Arc<Config>,
+        bin_name: &str,
+    ) -> Option<PathBuf> {
+        let mut installed = self.list_current_installed_versions(config);
+        Self::sort_by_overrides(&mut installed).unwrap();
+        for (p, tv) in installed {
+            if let Ok(Some(bin)) = Box::pin(p.which_spawnable(config, &tv, bin_name)).await {
+                return Some(bin);
+            }
+        }
+        None
+    }
+
     pub async fn list_rtvs_with_bin(
         &self,
         config: &Arc<Config>,
@@ -663,7 +696,7 @@ pub async fn get_versions_needed_by_tracked_configs(
     config: &Arc<Config>,
     use_locked_version: bool,
     offline: bool,
-) -> Result<std::collections::HashSet<(String, String)>> {
+) -> Result<HashSet<(String, String)>> {
     get_versions_needed_by_tracked_configs_excluding_locks(
         config,
         use_locked_version,
@@ -680,8 +713,8 @@ pub async fn get_versions_needed_by_tracked_configs_excluding_locks(
     use_locked_version: bool,
     offline: bool,
     exclude_locked_config_paths: &HashSet<PathBuf>,
-) -> Result<std::collections::HashSet<(String, String)>> {
-    let mut needed = std::collections::HashSet::new();
+) -> Result<HashSet<(String, String)>> {
+    let mut needed = HashSet::new();
     // `mise prune` should keep versions pinned by lockfiles. `mise upgrade`
     // also protects lockfiles for other tracked projects, but excludes configs
     // it just upgraded so stale locks there do not keep the old version alive.
@@ -717,25 +750,82 @@ pub async fn get_versions_needed_by_tracked_configs_excluding_locks(
         }
         let mut ts = Toolset::from(cf.to_tool_request_set()?);
         ts.resolve_with_opts(config, &opts).await?;
-        for (_, tv) in ts.list_current_versions() {
-            needed.insert((tv.ba().short.to_string(), tv.tv_pathname()));
-            // Offline can't resolve `sub-N:latest` to a concrete version
-            // (no remote latest available). Conservatively protect every
-            // installed version of this backend so we don't delete the
-            // active one.
-            if offline
-                && let crate::toolset::ToolRequest::Sub { orig_version, .. } = &tv.request
-                && orig_version == "latest"
-                && let Ok(backend) = tv.backend()
-            {
-                let short = tv.ba().short.to_string();
-                for v in backend.list_installed_versions() {
-                    needed.insert((short.clone(), v));
-                }
+        collect_needed_versions(&ts, offline, &mut needed);
+    }
+    Ok(needed)
+}
+
+/// Get all tool versions that are needed by tracked tool stub files.
+/// Stubs are tracked in ~/.local/state/mise/tracked-stubs when they are
+/// executed. Returns (short_name, tv_pathname) pairs like
+/// [`get_versions_needed_by_tracked_configs`] so `mise prune` and
+/// `mise upgrade` do not delete versions still referenced by a stub.
+pub async fn get_versions_needed_by_tracked_stubs(
+    config: &Arc<Config>,
+) -> Result<HashSet<(String, String)>> {
+    let mut needed = HashSet::new();
+    // Like prune's tracked-config resolution, only installed versions need
+    // protecting, so resolve offline to avoid pointless remote lookups.
+    let opts = ResolveOptions {
+        use_locked_version: true,
+        offline: true,
+        ..Default::default()
+    };
+    for path in Tracker::list_all_stubs()? {
+        // A stub that no longer parses protects nothing, but shouldn't fail
+        // the whole prune either — it may simply have been repurposed.
+        let stub = match crate::cli::tool_stub::ToolStubFile::from_file(&path) {
+            Ok(stub) => stub,
+            Err(err) => {
+                warn!(
+                    "error loading tracked tool stub {}: {err:#}",
+                    display_path(&path)
+                );
+                continue;
+            }
+        };
+        let tr = match stub.to_tool_request(&path) {
+            Ok(tr) => tr,
+            Err(err) => {
+                warn!(
+                    "error resolving tracked tool stub {}: {err:#}",
+                    display_path(&path)
+                );
+                continue;
+            }
+        };
+        let mut ts = Toolset::new(ToolSource::ToolStub(path.clone()));
+        ts.add_version(tr);
+        if let Err(err) = ts.resolve_with_opts(config, &opts).await {
+            warn!(
+                "error resolving tracked tool stub version {}: {err:#}",
+                display_path(&path)
+            );
+            continue;
+        }
+        collect_needed_versions(&ts, true, &mut needed);
+    }
+    Ok(needed)
+}
+
+fn collect_needed_versions(ts: &Toolset, offline: bool, needed: &mut HashSet<(String, String)>) {
+    for (_, tv) in ts.list_current_versions() {
+        needed.insert((tv.ba().short.to_string(), tv.tv_pathname()));
+        // Offline can't resolve `sub-N:latest` to a concrete version
+        // (no remote latest available). Conservatively protect every
+        // installed version of this backend so we don't delete the
+        // active one.
+        if offline
+            && let crate::toolset::ToolRequest::Sub { orig_version, .. } = &tv.request
+            && orig_version == "latest"
+            && let Ok(backend) = tv.backend()
+        {
+            let short = tv.ba().short.to_string();
+            for v in backend.list_installed_versions() {
+                needed.insert((short.clone(), v));
             }
         }
     }
-    Ok(needed)
 }
 
 #[cfg(test)]

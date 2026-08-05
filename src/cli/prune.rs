@@ -5,10 +5,13 @@ use crate::cli::args::{BackendArg, ToolArg};
 use crate::config::tracking::Tracker;
 use crate::config::{Config, Settings};
 use crate::runtime_symlinks;
-use crate::toolset::{ToolVersion, ToolsetBuilder, get_versions_needed_by_tracked_configs};
+use crate::toolset::{
+    ToolVersion, ToolsetBuilder, get_versions_needed_by_tracked_configs,
+    get_versions_needed_by_tracked_stubs,
+};
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::prompt;
-use crate::{backend::Backend, config, exit};
+use crate::{backend::Backend, config, env, exit};
 use console::style;
 use eyre::Result;
 
@@ -20,6 +23,9 @@ use super::trust::Trust;
 /// Versions which are no longer the latest specified in any of those configs are deleted.
 /// Versions installed only with environment variables `MISE_<TOOL>_VERSION` will be deleted,
 /// as will versions only referenced on the command line `mise exec <TOOL>@<VERSION>`.
+///
+/// Tool stubs that have been executed are tracked in ~/.local/state/mise/tracked-stubs.
+/// Versions still referenced by a tracked stub are not deleted.
 ///
 /// You can list prunable tools with `mise ls --prunable`
 #[derive(Debug, clap::Args)]
@@ -75,7 +81,7 @@ impl Prune {
             let has_work = !to_delete.is_empty();
             delete(&config, self.is_dry_run(), to_delete).await?;
             if self.dry_run_code && has_work {
-                exit::exit(1);
+                return Err(exit::request(1));
             }
             if self.is_dry_run() {
                 return Ok(());
@@ -114,6 +120,11 @@ pub async fn prunable_tools(
         .list_installed_versions(config)
         .await?
         .into_iter()
+        // System and shared installs are read-only fallback locations. Prune only
+        // manages versions in the user's primary install directory.
+        .filter(|(_, tv)| {
+            env::install_path_category(&tv.install_path()) == env::InstallPathCategory::Local
+        })
         .map(|(p, tv)| ((tv.ba().short.to_string(), tv.tv_pathname()), (p, tv)))
         .collect::<BTreeMap<(String, String), (Arc<dyn Backend>, ToolVersion)>>();
 
@@ -124,6 +135,12 @@ pub async fn prunable_tools(
     // Remove versions that are still needed by tracked configs
     let needed_versions = get_versions_needed_by_tracked_configs(config, true, true).await?;
     for key in needed_versions {
+        to_delete.remove(&key);
+    }
+
+    // Remove versions that are still needed by tracked tool stubs
+    let needed_by_stubs = get_versions_needed_by_tracked_stubs(config).await?;
+    for key in needed_by_stubs {
         to_delete.remove(&key);
     }
 
@@ -148,14 +165,16 @@ async fn delete(
         }
         if !dry_run
             && !Settings::get().yes
-            && !prompt::confirm_with_all(format!("remove {} ?", &tv))?
+            && !prompt::confirm_with_all(format!("remove {} ?", tv))?
         {
             continue;
         }
         let pr = mpr.add(&prefix);
         p.uninstall_version(config, &tv, pr.as_ref(), dry_run)
             .await?;
-        runtime_symlinks::remove_missing_symlinks(p)?;
+        if !dry_run {
+            runtime_symlinks::remove_missing_symlinks(p)?;
+        }
         pr.finish();
     }
     Ok(())

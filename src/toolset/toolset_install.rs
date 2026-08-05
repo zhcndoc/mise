@@ -13,17 +13,55 @@ use crate::errors::Error;
 use crate::hooks::{Hooks, InstalledToolInfo};
 use crate::install_context::InstallContext;
 use crate::plugins::PluginType;
+use crate::registry::REGISTRY;
 use crate::toolset::Toolset;
-use crate::toolset::helpers::show_python_install_hint;
+use crate::toolset::helpers::{preflight_system_deps, show_python_install_hint};
 use crate::toolset::install_options::InstallOptions;
 use crate::toolset::tool_deps::{ToolDeps, tool_key};
 use crate::toolset::tool_request::ToolRequest;
 use crate::toolset::tool_source::ToolSource;
 use crate::toolset::tool_version::{ResolveOptions, ToolVersion};
 use crate::ui::multi_progress_report::MultiProgressReport;
-use crate::{backend, config, hooks};
+use crate::{backend, config, hooks, runtime_symlinks};
 
 impl Toolset {
+    pub async fn should_install_missing_registry_bin_provider(
+        &self,
+        config: &Arc<Config>,
+        bin_name: &str,
+    ) -> Result<bool> {
+        let mut providers = vec![];
+        for (backend, tv) in self.list_current_versions() {
+            if backend.is_version_installed(config, &tv, true) {
+                if backend
+                    .which(config, &tv, bin_name)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    providers.push((backend, tv));
+                }
+            } else if REGISTRY
+                .get(&tv.ba().short)
+                .is_some_and(|tool| tool.provides_bin(bin_name))
+                && match &Settings::get().auto_install_disable_tools {
+                    Some(disable_tools) => !disable_tools.contains(&tv.ba().short),
+                    None => true,
+                }
+            {
+                providers.push((backend, tv));
+            }
+        }
+        Self::sort_by_overrides(&mut providers)?;
+        Ok(providers.first().is_some_and(|(backend, tv)| {
+            !backend.is_version_installed(config, tv, true)
+                && REGISTRY
+                    .get(&tv.ba().short)
+                    .is_some_and(|tool| tool.provides_bin(bin_name))
+        }))
+    }
+
     #[async_backtrace::framed]
     /// Installs missing tool versions and returns (installed_versions, still_missing_versions).
     /// This avoids callers needing to re-compute the missing versions list.
@@ -57,6 +95,13 @@ impl Toolset {
         // Ensure options from toolset are preserved during auto-install
         self.init_request_options(&mut versions);
         let installed = self.install_all_versions(config, versions, opts).await?;
+        if opts.dry_run {
+            // Dry-run install results describe the planned installs. They are not
+            // present on disk, so rebuilding shims/runtime symlinks or updating
+            // lockfiles for them would both mutate state and advertise tools that
+            // cannot be executed.
+            return Ok((installed, missing));
+        }
         if !installed.is_empty() {
             let ts = config.get_toolset().await?;
             config::rebuild_shims_and_runtime_symlinks(
@@ -125,11 +170,7 @@ impl Toolset {
         };
         mpr.init_footer(opts.dry_run, &footer_reason, versions.len());
 
-        // Skip hooks in dry-run mode
-        if !opts.dry_run {
-            // Run pre-install hook
-            hooks::run_one_hook(config, self, Hooks::Preinstall, None).await;
-        }
+        hooks::run_one_hook(config, self, Hooks::Preinstall, None, opts.dry_run).await;
 
         self.init_request_options(&mut versions);
         show_python_install_hint(&versions);
@@ -154,8 +195,20 @@ impl Toolset {
             plugin_errors.iter().map(|(tr, _)| tr.clone()).collect();
         versions.retain(|tr| !tools_with_plugin_errors.contains(tr));
 
+        // Check plugin-declared system prerequisites before compiling anything.
+        // Runs here (after plugins are installed, before parallel install tasks
+        // spawn) so declarations are readable and the non-Send driver stays on
+        // the main task.
+        preflight_system_deps(config, &versions, opts).await;
+
         // Build dependency graph and install using Kahn's algorithm
-        let (installed, failed) = self.install_with_deps(config, versions, opts).await;
+        let (installed, failed, attempted_failures) =
+            self.install_with_deps(config, versions, opts).await;
+        let failed_backends = attempted_failures
+            .iter()
+            .filter_map(|tr| tr.backend().ok())
+            .unique_by(|backend| backend.ba().installs_path.clone())
+            .collect_vec();
 
         // Update footer for errors found before install tasks are spawned.
         let pre_install_error_count = disabled_backend_errors.len() + plugin_errors.len();
@@ -176,6 +229,12 @@ impl Toolset {
             trace!("install: resolving");
             if let Err(err) = self.resolve(config).await {
                 debug!("error resolving versions after install: {err:#}");
+            }
+            if !failed_backends.is_empty()
+                && let Err(err) =
+                    runtime_symlinks::rebuild_for_backends(config, self, failed_backends).await
+            {
+                warn!("failed to restore runtime symlinks after install failure: {err:#}");
             }
         }
 
@@ -209,8 +268,17 @@ impl Toolset {
             mpr.footer_finish();
         }
 
-        // Skip hooks in dry-run mode
-        if !opts.dry_run {
+        if opts.dry_run {
+            hooks::run_one_hook_with_context(
+                config,
+                self,
+                Hooks::Postinstall,
+                None,
+                None,
+                opts.dry_run,
+            )
+            .await;
+        } else {
             // Run post-install hook with installed tools info
             // Use the full resolved toolset so all installed tools are on PATH
             // Fall back to self if toolset resolution fails (e.g. due to config issues)
@@ -229,6 +297,7 @@ impl Toolset {
                 Hooks::Postinstall,
                 None,
                 Some(&installed_tools),
+                opts.dry_run,
             )
             .await;
         }
@@ -295,15 +364,20 @@ impl Toolset {
     }
 
     /// Install tools using Kahn's algorithm for dependency ordering.
-    /// Returns (successful_installations, failed_installations).
+    /// Returns (successful_installations, failed_installations, attempted_failures).
+    /// The final collection excludes tools blocked before their installer was spawned.
     async fn install_with_deps(
         &self,
         config: &Arc<Config>,
         versions: Vec<ToolRequest>,
         opts: &InstallOptions,
-    ) -> (Vec<ToolVersion>, Vec<(ToolRequest, eyre::Error)>) {
+    ) -> (
+        Vec<ToolVersion>,
+        Vec<(ToolRequest, eyre::Error)>,
+        Vec<ToolRequest>,
+    ) {
         if versions.is_empty() {
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![]);
         }
 
         // Build index map to preserve original request order
@@ -322,7 +396,7 @@ impl Toolset {
                     .into_iter()
                     .map(|tr| (tr, eyre::eyre!("Failed to build dependency graph: {}", e)))
                     .collect();
-                return (vec![], failed);
+                return (vec![], failed, vec![]);
             }
         };
 
@@ -339,6 +413,7 @@ impl Toolset {
 
         let mut installed = vec![];
         let mut failed = vec![];
+        let mut attempted_failures = vec![];
         let mut jset: JoinSet<(ToolRequest, Result<ToolVersion>)> = JoinSet::new();
         // Track in-flight tools to recover from task panics
         let mut in_flight: HashMap<tokio::task::Id, ToolRequest> = HashMap::new();
@@ -361,6 +436,7 @@ impl Toolset {
                         }
                         Ok((tr, Err(e))) => {
                             mpr.footer_inc(1);
+                            attempted_failures.push(tr.clone());
                             failed.push((tr.clone(), e));
                             tool_deps.lock().await.complete_failure(&tr);
                         }
@@ -368,6 +444,7 @@ impl Toolset {
                             // Task panicked - try to recover the tool request from in_flight tracking
                             mpr.footer_inc(1);
                             if let Some(tr) = in_flight.remove(&e.id()) {
+                                attempted_failures.push(tr.clone());
                                 failed.push((tr.clone(), eyre::eyre!("Installation task panicked: {e:#}")));
                                 tool_deps.lock().await.complete_failure(&tr);
                             } else {
@@ -427,12 +504,14 @@ impl Toolset {
                 }
                 Ok((tr, Err(e))) => {
                     mpr.footer_inc(1);
+                    attempted_failures.push(tr.clone());
                     failed.push((tr.clone(), e));
                     tool_deps.lock().await.complete_failure(&tr);
                 }
                 Err(e) => {
                     mpr.footer_inc(1);
                     if let Some(tr) = in_flight.remove(&e.id()) {
+                        attempted_failures.push(tr.clone());
                         failed.push((tr.clone(), eyre::eyre!("Installation task panicked: {e:#}")));
                         tool_deps.lock().await.complete_failure(&tr);
                     } else {
@@ -455,7 +534,7 @@ impl Toolset {
             request_order.get(&key).copied().unwrap_or(usize::MAX)
         });
 
-        (installed, failed)
+        (installed, failed, attempted_failures)
     }
 
     /// Install a single tool
@@ -499,19 +578,36 @@ impl Toolset {
         config: &mut Arc<Config>,
         bin_name: &str,
     ) -> Result<Option<Vec<ToolVersion>>> {
-        // Strategy: Find backends that could provide this bin by checking:
-        // 1. Any currently installed versions that provide the bin
-        // 2. Any requested backends with installed versions (even if not current)
+        // Registry bin metadata is the only provider signal available before a tool has ever
+        // been installed. Prefer those configured providers, applying registry override order,
+        // before falling back to executable discovery from existing installs.
         let mut plugins = IndexSet::new();
+        let mut registry_providers = self
+            .list_missing_versions(config)
+            .await
+            .into_iter()
+            .filter(|tv| {
+                REGISTRY
+                    .get(&tv.ba().short)
+                    .is_some_and(|tool| tool.provides_bin(bin_name))
+            })
+            .filter(|tv| match &Settings::get().auto_install_disable_tools {
+                Some(disable_tools) => !disable_tools.contains(&tv.ba().short),
+                None => true,
+            })
+            .map(|tv| eyre::Ok((tv.backend()?, tv)))
+            .collect::<Result<Vec<_>>>()?;
+        Self::sort_by_overrides(&mut registry_providers)?;
+        plugins.extend(registry_providers.into_iter().map(|(backend, _)| backend));
 
-        // First check currently active installed versions
+        // Check currently active installed versions.
         for (p, tv) in self.list_current_installed_versions(config) {
             if let Ok(Some(_bin)) = p.which(config, &tv, bin_name).await {
                 plugins.insert(p);
             }
         }
 
-        // Also check backends that are requested but not currently active
+        // Also check backends that are requested but not currently active.
         // This handles the case where a user has tool@v1 globally and tool@v2 locally (not installed)
         // When looking for a bin provided by the tool, we check if any installed version provides it
         let all_installed = self.list_installed_versions(config).await?;
@@ -562,7 +658,12 @@ impl Toolset {
                     )
                     .await?;
                 }
-                return Ok(Some(versions));
+                for tv in &versions {
+                    let backend = tv.backend()?;
+                    if backend.which(config, tv, bin_name).await?.is_some() {
+                        return Ok(Some(versions));
+                    }
+                }
             }
         }
         Ok(None)

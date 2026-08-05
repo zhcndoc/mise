@@ -37,7 +37,7 @@ bin = "python"
 
 - `tool` - 显式工具名称或后端规范（例如 `"python"`、`"github:cli/cli"`）。这是工具存根中唯一独有的字段——它指定要使用配置中的哪个工具条目。如果省略且存在 `url` 字段，则默认为 HTTP 后端。
 - `version` - 要使用的工具版本
-- `bin` - 在该工具内要执行的二进制文件名称（默认为存根文件名）
+- `bin` - 在该工具内要执行的二进制文件名称（默认为存根文件名）。
 
 ## HTTP 存根
 
@@ -97,7 +97,7 @@ bin = "tool.exe"  # Windows 的平台特定二进制文件
 为通过 HTTP 分发的工具生成工具存根：
 
 ```bash
-mise generate tool-stub ./bin/gh --url "https://github.com/cli/cli/releases/download/v2.336.0/gh_2.336.0_linux_amd64.tar.gz"
+mise generate tool-stub ./bin/gh --url "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
 ```
 
 这将会：
@@ -176,7 +176,7 @@ mise generate tool-stub ./bin/rg \
 
 version = "latest"
 bin = "bin/gh"
-url = "https://github.com/cli/cli/releases/download/v2.336.0/gh_2.336.0_linux_amd64.tar.gz"
+url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
 checksum = "blake3:a1b2c3d4e5f6..."
 size = 12345678
 ```
@@ -186,7 +186,7 @@ size = 12345678
 - 计算 BLAKE3 校验和以进行完整性验证
 - 检测文件大小
 - 识别归档中的正确二进制文件路径
-- 使用输出文件名作为工具名称
+- 使用输出文件名作为工具名称。
 
 ## 示例
 
@@ -311,7 +311,13 @@ mise tool-stub ./bin/my-tool --version
 
 缓存后的存根开销约为 4 毫秒。
 
-## 替代方案：使用 `mise x` 创建简单的存根
+## 清理
+
+执行存根会将其记录在 `~/.local/state/mise/tracked-stubs` 中，方式与使用配置文件时跟踪配置文件相同。[`mise prune`](/cli/prune) 会将跟踪存根所引用的工具版本视为必需版本，因此不会删除这些版本，就像跟踪配置文件所需的版本一样。
+
+存根必须至少在机器上执行过一次，其工具才能受到保护。如果之后删除存根文件，其工具版本将再次变得可以清理（除非还有其他内容需要它们）。
+
+## 替代方案：使用 `mise x` 创建简单存根
 
 对于基本使用场景，你可以使用 [`mise x`](/cli/exec) 命令快速创建简单的工具存根，作为手动编写 TOML 配置的替代方案：
 

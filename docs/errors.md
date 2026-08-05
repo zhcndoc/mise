@@ -52,7 +52,7 @@ mise 已知所请求的版本，但磁盘上未安装。运行
 `mise install`（或 `mise install <tool>@<version>`）来安装它。`mise ls <tool>`
 会显示哪些版本已安装，以及哪些版本只是被配置文件请求。
 
-## `[<config file>] <tool>@<version>: <error>`（无法解析版本）
+## `[<配置文件>] <工具>@<版本>: <错误>`（无法解析版本）
 
 mise 无法解析由指定配置文件请求的版本——例如
 当不存在该版本时，`[~/src/proj/mise.toml] node@99`。常见原因包括：
@@ -64,12 +64,18 @@ mise 无法解析由指定配置文件请求的版本——例如
 - **网络/API 错误**：后端无法列出版本（速率限制、离线）。
   冒号后的底层错误会说明这一点。
 
-## `HTTP 状态客户端错误 (403 禁止访问)` / `GitHub 速率限制已超出`
+## `HTTP 状态客户端错误（401 未授权）`
+
+GitHub 拒绝了 mise 发送的凭据，通常是因为令牌无效、已过期、用于不同的 GitHub 主机，或缺少必需的作用域。错误包含一行 `github auth:`，用于说明 mise 解析凭据时所使用的令牌来源，例如 `GITHUB_TOKEN`、`gh CLI (hosts.yml)` 或 `github_tokens.toml`。
+
+请在指定的来源中检查或替换令牌。如果来源未知，mise 会打印 `github auth: yes`，表示使用了已配置的 GitHub 令牌。如果未发送 Authorization 标头，则会打印 `github auth: no`。有关支持的令牌来源和配置，请参阅[GitHub 令牌](/dev-tools/github-tokens.html)。
+
+## `HTTP 状态客户端错误（403 禁止访问）` / `GitHub 速率限制超出`
 
 你已经触发了 GitHub 的 API 速率限制，对于未认证请求来说，这个限制非常低。  
 这在 CI 中尤其常见。如果没有配置 token，mise 会打印一条警告提醒你。
 
-请在你的环境中将 GitHub token（不需要任何 scope）设置为 `GITHUB_TOKEN` 或 `MISE_GITHUB_TOKEN` —— 有关所有受支持的 token 来源，请参见 [GitHub Tokens](/dev-tools/github-tokens.html)。如果已经设置了 token，请确认它有效并且有权访问该仓库（私有仓库需要相应的 scope）。
+请在你的环境中将 GitHub token（不需要任何 scope）设置为 `GITHUB_TOKEN` 或 `MISE_GITHUB_TOKEN` —— 有关所有受支持的 token 来源，请参见 [GitHub 令牌](/dev-tools/github-tokens.html)。如果已经设置了 token，请确认它有效并且有权访问该仓库（私有仓库需要相应的 scope）。
 
 错误输出中包含 `github auth:` 和 `github rate limit:` 两行，可帮助你判断当前属于哪种情况。
 

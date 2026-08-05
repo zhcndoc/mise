@@ -6,7 +6,7 @@
 
 如果你需要在 Apple Silicon 上以 x86_64 运行工具，可以使用 mise 来实现，但目前你需要使用 x86_64 版本的 mise 本身。这样做的一个常见原因是为了支持编译 node <=14。
 
-你可以通过 [`MISE_ARCH`](https://mise.en.dev/configuration/settings.html#arch) 设置，或者使用下面描述的专用 rosetta mise 可执行文件：
+你可以通过 [`MISE_ARCH`](https://mise.jdx.dev/configuration/settings.html#arch) 设置来实现，也可以按照下面的说明使用专用的 Rosetta mise 二进制文件：
 
 首先，你需要一个为 x86_64 构建的 mise 版本：
 
@@ -33,14 +33,14 @@ mise-x64 use -g node@20
 
 ```typescript
 #!/usr/bin/env -S mise x node@20 -- node
-// "env -S" 允许在 shebang 中使用多个参数
-console.log(`Running node: ${process.version}`);
+// “env -S” 允许在 shebang 中使用多个参数
+console.log(`运行 node：${process.version}`);
 ```
 
 这在 mise 未被激活的环境中也很有用
 （例如非交互式会话）。
 
-## Bootstrap 脚本
+## 引导脚本
 
 你可以下载 <https://mise.run> 脚本，用于项目引导脚本中：
 
@@ -51,7 +51,7 @@ chmod +x setup-mise.sh
 ```
 
 ::: tip
-这个文件包含校验和，因此将其提交到你的项目中比动态调用 `curl https://mise.run` 更安全——不过当然，这也意味着它只会获取脚本创建时当时最新版本的 mise。
+这个文件包含校验和，因此将其提交到你的项目中比动态调用 `curl https://mise.run` 更安全——不过当然，这也意味着它只会获取脚本创建时最新版本的 mise。
 :::
 
 ## 项目本地任务入口点
@@ -70,7 +70,7 @@ mise generate task-stubs --mise-bin ./bin/mise
 生成的任务存根会像小型项目命令一样运行，而 `bin/mise`
 会下载并运行该项目固定版本的 mise 二进制文件。
 
-## 机器引导配置 <Badge type="warning" text="experimental" />
+## 机器引导
 
 除了 `[tools]` 之外，mise 还可以声明项目或工作站所需的其余机器设置，并且 [`mise bootstrap`](/cli/bootstrap.html)
 会通过一条命令将其收敛到目标状态——先是系统包，然后是仓库，然后是 dotfiles，然后
@@ -189,7 +189,7 @@ mise set NODE_ENV=production
 
 ## 使用 Tera 读取不受支持的版本文件
 
-一些项目本地的版本文件已经作为[惯用版本文件](https://mise.en.dev/configuration.html#idiomatic-version-files)得到支持。对于其他版本文件，你可以在 `mise.toml` 中使用 Tera 模板读取该文件，并将版本分配给相应的工具。
+一些项目本地的版本文件已经作为[惯用版本文件](https://mise.jdx.dev/configuration.html#idiomatic-version-files)受到支持。对于其他版本文件，您可以在 `mise.toml` 中使用 Tera 模板读取文件，并将版本分配给相应的工具。
 
 例如，要使用 `.hvm` 文件并指定普通的 Hugo 版本：
 
@@ -286,7 +286,7 @@ redactions = ["API_KEY", "PASSWORD"]
 也支持 glob 模式：
 
 ```toml
-redactions.env = ["SECRETS_*"]
+redactions = ["SECRETS_*"]
 ```
 
 ## 软件验证

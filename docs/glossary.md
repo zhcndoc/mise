@@ -84,7 +84,7 @@ mise 支持多个后端，用于从不同来源安装工具：
 : 用于分发为单个二进制文件的工具的通用二进制安装器。参见 [ubi 后端](/dev-tools/backends/ubi)。
 
 **vfox**
-: 与 [VersionFox](https://vfox.lhan.me/) 插件兼容的后端。参见 [vfox 后端](/dev-tools/backends/vfox)。
+: 与 [VersionFox](https://vfox.dev/) 插件兼容的后端。参见 [vfox 后端](/dev-tools/backends/vfox)。
 
 ## Shell 集成
 
@@ -132,27 +132,27 @@ mise 支持多个后端，用于从不同来源安装工具：
 **脱敏**
 : 使用 `redact = true` 标记敏感环境变量，以便在 mise 输出和日志中隐藏其值。
 
-## Hooks
+## 钩子
 
-**Hooks**
-: 在特定事件下于 mise 激活期间自动执行的脚本。一个实验性功能。参见 [Hooks](/hooks)。
+**钩子**
+: 在特定事件下于 mise 激活期间自动执行的脚本。一个实验性功能。参见 [钩子](/hooks)。
 
-**cd hook**
+**cd 钩子**
 : 当你在 mise 处于活动状态时切换目录时运行。
 
-**enter hook**
+**enter 钩子**
 : 当进入一个使 mise.toml 变为活动状态的目录时运行。
 
-**leave hook**
+**leave 钩子**
 : 当离开一个曾处于活动状态的 mise.toml 所在目录时运行。
 
-**postinstall hook**
+**postinstall 钩子**
 : 在工具成功安装后运行。
 
-**preinstall hook**
+**preinstall 钩子**
 : 在工具安装开始前运行。
 
-**watch_files hook**
+**watch_files 钩子**
 : 当指定文件发生变化时运行。文件监视需要 `mise activate`。
 
 ## 任务

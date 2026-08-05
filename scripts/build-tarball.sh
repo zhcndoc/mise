@@ -75,39 +75,62 @@ if [[ $os == "linux" ]] && [[ $arch == "armv7" ]]; then
 	features="$features,aws-lc-rs"
 fi
 
-if [[ $os == "linux" ]]; then
+if [[ $os == "macos" ]]; then
+	# Targeting macOS 12+ makes ld emit chained fixups (LC_DYLD_CHAINED_FIXUPS),
+	# which dyld applies lazily per page instead of eagerly interpreting ~170k
+	# legacy rebase/bind opcodes on every launch. Measurably faster startup for
+	# a binary this large. macOS 11 (EOL since 2023) cannot run these binaries.
+	export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-12.0}
+fi
+
+if [[ -n "${MISE_BOLT:-}" ]] && [[ -z "${MISE_PGO:-}" ]]; then
+	error "MISE_BOLT requires MISE_PGO so BOLT optimizes the PGO release binary"
+fi
+
+if [[ -n "${MISE_PGO:-}" ]]; then
+	# Profile-guided optimization: instrument, train against the hermetic
+	# offline workload in scripts/pgo.bash, rebuild with the profile.
+	# Only valid for targets whose binaries can execute on this machine.
+	build_tool=cargo
+	if [[ $os == "linux" ]]; then
+		build_tool=cross
+	fi
+	MISE_PGO_BUILD_TOOL="$build_tool" MISE_PGO_TARGET="$RUST_TRIPLE" \
+		bash scripts/pgo.bash --no-default-features --features "$features"
+elif [[ $os == "linux" ]]; then
 	cross build --profile=serious --target "$RUST_TRIPLE" --no-default-features --features "$features"
 else
 	cargo build --profile=serious --target "$RUST_TRIPLE" --no-default-features --features "$features"
 fi
 
-# Check glibc compatibility for x86_64-unknown-linux-gnu (Amazon Linux 2 requirement: glibc <= 2.26)
-if [[ $RUST_TRIPLE == "x86_64-unknown-linux-gnu" ]]; then
-	echo "Checking glibc compatibility for Amazon Linux 2..."
-	# Use CARGO_TARGET_DIR if set, otherwise default to target
-	target_dir="${CARGO_TARGET_DIR:-target}"
-	binary_path="$target_dir/$RUST_TRIPLE/serious/mise"
-	if [[ -f $binary_path ]]; then
-		max_glibc=$(objdump -p "$binary_path" | grep 'GLIBC_' | sed 's/.*GLIBC_//' | sort -V | tail -1)
-		echo "Maximum glibc version required: $max_glibc"
+# Use CARGO_TARGET_DIR if set, otherwise default to target
+target_dir="${CARGO_TARGET_DIR:-target}"
+binary_path="$target_dir/$RUST_TRIPLE/serious/mise"
 
-		# Amazon Linux 2 has glibc 2.26, so we check if our binary requires <= 2.26
-		if printf '%s\n' "$max_glibc" "2.26" | sort -V -C; then
-			echo "✅ Binary is compatible with Amazon Linux 2 (glibc $max_glibc <= 2.26)"
-		else
-			echo "❌ Binary requires glibc $max_glibc, which is newer than Amazon Linux 2's glibc 2.26"
-			echo "This binary will NOT work on Amazon Linux 2"
-			exit 1
-		fi
-	else
-		echo "Warning: Binary not found at $binary_path, skipping glibc check"
-	fi
+if [[ -n "${MISE_BOLT:-}" ]]; then
+	case "$RUST_TRIPLE" in
+	x86_64-unknown-linux-gnu)
+		bash scripts/bolt.bash "$binary_path"
+		;;
+	*)
+		error "BOLT is only enabled for the x86_64 Linux GNU release target: $RUST_TRIPLE"
+		;;
+	esac
 fi
+
+case "$RUST_TRIPLE" in
+x86_64-unknown-linux-gnu)
+	echo "Checking glibc compatibility for Amazon Linux 2..."
+	scripts/check-glibc.sh "$binary_path" "2.26" "Amazon Linux 2"
+	;;
+aarch64-unknown-linux-gnu)
+	echo "Checking glibc compatibility for Amazon Linux 2023..."
+	scripts/check-glibc.sh "$binary_path" "2.34" "Amazon Linux 2023"
+	;;
+esac
 mkdir -p dist/mise/bin
 mkdir -p dist/mise/man/man1
 mkdir -p dist/mise/share/fish/vendor_conf.d
-# Use CARGO_TARGET_DIR if set, otherwise default to target
-target_dir="${CARGO_TARGET_DIR:-target}"
 cp "$target_dir/$RUST_TRIPLE/serious/mise"* dist/mise/bin
 cp README.md dist/mise/README.md
 cp LICENSE dist/mise/LICENSE
@@ -127,8 +150,8 @@ if [[ $os == "windows" ]]; then
 	zip -r "$basename.zip" mise
 	ls -oh "$basename.zip"
 else
-	XZ_OPT=-9 tar -acf "$basename.tar.xz" mise
-	tar -cf - mise | gzip -9 >"$basename.tar.gz"
-	ZSTD_NBTHREADS=0 ZSTD_CLEVEL=19 tar -acf "$basename.tar.zst" mise
+	XZ_OPT=-9 tar --owner=0 --group=0 -acf "$basename.tar.xz" mise
+	tar --owner=0 --group=0 -cf - mise | gzip -9 >"$basename.tar.gz"
+	ZSTD_NBTHREADS=0 ZSTD_CLEVEL=19 tar --owner=0 --group=0 -acf "$basename.tar.zst" mise
 	ls -oh "$basename.tar."*
 fi

@@ -28,7 +28,78 @@ export const commands: { [key: string]: Command } = {
   bootstrap: {
     hide: false,
     subcommands: {
+      "__apply-account-plan": {
+        hide: true,
+      },
+      "__apply-firewall-plan": {
+        hide: true,
+      },
+      "__apply-service-plan": {
+        hide: true,
+      },
+      "__apply-system-plan": {
+        hide: true,
+      },
+      "__inspect-firewall-plan": {
+        hide: true,
+      },
+      "__inspect-system-files": {
+        hide: true,
+      },
+      accounts: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+        },
+      },
+      compose: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+        },
+      },
       dotfiles: {
+        hide: false,
+        subcommands: {
+          add: {
+            hide: false,
+          },
+          apply: {
+            hide: false,
+          },
+          edit: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+          unapply: {
+            hide: false,
+          },
+        },
+      },
+      files: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+        },
+      },
+      firewall: {
         hide: false,
         subcommands: {
           apply: {
@@ -149,7 +220,49 @@ export const commands: { [key: string]: Command } = {
           },
         },
       },
+      plan: {
+        hide: false,
+      },
+      plugins: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+        },
+      },
+      remote: {
+        hide: false,
+      },
       repos: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          exec: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+          update: {
+            hide: false,
+          },
+        },
+      },
+      secrets: {
+        hide: false,
+        subcommands: {
+          status: {
+            hide: false,
+          },
+        },
+      },
+      services: {
         hide: false,
         subcommands: {
           apply: {
@@ -197,6 +310,9 @@ export const commands: { [key: string]: Command } = {
         hide: false,
       },
       prune: {
+        hide: false,
+      },
+      task: {
         hide: false,
       },
     },
@@ -261,19 +377,22 @@ export const commands: { [key: string]: Command } = {
     },
   },
   dotfiles: {
-    hide: false,
+    hide: true,
     subcommands: {
       add: {
-        hide: false,
+        hide: true,
       },
       apply: {
-        hide: false,
+        hide: true,
       },
       edit: {
-        hide: false,
+        hide: true,
       },
       status: {
-        hide: false,
+        hide: true,
+      },
+      unapply: {
+        hide: true,
       },
     },
   },
@@ -502,6 +621,9 @@ export const commands: { [key: string]: Command } = {
         hide: false,
       },
       edit: {
+        hide: false,
+      },
+      graph: {
         hide: false,
       },
       info: {

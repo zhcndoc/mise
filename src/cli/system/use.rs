@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use super::driver::{self, Action, DriverOpts};
 use crate::config::config_file::ConfigFile;
 use crate::config::config_file::mise_toml::MiseToml;
-use crate::config::{ConfigPathOptions, Settings, resolve_target_config_path};
+use crate::config::{ConfigPathOptions, resolve_target_config_path};
 use crate::file::display_path;
 use crate::system;
 use crate::system::packages::PackageRequest;
@@ -43,7 +43,13 @@ pub struct SystemUse {
     dry_run: bool,
 
     /// Write to this config file or directory
-    #[clap(long, short, value_name = "PATH", conflicts_with = "global")]
+    #[clap(
+        long,
+        short,
+        visible_alias = "file",
+        value_name = "PATH",
+        conflicts_with = "global"
+    )]
     path: Option<PathBuf>,
 
     /// Skip the confirmation prompt
@@ -53,7 +59,6 @@ pub struct SystemUse {
 
 impl SystemUse {
     pub async fn run(self) -> Result<()> {
-        Settings::get().ensure_experimental("mise bootstrap")?;
         let config = crate::config::Config::get().await?;
         let mut by_mgr: IndexMap<String, Vec<PackageRequest>> = IndexMap::new();
         let mut entries: Vec<(String, String)> = vec![];
@@ -118,11 +123,13 @@ impl SystemUse {
         // this machine.
         if !self.dry_run {
             for mp in &mgrs {
-                if !mp.disabled && !mp.manager.is_available() {
+                if !mp.disabled
+                    && let Some(reason) = mp.manager.unavailable_reason_async().await
+                {
                     info!(
                         "{}: {} — added to config without installing",
                         mp.manager.name(),
-                        mp.manager.unavailable_reason()
+                        reason
                     );
                 }
             }
@@ -141,7 +148,7 @@ impl SystemUse {
 static AFTER_LONG_HELP: &str = color_print::cstr!(
     r#"<bold><underline>Examples:</underline></bold>
 
-    $ <bold>mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox mas:497799835</bold>
+    $ <bold>mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox mas:497799835</bold>
     $ <bold>mise bootstrap packages use -g brew:postgresql@17</bold>
     $ <bold>mise bootstrap packages use apt:curl@8.5.0-2</bold>
 "#

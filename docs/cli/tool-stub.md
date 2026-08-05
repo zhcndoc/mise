@@ -16,7 +16,7 @@ tool = "node" version = "20.0.0" bin = "node"
 
 如果缺少指定版本的工具，存根会自动安装它，并使用传递给存根的任何参数来执行它。
 
-更多信息请参见：<https://mise.en.dev/dev-tools/tool-stubs.html>
+有关更多信息，请参阅：<https://mise.jdx.dev/dev-tools/tool-stubs.html>。
 
 ## 参数
 

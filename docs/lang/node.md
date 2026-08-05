@@ -84,6 +84,13 @@ mise settings add idiomatic_version_file_enable_tools node
 idiomatic_version_file_enable_tools = ["node"]
 ```
 
+在保持启用 `.nvmrc` 或 `.node-version` 的同时，阻止 node 使用 `package.json` 中的
+`devEngines.runtime`：
+
+```sh
+mise settings add idiomatic_version_file_disable_files node:package.json
+```
+
 :::
 
 ## 默认 node 包

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::backend::static_helpers::lookup_platform_key;
 use crate::config::Config;
+use crate::config::env_directive::EnvValue;
 use crate::dirs;
 use crate::file;
 use crate::hash;
@@ -23,7 +24,7 @@ pub struct ToolStubFile {
     pub bin: Option<String>,  // defaults to filename if not specified
     pub tool: Option<String>, // explicit tool name override
     #[serde(default)]
-    pub install_env: indexmap::IndexMap<String, String>,
+    pub install_env: indexmap::IndexMap<String, EnvValue>,
     #[serde(default)]
     pub os: Option<Vec<String>>,
     pub lock: Option<ToolStubLock>,
@@ -638,7 +639,7 @@ async fn execute_with_tool_request(
 /// The stub will automatically install the specified tool version if missing
 /// and execute it with any arguments passed to the stub.
 ///
-/// For more information, see: https://mise.en.dev/dev-tools/tool-stubs.html
+/// For more information, see: https://mise.jdx.dev/dev-tools/tool-stubs.html
 #[derive(Debug, Parser)]
 #[clap(disable_help_flag = true, disable_version_flag = true)]
 pub struct ToolStub {
@@ -676,6 +677,16 @@ impl ToolStub {
         }; // Drop the lock before await
 
         let stub = ToolStubFile::from_file(&self.file)?;
+
+        // Track the stub so `mise prune` knows its tool is still needed. Stubs
+        // can live anywhere, so execution time is the only chance to find them.
+        // absolute() rather than canonicalize() so a symlinked stub keeps its
+        // invoked filename, which the tool name can be derived from.
+        let stub_path = std::path::absolute(&self.file).unwrap_or_else(|_| self.file.clone());
+        if let Err(err) = crate::config::tracking::Tracker::track_stub(&stub_path) {
+            crate::warn!("tracking tool stub: {err:#}");
+        }
+
         let mut config = Config::get().await?;
 
         return execute_with_tool_request(&stub, &mut config, args, &self.file).await;

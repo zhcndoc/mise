@@ -1,6 +1,6 @@
 mod path;
 
-use crate::{exit, plugins::PluginEnum};
+use crate::plugins::PluginEnum;
 use std::collections::HashSet;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -160,10 +160,12 @@ impl Doctor {
 
         let config = Config::get().await?;
         let ts = config.get_toolset().await?;
-        self.analyze_shims(&config, ts).await;
+        let desired_shims = self.analyze_shims(&config, ts).await;
         self.analyze_plugins();
         self.analyze_backend_mismatches();
+        self.analyze_system_deps(ts).await;
         self.check_path_ordering(ts, &config).await;
+        self.check_shim_shadowing(&desired_shims).await;
         data.insert(
             "paths".into(),
             self.paths(ts)
@@ -250,7 +252,7 @@ impl Doctor {
         println!("{out}");
 
         if !self.errors.is_empty() {
-            exit(1);
+            return Err(crate::request_exit(1));
         }
         Ok(())
     }
@@ -293,6 +295,11 @@ impl Doctor {
 
         self.analyze_plugins();
         self.analyze_backend_mismatches();
+        if let Ok(config) = Config::get().await
+            && let Ok(ts) = config.get_toolset().await
+        {
+            self.analyze_system_deps(ts).await;
+        }
 
         let env_vars = mise_env_vars()
             .into_iter()
@@ -336,10 +343,58 @@ impl Doctor {
                 let num = style::nred(format!("{}.", i + 1));
                 miseprintln!("{num} {}\n", info::indent_by(check, "   ").trim_start());
             }
-            exit(1);
+            return Err(crate::request_exit(1));
         }
 
         Ok(())
+    }
+
+    /// Warn about missing required system prerequisites declared by the
+    /// plugins backing the current toolset (php needs bison, etc.). Optional
+    /// deps and tools whose plugin isn't installed are silently skipped.
+    async fn analyze_system_deps(&mut self, ts: &Toolset) {
+        let mut seen = std::collections::HashSet::new();
+        for (ba, tvl) in &ts.versions {
+            // Skip tools not supported on this OS, matching bootstrap's
+            // collect_plugin_deps — otherwise we'd warn about prerequisites for
+            // a tool that will never install on this platform.
+            if !tvl.requests.iter().any(|tr| tr.is_os_supported()) {
+                continue;
+            }
+            if !seen.insert(ba.short.clone()) {
+                continue;
+            }
+            let Some(backend) = crate::backend::get(ba) else {
+                continue;
+            };
+            let deps = backend.system_dependencies();
+            if deps.is_empty() {
+                continue;
+            }
+            for status in crate::system::deps::detect(&deps).await {
+                if status.satisfied || status.dep.optional.is_some() {
+                    continue;
+                }
+                let msg = match (&status.found, &status.reason) {
+                    (Some(found), _) => format!(
+                        "{} requires system dependency {} (found {found})",
+                        ba.tool_name,
+                        status.dep.label()
+                    ),
+                    (None, Some(reason)) => format!(
+                        "{} requires system dependency {} ({reason})",
+                        ba.tool_name,
+                        status.dep.label()
+                    ),
+                    (None, None) => format!(
+                        "{} requires system dependency {}",
+                        ba.tool_name,
+                        status.dep.label()
+                    ),
+                };
+                self.warnings.push(msg);
+            }
+        }
     }
 
     fn analyze_settings(&mut self) -> eyre::Result<()> {
@@ -371,7 +426,7 @@ impl Doctor {
                 && !plugin.is_installed()
             {
                 self.errors
-                    .push(format!("plugin {} is not installed", &plugin.name()));
+                    .push(format!("plugin {} is not installed", plugin.name()));
                 continue;
             }
         }
@@ -385,7 +440,7 @@ impl Doctor {
                 ));
             } else {
                 let cmd = style::nyellow("mise help activate");
-                let url = style::nunderline("https://mise.en.dev");
+                let url = style::nunderline("https://mise.jdx.dev");
                 self.errors.push(formatdoc!(
                     r#"mise is not activated, run {cmd} or
                         read documentation at {url} for activation instructions.
@@ -397,10 +452,11 @@ impl Doctor {
 
         match ToolsetBuilder::new().build(config).await {
             Ok(ts) => {
-                self.analyze_shims(config, &ts).await;
+                let desired_shims = self.analyze_shims(config, &ts).await;
                 self.analyze_toolset(&ts).await?;
                 self.analyze_paths(&ts).await?;
                 self.check_path_ordering(&ts, config).await;
+                self.check_shim_shadowing(&desired_shims).await;
             }
             Err(err) => self.errors.push(format!("failed to load toolset: {err}")),
         }
@@ -414,9 +470,6 @@ impl Doctor {
 
     /// same diagnostics as [`Self::analyze_system_packages`] for `doctor -J`
     async fn system_packages_json(&mut self, config: &Arc<Config>) -> Option<serde_json::Value> {
-        if !Settings::get().experimental {
-            return None;
-        }
         let mgrs = crate::system::packages_from_config(config);
         if mgrs.is_empty() {
             return None;
@@ -425,12 +478,12 @@ impl Doctor {
         let mut total_missing = 0;
         for mp in mgrs {
             let name = mp.manager.name();
-            if mp.disabled || !mp.manager.is_available() {
-                let reason = if mp.disabled {
-                    "excluded by the system_packages.managers setting".to_string()
-                } else {
-                    mp.manager.unavailable_reason()
-                };
+            let reason = if mp.disabled {
+                Some("excluded by the system_packages.managers setting".to_string())
+            } else {
+                mp.manager.unavailable_reason_async().await
+            };
+            if let Some(reason) = reason {
                 map.insert(
                     name.into(),
                     serde_json::json!({
@@ -481,9 +534,6 @@ impl Doctor {
         &mut self,
         config: &Arc<Config>,
     ) -> Option<SystemDefaultsDiagnosis> {
-        if !Settings::get().experimental {
-            return None;
-        }
         let defaults = crate::system::defaults_from_config(config);
         if defaults.is_empty() {
             return None;
@@ -573,9 +623,6 @@ impl Doctor {
         &mut self,
         config: &Arc<Config>,
     ) -> Option<SystemLoginShellDiagnosis> {
-        if !Settings::get().experimental {
-            return None;
-        }
         let request = crate::system::login_shell_from_config(config)?;
         if !crate::system::login_shell::is_available() {
             return Some(SystemLoginShellDiagnosis::Unavailable {
@@ -658,9 +705,6 @@ impl Doctor {
     }
 
     async fn analyze_system_packages(&mut self, config: &Arc<Config>) -> eyre::Result<()> {
-        if !Settings::get().experimental {
-            return Ok(());
-        }
         let mgrs = crate::system::packages_from_config(config);
         if mgrs.is_empty() {
             return Ok(());
@@ -669,12 +713,12 @@ impl Doctor {
         let mut total_missing = 0;
         for mp in mgrs {
             let name = mp.manager.name();
-            if mp.disabled || !mp.manager.is_available() {
-                let reason = if mp.disabled {
-                    "excluded by the system_packages.managers setting".to_string()
-                } else {
-                    mp.manager.unavailable_reason()
-                };
+            let reason = if mp.disabled {
+                Some("excluded by the system_packages.managers setting".to_string())
+            } else {
+                mp.manager.unavailable_reason_async().await
+            };
+            if let Some(reason) = reason {
                 lines.push(format!(
                     "{name}: unavailable ({reason}), {} package(s) skipped",
                     mp.requests.len()
@@ -744,29 +788,32 @@ impl Doctor {
         Ok(())
     }
 
-    async fn analyze_shims(&mut self, config: &Arc<Config>, toolset: &Toolset) {
+    async fn analyze_shims(&mut self, config: &Arc<Config>, toolset: &Toolset) -> HashSet<String> {
         let mise_bin = file::which_no_shims("mise").unwrap_or(env::MISE_BIN.clone());
 
-        if let Ok((missing, extra)) = shims::get_shim_diffs(config, mise_bin, toolset).await {
+        if let Ok(diffs) = shims::get_shim_diffs(config, mise_bin, toolset).await {
             let cmd = style::nyellow("mise reshim");
 
-            if !missing.is_empty() {
+            if !diffs.missing.is_empty() {
                 self.errors.push(formatdoc!(
                     "shims are missing, run {cmd} to create them
                      Missing shims: {missing}",
-                    missing = missing.into_iter().join(", ")
+                    missing = diffs.missing.into_iter().join(", ")
                 ));
             }
 
-            if !extra.is_empty() {
+            if !diffs.extra.is_empty() {
                 self.errors.push(formatdoc!(
                     "unused shims are present, run {cmd} to remove them
                      Unused shims: {extra}",
-                    extra = extra.into_iter().join(", ")
+                    extra = diffs.extra.into_iter().join(", ")
                 ));
             }
+            time!("doctor::analyze_shims");
+            return diffs.desired;
         }
         time!("doctor::analyze_shims");
+        HashSet::new()
     }
 
     fn analyze_plugins(&mut self) {
@@ -776,7 +823,7 @@ impl Doctor {
 
             if is_core && matches!(plugin_type, Some(PluginType::Asdf | PluginType::Vfox)) {
                 self.warnings
-                    .push(format!("plugin {} overrides a core plugin", &plugin.id()));
+                    .push(format!("plugin {} overrides a core plugin", plugin.id()));
             }
         }
     }
@@ -919,6 +966,70 @@ impl Doctor {
             Ensure `mise activate` runs after other PATH modifications in your shell rc file."#
         ));
     }
+
+    /// Check whether commands provided by mise shims resolve to another executable first.
+    /// Paths before the shim directory are allowed to take precedence intentionally, so report
+    /// only concrete command collisions instead of warning merely because shims are not first.
+    async fn check_shim_shadowing(&mut self, desired_shims: &HashSet<String>) {
+        if env::is_activated() || !shims_on_path() {
+            return;
+        }
+
+        let path = match std::env::join_paths(&*env::PATH) {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        let cwd = dirs::CWD.clone().unwrap_or_default();
+        let mut shadowed = BTreeMap::new();
+        let mut checked_commands = HashSet::new();
+
+        for shim in desired_shims {
+            if !dirs::SHIMS.join(shim).exists() {
+                continue;
+            }
+            let command = shim_command_name(shim);
+            if !checked_commands.insert(command.clone()) {
+                continue;
+            }
+            let Ok(resolved) = which::which_in(&command, Some(&path), &cwd) else {
+                continue;
+            };
+            let is_mise_shim = resolved
+                .parent()
+                .is_some_and(|parent| file::paths_eq(&file::replace_path(parent), &dirs::SHIMS));
+            if !is_mise_shim {
+                shadowed.insert(command, resolved);
+            }
+        }
+
+        if shadowed.is_empty() {
+            return;
+        }
+
+        let shadowed = shadowed
+            .into_iter()
+            .map(|(command, path)| format!("{command}: {}", display_path(path)))
+            .join("\n  ");
+        self.warnings.push(formatdoc!(
+            r#"mise shims are shadowed by executables earlier in PATH:
+              {shadowed}
+            Move {} earlier in PATH to use the mise-managed versions."#,
+            display_path(*dirs::SHIMS),
+        ));
+    }
+}
+
+fn shim_command_name(shim: &str) -> String {
+    if cfg!(windows) {
+        let lower = shim.to_ascii_lowercase();
+        if lower.ends_with(".exe") || lower.ends_with(".cmd") {
+            shim[..shim.len() - 4].to_string()
+        } else {
+            shim.to_string()
+        }
+    } else {
+        shim.to_string()
+    }
 }
 
 fn shims_on_path() -> bool {
@@ -990,7 +1101,13 @@ async fn render_env_files(config: &Arc<Config>) -> eyre::Result<String> {
 fn render_backends() -> String {
     BackendType::iter()
         .filter(|b| b != &BackendType::Unknown)
-        .map(|b| b.to_string())
+        .map(|b| {
+            if backend::is_disabled_backend_type(&b) {
+                format!("{b} {}", style::ndim("(disabled)"))
+            } else {
+                b.to_string()
+            }
+        })
         .join("\n")
 }
 
@@ -1076,6 +1193,7 @@ fn plugin_type_name(plugin_type: PluginType) -> &'static str {
         PluginType::Asdf => "asdf",
         PluginType::Vfox => "vfox",
         PluginType::VfoxBackend => "vfox_backend",
+        PluginType::Package => "package",
     }
 }
 

@@ -10,6 +10,9 @@ use aqua_registry::types::{AquaPackage, RegistryPackageRow, RegistryYaml};
 use eyre::{Result, eyre};
 use serde_yaml::Value;
 
+// cfg_aliases 0.2.1 emits semicolon-terminated helper macros in expression
+// position, which the latest nightly compiler rejects as future-incompatible.
+#[allow(semicolon_in_expressions_from_macros)]
 fn main() -> Result<()> {
     cfg_aliases::cfg_aliases! {
         asdf: { any(feature = "asdf", not(target_os = "windows")) },
@@ -229,6 +232,20 @@ fn codegen_registry() {
         let description = info
             .get("description")
             .map(|d| d.as_str().unwrap().to_string());
+        let bins = info
+            .get("bins")
+            .map(|bins| {
+                bins.as_array()
+                    .unwrap_or_else(|| panic!("[{short}] 'bins' must be an array"))
+                    .iter()
+                    .map(|bin| {
+                        bin.as_str()
+                            .unwrap_or_else(|| panic!("[{short}] 'bins' must contain only strings"))
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let idiomatic_files = info
             .get("idiomatic_files")
             .map(|idiomatic_files| {
@@ -236,7 +253,58 @@ fn codegen_registry() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|f| f.as_str().unwrap().to_string())
+                    .map(|f| match f {
+                        toml::Value::String(path) => format!(
+                            "RegistryIdiomaticFile {{ path: {}, version_regex: None, version_json_path: None, version_expr: None }}",
+                            raw_string_literal(path)
+                        ),
+                        toml::Value::Table(spec) => {
+                            for key in spec.keys() {
+                                assert!(
+                                    matches!(
+                                        key.as_str(),
+                                        "path"
+                                            | "version_regex"
+                                            | "version_json_path"
+                                            | "version_expr"
+                                    ),
+                                    "[{short}] unknown idiomatic file field: {key}"
+                                );
+                            }
+                            let required = |key: &str| {
+                                spec.get(key)
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "[{short}] idiomatic_files.{key} must be a string"
+                                        )
+                                    })
+                            };
+                            let optional = |key: &str| {
+                                spec.get(key)
+                                    .map(|value| {
+                                        value.as_str().unwrap_or_else(|| {
+                                            panic!(
+                                                "[{short}] idiomatic_files.{key} must be a string"
+                                            )
+                                        })
+                                    })
+                                    .map(raw_string_literal)
+                                    .map(|value| format!("Some({value})"))
+                                    .unwrap_or_else(|| "None".to_string())
+                            };
+                            format!(
+                                "RegistryIdiomaticFile {{ path: {}, version_regex: {}, version_json_path: {}, version_expr: {} }}",
+                                raw_string_literal(required("path")),
+                                optional("version_regex"),
+                                optional("version_json_path"),
+                                optional("version_expr"),
+                            )
+                        }
+                        _ => panic!(
+                            "[{short}] idiomatic_files entries must be strings or tables"
+                        ),
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -263,11 +331,16 @@ fn codegen_registry() {
             })
             .unwrap_or_default();
         let rt = format!(
-            r#"RegistryTool{{short: "{short}", description: {description}, backends: &[{backends}], aliases: &[{aliases}], test: &{test}, os: &[{os}], idiomatic_files: &[{idiomatic_files}], detect: &[{detect}], overrides: &[{overrides}]}}"#,
+            r#"RegistryTool{{short: "{short}", description: {description}, backends: &[{backends}], bins: &[{bins}], aliases: &[{aliases}], test: &{test}, os: &[{os}], idiomatic_files: &[{idiomatic_files}], detect: &[{detect}], overrides: &[{overrides}]}}"#,
             description = description
                 .map(|d| format!("Some({})", raw_string_literal(&d)))
                 .unwrap_or("None".to_string()),
             backends = backends.into_iter().collect::<Vec<_>>().join(", "),
+            bins = bins
+                .iter()
+                .map(|bin| raw_string_literal(bin))
+                .collect::<Vec<_>>()
+                .join(", "),
             aliases = aliases
                 .iter()
                 .map(|a| format!("\"{a}\""))
@@ -290,11 +363,7 @@ fn codegen_registry() {
                 .map(|o| format!("\"{o}\""))
                 .collect::<Vec<_>>()
                 .join(", "),
-            idiomatic_files = idiomatic_files
-                .iter()
-                .map(|f| format!("\"{f}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
+            idiomatic_files = idiomatic_files.to_vec().join(", "),
             detect = detect
                 .iter()
                 .map(|f| format!("\"{f}\""))
@@ -321,7 +390,7 @@ fn registry_code(entries: &[(String, String)]) -> String {
     for (key, tool) in entries {
         code.push_str(&format!("        ({key:?}, {tool}),\n"));
     }
-    code.push_str("    ],\n    lookup: ");
+    code.push_str("    ],\n    lookup: RegistryLookup::Static(");
     code.push_str(&phf_usize_map_code(
         entries
             .iter()
@@ -329,7 +398,7 @@ fn registry_code(entries: &[(String, String)]) -> String {
             .map(|(index, (key, _))| (key.clone(), index.to_string()))
             .collect::<Vec<_>>(),
     ));
-    code.push_str(",\n}");
+    code.push_str("),\n}");
     code
 }
 
@@ -700,6 +769,10 @@ pub static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new
                     raw_string_literal(&description)
                 ));
             }
+            match props.get("env").and_then(|v| v.as_str()) {
+                Some(env) => lines.push(format!("        env: Some({env:?}),")),
+                None => lines.push("        env: None,".to_string()),
+            }
             push_deprecated_fields(&mut lines, props);
             lines.push("    },".to_string());
         }
@@ -725,6 +798,10 @@ pub static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new
                     "        description: {},",
                     raw_string_literal(&description)
                 ));
+            }
+            match props.get("env").and_then(|v| v.as_str()) {
+                Some(env) => lines.push(format!("        env: Some({env:?}),")),
+                None => lines.push("        env: None,".to_string()),
             }
             push_deprecated_fields(&mut lines, props);
             lines.push("    },".to_string());

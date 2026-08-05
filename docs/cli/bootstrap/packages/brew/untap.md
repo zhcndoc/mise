@@ -3,9 +3,10 @@
 
 - **用法**: `mise bootstrap packages brew untap [FLAGS] <TAPS>…`
 - **别名**: `remove`, `rm`
-- **源代码**: [`src/cli/bootstrap/packages/brew/untap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/packages/brew/untap.rs)
+- **效果**: 修改状态
+- **源代码**: [`src/cli/system/brew/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/system/brew/mod.rs)
 
-从 [bootstrap.brew.taps] 中移除 Homebrew tap URL
+从 [bootstrap.brew.taps] 中移除 Homebrew tap URL。
 
 ## 参数
 

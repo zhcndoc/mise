@@ -1,8 +1,9 @@
 <!-- 由 usage-cli 根据 usage spec 生成 -->
 # `mise registry`
 
-- **用法**: `mise registry [FLAGS] [NAME]`
-- **源代码**: [`src/cli/registry.rs`](https://github.com/jdx/mise/blob/main/src/cli/registry.rs)
+- **用法**：`mise registry [FLAGS] [NAME]`
+- **作用**：只读
+- **源代码**：[`src/cli/registry.rs`](https://github.com/jdx/mise/blob/main/src/cli/registry.rs)
 
 列出可安装的工具
 

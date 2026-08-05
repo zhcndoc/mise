@@ -2,6 +2,7 @@
 # `mise tasks ls`
 
 - **用法**: `mise tasks ls [FLAGS]`
+- **作用**: 只读
 - **源代码**: [`src/cli/tasks/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/ls.rs)
 
 列出可执行的任务
@@ -9,7 +10,7 @@
 mise 会将所有父目录中的任务合并到这个列表中。
 
 因此，如果你在 `~/.config/mise/tasks/*` 中有全局任务，并且在
-~/myproject/.mise/tasks/* 中有项目特定任务，那么它们都会可用，但如果项目特定
+`~/myproject/.mise/tasks/*` 中有项目特定任务，那么它们都会可用，但如果项目特定
 任务与全局任务同名，则会覆盖全局任务。
 
 ## 标志

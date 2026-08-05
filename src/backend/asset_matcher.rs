@@ -122,10 +122,6 @@ impl DetectedPlatform {
 static OS_PATTERNS: LazyLock<Vec<(AssetOs, Regex)>> = LazyLock::new(|| {
     vec![
         (
-            AssetOs::Android,
-            Regex::new(r"(?i)(?:\b|_)(?:android)(?:\b|_)").unwrap(),
-        ),
-        (
             AssetOs::Linux,
             Regex::new(r"(?i)(?:\b|_)(?:linux|manylinux(?:[0-9_]+)?|musllinux(?:[0-9_]+)?|ubuntu|debian|fedora|centos|rhel|alpine|arch)(?:\b|_|32|64|-)")
                 .unwrap(),
@@ -137,6 +133,10 @@ static OS_PATTERNS: LazyLock<Vec<(AssetOs, Regex)>> = LazyLock::new(|| {
         (
             AssetOs::Windows,
             Regex::new(r"(?i)(?:\b|_)(?:mingw-w64|win(?:32|64|dows)?)(?:\b|_)").unwrap(),
+        ),
+        (
+            AssetOs::Android,
+            Regex::new(r"(?i)(?:\b|_)(?:android|linux|musllinux(?:[0-9_]+)?)(?:\b|_)").unwrap(),
         ),
     ]
 });
@@ -341,7 +341,11 @@ impl AssetPicker {
         };
         scored_assets
             .into_iter()
-            .filter(|(score, asset)| *score > 0 && !self.has_arch_mismatch(asset))
+            .filter(|(score, asset)| {
+                *score > 0
+                    && !self.has_arch_mismatch(asset)
+                    && !is_package_or_installer_asset(asset)
+            })
             .min_by(|(score_a, name_a), (score_b, name_b)| {
                 score_b
                     .cmp(score_a)
@@ -442,6 +446,9 @@ impl AssetPicker {
         if self.target_os == "linux" || self.target_os == "windows" {
             score += self.score_libc_match(asset);
         }
+        if self.target_os == "linux" || self.target_os == "android" {
+            score += self.score_android_match(asset);
+        }
         score += self.score_format_preferences(asset);
         score += self.score_preferred_name_match(asset);
         score += self.score_build_penalties(asset);
@@ -479,24 +486,28 @@ impl AssetPicker {
 
     fn score_os_match(&self, asset: &str) -> i32 {
         let asset = self.platform_part(asset);
+        let mut asset_with_platform_mismatch = false;
         for (os, pattern) in OS_PATTERNS.iter() {
             if pattern.is_match(asset) {
-                return if os.matches_target(&self.target_os) {
-                    100
+                if os.matches_target(&self.target_os) {
+                    return 100;
                 } else {
-                    -100
+                    asset_with_platform_mismatch = true;
                 };
             }
         }
-        // Check for Windows-specific file extensions (.msi, .exe)
-        // These should be penalized on non-Windows platforms
+        if asset_with_platform_mismatch {
+            return -100;
+        }
+        // Prefer .exe assets on Windows and penalize Windows-specific extensions elsewhere.
         // See: https://github.com/jdx/mise/discussions/7837
         let lower = asset.to_lowercase();
         if (lower.ends_with(".msi") || lower.ends_with(".exe")) && self.target_os != "windows" {
             return -100;
         }
-        // On Windows, these are valid but don't need a boost - let other
-        // factors (arch match, format preferences) determine the best asset
+        if lower.ends_with(".exe") {
+            return 100;
+        }
         0
     }
 
@@ -540,6 +551,30 @@ impl AssetPicker {
             }
         }
         0
+    }
+
+    /// Android binaries tend to work in the following order:
+    /// - android: Pre-compiled targeting Bionic C lib and considering differences from Linux
+    /// - musl: Statically compiled without linking issues, but tend to assume Linux standards
+    /// - gnu: Assumes typical glibc which don't match Bionic C lib
+    ///
+    /// If target OS is not Android scoring is penalized as `linux-android` might tie with other
+    /// scoring if arch segments are present
+    fn score_android_match(&self, asset: &str) -> i32 {
+        let asset = self.platform_part(asset);
+        match (asset.contains("android"), self.target_os.as_str()) {
+            (true, "android") => 20,
+            (false, "android") => {
+                for (libc, pattern) in LIBC_PATTERNS.iter() {
+                    if pattern.is_match(asset) {
+                        return if *libc == AssetLibc::Musl { 10 } else { -10 };
+                    }
+                }
+                0
+            }
+            (true, _) => -200,
+            (false, _) => 0,
+        }
     }
 
     fn score_format_preferences(&self, asset: &str) -> i32 {
@@ -646,6 +681,30 @@ impl AssetPicker {
     }
 }
 
+/// Package archives and installers are not directly executable and mise does
+/// not extract them. Keep them out of automatic selection while still allowing
+/// an explicit `asset_pattern` or URL to select one for custom installation
+/// logic.
+fn is_package_or_installer_asset(asset: &str) -> bool {
+    let asset = asset.to_lowercase();
+    asset.split('.').any(|extension| {
+        matches!(
+            extension,
+            "apk"
+                | "appx"
+                | "appxbundle"
+                | "deb"
+                | "dmg"
+                | "mpkg"
+                | "msi"
+                | "msix"
+                | "msixbundle"
+                | "pkg"
+                | "rpm"
+        )
+    })
+}
+
 fn asset_matches_preferred_name(asset: &str, preferred_name: &str) -> bool {
     let asset = asset_name_stem(asset);
     let preferred_name = preferred_name
@@ -695,6 +754,9 @@ pub fn detect_platform_from_url(url: &str) -> Option<DetectedPlatform> {
 
     for (os, pattern) in OS_PATTERNS.iter() {
         if pattern.is_match(&filename) {
+            if filename.contains("android") && *os == AssetOs::Linux {
+                continue;
+            }
             detected_os = Some(*os);
             break;
         }
@@ -1555,6 +1617,22 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  tool-1.0.0-dar
     }
 
     #[test]
+    fn test_asset_picker_functionality_android_fallback_to_linux_musl() {
+        // rust triplet platforms contain linux as segment in filname for Android binaries
+        let assets = vec![
+            "tool-1.0.0-aarch64-apple-darwin.zip".to_string(),
+            "tool-1.0.0-aarch64-pc-windows-gnu.zip".to_string(),
+            "tool-1.0.0-aarch64-pc-windows-msvc.zip".to_string(),
+            "tool-1.0.0-aarch64-unknown-linux-gnu.zip".to_string(),
+            "tool-1.0.0-aarch64-unknown-linux-musl.zip".to_string(),
+        ];
+        let picked = AssetPicker::with_libc("android".to_string(), "aarch64".to_string(), None)
+            .pick_best_asset(&assets)
+            .unwrap();
+        assert_eq!(picked, "tool-1.0.0-aarch64-unknown-linux-musl.zip");
+    }
+
+    #[test]
     fn test_asset_scoring() {
         let picker = AssetPicker::with_libc("linux".to_string(), "x86_64".to_string(), None);
 
@@ -1571,13 +1649,17 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  tool-1.0.0-dar
             score_linux > score_linux_arm,
             "x86_64 should score higher than arm64"
         );
+        assert!(
+            score_linux > score_android,
+            "Linux should score higher than Android"
+        );
         // Architecture mismatch should result in negative score
         assert!(
             score_linux_arm < 0,
             "Architecture mismatch should be negative, got {}",
             score_linux_arm
         );
-        // Android Linux triplet should have a negative score
+        // Platform mismatch should result in negative score
         assert!(
             score_android < 0,
             "Platform mismatch should be negative, got {}",
@@ -1616,11 +1698,19 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  tool-1.0.0-dar
 
         // Test Windows URL
         let url =
-            "https://github.com/cli/cli/releases/download/v2.336.0/gh_2.336.0_windows_amd64.zip";
+            "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_windows_amd64.zip";
         let platform = detect_platform_from_url(url).unwrap();
         assert_eq!(platform.os, AssetOs::Windows);
         assert_eq!(platform.arch, AssetArch::X64);
         assert_eq!(platform.to_platform_string(), "windows-x64");
+
+        // Test Android URL
+        //
+        let url = "https://github.com/ajeetdsouza/zoxide/releases/download/v0.9.9/zoxide-0.9.9-aarch64-linux-android.tar.gz";
+        let platform = detect_platform_from_url(url).unwrap();
+        assert_eq!(platform.os, AssetOs::Android);
+        assert_eq!(platform.arch, AssetArch::Arm64);
+        assert_eq!(platform.to_platform_string(), "android-arm64");
 
         // Test URL without platform info
         let url = "https://example.com/generic-tool.tar.gz";
@@ -2392,6 +2482,63 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  tool-1.0.0-dar
     }
 
     #[test]
+    fn test_unsupported_package_assets_not_picked() {
+        // Regression test for https://github.com/jdx/mise/discussions/10987.
+        // The github backend cannot extract .deb/.rpm packages, so treating one
+        // as a raw executable produces a successful but unusable installation.
+        let assets = vec![
+            "quickhook-1.6.2-linux-amd64.deb".to_string(),
+            "quickhook-1.6.2-linux-amd64.rpm".to_string(),
+            "quickhook-1.6.2-linux-amd64.deb.sha256".to_string(),
+            "quickhook-1.6.2-linux-arm64.deb".to_string(),
+            "quickhook-1.6.2-linux-arm64.rpm".to_string(),
+        ];
+        let picker = AssetPicker::with_libc("linux".to_string(), "x86_64".to_string(), None)
+            .with_preferred_name("quickhook");
+
+        assert_eq!(picker.pick_best_asset(&assets), None);
+        assert_eq!(picker.with_matching(".deb").pick_best_asset(&assets), None);
+    }
+
+    #[test]
+    fn test_package_and_installer_assets_not_picked() {
+        let cases = [
+            (
+                "linux",
+                "x86_64",
+                vec!["tool-linux-amd64.apk", "tool-linux-amd64.apk.sha256"],
+            ),
+            (
+                "macos",
+                "aarch64",
+                vec![
+                    "tool-macos-arm64.dmg",
+                    "tool-macos-arm64.pkg",
+                    "tool-macos-arm64.mpkg",
+                ],
+            ),
+            (
+                "windows",
+                "x86_64",
+                vec![
+                    "tool-windows-x86_64.msi",
+                    "tool-windows-x86_64.MSI.SHA256",
+                    "tool-windows-x86_64.msix",
+                    "tool-windows-x86_64.msixbundle",
+                    "tool-windows-x86_64.appx",
+                    "tool-windows-x86_64.appxbundle",
+                ],
+            ),
+        ];
+
+        for (os, arch, assets) in cases {
+            let assets = assets.into_iter().map(str::to_string).collect::<Vec<_>>();
+            let picker = AssetPicker::with_libc(os.to_string(), arch.to_string(), None);
+            assert_eq!(picker.pick_best_asset(&assets), None, "failed for {os}");
+        }
+    }
+
+    #[test]
     fn test_platform_specific_still_wins_over_phar() {
         // If a release ships both platform-specific binaries and a .phar,
         // platform-specific should still win (it scores higher: 100+50+10 vs 10).
@@ -2415,6 +2562,14 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  tool-1.0.0-dar
         let assets = vec!["foo.exe".to_string()];
         let picker = AssetPicker::with_libc("linux".to_string(), "x86_64".to_string(), None);
         assert!(picker.pick_best_asset(&assets).is_none());
+    }
+
+    #[test]
+    fn test_exe_on_windows_preferred_over_extensionless_asset() {
+        let assets = vec!["k3sup".to_string(), "k3sup.exe".to_string()];
+        let picker = AssetPicker::with_libc("windows".to_string(), "x86_64".to_string(), None)
+            .with_preferred_name("k3sup");
+        assert_eq!(picker.pick_best_asset(&assets).unwrap(), "k3sup.exe");
     }
 
     #[test]

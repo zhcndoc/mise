@@ -49,6 +49,35 @@ chmod +x mise-tasks/build
 
 假设该文件位于 `mise-tasks/build`，那么可以使用 `mise run build`（或其别名：`mise run b`）来运行。
 
+### 多行值
+
+每个 `#MISE` 行都是 TOML。只要每一行都保留 `#MISE` 前缀，数组或内联表就可以拆分到多行，这样可以让较长的
+`depends`/`sources` 列表更易于阅读：
+
+```bash [mise-tasks/build]
+#!/usr/bin/env bash
+#MISE description="构建 CLI"
+#MISE depends=[
+#MISE   "lint",
+#MISE   "test",
+#MISE ]
+#MISE sources=[
+#MISE   "Cargo.toml",
+#MISE   "src/**/*.rs",
+#MISE ]
+cargo build
+```
+
+还可以通过使用带点号的键重复此前缀来逐步构建表，这样可以完全省略外层大括号：
+
+```bash
+#MISE tools.node="20"
+#MISE tools.python="3.11"
+```
+
+Mise 为文件任务提供了项目上下文变量，例如
+`MISE_PROJECT_ROOT`，无论从哪个目录调用任务，它都可以标识项目根目录。完整的变量列表请参阅[任务](/tasks/#environment-variables-passed-to-tasks)。
+
 :::tip
 注意格式化工具可能会将 `#MISE` 改为 `# MISE`。
 mise 会故意忽略这种写法，以避免意外配置。
@@ -95,7 +124,7 @@ Write-Host "Hello from PowerShell, current directory is $current_directory"
 
 ## 编辑任务
 
-可以通过运行 `mise tasks edit build`（使用 `$EDITOR`）来编辑此脚本。如果它不存在，将会被创建。
+可以通过运行 `mise tasks edit build`（使用 `$EDITOR`）来编辑此脚本。如果它不存在，将会被创建。  
 这对于快速编辑或创建新脚本很方便。
 
 ## 任务分组
@@ -181,7 +210,29 @@ cargo build --profile "${usage_profile?}" --target "${usage_target?}"
 例如，如果你使用 `mise run build -v` 且 `usage` 规范无效，你会看到类似 `DEBUG failed to parse task file with usage` 的错误消息
 :::
 
-### 带参数的 NodeJS 文件任务示例
+### 环境变量支持
+
+参数和标志可以通过 `env="..."` 使用环境变量提供值。
+优先级顺序为 CLI 参数、环境变量，然后是默认值：
+
+```bash [.mise/tasks/deploy]
+#!/usr/bin/env bash
+#MISE description="Deploy application"
+#USAGE arg "[environment]" env="DEPLOY_ENV" default="development"
+#USAGE flag "--region <region>" env="AWS_REGION" default="us-east-1"
+
+echo "Deploying to ${usage_environment} in ${usage_region}"
+```
+
+这样，同一个文件任务既可以使用显式参数，也可以使用调用该任务的 shell 环境：
+
+```shell
+DEPLOY_ENV=staging AWS_REGION=us-west-2 mise run deploy
+```
+
+有关更多详细信息，请参阅[环境变量支持](https://mise.jdx.dev/tasks/task-arguments.html#environment-variable-backing)。
+
+### 带参数的 Node.js 文件任务示例
 
 下面是如何在 Node.js 脚本中使用 [usage](https://usage.jdx.dev/cli/scripts#usage-scripts) 来解析参数：
 

@@ -55,7 +55,7 @@ MCP 服务器公开了以下只读资源，AI 助手可以查询这些资源：
 
 - 当前生效的配置文件
 - 项目根目录
-- 设置和偏好
+- 设置和偏好。
 
 ## 可用工具
 
@@ -142,4 +142,4 @@ MCP 服务器的实现位于 [`src/cli/mcp.rs`](https://github.com/jdx/mise/blob
 - 工具调用（任务执行）
 - 通过 stdio 进行 JSON-RPC 通信
 
-有关 Model Context Protocol 的更多信息，请访问 [官方 MCP 文档](https://modelcontextprotocol.io/)。
+有关模型上下文协议的更多信息，请访问 [官方 MCP 文档](https://modelcontextprotocol.io/docs/getting-started/intro)。

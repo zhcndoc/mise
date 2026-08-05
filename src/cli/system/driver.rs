@@ -78,16 +78,13 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
             debug!("{name}: skipping, excluded by system_packages.managers");
             continue;
         }
-        if !mp.manager.is_available() {
+        if let Some(reason) = mp.manager.unavailable_reason_async().await {
             if d.manager.is_some() || d.explicit {
                 // explicitly requested (via --manager or manager:package
                 // specs) — failing silently would be a lie
-                bail!(
-                    "{name} is not available: {}",
-                    mp.manager.unavailable_reason()
-                );
+                bail!("{name} is not available: {}", reason);
             }
-            debug!("{name}: skipping, {}", mp.manager.unavailable_reason());
+            debug!("{name}: skipping, {reason}");
             continue;
         }
         let statuses = mp.manager.installed(&mp.requests).await?;
@@ -100,7 +97,6 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
                 // below with a pointer at `install`
                 Action::Upgrade => !matches!(s.state, PackageState::Missing),
             })
-            .map(|s| s.request.clone())
             .collect();
         let skipped = statuses.len() - targets.len();
         if action == Action::Upgrade && skipped > 0 {
@@ -111,11 +107,14 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
         // a pin this manager can never satisfy must not block the rest
         // of the batch — it stays visible in `status` as a mismatch
         if !mp.manager.supports_version_pins() {
-            targets.retain(|r| {
-                if r.version.is_some() {
+            targets.retain(|status| {
+                if status.request.version.is_some()
+                    && !matches!(status.state, PackageState::NeedsRepair { .. })
+                {
                     warn!(
-                        "{name}: cannot {} pinned version '{r}', skipping",
-                        action.verb()
+                        "{name}: cannot {} pinned version '{}', skipping",
+                        action.verb(),
+                        status.request
                     );
                     false
                 } else {
@@ -129,6 +128,10 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
         if targets.is_empty() {
             continue;
         }
+        let targets = targets
+            .into_iter()
+            .map(|status| status.request.clone())
+            .collect::<Vec<_>>();
         let list = targets.iter().map(|r| r.to_string()).collect::<Vec<_>>();
         if !d.dry_run && !d.yes && console::user_attended_stderr() {
             let msg = format!("{name}: {} {}?", action.verb(), list.join(", "));
@@ -151,6 +154,7 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
                     .iter()
                     .filter_map(|s| match &s.state {
                         PackageState::Installed { version }
+                        | PackageState::NeedsRepair { installed: version }
                         | PackageState::VersionMismatch { installed: version } => {
                             Some((s.request.name.clone(), version.clone()))
                         }
@@ -164,6 +168,7 @@ pub(crate) async fn run(mgrs: Vec<ManagerPackages>, action: Action, d: &DriverOp
                         .iter()
                         .filter_map(|s| match &s.state {
                             PackageState::Installed { version }
+                            | PackageState::NeedsRepair { installed: version }
                             | PackageState::VersionMismatch { installed: version } => {
                                 let old = prior.get(&s.request.name)?;
                                 (old != version)

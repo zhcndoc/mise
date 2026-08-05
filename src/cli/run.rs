@@ -1,4 +1,5 @@
 use crate::errors::Error;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::iter::once;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,22 +8,25 @@ use std::time::Duration;
 use super::args::ToolArg;
 use crate::cli::{Cli, unescape_task_args};
 use crate::config::{Config, Settings};
-use crate::deps::{DepsEngine, DepsOptions};
+use crate::deps::{DepsEngine, DepsOptions, DepsStepResult};
 use crate::duration;
 use crate::env;
 use crate::file::display_path;
 use crate::task::has_any_usage_spec;
+use crate::task::task_executor::TaskRunContext;
 use crate::task::task_helpers::task_needs_permit;
 use crate::task::task_list::{get_task_lists, resolve_depends};
 use crate::task::task_output::TaskOutput;
 use crate::task::task_output_handler::OutputHandler;
-use crate::task::{Deps, Task};
-use crate::toolset::{InstallOptions, ResolveOptions, ToolsetBuilder};
+use crate::task::{Deps, Task, TaskCacheMode};
+use crate::toolset::{InstallOptions, ResolveOptions, ToolVersion, ToolsetBuilder};
 use crate::ui::{ctrlc, info, style};
+use bytesize::ByteSize;
 use clap::{CommandFactory, ValueHint};
 use eyre::{Result, bail, eyre};
 use futures_util::FutureExt;
 use itertools::Itertools;
+use serde::Serialize;
 use std::panic::AssertUnwindSafe;
 use tokio::sync::Mutex;
 
@@ -71,6 +75,38 @@ pub struct Run {
     /// Arguments to pass to the tasks. Use ":::" to separate tasks.
     #[clap(allow_hyphen_values = true, hide = true, last = true)]
     pub args_last: Vec<String>,
+
+    /// Run matching tasks only for projects affected by Git changes
+    #[clap(long, verbatim_doc_comment)]
+    pub affected: bool,
+
+    /// Git base revision for --affected
+    /// Defaults to MISE_AFFECTED_BASE, CI metadata, or HEAD~1
+    #[clap(long, requires = "affected", value_name = "REV", verbatim_doc_comment)]
+    pub affected_base: Option<String>,
+
+    /// Explain why projects and tasks were selected by --affected
+    #[clap(
+        long,
+        requires = "affected",
+        conflicts_with = "affected_json",
+        verbatim_doc_comment
+    )]
+    pub affected_explain: bool,
+
+    /// Git head revision for --affected
+    /// Defaults to MISE_AFFECTED_HEAD, CI metadata, or HEAD
+    #[clap(long, requires = "affected", value_name = "REV", verbatim_doc_comment)]
+    pub affected_head: Option<String>,
+
+    /// Output affected projects and tasks as JSON without running tasks
+    #[clap(
+        long,
+        requires = "affected",
+        conflicts_with = "affected_explain",
+        verbatim_doc_comment
+    )]
+    pub affected_json: bool,
 
     /// Continue running tasks even if one fails
     #[clap(long, short = 'c', verbatim_doc_comment)]
@@ -202,6 +238,39 @@ pub struct Run {
     #[clap(long, verbatim_doc_comment)]
     pub skip_tools: bool,
 
+    /// Set task output cache access for this run
+    ///
+    /// - `read-write` - Read cached results and write new results
+    /// - `read-only` - Read cached results without writing new results
+    /// - `write-only` - Write new results without reading cached results
+    /// - `off` - Disable task output caching
+    /// - `local-only` - Read and write only the local cache; currently equivalent to `read-write`
+    #[clap(
+        long,
+        value_enum,
+        default_value = "read-write",
+        env = "MISE_TASK_CACHE",
+        verbatim_doc_comment
+    )]
+    pub task_cache: TaskCacheMode,
+
+    /// Explain the inputs that produced each task's output cache key
+    #[clap(long, verbatim_doc_comment)]
+    pub task_cache_explain: bool,
+
+    /// Output cache-key input details as JSON Lines without running tasks
+    #[clap(
+        long,
+        requires = "dry_run",
+        conflicts_with = "task_cache_explain",
+        verbatim_doc_comment
+    )]
+    pub task_cache_explain_json: bool,
+
+    /// Report task output cache hits, restored bytes, and time saved
+    #[clap(long, conflicts_with = "dry_run", verbatim_doc_comment)]
+    pub task_cache_stats: bool,
+
     /// Timeout for the task to complete
     /// e.g.: 30s, 5m
     #[clap(long, verbatim_doc_comment)]
@@ -226,6 +295,262 @@ pub struct Run {
     pub executor: Option<crate::task::task_executor::TaskExecutor>,
 }
 
+fn affected_task_args(args: &[String]) -> Vec<String> {
+    let mut task = true;
+    args.iter()
+        .map(|arg| {
+            if arg == ":::" {
+                task = true;
+                return arg.clone();
+            }
+            if !task {
+                return arg.clone();
+            }
+            task = false;
+            if arg.starts_with("//")
+                || arg.starts_with(':')
+                || crate::task::is_workspace_project_task(arg)
+            {
+                arg.clone()
+            } else {
+                format!("//...:{arg}")
+            }
+        })
+        .collect()
+}
+
+async fn get_affected_task_list(
+    config: &Arc<Config>,
+    args: &[String],
+    only: bool,
+    base: Option<&str>,
+    head: Option<&str>,
+    explain: bool,
+    json: bool,
+) -> Result<Vec<Task>> {
+    Settings::get().ensure_experimental("affected tasks")?;
+    let workspace_root = config
+        .monorepo_root()
+        .ok_or_else(|| eyre!("--affected requires a monorepo root configuration"))?;
+    let graph = config.workspace_project_graph()?;
+    let revisions = crate::task::workspace::git::WorkspaceGitRevisions::resolve(base, head);
+    let changed_paths = revisions.changed_paths(&workspace_root)?;
+    let global_inputs = config.monorepo_global_task_inputs().await?;
+    let git = crate::git::Git::new(&workspace_root);
+    let cargo = crate::task::workspace::cargo::CargoWorkspaceProvider;
+    let go = crate::task::workspace::go::GoWorkspaceProvider;
+    let node = crate::task::workspace::node::NodeWorkspaceProvider;
+    let uv = crate::task::workspace::uv::UvWorkspaceProvider;
+    let providers: [&dyn crate::task::workspace::WorkspaceProvider; 4] = [&cargo, &go, &node, &uv];
+    let mut regular_paths = BTreeSet::new();
+    let mut lockfile_projects = BTreeMap::<PathBuf, BTreeSet<_>>::new();
+    let mut comparison_base: Option<String> = None;
+
+    for path in changed_paths {
+        let Some(lockfile_candidates) =
+            graph.affected_projects_for_lockfile(&providers, &path, None, None)?
+        else {
+            regular_paths.insert(path);
+            continue;
+        };
+        if lockfile_candidates.is_empty() {
+            regular_paths.insert(path);
+            continue;
+        }
+        let comparison_base = match &comparison_base {
+            Some(base) => base.clone(),
+            None => {
+                let base = git.merge_base(&revisions.base, &revisions.head)?;
+                comparison_base = Some(base.clone());
+                base
+            }
+        };
+        let before = git.file_at_revision(&comparison_base, &path)?;
+        let after = git.file_at_revision(&revisions.head, &path)?;
+        if let Some(projects) = graph.affected_projects_for_lockfile(
+            &providers,
+            &path,
+            before.as_deref(),
+            after.as_deref(),
+        )? {
+            lockfile_projects.entry(path).or_default().extend(projects);
+        }
+    }
+
+    let affected = graph.affected_projects_for_changes(
+        &workspace_root,
+        regular_paths,
+        &global_inputs,
+        &lockfile_projects,
+    )?;
+    let affected_roots = affected
+        .projects()
+        .map(|(id, _)| id)
+        .filter_map(|id| graph.get(id))
+        .map(|project| crate::file::desymlink_path(&workspace_root.join(&project.root)))
+        .collect::<BTreeSet<_>>();
+
+    let args = affected_task_args(args);
+    let mut tasks = get_task_lists(config, &args, true, only).await?;
+    // Restrict only the task-pattern matches. `Run::run` calls `resolve_depends`
+    // after this returns, so prerequisites from unaffected projects remain intact.
+    tasks.retain(|task| {
+        !task.global
+            && task
+                .config_root
+                .as_deref()
+                .map(crate::file::desymlink_path)
+                .is_some_and(|root| affected_roots.contains(&root))
+    });
+    if json {
+        display_affected_json(&revisions, &workspace_root, &graph, &affected, &tasks)?;
+    } else if explain {
+        display_affected_explanation(&revisions, &workspace_root, &graph, &affected, &tasks)?;
+    }
+    Ok(tasks)
+}
+
+#[derive(Serialize)]
+struct AffectedSelectionOutput<'a> {
+    base: &'a str,
+    head: &'a str,
+    projects: Vec<AffectedProjectOutput<'a>>,
+    tasks: Vec<AffectedTaskOutput<'a>>,
+}
+
+#[derive(Serialize)]
+struct AffectedProjectOutput<'a> {
+    id: &'a crate::task::workspace::ProjectId,
+    root: &'a std::path::Path,
+    reasons: &'a BTreeSet<crate::task::workspace::AffectedProjectReason>,
+}
+
+#[derive(Serialize)]
+struct AffectedTaskOutput<'a> {
+    name: &'a str,
+    projects: Vec<&'a crate::task::workspace::ProjectId>,
+}
+
+fn display_affected_json(
+    revisions: &crate::task::workspace::git::WorkspaceGitRevisions,
+    workspace_root: &std::path::Path,
+    graph: &crate::task::workspace::WorkspaceProjectGraph,
+    affected: &crate::task::workspace::AffectedProjects,
+    tasks: &[Task],
+) -> Result<()> {
+    let mut projects_by_root = BTreeMap::<PathBuf, Vec<_>>::new();
+    let projects = affected
+        .projects()
+        .map(|(id, reasons)| {
+            let project = graph.get(id).expect("affected project exists in graph");
+            projects_by_root
+                .entry(crate::file::desymlink_path(
+                    &workspace_root.join(&project.root),
+                ))
+                .or_default()
+                .push(id);
+            AffectedProjectOutput {
+                id,
+                root: &project.root,
+                reasons,
+            }
+        })
+        .collect();
+    let mut tasks = tasks
+        .iter()
+        .map(|task| AffectedTaskOutput {
+            name: &task.display_name,
+            projects: task
+                .config_root
+                .as_deref()
+                .map(crate::file::desymlink_path)
+                .and_then(|root| projects_by_root.get(&root))
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    tasks.sort_by(|left, right| left.name.cmp(right.name));
+    let output = AffectedSelectionOutput {
+        base: &revisions.base,
+        head: &revisions.head,
+        projects,
+        tasks,
+    };
+    miseprintln!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn display_affected_explanation(
+    revisions: &crate::task::workspace::git::WorkspaceGitRevisions,
+    workspace_root: &std::path::Path,
+    graph: &crate::task::workspace::WorkspaceProjectGraph,
+    affected: &crate::task::workspace::AffectedProjects,
+    tasks: &[Task],
+) -> Result<()> {
+    use crate::task::workspace::AffectedProjectReason;
+
+    miseprintln!(
+        "Affected projects ({}...{}):{}",
+        revisions.base,
+        revisions.head,
+        if affected.is_empty() { " none" } else { "" }
+    );
+    let mut projects_by_root = BTreeMap::<PathBuf, Vec<_>>::new();
+    for (id, reasons) in affected.projects() {
+        let project = graph.get(id).expect("affected project exists in graph");
+        miseprintln!("  {} ({})", id, display_affected_path(&project.root));
+        for reason in reasons {
+            match reason {
+                AffectedProjectReason::ChangedPath { path } => {
+                    miseprintln!("    changed path: {}", display_affected_path(path));
+                }
+                AffectedProjectReason::GlobalPath { path } => {
+                    miseprintln!("    workspace-global path: {}", display_affected_path(path));
+                }
+                AffectedProjectReason::Lockfile { path } => {
+                    miseprintln!("    lockfile change: {}", display_affected_path(path));
+                }
+                AffectedProjectReason::Dependent { dependency } => {
+                    miseprintln!("    depends on affected project: {dependency}");
+                }
+            }
+        }
+        projects_by_root
+            .entry(crate::file::desymlink_path(
+                &workspace_root.join(&project.root),
+            ))
+            .or_default()
+            .push(id);
+    }
+
+    miseprintln!(
+        "Affected tasks:{}",
+        if tasks.is_empty() { " none" } else { "" }
+    );
+    for task in tasks {
+        miseprintln!("  {}", display_affected_text(&task.display_name));
+        if let Some(ids) = task
+            .config_root
+            .as_deref()
+            .map(crate::file::desymlink_path)
+            .and_then(|root| projects_by_root.get(&root))
+        {
+            for id in ids {
+                miseprintln!("    affected project: {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn display_affected_path(path: &std::path::Path) -> String {
+    display_affected_text(&path.to_string_lossy())
+}
+
+fn display_affected_text(text: &str) -> String {
+    text.escape_debug().to_string()
+}
+
 impl Run {
     pub async fn run(mut self) -> Result<()> {
         // Check help flags before doing any work
@@ -237,6 +562,8 @@ impl Run {
             self.get_clap_command().print_long_help()?;
             return Ok(());
         }
+
+        Settings::ensure_not_safe("running tasks")?;
 
         // Unescape task args early so we can check for help flags
         self.args = unescape_task_args(&self.args);
@@ -279,7 +606,7 @@ impl Run {
 
                     if has_any_usage_spec(&spec) {
                         // Task has usage spec defined, render help using usage library
-                        println!("{}", usage::docs::cli::render_help(&spec, &spec.cmd, true));
+                        println!("{}", render_usage_help(&spec, &self.args));
                     } else {
                         // Task has no usage defined, show basic task info
                         display_task_help(task)?;
@@ -306,7 +633,23 @@ impl Run {
             .chain(self.args.clone())
             .collect_vec();
 
-        let mut task_list = get_task_lists(&config, &args, true, self.skip_deps).await?;
+        let mut task_list = if self.affected {
+            get_affected_task_list(
+                &config,
+                &args,
+                self.skip_deps,
+                self.affected_base.as_deref(),
+                self.affected_head.as_deref(),
+                self.affected_explain,
+                self.affected_json,
+            )
+            .await?
+        } else {
+            get_task_lists(&config, &args, true, self.skip_deps).await?
+        };
+        if self.affected_json {
+            return Ok(());
+        }
 
         // Args after -- go directly to tasks (no prefix). They are also
         // recorded on `trailing_args` so the task renderer can detect
@@ -321,7 +664,7 @@ impl Run {
         // Fetch remote task files before parsing usage specs, so that
         // file-based remote tasks have their files resolved to local cache.
         let fetcher = crate::task::task_fetcher::TaskFetcher::new(self.no_cache);
-        fetcher.fetch_tasks(&mut task_list).await?;
+        fetcher.fetch_tasks(&config, &mut task_list).await?;
 
         // Re-render dependency templates with parent task's usage arg/flag values.
         // This enables patterns like: depends = ["child {{usage.app}}"]
@@ -346,7 +689,8 @@ impl Run {
         // Resolve transitive dependencies once upfront so we can:
         // 1. Discover deps providers from monorepo subdirectory configs
         // 2. Include monorepo subdirectory tools in the toolset before installing
-        // 3. Reuse the resolved list for execution (avoiding duplicate work)
+        // 3. Validate and install tools for the complete dependency set before execution
+        let execution_tasks = task_list.clone();
         let resolved_tasks = resolve_depends(&config, task_list).await?;
 
         // Collect subdirectory config files from all resolved tasks. In
@@ -357,10 +701,53 @@ impl Run {
             .filter_map(|task| task.cf.clone())
             .collect();
 
+        // Validate deps configuration before toolset construction can install
+        // anything, then retain the engine for execution below.
+        let mut layered_subdir_configs = vec![];
+        let deps_engine = if self.no_deps {
+            None
+        } else if subdir_configs.is_empty() {
+            Some(DepsEngine::new(&config)?)
+        } else {
+            let mut deps_config_files = config.config_files.clone();
+            let selected_config_roots: HashSet<_> =
+                subdir_configs.iter().map(|cf| cf.config_root()).collect();
+            for config_root in subdir_configs.iter().map(|cf| cf.config_root()).unique() {
+                let (config_paths, idiomatic_filenames) =
+                    crate::config::load_config_hierarchy_from_dir(&config_root).await?;
+                deps_config_files.extend(
+                    crate::config::load_config_files_from_paths(
+                        &config_paths,
+                        &idiomatic_filenames,
+                    )
+                    .await?,
+                );
+            }
+            deps_config_files.retain(|_, cf| {
+                let config_root = cf.config_root();
+                cf.project_root().is_some()
+                    && selected_config_roots.contains(&config_root)
+                    && config.project_root.as_ref() != Some(&config_root)
+            });
+            layered_subdir_configs.extend(deps_config_files.values().cloned());
+            Some(DepsEngine::new_task_monorepo(
+                &config,
+                deps_config_files.into_values(),
+            )?)
+        };
+
         // Build the toolset using root config files plus subdir configs from
         // resolved tasks, so tools declared in monorepo subdirs are installed
         // before deps (e.g. `[deps.bun] auto=true`) try to use them.
         let mut combined_configs = config.config_files.clone();
+        // The hierarchy loader returns higher-precedence files first. Preserve
+        // that order so local overlays still win when ToolsetBuilder reverses
+        // the map for low-to-high merging.
+        for cf in layered_subdir_configs {
+            combined_configs
+                .entry(cf.get_path().to_path_buf())
+                .or_insert(cf);
+        }
         for cf in &subdir_configs {
             combined_configs
                 .entry(cf.get_path().to_path_buf())
@@ -387,31 +774,39 @@ impl Run {
         let opts = InstallOptions {
             jobs: self.jobs,
             raw: self.raw,
+            dry_run: self.dry_run,
             missing_args_only: !Settings::get().task.run_auto_install,
             skip_auto_install: !Settings::get().task.run_auto_install
                 || !Settings::get().auto_install,
             ..Default::default()
         };
-        if !self.skip_tools {
-            let _ = ts.install_missing_versions(&mut config, &opts).await?;
-        }
+        let previewed_tools = if !self.skip_tools {
+            let (installed, _) = ts.install_missing_versions(&mut config, &opts).await?;
+            if self.dry_run {
+                installed.into_iter().collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
 
         // Run auto-enabled deps steps (unless --no-deps)
-        if !self.no_deps {
+        if let Some(engine) = deps_engine {
             let env = ts.env_with_path(&config).await?;
-            let mut engine = DepsEngine::new(&config)?;
-
-            if !subdir_configs.is_empty() {
-                engine.add_config_files(subdir_configs);
-            }
-
-            engine
+            let result = engine
                 .run(DepsOptions {
                     auto_only: true, // Only run providers with auto=true
+                    dry_run: self.dry_run,
                     env,
                     ..Default::default()
                 })
                 .await?;
+            for step in result.steps {
+                if let DepsStepResult::WouldRun(id, reason) = step {
+                    info!("[dry-run] Would install dependency: {id} ({reason})");
+                }
+            }
         }
 
         // Apply global timeout for entire run if configured
@@ -422,11 +817,15 @@ impl Run {
         };
 
         if let Some(timeout) = timeout {
-            tokio::time::timeout(timeout, self.parallelize_tasks(config, resolved_tasks))
-                .await
-                .map_err(|_| eyre!("mise run timed out after {:?}", timeout))??
+            tokio::time::timeout(
+                timeout,
+                self.parallelize_tasks(config, execution_tasks, previewed_tools),
+            )
+            .await
+            .map_err(|_| eyre!("mise run timed out after {:?}", timeout))??
         } else {
-            self.parallelize_tasks(config, resolved_tasks).await?
+            self.parallelize_tasks(config, execution_tasks, previewed_tools)
+                .await?
         }
 
         time!("run done");
@@ -441,7 +840,12 @@ impl Run {
             .clone()
     }
 
-    async fn parallelize_tasks(mut self, mut config: Arc<Config>, tasks: Vec<Task>) -> Result<()> {
+    async fn parallelize_tasks(
+        mut self,
+        mut config: Arc<Config>,
+        tasks: Vec<Task>,
+        previewed_tools: HashSet<ToolVersion>,
+    ) -> Result<()> {
         time!("parallelize_tasks start");
 
         // Step 1: Prepare tasks (resolve dependencies, fetch, validate)
@@ -454,7 +858,8 @@ impl Run {
 
         // Step 3: Install tools needed by tasks
         if !self.skip_tools {
-            self.install_task_tools(&mut config, &tasks).await?;
+            self.install_task_tools(&mut config, &tasks, &previewed_tools)
+                .await?;
         }
 
         // Step 4: Create TaskExecutor after tool installation
@@ -479,12 +884,20 @@ impl Run {
                 &mut main_done_rx,
                 main_deps.clone(),
                 || this.is_stopping(),
+                || this.is_interrupted(),
                 this.continue_on_error,
-                |task, deps_for_remove| {
+                |task, deps_for_remove, allow_during_interruption| {
                     let this = this.clone();
                     let spawn_context = spawn_context.clone();
                     async move {
-                        Self::spawn_sched_job(this, task, deps_for_remove, spawn_context).await
+                        Self::spawn_sched_job(
+                            this,
+                            task,
+                            deps_for_remove,
+                            allow_during_interruption,
+                            spawn_context,
+                        )
+                        .await
                     }
                 },
             )
@@ -498,8 +911,13 @@ impl Run {
             this.executor.as_ref().unwrap().failed_tasks.clone(),
             this.continue_on_error,
             this.timings(),
+            this.is_interrupted(),
         );
-        results_display.display_results(num_tasks, timer);
+        let result = results_display.display_results(num_tasks, timer);
+        if this.task_cache_stats {
+            this.display_task_cache_stats();
+        }
+        result?;
         time!("parallelize_tasks done");
 
         Ok(())
@@ -509,23 +927,23 @@ impl Run {
         this: Arc<Self>,
         task: Task,
         deps_for_remove: Arc<Mutex<Deps>>,
+        inherited_allow_during_interruption: bool,
         ctx: crate::task::task_scheduler::SpawnContext,
     ) -> Result<()> {
-        // If we're already stopping due to a previous failure and not in
-        // continue-on-error mode, do not launch this task unless it's a
-        // post-dependency (cleanup task that should run even on failure).
-        if this.is_stopping() && !this.continue_on_error {
-            let mut deps = deps_for_remove.lock().await;
-            if !deps.is_runnable_post_dep(&task) {
-                trace!(
-                    "aborting spawn before start (not continue-on-error): {} {}",
-                    task.name,
-                    task.args.join(" ")
-                );
-                deps.remove(&task);
-                return Ok(());
-            }
-            drop(deps);
+        if Self::should_abort_while_stopping(
+            &this,
+            &task,
+            &deps_for_remove,
+            inherited_allow_during_interruption,
+        )
+        .await
+        {
+            trace!(
+                "aborting spawn before start while stopping: {} {}",
+                task.name,
+                task.args.join(" ")
+            );
+            return Ok(());
         }
         let needs_permit = task_needs_permit(&task);
         let permit_opt = if needs_permit {
@@ -536,23 +954,23 @@ impl Run {
                 task.name,
                 wait_start.elapsed().as_millis()
             );
-            // If a failure occurred while we were waiting for a permit and we're not
-            // in continue-on-error mode, skip launching this task unless it's a
-            // post-dependency (cleanup task). This prevents subsequently queued
-            // tasks from running after failure, while still allowing cleanup.
-            if this.is_stopping() && !this.continue_on_error {
-                let mut deps = deps_for_remove.lock().await;
-                if !deps.is_runnable_post_dep(&task) {
-                    trace!(
-                        "aborting spawn after failure (not continue-on-error): {} {}",
-                        task.name,
-                        task.args.join(" ")
-                    );
-                    // Remove from deps so the scheduler can drain and not hang
-                    deps.remove(&task);
-                    return Ok(());
-                }
-                drop(deps);
+            // If a failure or interruption occurred while waiting for a permit,
+            // skip this task unless failures may continue or it is a
+            // post-dependency. Interruption always stops new normal tasks.
+            if Self::should_abort_while_stopping(
+                &this,
+                &task,
+                &deps_for_remove,
+                inherited_allow_during_interruption,
+            )
+            .await
+            {
+                trace!(
+                    "aborting spawn after wait while stopping: {} {}",
+                    task.name,
+                    task.args.join(" ")
+                );
+                return Ok(());
             }
             p
         } else {
@@ -564,6 +982,8 @@ impl Run {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let in_flight_c = ctx.in_flight.clone();
         trace!("running task: {task}");
+        let allow_during_interruption = inherited_allow_during_interruption
+            || deps_for_remove.lock().await.is_runnable_post_dep(&task);
         // Mark task as executed synchronously before spawning so that the
         // scheduler's failure-cleanup path (which checks is_runnable_post_dep)
         // always sees the parent in `executed` — avoiding a race where a
@@ -572,19 +992,20 @@ impl Run {
         let semaphore = ctx.semaphore.clone();
         ctx.jset.lock().await.spawn(async move {
             let mut permit = permit_opt;
-            let (completed, dep_ran) = {
+            let (completion_state, dependency_state) = {
                 let deps = deps_for_remove.lock().await;
-                (deps.handled_task_keys(), deps.any_dep_ran(&task))
+                (deps.completion_state(), deps.dependency_state(&task))
             };
-            let (result, panicked) = match AssertUnwindSafe(this.run_task_sched(
-                &task,
-                &ctx.config,
-                ctx.sched_tx.clone(),
-                completed,
-                dep_ran,
+            let (result, panicked) = match AssertUnwindSafe(this.run_task_sched(TaskRunContext {
+                task: &task,
+                config: &ctx.config,
+                sched_tx: ctx.sched_tx.clone(),
+                completion_state,
+                dependency_state,
                 semaphore,
-                &mut permit,
-            ))
+                permit: &mut permit,
+                allow_during_interruption,
+            }))
             .catch_unwind()
             .await
             {
@@ -594,21 +1015,31 @@ impl Run {
                     true,
                 ),
             };
-            // If the task actually ran (not skipped) and has sources defined,
+            // If the task executed or restored outputs and has sources defined,
             // mark it so dependents' source freshness checks are invalidated.
             // Tasks without sources always run and should not trigger invalidation.
-            if let Ok(true) = &result
-                && !task.sources.is_empty()
-            {
-                deps_for_remove.lock().await.mark_ran(&task);
+            if let Ok(outcome) = &result {
+                let mut deps = deps_for_remove.lock().await;
+                if outcome.did_work && !task.sources.is_empty() {
+                    deps.mark_did_work(&task);
+                }
+                if let Some(cache_key) = &outcome.cache_key {
+                    deps.mark_cache_key(&task, cache_key.clone());
+                }
             }
+            let interrupted = result.as_ref().is_err_and(|err| {
+                !panicked && ctrlc::is_cancelled() && Error::is_task_interrupted(err)
+            });
             if let Err(err) = &result {
+                if interrupted {
+                    this.mark_interrupted();
+                }
                 let status = if panicked {
                     Some(1)
                 } else {
                     Error::get_exit_status(err)
                 };
-                if !this.is_stopping() && (panicked || status.is_none()) {
+                if !interrupted && !this.is_stopping() && (panicked || status.is_none()) {
                     let prefix = task.estyled_prefix();
                     if Settings::get().verbose {
                         this.eprint(&task, &prefix, &format!("{} {err:?}", style::ered("ERROR")));
@@ -621,13 +1052,15 @@ impl Run {
                         }
                     };
                 }
-                this.add_failed_task(task.clone(), status);
+                if !interrupted {
+                    this.add_failed_task(task.clone(), status);
+                }
                 // SIGTERM any still-running siblings so we exit promptly on
                 // failure instead of waiting for them to finish naturally.
                 // run_loop only sees `is_stopping` when it next iterates,
                 // which doesn't happen while it's awaiting an idle select —
                 // so the kill has to be triggered from here.
-                if !this.continue_on_error {
+                if !interrupted && !this.continue_on_error {
                     debug!("task {} failed, killing siblings", task.name);
                     #[cfg(unix)]
                     crate::cmd::CmdLineRunner::kill_all(nix::sys::signal::SIGTERM);
@@ -636,17 +1069,49 @@ impl Run {
                 }
             }
             if let Some(oh) = &this.output_handler
-                && oh.output(None) == TaskOutput::KeepOrder
+                && oh.output(Some(&task)) == TaskOutput::KeepOrder
             {
                 oh.keep_order_state.lock().unwrap().on_task_finished(&task);
             }
-            deps_for_remove.lock().await.remove(&task);
+            let mut deps = deps_for_remove.lock().await;
+            if result
+                .as_ref()
+                .is_err_and(Error::is_task_interrupted_before_start)
+            {
+                deps.unmark_executed(&task);
+            }
+            deps.remove(&task);
+            drop(deps);
             trace!("deps removed: {} {}", task.name, task.args.join(" "));
             in_flight_c.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            result.map(|_| ())
+            if interrupted {
+                Ok(())
+            } else {
+                result.map(|_| ())
+            }
         });
 
         Ok(())
+    }
+
+    async fn should_abort_while_stopping(
+        this: &Self,
+        task: &Task,
+        deps_for_remove: &Arc<Mutex<Deps>>,
+        inherited_allow_during_interruption: bool,
+    ) -> bool {
+        if !this.is_stopping()
+            || (this.continue_on_error && !this.is_interrupted())
+            || inherited_allow_during_interruption
+        {
+            return false;
+        }
+        let mut deps = deps_for_remove.lock().await;
+        if deps.is_runnable_post_dep(task) {
+            return false;
+        }
+        deps.remove(task);
+        true
     }
 
     // ============================================================================
@@ -657,7 +1122,7 @@ impl Run {
     /// Dependencies should already be resolved via resolve_depends() before calling this.
     async fn prepare_tasks(&mut self, config: &Arc<Config>, mut tasks: Vec<Task>) -> Result<Deps> {
         let fetcher = crate::task::task_fetcher::TaskFetcher::new(self.no_cache);
-        fetcher.fetch_tasks(&mut tasks).await?;
+        fetcher.fetch_tasks(config, &mut tasks).await?;
         let mut tasks = Deps::new(config, tasks).await?;
         tasks.mark_ambiguous_prefixes();
         self.is_linear = tasks.is_linear();
@@ -677,8 +1142,12 @@ impl Run {
         };
         self.output_handler = Some(OutputHandler::new(output_config));
 
-        // Spawn timed output task if needed
-        if self.output(None) == TaskOutput::Timed {
+        // Spawn the timed-output printer if any task resolves to the Timed style
+        // (run-wide default OR a per-task `output = "timed"` override).
+        let any_timed = tasks
+            .all()
+            .any(|task| self.output(Some(task)) == TaskOutput::Timed);
+        if any_timed {
             let timed_outputs = self.output_handler.as_ref().unwrap().timed_outputs.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -686,12 +1155,14 @@ impl Run {
                     {
                         let mut outputs = timed_outputs.lock().unwrap();
                         for (prefix, out) in outputs.clone() {
-                            let (time, line) = out;
+                            let (time, lines) = out;
                             if time.elapsed().unwrap().as_secs() >= 1 {
-                                if console::colors_enabled() {
-                                    prefix_println!(prefix, "{line}\x1b[0m");
-                                } else {
-                                    prefix_println!(prefix, "{line}");
+                                for line in lines {
+                                    if console::colors_enabled() {
+                                        prefix_println!(prefix, "{line}\x1b[0m");
+                                    } else {
+                                        prefix_println!(prefix, "{line}");
+                                    }
                                 }
                                 outputs.shift_remove(&prefix);
                             }
@@ -722,16 +1193,25 @@ impl Run {
             continue_on_error: self.continue_on_error,
             dry_run: self.dry_run,
             skip_deps: self.skip_deps,
-            sandbox: crate::sandbox::SandboxConfig {
-                deny_read: self.deny_all || self.deny_read,
-                deny_write: self.deny_all || self.deny_write,
-                deny_net: self.deny_all || self.deny_net,
-                deny_env: self.deny_all || self.deny_env,
-                allow_read: self.allow_read.clone(),
-                allow_write: self.allow_write.clone(),
-                allow_net: self.allow_net.clone(),
-                allow_env: self.allow_env.clone(),
-            },
+            task_cache: self.task_cache,
+            task_cache_explain: self.task_cache_explain,
+            task_cache_explain_json: self.task_cache_explain_json,
+            sandbox: crate::sandbox::SandboxConfig::from_settings_and_cli(
+                &Settings::get().sandbox,
+                self.deny_all,
+                crate::sandbox::SandboxConfig {
+                    deny_read: self.deny_read,
+                    deny_write: self.deny_write,
+                    deny_net: self.deny_net,
+                    deny_env: self.deny_env,
+                    allow_read: self.allow_read.clone(),
+                    allow_write: self.allow_write.clone(),
+                    allow_net: self.allow_net.clone(),
+                    allow_env: self.allow_env.clone(),
+                    pass_through_env: vec![],
+                    cache_env: vec![],
+                },
+            ),
         };
         self.executor = Some(crate::task::task_executor::TaskExecutor::new(
             self.context_builder.clone(),
@@ -743,12 +1223,19 @@ impl Run {
     }
 
     /// Collect and install all tools needed by tasks
-    async fn install_task_tools(&self, config: &mut Arc<Config>, tasks: &Deps) -> Result<()> {
+    async fn install_task_tools(
+        &self,
+        config: &mut Arc<Config>,
+        tasks: &Deps,
+        previewed_tools: &HashSet<ToolVersion>,
+    ) -> Result<()> {
         let installer = crate::task::task_tool_installer::TaskToolInstaller::new(
             &self.context_builder,
             &self.tool,
         );
-        installer.install_tools(config, tasks).await
+        installer
+            .install_tools(config, tasks, self.dry_run, previewed_tools)
+            .await
     }
 
     // ============================================================================
@@ -771,35 +1258,37 @@ impl Run {
     }
 
     fn is_stopping(&self) -> bool {
-        self.executor
-            .as_ref()
-            .map(|e| e.is_stopping())
-            .unwrap_or(false)
+        ctrlc::is_cancelled()
+            || self
+                .executor
+                .as_ref()
+                .map(|e| e.is_stopping())
+                .unwrap_or(false)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn is_interrupted(&self) -> bool {
+        ctrlc::is_cancelled()
+            || self
+                .executor
+                .as_ref()
+                .map(|e| e.is_interrupted())
+                .unwrap_or(false)
+    }
+
+    fn mark_interrupted(&self) {
+        if let Some(executor) = &self.executor {
+            executor.mark_interrupted();
+        }
+    }
+
     async fn run_task_sched(
         &self,
-        task: &Task,
-        config: &Arc<Config>,
-        sched_tx: Arc<tokio::sync::mpsc::UnboundedSender<(Task, Arc<Mutex<Deps>>)>>,
-        completed_tasks: std::collections::HashSet<crate::task::TaskKey>,
-        dep_ran: bool,
-        semaphore: Arc<tokio::sync::Semaphore>,
-        permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
-    ) -> Result<bool> {
+        ctx: TaskRunContext<'_>,
+    ) -> Result<crate::task::task_executor::TaskRunOutcome> {
         self.executor
             .as_ref()
             .expect("executor must be initialized before running tasks")
-            .run_task_sched(
-                task,
-                config,
-                sched_tx,
-                completed_tasks,
-                dep_ran,
-                semaphore,
-                permit,
-            )
+            .run_task_sched(ctx)
             .await
     }
 
@@ -812,6 +1301,12 @@ impl Run {
     fn validate_task(&self, task: &Task) -> Result<()> {
         use crate::file;
         use crate::ui;
+        if self.task_cache.enabled() && task.cache.as_ref().is_some_and(|cache| cache.enabled) {
+            Settings::get().ensure_experimental("task artifact caching")?;
+        }
+        if !task.pass_through_env.is_empty() {
+            Settings::get().ensure_experimental("task environment pass-through")?;
+        }
         if let Some(path) = &task.file
             && path.exists()
             && !file::is_executable(path)
@@ -829,6 +1324,30 @@ impl Run {
 
     fn timings(&self) -> bool {
         !self.quiet(None) && !self.no_timings
+    }
+
+    fn display_task_cache_stats(&self) {
+        let stats = *self
+            .executor
+            .as_ref()
+            .expect("executor must be initialized before displaying cache stats")
+            .cache_stats
+            .lock()
+            .unwrap();
+        let lookups = stats.hits.saturating_add(stats.misses);
+        if lookups == 0 {
+            safe_eprintln!("Task cache: no lookups");
+            return;
+        }
+        let hit_rate = stats.hits.saturating_mul(100) / lookups;
+        safe_eprintln!(
+            "Task cache: {}/{} hits ({}%), {} restored, {} saved",
+            stats.hits,
+            lookups,
+            hit_rate,
+            ByteSize::b(stats.restored_bytes).display().iec(),
+            crate::ui::time::format_duration(stats.time_saved),
+        );
     }
 
     fn quiet(&self, task: Option<&Task>) -> bool {
@@ -859,7 +1378,10 @@ fn display_task_help(task: &Task) -> Result<()> {
     if !task.description.is_empty() {
         info::inline_section("Description", &task.description)?;
     }
-    info::inline_section("Source", display_path(&task.config_source))?;
+    info::inline_section(
+        "Source",
+        task.config_sources().iter().map(display_path).join(", "),
+    )?;
     if !task.depends.is_empty() {
         info::inline_section("Depends on", task.depends.iter().join(", "))?;
     }
@@ -875,8 +1397,66 @@ fn display_task_help(task: &Task) -> Result<()> {
         "To define arguments, add a `usage` field to the task definition in the config file."
     };
     miseprintln!("{hint}");
-    miseprintln!("See https://mise.en.dev/tasks/task-configuration.html for more information.");
+    miseprintln!("See https://mise.jdx.dev/tasks/task-configuration.html for more information.");
     Ok(())
+}
+
+fn render_usage_help(spec: &usage::Spec, args: &[String]) -> String {
+    let cmd = usage_command_for_args(spec, args);
+    usage::docs::cli::render_help(spec, cmd, true)
+}
+
+fn usage_command_for_args<'a>(spec: &'a usage::Spec, args: &[String]) -> &'a usage::SpecCommand {
+    let mut cmd = &spec.cmd;
+    let mut idx = 0;
+    let mut used_default_subcommand = false;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+        if arg == "-h" || arg == "--help" {
+            break;
+        }
+        if let Some(subcommand) = cmd.find_subcommand(arg) {
+            cmd = subcommand;
+            idx += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            if !arg.contains('=')
+                && (flag_takes_value(&spec.cmd, arg) || flag_takes_value(cmd, arg))
+            {
+                idx += 1;
+            }
+            idx += 1;
+            continue;
+        }
+        if !used_default_subcommand
+            && let Some(default_name) = &spec.default_subcommand
+            && let Some(subcommand) = cmd.find_subcommand(default_name)
+        {
+            cmd = subcommand;
+            used_default_subcommand = true;
+            continue;
+        }
+        break;
+    }
+
+    cmd
+}
+
+fn flag_takes_value(cmd: &usage::SpecCommand, flag: &str) -> bool {
+    let flag = flag.split_once('=').map(|(flag, _)| flag).unwrap_or(flag);
+    if let Some(long) = flag.strip_prefix("--") {
+        cmd.flags
+            .iter()
+            .any(|f| f.arg.is_some() && f.long.iter().any(|f| f == long))
+    } else if let Some(short) = flag.strip_prefix('-').and_then(|f| f.chars().next()) {
+        cmd.flags
+            .iter()
+            .any(|f| f.arg.is_some() && f.short.contains(&short))
+    } else {
+        false
+    }
 }
 
 static AFTER_LONG_HELP: &str = color_print::cstr!(
@@ -921,5 +1501,41 @@ mod tests {
     fn test_panic_payload_message_from_unknown_payload() {
         let payload: Box<dyn std::any::Any + Send> = Box::new(123usize);
         assert_eq!(panic_payload_message(&*payload), "unknown panic payload");
+    }
+
+    #[test]
+    fn affected_patterns_expand_across_projects_and_preserve_arguments() {
+        assert_eq!(
+            affected_task_args(&[
+                "build".into(),
+                "--release".into(),
+                ":::".into(),
+                "//apps/...:test".into(),
+                "unit".into(),
+                ":::".into(),
+                "node:@scope/app#lint".into(),
+            ]),
+            vec![
+                "//...:build",
+                "--release",
+                ":::",
+                "//apps/...:test",
+                "unit",
+                ":::",
+                "node:@scope/app#lint",
+            ]
+        );
+    }
+
+    #[test]
+    fn affected_paths_escape_terminal_control_characters() {
+        assert_eq!(
+            display_affected_path(std::path::Path::new("src/\x1b[2J\nfile.rs")),
+            r"src/\u{1b}[2J\nfile.rs"
+        );
+        assert_eq!(
+            display_affected_text("//app:\x1b]8;;https://example.com\x1b\\build"),
+            r"//app:\u{1b}]8;;https://example.com\u{1b}\\build"
+        );
     }
 }

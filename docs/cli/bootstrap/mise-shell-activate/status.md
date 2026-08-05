@@ -2,7 +2,8 @@
 # `mise bootstrap mise-shell-activate status`
 
 - **用法**: `mise bootstrap mise-shell-activate status [-J --json] [--missing]`
-- **源代码**: [`src/cli/bootstrap/mise_shell_activate/status.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/mise_shell_activate/status.rs)
+- **作用**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

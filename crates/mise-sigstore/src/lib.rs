@@ -535,6 +535,17 @@ impl AttestationClient {
     }
 }
 
+pub struct GithubAttestationRequest<'a> {
+    pub artifact_path: &'a Path,
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub token: Option<&'a str>,
+    pub signer_workflow: Option<&'a str>,
+    pub base_url: Option<&'a str>,
+    pub digest: Option<&'a str>,
+    pub retry_config: RetryConfig,
+}
+
 pub async fn verify_github_attestation(
     artifact_path: &Path,
     owner: &str,
@@ -543,16 +554,16 @@ pub async fn verify_github_attestation(
     signer_workflow: Option<&str>,
     retry_config: RetryConfig,
 ) -> Result<bool> {
-    verify_github_attestation_inner(
+    verify_github_attestation_inner(GithubAttestationRequest {
         artifact_path,
         owner,
         repo,
         token,
         signer_workflow,
-        None,
-        None,
+        base_url: None,
+        digest: None,
         retry_config,
-    )
+    })
     .await
 }
 
@@ -565,41 +576,23 @@ pub async fn verify_github_attestation_with_base_url(
     base_url: &str,
     retry_config: RetryConfig,
 ) -> Result<bool> {
-    verify_github_attestation_inner(
+    verify_github_attestation_inner(GithubAttestationRequest {
         artifact_path,
         owner,
         repo,
         token,
         signer_workflow,
-        Some(base_url),
-        None,
+        base_url: Some(base_url),
+        digest: None,
         retry_config,
-    )
+    })
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn verify_github_attestation_with_base_url_and_digest(
-    artifact_path: &Path,
-    owner: &str,
-    repo: &str,
-    token: Option<&str>,
-    signer_workflow: Option<&str>,
-    base_url: &str,
-    digest: &str,
-    retry_config: RetryConfig,
+    request: GithubAttestationRequest<'_>,
 ) -> Result<bool> {
-    verify_github_attestation_inner(
-        artifact_path,
-        owner,
-        repo,
-        token,
-        signer_workflow,
-        Some(base_url),
-        Some(digest),
-        retry_config,
-    )
-    .await
+    verify_github_attestation_inner(request).await
 }
 
 pub async fn verify_github_attestation_with_attestations(
@@ -616,33 +609,23 @@ pub async fn verify_github_attestation_with_attestations(
     verify_attestation_bundles(attestations, &artifact, signer_workflow, &mut trust_roots).await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn verify_github_attestation_inner(
-    artifact_path: &Path,
-    owner: &str,
-    repo: &str,
-    token: Option<&str>,
-    signer_workflow: Option<&str>,
-    base_url: Option<&str>,
-    digest: Option<&str>,
-    retry_config: RetryConfig,
-) -> Result<bool> {
-    let mut builder = AttestationClient::builder().retry_config(retry_config);
-    if let Some(token) = token {
+async fn verify_github_attestation_inner(request: GithubAttestationRequest<'_>) -> Result<bool> {
+    let mut builder = AttestationClient::builder().retry_config(request.retry_config);
+    if let Some(token) = request.token {
         builder = builder.github_token(token);
     }
-    if let Some(base_url) = base_url {
+    if let Some(base_url) = request.base_url {
         builder = builder.base_url(base_url);
     }
     let client = builder.build()?;
-    let digest = match digest {
+    let digest = match request.digest {
         Some(digest) => digest.to_string(),
-        None => calculate_file_digest(artifact_path).await?,
+        None => calculate_file_digest(request.artifact_path).await?,
     };
     let attestations = client
         .fetch_attestations(FetchParams {
-            owner: owner.to_string(),
-            repo: Some(format!("{owner}/{repo}")),
+            owner: request.owner.to_string(),
+            repo: Some(format!("{}/{}", request.owner, request.repo)),
             digest: format!("sha256:{digest}"),
             limit: 30,
             predicate_type: None,
@@ -653,9 +636,15 @@ async fn verify_github_attestation_inner(
         return Err(AttestationError::NoAttestations);
     }
 
-    let artifact = tokio::fs::read(artifact_path).await?;
+    let artifact = tokio::fs::read(request.artifact_path).await?;
     let mut trust_roots = TrustRoots::default();
-    verify_attestation_bundles(&attestations, &artifact, signer_workflow, &mut trust_roots).await
+    verify_attestation_bundles(
+        &attestations,
+        &artifact,
+        request.signer_workflow,
+        &mut trust_roots,
+    )
+    .await
 }
 
 pub async fn verify_cosign_signature(
@@ -706,17 +695,7 @@ pub async fn verify_cosign_signature_with_key(
         // Bundle path: needs the trust root for tlog (Rekor) verification.
         let trusted_root = production_trusted_root().await?;
         let artifact = tokio::fs::read(artifact_path).await?;
-        let result = sigstore_verify::verify_with_key(
-            artifact.as_slice(),
-            &bundle,
-            &public_key,
-            &trusted_root,
-        )?;
-        if !result.success {
-            return Err(AttestationError::Verification(
-                "sigstore verification returned false".to_string(),
-            ));
-        }
+        sigstore_verify::verify_with_key(artifact.as_slice(), &bundle, &public_key, &trusted_root)?;
         return Ok(true);
     }
 
@@ -1239,11 +1218,6 @@ fn verify_bundle<'a>(
         policy = policy.skip_sct();
     }
     let result = sigstore_verify::verify(artifact, bundle, &policy, trusted_root)?;
-    if !result.success {
-        return Err(AttestationError::Verification(
-            "sigstore verification returned false".to_string(),
-        ));
-    }
 
     verify_signer_workflow_identity(result.identity.as_deref(), signer_workflow)?;
 
@@ -1340,8 +1314,8 @@ fn verify_cert_chain(leaf_der: &[u8], trusted_root: &TrustedRoot) -> Result<()> 
         AttestationError::Verification(format!("failed to parse leaf certificate: {e}"))
     })?;
     let not_after = leaf
-        .tbs_certificate
-        .validity
+        .tbs_certificate()
+        .validity()
         .not_after
         .to_unix_duration()
         .as_secs();
@@ -1415,8 +1389,8 @@ fn cert_issuer_organization(cert_der: &[u8]) -> Option<String> {
     use x509_cert::Certificate;
     use x509_cert::der::Decode;
     let cert = Certificate::from_der(cert_der).ok()?;
-    for rdn in cert.tbs_certificate.issuer.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in cert.tbs_certificate().issuer().iter_rdn() {
+        for atv in rdn.iter() {
             // 2.5.4.10 = id-at-organizationName
             if atv.oid.to_string() == "2.5.4.10" {
                 if let Ok(s) = atv.value.decode_as::<String>() {
@@ -1443,8 +1417,8 @@ fn extract_spki_der(cert_der: &[u8]) -> Result<Vec<u8>> {
     use x509_cert::der::{Decode, Encode};
     let cert = Certificate::from_der(cert_der)
         .map_err(|e| AttestationError::Verification(format!("failed to parse certificate: {e}")))?;
-    cert.tbs_certificate
-        .subject_public_key_info
+    cert.tbs_certificate()
+        .subject_public_key_info()
         .to_der()
         .map_err(|e| {
             AttestationError::Verification(format!("failed to encode SubjectPublicKeyInfo: {e}"))

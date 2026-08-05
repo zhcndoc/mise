@@ -2,6 +2,7 @@
 # `mise deps install`
 
 - **用法**: `mise deps install [FLAGS] [PROVIDER]`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/deps/install.rs`](https://github.com/jdx/mise/blob/main/src/cli/deps/install.rs)
 
 安装所有项目依赖项
@@ -13,7 +14,7 @@
 
 ### `[PROVIDER]`
 
-要操作的提供程序（仅运行此提供程序，或与 --explain 一起使用）
+要操作的提供程序（仅运行此提供程序，或与 --explain 一起使用）。
 
 ## 标志
 
@@ -32,6 +33,12 @@
 ### `--list`
 
 显示可用的 deps providers
+
+### `--monorepo`
+
+从每个 [monorepo].config_roots 配置根目录安装依赖
+
+要求 monorepo_root = true，并且在 monorepo 根配置中显式指定 [monorepo].config_roots。Provider 的命名方式类似于 //apps/api:uv。
 
 ### `--only… <ONLY>`
 

@@ -108,7 +108,7 @@ $ goreleaser --version
 
 ```toml
 [tools]
-"ubi:helix-editor/helix" = { version = "latest", extract_all = "true" }
+"ubi:helix-editor/helix" = { version = "latest", extract_all = true }
 ```
 
 ### `bin_path`
@@ -120,7 +120,7 @@ tar 包中二进制文件所在的目录。当二进制文件不在 tar 包根�
 [tools]
 "ubi:BurntSushi/ripgrep" = {
   version = "latest",
-  extract_all = "true",
+  extract_all = true,
   bin_path = "target/release",
 }
 ```

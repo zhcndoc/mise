@@ -2,9 +2,10 @@
 # `mise config set`
 
 - **用法**: `mise config set [-f --file <FILE>] [-t --type <TYPE>] <KEY> [VALUE]`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/config/set.rs`](https://github.com/jdx/mise/blob/main/src/cli/config/set.rs)
 
-在 mise.toml 文件中设置某个配置项的值
+在 mise.toml 文件中设置某个配置项的值。
 
 ## 参数
 
@@ -22,7 +23,9 @@
 
 要编辑的 mise.toml 文件路径
 
-如果未提供，将使用最近的 mise.toml 文件
+可以是文件路径或目录。如果提供的是目录，则使用该目录中的配置文件。
+
+如果未提供，则使用最近的 mise.toml 文件
 
 ### `-t --type <TYPE>`
 

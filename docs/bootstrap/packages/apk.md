@@ -1,4 +1,4 @@
-# apk <Badge type="warning" text="experimental" />
+# apk
 
 Alpine Linux 的系统包。
 

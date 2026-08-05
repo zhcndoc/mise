@@ -12,7 +12,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use super::platform_tokens::{BINARY_ARCH_TOKENS, BINARY_OS_TOKENS};
+use super::platform_tokens::{
+    BINARY_ARCH_TOKENS, BINARY_OS_TOKENS, is_arch_token, is_os_token, is_platform_or_version_token,
+};
 
 /// Regex pattern for matching version suffixes like -v1.2.3, _1.2.3, etc.
 static VERSION_PATTERN: LazyLock<regex::Regex> =
@@ -321,22 +323,12 @@ pub fn platform_aliases() -> Vec<(String, String)> {
 /// Supports nested format (platforms.macos-x64.url) with os-arch dash notation.
 /// Also supports both "platforms" and "platform" prefixes.
 pub fn lookup_platform_key(opts: &ToolVersionOptions, key_type: &str) -> Option<String> {
-    // Try nested platform structure with os-arch format
-    for (os, arch) in platform_aliases() {
-        for prefix in ["platforms", "platform"] {
-            // Try nested format: platforms.macos-x64.url
-            let nested_key = format!("{prefix}.{os}-{arch}.{key_type}");
-            if let Some(val) = opts.get_nested_string(&nested_key) {
-                return Some(val);
-            }
-            // Try flat format: platforms_macos_arm64_url
-            let flat_key = format!("{prefix}_{os}_{arch}_{key_type}");
-            if let Some(val) = opts.get_string(&flat_key) {
-                return Some(val);
-            }
-        }
-    }
-    None
+    lookup_platform_value_for_aliases(
+        platform_aliases(),
+        key_type,
+        |key| opts.get_nested_string(key),
+        |key| opts.get_string(key),
+    )
 }
 
 /// Looks up an option value with platform-specific fallback.
@@ -351,6 +343,52 @@ pub fn lookup_platform_key(opts: &ToolVersionOptions, key_type: &str) -> Option<
 /// * `None` if not found
 pub fn lookup_with_fallback(opts: &ToolVersionOptions, key: &str) -> Option<String> {
     lookup_platform_key(opts, key).or_else(|| opts.get_string(key))
+}
+
+/// Looks up a raw option value with platform-specific fallback.
+/// Like [`lookup_with_fallback`] but preserves the original `toml::Value` so
+/// callers can distinguish scalar and table forms (e.g. `rename_exe`).
+pub fn lookup_value_with_fallback<'a>(
+    opts: &'a ToolVersionOptions,
+    key: &str,
+) -> Option<&'a toml::Value> {
+    lookup_platform_value(opts, key).or_else(|| opts.opts.get(key))
+}
+
+fn lookup_nested_value<'a>(opts: &'a ToolVersionOptions, key: &str) -> Option<&'a toml::Value> {
+    let parts: Vec<&str> = key.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let mut value = opts.opts.get(parts[0])?;
+    for part in &parts[1..] {
+        let table = value.as_table()?;
+        value = table.get(*part)?;
+    }
+    Some(value)
+}
+
+fn lookup_platform_value_for_aliases<T>(
+    aliases: Vec<(String, String)>,
+    key_type: &str,
+    mut nested_lookup: impl FnMut(&str) -> Option<T>,
+    mut flat_lookup: impl FnMut(&str) -> Option<T>,
+) -> Option<T> {
+    for (os, arch) in aliases {
+        for prefix in ["platforms", "platform"] {
+            let nested_key = format!("{prefix}.{os}-{arch}.{key_type}");
+            if let Some(val) = nested_lookup(&nested_key) {
+                return Some(val);
+            }
+
+            let flat_key = format!("{prefix}_{os}_{arch}_{key_type}");
+            if let Some(val) = flat_lookup(&flat_key) {
+                return Some(val);
+            }
+        }
+    }
+    None
 }
 
 /// Returns all possible aliases for a given platform target (os, arch).
@@ -389,22 +427,39 @@ pub fn lookup_platform_key_for_target(
     key_type: &str,
     target: &PlatformTarget,
 ) -> Option<String> {
-    // Try nested platform structure with os-arch format
-    for (os, arch) in target_platform_aliases(target) {
-        for prefix in ["platforms", "platform"] {
-            // Try nested format: platforms.macos-x64.url
-            let nested_key = format!("{prefix}.{os}-{arch}.{key_type}");
-            if let Some(val) = opts.get_nested_string(&nested_key) {
-                return Some(val);
-            }
-            // Try flat format: platforms_macos_arm64_url
-            let flat_key = format!("{prefix}_{os}_{arch}_{key_type}");
-            if let Some(val) = opts.get_string(&flat_key) {
-                return Some(val);
-            }
-        }
-    }
-    None
+    lookup_platform_value_for_aliases(
+        target_platform_aliases(target),
+        key_type,
+        |key| opts.get_nested_string(key),
+        |key| opts.get_string(key),
+    )
+}
+
+/// Looks up a raw option value for a specific target platform.
+pub fn lookup_platform_value_for_target<'a>(
+    opts: &'a ToolVersionOptions,
+    key_type: &str,
+    target: &PlatformTarget,
+) -> Option<&'a toml::Value> {
+    lookup_platform_value_for_aliases(
+        target_platform_aliases(target),
+        key_type,
+        |key| lookup_nested_value(opts, key),
+        |key| opts.opts.get(key),
+    )
+}
+
+/// Looks up a raw platform-specific option value.
+pub fn lookup_platform_value<'a>(
+    opts: &'a ToolVersionOptions,
+    key_type: &str,
+) -> Option<&'a toml::Value> {
+    lookup_platform_value_for_aliases(
+        platform_aliases(),
+        key_type,
+        |key| lookup_nested_value(opts, key),
+        |key| opts.opts.get(key),
+    )
 }
 
 /// Lists platform keys (e.g. "macos-x64") for which a given key_type exists (e.g. "url").
@@ -464,7 +519,7 @@ pub fn template_string_for_target(
     )
 }
 
-fn render_template(template: &str, version: &str, mut tera: tera::Tera) -> String {
+fn render_template(template: &str, version: &str, mut tera: crate::tera::TeraEngine) -> String {
     // Check for legacy {version} syntax and emit deprecation warning
     if template.contains("{version}") && !template.contains("{{version}}") {
         deprecated_at!(
@@ -526,6 +581,16 @@ pub fn install_artifact(
         .or_else(|| opts.get_string("strip_components"))
         .and_then(|s| s.parse().ok());
 
+    // `bin` historically accepts a path within the install directory (for
+    // example `bin/tiny`), while rename_exe names a file in one search dir.
+    if let Some(name) = lookup_with_fallback(opts, "bin") {
+        ensure_safe_relative_bin_path("bin", &name)?;
+    }
+    // Table-form rename_exe is not a scalar and is validated in apply_rename_exe.
+    if let Some(name) = lookup_with_fallback(opts, "rename_exe") {
+        ensure_plain_bin_name("rename_exe", &name)?;
+    }
+
     file::remove_all(&install_path)?;
     file::create_dir_all(&install_path)?;
 
@@ -552,13 +617,20 @@ pub fn install_artifact(
         let decompressed_name = file_name.trim_end_matches(&format!(".{}", ext));
 
         // Determine the destination path with support for bin_path
+        let rename_exe = lookup_with_fallback(opts, "rename_exe");
         let dest = if let Some(bin_path_template) = lookup_with_fallback(opts, "bin_path") {
             let bin_path = template_string(&bin_path_template, tv);
             let bin_dir = install_path.join(&bin_path);
             file::create_dir_all(&bin_dir)?;
-            bin_dir.join(decompressed_name)
+            if let Some(rename_to) = rename_exe {
+                bin_dir.join(rename_binary_name(decompressed_name, &rename_to))
+            } else {
+                bin_dir.join(decompressed_name)
+            }
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
             install_path.join(&bin_name)
+        } else if let Some(rename_to) = rename_exe {
+            install_path.join(rename_binary_name(decompressed_name, &rename_to))
         } else {
             // Auto-clean binary names by removing OS/arch suffixes
             let cleaned_name = clean_binary_name(decompressed_name, Some(&tv.ba().tool_name));
@@ -574,12 +646,21 @@ pub fn install_artifact(
             let bin_path = template_string(&bin_path_template, tv);
             let bin_dir = install_path.join(&bin_path);
             file::create_dir_all(&bin_dir)?;
-            let dest = bin_dir.join(file_path.file_name().unwrap());
+            let original_name = file_path.file_name().unwrap().to_string_lossy();
+            let dest_name = lookup_with_fallback(opts, "rename_exe")
+                .map(|rename_to| rename_binary_name(&original_name, &rename_to))
+                .unwrap_or_else(|| original_name.to_string());
+            let dest = bin_dir.join(dest_name);
             file::copy(file_path, &dest)?;
             file::make_executable(&dest)?;
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
             // If bin is specified, rename the file to this name
             let dest = install_path.join(&bin_name);
+            file::copy(file_path, &dest)?;
+            file::make_executable(&dest)?;
+        } else if let Some(rename_to) = lookup_with_fallback(opts, "rename_exe") {
+            let original_name = file_path.file_name().unwrap().to_string_lossy();
+            let dest = install_path.join(rename_binary_name(&original_name, &rename_to));
             file::copy(file_path, &dest)?;
             file::make_executable(&dest)?;
         } else {
@@ -630,24 +711,87 @@ pub fn install_artifact(
         // Handle rename_exe option for archives
         // When bin_path is not explicitly set, auto-detect bin/ subdirectory to match
         // the same logic used by discover_bin_paths() for PATH construction
-        if let Some(rename_to) = lookup_with_fallback(opts, "rename_exe") {
-            let search_dir = if let Some(ref dir) = explicit_bin_path {
-                dir.clone()
-            } else {
-                let bin_dir = install_path.join("bin");
-                if bin_dir.is_dir() {
-                    bin_dir
-                } else {
-                    install_path.clone()
-                }
-            };
-            rename_executable_in_dir(&search_dir, &rename_to, Some(tool_name))?;
+        if let Some(rename_value) = lookup_value_with_fallback(opts, "rename_exe") {
+            let search_dir = archive_bin_search_dir(&install_path, explicit_bin_path.as_deref());
+            apply_rename_exe(&search_dir, rename_value, Some(tool_name))?;
+        }
+
+        // When neither bin= nor rename_exe= is set, auto-clean a single extracted
+        // binary whose filename carries an OS/arch platform suffix (e.g. a linux
+        // archive shipping `tool-macos-aarch64`), mirroring the behavior for
+        // single-file (non-archive) downloads. See discussion #6532.
+        if lookup_with_fallback(opts, "bin").is_none()
+            && lookup_value_with_fallback(opts, "rename_exe").is_none()
+        {
+            let search_dir = archive_bin_search_dir(&install_path, explicit_bin_path.as_deref());
+            auto_clean_single_archive_binary(&search_dir, tool_name)?;
         }
     }
     Ok(())
 }
 
+/// Directory to search for an archive's executable: an explicit `bin_path` when
+/// configured, else the conventional `bin/` subdirectory if it exists, else the
+/// install root. Mirrors the `bin/` auto-detection used by `discover_bin_paths()`
+/// for PATH construction so renaming/auto-cleaning targets the same location.
+fn archive_bin_search_dir(install_path: &Path, explicit_bin_path: Option<&Path>) -> PathBuf {
+    if let Some(dir) = explicit_bin_path {
+        return dir.to_path_buf();
+    }
+    let bin_dir = install_path.join("bin");
+    if bin_dir.is_dir() {
+        bin_dir
+    } else {
+        install_path.to_path_buf()
+    }
+}
+
+/// When an archive contains a single binary whose filename carries an OS/arch
+/// platform suffix (e.g. `tool-macos-aarch64`), rename it to the cleaned name
+/// (`tool`), matching what single-file (non-archive) downloads already do.
+///
+/// Only acts when the directory holds exactly one file (after dropping hidden
+/// files, LICENSE/README, and docs) and cleaning actually changes its name, so
+/// multi-file archives and files without a platform suffix are left untouched.
+/// See discussion #6532.
+fn auto_clean_single_archive_binary(dir: &Path, tool_name: &str) -> eyre::Result<()> {
+    // Only act on an unambiguously single-binary archive: exactly one file after
+    // dropping obvious non-binaries (hidden files, LICENSE/README, and known doc
+    // extensions via should_skip_file). Any other companion file makes the
+    // archive multi-file and we must not rename — a clean-named companion binary
+    // and a plain metadata file (e.g. CHANGELOG) are indistinguishable when a zip
+    // extracts them without an exec bit and they carry no platform suffix, so the
+    // only safe, deterministic choice is to leave multi-file archives untouched
+    // (users can disambiguate with `bin=`/`rename_exe=`). See discussion #6532.
+    let files = file::ls(dir)?
+        .into_iter()
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            !should_skip_file(&name, true)
+        })
+        .collect::<Vec<_>>();
+    let [path] = files.as_slice() else {
+        return Ok(());
+    };
+    let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+    let cleaned_name = clean_binary_name(&file_name, Some(tool_name));
+    // The sole file has no platform suffix; nothing to clean.
+    if cleaned_name == file_name {
+        return Ok(());
+    }
+    let dest = dir.join(&cleaned_name);
+    if dest.exists() {
+        return Ok(());
+    }
+    file::rename(path, &dest)?;
+    file::make_executable(&dest)?;
+    debug!("Auto-cleaned archive binary {file_name} -> {cleaned_name}");
+    Ok(())
+}
+
 fn make_configured_bin_executable(search_dir: &Path, bin_name: &str) -> Result<()> {
+    ensure_safe_relative_bin_path("bin", bin_name)?;
     let bin_path = search_dir.join(bin_name);
     if bin_path.is_file() {
         file::make_executable(bin_path)?;
@@ -750,6 +894,10 @@ pub fn rename_executable_in_dir(
     new_name: &str,
     tool_name: Option<&str>,
 ) -> eyre::Result<()> {
+    // This helper is shared by `bin`, which may be a nested path within the
+    // install directory, and scalar `rename_exe`, which is validated as a plain
+    // file name by apply_rename_exe before reaching here.
+    ensure_safe_relative_bin_path("rename target", new_name)?;
     let target_path = dir.join(new_name);
 
     // Check if target already exists before iterating
@@ -808,7 +956,7 @@ pub fn rename_executable_in_dir(
                     );
                     return Ok(());
                 }
-                if file_name.contains(tool_name) {
+                if file_name.to_lowercase().contains(&tool_name.to_lowercase()) {
                     if substring_match.is_none() {
                         substring_match = Some(path);
                     }
@@ -853,7 +1001,9 @@ pub fn rename_executable_in_dir(
                 }
 
                 // Check if filename matches tool name pattern or the target name
-                if file_name.contains(tool_name) || *file_name == *new_name {
+                if file_name.to_lowercase().contains(&tool_name.to_lowercase())
+                    || *file_name == *new_name
+                {
                     let target_path_with_extension =
                         keep_required_extensions(dir, &file_name, new_name, target_path);
 
@@ -870,6 +1020,161 @@ pub fn rename_executable_in_dir(
         }
     }
 
+    Ok(())
+}
+
+/// Applies the `rename_exe` option to freshly-extracted archive contents.
+///
+/// Two forms are supported:
+/// - String — `rename_exe = "plz"` — renames the tool's primary executable
+///   (located via the `tool_name` hint) to the given name. This is the original
+///   single-binary behavior.
+/// - Table — `rename_exe = { "ols-*" = "ols", "odinfmt-*" = "odinfmt" }` — renames
+///   every matched executable. Keys are source names that may contain glob
+///   patterns (matched against the file name); values are the new names. This
+///   lets archives that ship several binaries expose all of them under clean
+///   names.
+pub fn apply_rename_exe(
+    search_dir: &Path,
+    value: &toml::Value,
+    tool_name: Option<&str>,
+) -> eyre::Result<()> {
+    match value {
+        toml::Value::Table(entries) => {
+            // Validate every target before renaming anything, so a bad entry
+            // fails the install without leaving a half-applied table.
+            for target in entries.values() {
+                if let Some(target) = target.as_str() {
+                    ensure_plain_bin_name("rename_exe", target)?;
+                }
+            }
+            // Snapshot the directory once and consume each matched file, so a
+            // rename's *output* can never become a later entry's *input*
+            // (e.g. `tool-*`→`tool` then `tool`→`x` must not rename twice) and a
+            // single file satisfies at most one mapping. `file::ls` is sorted, so
+            // a glob matching several files resolves deterministically.
+            let mut available: Vec<PathBuf> = file::ls(search_dir)?
+                .into_iter()
+                // Do not follow archive-provided symlinks: chmod on a symlink
+                // follows its target and could change permissions outside the
+                // extraction directory.
+                .filter(|p| {
+                    matches!(
+                        p.symlink_metadata(),
+                        Ok(metadata) if metadata.file_type().is_file()
+                    )
+                })
+                .collect();
+            for (source, target) in entries {
+                let Some(target) = target.as_str() else {
+                    warn!("rename_exe: target for '{source}' is not a string, skipping");
+                    continue;
+                };
+                match take_matching(&mut available, source)? {
+                    Some(path) => {
+                        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+                        finish_rename(search_dir, &path, &file_name, target)?;
+                    }
+                    None => warn!(
+                        "rename_exe: no file matching '{source}' found in {}",
+                        search_dir.display()
+                    ),
+                }
+            }
+            Ok(())
+        }
+        toml::Value::String(new_name) => {
+            ensure_plain_bin_name("rename_exe", new_name)?;
+            rename_executable_in_dir(search_dir, new_name, tool_name)
+        }
+        other => {
+            warn!("rename_exe: expected a string or table, got {other}");
+            Ok(())
+        }
+    }
+}
+
+/// Removes and returns the first file in `available` matching `pattern` — an
+/// exact file name (preferred) or a glob such as `ols-*`. Consuming the match
+/// keeps one file from satisfying two mappings and keeps a rename output from
+/// being re-matched by a later pattern.
+fn take_matching(available: &mut Vec<PathBuf>, pattern: &str) -> eyre::Result<Option<PathBuf>> {
+    // An exact file name honors the user's explicit choice, even for files a glob
+    // heuristic would skip.
+    let exact = std::ffi::OsStr::new(pattern);
+    if let Some(idx) = available.iter().position(|p| p.file_name() == Some(exact)) {
+        return Ok(Some(available.remove(idx)));
+    }
+
+    // For a glob, skip obvious non-binary collateral (LICENSE, README, *.txt/.md,
+    // …) the same way the string-form rename path does, so e.g. `ols-*` grabs the
+    // real binary rather than `ols-license.txt`, which would sort first.
+    let glob = glob::Pattern::new(pattern)
+        .map_err(|e| eyre::eyre!("invalid rename_exe pattern '{pattern}': {e}"))?;
+    if let Some(idx) = available.iter().position(|p| {
+        p.file_name()
+            .map(|n| {
+                let name = n.to_string_lossy();
+                !should_skip_file(&name, true) && glob.matches(&name)
+            })
+            .unwrap_or(false)
+    }) {
+        return Ok(Some(available.remove(idx)));
+    }
+
+    Ok(None)
+}
+
+/// Rejects `bin`/`rename_exe` names that are not plain file names (`../tool`,
+/// `/abs/tool`, `bin/tool`), which would otherwise be joined onto the install
+/// or search directory and place the binary outside it.
+pub fn ensure_plain_bin_name(option: &str, name: &str) -> eyre::Result<()> {
+    if !file::is_plain_file_name(name) {
+        bail!(
+            "{option}: '{name}' must be a plain file name \
+             (no path separators or parent directories)"
+        );
+    }
+    Ok(())
+}
+
+/// Rejects a configured binary path that is absolute or contains parent
+/// components, while preserving the established `bin = "bin/tool"` form.
+pub fn ensure_safe_relative_bin_path(option: &str, path: &str) -> eyre::Result<()> {
+    if !file::is_safe_relative_path(path) {
+        bail!(
+            "{option}: '{path}' must be a safe relative path \
+             (no absolute paths or parent directories)"
+        );
+    }
+    Ok(())
+}
+
+/// Renames `path` (named `file_name`) to `target` within `dir`, preserving any
+/// required extension and ensuring the result is executable. A collision on the
+/// target (two mappings pointing at the same name, or the archive already
+/// containing that name) is unsatisfiable, so it fails the install loudly rather
+/// than silently dropping a binary and reporting success.
+fn finish_rename(dir: &Path, path: &Path, file_name: &str, target: &str) -> eyre::Result<()> {
+    let target_path = keep_required_extensions(dir, file_name, target, dir.join(target));
+    // Ensure the binary is executable whether or not we move it: ZIP archives drop
+    // the exec bit, and the file may already carry the desired name.
+    if !file::is_executable(path) {
+        file::make_executable(path)?;
+    }
+    if path == target_path {
+        return Ok(());
+    }
+    if target_path.exists() {
+        bail!(
+            "rename_exe: cannot rename '{}' to '{}': target already exists. \
+             Check for duplicate or overlapping rename_exe mappings.",
+            path.display(),
+            target_path.display()
+        );
+    }
+    file::rename(path, &target_path)?;
+    debug!("Renamed {} to {}", path.display(), target_path.display());
     Ok(())
 }
 
@@ -954,6 +1259,17 @@ fn keep_extensions(
     target_path
 }
 
+pub fn rename_binary_name(original_name: &str, new_name: &str) -> String {
+    for ext in [".exe", ".cmd", ".bat", ".sh", ".ps1", ".AppImage"] {
+        if original_name.to_lowercase().ends_with(&ext.to_lowercase())
+            && !new_name.to_lowercase().ends_with(&ext.to_lowercase())
+        {
+            return format!("{new_name}{ext}");
+        }
+    }
+    new_name.to_string()
+}
+
 /// Cleans a binary name by removing OS/arch suffixes and version numbers.
 /// This is useful when downloading single binaries that have platform-specific names.
 /// Executable extensions (.exe, .bat, .sh, etc.) are preserved.
@@ -999,6 +1315,12 @@ pub fn clean_binary_name(name: &str, tool_name: Option<&str>) -> String {
 
     // Try to find and remove platform suffixes
     let mut cleaned = name_without_ext.to_string();
+
+    if let Some(stripped) = strip_platform_token_suffix(&cleaned) {
+        cleaned = stripped;
+        let result = clean_version_suffix(&cleaned, tool_name);
+        return with_ext(result);
+    }
 
     // First try combined OS-arch patterns
     for os in BINARY_OS_TOKENS {
@@ -1077,6 +1399,65 @@ pub fn clean_binary_name(name: &str, tool_name: Option<&str>) -> String {
 
     // Add the extension back if we had one
     with_ext(cleaned)
+}
+
+fn strip_platform_token_suffix(name: &str) -> Option<String> {
+    let mut separators = name
+        .char_indices()
+        .filter_map(|(idx, c)| matches!(c, '-' | '_').then_some(idx))
+        .collect::<Vec<_>>();
+    separators.sort_unstable_by(|a, b| b.cmp(a));
+
+    for idx in separators {
+        if separator_inside_platform_token(name, idx) {
+            continue;
+        }
+        let suffix = &name[idx + 1..];
+        let tokens = suffix
+            .split(['-', '_'])
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        if tokens.len() < 2 {
+            continue;
+        }
+        if !tokens
+            .iter()
+            .all(|token| is_platform_or_version_token(token))
+        {
+            continue;
+        }
+        if !tokens.iter().any(|token| is_os_token(token)) {
+            continue;
+        }
+        if !tokens.iter().any(|token| is_arch_token(token)) {
+            continue;
+        }
+
+        let prefix = &name[..idx];
+        if !prefix.is_empty() {
+            return Some(prefix.to_string());
+        }
+    }
+
+    None
+}
+
+fn separator_inside_platform_token(name: &str, idx: usize) -> bool {
+    if !name[idx..].starts_with('_') {
+        return false;
+    }
+
+    let token_start = name[..idx]
+        .rfind(['-', '_'])
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    let token_end = name[idx + 1..]
+        .find(['-', '_'])
+        .map(|pos| idx + 1 + pos)
+        .unwrap_or(name.len());
+    let token = &name[token_start..token_end];
+
+    is_platform_or_version_token(token)
 }
 
 /// Remove version suffixes from binary names.
@@ -1293,6 +1674,13 @@ Path      : C:\\a\\deno\\deno\\target\\release\\deno-x86_64-pc-windows-msvc.zip
         // Test arch before OS
         assert_eq!(clean_binary_name("tool-x86_64-linux", None), "tool");
         assert_eq!(clean_binary_name("tool_amd64_windows", None), "tool");
+        assert_eq!(
+            clean_binary_name(
+                "code2prompt-x86_64-pc-windows-msvc.exe",
+                Some("mufeedvh/code2prompt")
+            ),
+            "code2prompt.exe"
+        );
 
         // Test with tool name hint
         assert_eq!(
@@ -1359,6 +1747,30 @@ Path      : C:\\a\\deno\\deno\\target\\release\\deno-x86_64-pc-windows-msvc.zip
         // Test edge cases
         assert_eq!(clean_binary_name("linux", None), "linux"); // Just OS name
         assert_eq!(clean_binary_name("", None), "");
+    }
+
+    #[test]
+    fn test_rename_binary_name_preserves_executable_extension() {
+        assert_eq!(
+            rename_binary_name("code2prompt-x86_64-pc-windows-msvc.exe", "code2prompt"),
+            "code2prompt.exe"
+        );
+        assert_eq!(
+            rename_binary_name("tool-linux-x64", "tool-renamed"),
+            "tool-renamed"
+        );
+    }
+
+    #[test]
+    fn test_strip_platform_token_suffix_uses_nearest_valid_suffix() {
+        assert_eq!(
+            strip_platform_token_suffix("code2prompt-x86_64-pc-windows-msvc"),
+            Some("code2prompt".to_string())
+        );
+        assert_eq!(
+            strip_platform_token_suffix("tool-v1.2.3-linux-x86_64"),
+            Some("tool-v1.2.3".to_string())
+        );
     }
 
     #[test]
@@ -1754,5 +2166,420 @@ bin = "tool.exe"
         assert!(!file::is_executable(&readme));
         assert!(!file::is_executable(&config));
         assert!(!file::is_executable(&unrelated));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_renames_multiple_binaries_by_glob() {
+        // An archive that ships several binaries with platform-suffixed names.
+        // The table form should clean up all of them, not just one.
+        let tmp = tempfile::tempdir().unwrap();
+        let ols = tmp.path().join("ols-x86_64-unknown-linux-gnu");
+        let odinfmt = tmp.path().join("odinfmt-x86_64-unknown-linux-gnu");
+        std::fs::write(&ols, b"bin").unwrap();
+        std::fs::write(&odinfmt, b"bin").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("ols-*".to_string(), toml::Value::String("ols".to_string()));
+            t.insert(
+                "odinfmt-*".to_string(),
+                toml::Value::String("odinfmt".to_string()),
+            );
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, Some("ols")).unwrap();
+
+        let ols_renamed = tmp.path().join("ols");
+        let odinfmt_renamed = tmp.path().join("odinfmt");
+        assert!(ols_renamed.is_file(), "ols should be renamed");
+        assert!(odinfmt_renamed.is_file(), "odinfmt should be renamed");
+        assert!(!ols.exists(), "original ols-* should be gone");
+        assert!(!odinfmt.exists(), "original odinfmt-* should be gone");
+        // ZIP archives drop the exec bit; rename should restore it.
+        assert!(file::is_executable(&ols_renamed));
+        assert!(file::is_executable(&odinfmt_renamed));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_exact_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let please = tmp.path().join("please");
+        let other = tmp.path().join("please_sandbox");
+        std::fs::write(&please, b"bin").unwrap();
+        std::fs::write(&other, b"bin").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("please".to_string(), toml::Value::String("plz".to_string()));
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, Some("please")).unwrap();
+
+        assert!(tmp.path().join("plz").is_file());
+        assert!(!please.exists());
+        // Untargeted binaries are left untouched.
+        assert!(other.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_string_delegates_to_single_rename() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("please");
+        std::fs::write(&bin, b"bin").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let value = toml::Value::String("plz".to_string());
+        apply_rename_exe(tmp.path(), &value, Some("please")).unwrap();
+
+        assert!(tmp.path().join("plz").is_file());
+        assert!(!bin.exists());
+    }
+
+    #[test]
+    fn test_apply_rename_exe_table_missing_source_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("keep"), b"bin").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert(
+                "nonexistent-*".to_string(),
+                toml::Value::String("whatever".to_string()),
+            );
+            t
+        });
+
+        // No matching file: warns and leaves the directory untouched.
+        apply_rename_exe(tmp.path(), &value, None).unwrap();
+        assert!(tmp.path().join("keep").is_file());
+        assert!(!tmp.path().join("whatever").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_does_not_rename_its_own_output() {
+        // `tool-*` -> `tool` then `tool` -> `renamed` must not chain: the file
+        // produced by the first mapping must not be consumed by the second.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("tool-linux-x64"), b"bin").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert(
+                "tool-*".to_string(),
+                toml::Value::String("tool".to_string()),
+            );
+            t.insert(
+                "tool".to_string(),
+                toml::Value::String("renamed".to_string()),
+            );
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, None).unwrap();
+
+        // The `tool-*` mapping wins; the `tool` mapping finds nothing (its only
+        // candidate was the freshly-created output, which is not re-matched).
+        assert!(tmp.path().join("tool").is_file());
+        assert!(!tmp.path().join("renamed").exists());
+        assert!(!tmp.path().join("tool-linux-x64").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_errors_on_shared_target() {
+        // Two sources mapped to the same target is unsatisfiable: the install
+        // must fail loudly rather than silently drop one binary and report success.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a-bin"), b"aaa").unwrap();
+        std::fs::write(tmp.path().join("b-bin"), b"bbb").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert(
+                "a-bin".to_string(),
+                toml::Value::String("common".to_string()),
+            );
+            t.insert(
+                "b-bin".to_string(),
+                toml::Value::String("common".to_string()),
+            );
+            t
+        });
+
+        let err = apply_rename_exe(tmp.path(), &value, None).unwrap_err();
+        assert!(
+            err.to_string().contains("target already exists"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_apply_rename_exe_rejects_path_traversal_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("tool"), b"bin").unwrap();
+
+        // Table form: a target escaping the directory fails before any rename.
+        for target in ["../tool", "/abs/tool", "sub/tool"] {
+            let value = toml::Value::Table({
+                let mut t = toml::value::Table::new();
+                t.insert("tool".to_string(), toml::Value::String(target.to_string()));
+                t
+            });
+            let err = apply_rename_exe(tmp.path(), &value, None).unwrap_err();
+            assert!(
+                err.to_string().contains("plain file name"),
+                "unexpected error for {target:?}: {err}"
+            );
+            assert!(tmp.path().join("tool").is_file(), "nothing may be renamed");
+        }
+
+        // String form takes the same validation path.
+        let value = toml::Value::String("../evil".to_string());
+        let err = apply_rename_exe(tmp.path(), &value, Some("tool")).unwrap_err();
+        assert!(err.to_string().contains("plain file name"), "{err}");
+        assert!(!tmp.path().join("..").join("evil").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_glob_skips_collateral_files() {
+        // A glob must pick the real binary, not a lexicographically-earlier
+        // collateral file like a license that also matches the pattern.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("ols-license.txt"), b"MIT").unwrap();
+        std::fs::write(tmp.path().join("ols-x86_64-unknown-linux-gnu"), b"bin").unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("ols-*".to_string(), toml::Value::String("ols".to_string()));
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, None).unwrap();
+
+        // The binary is renamed; the license is untouched.
+        assert_eq!(std::fs::read(tmp.path().join("ols")).unwrap(), b"bin");
+        assert!(tmp.path().join("ols-license.txt").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_sets_exec_bit_when_already_named() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A ZIP-extracted file already carrying the target name must still be made
+        // executable, matching the behavior of renames that move a file.
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = tmp.path().join("tool");
+        std::fs::write(&tool, b"bin").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!file::is_executable(&tool));
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("tool".to_string(), toml::Value::String("tool".to_string()));
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, None).unwrap();
+
+        assert!(tool.is_file());
+        assert!(file::is_executable(&tool));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_rename_exe_table_ignores_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = tmp.path().join("tool-linux-x64");
+        symlink(outside.path(), &link).unwrap();
+
+        let value = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert(
+                "tool-*".to_string(),
+                toml::Value::String("tool".to_string()),
+            );
+            t
+        });
+
+        apply_rename_exe(tmp.path(), &value, None).unwrap();
+
+        assert!(
+            link.is_symlink(),
+            "the archive symlink must remain untouched"
+        );
+        assert!(!tmp.path().join("tool").exists());
+        assert_eq!(
+            outside.path().metadata().unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the external target's permissions must not change"
+        );
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_strips_platform_suffix() {
+        // A single-file archive whose inner binary carries a platform suffix that
+        // doesn't match the host (linux archive shipping a macos-named binary)
+        // should still be renamed to the clean tool name. See discussion #6532.
+        let tmp = tempfile::tempdir().unwrap();
+        let extracted = tmp.path().join("gdscript-formatter-macos-aarch64");
+        std::fs::write(&extracted, b"not-a-binary").unwrap();
+
+        auto_clean_single_archive_binary(tmp.path(), "GDScript-formatter").unwrap();
+
+        let cleaned = tmp.path().join("gdscript-formatter");
+        assert!(cleaned.is_file(), "binary should be renamed to clean name");
+        // make_executable is a no-op on Windows (executability is inferred from
+        // the file extension there), so only assert it on Unix.
+        #[cfg(unix)]
+        assert!(file::is_executable(&cleaned));
+        assert!(!extracted.exists(), "suffixed name should no longer exist");
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_leaves_multi_file_archive() {
+        // With more than one relevant file we cannot tell which is the binary,
+        // so nothing should be renamed.
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("tool-linux-x86_64");
+        let b = tmp.path().join("helper-linux-x86_64");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+
+        auto_clean_single_archive_binary(tmp.path(), "tool").unwrap();
+
+        assert!(a.is_file());
+        assert!(b.is_file());
+        assert!(!tmp.path().join("tool").exists());
+        assert!(!tmp.path().join("helper").exists());
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_leaves_already_clean_name() {
+        // A single file without a platform suffix must be left untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("tool");
+        std::fs::write(&bin, b"x").unwrap();
+
+        auto_clean_single_archive_binary(tmp.path(), "tool").unwrap();
+
+        assert!(bin.is_file());
+        assert_eq!(file::ls(tmp.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_leaves_nonexec_companion() {
+        // A clean-named companion extracted without an exec bit (e.g. from a zip
+        // that stored no permissions) still makes the archive multi-file, so the
+        // suffixed binary must NOT be renamed — the outcome must not depend on
+        // executable permissions. Regression for the permission-dependent
+        // multi-binary guard. See discussion #6532.
+        let tmp = tempfile::tempdir().unwrap();
+        let suffixed = tmp.path().join("tool-linux-x86_64");
+        let companion = tmp.path().join("helper");
+        std::fs::write(&suffixed, b"x").unwrap();
+        std::fs::write(&companion, b"x").unwrap();
+        // Intentionally not marked executable.
+
+        auto_clean_single_archive_binary(tmp.path(), "tool").unwrap();
+
+        assert!(suffixed.is_file(), "suffixed binary must be left untouched");
+        assert!(companion.is_file(), "companion must be left untouched");
+        assert!(!tmp.path().join("tool").exists());
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_ignores_license_readme_siblings() {
+        // LICENSE/README are dropped by should_skip_file, so the common
+        // "binary + LICENSE + README" layout is still treated as single-binary
+        // and the suffix is cleaned. See discussion #6532.
+        let tmp = tempfile::tempdir().unwrap();
+        let extracted = tmp.path().join("tool-linux-x86_64");
+        std::fs::write(&extracted, b"x").unwrap();
+        std::fs::write(tmp.path().join("LICENSE"), b"lic").unwrap();
+        std::fs::write(tmp.path().join("README.md"), b"readme").unwrap();
+
+        auto_clean_single_archive_binary(tmp.path(), "tool").unwrap();
+
+        assert!(
+            tmp.path().join("tool").is_file(),
+            "binary should be cleaned"
+        );
+        assert!(!extracted.exists());
+    }
+
+    #[test]
+    fn test_archive_bin_search_dir_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install = tmp.path();
+
+        // No explicit bin_path and no bin/ dir -> install root.
+        assert_eq!(archive_bin_search_dir(install, None), install.to_path_buf());
+
+        // Implicit bin/ dir present -> bin/.
+        let bin_dir = install.join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        assert_eq!(archive_bin_search_dir(install, None), bin_dir);
+
+        // Explicit bin_path always wins.
+        let explicit = install.join("custom");
+        assert_eq!(
+            archive_bin_search_dir(install, Some(explicit.as_path())),
+            explicit
+        );
+    }
+
+    #[test]
+    fn test_auto_clean_single_archive_binary_in_implicit_bin_dir() {
+        // An archive whose sole platform-suffixed binary lives under bin/ should
+        // still be cleaned, since archive_bin_search_dir points there. See #6532.
+        let tmp = tempfile::tempdir().unwrap();
+        let install = tmp.path();
+        let bin_dir = install.join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let extracted = bin_dir.join("tool-linux-x86_64");
+        std::fs::write(&extracted, b"x").unwrap();
+
+        let search_dir = archive_bin_search_dir(install, None);
+        assert_eq!(search_dir, bin_dir);
+        auto_clean_single_archive_binary(&search_dir, "tool").unwrap();
+
+        let cleaned = bin_dir.join("tool");
+        assert!(cleaned.is_file());
+        // make_executable is a no-op on Windows; only assert executability on Unix.
+        #[cfg(unix)]
+        assert!(file::is_executable(&cleaned));
+        assert!(!extracted.exists());
+    }
+
+    #[test]
+    fn test_rename_executable_in_dir_is_case_insensitive() {
+        // The tool_name (repo short name) can differ in case from the extracted
+        // file, e.g. `GDScript-formatter` vs `gdscript-formatter-macos-aarch64`.
+        // The substring match must be case-insensitive so `bin=`/`rename_exe=`
+        // can locate the file. See discussion #6532.
+        let tmp = tempfile::tempdir().unwrap();
+        let extracted = tmp.path().join("gdscript-formatter-macos-aarch64");
+        std::fs::write(&extracted, b"x").unwrap();
+        file::make_executable(&extracted).unwrap();
+
+        rename_executable_in_dir(tmp.path(), "gdscript-formatter", Some("GDScript-formatter"))
+            .unwrap();
+
+        assert!(tmp.path().join("gdscript-formatter").is_file());
+        assert!(!extracted.exists());
     }
 }

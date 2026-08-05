@@ -4,7 +4,7 @@ mise 支持可扩展其功能的插件，使你能够安装标准注册表中不
 
 - 从私有仓库安装工具
 - 使用实验性或小众工具
-- 为你的团队创建自定义工具安装
+- 为你的团队创建自定义工具安装。
 
 ## 什么是插件？
 
@@ -31,7 +31,7 @@ mise 支持可扩展其功能的插件，使你能够安装标准注册表中不
 - 从任何来源安装工具（npm 包、GitHub releases、自定义构建）
 - 设置环境变量和 PATH 条目
 - 处理版本管理和列表
-- 可在所有平台上运行（Windows、macOS、Linux）
+- 可在所有平台上运行（Windows、macOS、Linux）。
 
 ## 安装插件
 
@@ -61,6 +61,15 @@ mise plugin install tiny https://github.com/mise-plugins/mise-tiny.git
 # 链接一个本地插件用于开发
 mise plugin link <plugin-name> /path/to/plugin/directory
 ```
+
+本地插件也可以在 `mise.toml` 中声明：
+
+```toml
+[plugins]
+my-plugin = "./plugins/my-plugin"
+```
+
+支持绝对路径和 `~/...` 路径。以 `./` 或 `../` 开头的显式相对路径，将从包含该声明的文件的配置根目录解析。Mise 会像执行 `mise plugins link` 一样为该目录创建符号链接，因此本地编辑会立即生效。现有插件安装不会自动替换；将已有安装切换为本地源时，请使用 `mise plugins install --force my-plugin`。
 
 ## 使用插件（高级）
 
@@ -150,7 +159,7 @@ vfox-npm = "https://github.com/jdx/vfox-npm"
 
 - **GitHub**：搜索带有 “vfox-” 前缀的仓库
 - **社区**：查看 mise 社区讨论和 Discord
-- **公司内部**：你的组织可能有私有插件
+- **公司内部**：你的组织可能有私有插件。
 
 ## 插件示例
 

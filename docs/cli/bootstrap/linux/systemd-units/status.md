@@ -1,8 +1,9 @@
 <!-- 由 usage-cli 根据 usage 规范生成 -->
 # `mise bootstrap linux systemd-units status`
 
-- **用法**: `mise bootstrap linux systemd-units status [-J --json] [--missing]`
-- **源代码**: [`src/cli/bootstrap/linux/systemd_units/status.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/linux/systemd_units/status.rs)
+- **用法**：`mise bootstrap linux systemd-units status [-J --json] [--missing]`
+- **作用**：只读
+- **源代码**：[`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

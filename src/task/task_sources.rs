@@ -1,6 +1,6 @@
 use crate::dirs;
 use crate::task::Task;
-use crate::tera::{contains_template_syntax, render_str};
+use crate::tera::{TeraEngine, contains_template_syntax, render_str};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -9,6 +9,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Eq, PartialEq, strum::EnumIs)]
 pub enum TaskOutputs {
     Files(Vec<String>),
+    NoFiles,
     Auto,
 }
 
@@ -30,20 +31,21 @@ impl TaskOutputs {
     pub fn is_empty(&self) -> bool {
         match self {
             TaskOutputs::Files(files) => files.is_empty(),
-            TaskOutputs::Auto => false,
+            TaskOutputs::NoFiles | TaskOutputs::Auto => false,
         }
     }
 
     pub fn patterns(&self) -> Vec<String> {
         match self {
             TaskOutputs::Files(files) => files.clone(),
-            TaskOutputs::Auto => vec![],
+            TaskOutputs::NoFiles | TaskOutputs::Auto => vec![],
         }
     }
 
     pub fn paths(&self, task: &Task, root: &Path) -> Vec<String> {
         match self {
             TaskOutputs::Files(files) => files.clone(),
+            TaskOutputs::NoFiles => vec![],
             TaskOutputs::Auto => vec![self.auto_path(task, root)],
         }
     }
@@ -51,7 +53,7 @@ impl TaskOutputs {
     pub fn has_tera_template(&self) -> bool {
         match self {
             TaskOutputs::Files(files) => files.iter().any(|file| contains_template_syntax(file)),
-            TaskOutputs::Auto => false,
+            TaskOutputs::NoFiles | TaskOutputs::Auto => false,
         }
     }
 
@@ -61,14 +63,14 @@ impl TaskOutputs {
                 templates: Some(files.clone()),
                 original_env: None,
             },
-            TaskOutputs::Auto => RawOutputTemplates::default(),
+            TaskOutputs::NoFiles | TaskOutputs::Auto => RawOutputTemplates::default(),
         }
     }
 
     fn auto_path(&self, task: &Task, root: &Path) -> String {
         let mut hasher = DefaultHasher::new();
         task.hash(&mut hasher);
-        task.config_source.hash(&mut hasher);
+        task.config_sources().hash(&mut hasher);
         root.hash(&mut hasher);
         let hash = format!("{:x}", hasher.finish());
         dirs::STATE
@@ -80,7 +82,7 @@ impl TaskOutputs {
 
     pub fn render(
         &mut self,
-        tera: &mut tera::Tera,
+        tera: &mut TeraEngine,
         ctx: &tera::Context,
     ) -> eyre::Result<RawOutputTemplates> {
         match self {
@@ -88,7 +90,7 @@ impl TaskOutputs {
                 let raw = files.clone();
                 let original_env = ctx
                     .get("env")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                    .and_then(|v| serde::Deserialize::deserialize(v.clone()).ok());
                 for file in files.iter_mut() {
                     if contains_template_syntax(file) {
                         *file = render_str(tera, file, ctx)?;
@@ -99,7 +101,7 @@ impl TaskOutputs {
                     original_env,
                 })
             }
-            TaskOutputs::Auto => Ok(RawOutputTemplates::default()),
+            TaskOutputs::NoFiles | TaskOutputs::Auto => Ok(RawOutputTemplates::default()),
         }
     }
 
@@ -149,6 +151,7 @@ impl From<&toml::Value> for TaskOutputs {
     fn from(value: &toml::Value) -> Self {
         match value {
             toml::Value::String(file) => TaskOutputs::Files(vec![file.to_string()]),
+            toml::Value::Array(files) if files.is_empty() => TaskOutputs::NoFiles,
             toml::Value::Array(files) => TaskOutputs::Files(
                 files
                     .iter()
@@ -194,7 +197,11 @@ impl<'de> Deserialize<'de> for TaskOutputs {
                 while let Some(file) = seq.next_element()? {
                     files.push(file);
                 }
-                Ok(TaskOutputs::Files(files))
+                if files.is_empty() {
+                    Ok(TaskOutputs::NoFiles)
+                } else {
+                    Ok(TaskOutputs::Files(files))
+                }
             }
 
             fn visit_map<A: serde::de::MapAccess<'de>>(
@@ -231,6 +238,7 @@ impl Serialize for TaskOutputs {
                 }
                 seq.end()
             }
+            TaskOutputs::NoFiles => serializer.serialize_seq(Some(0))?.end(),
             TaskOutputs::Auto => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry("auto", &true)?;
@@ -256,6 +264,11 @@ mod tests {
         let outputs = TaskOutputs::from(value);
         assert_eq!(outputs, TaskOutputs::Files(vec!["file1".to_string()]));
 
+        let value: toml::Table = toml::from_str("outputs = []").unwrap();
+        let value = value.get("outputs").unwrap();
+        let outputs = TaskOutputs::from(value);
+        assert_eq!(outputs, TaskOutputs::NoFiles);
+
         let value: toml::Table = toml::from_str("outputs = { auto = true }").unwrap();
         let value = value.get("outputs").unwrap();
         let outputs = TaskOutputs::from(value);
@@ -271,6 +284,10 @@ mod tests {
         let outputs = TaskOutputs::Auto;
         let serialized = serde_json::to_string(&outputs).unwrap();
         assert_eq!(serialized, "{\"auto\":true}");
+
+        let outputs = TaskOutputs::NoFiles;
+        let serialized = serde_json::to_string(&outputs).unwrap();
+        assert_eq!(serialized, "[]");
     }
 
     #[test]
@@ -280,6 +297,9 @@ mod tests {
 
         let deserialized: TaskOutputs = serde_json::from_str("[\"file1\"]").unwrap();
         assert_eq!(deserialized, TaskOutputs::Files(vec!["file1".to_string()]));
+
+        let deserialized: TaskOutputs = serde_json::from_str("[]").unwrap();
+        assert_eq!(deserialized, TaskOutputs::NoFiles);
 
         let deserialized: TaskOutputs = serde_json::from_str("{ \"auto\": true }").unwrap();
         assert_eq!(deserialized, TaskOutputs::Auto);

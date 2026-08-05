@@ -17,8 +17,24 @@ git config user.email release@mise.jdx.dev
 latest_tag="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1 || true)"
 if [[ -n $latest_tag ]]; then
 	if ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$latest_tag" --silent 2>/dev/null; then
-		echo "Tag $latest_tag has no GitHub Release — triggering release workflow"
-		gh workflow run release.yml --ref "$latest_tag"
+		# Don't stack dispatches. release-plz runs on every push to main, so without
+		# this guard each merge re-triggers release.yml for the same tag. That trips
+		# the workflow's `release-<ref>` concurrency group, which cancels the still
+		# -pending prior attempt — so during a busy merge window no run ever survives
+		# long enough to finish and the release can never publish (a self-perpetuating
+		# loop, since a missing release keeps re-arming this very check). Only
+		# re-trigger when nothing is already queued or in progress for this tag.
+		#
+		# Tag-dispatched runs report the tag as `headBranch`, so filter on that.
+		# `gh run list --branch` is documented for branches only and its behavior
+		# with tags is unspecified, so match in jq rather than relying on it.
+		active_runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml --limit 60 --json status,headBranch 2>/dev/null | jq --arg tag "$latest_tag" '[.[] | select(.headBranch == $tag and .status != "completed")] | length' 2>/dev/null || echo 0)"
+		if [[ ${active_runs:-0} -gt 0 ]]; then
+			echo "Release workflow already active for $latest_tag ($active_runs queued/running) — not re-triggering"
+		else
+			echo "Tag $latest_tag has no GitHub Release — triggering release workflow"
+			gh workflow run release.yml --ref "$latest_tag"
+		fi
 	fi
 fi
 
@@ -32,6 +48,25 @@ exists_on_crates() {
 		return 0
 	fi
 	return 1
+}
+
+# Git pathspecs used to decide whether a subcrate has meaningfully changed.
+# Some crates embed vendored/generated content that the release process refreshes
+# on every run (e.g. vfox's embedded-plugins are deleted and re-cloned each
+# release). Counting that churn as a change would bump, tag, and publish the crate
+# on every single release even when its hand-written source is untouched, producing
+# a flood of pointless `<crate>-v*` tags. Excluding that content here means a new
+# subcrate version is only cut when the real source actually changes.
+# Populates the caller-declared `pathspec` array (bash 3.2 compatible).
+subcrate_diff_pathspec() {
+	local crate_name="$1"
+	local crate_dir="$2"
+	pathspec=("$crate_dir")
+	case "$crate_name" in
+	vfox)
+		pathspec+=(":(exclude)${crate_dir}/embedded-plugins")
+		;;
+	esac
 }
 
 # Check if a subcrate has changes since its last tagged release
@@ -49,12 +84,15 @@ has_crate_changes() {
 		return 0
 	fi
 
-	# Check if there are changes in the crate directory since the tag
-	if git diff --quiet "$latest_tag" -- "$crate_dir"; then
-		echo "No changes in $crate_name since $latest_tag"
+	# Check if there are changes in the crate directory since the tag,
+	# ignoring vendored/generated content (see subcrate_diff_pathspec).
+	local pathspec
+	subcrate_diff_pathspec "$crate_name" "$crate_dir"
+	if git diff --quiet "$latest_tag" -- "${pathspec[@]}"; then
+		echo "No source changes in $crate_name since $latest_tag"
 		return 1
 	else
-		echo "Changes detected in $crate_name since $latest_tag"
+		echo "Source changes detected in $crate_name since $latest_tag"
 		return 0
 	fi
 }
@@ -63,6 +101,96 @@ has_crate_changes() {
 get_latest_crates_version() {
 	local crate="$1"
 	cargo info --registry "crates-io" --color never --quiet "$crate" 2>/dev/null | grep "^version:" | cut -d' ' -f2 || echo ""
+}
+
+package_version() {
+	cargo metadata --offline --no-deps --format-version 1 |
+		jq -er --arg name "$1" '
+			[.packages[] | select(.name == $name)]
+			| if length == 1 then .[0].version else error("package not found or ambiguous: \($name)") end
+		'
+}
+
+version_relation() {
+	jq -ner --arg candidate "$1" --arg current "$2" '
+		def parts:
+			split(".")
+			| map(tonumber)
+			| if length == 3 then . else error("expected a numeric three-part version") end;
+		if ($candidate | parts) > ($current | parts) then "greater" else "not-greater" end
+	'
+}
+
+set_package_version() {
+	local crate_name="$1"
+	local manifest="$2"
+	local new_version="$3"
+	local old_version old_pattern relation
+
+	old_version="$(package_version "$crate_name")"
+	old_pattern="${old_version//./\\.}"
+	relation="$(version_relation "$new_version" "$old_version")"
+	if [[ $relation != greater ]]; then
+		echo "Cannot downgrade $crate_name from $old_version to $new_version" >&2
+		return 1
+	fi
+
+	grep -Fqx "version = \"$old_version\"" "$manifest"
+	sed -i.bak "s/^version = \"$old_pattern\"$/version = \"$new_version\"/" "$manifest"
+	rm -f "$manifest.bak"
+
+	# This is the only constrained workspace path dependency.
+	if [[ $crate_name == mise-interactive-config ]]; then
+		grep -Fqx \
+			"mise-interactive-config = { path = \"crates/mise-interactive-config\", version = \"$old_version\" }" \
+			Cargo.toml
+		sed -i.bak \
+			"/^mise-interactive-config = /s/version = \"$old_pattern\"/version = \"$new_version\"/" \
+			Cargo.toml
+		rm -f Cargo.toml.bak
+	fi
+
+	cargo update --offline -p "$crate_name" --precise "$new_version"
+}
+
+bump_package_version() {
+	local crate_name="$1"
+	local manifest="$2"
+	local component="$3"
+	local current major minor patch
+
+	current="$(package_version "$crate_name")"
+	IFS=. read -r major minor patch <<<"$current"
+	[[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ && $patch =~ ^[0-9]+$ ]]
+
+	case "$component" in
+	patch) patch=$((patch + 1)) ;;
+	minor)
+		minor=$((minor + 1))
+		patch=0
+		;;
+	*)
+		echo "Unsupported version component: $component" >&2
+		return 1
+		;;
+	esac
+
+	set_package_version "$crate_name" "$manifest" "$major.$minor.$patch"
+}
+
+advance_package_version() {
+	local crate_name="$1"
+	local manifest="$2"
+	local candidate="$3"
+	local current relation
+
+	current="$(package_version "$crate_name")"
+	relation="$(version_relation "$candidate" "$current")"
+	if [[ $relation == greater ]]; then
+		set_package_version "$crate_name" "$manifest" "$candidate"
+	else
+		bump_package_version "$crate_name" "$manifest" patch
+	fi
 }
 
 use_published_aqua_registry() {
@@ -74,15 +202,12 @@ use_published_aqua_registry() {
 	cargo add --build "aqua-registry@$version"
 }
 
-# Check if a directory has uncommitted changes (staged or unstaged)
+# Check if the given git pathspecs have uncommitted changes (staged or unstaged)
 has_uncommitted_changes() {
-	local dir="$1"
-	# Check for any changes (staged or unstaged) in the directory
-	if git diff --quiet HEAD -- "$dir" 2>/dev/null && git diff --quiet --cached -- "$dir" 2>/dev/null; then
-		# Also check for untracked files
-		if [[ -z $(git ls-files --others --exclude-standard -- "$dir") ]]; then
-			return 1 # No changes
-		fi
+	# Args: one or more git pathspecs (e.g. a crate dir plus `:(exclude)` entries).
+	# --porcelain covers staged, unstaged, and untracked changes in one check.
+	if [[ -z $(git status --porcelain -- "$@" 2>/dev/null) ]]; then
+		return 1 # No changes
 	fi
 	return 0 # Has changes
 }
@@ -92,7 +217,11 @@ bump_subcrate_if_changed() {
 	local crate_name="$1"
 	local crate_dir="$2"
 
-	if ! has_uncommitted_changes "$crate_dir"; then
+	# Ignore vendored/generated content (see subcrate_diff_pathspec) so refreshed
+	# embedded content doesn't force an otherwise-unnecessary version bump.
+	local pathspec
+	subcrate_diff_pathspec "$crate_name" "$crate_dir"
+	if ! has_uncommitted_changes "${pathspec[@]}"; then
 		echo "No uncommitted changes in $crate_name, keeping current version"
 		return
 	fi
@@ -108,10 +237,10 @@ bump_subcrate_if_changed() {
 
 	if echo "$cur_version" | grep -qE "^$year\.$month\."; then
 		# Same year.month, bump patch (e.g., 2025.12.0 -> 2025.12.1)
-		cargo set-version --bump patch -p "$crate_name"
+		bump_package_version "$crate_name" "$crate_dir/Cargo.toml" patch
 	else
 		# New month or new year, start fresh at YYYY.MM.0
-		cargo set-version "$year.$month.0" -p "$crate_name"
+		advance_package_version "$crate_name" "$crate_dir/Cargo.toml" "$year.$month.0"
 	fi
 
 	local new_version
@@ -151,10 +280,10 @@ bump_and_publish_subcrate() {
 
 	if echo "$cur_version" | grep -qE "^$year\.$month\."; then
 		# Same year.month, bump patch (e.g., 2025.12.0 -> 2025.12.1)
-		cargo set-version --bump patch -p "$crate_name"
+		bump_package_version "$crate_name" "$crate_dir/Cargo.toml" patch
 	else
 		# New month or new year, start fresh at YYYY.MM.0
-		cargo set-version "$year.$month.0" -p "$crate_name"
+		advance_package_version "$crate_name" "$crate_dir/Cargo.toml" "$year.$month.0"
 	fi
 
 	local new_version
@@ -164,7 +293,7 @@ bump_and_publish_subcrate() {
 	# This handles cases where a version was published but local code has changed since
 	while exists_on_crates "$crate_name" "$new_version"; do
 		echo "$crate_name@$new_version already on crates.io, bumping again"
-		cargo set-version --bump patch -p "$crate_name"
+		bump_package_version "$crate_name" "$crate_dir/Cargo.toml" patch
 		new_version="$(cargo pkgid -p "$crate_name" | cut -d# -f2)"
 	done
 
@@ -233,11 +362,11 @@ fi
 year="$(date +%Y)"
 month="$(date +%-m)"
 if echo "$cur_version" | grep -e "^$year\.$month\."; then
-	cargo set-version --bump patch -p mise
+	bump_package_version mise Cargo.toml patch
 elif echo "$cur_version" | grep -e "^$year\."; then
-	cargo set-version --bump minor -p mise
+	bump_package_version mise Cargo.toml minor
 else
-	cargo set-version "$year.1.0" -p mise
+	advance_package_version mise Cargo.toml "$year.1.0"
 fi
 
 version="$(cargo pkgid mise | cut -d# -f2)"

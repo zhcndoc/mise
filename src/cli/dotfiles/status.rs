@@ -1,7 +1,7 @@
 use eyre::Result;
 use serde_json::json;
 
-use crate::config::{Config, Settings};
+use crate::config::Config;
 use crate::path::PathExt;
 use crate::system;
 use crate::system::files::FileState;
@@ -27,7 +27,6 @@ pub struct DotfilesStatus {
 
 impl DotfilesStatus {
     pub async fn run(self) -> Result<()> {
-        Settings::get().ensure_experimental("mise dotfiles")?;
         let config = Config::get().await?;
         let mut any_missing = false;
 
@@ -121,6 +120,11 @@ impl DotfilesStatus {
             }
         }
 
+        // the hint goes to stderr, so an empty --json result explains itself
+        // too without anything landing in the parsed output
+        if files.is_empty() && edits.is_empty() {
+            super::warn_if_dotfiles_ignored();
+        }
         if self.json {
             miseprintln!(
                 "{}",
@@ -149,7 +153,7 @@ impl DotfilesStatus {
             }
         }
         if self.missing && any_missing {
-            crate::exit(1);
+            return Err(crate::request_exit(1));
         }
         Ok(())
     }
@@ -158,10 +162,9 @@ impl DotfilesStatus {
 static AFTER_LONG_HELP: &str = color_print::cstr!(
     r#"<bold><underline>Examples:</underline></bold>
 
-    $ <bold>mise dotfiles status</bold>
     $ <bold>mise bootstrap dotfiles status</bold>
-    $ <bold>mise dotfiles status ~/.zshrc</bold>
-    $ <bold>mise dotfiles status --json</bold>
-    $ <bold>mise dotfiles status --missing</bold> # exit 1 if anything is out of sync
+    $ <bold>mise bootstrap dotfiles status ~/.zshrc</bold>
+    $ <bold>mise bootstrap dotfiles status --json</bold>
+    $ <bold>mise bootstrap dotfiles status --missing</bold> # exit 1 if anything is out of sync
 "#
 );

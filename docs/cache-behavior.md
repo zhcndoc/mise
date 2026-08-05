@@ -50,4 +50,4 @@ _.source = { file = "dynamic.sh", cacheable = false }
 
 ## 缓存自动清理
 
-mise 会自动删除其缓存目录中的旧文件（可通过 [`cache_prune_age`](https://mise.en.dev/configuration/settings.html#cache_prune_age) 配置）。其中大部分内容如果超过 24 小时或几天，也会被 mise 忽略。因此，在 CI 作业中存储这个目录很可能是一种浪费。
+mise 将自动删除其缓存目录中的旧文件（通过 [`cache_prune_age`](https://mise.jdx.dev/configuration/settings.html#cache_prune_age) 配置）。其中的大部分内容如果超过 24 小时或几天，也会被 mise 忽略。因此，在 CI 作业中存储此目录很可能是浪费的。

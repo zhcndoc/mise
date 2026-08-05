@@ -4,14 +4,6 @@
 description = 'Clean build artifacts'
 run = 'cargo clean'
 
-[release]
-description = 'Release the project'
-run = 'cargo release --exclude-unchanged'
-
-[signal-test]
-description = 'Test signal handling in Node.js'
-run = 'node ./test/fixtures/signal-test.js'
-
 [ci]
 depends = ["format", "build", "test"]
 description = "Run all CI checks"
@@ -103,16 +95,6 @@ depends = ["render:usage"]
 env = { NO_COLOR = "1" }
 run = "usage generate manpage --file mise.usage.kdl > man/man1/mise.1"
 
-["render:fig"]
-description = 'Generate Fig completion spec'
-wait_for = ["render:completions"]
-run = [
-  "usage generate fig --file mise.usage.kdl --out-file xtasks/fig/src/mise.ts",
-  "tsx xtasks/fig/addCustomGenerators.ts xtasks/fig/src/mise.ts xtasks/fig/src/mise.ts",
-  "bun run lint-fig:fix",
-]
-depends = ['docs:setup']
-
 ["render:help"]
 description = 'Render help documentation'
 depends = ["build"]
@@ -123,6 +105,24 @@ run = [
   "mise render-help",
   "mise run show-output-on-failure -- mise x node@latest -- npx markdown-magic",
 ]
+
+["render:llms"]
+description = 'Generate docs/public/llms.txt (docs index for AI agents)'
+# render:usage writes docs/cli/*.md and render:help writes cli_commands.ts,
+# both of which the index is built from.
+depends = ["render:usage", "render:help"]
+sources = [
+  "docs/**/*.md",
+  "docs/.vitepress/sidebar.ts",
+  "docs/.vitepress/llms.ts",
+  # sidebar.ts builds the CLI section from this, so a render:help change to
+  # command visibility must invalidate the index even if no markdown changed.
+  "docs/.vitepress/cli_commands.ts",
+  # the title and summary come from the docs homepage hero
+  "docs/index.md",
+]
+outputs = ["docs/public/llms.txt"]
+run = "bun docs/.vitepress/llms.ts"
 
 [render]
 description = 'Run all render tasks'
@@ -154,12 +154,6 @@ run = 'cargo +nightly test --all-features -- -Z unstable-options --shuffle'
 [install-dev]
 description = 'Install the current project in debug mode'
 run = 'cargo install --path . --debug'
-
-[xxx]
-hide = true
-tools = { gh = "2.60.0" }
-run = "echo {{arg(name='greeting')}}; sleep 2; echo 2; sleep 2; echo 3; sleep 0.4; echo 4; sleep 1"
-description = "a task for testing"
 
 [pre-commit]
 description = 'Run pre-commit hooks'

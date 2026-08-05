@@ -8,7 +8,12 @@ extern crate mlua;
 
 pub use error::Result as VfoxResult;
 pub use error::VfoxError;
+pub use hooks::package::{
+    PackageActionContext, PackageActionResponse, PackageInstalledContext, PackageInstalledResponse,
+    PackageRequest,
+};
 pub use hooks::pre_install::VerifiedAttestation;
+pub use metadata::{Metadata, SystemDependency};
 pub use plugin::Plugin;
 pub use vfox::InstallResult;
 pub use vfox::Vfox;

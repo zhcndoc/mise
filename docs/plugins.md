@@ -11,9 +11,9 @@ mise 中的插件是一种通过新增功能来扩展 `mise` 的方式，例如�
 
 唯一的例外是：如果该工具需要设置环境变量，或者安装过程很复杂，那么插件可以提供诸如 [全局设置环境变量](/environments/#plugin-provided-env-directives) 之类的功能，而无需依赖某个工具已安装。它们还可以提供 [版本别名](/dev-tools/aliases.html#aliased-versions)。
 
-如果你想将一个新工具集成到 mise 中，你应该优先尝试将其加入 [aqua registry](https://mise.en.dev/dev-tools/backends/aqua.html)
-，或者看看是否可以通过 [github](https://mise.en.dev/dev-tools/backends/github.html) 安装。
-与 github 相比，Aqua 明显更受推荐，因为它拥有更好的用户体验和更多功能，例如 slsa 验证，以及针对旧版本使用不同逻辑的能力。
+如果你想将新工具集成到 mise 中，应尝试将其加入 [aqua 注册表](https://mise.jdx.dev/dev-tools/backends/aqua.html)，
+或者查看它是否可以通过 [github](https://mise.jdx.dev/dev-tools/backends/github.html) 安装。
+相比 github，Aqua 更受推荐，因为它具有更好的用户体验和更多功能，例如 SLSA 验证，以及能够对旧版本使用不同的逻辑。
 
 你可以在 `mise` 中通过 [`mise plugins`](/cli/plugins.html) 管理所有已安装的插件。
 
@@ -67,7 +67,7 @@ mise install my-tool@1.0.0
 mise use my-tool@latest
 ```
 
-有关创建工具插件，请参见 [Tool Plugin Development](tool-plugin-development.md)。`[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template)` 提供了一个可直接使用的起点。
+有关创建工具插件，请参见 [工具插件开发](tool-plugin-development.md)。`[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template)` 提供了一个可直接使用的起点。
 
 ## 环境插件
 
@@ -124,7 +124,13 @@ mise 支持“工具选项”，这是在 `mise.toml` 中指定的配置，用�
 python = { version='3.11', virtualenv='.venv' }
 ```
 
-这将作为 `MISE_TOOL_OPTS__VIRTUALENV=.venv` 传递给所有插件脚本。用户可以指定任何选项，并且它会以该格式传递给插件。
+::: warning
+python 的 `virtualenv` 工具选项已弃用，并将在未来版本中移除。
+请改用 `[env]` 部分中的 [`_.python.venv`](/lang/python.html#automatic-virtualenv-activation)。
+:::
+
+这将作为 `MISE_TOOL_OPTS__VIRTUALENV=.venv` 传递给所有插件脚本。用户可以指定
+任意选项，并且该选项将以此格式传递给插件。
 
 目前，这只支持简单字符串，但如果有需要，我们可以相当容易地将其兼容为更复杂的类型
 （数组、表）。

@@ -3,9 +3,10 @@
 
 - **用法**: `mise config ls [FLAGS]`
 - **别名**: `list`
+- **作用**: 只读
 - **源代码**: [`src/cli/config/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/config/ls.rs)
 
-列出当前正在使用的配置文件
+列出当前正在使用的配置文件。
 
 ## 标志
 
@@ -27,5 +28,5 @@
 $ mise config ls
 Path                        Tools
 ~/.config/mise/config.toml  pitchfork
-~/src/mise/mise.toml        actionlint, bun, cargo-binstall, cargo:cargo-edit, cargo:cargo-insta
+~/src/mise/mise.toml        actionlint, bun, cargo-binstall, cargo:cargo-insta
 ```

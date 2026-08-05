@@ -1,14 +1,15 @@
 use crate::Result;
+use crate::cmd::{RunningPidGuard, prepare_noninteractive_child};
 use crate::config::Config;
 use clap::Parser;
 use rmcp::{
     RoleServer, ServiceExt,
     handler::server::{ServerHandler, tool::ToolRouter, wrapper::Parameters},
     model::{
-        AnnotateAble, CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData,
-        ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, RawResource,
-        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
-        ServerInfo,
+        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ErrorData, Implementation,
+        ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
+        ServerCapabilities, ServerInfo,
     },
     schemars::JsonSchema,
     service::RequestContext,
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Run Model Context Protocol (MCP) server
 ///
@@ -38,6 +40,7 @@ use std::collections::HashMap;
 /// - mise://config - Show configuration files and project root
 ///
 /// Tools available:
+/// - list_commands - Every mise command, with its declared effect on the world
 /// - install_tool - Install a tool with an optional version (not yet implemented)
 /// - run_task - Execute a mise task with optional arguments
 ///
@@ -50,6 +53,9 @@ pub struct Mcp {}
 #[derive(Clone)]
 struct MiseServer {
     tool_router: ToolRouter<Self>,
+    /// mise's own usage spec, built once. Deriving it walks the whole clap
+    /// command tree, which is not work to repeat per request.
+    spec: Arc<usage::Spec>,
 }
 
 /// Parameters for installing a tool
@@ -63,6 +69,15 @@ struct InstallToolParams {
     version: Option<String>,
 }
 
+/// Parameters for listing mise's commands
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ListCommandsParams {
+    /// Include commands hidden from help. They are still runnable.
+    #[serde(default)]
+    include_hidden: bool,
+}
+
 /// Parameters for running a mise task
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -74,12 +89,62 @@ struct RunTaskParams {
     args: Vec<String>,
 }
 
+/// Structured data as pretty JSON text, which is what the other tools here
+/// return and what clients that only read `content` can use.
+fn json_result(value: Value) -> std::result::Result<CallToolResult, ErrorData> {
+    let text = serde_json::to_string_pretty(&value).map_err(|e| ErrorData {
+        code: ErrorCode::INTERNAL_ERROR,
+        message: Cow::Owned(format!("Failed to serialize response: {e}")),
+        data: None,
+    })?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+}
+
 #[tool_router]
 impl MiseServer {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
+            spec: Arc::new(crate::cli::usage::spec()),
         }
+    }
+
+    /// Every mise command, with what running it does to the world
+    #[tool(
+        description = "Every mise command, with what running it does: `read` only inspects state, `write` changes it, `destructive` removes something that is work to get back. A command with no effect listed is unclassified — treat it as needing confirmation, not as safe. Call this before running an unfamiliar mise command."
+    )]
+    async fn list_commands(
+        &self,
+        Parameters(ListCommandsParams { include_hidden }): Parameters<ListCommandsParams>,
+    ) -> std::result::Result<CallToolResult, ErrorData> {
+        fn walk(
+            cmd: &usage::SpecCommand,
+            path: &mut Vec<String>,
+            include_hidden: bool,
+            out: &mut Vec<Value>,
+        ) {
+            for (name, sub) in &cmd.subcommands {
+                // A hidden command takes its subtree with it: clap does not
+                // propagate `hide` to children, so a visible child of a hidden
+                // parent is still not a documented path.
+                if sub.hide && !include_hidden {
+                    continue;
+                }
+                path.push(name.clone());
+                out.push(json!({
+                    "command": path.join(" "),
+                    "help": sub.help,
+                    "effect": sub.effect.map(|e| e.as_str()),
+                    "hidden": sub.hide,
+                }));
+                walk(sub, path, include_hidden, out);
+                path.pop();
+            }
+        }
+
+        let mut commands = vec![];
+        walk(&self.spec.cmd, &mut vec![], include_hidden, &mut commands);
+        json_result(json!({ "bin": "mise", "commands": commands }))
     }
 
     /// Install a tool with an optional version
@@ -88,7 +153,7 @@ impl MiseServer {
         &self,
         Parameters(_params): Parameters<InstallToolParams>,
     ) -> std::result::Result<CallToolResult, ErrorData> {
-        Ok(CallToolResult::error(vec![Content::text(
+        Ok(CallToolResult::error(vec![ContentBlock::text(
             "Tool installation not yet implemented",
         )]))
     }
@@ -111,20 +176,22 @@ impl MiseServer {
             cmd_args.extend(args);
         }
 
-        let child = tokio::process::Command::new(exe)
+        let mut command = tokio::process::Command::new(exe);
+        command
             .args(&cmd_args)
             .env("NO_COLOR", "1")
             .env("MISE_YES", "1")
             .kill_on_drop(true)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| ErrorData {
-                code: ErrorCode::INTERNAL_ERROR,
-                message: Cow::Owned(format!("Failed to spawn mise run: {e}")),
-                data: None,
-            })?;
+            .stderr(std::process::Stdio::piped());
+        prepare_noninteractive_child(command.as_std_mut());
+        let child = command.spawn().map_err(|e| ErrorData {
+            code: ErrorCode::INTERNAL_ERROR,
+            message: Cow::Owned(format!("Failed to spawn mise run: {e}")),
+            data: None,
+        })?;
+        let _running_pid = RunningPidGuard::new(child.id());
 
         let output = match crate::config::Settings::get().task_timeout_duration() {
             Some(timeout) => tokio::time::timeout(timeout, child.wait_with_output())
@@ -152,7 +219,7 @@ impl MiseServer {
                 (false, true) => stderr.into_owned(),
                 (false, false) => format!("{stderr}\n{stdout}"),
             };
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
         } else {
             let text = match (stderr.is_empty(), stdout.is_empty()) {
                 (true, true) => format!("Task '{task}' failed with no output"),
@@ -160,7 +227,7 @@ impl MiseServer {
                 (true, false) => stdout.into_owned(),
                 (false, false) => format!("{stderr}\n{stdout}"),
             };
-            Ok(CallToolResult::error(vec![Content::text(format!(
+            Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Task '{task}' failed with exit code {}:\n{text}",
                 output.status.code().unwrap_or(1),
             ))]))
@@ -176,7 +243,14 @@ impl ServerHandler for MiseServer {
             .build();
         ServerInfo::new(capabilities)
             .with_protocol_version(ProtocolVersion::V_2025_03_26)
-            .with_instructions("Mise MCP server provides access to tools, tasks, environment variables, and configuration")
+            .with_server_info(Implementation::new("mise", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "Mise MCP server provides access to tools, tasks, environment variables, and \
+                 configuration. Call list_commands before running an unfamiliar mise command: \
+                 every command declares its effect on the world (`read`, `write`, \
+                 `destructive`), and a command with no effect listed is unclassified rather \
+                 than safe.",
+            )
     }
 
     async fn list_resources(
@@ -185,10 +259,10 @@ impl ServerHandler for MiseServer {
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListResourcesResult, ErrorData> {
         let resources = vec![
-            RawResource::new("mise://tools", "Installed Tools".to_string()).no_annotation(),
-            RawResource::new("mise://tasks", "Available Tasks".to_string()).no_annotation(),
-            RawResource::new("mise://env", "Environment Variables".to_string()).no_annotation(),
-            RawResource::new("mise://config", "Configuration".to_string()).no_annotation(),
+            Resource::new("mise://tools", "Installed Tools"),
+            Resource::new("mise://tasks", "Available Tasks"),
+            Resource::new("mise://env", "Environment Variables"),
+            Resource::new("mise://config", "Configuration"),
         ];
 
         Ok(ListResourcesResult::with_all_items(resources))
@@ -312,6 +386,11 @@ impl ServerHandler for MiseServer {
                         "description": task.description.clone(),
                         "aliases": task.aliases,
                         "source": task.config_source.to_string_lossy(),
+                        "config_sources": task
+                            .config_sources()
+                            .iter()
+                            .map(|source| source.to_string_lossy())
+                            .collect::<Vec<_>>(),
                         "depends": task.depends.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
                         "depends_post": task.depends_post.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
                         "wait_for": task.wait_for.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
@@ -468,8 +547,107 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
     - <bold>mise://config</bold> - Show configuration info
 
     # Tools available:
+    - <bold>list_commands</bold> - Every mise command and what running it does
+      Example: {"include_hidden": false}
     - <bold>install_tool</bold> - Install a tool (not yet implemented)
     - <bold>run_task</bold> - Execute a mise task with optional arguments
       Example: {"task": "build", "args": ["--verbose"]}
 "#
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The text of every command row `list_commands` returns.
+    async fn commands(include_hidden: bool) -> Vec<Value> {
+        let res = MiseServer::new()
+            .list_commands(Parameters(ListCommandsParams { include_hidden }))
+            .await
+            .unwrap();
+        let ContentBlock::Text(text) = &res.content[0] else {
+            panic!("expected text content");
+        };
+        serde_json::from_str::<Value>(&text.text).unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    fn find<'a>(commands: &'a [Value], path: &str) -> &'a Value {
+        commands
+            .iter()
+            .find(|c| c["command"] == path)
+            .unwrap_or_else(|| panic!("no command {path:?}"))
+    }
+
+    #[tokio::test]
+    async fn list_commands_carries_the_declared_effects() {
+        // The point of the tool. If these come back null the classification in
+        // command_effects is not reaching the agent that needs it.
+        let commands = commands(false).await;
+        assert_eq!(find(&commands, "ls")["effect"], "read");
+        assert_eq!(find(&commands, "install")["effect"], "write");
+        assert_eq!(find(&commands, "prune")["effect"], "destructive");
+    }
+
+    #[tokio::test]
+    async fn list_commands_reaches_nested_paths() {
+        let commands = commands(false).await;
+        assert_eq!(find(&commands, "tasks ls")["effect"], "read");
+        assert!(find(&commands, "tasks ls")["help"].is_string());
+    }
+
+    #[tokio::test]
+    async fn hidden_subtrees_are_excluded_by_default() {
+        // clap does not propagate `hide`, so `bootstrap launchd` is hidden
+        // while its children are not; the children must not leak either.
+        let shown = commands(false).await;
+        assert!(!shown.iter().any(|c| c["command"] == "bootstrap launchd"));
+        assert!(
+            !shown
+                .iter()
+                .any(|c| c["command"] == "bootstrap launchd apply")
+        );
+
+        let all = commands(true).await;
+        assert!(all.iter().any(|c| c["command"] == "bootstrap launchd"));
+        assert!(
+            all.iter()
+                .any(|c| c["command"] == "bootstrap launchd apply")
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_unclassified_by_accident() {
+        // command_effects tests its own table, but nothing there proves the
+        // classification survives into what an agent is actually served. A
+        // missing effect reads as "unknown, ask" — fine for `mise run`, whose
+        // effect really is whatever the task does, and a silent gap for
+        // anything else.
+        let deliberate: std::collections::HashSet<_> = crate::cli::command_effects::UNCLASSIFIED
+            .iter()
+            .map(|(cmd, _)| *cmd)
+            .collect();
+        let accidental: Vec<_> = commands(false)
+            .await
+            .iter()
+            .filter(|c| c["effect"].is_null())
+            .map(|c| c["command"].as_str().unwrap().to_string())
+            .filter(|cmd| !deliberate.contains(cmd.as_str()))
+            .collect();
+        assert!(
+            accidental.is_empty(),
+            "unclassified with no entry in command_effects::UNCLASSIFIED: {accidental:?}"
+        );
+    }
+
+    #[test]
+    fn server_info_identifies_mise() {
+        // rmcp defaults server_info to its own crate name/version, which would
+        // make every MCP client see the server as "rmcp".
+        let info = MiseServer::new().get_info();
+        assert_eq!(info.server_info.name, "mise");
+        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
+    }
+}

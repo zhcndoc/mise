@@ -1,8 +1,13 @@
-# Bootstrap <Badge type="warning" text="experimental" />
+# 引导
 
-包、git 仓库、dotfiles、mise shell 激活、macOS 默认设置、macOS
-LaunchAgents、Linux systemd 用户服务、用户的登录 shell、工具，以及
-任何最终的项目特定任务。你还可以添加在 bootstrap 序列中的命名点运行的钩子。
+`mise bootstrap` 可通过一条命令，根据当前配置设置机器：Linux
+用户和组、操作系统软件包、特权文件和目录、系统服务、Linux 主机防火墙策略、Docker Compose
+项目、Git 仓库、dotfile、mise shell
+激活、macOS 默认设置、macOS LaunchAgents、Linux systemd 用户服务、
+用户的登录 shell、工具，以及任何最终的项目专属任务。它可以使用声明的秘密输入，而无需将其值存储在 mise 配置中。你还可以添加在引导流程中指定时间点运行的钩子。
+
+通过 [`mise bootstrap remote`](/bootstrap/remote.html)，可以将相同的配置应用于命名的清单主机或临时 SSH
+目标。
 
 对于在项目或工作站就绪之前所需、但不属于 `[tools]` 的内容，请使用 bootstrap：原生库、Homebrew
 公式、dotfile 仓库、shell rc 文件、编辑器配置、macOS
@@ -12,33 +17,54 @@ LaunchAgents、Linux systemd 用户服务、用户的登录 shell、工具，以
 
 `mise bootstrap` 按以下顺序执行这些步骤：
 
-1. `mise bootstrap packages apply` 安装缺失的 `[bootstrap.packages]`。
-2. `mise bootstrap repos apply` 克隆或更新 `[bootstrap.repos]`。
-3. `mise bootstrap dotfiles apply` 应用 `[dotfiles]`。
-4. `mise bootstrap mise-shell-activate apply` 配置来自
-   `[bootstrap.mise_shell_activate]` 的 shell 激活。
-5. `mise bootstrap macos defaults apply` 写入 `[bootstrap.macos.defaults]`。
-6. `mise bootstrap macos launchd-agents apply` 写入并加载
-   `[bootstrap.macos.launchd.agents]`。
-7. `mise bootstrap linux systemd-units apply` 通过写入 unit 文件、启用/禁用它们，并按配置启动/停止它们来收敛
-   `[bootstrap.linux.systemd.units]`。
-8. `mise bootstrap user apply` 应用 `[bootstrap.user]`。
-9. `mise install` 安装缺失的 `[tools]`。
-10. `mise run bootstrap` 运行一个名为 `bootstrap` 的任务（如果存在）。
-11. `[bootstrap.hooks.final]` 在 bootstrap 任务之后运行（如果已配置）。
+在进行更改之前，mise 会解析文件阶段所需的
+[`[bootstrap.secrets]`](/bootstrap/secrets.html)。此预检可防止因缺少输入而导致主机仅被部分配置。
+
+1. `mise bootstrap accounts apply` 收敛
+   [`[bootstrap.users]` 和 `[bootstrap.groups]`](/bootstrap/accounts.html)。
+2. `mise bootstrap plugins apply` 安装
+   [`[bootstrap.plugins]`](/bootstrap/packages/plugins.html) 中声明的软件包管理器插件。
+3. 内置管理器安装缺失的 [`[bootstrap.packages]`](/bootstrap/packages/)。
+4. `mise bootstrap files apply` 收敛
+   [`[bootstrap.files]` 和 `[bootstrap.directories]`](/bootstrap/files.html)。
+5. `mise bootstrap services apply` 收敛
+   [`[bootstrap.services]`](/bootstrap/services.html) 中已有的 systemd 系统单元。
+6. `mise bootstrap firewall apply` 根据
+   [`[bootstrap.linux.firewall]`](/bootstrap/firewall.html) 收敛主机防火墙策略和规则。
+7. `mise bootstrap compose apply` 收敛
+   [`[bootstrap.compose]`](/bootstrap/compose.html) 项目。
+8. `mise bootstrap repos apply` 克隆或更新
+   [`[bootstrap.repos]`](/bootstrap/repos.html)。
+9. `mise bootstrap dotfiles apply` 应用 [`[dotfiles]`](/dotfiles.html)。
+10. `mise bootstrap mise-shell-activate apply` 根据
+    [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html) 配置 shell 激活。
+11. `mise bootstrap macos defaults apply` 写入
+    [`[bootstrap.macos.defaults]`](/bootstrap/macos-defaults.html)。
+12. `mise bootstrap macos launchd-agents apply` 写入并加载
+    [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html)。
+13. `mise bootstrap linux systemd-units apply` 通过写入单元文件、启用或禁用单元，
+    并根据配置启动或停止单元，来收敛
+    [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)。
+14. `mise bootstrap user apply` 应用 [`[bootstrap.user]`](/bootstrap/user.html)。
+15. `mise install` 安装缺失的 `[tools]`。
+16. 软件包管理器插件会在其宿主工具可用后应用。
+17. 如果存在名为 `bootstrap` 的任务，`mise run bootstrap` 会运行该任务。
+18. 如果已配置，`[bootstrap.hooks.final]` 会在 bootstrap 任务之后运行。
 
 使用 `mise bootstrap --skip <part>` 跳过特定部分。支持的部分包括
-`packages`、`repos`、`dotfiles`、`mise-shell-activate`、`macos-defaults`、
-`macos-launchd-agents`、`linux-systemd-units`、`user`、`tools`、`task` 和
-`final-hook`。旧的较短名称 `shell`、`defaults`、`launchd` 和
-`systemd` 仍然可以作为别名接受。该标志可以重复使用或用逗号分隔，例如
-`mise bootstrap --skip tools,task`。
+`accounts`、`plugins`、`packages`、`files`、`services`、`firewall`、`compose`、`repos`、`dotfiles`、`mise-shell-activate`、
+`macos-defaults`、`macos-launchd-agents`、`linux-systemd-units`、`user`、`tools`、
+`task` 和 `final-hook`。较短的旧名称 `shell`、`defaults`、`launchd`
+和 `systemd` 仍作为别名接受。该标志可以重复使用或用逗号分隔，例如 `mise bootstrap --skip tools,task`。
 
 使用 `mise bootstrap --only <part>` 仅运行特定部分。它支持
 相同的部分名称，并且可以重复使用或用逗号分隔，例如
 `mise bootstrap --only dotfiles,tools`。`--only` 和 `--skip` 互斥。
 
-Hook 阶段也可以在内置步骤之前和之后运行：
+使用 `mise bootstrap --update` 在安装软件包前刷新系统软件包管理器元数据
+（apk：`--update-cache`，apt：`apt-get update`）。
+
+钩子阶段也可以在内置步骤之前和之后运行：
 `pre-packages`、`post-packages`、`pre-repos`、`post-repos`、`pre-dotfiles`、
 `post-dotfiles`、`pre-defaults`、`post-defaults`、`pre-user`、`post-user`、
 `pre-tools` 和 `post-tools`。
@@ -53,6 +79,48 @@ Hook 阶段也可以在内置步骤之前和之后运行：
 "apk:build-base" = "latest"
 "apt:build-essential" = "latest"
 "brew:postgresql@17" = "latest"
+
+[bootstrap.secrets]
+service_token = "EXAMPLE_SERVICE_TOKEN"
+
+[bootstrap.groups.example]
+system = true
+
+[bootstrap.users.example]
+system = true
+group = "example"
+home = "/var/lib/example"
+create_home = true
+
+[bootstrap.directories."/opt/example"]
+owner = "root"
+group = "root"
+mode = "0755"
+
+[bootstrap.files."/etc/example.conf"]
+content = 'token={{ secret(name="service_token") }}'
+template = true
+owner = "root"
+group = "root"
+mode = "0644"
+notify = ["example"]
+
+[bootstrap.services.example]
+state = "running"
+enabled = true
+on_change = "reload_or_restart"
+
+[bootstrap.linux.firewall]
+backend = "auto"
+state = "enabled"
+default_incoming = "deny"
+default_outgoing = "allow"
+
+[[bootstrap.linux.firewall.rules]]
+name = "https"
+port = 443
+protocol = "tcp"
+action = "allow"
 
 [bootstrap.repos]
 "~/src/dotfiles" = { url = "git@github.com:jdx/dotfiles.git", ref = "main" }
@@ -111,23 +179,29 @@ python = "3.12"
 run = "gh auth status || gh auth login"
 ```
 
-然后运行：
+然后收敛整台机器（`--yes` 会跳过确认提示）：
 
 ```sh
 mise bootstrap --yes
 ```
 
-进行 dry run：
+若要在不进行任何修改的情况下预览将发生的变化：
 
 ```sh
 mise bootstrap --dry-run
 ```
 
-当 `mise bootstrap` 应用或即将应用某些需要用户后续处理的内容时，
-它会在成功运行后打印一个最终的 `bootstrap: follow-up` 部分。dry run
-会使用 `bootstrap: follow-up if applied`。如果后续的某个 bootstrap 阶段
-在前面的阶段已经生成了后续处理项之后失败，mise 会在返回错误之前打印
-这些项。如果没有需要处理的可操作内容，则会省略该部分。
+如需结构化的资源计划，请使用 `mise bootstrap plan`。配置过程规划器会按依赖顺序报告账户、系统软件包、特权文件和目录、系统服务、防火墙策略和规则，以及 Compose 项目。其他声明式 bootstrap 部分在采用资源模型后，也会加入同一张图。
+
+```sh
+mise bootstrap plan
+mise bootstrap plan --json
+mise bootstrap plan --detailed-exitcode
+```
+
+使用 `--detailed-exitcode` 时，如果没有任何需要变更的内容，命令退出码为 0；如果计划包含变更，退出码为 2；如果规划失败或任何资源处于 `unknown` 状态，退出码为 1。未知资源不计为变更，但会阻止成功的收敛结果。当当前平台上的软件包管理器不可用，或无法安装所请求的版本时，该软件包会处于未知状态。这与应用行为一致：不受支持的版本固定会继续显示，以便手动解决，而不会被报告为 mise 将跳过的变更。
+
+当 `mise bootstrap` 应用或将要应用某些需要用户后续操作的内容时，它会在成功运行后打印最后的 `bootstrap: follow-up` 部分。试运行会使用 `bootstrap: follow-up if applied`。如果后续 bootstrap 阶段失败，而较早阶段已经产生了后续操作项，mise 会在返回错误前打印这些项目。当没有任何可执行的后续操作需要报告时，将省略该部分。
 
 默认情况下，bootstrap 会拒绝 dotfile 冲突，而不是替换本地文件。
 当你明确希望 dotfiles 阶段替换冲突的整文件 dotfile 目标时，请使用
@@ -135,7 +209,7 @@ mise bootstrap --dry-run
 
 ## 检查状态
 
-使用 `mise bootstrap status` 在一个地方检查声明式引导状态：
+使用 `mise bootstrap status` 在一处检查声明式引导状态。它会报告每个声明式部分——软件包、仓库、点文件、Shell 激活、macOS 默认设置、LaunchAgents、systemd 单元和登录 Shell——以及 `[tools]` 和已安装工具所需的任何系统依赖项：
 
 ```sh
 mise bootstrap status
@@ -150,30 +224,32 @@ mise bootstrap mise-shell-activate status
 mise bootstrap macos defaults status
 mise bootstrap macos launchd-agents status
 mise bootstrap linux systemd-units status
+mise bootstrap firewall status
 mise bootstrap user status
 ```
 
 `mise bootstrap status --missing` 会通过一个命令检查整个声明式引导范围。更窄的 `mise bootstrap packages status --missing` 和 `mise bootstrap dotfiles status --missing` 命令在你只想检查某一部分而不安装任何东西时很有用。
 
-## 放置位置说明
+## 各项配置的用途
 
-| 配置                             | 用途                                                          |
-| ---------------------------------- | ------------------------------------------------------------- |
-| `[bootstrap.packages]`             | 来自 apk、apt、dnf、pacman 或 brew 的操作系统包               |
-| `[bootstrap.repos]`                | 在应用 dotfiles 之前克隆的 Git 仓库                            |
-| `[dotfiles]`                       | 整文件 dotfiles 以及对现有文件的小型受管编辑                   |
-| `[bootstrap.mise_shell_activate]`  | shell 启动文件中的 mise 激活片段                              |
-| `[bootstrap.macos.*]`              | 面向 macOS 的精选偏好设置，如 Dock/Finder/键盘/触控板         |
-| `[bootstrap.macos.defaults]`       | 通过 `defaults write` 写入的 macOS 用户偏好设置               |
-| `[bootstrap.macos.launchd.agents]` | 使用 `launchctl` 写入并加载的 macOS 用户 LaunchAgents        |
-| `[bootstrap.linux.systemd.units]`  | 使用 `systemctl --user` 管理的 Linux systemd 用户服务         |
-| `[bootstrap.user]`                 | 当前用户设置，例如 `login_shell`                              |
-| `[bootstrap.hooks]`                | 在命名的 bootstrap 阶段运行的命令                              |
-| `[tools]`                          | 由 mise 管理的带版本开发工具                                   |
-| `[tasks.bootstrap]`                | 工具安装后应运行的任何自定义内容                               |
+| 配置                                                         | 用途                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| [`[bootstrap.packages]`](/bootstrap/packages/)                 | 来自 apk、apt、dnf、pacman、brew、flatpak 或 mas 的操作系统软件包 |
+| [`[bootstrap.repos]`](/bootstrap/repos.html)                   | 在应用 dotfiles 之前克隆的 Git 仓库                         |
+| [`[dotfiles]`](/dotfiles.html)                                 | 整个文件形式的 dotfiles，以及对现有文件进行的小型托管修改    |
+| [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)     | shell 启动文件中的 mise 激活片段                            |
+| [`[bootstrap.macos.*]`](/bootstrap/macos-defaults.html)        | 针对 Dock/Finder/键盘/触控板整理的 macOS 偏好设置             |
+| [`[bootstrap.macos.defaults]`](/bootstrap/macos-defaults.html) | 通过 `defaults write` 写入的 macOS 用户偏好设置              |
+| [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html)  | 使用 `launchctl` 写入并加载的 macOS 用户 LaunchAgents         |
+| [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)   | 使用 `systemctl --user` 管理的 Linux systemd 用户服务        |
+| [`[bootstrap.linux.firewall]`](/bootstrap/firewall.html)       | Linux 主机防火墙策略和托管规则                               |
+| [`[bootstrap.user]`](/bootstrap/user.html)                     | 当前用户设置，例如 `login_shell`                             |
+| `[bootstrap.hooks]`                                            | 在指定引导阶段运行的命令                                     |
+| `[tools]`                                                      | 由 mise 管理的版本化开发工具                                 |
+| `[tasks.bootstrap]`                                            | 工具安装完成后应运行的任何自定义内容                         |
 
-当 mise 可以检查并收敛状态时，请使用声明式区块。对不适合这些区块的命令式设置，请使用
-`[tasks.bootstrap]`，例如运行认证流程、初始化本地数据，或其他一次性的项目设置。
+当 mise 可以检查并收敛状态时，请使用声明式区块。对于不适合这些区块的命令式设置，请使用
+`[tasks.bootstrap]`，例如运行认证流程、初始化本地数据，或执行其他一次性的项目设置。
 
 ## 钩子
 
@@ -200,9 +276,11 @@ run = "gh auth status || gh auth login"
 post-defaults = "killall Dock || true"
 ```
 
-钩子会在全局到本地的配置层级之间合并，因此共享配置可以定义较通用的机器设置，而项目则可以添加自己的阶段命令。
+钩子会从全局配置到本地配置，跨配置层级进行合并，因此共享配置可以定义广泛的机器设置，而项目则可以添加自己的阶段命令。  
+`pre-dotfiles` 和 `post-dotfiles` 阶段也会包裹  
+`mise bootstrap dotfiles apply`。
 
-## 常见工作流程
+## 常见工作流
 
 ### 新机器
 
@@ -211,7 +289,7 @@ mise trust
 mise bootstrap --yes
 ```
 
-### 添加一个包
+### 添加软件包
 
 ```sh
 mise bootstrap packages use apk:zlib-dev apt:libssl-dev
@@ -219,23 +297,24 @@ mise bootstrap packages use apk:zlib-dev apt:libssl-dev
 
 这会写入 `[bootstrap.packages]` 并安装缺失的内容。
 
-### 捕获已编辑的 dotfile
+### 保存已编辑的点文件
 
 ```sh
 $EDITOR ~/.zshrc
-mise dotfiles add ~/.zshrc
+mise bootstrap dotfiles add ~/.zshrc
 ```
 
-`mise dotfiles add` 会将活动文件存储到 `dotfiles.root` 下，并写入一个带有 `mode` 的显式 `[dotfiles]` 条目。
+`mise bootstrap dotfiles add` 会将当前文件存储在 `dotfiles.root` 下，并写入一个包含
+`mode` 的显式 `[dotfiles]` 条目。
 
-### 编辑受管理的 dotfile
+### 编辑受管理的点文件
 
 ```sh
-mise dotfiles edit ~/.zshrc
-mise dotfiles apply ~/.zshrc
+mise bootstrap dotfiles edit ~/.zshrc
+mise bootstrap dotfiles apply ~/.zshrc
 ```
 
-对于通过符号链接的 dotfile，`edit` 会打开受管理的源文件，因此它可以配合默认的 `symlink` 模式使用。
+对于通过符号链接的点文件，`edit` 会打开受管理的源文件，因此它可以配合默认的 `symlink` 模式使用。
 
 ## 高级：自管理配置
 

@@ -2,12 +2,13 @@
 # `mise tasks add`
 
 - **用法**: `mise tasks add [FLAGS] <TASK> [-- RUN]…`
+- **效果**: 修改状态
 - **源代码**: [`src/cli/tasks/add.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/add.rs)
 
 创建一个新任务
 
-将一个任务添加到本地的 mise.toml 文件。
-参见 <https://mise.en.dev/configuration.html#target-file-for-write-operations>
+将任务添加到本地 mise.toml 文件中。
+参见 <https://mise.jdx.dev/configuration.html#target-file-for-write-operations>。
 
 ## 参数
 
@@ -15,7 +16,7 @@
 
 要添加的任务名称
 
-### `[-- RUN]…`
+### `[-- RUN]`…
 
 ## 标志
 

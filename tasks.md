@@ -1,314 +1,266 @@
-## `aqua-tester`
-
-- **Usage**: `aqua-tester`
-
-Test Aqua configuration with fish shell
-
 ## `build`
 
-- **Usage**: `build`
-- **Aliases**: `b`
+- **用法**: `build`
+- **别名**: `b`
 
-Build the project
+构建项目
 
 ## `ci`
 
-- Depends: format, build, test
+- 依赖：format、build、test
 
-- **Usage**: `ci`
+- **用法**：`ci`
 
-Run all CI checks
+运行所有 CI 检查
 
 ## `clean`
 
-- **Usage**: `clean`
+- **用法**：`clean`
 
-Clean build artifacts
+清理构建产物
 
 ## `docs`
 
-- Depends: docs:setup
+- 依赖：docs:setup
 
-- **Usage**: `docs`
+- **用法**：`docs`
 
-Start the documentation development server
+启动文档开发服务器
 
 ## `docs:build`
 
-- Depends: docs:setup
+- 依赖：docs:setup
 
-- **Usage**: `docs:build`
+- **用法**：`docs:build`
 
-Build the documentation site
+构建文档网站
 
 ## `docs:demos`
 
-- **Usage**: `docs:demos`
+- **用法**：`docs:demos`
 
-Create recordings with vhs
+使用 vhs 创建录制内容
 
 ## `docs:preview`
 
-- Depends: docs:build
+- 依赖：docs:build
 
-- **Usage**: `docs:preview`
+- **用法**：`docs:preview`
 
-Preview the documentation site
+预览文档网站
 
 ## `docs:release`
 
-- Depends: docs:build
+- 依赖：docs:build
 
-- **Usage**: `docs:release`
+- **用法**：`docs:release`
 
-Release documentation site to production or remote
+将文档网站发布到生产环境或远程环境
 
 ## `docs:setup`
 
-- **Usage**: `docs:setup`
+- **用法**：`docs:setup`
 
-Install documentation dependencies
+安装文档依赖
 
 ## `fetch-gpg-keys`
 
-- **Usage**: `fetch-gpg-keys`
+- **用法**：`fetch-gpg-keys`
 
-Fetch GPG keys for signing or verification
-
-## `filetask`
-
-This is a test build script
-
-
-- **Usage**: `filetask [-f --force] [-u --user <user>] [file] [arg_with_default]`
-- **Aliases**: `ft`
-
-### Arguments
-
-#### `[file]`
-
-The file to write
-
-**Default:** `file.txt`
-
-#### `[arg_with_default]`
-
-An arg with a default
-
-**Default:** `mydefault`
-
-### Flags
-
-#### `-f --force`
-
-Overwrite existing &lt;file>
-
-#### `-u --user <user>`
-
-User to run as
-
-## `filetask.bat`
-
-- **Usage**: `filetask.bat`
+获取用于签名或验证的 GPG 密钥
 
 ## `flamegraph`
 
-- **Usage**: `flamegraph`
+- **用法**：`flamegraph`
 
-Generate a flamegraph for performance analysis
+生成用于性能分析的火焰图
 
 ## `install-dev`
 
-- **Usage**: `install-dev`
+- **用法**：`install-dev`
 
-Install the current project in debug mode
+以调试模式安装当前项目
 
 ## `lint`
 
-- Depends: lint:*
+- 依赖：lint:*
 
-- **Usage**: `lint`
+- **用法**：`lint`
 
-Run all lint checks
+运行所有 lint 检查
 
 ## `lint-fix`
 
-- **Usage**: `lint-fix`
-- **Aliases**: `format`, `fix`
+- **用法**: `lint-fix`
+- **别名**: `format`、`fix`
 
-Automatically fix lint issues
+自动修复代码检查问题
 
 ## `lint:hk`
 
-- **Usage**: `lint:hk`
+- **用法**：`lint:hk`
 
-Lint HK files
+检查 HK 文件
+
+## `perf`
+
+- **用法**：`perf`
+
+## `perf:record`
+
+- **用法**: `perf:record`
+
+## `perf:task-cache`
+
+- **用法**: `perf:task-cache`
 
 ## `pre-commit`
 
-- **Usage**: `pre-commit`
+- **用法**：`pre-commit`
 
-Run pre-commit hooks
-
-## `release`
-
-- **Usage**: `release`
-
-Release the project
+运行 pre-commit 钩子
 
 ## `release-plz`
 
-- **Usage**: `release-plz`
+- **用法**：`release-plz`
 
-Release with release-plz
+使用 release-plz 发布
 
 ## `render`
 
-- Depends: render:*
+- 依赖：render:*
 
-- **Usage**: `render`
+- **用法**：`render`
 
-Run all render tasks
+运行所有渲染任务
 
 ## `render:completions`
 
-- Depends: build
+- 依赖：build
 
-- **Usage**: `render:completions`
+- **用法**：`render:completions`
 
-Generate shell completions
-
-## `render:fig`
-
-- Depends: docs:setup
-
-- **Usage**: `render:fig`
-
-Generate Fig completion spec
+生成 Shell 补全命令
 
 ## `render:help`
 
-- Depends: build
+- 依赖：build
 
-- **Usage**: `render:help`
+- **用法**：`render:help`
 
-Render help documentation
+渲染帮助文档
+
+## `render:llms`
+
+- 依赖：render:usage、render:help
+
+- **用法**：`render:llms`
+
+生成 docs/public/llms.txt（面向 AI 代理的文档索引）
 
 ## `render:mangen`
 
-- Depends: render:usage
+- 依赖：render:usage
 
-- **Usage**: `render:mangen`
+- **用法**：`render:mangen`
 
-Generate man pages
+生成 man 手册页
 
 ## `render:schema`
 
-- Depends: docs:setup
+- 依赖：docs:setup
 
-- **Usage**: `render:schema`
+- **用法**：`render:schema`
 
-Render JSON schema
+渲染 JSON Schema
 
 ## `render:usage`
 
-- Depends: build
+- 依赖：build
 
-- **Usage**: `render:usage`
+- **用法**：`render:usage`
 
-Generate usage documentation
+生成用法文档
 
 ## `show-output-on-failure`
 
-- **Usage**: `show-output-on-failure`
+- **用法**：`show-output-on-failure`
 
-Show output on failure for documentation generation
-
-## `signal-test`
-
-- **Usage**: `signal-test`
-
-Test signal handling in Node.js
+文档生成失败时显示输出
 
 ## `snapshots`
 
-- **Usage**: `snapshots`
+- **用法**：`snapshots`
 
-update test snapshots
+更新测试快照
 
 ## `test`
 
 - **Usage**: `test`
 - **Aliases**: `t`
 
-run all tests
+运行所有测试
 
 ## `test-tool-retry`
 
-Retry failed test-tools with grace period for recent upstream releases
+在上游版本发布后的一段宽限期内，重试失败的测试工具
 
 
-- **Usage**: `test-tool-retry [--grace-period] [--check-only] <tools>…`
+- **用法**：`test-tool-retry [--grace-period] [--check-only] <tools>…`
 
-### Arguments
+### 参数
 
 #### `<tools>…`
 
-Failed tools to retry
+要重试的失败工具
 
-### Flags
+### 标志
 
 #### `--grace-period`
 
-Ignore failures from tools whose upstream released &lt;7 days ago
+忽略上游版本发布距今 &lt;7 天的工具所产生的失败
 
 #### `--check-only`
 
-Skip retrying tools, only check grace period (use with --grace-period)
+跳过工具重试，仅检查宽限期（与 --grace-period 一起使用）
 
 ## `test:build-perf-workspace`
 
-- **Usage**: `test:build-perf-workspace`
+- **用法**：`test:build-perf-workspace`
 
-task description
+任务描述
 
 ## `test:coverage`
 
-- **Usage**: `test:coverage`
+- **用法**: `test:coverage`
 
-Run all tests with coverage report
+运行所有测试并生成覆盖率报告
 
 ## `test:e2e`
 
-- Depends: build
+- 依赖：build
 
-- **Usage**: `test:e2e`
-- **Aliases**: `e`, `e2e`
+- **用法**：`test:e2e`
+- **别名**：`e`、`e2e`
 
-Run end-to-end tests
+运行端到端测试
 
 ## `test:perf`
 
-- Depends: test:build-perf-workspace
+- 依赖：test:build-perf-workspace
 
-- **Usage**: `test:perf`
+- **用法**：`test:perf`
 
-Run performance tests
+运行性能测试
 
 ## `test:shuffle`
 
-- **Usage**: `test:shuffle`
+- **用法**: `test:shuffle`
 
-Run tests with shuffling enabled
+启用随机排序运行测试
 
 ## `test:unit`
 
-- **Usage**: `test:unit`
+- **用法**：`test:unit`
 
-run unit tests
-
-## `update-descriptions`
-
-- **Usage**: `update-descriptions`
-
-Update all task descriptions in the project
+运行单元测试

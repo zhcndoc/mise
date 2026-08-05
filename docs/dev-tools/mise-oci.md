@@ -1,11 +1,11 @@
-# mise oci <Badge type="warning" text="experimental" />
+# mise oci <Badge type="warning" text="实验性" />
 
 `mise oci build` 会将一个 `mise.toml` 转换为容器镜像，并且每个已安装的工具对应一个
 [OCI](https://github.com/opencontainers/image-spec) 层。
 
 其优势在于，**仅升级任意单个工具版本，只会使一个内容可寻址 blob 失效**。使用 Dockerfile 时，每个 `RUN install_tool` 都叠加在前一个之上——更改较早的 `RUN` 会使后续所有层失效。mise 的磁盘布局（每个工具都安装在独立的 `$MISE_DATA_DIR/installs/<plugin>/<version>/` 目录中）使得层的顺序在语义上变得无关紧要，因此切换某个工具的版本只会切换单个层，而其他所有内容（基础镜像、其他工具、mise 本身、镜像配置）都会原样复用。
 
-::: warning Experimental
+::: warning 实验性
 `mise oci build` 是实验性功能。可通过以下方式启用：
 
 ```sh
@@ -19,11 +19,11 @@ MISE_EXPERIMENTAL=1 mise oci build …
 
 ## 命令一览
 
-| 命令             | 作用                                                                     |
-| ---------------- | ------------------------------------------------------------------------ |
-| `mise oci build` | 在磁盘上生成一个 OCI 镜像布局。                                           |
-| `mise oci run`   | 构建（或复用）一个镜像，并通过 podman/docker 在其中运行命令。           |
-| `mise oci push`  | 构建（或复用）一个镜像，并通过 skopeo 或 crane 将其推送到镜像仓库。     |
+| 命令             | 作用                                               |
+| ---------------- | -------------------------------------------------- |
+| `mise oci build` | 在磁盘上生成 OCI 镜像布局。                         |
+| `mise oci run`   | 构建（或复用）镜像，并通过 podman/docker 在其中运行命令。 |
+| `mise oci push`  | 构建（或复用）镜像，并将其推送到镜像仓库。           |
 
 ## 快速开始
 
@@ -32,16 +32,15 @@ MISE_EXPERIMENTAL=1 mise oci build …
 #（debian:bookworm-slim）。输出到 ./mise-oci/。
 mise oci build
 
-# 在镜像中运行交互式 shell（如果存在则使用 podman，否则
-# 使用 docker + skopeo）。
+# 在镜像中运行交互式 shell（如果存在则使用 podman，否则使用
+# docker）。
 mise oci run -it -- bash
 
-# 推送到镜像仓库（调用 skopeo；如果不可用则回退到 crane）。
+# 使用内置客户端推送到镜像仓库（无需 skopeo/crane）。
 mise oci push ghcr.io/me/devenv:latest
 
-# 你也可以手动通过 skopeo/crane：
+# 输出是标准 OCI 镜像布局，因此外部工具也可以使用：
 skopeo inspect oci:./mise-oci
-skopeo copy oci:./mise-oci docker://ghcr.io/me/devenv:latest
 ```
 
 ## 分层工作原理
@@ -77,18 +76,21 @@ Python、jq、mise、基础层以及生成的配置都会从
 
 ```sh
 mise oci build [-o PATH] [--from REF] [--tag REF] [--mount-point PATH]
+               [--copy HOST_PATH:IMAGE_PATH]...
                [--no-mise] [--owner UID[:GID]]
 ```
 
-- `-o, --output PATH` — 输出目录（默认 `./mise-oci`）
+- `-o, --output PATH` — 输出目录（默认为 `./mise-oci`）
 - `--from REF` — 基础镜像引用（覆盖 `[oci].from` 和
   `oci.default_from` 设置）。使用 `scratch` 可在没有基础镜像的情况下构建。
-- `-t, --tag REF` — 写入 `index.json` 的标签，作为
-  `org.opencontainers.image.ref.name` 注解
-- `--mount-point PATH` — mise 安装内容在镜像内的存放位置
-  （默认 `/mise`）。必须是绝对路径。
-- `--no-mise` — 不将正在运行的 mise 二进制文件嵌入到
-  `/usr/local/bin/mise`
+- `-t, --tag REF` — 写入 `index.json` 的
+  `org.opencontainers.image.ref.name` 注解中的标签
+- `--mount-point PATH` — mise 在镜像中的安装位置
+  （默认为 `/mise`）。必须是绝对路径。
+- `--copy HOST_PATH:IMAGE_PATH` — 将主机文件或目录复制到镜像中的绝对路径。
+  对于多个负载，可重复使用此标志。每个负载都会在工具层之后作为独立的、
+  内容寻址的层生成。
+- `--no-mise` — 不在 `/usr/local/bin/mise` 嵌入正在运行的 mise 二进制文件
 - `--owner UID[:GID]` — 每个生成的层条目的数字所有者。
   默认为 `[oci].user_id` / `[oci].group_id`，然后是 `0:0`。如果省略 GID，
   则默认为 UID。这只影响文件所有权，不影响镜像的 `USER` 指令。
@@ -130,27 +132,57 @@ mise oci build -o ./img
 mise oci run --image-dir ./img -- node --version
 ```
 
-**要求：** 需要 `podman`（原生支持 OCI-layout）或
-`docker + skopeo`（skopeo 会将该布局加载到 docker daemon 中）。
+**要求：**必须使用 `podman`（原生支持 OCI 布局）或
+`docker`（mise 通过 `docker load` 将镜像流式传输到守护进程）。
 
 ## `mise oci push`
 
-构建（或复用）一个镜像，并通过 `skopeo` 或
-`crane` 将其推送到镜像仓库。mise 本身不会处理凭据——请配置
-底层工具（`docker login`、`REGISTRY_AUTH_FILE`、`crane auth
-login` 等）。
+使用 mise 内置的 registry 客户端构建（或复用）镜像并将其推送到 registry——无需
+skopeo、crane 或 docker 守护进程。只有 registry 中尚不存在的 blob 才会被上传，
+因此，对于大部分内容未变化的工具集，重复推送时传输的数据非常少。
+当基础镜像位于目标 registry 时，其 blob 会进行跨仓库挂载，而不是重新上传（不会传输任何字节）。
+大型层会分块上传并显示进度条，暂时性的网络故障会采用退避策略重试
+（`http_retries` 控制尝试次数）。
+
+### 层复用
+
+如果工具层的缓存键（工具、版本、镜像内前缀和文件所有者）与之前推送的镜像匹配，
+则会**直接从 registry 复用，而不是重新构建**——完全跳过 tar/gzip 操作。
+被复用的工具甚至不需要在本地安装，这会让 CI 推送变得很快：只有版本确实发生变化的工具才会被安装和打包。
+
+- 默认情况下，缓存来源就是目标引用本身（之前以该标签推送的镜像）。
+- `--cache-from REF` 会从**同一仓库**中的另一个标签复用层——适用于每次推送都使用唯一标签的情况：
+
+  ```sh
+  mise oci push --cache-from ghcr.io/me/dev:latest ghcr.io/me/dev:$GIT_SHA
+  ```
+
+- `--no-cache` 会禁用复用，并从本地安装重新构建每一层（类似 docker 的逃生舱——复用会信任
+  registry 中的层内容与其注解匹配，而不是在本地重新构建完全相同的字节）。
+
+有一个注意事项：环境派生（`JAVA_HOME` 风格的 `exec_env` 变量）会基于本地安装运行。
+对于未安装的复用工具，大多数后端仍能正确派生路径，但较特殊的后端可能会生成不完整的环境变量——如果镜像配置看起来不正确，
+请传入 `--no-cache`（并确保工具已安装）。
 
 ```sh
-mise oci push [--tool TOOL] [--image-dir DIR]
+mise oci push [--image-dir DIR]
               [--from REF] [--mount-point PATH] [--no-mise]
               [--owner UID[:GID]]
               <REGISTRY_REF>
 ```
 
-- `<REGISTRY_REF>` — 完整限定的目标地址（例如
-  `ghcr.io/me/devenv:latest`）。必须包含镜像仓库主机名。
-- `--tool` — `auto`（默认，优先使用 skopeo）、`skopeo` 或 `crane`。
-- `--image-dir` — 推送一个已有的 OCI 布局，而不是构建。
+- `<REGISTRY_REF>` — 完全限定的目标地址（例如
+  `ghcr.io/me/devenv:latest`）。必须包含 registry 主机名。回环地址 registry
+  （`localhost:5000/…`）会通过普通 HTTP 访问，这是与 docker 相同的默认不安全约定。
+  非回环的普通 HTTP registry（例如 `registry.lan:5000`）必须通过
+  `oci.insecure_registries` 设置显式启用：
+
+  ```toml
+  [settings.oci]
+  insecure_registries = ["registry.lan:5000"]
+  ```
+
+- `--image-dir` — 推送现有的 OCI 布局，而不是进行构建。
 
 - `--owner UID[:GID]` — 在全新构建时，为生成的层条目指定数字所有者；它不能与
   `--image-dir` 同时使用。
@@ -166,6 +198,23 @@ mise oci build -o ./img
 mise oci push --image-dir ./img ghcr.io/me/devenv:v1
 ```
 
+### 推送认证
+
+凭据会按照 docker 和 podman 使用的相同来源解析，顺序如下：
+
+1. `$REGISTRY_AUTH_FILE`
+2. `$XDG_RUNTIME_DIR/containers/auth.json`（podman）
+3. `~/.config/containers/auth.json`
+4. `~/.docker/config.json`（或 `$DOCKER_CONFIG/config.json`）
+
+支持内联的 `auths` 条目和凭据助手
+（`credsStore` / `credHelpers`，例如 `docker-credential-osxkeychain`、
+`docker-credential-ecr-login`）——因此，只需执行普通的
+`docker login ghcr.io` 或 `podman login ghcr.io` 即可完成设置。
+如果找不到凭据，mise 会匿名推送（适用于本地 registry）并发出警告。
+
+对于 ghcr.io，令牌需要具备 `write:packages` 权限范围。
+
 ### `mise.toml` 中的 `[oci]` 部分
 
 ```toml
@@ -180,7 +229,15 @@ user_id     = 1000                      # tar 层条目 UID（文件所有权）
 group_id    = 1000                      # tar 层条目 GID（默认使用 user_id）
 mount_point = "/mise"                  # 工具在镜像中的安装位置
 
-# 注入到镜像配置中的额外环境变量（仅限镜像本身——不会覆盖 MISE_*）。
+[[oci.copy]]
+host  = "dist/my-app"
+image = "/usr/local/bin/my-app"
+
+[[oci.copy]]
+host  = "assets"
+image = "/srv/app/assets"
+
+# 注入到镜像配置中的额外环境变量（仅适用于镜像——不会覆盖 MISE_*）。
 [oci.env]
 NODE_ENV = "production"
 
@@ -198,6 +255,16 @@ CLI 标志会覆盖 `[oci]` 部分。`[oci]` 部分会覆盖
 
 当 `mise.toml` 文件分层（全局 + 项目）时，各部分会按字段逐项合并，
 每个字段以更具体的文件为准。
+
+复制源可以是文件、目录或符号链接。目录内容会放置在
+`image` 指定的位置；不会添加源目录名称。镜像路径必须是绝对路径，且不能包含
+`.` 或 `..` 组件。父目录会自动创建，可执行位会被保留，所有权遵循
+`--owner` 或 `[oci].user_id` / `[oci].group_id`。复制层会添加
+`dev.mise.copy=<image path>` 注解，以便在检查期间识别。
+`[[oci.copy]]` 中的相对 `host` 路径相对于声明它们的配置文件所在目录解析；
+CLI 中的相对路径相对于当前工作目录解析。
+当分层配置复制到相同的镜像路径时，较不具体的条目会先输出，以便更具体的配置生效。
+CLI 复制项最后输出。
 
 ### OCI 镜像中的 `[bootstrap]` 和 `[dotfiles]`
 
@@ -278,14 +345,11 @@ vfox 插件）。它们的安装脚本可能会写入按版本目录之外的路
 
 ## 注册表基础镜像支持
 
-v1 可以从任何支持匿名拉取的 OCI Distribution v2 注册表中拉取基础镜像：
-
-- Docker Hub（`debian`、`ubuntu`、`node`、…）——令牌认证匿名处理。
-- GitHub Container Registry（`ghcr.io/…`）——仅支持公开镜像。
-- Quay.io（`quay.io/…`）——仅支持公开镜像。
-- 自托管 / 其他注册表——如果不需要认证则可正常工作。
-
-受认证的拉取（私有基础镜像）是后续计划。
+基础镜像可以从任何 OCI Distribution v2 注册表中拉取 —
+Docker Hub、ghcr.io、quay.io、自托管注册表等。对于公开镜像，
+匿名令牌身份验证会自动处理；当你已登录时
+（`docker login` / `podman login`），系统会使用这些凭据，因此
+私有基础镜像也同样可用。
 
 支持 digest 引用：
 
@@ -313,21 +377,37 @@ OCI 镜像面向 Linux。 在 macOS 或 Windows 上构建会生成一个 `os` �
 
 要获得可正常工作的镜像，请在 Linux 主机上（或在 Linux 容器内——`docker run -v $PWD:/src -w /src debian mise oci build` 可行）运行 `mise oci build`。当检测到这种不匹配时，mise 会打印警告。
 
+### 多架构镜像
+
+单个主机只能构建单个平台，但 `mise oci push
+--update-index` 允许每种架构使用一个运行器来组装多架构
+标签：每次推送都会按摘要上传其平台清单，并将标签指向一个 OCI **镜像索引**，同时保留其他已推送平台的条目。
+
+```yaml
+# CI 示例：每种架构一个作业，使用相同的标签
+jobs:
+  push-amd64: # runs-on: ubuntu-24.04
+    run: mise oci push --update-index ghcr.io/me/dev:latest
+  push-arm64: # runs-on: ubuntu-24.04-arm
+    needs: push-amd64 # 按顺序执行，以避免读-改-写竞争
+    run: mise oci push --update-index ghcr.io/me/dev:latest
+```
+
+重新推送相同的平台会替换其条目（不会产生重复项），并且单架构标签会升级为索引，同时不会丢失现有平台。通过索引可以复用层——缓存会解析到与构建平台匹配的条目。
+
+请注意，索引更新采用读-改-写方式（Distribution API 不支持条件写入），因此来自不同运行器的并发推送可能发生竞争——请像上面那样按顺序执行。
+
 ## 已知限制（v1）
 
 - `asdf` / `vfox` 后端会被拒绝（见上文）。
-- `--from` 仅支持匿名镜像仓库拉取；目前还不支持认证。
-  （`mise oci push` 确实支持认证——它只是委托给 skopeo/crane
-  而这些工具本身已经支持。）
-- 跨平台构建会生成损坏的镜像（可执行文件是宿主机原生的）；
+- 跨平台构建会生成损坏的镜像（二进制文件采用主机原生格式）；
   请在 Linux 主机上运行构建。
-- Alpine / musl 基础镜像会导致大多数工具失效。
-- `mise oci run` / `oci push` 会调用外部工具
-  （podman、docker+skopeo、crane）。没有内置的容器运行时或
-  镜像仓库客户端。
+- Alpine / musl 基础镜像会导致大多数工具无法正常运行。
+- `mise oci run` 需要容器引擎（podman 或 docker）——mise
+  没有内置的容器运行时。推送不需要外部工具。
 
 ## 另请参阅
 
-- [`mise oci build`](/cli/oci/build.md) — 完整 CLI 参考
+- [`mise oci build`](/cli/oci/build.md) — 完整的 CLI 参考
 - [OCI 镜像规范](https://github.com/opencontainers/image-spec)
-- [skopeo](https://github.com/containers/skopeo)，用于推送镜像
+- [OCI 分发规范](https://github.com/opencontainers/distribution-spec)

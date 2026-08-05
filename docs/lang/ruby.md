@@ -17,23 +17,11 @@
 mise use -g ruby@3.2
 ```
 
-在幕后，mise 使用 [`ruby-build`](https://github.com/rbenv/ruby-build) 从源码编译 ruby。
-请确保你已安装必要的
-[依赖项](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment)。
-你可以查看其 [README](https://github.com/rbenv/ruby-build/blob/master/README.md) 以了解更多设置和一些
-故障排除信息。
+默认情况下，如果有预编译的 Ruby 二进制文件，mise 会安装该文件；否则会使用 [`ruby-build`](https://github.com/rbenv/ruby-build) 从源代码编译。源代码构建需要相应的[依赖项](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment)。有关其他设置和故障排除方法，请参阅 ruby-build 的[自述文件](https://github.com/rbenv/ruby-build/blob/master/README.md)。
 
 ## 预编译二进制文件
 
-Mise 可以下载预编译的 Ruby 二进制文件，而不是
-从源代码编译。这会显著减少安装时间。
-
-预编译二进制文件将在 2026.8.0 中成为默认选项。要立即启用：
-
-```sh
-mise settings ruby.compile=false
-mise use ruby@3.4.1
-```
+mise 默认下载预编译的 Ruby 二进制文件。这会显著缩短安装时间。
 
 预编译二进制文件来源于 [jdx/ruby](https://github.com/jdx/ruby)，并适用于
 以下平台：
@@ -44,6 +32,31 @@ mise use ruby@3.4.1
 
 如果你的平台或 Ruby 版本没有可用的预编译二进制文件，mise 会自动
 回退到使用 ruby-build 从源代码编译。
+
+### 仅使用预编译二进制文件
+
+设置 `ruby.compile=false` 可完全选择退出源代码构建。在没有
+构建工具链的主机上，这非常有用，因为静默回退到 ruby-build 会导致较晚的失败，
+或引入你特意不安装的构建依赖：
+
+```sh
+mise settings ruby.compile=false
+```
+
+使用此设置时：
+
+- 当请求的版本和平台不存在预编译二进制文件时，安装会报错，
+  而不是回退到 ruby-build。
+- `mise ls-remote ruby` 和模糊版本只会考虑具有预编译
+  二进制文件的版本，因此 `ruby = "4.0"` 会解析为实际具有二进制文件的最新
+  4.0.x 版本，而不是必须从源代码构建的版本。
+
+如果你设置了自定义的 `ruby.precompiled_url` 模板，mise 将无法枚举可用版本，
+版本列表将不会进行筛选。
+
+`ruby.compile` 对 Windows 没有影响，因为 Windows 会从
+[RubyInstaller2](https://rubyinstaller.org/) 安装 Ruby，而不是从 `jdx/ruby`
+或 ruby-build 安装。
 
 ### 预编译构建修订版
 
@@ -96,8 +109,11 @@ mise install --force ruby
 mise settings ruby.compile=true
 ```
 
-你也可以通过将 `ruby.precompiled_url` 设置为
-GitHub 仓库（例如 `owner/repo`）或完整的 URL 模板，来自定义预编译二进制文件的来源。
+若要要求使用预编译二进制文件且绝不进行编译，请参阅
+[仅使用预编译二进制文件](#precompiled-binaries-only)。
+
+你还可以通过将 `ruby.precompiled_url` 设置为 GitHub 仓库（例如 `owner/repo`）
+或完整的 URL 模板，使用自定义的预编译二进制文件来源。
 
 你还可以安装特定的 ruby 变体。要获取某个变体的最新版本，只需使用
 该变体前缀。
@@ -156,16 +172,16 @@ ruby = { version = "latest", install_env = { RUBY_CONFIGURE_OPTS = "--disable-in
 ## `.ruby-version` 和 `Gemfile` 支持
 
 mise 使用 `mise.toml` 或 `.tool-versions` 文件在不同软件版本之间自动切换。
-不过，它也可以读取 ruby 特定的版本文件 `.ruby-version` 或 `Gemfile`
-（如果其中指定了 ruby 版本）。
+不过，它也可以读取 Ruby 特定的版本文件 `.ruby-version` 或 `Gemfile`
+（如果其中指定了 Ruby 版本）。
 
-为当前版本的 ruby 创建一个 `.ruby-version` 文件：
+为当前版本的 Ruby 创建一个 `.ruby-version` 文件：
 
 ```sh
 ruby -v > .ruby-version
 ```
 
-为 ruby 启用惯用版本文件读取：
+为 Ruby 启用惯用版本文件读取：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools ruby

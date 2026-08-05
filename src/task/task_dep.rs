@@ -6,29 +6,40 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use crate::tera::{contains_template_syntax, render_str};
+use crate::tera::{TeraEngine, contains_template_syntax, render_str};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TaskDep {
     pub task: String,
     pub args: Vec<String>,
     pub env: IndexMap<String, String>,
+    pub optional: bool,
 }
 
 impl TaskDep {
     pub fn render(
         &mut self,
-        tera: &mut tera::Tera,
+        tera: &mut TeraEngine,
         tera_ctx: &tera::Context,
-    ) -> crate::Result<&mut Self> {
+    ) -> crate::Result<bool> {
         if contains_template_syntax(&self.task) {
             self.task = render_str(tera, &self.task, tera_ctx)?;
-        }
-        for a in &mut self.args {
-            if contains_template_syntax(a) {
-                *a = render_str(tera, a, tera_ctx)?;
+            if self.task.trim().is_empty() {
+                return Ok(false);
             }
         }
+        let mut rendered_args = Vec::with_capacity(self.args.len());
+        for a in &self.args {
+            if contains_template_syntax(a) {
+                let rendered = render_str(tera, a, tera_ctx)?;
+                if !rendered.is_empty() {
+                    rendered_args.push(rendered);
+                }
+            } else {
+                rendered_args.push(a.clone());
+            }
+        }
+        self.args = rendered_args;
         // Render env values through Tera
         for v in self.env.values_mut() {
             if contains_template_syntax(v) {
@@ -36,7 +47,7 @@ impl TaskDep {
             }
         }
         self.parse_shell_style_env()?;
-        Ok(self)
+        Ok(true)
     }
 
     pub fn parse_shell_style_env(&mut self) -> crate::Result<&mut Self> {
@@ -114,6 +125,7 @@ impl FromStr for TaskDep {
             task: s.to_string(),
             args: Default::default(),
             env: Default::default(),
+            optional: false,
         })
     }
 }
@@ -134,6 +146,7 @@ impl<'de> Deserialize<'de> for TaskDep {
                     task: v.to_string(),
                     args: Default::default(),
                     env: Default::default(),
+                    optional: false,
                 })
             }
 
@@ -149,6 +162,7 @@ impl<'de> Deserialize<'de> for TaskDep {
                     task: items[0].clone(),
                     args: items[1..].to_vec(),
                     env: Default::default(),
+                    optional: false,
                 })
             }
 
@@ -156,14 +170,19 @@ impl<'de> Deserialize<'de> for TaskDep {
                 let mut task: Option<String> = None;
                 let mut args: Vec<String> = Vec::new();
                 let mut env: IndexMap<String, String> = IndexMap::new();
+                let mut optional = false;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "task" => task = Some(map.next_value()?),
                         "args" => args = map.next_value()?,
                         "env" => env = map.next_value()?,
+                        "optional" => optional = map.next_value()?,
                         _ => {
-                            return Err(de::Error::unknown_field(&key, &["task", "args", "env"]));
+                            return Err(de::Error::unknown_field(
+                                &key,
+                                &["task", "args", "env", "optional"],
+                            ));
                         }
                     }
                 }
@@ -172,6 +191,7 @@ impl<'de> Deserialize<'de> for TaskDep {
                     task: task.ok_or_else(|| de::Error::missing_field("task"))?,
                     args,
                     env,
+                    optional,
                 })
             }
         }
@@ -182,14 +202,19 @@ impl<'de> Deserialize<'de> for TaskDep {
 
 impl Serialize for TaskDep {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if !self.env.is_empty() {
-            // Use object format when env is present
+        if !self.env.is_empty() || self.optional {
+            // Use object format when env or optional metadata is present
             let mut map = serializer.serialize_map(None)?;
             map.serialize_entry("task", &self.task)?;
             if !self.args.is_empty() {
                 map.serialize_entry("args", &self.args)?;
             }
-            map.serialize_entry("env", &self.env)?;
+            if !self.env.is_empty() {
+                map.serialize_entry("env", &self.env)?;
+            }
+            if self.optional {
+                map.serialize_entry("optional", &true)?;
+            }
             map.end()
         } else if self.args.is_empty() {
             serializer.serialize_str(&self.task)
@@ -224,6 +249,7 @@ mod tests {
             task: "task".to_string(),
             args: vec!["arg1".to_string(), "arg2".to_string()],
             env: Default::default(),
+            optional: false,
         };
         assert_eq!(td.to_string(), "task arg1 arg2");
 
@@ -234,6 +260,7 @@ mod tests {
             task: "task".to_string(),
             args: vec![],
             env,
+            optional: false,
         };
         assert_eq!(td.to_string(), "FOO=bar task");
     }
@@ -267,6 +294,20 @@ mod tests {
         assert_eq!(td.task, "mytask");
         assert_eq!(td.args, vec!["arg1"]);
         assert_eq!(td.env.get("FOO"), Some(&"bar".to_string()));
+        assert!(!td.optional);
+    }
+
+    #[test]
+    fn test_task_dep_optional_round_trip() {
+        let td: TaskDep = serde_json::from_str(r#"{"task":"missing:*","optional":true}"#).unwrap();
+        assert_eq!(td.task, "missing:*");
+        assert!(td.args.is_empty());
+        assert!(td.env.is_empty());
+        assert!(td.optional);
+        assert_eq!(
+            serde_json::to_string(&td).unwrap(),
+            r#"{"task":"missing:*","optional":true}"#
+        );
     }
 
     #[test]
@@ -288,6 +329,7 @@ mod tests {
             task: "mytask".to_string(),
             args: vec![],
             env,
+            optional: false,
         };
         let json = serde_json::to_string(&td).unwrap();
         assert!(json.contains(r#""task":"mytask""#));
@@ -298,7 +340,7 @@ mod tests {
     #[test]
     fn test_task_dep_render_shell_style_env() {
         let mut td: TaskDep = "FOO=bar mytask arg1".parse().unwrap();
-        let mut tera = tera::Tera::default();
+        let mut tera = TeraEngine::V2(Box::default());
         let ctx = tera::Context::new();
         td.render(&mut tera, &ctx).unwrap();
 
@@ -310,7 +352,7 @@ mod tests {
     #[test]
     fn test_task_dep_render_multiple_env() {
         let mut td: TaskDep = "FOO=bar BAZ=qux mytask".parse().unwrap();
-        let mut tera = tera::Tera::default();
+        let mut tera = TeraEngine::V2(Box::default());
         let ctx = tera::Context::new();
         td.render(&mut tera, &ctx).unwrap();
 
@@ -323,7 +365,7 @@ mod tests {
     #[test]
     fn test_task_dep_render_no_env() {
         let mut td: TaskDep = "mytask arg1 arg2".parse().unwrap();
-        let mut tera = tera::Tera::default();
+        let mut tera = TeraEngine::V2(Box::default());
         let ctx = tera::Context::new();
         td.render(&mut tera, &ctx).unwrap();
 
@@ -333,10 +375,85 @@ mod tests {
     }
 
     #[test]
+    fn test_task_dep_render_omits_empty_templated_args() {
+        let mut td = TaskDep {
+            task: "lint".to_string(),
+            args: vec![
+                "{% if usage.fix %}--fix{% endif %}".to_string(),
+                String::new(),
+            ],
+            env: Default::default(),
+            optional: false,
+        };
+        let mut tera = TeraEngine::V2(Box::default());
+        let mut ctx = tera::Context::new();
+        ctx.insert("usage", &serde_json::json!({ "fix": false }));
+        td.render(&mut tera, &ctx).unwrap();
+
+        assert_eq!(td.args, vec![""]);
+    }
+
+    #[test]
+    fn test_task_dep_render_keeps_non_empty_templated_args() {
+        let mut td = TaskDep {
+            task: "lint".to_string(),
+            args: vec!["{% if usage.fix %}--fix{% endif %}".to_string()],
+            env: Default::default(),
+            optional: false,
+        };
+        let mut tera = TeraEngine::V2(Box::default());
+        let mut ctx = tera::Context::new();
+        ctx.insert("usage", &serde_json::json!({ "fix": true }));
+        td.render(&mut tera, &ctx).unwrap();
+
+        assert_eq!(td.args, vec!["--fix"]);
+    }
+
+    #[test]
+    fn test_task_dep_render_skips_empty_templated_task() {
+        let mut td: TaskDep = "{% if false %}lint{% endif %}".parse().unwrap();
+        let mut tera = TeraEngine::V2(Box::default());
+        let ctx = tera::Context::new();
+
+        assert!(!td.render(&mut tera, &ctx).unwrap());
+        assert!(td.task.is_empty());
+    }
+
+    #[test]
+    fn test_task_dep_render_skips_whitespace_only_templated_task() {
+        let mut td: TaskDep = "\n{% if false %}lint{% endif %}\n".parse().unwrap();
+        let mut tera = TeraEngine::V2(Box::default());
+        let ctx = tera::Context::new();
+
+        assert!(!td.render(&mut tera, &ctx).unwrap());
+        assert_eq!(td.task, "\n\n");
+    }
+
+    #[test]
+    fn test_task_dep_render_keeps_non_empty_templated_task() {
+        let mut td: TaskDep = "{% if true %}lint{% endif %}".parse().unwrap();
+        let mut tera = TeraEngine::V2(Box::default());
+        let ctx = tera::Context::new();
+
+        assert!(td.render(&mut tera, &ctx).unwrap());
+        assert_eq!(td.task, "lint");
+    }
+
+    #[test]
+    fn test_task_dep_render_keeps_literal_empty_task() {
+        let mut td: TaskDep = "".parse().unwrap();
+        let mut tera = TeraEngine::V2(Box::default());
+        let ctx = tera::Context::new();
+
+        assert!(td.render(&mut tera, &ctx).unwrap());
+        assert!(td.task.is_empty());
+    }
+
+    #[test]
     fn test_task_dep_single_token_with_equals() {
         // Single token like "build=release" should be treated as task name, not env var
         let mut td: TaskDep = "build=release".parse().unwrap();
-        let mut tera = tera::Tera::default();
+        let mut tera = TeraEngine::V2(Box::default());
         let ctx = tera::Context::new();
         td.render(&mut tera, &ctx).unwrap();
 
@@ -349,7 +466,7 @@ mod tests {
     fn test_task_dep_only_env_vars_error() {
         // Only env vars without task name should error
         let mut td: TaskDep = "FOO=bar BAZ=qux".parse().unwrap();
-        let mut tera = tera::Tera::default();
+        let mut tera = TeraEngine::V2(Box::default());
         let ctx = tera::Context::new();
         let result = td.render(&mut tera, &ctx);
 

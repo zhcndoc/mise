@@ -1,5 +1,4 @@
 #![allow(unknown_lints)]
-#![allow(clippy::literal_string_with_formatting_args)]
 
 use std::{
     fmt::{Display, Formatter},
@@ -88,8 +87,11 @@ pub struct ProgressReport {
 
 impl ProgressReport {
     pub fn new(prefix: String) -> ProgressReport {
+        Self::new_with_pad(prefix, *LONGEST_PLUGIN_NAME)
+    }
+
+    pub fn new_with_pad(prefix: String, pad: usize) -> ProgressReport {
         ui::ctrlc::show_cursor_after_ctrl_c();
-        let pad = *LONGEST_PLUGIN_NAME;
         let formatted_prefix = normal_prefix(pad, &prefix);
 
         // Template: prefix + message + optional bytes/progress bar + spinner on right
@@ -176,10 +178,14 @@ pub struct VerboseReport {
 
 impl VerboseReport {
     pub fn new(prefix: String) -> VerboseReport {
+        Self::new_with_pad(prefix, *LONGEST_PLUGIN_NAME)
+    }
+
+    pub fn new_with_pad(prefix: String, pad: usize) -> VerboseReport {
         VerboseReport {
             prefix,
             prev_message: Mutex::new("".to_string()),
-            pad: *LONGEST_PLUGIN_NAME,
+            pad,
             total_operations: Mutex::new(None),
             current_operation: Mutex::new(0),
         }
@@ -188,7 +194,7 @@ impl VerboseReport {
 
 impl SingleReport for VerboseReport {
     fn println(&self, message: String) {
-        eprintln!("{message}");
+        safe_eprintln!("{message}");
     }
     fn set_message(&self, message: String) {
         let mut prev_message = self.prev_message.lock().unwrap();

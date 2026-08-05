@@ -86,7 +86,8 @@ mise 会使用已配置的默认内联 shell 执行此命令。目标主机名�
 mise 可以从 [`fj` CLI](https://codeberg.org/forgejo-contrib/forgejo-cli)（`keys.json`）中读取令牌作为后备方案。它会检查：
 
 1. `$XDG_DATA_HOME/forgejo-cli/keys.json`（默认为 `~/.local/share/forgejo-cli/keys.json`）
-2. `~/Library/Application Support/Cyborus.forgejo-cli/keys.json`（macOS）
+2. `~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json`（macOS）
+3. `~/Library/Application Support/Cyborus.forgejo-cli/keys.json`（旧版 macOS 位置）
 
 可通过以下方式禁用此后备方案：
 
@@ -343,14 +344,31 @@ no_app = true
 ### `bin_path`
 
 ::: v-pre
-指定压缩包解压后包含二进制文件的目录，或下载文件的放置位置。这支持使用 Tera 模板以及诸如 `{{ version }}`、`{{ os }}`、`{{ arch }}` 和架构别名（`{{ darwin_os }}`、`{{ amd64_arch }}`、`{{ x86_64_arch }}`、`{{ gnu_arch }}`）等变量：
+指定已解压归档中包含二进制文件的目录，或指定下载文件的存放位置。此选项支持使用 `{{ version }}` 以及 `{{ os() }}` / `{{ arch() }}` 函数进行 Tera 模板化：
 :::
 
 ```toml
 [tools."forgejo:user/repo"]
 version = "latest"
-bin_path = "tool-{{ version }}/bin" # expands to tool-1.0.0/bin
+bin_path = "tool-{{ version }}/bin" # 展开为 tool-1.0.0/bin
 ```
+
+两者都接受用于重新映射 mise 将输出的值的关键字参数（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），以便处理上游项目使用不同目录名称的情况：
+
+```toml
+[tools."forgejo:user/repo"]
+version = "latest"
+# 展开为 tool-1.0.0-linux-x86_64/bin
+bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/bin'
+```
+
+::: tip
+当模板包含双引号时，请像上面一样使用单引号括起来的 TOML 字符串。
+:::
+
+::: v-pre
+不存在单独的 `{{ os }}` / `{{ arch }}` 变量，也不存在 `{{ x86_64_arch }}` 形式的别名——要获取这些名称，应使用 `{{ arch(x64="x86_64", arm64="aarch64") }}`。
+:::
 
 **二进制路径查找顺序：**
 
@@ -363,11 +381,12 @@ bin_path = "tool-{{ version }}/bin" # expands to tool-1.0.0/bin
 
 ### `filter_bins`
 
-以逗号分隔的二进制文件列表，将其符号链接到一个经过过滤的 `.mise-bins` 目录中。当工具附带了你不想暴露在 PATH 上的额外二进制文件时，这很有用。
+列出要链接到经过筛选的 `.mise-bins` 目录中的二进制文件。当工具附带不希望暴露在 PATH 中的额外二进制文件时，这会很有用。
 
 ```toml
 [tools]
 "forgejo:user/repo" = { version = "latest", filter_bins = "tool" }
+"forgejo:user/other-repo" = { version = "latest", filter_bins = ["tool", "helper"] }
 ```
 
 启用后：

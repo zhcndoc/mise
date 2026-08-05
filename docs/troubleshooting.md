@@ -98,26 +98,34 @@ mise-versions 本身也会受到速率限制的影响，但你可以通过使用
 
 如果你在 `mise.toml` 层级结构中定义了很多工具，那么 `mise x` 可能会生成一个过长的 `Path` 环境变量，以至于某些工具无法处理，最典型的是 `cmd.exe`。这会影响调用 `cmd.exe` 的 `mise` 工具（例如 `npm install`）。
 
-你有几种选择：
+限制为 **8191 个字符**，而 `cmd.exe` 不会截断更长的 `Path`——它会[完全忽略该变量](https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/command-line-string-limitation)。因此，表现并不是某一个工具消失了：所有通过 `Path` 找到的内容会同时停止解析，并报告 `is not recognized`。`C:\Windows\System32` 中的程序仍然可以运行，因为 `cmd.exe` 无需查询 `Path` 就能找到它们——这正是该故障看起来毫无规律的原因，也说明了下面的测试为何重要。
+
+你有以下几种选择：
 
 1. 将 `MISE_INSTALLS_DIR` 环境变量设置为更短的路径，例如 `C:\.mise-installs`。
-1. 改用 `powershell.exe` 或 `pwsh.exe`，而不是 `cmd.exe`，因为它们可以处理更长的 `Path`。
-1. 重新组织 monorepo 中的 `mise.toml` 文件，只为它们指定所需的工具。
+1. 使用 `powershell.exe` 或 `pwsh.exe` 替代 `cmd.exe`，因为它们可以处理更长的 `Path`。
+1. 重新组织 monorepo 中的 `mise.toml` 文件，使其只指定所需的工具。
+1. [Shims](/dev-tools/shims.html) 可以防止你的** shell** 的 `Path` 随工具集增长——`mise activate --shims` 添加的是一个目录，而不是每个工具各添加一个目录。但请注意它无法解决的问题：通过 shim 运行工具时，仍然会构建一个包含所有活动工具目录的环境，因此，一个由 mise 管理且自身调用 `cmd.exe` 的工具（例如 `npm`）无论采用哪种方式，看到的都是同样过长的 `Path`。此外，Shims [不支持](/dev-tools/shims.html#shims-vs-path) `mise activate` 的全部功能。
 
 你可以运行以下命令来测试自己是否已经触发了 `cmd.exe` 的 `Path` 限制：
 
 ```powershell
 # Path 在限制范围内
-❯ mise x -- cmd.exe /d /s /c "where.exe where"
-C:\Windows\System32\where.exe
-# Path 超出了 cmd.exe 的限制
-❯ mise x -- cmd.exe /d /s /c "where.exe where"
-'where.exe' 不是内部或外部命令，也不是可运行的程序或批处理文件。
+❯ mise x -- cmd.exe /d /s /c "git --version"
+git version 2.55.0.windows.3
+# Path 超出 cmd.exe 限制
+❯ mise x -- cmd.exe /d /s /c "git --version"
+'git' is not recognized as an internal or external command,
+operable program or batch file.
 mise ERROR command failed: exit code 1
 mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
 ```
 
-### Shim 泄漏到 WSL 中
+关于该测试，有两点需要注意。请选择一个**不在** `C:\Windows\System32` 中、也不在运行测试所在目录中的程序：`cmd.exe` 会在查询 `Path` 之前搜索当前目录，并且完全无需查询 `Path` 就能找到系统目录中的程序，因此无论 `Path` 多长，在这两个位置进行探测都会成功。这正是 `where.exe` 无法告诉你任何信息的原因。然后，先确认所选程序可以正常运行（例如在 shell 中运行 `git --version`），因为一个你根本没有安装的程序也会产生与该限制相同的 `is not recognized` 错误。
+
+重复的 `Path` 条目不像过去那样影响明显：重新激活时，mise 现在会在添加当前工具集的目录之前，移除它在继承的 `Path` 中找到的过时安装目录（v2026.5.18）；从 v2026.7.18 起，它还会在计算环境（`mise x`、`mise run`、`mise env`、`mise doctor`）时合并完全重复的条目。这会减少 mise 添加的内容，但不会提高上限——足够多的不同工具仍然会达到 8191 个字符。
+
+### Shims 泄漏到 WSL
 
 当 `windows_shim_mode` 设置为 `file` 时，mise 会在每个 `<tool>.cmd` shim 旁边写入一个没有扩展名的 bash
 脚本（这样 Git Bash / Cygwin 就能解析该工具）。WSL 默认的 Windows-PATH 互操作会将 shims 目录暴露为
@@ -160,8 +168,13 @@ mise 会原样遵循一个**显式**指定的 bash 路径。如果你设置了 `
 `C:/msys64/usr/bin/bash.exe -c`，mise 会精确使用那个二进制文件——
 `MISE_BASH_PATH` 覆盖以及 Git Bash / MSYS2 的自动检测只在 shell 名称为裸的 `bash` 时才生效。
 
-如果你的 shell 路径包含空格（例如 `C:\Program Files\Git\bin\bash.exe`），请用双引号将程序包裹起来，这样空格就不会被当作参数分隔符。
-在 Windows 上，反斜杠会被按字面处理，因此不需要转义；正斜杠也可以：
+同样的解析规则（自动检测、使用 `MISE_BASH_PATH`，绝不使用 WSL 启动器）
+也适用于 mise 为获取
+[`[env] _.source`](/environments/#env-source) 脚本内容而启动的 bash。
+
+如果 shell 路径包含空格（例如 `C:\Program Files\Git\bin\bash.exe`），
+请将程序放在双引号中，以免空格被当作参数分隔符。
+在 Windows 上，反斜杠按字面意义处理，因此无需转义；正斜杠也同样可用：
 
 ```toml
 [tasks.build]
@@ -217,7 +230,7 @@ eval "$(mise hook-env)"
 python --version # 只有在显式调用 hook-env 之后才会工作
 ```
 
-有关更多信息，请参见 [What does `mise activate` do?](/faq#what-does-mise-activate-do)
+有关更多信息，请参见 [“mise activate” 的作用是什么？](/faq#what-does-mise-activate-do)。
 
 ## mise 是安全的吗？
 

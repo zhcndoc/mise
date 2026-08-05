@@ -4,12 +4,15 @@
 - **用法**: `mise oci run [FLAGS] [-- CMD]…`
 - **源代码**: [`src/cli/oci/run.rs`](https://github.com/jdx/mise/blob/main/src/cli/oci/run.rs)
 
-[experimental] 从当前 mise.toml 构建一个 OCI 镜像并在其中运行命令
+[实验性] 从当前 mise.toml 构建一个 OCI 镜像并在其中运行命令
 
-等同于先执行 `mise oci build`，再执行 `docker run` / `podman run`。
-构建好的镜像会加载到本地容器引擎中（优先使用 podman；docker 通过 skopeo 工作），并在其中执行给定命令，且继承 stdin/stdout/stderr。
+等同于依次执行 `mise oci build` 和 `docker run` / `podman run`。
+构建的镜像会被加载到本地容器引擎中（podman 原生拉取 OCI 布局；
+docker 则通过 `docker load` 接收），并在其中执行给定的命令，同时继承
+stdin/stdout/stderr。
 
-需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）以及以下之一：`podman`、`docker+skopeo`。
+需要设置 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`），并且
+需要以下程序之一：`podman`、`docker`。
 
 ## 参数
 
@@ -104,6 +107,6 @@ $ mise oci build -o ./img && mise oci run --image-dir ./img -- node -e 'console.
 引擎：
 
 ```
-优先使用 podman（可原生加载 OCI 布局）。回退到
-docker + skopeo。传入 --engine podman 或 --engine docker 可覆盖默认行为。
+优先使用 podman（原生加载 OCI 布局）。回退到 docker
+（通过 docker load 加载）。传入 --engine podman 或 --engine docker 可覆盖此设置。
 ```

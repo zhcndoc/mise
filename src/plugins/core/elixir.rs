@@ -44,7 +44,7 @@ impl ElixirPlugin {
         CmdLineRunner::new(self.elixir_bin(tv))
             .with_pr(ctx.pr.as_ref())
             .envs(self.dependency_env(&ctx.config).await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .arg("--version")
             .execute()
     }
@@ -169,10 +169,6 @@ impl Backend for ElixirPlugin {
             })
             .collect();
         Ok(versions)
-    }
-
-    async fn _idiomatic_filenames(&self) -> eyre::Result<Vec<String>> {
-        Ok(vec![".exenv-version".into()])
     }
 
     fn get_dependencies(&self) -> Result<Vec<&str>> {

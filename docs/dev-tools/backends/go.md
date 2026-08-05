@@ -28,9 +28,25 @@ $ hivemind --help
 Hivemind version 1.1.0
 ```
 
+你也可以固定特定的 Go 模块版本，包括尚未发布的
+伪版本：
+
+```toml
+[tools]
+"go:github.com/grafana/oats" = "v0.7.1-0.20260703092802-96201f1b8136"
+```
+
+如果你需要直接从 VCS 而不是模块代理解析尚未发布的修订版本，
+请将固定的版本与 [`install_env`](#install_env) 结合使用：
+
+```toml
+[tools]
+"go:github.com/grafana/oats" = { version = "v0.7.1-0.20260703092802-96201f1b8136", install_env = { GOPROXY = "direct", GONOSUMDB = "github.com/grafana/oats" } }
+```
+
 ## 工具选项
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `go` 后端——这些内容放在 `mise.toml` 的 `[tools]` 中。
+以下 [工具选项](/dev-tools/#tool-options) 适用于 `go` 后端——这些内容放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
 
@@ -49,4 +65,6 @@ Hivemind version 1.1.0
 ```toml
 [tools]
 "go:github.com/golang-migrate/migrate/v4/cmd/migrate" = { version = "latest", tags = "postgres" }
+# 等效的数组形式：
+# "go:github.com/golang-migrate/migrate/v4/cmd/migrate" = { version = "latest", tags = ["postgres", "mysql"] }
 ```

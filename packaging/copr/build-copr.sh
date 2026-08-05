@@ -186,7 +186,7 @@ Release:        1%{?dist}
 Summary:        Dev tools, env vars, and tasks in one CLI
 
 License:        MIT
-URL:            https://mise.en.dev
+URL:            https://mise.jdx.dev
 Source0:        https://github.com/jdx/mise/archive/v%{version}/mise-%{version}.tar.gz
 Source1:        mise-vendor-%{version}.tar.gz
 
@@ -195,6 +195,16 @@ BuildRequires:  cargo
 BuildRequires:  gcc
 BuildRequires:  git
 BuildRequires:  openssl-devel
+BuildRequires:  cmake
+# nasm is required by aws-lc-sys on x86_64 to compile ASM crypto routines.
+# Available in standard Fedora repos; on RHEL/EPEL it lives in CRB (not
+# enabled in COPR by default) so we use prebuilt NASM objects there instead
+# (see AWS_LC_SYS_PREBUILT_NASM in the %%build section).
+%if 0%{?fedora}
+%ifarch x86_64
+BuildRequires:  nasm
+%endif
+%endif
 
 %description
 mise prepares your development environment before each command runs. It installs
@@ -216,6 +226,27 @@ replace-with = "vendored-sources"
 [source.vendored-sources]
 directory = "vendor"
 CARGO_EOF
+
+# aws-lc-sys compiles and links its memcmp compiler probe in one command. It
+# intentionally ignores CFLAGS, but still applies Fedora's LDFLAGS, whose
+# hardened linker specs produce a PIE executable. Add the matching compiler
+# flag so the probe's object file is position-independent as well.
+%if 0%{?fedora}
+%ifarch x86_64
+export LDFLAGS="${LDFLAGS:-} -fPIE"
+%endif
+%endif
+
+# On RHEL/EPEL x86_64, nasm lives in CRB which is not enabled in COPR
+# chroots. Use prebuilt NASM objects bundled inside the aws-lc-sys crate
+# instead. This works at all Cargo profile/optimization levels including
+# release (unlike AWS_LC_SYS_NO_ASM which is debug-only and panics at
+# release profile).
+%if 0%{?rhel}
+%ifarch x86_64
+export AWS_LC_SYS_PREBUILT_NASM=1
+%endif
+%endif
 
 # Build with specified profile
 cargo build --profile __BUILD_PROFILE__ --frozen --bin mise

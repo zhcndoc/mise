@@ -3,6 +3,7 @@
 
 - **用法**: `mise ls [FLAGS] [INSTALLED_TOOL]…`
 - **别名**: `list`
+- **效果**: 只读
 - **源代码**: [`src/cli/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/ls.rs)
 
 列出已安装和已激活的工具版本
@@ -16,7 +17,7 @@
 
 ### `[INSTALLED_TOOL]…`
 
-仅显示来自 [TOOL] 的工具版本
+仅显示来自 [TOOL] 的工具版本。
 
 ## 标志
 

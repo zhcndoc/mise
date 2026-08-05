@@ -2,7 +2,8 @@
 # `mise bootstrap repos status`
 
 - **用法**: `mise bootstrap repos status [-J --json] [--missing]`
-- **源代码**: [`src/cli/bootstrap/repos/status.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/repos/status.rs)
+- **作用**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

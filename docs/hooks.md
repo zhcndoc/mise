@@ -1,7 +1,7 @@
-# Hooks
+# 钩子
 
-你可以让 mise 在 `mise activate` 会话期间自动执行脚本。除了 `preinstall` 和 `postinstall` 钩子之外，
-如果你的 shell 中没有安装 `mise activate` shell 钩子，就不能使用这些功能。
+你可以让 mise 在 `mise activate` 会话期间自动执行脚本。除了 `preinstall` 和 `postinstall` 钩子之外，  
+如果你的 shell 中没有安装 `mise activate` shell 钩子，就不能使用这些功能。  
 配置写入 `mise.toml`。
 
 ## CD 钩子
@@ -57,7 +57,7 @@ postinstall = { run = "echo '已安装'", shell = "bash -c" }
 postinstall = { run = "echo installed", run_windows = "Write-Output installed" }
 ```
 
-对于 `preinstall` 和 `postinstall`，`script = ...` 是 `run = ...` 的旧别名。如果在 `script`/`scripts` 钩子上也设置了 `shell`，mise 会警告该 shell 被忽略，并仍然使用默认的内联 shell 运行脚本。使用 `run = ...` 搭配 `shell = "bash -c"` 来选择内联 shell 命令。安装钩子的 `script` 别名已被弃用。
+对于 `preinstall` 和 `postinstall`，`script = ...` 和 `scripts = ...` 是 `run = ...` 的旧版别名。如果在 `script`/`scripts` 钩子上同时设置了 `shell`，mise 会发出警告，说明该 shell 设置会被忽略，并仍然使用默认的内联 shell 运行脚本。要选择内联 shell 命令，请使用带有 `shell = "bash -c"` 的 `run = ...`。安装钩子中的 `script` 和 `scripts` 别名已弃用。
 
 即使 `mise install` 没有发现任何需要安装的内容（所有已配置的工具都已存在），它仍然会运行 `postinstall` 钩子——在无操作安装时它不会被跳过。
 
@@ -86,7 +86,7 @@ python = { version = "3.12", postinstall = "pip install pipx" }
 - `MISE_TOOL_NAME`: 工具的简称（例如 "node"、"python"）
 - `MISE_TOOL_VERSION`: 已安装的版本（例如 "20.10.0"、"3.12.0"）
 - `MISE_TOOL_INSTALL_PATH`: 工具的安装路径
-- 来自该工具 `install_env` 选项中的变量
+- 来自该工具 `install_env` 选项中的变量。
 
 ## 任务 hooks
 
@@ -108,7 +108,7 @@ enter = { task = "setup" }
 enter = ["echo 'entering project'", { task = "setup" }]
 ```
 
-Task hooks 适用于所有 hook 类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
+任务 hooks 适用于所有 hook 类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
 
 ## 文件监视钩子
 
@@ -146,21 +146,21 @@ task = "sync-deps"
 
 - `MISE_WATCH_FILES_MODIFIED`：一个以冒号分隔的已修改文件列表。冒号使用反斜杠进行转义。
 
-## Hook 执行
+## 钩子执行
 
-Hooks 会在设置了以下环境变量的情况下执行：
+钩子会在设置了以下环境变量的情况下执行：
 
 - `MISE_ORIGINAL_CWD`：用户所在的目录。
 - `MISE_PROJECT_ROOT`：项目的根目录。
 - `MISE_PREVIOUS_DIR`：目录更改之前用户所在的目录（仅在发生目录更改时）。
-- `MISE_INSTALLED_TOOLS`：已安装工具的 JSON 数组（仅用于 `postinstall` hooks）。
+- `MISE_INSTALLED_TOOLS`：已安装工具的 JSON 数组（仅用于 `postinstall` 钩子）。
 
-内联 `run` hooks 可以针对任何 hook 类型写成 `{ run = "..." }`。字符串简写
+内联 `run` 钩子可以针对任何钩子类型写成 `{ run = "..." }`。字符串简写
 （`enter = "echo hi"`）等同于 `{ run = "echo hi" }`。
 
 `run` 和 `run_windows` 必须是字符串。`run = ["echo one", "echo two"]` 不受支持。
 
-要运行彼此独立启动的内联命令，请定义多个 hooks。每个 hook 条目都是一次单独的
+要运行彼此独立启动的内联命令，请定义多个钩子。每个钩子条目都是一次单独的
 执行，因此 mise 会为每个 `run` 条目启动一个子进程：
 
 ```toml
@@ -171,7 +171,7 @@ enter = [
 ]
 ```
 
-要在一个启动的命令中运行多行 shell 命令，请使用一个多行 `run` 字符串。这是一次 hook
+要在一个启动的命令中运行多行 shell 命令，请使用一个多行 `run` 字符串。这是一次钩子
 执行和一个子进程：
 
 ```toml
@@ -182,10 +182,10 @@ echo two
 """
 ```
 
-`run` hooks 会在子进程中使用默认的内联 shell 执行：
+`run` 钩子会在子进程中使用默认的内联 shell 执行：
 [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)
 或 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)。
-向 `run` hook 表添加 `shell = "bash -c"` 以选择不同的内联 shell 命令。与 task 的
+向 `run` 钩子表添加 `shell = "bash -c"` 以选择不同的内联 shell 命令。与任务的
 `shell` 类似，该值应同时包含程序以及用于求值内联命令的参数，
 例如 `bash -c`、`zsh -c` 或 `pwsh -Command`。
 
@@ -219,8 +219,9 @@ scripts = [
 带有 `shell` 的 `script` 用于当前 shell 钩子。这里的 `shell` 是一个 shell 名称选择器，例如
 `bash`、`zsh` 或 `fish`，而不是像 `bash -c` 这样的内联 shell 命令。只有当当前激活的 `mise activate` shell 匹配时，mise 才会打印该脚本。
 
-当钩子应作为子进程中的内联命令执行时，请使用 `run`。`preinstall` 和
-`postinstall` 没有当前 shell，因此 `script` 在那里仅作为 `run` 的旧别名保留；如果在这些钩子上设置了 `shell` 与 `script`/`scripts`，它会被忽略。
+当钩子应在子进程中作为内联命令执行时，请使用 `run`。`preinstall` 和
+`postinstall` 没有当前 shell，因此其中的 `script`/`scripts` 仅作为
+`run` 的旧版别名保留；如果在这些钩子中通过 `script`/`scripts` 设置了 `shell`，则该设置会被忽略。
 
 ::: warning
 我觉得这应该是不言自明的，但万一不是的话，这并不会像 `mise.toml` 中的 `[env]` 那样在你 _离开_ 目录时执行任何清理操作。你实际上只是

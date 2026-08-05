@@ -6,6 +6,7 @@ use crate::cache::{CacheManager, CacheManagerBuilder};
 use crate::cli::args::BackendArg;
 use crate::cmd::CmdLineRunner;
 use crate::config::{Config, Settings};
+use crate::duration::parse_into_timestamp;
 #[cfg(unix)]
 use crate::env;
 #[cfg(unix)]
@@ -20,7 +21,7 @@ use crate::toolset::{ToolRequest, ToolVersion, ToolVersionOptions, Toolset, Tool
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::progress_report::SingleReport;
 use async_trait::async_trait;
-use eyre::{Result, eyre};
+use eyre::{Result, bail, eyre};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use jiff::Timestamp;
@@ -29,7 +30,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
 use versions::Versioning;
@@ -55,8 +58,12 @@ impl<'a> PipxOptions<'a> {
         }
     }
 
-    fn extras(&self) -> Option<&'a str> {
-        self.values.str("extras")
+    fn extras(&self) -> Option<String> {
+        self.values.comma_joined("extras")
+    }
+
+    fn package_name(&self) -> Option<&'a str> {
+        self.values.str("package_name")
     }
 
     fn pipx_args(&self) -> Option<&'a str> {
@@ -73,7 +80,13 @@ impl<'a> PipxOptions<'a> {
 
     fn lockfile_options(&self) -> BTreeMap<String, String> {
         let mut result = BTreeMap::new();
+        if let Some(value) = self.extras() {
+            result.insert("extras".to_string(), value);
+        }
         for key in install_time_option_keys() {
+            if key == "extras" {
+                continue;
+            }
             if let Some(value) = self.values.raw().get_string(&key) {
                 result.insert(key, value);
             }
@@ -249,44 +262,111 @@ impl Backend for PIPXBackend {
         }
     }
 
+    async fn resolve_exact_version(
+        &self,
+        _config: &Arc<Config>,
+        version: &str,
+    ) -> eyre::Result<Option<String>> {
+        // Git-sourced tools resolve versions from repo tags, which cannot be
+        // validated from the version string alone.
+        if !matches!(
+            self.tool_name().parse::<PipxRequest>(),
+            Ok(PipxRequest::Pypi(_))
+        ) {
+            return Ok(None);
+        }
+        // Surface malformed registry configuration at resolve time like
+        // remote discovery would — installation only sees the derived index
+        // URL, which skips this validation.
+        Self::get_registry_url()?;
+        // PEP 440 allows non-semver versions (1.2.3.4, 1.2.3rc1, 1.2.3.post1)
+        // — those keep using remote discovery. A full semver request is
+        // exact; `pipx install pkg==version` / `uv tool install` fail when it
+        // does not exist upstream.
+        Ok(versions::SemVer::new(version).map(|_| version.to_string()))
+    }
+
     async fn install_version_(&self, ctx: &InstallContext, tv: ToolVersion) -> Result<ToolVersion> {
         let request_options = tv.request.options();
         let options = PipxOptions::new(&request_options);
 
         // Check if pipx is available (unless uvx is being used)
-        let uv_program = if Settings::get().pipx.uvx != Some(false) && !options.uvx_disabled() {
-            self.dependency_path_for_install(&ctx.config, Some(&ctx.ts), "uv")
+        //
+        // Asks for a *spawnable* uv, because this both picks the branch and supplies the
+        // program `uvx_cmd` hands to `CmdLineRunner`. A `uv.ps1` or a shebang-only `uv`
+        // satisfies the plain lookup, so mise would commit to the uv branch and then fail
+        // at process creation; treating it as absent falls through to pipx, which either
+        // works or reports the install instructions below. The branch only changes in the
+        // case where the branch it would have taken cannot run.
+        let uvx_allowed = Settings::get().pipx.uvx != Some(false) && !options.uvx_disabled();
+        let uv_program = if uvx_allowed {
+            self.spawnable_dependency(&ctx.config, Some(&ctx.ts), "uv")
                 .await
         } else {
             None
         };
 
         if uv_program.is_none() {
-            self.warn_if_dependency_missing(
-                &ctx.config,
-                "pipx",
-                &["pipx"],
-                "To use pipx packages with mise, you need to install pipx first:\n\
-                  mise use pipx@latest\n\n\
-                Alternatively, you can use uv/uvx by installing uv:\n\
-                  mise use uv@latest",
-            )
-            .await;
+            // Only offer uv as an alternative when this package can actually use it.
+            // Packages that set `uvx = false` (or a `pipx.uvx = false` setting) always go
+            // through pipx, so pointing at uv there just sends people down a dead end.
+            let instructions = if uvx_allowed {
+                "To use pipx packages with mise, you need to install pipx first:\n  \
+                   mise use pipx@latest\n\n\
+                 Alternatively, you can use uv/uvx by installing uv:\n  \
+                   mise use uv@latest"
+                    .to_string()
+            } else {
+                let reason = if options.uvx_disabled() {
+                    "this package sets `uvx = false`"
+                } else {
+                    "uvx is disabled by the `pipx.uvx` setting"
+                };
+                format!(
+                    "This package is installed with pipx because {reason}, so uv/uvx cannot be \
+                     used for it.\n\nInstall pipx first:\n  mise use pipx@latest"
+                )
+            };
+            self.warn_if_dependency_missing(&ctx.config, "pipx", &["pipx"], &instructions)
+                .await;
+
+            // Fail with the instructions above rather than letting `pipx install` die with a
+            // bare "No such file or directory (os error 2)". Skipped when a configured tool
+            // provides pipx, since mise installs that first — same rule as the warning.
+            //
+            // The gate asks `spawnable_dependency`, the same question `spawn_program` asks
+            // below, so it cannot pass on evidence the spawn will then reject. On Windows a
+            // `pipx.ps1` or a shebang-only `pipx.pyz` satisfies the plain lookup but cannot
+            // be launched, and it used to reach `pipx install` and die with
+            // "program not found" instead of these instructions.
+            let pipx_configured = match self.dependency_toolset(&ctx.config).await {
+                Ok(ts) => ts.versions.keys().any(|ba| ba.short == "pipx"),
+                Err(_) => false,
+            };
+            if !pipx_configured
+                && self
+                    .spawnable_dependency(&ctx.config, Some(&ctx.ts), "pipx")
+                    .await
+                    .is_none()
+            {
+                bail!(
+                    "pipx is required to install {} but was not found.\n\n{instructions}",
+                    self.ba()
+                );
+            }
         }
 
-        let pipx_request = self
-            .tool_name()
-            .parse::<PipxRequest>()?
-            .pipx_request(&tv.version, &options);
+        let request = self.tool_name().parse::<PipxRequest>()?;
 
         if let Some(uv_program) = uv_program {
+            let package_request = request.uvx_request(&tv.version, &options);
             self.warn_if_uv_may_not_support_exclude_newer(ctx).await;
             ctx.pr
-                .set_message(format!("uv tool install {pipx_request}"));
+                .set_message(format!("uv tool install {package_request}"));
             let mut cmd = Self::uvx_cmd(
                 &uv_program,
                 &ctx.config,
-                &["tool", "install", &pipx_request],
+                &["tool", "install", &package_request],
                 self,
                 &tv,
                 &ctx.ts,
@@ -325,10 +405,12 @@ impl Backend for PIPXBackend {
                 }
             }
 
-            ctx.pr.set_message(format!("pipx install {pipx_request}"));
+            let package_request = request.pipx_request(&tv.version, &options);
+            ctx.pr
+                .set_message(format!("pipx install {package_request}"));
             let mut cmd = Self::pipx_cmd(
                 &ctx.config,
-                &["install", &pipx_request],
+                &["install", &package_request],
                 self,
                 &tv,
                 &ctx.ts,
@@ -364,6 +446,7 @@ impl Backend for PIPXBackend {
 pub fn install_time_option_keys() -> Vec<String> {
     vec![
         "extras".into(),
+        "package_name".into(),
         "pipx_args".into(),
         "uvx_args".into(),
         "uvx".into(),
@@ -379,12 +462,28 @@ impl PIPXBackend {
             .filter(|(_, files)| files.iter().any(|f| !f.yanked))
             .sorted_by_cached_key(|(v, _)| Versioning::new(v))
             .map(|(version, files)| {
+                // Prefer the RFC3339 `upload_time_iso_8601` over the
+                // timezone-naive `upload_time`: the latter has no offset, so
+                // `parse_into_timestamp` parses it as a `civil::Date` and
+                // substitutes end-of-day UTC, dropping the real time-of-day
+                // and inflating `minimum_release_age` for same-day releases by
+                // up to ~24h. Custom indexes without the ISO field fall back to
+                // `upload_time` as before.
                 let created_at = files
                     .iter()
                     .filter(|f| !f.yanked)
-                    .filter_map(|f| f.upload_time.as_ref())
-                    .min()
-                    .cloned();
+                    .filter_map(|f| {
+                        f.upload_time_iso_8601
+                            .clone()
+                            .or_else(|| f.upload_time.clone())
+                    })
+                    // Pick the earliest upload as a parsed instant, not by
+                    // lexicographic string order: RFC3339 strings with
+                    // different offsets (`...00:00-05:00` vs `...04:00Z`) do
+                    // not sort chronologically, so a naive `.min()` on the raw
+                    // strings can select a later instant and over-gate.
+                    .min_by_key(|s| parse_into_timestamp(s).unwrap_or(Timestamp::MAX));
+
                 VersionInfo {
                     version,
                     created_at,
@@ -531,7 +630,7 @@ impl PIPXBackend {
         }
         cmd.with_pr(pr)
             .envs(ts.env_with_path_without_tools(config).await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .env("UV_TOOL_DIR", tv.install_path())
             .env("UV_TOOL_BIN_DIR", tv.install_path().join("bin"))
             .env("UV_INDEX", Self::get_index_url()?)
@@ -548,13 +647,17 @@ impl PIPXBackend {
         ts: &Toolset,
         pr: &'a dyn SingleReport,
     ) -> Result<CmdLineRunner<'a>> {
-        let mut cmd = CmdLineRunner::new("pipx");
+        // Resolved rather than a bare "pipx": on Windows std only appends `.exe`, so a
+        // pipx that exists only as `pipx.cmd` — how scoop and `pip install pipx` leave it —
+        // cleared mise's dependency check and then died at the spawn (discussion #5333).
+        // Same question the `bail!` gate in `install_version_` asks, so the two agree.
+        let mut cmd = CmdLineRunner::new(b.spawn_program(config, Some(ts), "pipx").await);
         for arg in args {
             cmd = cmd.arg(arg);
         }
         cmd.with_pr(pr)
             .envs(ts.env_with_path_without_tools(config).await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             // pipx 1.12+ auto-picks uv on PATH; this path passes pip-only --pip-args.
             .env("PIPX_DEFAULT_BACKEND", "pip")
             .env("PIP_INDEX_URL", Self::get_index_url()?)
@@ -576,7 +679,7 @@ impl PIPXBackend {
                 .await
         else {
             warn!(
-                "minimum_release_age is set for pipx:{} but could not determine uv version required to verify --exclude-newer support. Release-age filtering for transitive dependencies may not work as expected. See https://mise.en.dev/dev-tools/backends/pipx.html",
+                "minimum_release_age is set for pipx:{} but could not determine uv version required to verify --exclude-newer support. Release-age filtering for transitive dependencies may not work as expected. See https://mise.jdx.dev/dev-tools/backends/pipx.html",
                 self.tool_name(),
             );
             return;
@@ -584,7 +687,7 @@ impl PIPXBackend {
 
         if semver_is_older_than(&version, UV_EXCLUDE_NEWER_VERSION).unwrap_or(false) {
             warn!(
-                "minimum_release_age is set for pipx:{} but uv@{} is older than the documented minimum uv@{} required for --exclude-newer. Older versions may fail while processing the forwarded argument. See https://mise.en.dev/dev-tools/backends/pipx.html",
+                "minimum_release_age is set for pipx:{} but uv@{} is older than the documented minimum uv@{} required for --exclude-newer. Older versions may fail while processing the forwarded argument. See https://mise.jdx.dev/dev-tools/backends/pipx.html",
                 self.tool_name(),
                 version,
                 UV_EXCLUDE_NEWER_VERSION,
@@ -609,19 +712,54 @@ impl PipxRequest {
         }
     }
 
+    fn git_url(url: &str, v: &str) -> String {
+        if v == "latest" {
+            format!("git+{url}.git")
+        } else {
+            format!("git+{url}.git@{v}")
+        }
+    }
+
+    fn git_package_name<'a>(url: &'a str, opts: &PipxOptions<'a>) -> &'a str {
+        opts.package_name()
+            .unwrap_or_else(|| url.rsplit('/').next().unwrap_or(url))
+    }
+
+    fn uvx_request(&self, v: &str, opts: &PipxOptions<'_>) -> String {
+        let extras = self.extras_from_opts(opts);
+
+        match self {
+            PipxRequest::Git(url) => {
+                let git_url = Self::git_url(url, v);
+                if extras.is_empty() {
+                    git_url
+                } else {
+                    let package = Self::git_package_name(url, opts);
+                    format!("{package}{extras} @ {git_url}")
+                }
+            }
+            PipxRequest::Pypi(package) if v == "latest" => format!("{package}{extras}"),
+            PipxRequest::Pypi(package) => format!("{package}{extras}=={v}"),
+        }
+    }
+
     fn pipx_request(&self, v: &str, opts: &PipxOptions<'_>) -> String {
         let extras = self.extras_from_opts(opts);
 
-        if v == "latest" {
-            match self {
-                PipxRequest::Git(url) => format!("git+{url}.git"),
-                PipxRequest::Pypi(package) => format!("{package}{extras}"),
+        match self {
+            PipxRequest::Git(url) => {
+                let git_url = Self::git_url(url, v);
+                if extras.is_empty() {
+                    git_url
+                } else {
+                    // pipx ignored extras on PEP 508 URL requirements before 0.15.6.0.
+                    // Its VCS `egg` form works across the supported pipx version range.
+                    let package = Self::git_package_name(url, opts);
+                    format!("{git_url}#egg={package}{extras}")
+                }
             }
-        } else {
-            match self {
-                PipxRequest::Git(url) => format!("git+{url}.git@{v}"),
-                PipxRequest::Pypi(package) => format!("{package}{extras}=={v}"),
-            }
+            PipxRequest::Pypi(package) if v == "latest" => format!("{package}{extras}"),
+            PipxRequest::Pypi(package) => format!("{package}{extras}=={v}"),
         }
     }
 }
@@ -634,6 +772,7 @@ struct PypiPackage {
 #[derive(serde::Deserialize)]
 struct PypiRelease {
     upload_time: Option<String>,
+    upload_time_iso_8601: Option<String>,
     #[serde(default, deserialize_with = "deserialize_pypi_yanked")]
     yanked: bool,
 }
@@ -813,11 +952,167 @@ fn fix_venv_python_symlink(_install_path: &Path, _pkg_name: &str) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::{PIPXBackend, PypiPackage, PypiRelease, UV_EXCLUDE_NEWER_VERSION};
+    use super::{
+        PIPXBackend, PipxOptions, PipxRequest, PypiPackage, PypiRelease, UV_EXCLUDE_NEWER_VERSION,
+    };
     use crate::github::GithubRelease;
+    use crate::toolset::ToolVersionOptions;
     use indexmap::IndexMap;
     use pretty_assertions::assert_eq;
     use std::ffi::OsString;
+
+    #[tokio::test]
+    async fn exact_semver_versions_resolve_without_remote_discovery() {
+        use crate::backend::Backend;
+        let config = crate::config::Config::get().await.unwrap();
+        let backend = PIPXBackend::from_arg("pipx:black".into());
+
+        assert_eq!(
+            backend
+                .resolve_exact_version(&config, "24.3.0")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("24.3.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn non_semver_versions_require_remote_discovery() {
+        use crate::backend::Backend;
+        let config = crate::config::Config::get().await.unwrap();
+        let backend = PIPXBackend::from_arg("pipx:black".into());
+
+        // PEP 440 versions that are not semver must keep resolving against
+        // the remote version list.
+        for version in ["latest", "24", "24.3", "1.2.3.4", "1.2.3rc1", "1.2.3.post1"] {
+            assert_eq!(
+                backend
+                    .resolve_exact_version(&config, version)
+                    .await
+                    .unwrap(),
+                None,
+                "{version} should use remote discovery"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn git_tools_keep_remote_discovery() {
+        use crate::backend::Backend;
+        let config = crate::config::Config::get().await.unwrap();
+
+        for tool in [
+            "pipx:psf/black",
+            "pipx:git+https://github.com/psf/black.git",
+        ] {
+            let backend = PIPXBackend::from_arg(tool.into());
+            assert_eq!(
+                backend
+                    .resolve_exact_version(&config, "24.3.0")
+                    .await
+                    .unwrap(),
+                None,
+                "{tool} should use remote discovery"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extras_accepts_string_or_array() {
+        let mut string_opts = ToolVersionOptions::default();
+        string_opts.opts.insert(
+            "extras".to_string(),
+            toml::Value::String("postgres,s3".to_string()),
+        );
+        assert_eq!(
+            PipxOptions::new(&string_opts).extras().as_deref(),
+            Some("postgres,s3")
+        );
+        assert_eq!(
+            PipxOptions::new(&string_opts)
+                .lockfile_options()
+                .get("extras"),
+            Some(&"postgres,s3".to_string())
+        );
+
+        let mut array_opts = ToolVersionOptions::default();
+        array_opts.opts.insert(
+            "extras".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("postgres".to_string()),
+                toml::Value::Integer(1),
+                toml::Value::String("s3".to_string()),
+            ]),
+        );
+        assert_eq!(
+            PipxOptions::new(&array_opts).extras().as_deref(),
+            Some("postgres,s3")
+        );
+        assert_eq!(
+            PipxRequest::Pypi("harlequin".to_string())
+                .pipx_request("latest", &PipxOptions::new(&array_opts)),
+            "harlequin[postgres,s3]"
+        );
+        assert_eq!(
+            PipxOptions::new(&array_opts)
+                .lockfile_options()
+                .get("extras"),
+            Some(&"postgres,s3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_git_extras_use_frontend_compatible_requests() {
+        let mut inferred_opts = ToolVersionOptions::default();
+        inferred_opts.opts.insert(
+            "extras".to_string(),
+            toml::Value::Array(vec![toml::Value::String("jupyter".to_string())]),
+        );
+        let inferred_opts = PipxOptions::new(&inferred_opts);
+        let inferred_request = PipxRequest::Git("https://github.com/psf/black".to_string());
+        assert_eq!(
+            inferred_request.uvx_request("latest", &inferred_opts),
+            "black[jupyter] @ git+https://github.com/psf/black.git"
+        );
+        assert_eq!(
+            inferred_request.pipx_request("latest", &inferred_opts),
+            "git+https://github.com/psf/black.git#egg=black[jupyter]"
+        );
+
+        let mut named_opts = ToolVersionOptions::default();
+        named_opts.opts.insert(
+            "extras".to_string(),
+            toml::Value::Array(vec![toml::Value::String("jupyter".to_string())]),
+        );
+        named_opts.opts.insert(
+            "package_name".to_string(),
+            toml::Value::String("black".to_string()),
+        );
+        let named_opts = PipxOptions::new(&named_opts);
+        let request = PipxRequest::Git("https://github.com/psf/black-repository".to_string());
+
+        assert_eq!(
+            request.uvx_request("latest", &named_opts),
+            "black[jupyter] @ git+https://github.com/psf/black-repository.git"
+        );
+        assert_eq!(
+            request.uvx_request("24.3.0", &named_opts),
+            "black[jupyter] @ git+https://github.com/psf/black-repository.git@24.3.0"
+        );
+        assert_eq!(
+            request.pipx_request("latest", &named_opts),
+            "git+https://github.com/psf/black-repository.git#egg=black[jupyter]"
+        );
+        assert_eq!(
+            request.pipx_request("24.3.0", &named_opts),
+            "git+https://github.com/psf/black-repository.git@24.3.0#egg=black[jupyter]"
+        );
+        assert_eq!(
+            named_opts.lockfile_options().get("package_name"),
+            Some(&"black".to_string())
+        );
+    }
 
     #[test]
     fn test_versions_from_pypi_package_skips_yanked_releases() {
@@ -848,6 +1143,75 @@ mod tests {
                 ("1.0.0", Some("2024-01-01T00:00:00Z")),
                 ("1.2.0", Some("2024-03-01T00:01:00Z")),
             ]
+        );
+    }
+
+    #[test]
+    fn test_versions_from_pypi_package_preserves_time_of_day_from_iso_field() {
+        // PyPI's JSON carries both a naive `upload_time` (no offset) and an
+        // RFC3339 `upload_time_iso_8601`. Preferring the ISO field keeps the
+        // real upload instant; the naive field would parse as a `civil::Date`
+        // and collapse to end-of-day UTC, inflating `minimum_release_age`.
+        fn release(iso: Option<&str>, naive: Option<&str>) -> PypiRelease {
+            PypiRelease {
+                upload_time: naive.map(str::to_string),
+                upload_time_iso_8601: iso.map(str::to_string),
+                yanked: false,
+            }
+        }
+
+        let versions = PIPXBackend::versions_from_pypi_package(pypi_package(vec![
+            // Both fields present: the precise midday instant wins.
+            (
+                "1.0.0",
+                vec![release(
+                    Some("2024-01-02T10:05:14.723989Z"),
+                    Some("2024-01-02T10:05:14"),
+                )],
+            ),
+            // Index without the ISO field: naive fallback still yields a
+            // timestamp (here end-of-day UTC), so release-age gating degrades
+            // gracefully rather than disappearing.
+            ("1.1.0", vec![release(None, Some("2024-01-03"))]),
+        ]));
+
+        let parsed: Vec<_> = versions
+            .iter()
+            .map(|v| v.created_at_timestamp().map(|t| t.to_string()))
+            .collect();
+        // ISO field: real upload instant, not 2024-01-02T23:59:59Z.
+        assert_eq!(parsed[0].as_deref(), Some("2024-01-02T10:05:14.723989Z"));
+        // Naive-only fallback: parses as a date, end-of-day UTC.
+        assert_eq!(parsed[1].as_deref(), Some("2024-01-03T23:59:59Z"));
+    }
+
+    #[test]
+    fn test_versions_from_pypi_package_picks_earliest_instant_not_lexical_min() {
+        // A custom index may return RFC3339 timestamps with differing offsets.
+        // These two are the same instant, but lexicographic order and
+        // chronological UTC order diverge for different-offset strings, so the
+        // earliest upload must be selected by parsed instant.
+        //
+        //   "2024-01-02T00:00:00-05:00"  ==  2024-01-02T05:00:00Z
+        //   "2024-01-02T04:30:00Z"            2024-01-02T04:30:00Z  (earlier)
+        //
+        // Lexical min is the first ("-05:00" string sorts before "Z"), but the
+        // second is 30 min earlier in UTC and must win.
+        let release = |iso: &str| PypiRelease {
+            upload_time: None,
+            upload_time_iso_8601: Some(iso.to_string()),
+            yanked: false,
+        };
+        let versions = PIPXBackend::versions_from_pypi_package(pypi_package(vec![(
+            "1.0.0",
+            vec![
+                release("2024-01-02T00:00:00-05:00"),
+                release("2024-01-02T04:30:00Z"),
+            ],
+        )]));
+        assert_eq!(
+            versions[0].created_at.as_deref(),
+            Some("2024-01-02T04:30:00Z"),
         );
     }
 
@@ -1012,6 +1376,7 @@ mod tests {
     fn pypi_release(upload_time: Option<&str>, yanked: bool) -> PypiRelease {
         PypiRelease {
             upload_time: upload_time.map(str::to_string),
+            upload_time_iso_8601: upload_time.map(str::to_string),
             yanked,
         }
     }

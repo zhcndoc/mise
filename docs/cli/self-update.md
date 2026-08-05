@@ -2,6 +2,7 @@
 # `mise self-update`
 
 - **用法**: `mise self-update [FLAGS] [VERSION]`
+- **影响**: 修改状态
 - **源代码**: [`src/cli/self_update.rs`](https://github.com/jdx/mise/blob/main/src/cli/self_update.rs)
 
 更新 mise 本身。
@@ -10,7 +11,8 @@
 默认情况下，这也会更新任何已安装的插件。
 对经过身份验证的请求使用 mise 的 GitHub 令牌解析链。
 
-如果 mise 是通过包管理器安装的，则此命令不可用。
+打包维护者可以禁用此命令，以便通过包管理器更新 mise。请参阅
+<https://mise.jdx.dev/contributing.html#packaging-and-self-update-instructions>。
 
 ## 参数
 
@@ -30,4 +32,4 @@
 
 ### `--no-plugins`
 
-禁用自动更新插件
+禁用自动更新插件。

@@ -2,12 +2,13 @@
 # `mise shell-alias set`
 
 - **用法**: `mise shell-alias set <shell_alias> [COMMAND]`
-- **别名**: `add`, `create`
+- **别名**: `add`、`create`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/shell_alias/set.rs`](https://github.com/jdx/mise/blob/main/src/cli/shell_alias/set.rs)
 
 添加/更新一个 shell 别名
 
-这会修改 ~/.config/mise/config.toml 的内容
+这会修改 ~/.config/mise/config.toml 的内容。
 
 ## 参数
 

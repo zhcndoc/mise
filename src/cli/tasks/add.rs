@@ -8,7 +8,7 @@ use toml_edit::Item;
 /// Create a new task
 ///
 /// Adds a task to the local mise.toml file.
-/// See https://mise.en.dev/configuration.html#target-file-for-write-operations
+/// See https://mise.jdx.dev/configuration.html#target-file-for-write-operations
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
 pub struct TasksAdd {
@@ -74,7 +74,7 @@ impl TasksAdd {
     pub async fn run(self) -> Result<()> {
         if self.file {
             let mut path = Task::task_dir()
-                .await
+                .await?
                 .join(self.task.replace(':', MAIN_SEPARATOR_STR));
             if path.is_dir() {
                 path = path.join("_default");
@@ -212,6 +212,9 @@ impl TasksAdd {
             }
             if !self.run.is_empty() {
                 task.insert("run", shell_words::join(&self.run).into());
+            }
+            if let Some(run_windows) = &self.run_windows {
+                task.insert("run_windows", run_windows.clone().into());
             }
             tasks.insert(&self.task, Item::Table(task));
             file::write(&path, doc.to_string())?;

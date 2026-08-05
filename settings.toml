@@ -126,14 +126,17 @@ env = "MISE_AQUA_MINISIGN"
 type = "Bool"
 
 [aqua.registries]
-description = "Aqua registry repositories to fetch before the baked-in registry."
+description = "Aqua registry sources to load before the baked-in registry."
 docs = """
-Aqua registry repositories to fetch before the baked-in registry. mise downloads `registry.yaml`
-from each repository root and falls back to `registry.yml` if needed.
+Aqua registry sources to load before the baked-in registry. Each source can be a repository URL, a
+direct URL to a `registry.yaml` or `registry.yml` file, or an absolute `file://` URL to a local
+registry directory or file. For repository and directory sources, mise loads `registry.yaml` from
+the source root and falls back to `registry.yml` if needed.
 
 Downloaded registries are cached according to `aqua.registry_cache_ttl`, which defaults to one
 week. To refresh sooner, run `mise cache clear`, set `aqua.registry_cache_ttl = "0s"`, or change
-`MISE_CACHE_DIR` to use a different cache location.
+`MISE_CACHE_DIR` to use a different cache location. Local `file://` sources bypass the downloaded
+source cache, so changes are read the next time the registry is loaded.
 
 If this is set, mise checks the configured registries in order. When `aqua.baked_registry` is
 enabled, the baked-in aqua registry remains a fallback for packages missing from all configured
@@ -279,9 +282,12 @@ When `cargo-binstall` installs a prebuilt binary, Cargo build settings and `carg
 behavior do not affect the downloaded artifact. Set `cargo.binstall = false` to force
 `cargo install` when you need Cargo settings to control the install.
 
-When mise invokes `cargo-binstall`, `cargo-binstall` handles its own fallback order, including
-its final fallback to compiling with `cargo install`. mise does not retry with a separate
-`cargo install` command if `cargo-binstall` exits with an error.
+When mise invokes external `cargo-binstall`, it disables cargo-binstall's `compile` strategy.
+If cargo-binstall reports that no prebuilt artifact is available (exit code 94), mise runs
+`cargo install` itself. Other cargo-binstall errors do not trigger this fallback. When
+`cargo.binstall_only = true`, Cargo tools without an explicit Git source must be installed by cargo-binstall:
+mise does not fall back to `cargo install`, and options that require `cargo install` produce an
+error. Explicit Git sources are unaffected because they always use `cargo install --git`.
 
 You can install it with mise:
 
@@ -292,10 +298,54 @@ mise use -g cargo-binstall
 env = "MISE_CARGO_BINSTALL"
 type = "Bool"
 
+[cargo.binstall_native]
+description = "Use mise's native cargo binary installer when cargo-binstall is unavailable."
+docs = """
+Controls mise's native cargo binary installer, which downloads precompiled binaries using
+conventional GitHub release artifact names from the crate's linked repository or
+`package.metadata.binstall` from its `Cargo.toml` when `cargo-binstall` is not installed.
+
+- If `true`: Try mise's native cargo binary installer first, fall back to `cargo install` if unavailable.
+- If `false`: Do not use mise's native cargo binary installer.
+- If unset: Native installs are disabled for now. Starting in mise `2027.1.0`, mise will warn when
+  a cargo package could have been installed from a native binary artifact. In mise `2027.7.0`, unset
+  will default to native binary installs and this setting will become a two-way switch.
+
+Set `cargo.binstall = false` to force `cargo install` instead of either `cargo-binstall` or mise's
+native cargo binary installer.
+
+This is a best-effort fast path. If neither compatible metadata nor a conventionally named GitHub
+release artifact is available, or the install uses Cargo build options that would change the
+resulting binary, mise falls back to `cargo install`.
+"""
+env = "MISE_CARGO_BINSTALL_NATIVE"
+optional = true
+type = "Bool"
+
 [cargo.binstall_only]
 default = false
-description = "Only use cargo-binstall for installation, fail if not available."
+description = "Require cargo-binstall for Cargo tools without an explicit Git source. Fail if no prebuilt binary is available or if tool options require cargo install."
 env = "MISE_CARGO_BINSTALL_ONLY"
+type = "Bool"
+
+[cargo.binstall_quickinstall]
+default = false
+description = "Allow cargo-binstall to use third-party cargo-quickinstall artifacts."
+docs = """
+If true, mise allows the external `cargo-binstall` binary to use artifacts from
+the third-party [cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) host. These
+artifacts are separate from crate-author GitHub releases and artifacts declared in
+`package.metadata.binstall`.
+
+By default, mise passes `--disable-strategies compile,quick-install` when invoking the external
+`cargo-binstall` binary. The `compile` strategy is always disabled; setting this to `true` changes
+the flag to `--disable-strategies compile`. This setting does not affect mise's
+`cargo.binstall_native` path, which does not use quickinstall.
+
+This only controls external `cargo-binstall`'s quick-install strategy. To disable binstall, set
+`cargo.binstall = false`.
+"""
+env = "MISE_CARGO_BINSTALL_QUICKINSTALL"
 type = "Bool"
 
 [cargo.registry_name]
@@ -697,6 +747,11 @@ type = "Duration"
 aliases = ["fetch_remote_version_timeout"]
 default = "20s"
 description = "Timeout in seconds for HTTP requests to fetch new tool versions in mise."
+docs = """
+Fast commands using `prefer_offline` cap this timeout at 3 seconds so shims and
+shell activation do not block for a long time when cached data is insufficient
+and the network is unavailable.
+"""
 env = "MISE_FETCH_REMOTE_VERSIONS_TIMEOUT"
 type = "Duration"
 
@@ -725,7 +780,8 @@ description = "Read Forgejo tokens from the fj CLI config."
 docs = """
 When enabled, mise will read tokens from the fj CLI keys file
 (`~/.local/share/forgejo-cli/keys.json` on Linux,
-`~/Library/Application Support/Cyborus.forgejo-cli/keys.json` on macOS).
+`~/Library/Application Support/forgejo-cli.forgejo-cli/keys.json` on macOS,
+with the legacy `Cyborus.forgejo-cli` location as a fallback).
 This is used as a fallback when no `FORGEJO_TOKEN` or `MISE_FORGEJO_TOKEN`
 environment variable is set.
 
@@ -1088,7 +1144,7 @@ optional = true
 type = "Bool"
 
 [gpg_verify]
-description = "Use gpg to verify all tool signatures."
+description = "Verify OpenPGP signatures for all tools (built-in, no external gpg required). Set to false to disable."
 env = "MISE_GPG_VERIFY"
 optional = true
 type = "Bool"
@@ -1129,6 +1185,20 @@ This setting is useful when:
 env = "MISE_HOOK_ENV_CHPWD_ONLY"
 type = "Bool"
 
+[http_download_timeout]
+default = "30m"
+description = "Total time allowed for an HTTP download, including retries."
+docs = """
+Limits the complete wall-clock time for downloading one artifact, including
+all retry attempts and backoff delays. This is separate from `http_timeout`,
+which detects stalled connections by timing out individual reads.
+
+When this budget is exhausted, mise reports the URL, active attempt, bytes
+received during that attempt, and this setting name.
+"""
+env = "MISE_HTTP_DOWNLOAD_TIMEOUT"
+type = "Duration"
+
 [http_retries]
 default = 3
 description = "Number of retries for transient HTTP failures in mise."
@@ -1141,6 +1211,10 @@ treated as permanent and not retried.
 Backoff schedule with jitter: ~200ms / ~1s / ~4s / ~15s. Set to 0 to disable
 retries entirely.
 
+Retries are automatically disabled for fast commands using `prefer_offline`,
+including shims and shell activation. These paths make one network attempt when
+cached data is insufficient, then fail or fall back immediately.
+
 When a retry rescues a request, a warning is logged with the original error so
 flaky infrastructure doesn't silently mask itself.
 """
@@ -1149,7 +1223,12 @@ type = "Integer"
 
 [http_timeout]
 default = "30s"
-description = "Timeout in seconds for all HTTP requests in mise."
+description = "Timeout for connecting or waiting between reads during HTTP requests."
+docs = """
+This timeout applies to the connection phase and to each individual response
+read. The read timer resets whenever data is received, so long-running artifact
+downloads are bounded separately by `http_download_timeout`.
+"""
 env = "MISE_HTTP_TIMEOUT"
 type = "Duration"
 
@@ -1168,6 +1247,23 @@ env = "MISE_IDIOMATIC_VERSION_FILE"
 hide = true
 optional = true
 type = "Bool"
+
+[idiomatic_version_file_disable_files]
+default = []
+description = "Specific idiomatic version files to disable for a tool."
+docs = """
+Use `tool:filename` pairs to exclude individual idiomatic version files without disabling
+other files for the tool or other tools that read the same file.
+
+For example, this keeps `.nvmrc` enabled for node while preventing node from reading
+`devEngines.runtime` in `package.json`:
+
+    mise settings add idiomatic_version_file_disable_files node:package.json
+"""
+env = "MISE_IDIOMATIC_VERSION_FILE_DISABLE_FILES"
+parse_env = "set_by_comma"
+rust_type = "BTreeSet<String>"
+type = "SetString"
 
 [idiomatic_version_file_disable_tools]
 default = []
@@ -1587,7 +1683,7 @@ optional = true
 type = "String"
 
 [node.gpg_verify]
-description = "Use gpg to verify node tool signatures."
+description = "Verify OpenPGP signatures for node (built-in, no external gpg required). Set to false to disable."
 env = "MISE_NODE_GPG_VERIFY"
 optional = true
 type = "Bool"
@@ -1693,14 +1789,39 @@ default = "auto"
 description = "Package manager to use for installing npm packages."
 docs = """
 Package manager to use for installing npm packages. The default, `auto`, uses
-`aube` when it is installed and falls back to `npm`, similar to how the pipx
-backend uses `uv` when available. Set this to `npm`, `aube`, `bun`, or `pnpm`
-to force a specific package manager.
+mise's embedded `aube` package manager. Set this to `aube_cli` to invoke a
+standalone aube executable, or to `npm`, `bun`, or `pnpm` to invoke that
+package manager instead.
 """
-enum = ["auto", "npm", "aube", "bun", "pnpm"]
+enum = ["auto", "npm", "aube", "aube_cli", "bun", "pnpm"]
 env = "MISE_NPM_PACKAGE_MANAGER"
 rust_type = "NpmPackageManager"
 type = "String"
+
+[npm.shell_out]
+default = false
+description = "Shell out to the npm CLI for `npm:` version metadata and installs instead of mise's built-in aube-based implementation."
+docs = """
+By default, mise handles `npm:` tools without needing node/npm installed:
+version metadata (`mise ls-remote`, `latest` resolution) is queried directly
+from the npm registry over HTTP, and packages are installed with mise's
+embedded [aube](https://github.com/jdx/aube) package manager. Both honor the
+registry, scoped registries, and auth tokens configured in `~/.npmrc` and
+`NPM_CONFIG_*` environment variables.
+
+Enable this setting to shell out to the npm CLI instead — `npm view` for
+metadata and `npm install -g` for installs. Use it if your setup relies on
+npm-specific configuration the built-in implementation does not support (such
+as `cafile`, client certificates, or an auth token helper). When enabled, npm
+must be installed.
+
+This applies to the default/`auto` package manager. Explicitly selecting a
+package manager with [`npm.package_manager`](#npm-package-manager) (`aube_cli`,
+`bun`, `pnpm`, or `npm`) always shells out to that tool regardless of this
+setting.
+"""
+env = "MISE_NPM_SHELL_OUT"
+type = "Bool"
 
 [oci.default_from]
 default = "debian:bookworm-slim"
@@ -1730,6 +1851,25 @@ Defaults to `/mise`. The resulting image sets `MISE_DATA_DIR` to this path.
 """
 env = "MISE_OCI_DEFAULT_MOUNT_POINT"
 type = "String"
+
+[oci.insecure_registries]
+description = "Registries (host or host:port) contacted over plain HTTP instead of HTTPS."
+docs = """
+Registries that `mise oci push` / `mise oci build --from` contact over plain
+HTTP instead of HTTPS, matching docker's `insecure-registries` daemon option.
+Loopback registries (`localhost:5000`, `127.0.0.1:5000`) are always treated as
+insecure and don't need to be listed. Entries match on exact `host` or
+`host:port`:
+
+```toml
+[settings.oci]
+insecure_registries = ["registry.lan:5000", "10.0.0.8:5000"]
+```
+"""
+env = "MISE_OCI_INSECURE_REGISTRIES"
+optional = true
+rust_type = "Vec<String>"
+type = "ListString"
 
 [offline]
 description = "Disable all HTTP requests. Tools will only use locally cached data."
@@ -2029,6 +2169,34 @@ description = "Connect stdin/stdout/stderr to child processes."
 env = "MISE_RAW"
 type = "Bool"
 
+[registry_cache_ttl]
+default_docs = "1h"
+description = "How long to cache the floating mise registry."
+docs = """
+How long the downloaded mise registry remains fresh when [`registry_floating`](#registry_floating)
+is enabled. Set to `0s` to check for registry updates every time.
+"""
+env = "MISE_REGISTRY_CACHE_TTL"
+optional = true
+type = "Duration"
+
+[registry_floating]
+default = false
+description = "Fetch the latest released mise registry and current aqua registry instead of using only the snapshots baked into this mise release."
+docs = """
+Fetch the latest released official mise registry and the current aqua registry, with the snapshots
+baked into this mise release used as a fallback when a remote registry cannot be loaded.
+
+This is disabled by default because each mise release is tested with its bundled registry snapshots.
+It can be useful on distributions whose mise package updates lag behind registry changes.
+
+The downloaded mise registry is refreshed only for commands that allow network access and is cached
+according to [`registry_cache_ttl`](#registry_cache_ttl). Fast and offline commands never refresh it.
+The downloaded aqua registry uses [`aqua.registry_cache_ttl`](#aqua-registry_cache_ttl).
+"""
+env = "MISE_REGISTRY_FLOATING"
+type = "Bool"
+
 [ruby.apply_patches]
 description = "A list of patch files or URLs to apply to ruby source."
 env = "MISE_RUBY_APPLY_PATCHES"
@@ -2036,13 +2204,17 @@ optional = true
 type = "String"
 
 [ruby.compile]
-description = "Set to true to compile ruby from source, false to use precompiled binaries."
+description = "If true, compile ruby from source. If false, require precompiled binaries. If not set, use precompiled binaries if available."
 docs = """
 Controls whether Ruby is compiled from source or downloaded as precompiled binaries.
 
-- If `false`: Try precompiled binaries first, fall back to compiling if unavailable
+- If `false`: Only use precompiled binaries. Installs error out instead of falling back to
+  ruby-build, and version listings only include versions that have a precompiled binary for
+  the current platform.
 - If `true`: Always compile from source using ruby-build
-- If unset: Defaults to compiling from source (will change to precompiled in 2026.8.0). Note: if `experimental = true`, precompiled binaries are used when unset.
+- If unset: Try precompiled binaries first, fall back to compiling if unavailable
+
+This setting has no effect on Windows, which installs Ruby from RubyInstaller2.
 """
 env = "MISE_RUBY_COMPILE"
 optional = true
@@ -2155,6 +2327,70 @@ env = "MISE_RUSTUP_HOME"
 optional = true
 type = "Path"
 
+[safe]
+default = false
+description = "Prevent project configuration from executing code during config loading and version resolution."
+docs = """
+Safe mode is a hard boundary against repo-controlled code execution, designed for
+running mise against untrusted project configuration — for example a bot that
+updates `mise.lock` on pull request branches (`mise lock --bump`), or CI jobs that
+resolve tool versions from configs the operator did not author.
+
+When enabled, mise refuses (with an error, never a silent fallback) to:
+
+- run `exec()` or `read_file()` in config templates
+- run hooks
+- run tasks
+- execute asdf plugin scripts
+- install plugins (already-installed and embedded vfox plugins still work — their
+  code was chosen by the operator, not the repository)
+
+It also ignores environment and shell configuration from project (non-global) config —
+`[env]` values, `_.path`, `_.file`, and `[shell_alias]` entries — since those would be
+applied to the host environment (env vars and aliases are emitted through `hook-env`) and
+to subprocesses mise spawns during resolution, an indirect code-execution vector.
+Global/system config is operator-owned and still applies. `_.source` runs a shell script
+(code execution rather than env injection), so it is ignored regardless of source.
+
+Version resolution still works for every HTTP-based backend (core, aqua, github,
+gitlab, http, cargo, pipx, gem, dotnet, npm) as well as `go` (which runs with
+`GOTOOLCHAIN=local` so a project `go.mod` cannot trigger a toolchain download).
+Refreshing `mise.lock` and listing installed tools work normally.
+"""
+env = "MISE_SAFE"
+global_only = true
+type = "Bool"
+
+[sandbox.deny_all]
+default = false
+description = "Deny filesystem reads and writes, network access, and environment variable inheritance by default for `mise run` and `mise exec`."
+env = "MISE_SANDBOX_DENY_ALL"
+type = "Bool"
+
+[sandbox.deny_env]
+default = false
+description = "Deny environment variable inheritance by default for `mise run` and `mise exec`."
+env = "MISE_SANDBOX_DENY_ENV"
+type = "Bool"
+
+[sandbox.deny_net]
+default = false
+description = "Deny network access by default for `mise run` and `mise exec`."
+env = "MISE_SANDBOX_DENY_NET"
+type = "Bool"
+
+[sandbox.deny_read]
+default = false
+description = "Deny filesystem reads by default for `mise run` and `mise exec`."
+env = "MISE_SANDBOX_DENY_READ"
+type = "Bool"
+
+[sandbox.deny_write]
+default = false
+description = "Deny filesystem writes by default for `mise run` and `mise exec`."
+env = "MISE_SANDBOX_DENY_WRITE"
+type = "Bool"
+
 [shared_install_dirs]
 description = "Additional read-only directories to search for installed tool versions."
 docs = """
@@ -2181,7 +2417,7 @@ rust_type = "Vec<PathBuf>"
 type = "ListPath"
 
 [shorthands_file]
-deprecated = "Use [plugins] in mise.toml or ~/.config/mise/config.toml instead (same shortname = \"backend-or-url\" rows; see https://mise.en.dev/configuration.html#plugins)."
+deprecated = "Use [plugins] in mise.toml or ~/.config/mise/config.toml instead (same shortname = \"backend-or-url\" rows; see https://mise.jdx.dev/configuration.html#plugins)."
 deprecated_remove_at = "2026.12.0"
 deprecated_warn_at = "2026.6.0"
 description = "[deprecated] Path to a file containing custom tool shorthands."
@@ -2303,7 +2539,7 @@ env = "MISE_STATUS_MESSAGE_TRUNCATE"
 type = "Bool"
 
 [swift.gpg_verify]
-description = "Use gpg to verify swift tool signatures."
+description = "Verify OpenPGP signatures for swift (built-in, no external gpg required). Set to false to disable."
 env = "MISE_SWIFT_GPG_VERIFY"
 optional = true
 type = "Bool"
@@ -2321,10 +2557,39 @@ env = "MISE_SYSTEM_CONFIG_FILE"
 optional = true
 type = "Path"
 
-[system_packages.managers]
-description = "[experimental] Restrict which system package managers mise will use."
+[system_deps]
+default = "prompt"
+description = "How to handle a plugin's declared system dependencies before installing a tool."
 docs = """
-[experimental] Restrict which system package managers mise will use.
+Controls what mise does when a plugin declares system prerequisites (build tools,
+libraries, ...) via `PLUGIN.systemDependencies` and one or more are missing before
+the tool is compiled/installed.
+
+Detection is always the source of truth: a prerequisite that mise can already find
+on the machine (via any means — Homebrew, apt, nix, MacPorts, from source) is never
+questioned. This setting only governs what happens for the *missing* subset:
+
+- `prompt` (default) — report the missing capabilities and offer to install them
+  via the first available system package manager. Falls back to `warn` when not
+  running interactively.
+- `auto` — install the missing packages without asking (implies the package
+  manager's own non-interactive install; may use sudo per `system_packages.sudo`).
+- `warn` — print the missing capabilities and copy-pasteable install commands, then
+  continue with the install anyway.
+- `ignore` — do nothing; skip the check entirely.
+
+Missing *optional* dependencies never prompt or fail — they surface as a single
+informational line regardless of this setting.
+"""
+enum = ["prompt", "auto", "warn", "ignore"]
+env = "MISE_SYSTEM_DEPS"
+rust_type = "SystemDepsMode"
+type = "String"
+
+[system_packages.managers]
+description = "Restrict which system package managers mise will use."
+docs = """
+Restrict which system package managers mise will use.
 
 By default mise acts on every manager in `[bootstrap.packages]` that is available
 on the current machine. When more than one could apply (e.g. several package
@@ -2347,9 +2612,9 @@ type = "ListString"
 
 [system_packages.sudo]
 default = true
-description = "[experimental] Allow `mise bootstrap packages apply` to elevate with sudo when not running as root."
+description = "Allow `mise bootstrap packages apply` to elevate with sudo when not running as root."
 docs = """
-[experimental] Allow `mise bootstrap packages apply` to elevate with sudo when not running as root.
+Allow `mise bootstrap packages apply` to elevate with sudo when not running as root.
 
 When disabled, mise never runs sudo: if elevation would be required, it errors
 with the exact command to run manually. mise only elevates for explicit
@@ -2358,6 +2623,129 @@ it, and skips sudo entirely when already running as root (e.g. containers/CI).
 """
 env = "MISE_SYSTEM_PACKAGES_SUDO"
 type = "Bool"
+
+[task.auto_infer]
+default = []
+description = "[experimental] Workspace providers from which to automatically infer tasks."
+docs = """
+List the workspace provider languages whose ecosystem tasks mise should import. For example,
+`["node"]` imports scripts from Node workspace `package.json` files. Inferred tasks use stable
+provider-scoped names and monorepo path aliases. Task inference is opt-in because ecosystem commands
+may overlap with explicit mise tasks.
+"""
+env = "MISE_TASK_AUTO_INFER"
+parse_env = "set_by_comma"
+rust_type = "BTreeSet<String>"
+type = "SetString"
+
+[task.cache_dir]
+description = "[experimental] Directory for task output cache artifacts."
+docs = """
+Store task output cache artifacts in this directory instead of
+`MISE_CACHE_DIR/task-artifacts`. mise stores the current artifact format in a
+versioned subdirectory and includes custom locations in `mise cache clear` and
+manual and automatic cache pruning.
+"""
+env = "MISE_TASK_CACHE_DIR"
+optional = true
+type = "Path"
+
+[task.cache_max_age]
+description = "[experimental] Maximum age of task output cache entries since their last access."
+docs = """
+Remove task output cache entries that have not been accessed within this duration after a new entry
+is stored. This limit applies only to the task output cache and is independent of
+[`cache_prune_age`](#cache_prune_age). Set to `0s` or leave unset to disable the age limit.
+"""
+env = "MISE_TASK_CACHE_MAX_AGE"
+optional = true
+type = "Duration"
+
+[task.cache_max_size]
+description = "[experimental] Maximum total size of task output cache entries."
+docs = """
+Keep the task output cache at or below this size by removing least-recently-accessed entries after a
+new entry is stored. Values accept SI or IEC units such as `500MB` or `2GiB`. Set to `0` or leave
+unset to disable the size limit.
+"""
+env = "MISE_TASK_CACHE_MAX_SIZE"
+optional = true
+type = "String"
+
+[task.cache_remote_mode]
+default = "read-write"
+description = "[experimental] Remote task cache access mode."
+docs = """
+Control remote cache access while keeping the local task cache enabled:
+
+- `read-write` reads remote misses and uploads successful local results.
+- `read-only` reads remote misses without uploading results.
+- `write-only` uploads results without reading remote entries.
+
+The per-run `--task-cache` mode remains authoritative. In particular, `--task-cache=local-only`
+disables all remote access.
+"""
+enum = ["read-write", "read-only", "write-only"]
+env = "MISE_TASK_CACHE_REMOTE_MODE"
+rust_type = "crate::task::TaskCacheRemoteMode"
+type = "String"
+
+[task.cache_remote_namespace]
+description = "[experimental] Namespace sent to the remote task cache."
+docs = """
+Opaque repository or organization namespace used to isolate remote cache entries. This setting is
+required when [`task.cache_remote_url`](#task-cache-remote-url) is configured.
+"""
+env = "MISE_TASK_CACHE_REMOTE_NAMESPACE"
+optional = true
+type = "String"
+
+[task.cache_remote_oidc_audience]
+description = "[experimental] Audience for an automatically acquired remote cache OIDC token."
+docs = """
+Acquire a short-lived OIDC token for this audience when running in a supported workload identity
+environment. GitHub Actions is supported through its OIDC request environment variables. This
+setting is global-only so shared project configuration cannot choose a token audience.
+"""
+env = "MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE"
+global_only = true
+optional = true
+type = "String"
+
+[task.cache_remote_token]
+description = "[experimental] Bearer token for remote task cache authentication."
+docs = """
+Authenticate remote task cache requests with an HTTP `Authorization: Bearer` header. Prefer the
+`MISE_TASK_CACHE_REMOTE_TOKEN` environment variable or a protected global configuration file; this
+setting is global-only so shared project configuration cannot supply credentials.
+"""
+env = "MISE_TASK_CACHE_REMOTE_TOKEN"
+global_only = true
+optional = true
+type = "String"
+
+[task.cache_remote_token_file]
+description = "[experimental] File containing a remote task cache bearer token."
+docs = """
+Read the remote task cache bearer token from this file before each request. This supports rotating
+credentials such as Kubernetes projected service account tokens. This setting is global-only so
+shared project configuration cannot select a credential file.
+"""
+env = "MISE_TASK_CACHE_REMOTE_TOKEN_FILE"
+global_only = true
+optional = true
+type = "Path"
+
+[task.cache_remote_url]
+description = "[experimental] Base URL for the remote task cache service."
+docs = """
+Enable the versioned HTTP remote task cache protocol at this base URL. Remote access also requires
+[`task.cache_remote_namespace`](#task-cache-remote-namespace). Leave unset to use only the local
+task cache.
+"""
+env = "MISE_TASK_CACHE_REMOTE_URL"
+optional = true
+type = "Url"
 
 [task.disable_paths]
 default = []
@@ -2444,6 +2832,13 @@ type = "Bool"
 description = "Change output style when executing tasks."
 docs = """
 Change output style when executing tasks. This controls the output of `mise run`.
+
+This is the output *style* axis. Verbosity is a separate axis controlled by
+`quiet`/`silent` (as settings, `--quiet`/`--silent` flags, or per-task fields),
+so a style can be combined with quietness — e.g. `output = "prefix"` together
+with `quiet = true` keeps the task-name prefixes while suppressing mise's own
+messages. The `quiet` and `silent` *values* below are kept for backwards
+compatibility and bundle a style with that verbosity.
 """
 enum = [
   { value = "prefix", description = "(default if jobs > 1) print by line with the prefix of the task name" },
@@ -2451,8 +2846,8 @@ enum = [
   { value = "keep-order", description = "stream one task's output live while buffering others, printing in definition order as tasks complete" },
   { value = "replacing", description = "replace stdout each time a line is printed-this uses similar logic as `mise install`" },
   { value = "timed", description = "only show stdout lines that take longer than 1s to complete" },
-  { value = "quiet", description = "print only stdout/stderr from tasks and nothing from mise" },
-  { value = "silent", description = "print nothing from tasks or mise" },
+  { value = "quiet", description = "legacy: interleave task output and suppress mise's own messages (equivalent to `interleave` + `quiet = true`). Prefer `--quiet`/`quiet = true` to keep your chosen style." },
+  { value = "silent", description = "print nothing from tasks or mise (nulls stdout and stderr)" },
 ]
 env = "MISE_TASK_OUTPUT"
 optional = true
@@ -2604,6 +2999,28 @@ hide = true
 optional = true
 type = "Bool"
 
+[tera_v1]
+default = false
+deprecated = "tera_v1 is a temporary compatibility escape hatch for templates that still need Tera v1 behavior. Update templates to Tera v2 syntax instead."
+deprecated_remove_at = "2027.4.0"
+deprecated_warn_at = "2026.10.0"
+description = "Use Tera v1 instead of Tera v2 for template rendering."
+docs = """
+Use Tera v1 instead of Tera v2 for template rendering.
+
+This is a temporary escape hatch for users whose templates still rely on Tera v1 behavior that
+cannot be fully emulated by mise's Tera v2 compatibility helpers, such as Tera v1 macros or looser
+undefined variable handling.
+
+For shared `mise.toml` files, prefer setting `MISE_TERA_V1 = true` under `[env]` while migrating.
+Older mise releases treat that as a regular environment variable instead of failing on an unknown
+setting.
+
+New templates should use Tera v2 syntax. This setting is scheduled for removal in mise 2027.4.0.
+"""
+env = "MISE_TERA_V1"
+type = "Bool"
+
 [terminal_progress]
 default = true
 description = "Enable terminal progress indicators (OSC 9;4) for compatible terminals."
@@ -2649,12 +3066,14 @@ type = "ListPath"
 default = "sh"
 description = "Default shell arguments for Unix to be used for file commands. For example, `sh` for sh."
 env = "MISE_UNIX_DEFAULT_FILE_SHELL_ARGS"
+global_only = true
 type = "String"
 
 [unix_default_inline_shell_args]
 default = "sh -c -o errexit"
 description = "Default shell arguments for Unix to be used for inline commands. For example, `sh -c` for sh."
 env = "MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS"
+global_only = true
 type = "String"
 
 [url_replacements]
@@ -2733,12 +3152,14 @@ type = "Bool"
 default = "cmd /c"
 description = "Default shell arguments for Windows to be used for file commands. For example, `cmd /c` for cmd.exe."
 env = "MISE_WINDOWS_DEFAULT_FILE_SHELL_ARGS"
+global_only = true
 type = "String"
 
 [windows_default_inline_shell_args]
 default = "cmd /c"
 description = "Default shell arguments for Windows to be used for inline commands. For example, `cmd /c` for cmd.exe."
 env = "MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS"
+global_only = true
 type = "String"
 
 [windows_executable_extensions]
@@ -2748,6 +3169,26 @@ env = "MISE_WINDOWS_EXECUTABLE_EXTENSIONS"
 parse_env = "list_by_comma"
 rust_type = "Vec<String>"
 type = "ListString"
+
+[windows_powershell_no_profile]
+default = true
+description = "Pass `-NoProfile` to PowerShell (`pwsh`/`powershell`) shells that mise spawns for tasks and inline commands, so startup profiles are skipped."
+docs = """
+When mise runs a task or inline command through PowerShell, it passes
+`-NoProfile` so the shell does not load the user's PowerShell profile. This
+matches the non-interactive behavior of `sh -c` / `zsh -c` on Unix, which do not
+source interactive startup files.
+
+Profiles that mutate `PATH` — for example a mise activation snippet that prepends
+the shims directory — can otherwise shadow a task's own installed tools and
+produce confusing `cannot find binary path` errors.
+
+Set to `false` if your tasks rely on side effects from your PowerShell profile
+(environment variables, functions, aliases). This only affects `pwsh` and
+`powershell`; it has no effect on `cmd` or on non-Windows shells.
+"""
+env = "MISE_WINDOWS_POWERSHELL_NO_PROFILE"
+type = "Bool"
 
 [windows_shim_mode]
 default = "exe"

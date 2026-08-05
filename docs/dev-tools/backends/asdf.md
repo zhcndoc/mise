@@ -39,7 +39,7 @@ asdf 插件被视为遗留方案。**出于供应链安全原因，新的 asdf �
 | asdf 脚本                  | vfox Hook                | 说明                                                             |
 | --------------------------- | ------------------------ | ---------------------------------------------------------------- |
 | `bin/list-all`              | `Available`              | 返回结构化的版本对象，而不是纯文本                                   |
-| `bin/download`             | `PreInstall`             | 返回 URL 和校验和；mise 负责处理下载                                  |
+| `bin/download`              | `PreInstall`             | 返回 URL 和校验和；mise 负责处理下载                                  |
 | `bin/install`               | `PostInstall`            | 在 mise 下载并解压工具之后运行                                        |
 | `bin/exec-env`              | `EnvKeys`                | 返回结构化的键/值对，而不是 `export` 语句                              |
 | `bin/list-legacy-filenames` | `PLUGIN.legacyFilenames` | 在 `metadata.lua` 中设置，而不是使用脚本                               |
@@ -48,6 +48,8 @@ asdf 插件被视为遗留方案。**出于供应链安全原因，新的 asdf �
 ## 为 mise 编写 asdf（旧版）插件
 
 有关[编写插件](https://asdf-vm.com/plugins/create.html)的更多信息，请参阅 asdf 文档。
+
+`bin/list-all` 和 `bin/latest-stable` 版本脚本会接收从 mise 配置中解析出的环境变量和 PATH 附加项，这些内容会在加载工具之前解析。这样一来，私有插件便可以在列出版本时使用凭据、来自 `_.path` 的辅助可执行文件，或 `[env]` 中的其他项目特定值。由于这些值可能会改变可用版本，mise 会针对每个解析后的配置环境分别存储版本列表缓存，而不会将原始值或路径写入缓存。
 
 ## 工具选项
 
@@ -62,3 +64,17 @@ asdf 插件被视为遗留方案。**出于供应链安全原因，新的 asdf �
 [tools]
 "asdf:owner/plugin" = { version = "latest", install_env = { MAKEFLAGS = "-j8" } }
 ```
+
+### 安装依赖
+
+使用 [`depends` 选项](/dev-tools/#tool-dependencies)声明的工具会在
+asdf 工具之前安装，并添加到其 `bin/download` 和 `bin/install` 脚本使用的
+`PATH` 中：
+
+```toml
+[tools]
+python = "3.12"
+"asdf:owner/plugin" = { version = "latest", depends = ["python"] }
+```
+
+这样，asdf 插件就可以在同一次 `mise install` 期间调用由其他 mise 管理的工具提供的可执行文件。

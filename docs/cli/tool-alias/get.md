@@ -2,11 +2,12 @@
 # `mise tool-alias get`
 
 - **用法**: `mise tool-alias get <TOOL> <ALIAS>`
+- **效果**: 只读
 - **源代码**: [`src/cli/tool_alias/get.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_alias/get.rs)
 
 显示工具的别名
 
-这是 ~/.config/mise/config.toml 中 tool_alias.&lt;TOOL> 条目的内容
+这是 ~/.config/mise/config.toml 中 tool_alias.&lt;TOOL> 条目的内容。
 
 ## 参数
 

@@ -16,6 +16,8 @@ use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::style;
 use crate::{backend::unalias_backend, config::Settings};
 
+use super::{PluginTaskNames, PluginTaskResult, join_plugin_tasks, spawn_plugin_task};
+
 /// Install a plugin
 ///
 /// note that mise can automatically install plugins when you install a tool
@@ -101,30 +103,21 @@ impl PluginsInstall {
         config: &Arc<Config>,
         plugins: Vec<String>,
     ) -> Result<()> {
-        let mut jset: JoinSet<Result<()>> = JoinSet::new();
+        let mut jset: JoinSet<PluginTaskResult> = JoinSet::new();
+        let mut task_names = PluginTaskNames::new();
         let semaphore = Arc::new(Semaphore::new(self.jobs.unwrap_or(Settings::get().jobs)));
         for plugin in plugins {
             let this = self.clone();
             let config = config.clone();
-            let permit = semaphore.clone().acquire_owned().await?;
-            jset.spawn(async move {
-                let _permit = permit;
+            let semaphore = semaphore.clone();
+            let plugin_name = plugin.clone();
+            spawn_plugin_task(&mut jset, &mut task_names, plugin_name, async move {
+                let _permit = semaphore.acquire_owned().await?;
                 println!("installing {plugin}");
                 this.install_one(&config, plugin, None).await
             });
         }
-        while let Some(result) = jset.join_next().await {
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    return Err(e);
-                }
-                Err(e) => {
-                    return Err(eyre!(e));
-                }
-            }
-        }
-        Ok(())
+        join_plugin_tasks(jset, task_names, "install").await
     }
 
     async fn install_one(
@@ -133,25 +126,41 @@ impl PluginsInstall {
         name: String,
         git_url: Option<String>,
     ) -> Result<()> {
-        let (plugin_type, name) = PluginType::from_plugin_config(&name);
-        let name = name.to_string();
-        let path = dirs::PLUGINS.join(name.to_kebab_case());
-        let plugin = plugin_type.plugin(name.clone());
-        if let Some(url) = git_url {
-            plugin.set_remote_url(url);
-        }
-        if !self.force && plugin.is_installed() {
-            warn!("Plugin {name} already installed");
-            warn!("Use --force to install anyway");
-        } else {
-            let mpr = MultiProgressReport::get();
-            plugin
-                .ensure_installed(config, &mpr, self.force, false)
-                .await?;
+        install_plugin(config, &name, git_url, self.force, false).await
+    }
+}
+
+pub(crate) async fn install_plugin(
+    config: &Arc<Config>,
+    name: &str,
+    git_url: Option<String>,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let (plugin_type, name) = PluginType::from_plugin_config(name);
+    let name = name.to_string();
+    if plugin_type == PluginType::Package && crate::system::packages::is_builtin_manager_name(&name)
+    {
+        bail!("package plugin '{name}' collides with a built-in package manager");
+    }
+    let path = dirs::PLUGINS.join(name.to_kebab_case());
+    let plugin = plugin_type.plugin(name.clone());
+    if let Some(url) = git_url {
+        plugin.set_remote_url(url);
+    }
+    if !force && plugin.is_installed() {
+        warn!("Plugin {name} already installed");
+        warn!("Use --force to install anyway");
+    } else {
+        let mpr = MultiProgressReport::get();
+        plugin
+            .ensure_installed(config, &mpr, force, dry_run)
+            .await?;
+        if !dry_run {
             warn_if_env_plugin_shadows_registry(&name, &path);
         }
-        Ok(())
     }
+    Ok(())
 }
 
 #[ensures(!ret.as_ref().is_ok_and(|(r, _)| r.is_empty()), "plugin name is empty")]

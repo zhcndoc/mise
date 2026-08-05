@@ -77,6 +77,10 @@ which python
 使用 `"source"` 可仅加载现有的 `.venv`，或使用 `"create|source"` 在缺失时创建它，然后再加载。
 如果你更希望由 `mise deps` 来创建虚拟环境，请保持为 `"source"`，启用 `[deps.uv]`，然后运行 `mise deps`。
 
+::: tip
+`mise` 会向上查找 `uv.lock` 文件来定位 uv 项目——`mise` 正是通过这个锁定文件得知项目使用 uv。因此，必须存在 `uv.lock`：如果找不到该文件（例如尚未运行 `uv sync` 的新项目），此设置将不会生效。运行 `uv sync`（或 `uv lock`）即可生成该文件。
+:::
+
 ```toml [mise.toml]
 [settings]
 python.uv_venv_auto = "source"

@@ -6,8 +6,8 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use blake3::Hasher;
 use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce,
-    aead::{Aead, AeadCore, OsRng},
+    ChaCha20Poly1305, Key, KeyInit, Nonce,
+    aead::{Aead, Generate},
 };
 use eyre::{Result, bail};
 use indexmap::IndexMap;
@@ -27,7 +27,7 @@ fn get_encryption_key() -> Option<[u8; 32]> {
 fn encrypt_data(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key)
         .map_err(|e| eyre::eyre!("failed to create cipher: {}", e))?;
-    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let nonce = Nonce::generate();
     let ciphertext = cipher
         .encrypt(&nonce, data)
         .map_err(|e| eyre::eyre!("encryption failed: {}", e))?;
@@ -43,14 +43,15 @@ fn decrypt_data(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
         bail!("data too short to contain nonce");
     }
 
-    let nonce = Nonce::from_slice(&data[..12]);
+    let nonce =
+        Nonce::try_from(&data[..12]).map_err(|e| eyre::eyre!("failed to read nonce: {}", e))?;
     let ciphertext = &data[12..];
 
     let cipher = ChaCha20Poly1305::new_from_slice(key)
         .map_err(|e| eyre::eyre!("failed to create cipher: {}", e))?;
 
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| eyre::eyre!("decryption failed: {}", e))?;
     Ok(plaintext)
 }
@@ -119,6 +120,9 @@ pub struct CachedNonToolEnv {
     pub env_scripts: Vec<PathBuf>,
     /// redaction patterns contributed by env directives
     pub redactions: Vec<String>,
+    /// environment keys explicitly excluded from redaction
+    #[serde(default)]
+    pub redaction_exclusions: BTreeSet<String>,
     /// Files to watch for changes (from modules and _.source directives)
     pub watch_files: Vec<PathBuf>,
     /// mtimes of watch files at cache creation time
@@ -173,7 +177,7 @@ impl CachedEnv {
 
     /// Generates a new encryption key and returns it as a base64 string
     pub fn generate_encryption_key() -> String {
-        let key = ChaCha20Poly1305::generate_key(&mut OsRng);
+        let key = Key::generate();
         BASE64_STANDARD.encode(key)
     }
 
@@ -449,6 +453,9 @@ pub fn compute_settings_hash() -> String {
     // Add settings that affect env computation
     hasher.update(settings.experimental.to_string().as_bytes());
     hasher.update(settings.all_compile.to_string().as_bytes());
+    // Safe mode drops project [env]/_.path directives, so a cache entry built
+    // with a different `safe` value must not be reused.
+    hasher.update(settings.safe.to_string().as_bytes());
 
     // Add any other relevant settings
     if let Some(env_file) = &settings.env_file {

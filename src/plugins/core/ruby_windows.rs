@@ -69,7 +69,7 @@ impl RubyPlugin {
                 .with_pr(pr)
                 .arg("install")
                 .envs(config.env().await?)
-                .envs(tv.install_env());
+                .env_values(tv.install_env());
             match package.split_once(' ') {
                 Some((name, "--pre")) => cmd = cmd.arg(name).arg("--pre"),
                 Some((name, version)) => cmd = cmd.arg(name).arg("--version").arg(version),
@@ -92,7 +92,7 @@ impl RubyPlugin {
             .with_pr(pr)
             .arg("-v")
             .envs(config.env().await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .execute()
     }
 
@@ -107,7 +107,7 @@ impl RubyPlugin {
             .with_pr(pr)
             .arg("-v")
             .envs(config.env().await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .env(&*PATH_KEY, plugins::core::path_env_with_tv_path(tv)?)
             .execute()
     }
@@ -185,10 +185,6 @@ impl Backend for RubyPlugin {
             .sorted_by_cached_key(|v| (Versioning::new(&v.version), v.version.clone()))
             .collect();
         Ok(versions)
-    }
-
-    async fn _idiomatic_filenames(&self) -> Result<Vec<String>> {
-        Ok(vec![".ruby-version".into(), "Gemfile".into()])
     }
 
     async fn _parse_idiomatic_file(&self, path: &Path) -> Result<Vec<String>> {
@@ -275,13 +271,8 @@ fn parse_gemfile(body: &str) -> String {
     v
 }
 
-#[allow(clippy::if_same_then_else)]
 fn arch() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        "x64"
-    } else {
-        "x64"
-    }
+    "x64"
 }
 
 #[cfg(test)]

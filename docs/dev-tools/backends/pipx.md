@@ -37,7 +37,7 @@ mise use -g python
 pip install --user pipx
 ```
 
-[其他安装说明](https://pipx.pypa.io/latest/installation/)
+[其他安装说明](https://pipx.pypa.io/stable/how-to/install-pipx.html)。
 
 ## 用法
 
@@ -117,6 +117,24 @@ import Settings from '/components/settings.vue';
 ```toml
 [tools]
 "pipx:harlequin" = { version = "latest", extras = "postgres,s3" }
+# 等效的数组形式：
+# "pipx:harlequin" = { version = "latest", extras = ["postgres", "s3"] }
+# extras 也适用于 Git 源：
+# "pipx:psf/black" = { version = "latest", extras = ["jupyter"] }
+```
+
+内联传递 extras 时，使用 mise 的 `key=value` 工具选项语法：
+
+```bash
+mise use 'pipx:psf/black[extras=jupyter]@latest'
+```
+
+对于名称与 Python distribution 名称不同的 Git 仓库，请设置 `package_name`，以便
+mise 构建用于选择 extras 的依赖要求：
+
+```toml
+[tools]
+"pipx:owner/repository" = { version = "latest", package_name = "distribution", extras = ["feature"] }
 ```
 
 ### `pipx_args`

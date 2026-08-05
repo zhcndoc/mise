@@ -2,9 +2,10 @@
 # `mise bootstrap user`
 
 - **用法**: `mise bootstrap user <SUBCOMMAND>`
-- **源代码**: [`src/cli/bootstrap/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/mod.rs)
+- **作用**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-管理当前用户的 bootstrap 设置，来自 `[bootstrap.user]`
+管理当前用户的 bootstrap 设置，来源于 `[bootstrap.user]`。
 
 ## 子命令
 

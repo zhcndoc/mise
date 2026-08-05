@@ -91,14 +91,20 @@ pub struct Install {
     /// May require elevated permissions (e.g. sudo).
     #[clap(long, verbatim_doc_comment, conflicts_with = "shared")]
     system: bool,
+
+    /// Skip confirmation when installing missing plugin system dependencies.
+    /// Set internally by `mise bootstrap --yes`; not a user-facing flag.
+    #[clap(skip)]
+    yes: bool,
 }
 
 impl Install {
     /// a bare `mise install` (install everything missing from config), as run
     /// by `mise bootstrap`
-    pub(crate) fn new_bare(dry_run: bool) -> Self {
+    pub(crate) fn new_bare(dry_run: bool, yes: bool) -> Self {
         Self {
             dry_run,
+            yes,
             ..Default::default()
         }
     }
@@ -131,9 +137,7 @@ impl Install {
     async fn hint_missing_system_packages(&self) {
         // the status queries spawn package-manager processes; skip them
         // entirely once the hint has been shown (or is disabled)
-        if !Settings::get().experimental
-            || !crate::hint::hint_would_display("system_packages_missing")
-        {
+        if !crate::hint::hint_would_display("system_packages_missing") {
             return;
         }
         let Ok(config) = Config::get().await else {
@@ -148,9 +152,15 @@ impl Install {
         // packages that would actually be checked is unchanged, so editing
         // [bootstrap.packages] or widening system_packages.managers re-checks
         // immediately
+        let mut available = std::collections::HashSet::new();
+        for mp in &mgrs {
+            if !mp.disabled && mp.manager.unavailable_reason_async().await.is_none() {
+                available.insert(mp.manager.name().to_string());
+            }
+        }
         let fingerprint = mgrs
             .iter()
-            .filter(|mp| !mp.disabled && mp.manager.is_available())
+            .filter(|mp| available.contains(mp.manager.name()))
             .flat_map(|mp| {
                 mp.requests
                     .iter()
@@ -172,7 +182,7 @@ impl Install {
         let mut missing = 0;
         let mut all_queries_ok = true;
         for mp in mgrs {
-            if mp.disabled || !mp.manager.is_available() {
+            if !available.contains(mp.manager.name()) {
                 continue;
             }
             match mp.manager.installed(&mp.requests).await {
@@ -298,18 +308,17 @@ impl Install {
                     .await,
             )
         };
+        // Tools that actually installed successfully. `versions` is mutated
+        // below (retained to current versions for the lockfile/shim rebuild),
+        // so capture the set now for the "installed but not activated" warning.
+        let installed_shorts: HashSet<String> =
+            versions.iter().map(|tv| tv.short().to_string()).collect();
         // In dry-run mode, check if any tools would be installed before filtering
         if self.is_dry_run() {
             if self.dry_run_code {
-                let has_work = versions.iter().any(|tv| {
-                    if let Ok(backend) = tv.backend() {
-                        !backend.is_version_installed(&install_config, tv, true)
-                    } else {
-                        true
-                    }
-                });
+                let has_work = versions.iter().any(|tv| tv.install_satisfied != Some(true));
                 if has_work {
-                    exit::exit(1);
+                    return Err(exit::request(1));
                 }
             }
             return install_error;
@@ -343,7 +352,14 @@ impl Install {
             .await?;
         }
 
-        // Warn about tools that were installed but not in any config file
+        // Warn about tools that were installed but not in any config file.
+        // Restrict to tools that actually installed — a tool whose install
+        // failed is already reported by `install_error` below, and also
+        // claiming it was "installed but not activated" would be misleading.
+        let inactive_tools: Vec<String> = inactive_tools
+            .into_iter()
+            .filter(|t| installed_shorts.contains(t))
+            .collect();
         if !inactive_tools.is_empty() {
             let tool_list = inactive_tools.join(", ");
             let use_cmds: Vec<String> = inactive_tools
@@ -381,6 +397,7 @@ impl Install {
                 latest_versions: true,
                 before_date: self.get_before_date()?,
                 before_date_from_default: false,
+                filter_installed_versions_by_release_date: false,
                 offline: false,
                 refresh_remote_versions: false,
                 inactive: false,
@@ -388,6 +405,7 @@ impl Install {
             dry_run: self.is_dry_run(),
             locked: Settings::get().locked,
             install_dir,
+            yes: self.yes || Settings::get().yes,
             ..Default::default()
         })
     }
@@ -488,7 +506,12 @@ impl Install {
                 // project setup relies on it); MISE_INSTALLED_TOOLS is [] so hooks
                 // can guard on actual installs. (#10574)
                 let ts_owned;
-                let ts = if self.monorepo {
+                let ts = if self.is_dry_run() {
+                    // Preview mode only needs the hook-selection context. Avoid
+                    // resolving the full toolset solely to describe the hook.
+                    ts_owned = Toolset::from(trs.clone());
+                    &ts_owned
+                } else if self.monorepo {
                     ts_owned =
                         Self::resolved_toolset_from_trs(&install_config, trs.clone()).await?;
                     &ts_owned
@@ -501,6 +524,7 @@ impl Install {
                     Hooks::Postinstall,
                     None,
                     Some(&[]),
+                    self.is_dry_run(),
                 )
                 .await;
                 (vec![], Ok(()))
@@ -516,7 +540,7 @@ impl Install {
         };
         if self.is_dry_run() {
             if self.dry_run_code && has_missing {
-                exit::exit(1);
+                return Err(exit::request(1));
             }
             return install_error;
         }

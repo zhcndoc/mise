@@ -1,8 +1,14 @@
 //! `[bootstrap]` config section: machine-global bootstrapping.
 //!
-//! This is `[bootstrap.packages]` — declarative system packages installed
-//! by `mise bootstrap packages apply` — `[bootstrap.repos]` — declarative
-//! git checkouts — `[dotfiles]` — declarative config files applied by
+//! This is `[bootstrap.groups]` and `[bootstrap.users]` — declarative Linux
+//! accounts — `[bootstrap.services]` — declarative Linux system service
+//! lifecycle — `[bootstrap.linux.firewall]` — declarative Linux host
+//! firewall policy — `[bootstrap.compose]` — declarative Compose projects —
+//! `[bootstrap.packages]` — declarative system packages installed by
+//! `mise bootstrap packages apply` — `[bootstrap.files]` and
+//! `[bootstrap.directories]` — privileged filesystem resources —
+//! `[bootstrap.repos]` — declarative git checkouts — `[dotfiles]` —
+//! declarative config files applied by
 //! `mise bootstrap dotfiles apply` — `[bootstrap.mise_shell_activate]`
 //! shell activation setup — `[bootstrap.macos.defaults]` — declarative macOS
 //! user defaults — `[bootstrap.macos.launchd.agents]` — declarative macOS
@@ -15,7 +21,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use eyre::{Result, bail};
+#[cfg(unix)]
+use eyre::Result;
+use eyre::bail;
 use indexmap::IndexMap;
 use serde::Deserialize;
 
@@ -29,14 +37,35 @@ use crate::system::shell_activation::{
 };
 use crate::system::systemd::{SystemdRequest, SystemdTomlConfig};
 
+#[cfg(target_os = "linux")]
+pub mod accounts;
+#[cfg(not(target_os = "linux"))]
+#[path = "accounts_non_linux.rs"]
+pub mod accounts;
+pub mod compose;
 pub mod defaults;
+pub mod deps;
 pub mod edits;
 pub mod files;
+#[cfg(target_os = "linux")]
+pub mod firewall;
+#[cfg(not(target_os = "linux"))]
+#[path = "firewall_non_linux.rs"]
+pub mod firewall;
 pub mod hooks;
 pub mod launchd;
 pub mod login_shell;
+pub mod managed_files;
 pub mod packages;
+pub mod remote;
 pub mod repos;
+pub mod resources;
+pub mod secrets;
+#[cfg(target_os = "linux")]
+pub mod services;
+#[cfg(not(target_os = "linux"))]
+#[path = "services_non_linux.rs"]
+pub mod services;
 pub mod shell_activation;
 pub(crate) mod sudo;
 pub mod systemd;
@@ -44,11 +73,38 @@ pub mod systemd;
 /// `[bootstrap]` as parsed from a single mise.toml
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BootstrapTomlConfig {
+    /// Logical secret name -> environment input declaration.
+    #[serde(default)]
+    pub secrets: IndexMap<String, secrets::SecretTomlConfig>,
+    /// Linux group name -> declarative local group.
+    #[serde(default)]
+    pub groups: IndexMap<String, accounts::GroupTomlConfig>,
+    /// Linux user name -> declarative local user.
+    #[serde(default)]
+    pub users: IndexMap<String, accounts::UserTomlConfig>,
+    /// Linux systemd unit name -> declarative system service lifecycle.
+    #[serde(default)]
+    pub services: IndexMap<String, services::ServiceTomlConfig>,
+    /// Docker Compose project name -> declarative project lifecycle.
+    #[serde(default)]
+    pub compose: IndexMap<String, compose::ComposeTomlConfig>,
+    /// OpenSSH targets used by `mise bootstrap remote`.
+    #[serde(default)]
+    pub remote: remote::RemoteTomlConfig,
+    /// Package manager plugins that must be installed, keyed by manager name.
+    #[serde(default)]
+    pub plugins: IndexMap<String, String>,
     /// `"manager:package"` -> version (`"latest"` or a manager-native pin).
     /// String-keyed so configs using managers from newer mise versions (dnf,
     /// pacman, winget, ...) parse fine on older ones.
     #[serde(default)]
     pub packages: IndexMap<String, String>,
+    /// Absolute target path -> declarative managed file.
+    #[serde(default)]
+    pub files: IndexMap<String, managed_files::ManagedFileTomlConfig>,
+    /// Absolute target path -> declarative managed directory.
+    #[serde(default)]
+    pub directories: IndexMap<String, managed_files::ManagedDirectoryTomlConfig>,
     /// `"~/path"` -> git repo checkout.
     #[serde(default)]
     pub repos: IndexMap<String, RepoTomlConfig>,
@@ -72,6 +128,18 @@ pub struct BootstrapTomlConfig {
     /// warn and be skipped without rejecting the whole config.
     #[serde(default)]
     pub hooks: IndexMap<String, toml::Value>,
+}
+
+pub fn plugins_from_config(config: &Config) -> IndexMap<String, String> {
+    let mut plugins = IndexMap::new();
+    for cf in config.config_files.values().rev() {
+        if let Some(bootstrap) = cf.bootstrap_config() {
+            for (name, url) in bootstrap.plugins {
+                plugins.insert(name, url);
+            }
+        }
+    }
+    plugins
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -117,16 +185,19 @@ pub struct BootstrapMacosLaunchdTomlConfig {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BootstrapLinuxTomlConfig {
+    /// Declarative Linux host firewall policy and rules.
+    #[serde(default)]
+    pub firewall: Option<firewall::FirewallTomlConfig>,
     /// `[bootstrap.linux.systemd.units.<name>]`: declarative systemd user
-    /// services rendered to ~/.config/systemd/user.
+    /// services and timers rendered to ~/.config/systemd/user.
     #[serde(default)]
     pub systemd: BootstrapLinuxSystemdTomlConfig,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BootstrapLinuxSystemdTomlConfig {
-    /// User services, keyed by a short stable name. mise gives these a
-    /// `dev.mise.<name>.service` unit name when rendering the unit file.
+    /// User services and timers, keyed by a short stable name. mise gives
+    /// these a `dev.mise.<name>.<service|timer>` unit name when rendering.
     #[serde(default)]
     pub units: IndexMap<String, SystemdTomlConfig>,
 }
@@ -246,9 +317,50 @@ pub fn packages_from_config(config: &Config) -> Vec<ManagerPackages> {
     packages_from_config_files_with_brew_taps(&config.config_files, &brew_taps)
 }
 
+/// Package requests for declared package plugins that are not installed yet.
+///
+/// During a bootstrap dry run, plugin installation is intentionally not
+/// persisted, but the later package phase still needs to show the packages
+/// that the newly declared plugins would manage.
+pub fn pending_plugin_packages_from_config(
+    config: &Config,
+) -> IndexMap<String, Vec<PackageRequest>> {
+    pending_plugin_packages_from_config_including_disabled(config)
+        .into_iter()
+        .filter(|(name, _)| package_manager_is_enabled(name))
+        .collect()
+}
+
+/// All package requests for declared, not-yet-installed package plugins,
+/// including managers excluded by `system_packages.managers`. Resource plans
+/// use this broader view so excluded declarations remain visible as unknown.
+pub(crate) fn pending_plugin_packages_from_config_including_disabled(
+    config: &Config,
+) -> IndexMap<String, Vec<PackageRequest>> {
+    let declared = plugins_from_config(config);
+    let brew_taps = brew_taps_from_config(config);
+    let installed = packages::all_managers()
+        .into_iter()
+        .map(|manager| manager.name().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    package_requests_from_config_files(&config.config_files, &brew_taps)
+        .into_iter()
+        .filter(|(name, _)| declared.contains_key(name) && !installed.contains(name))
+        .collect()
+}
+
+pub(crate) fn package_manager_is_enabled(name: &str) -> bool {
+    crate::config::Settings::get()
+        .system_packages
+        .managers
+        .as_ref()
+        .is_none_or(|names| names.iter().any(|enabled| enabled == name))
+}
+
 /// Aggregate `[bootstrap.packages]` from the current merged config plus every
 /// tracked config file, mirroring the way `mise prune` protects tool versions
 /// still referenced by other projects.
+#[cfg(unix)]
 pub async fn packages_from_config_and_tracked_config_files(
     config: &Arc<Config>,
 ) -> Result<Vec<ManagerPackages>> {
@@ -256,6 +368,7 @@ pub async fn packages_from_config_and_tracked_config_files(
     packages_from_config_files_and_tracked_config_files(&config.config_files, &tracked_config_files)
 }
 
+#[cfg(unix)]
 fn packages_from_config_files_and_tracked_config_files(
     current_config_files: &ConfigMap,
     tracked_config_files: &ConfigMap,
@@ -279,6 +392,7 @@ fn packages_from_config_files_and_tracked_config_files(
     resolve_managers(by_mgr, false)
 }
 
+#[cfg(unix)]
 fn merge_manager_packages(
     by_mgr: &mut IndexMap<String, Vec<PackageRequest>>,
     manager_packages: Vec<ManagerPackages>,
@@ -308,6 +422,17 @@ fn packages_from_config_files_with_brew_taps(
     config_files: &ConfigMap,
     brew_taps: &IndexMap<String, String>,
 ) -> Vec<ManagerPackages> {
+    resolve_managers(
+        package_requests_from_config_files(config_files, brew_taps),
+        false,
+    )
+    .expect("non-strict resolve is infallible")
+}
+
+fn package_requests_from_config_files(
+    config_files: &ConfigMap,
+    brew_taps: &IndexMap<String, String>,
+) -> IndexMap<String, Vec<PackageRequest>> {
     let mut merged: IndexMap<String, String> = IndexMap::new();
     // config_files is ordered local -> global; reverse for global -> local
     for cf in config_files.values().rev() {
@@ -340,7 +465,7 @@ fn packages_from_config_files_with_brew_taps(
             Err(err) => warn!("[bootstrap.packages]: {err}"),
         }
     }
-    resolve_managers(by_mgr, false).expect("non-strict resolve is infallible")
+    by_mgr
 }
 
 /// Aggregate `[bootstrap.macos.defaults]` across all loaded config files.
@@ -422,7 +547,7 @@ pub fn repos_from_config(config: &Config) -> Vec<RepoRequest> {
     for cf in config.config_files.values().rev() {
         if let Some(sys) = cf.bootstrap_config() {
             for (path_raw, repo) in sys.repos {
-                match RepoRequest::from_toml(path_raw.clone(), repo) {
+                match RepoRequest::from_toml(path_raw.clone(), repo, cf.project_root().as_deref()) {
                     Ok(request) => {
                         merged.insert(request.path.clone(), request);
                     }
@@ -1232,6 +1357,10 @@ fn resolve_managers(
         .system_packages
         .managers
         .clone();
+    let managers = packages::all_managers()
+        .into_iter()
+        .map(|manager| (manager.name().to_string(), manager))
+        .collect::<IndexMap<_, _>>();
     let mut out = vec![];
     for (name, requests) in by_mgr {
         let disabled = enabled.as_ref().is_some_and(|e| !e.contains(&name));
@@ -1242,23 +1371,31 @@ fn resolve_managers(
                 enabled.as_deref().unwrap_or_default().join(", ")
             );
         }
-        match packages::get_manager(&name) {
+        match managers.get(&name) {
             Some(manager) => out.push(ManagerPackages {
-                manager,
+                manager: manager.clone(),
                 requests,
                 disabled,
             }),
             None => {
                 if strict {
-                    bail!("unknown bootstrap package manager '{name}'");
+                    bail!(
+                        "unknown bootstrap package manager '{name}' — install a package plugin: mise plugin install package:{name} <url>"
+                    );
                 }
                 // brew is compiled out on Windows — not unknown, just
                 // unsupported there
                 if cfg!(windows) && name == "brew" {
                     debug!("system package manager 'brew' is not supported on windows");
+                } else if crate::config::is_loaded()
+                    && plugins_from_config(&crate::config::Config::get_()).contains_key(&name)
+                {
+                    warn!(
+                        "unknown bootstrap package manager '{name}' in [bootstrap.packages] — declared in [bootstrap.plugins] but not installed; run `mise bootstrap`"
+                    );
                 } else {
                     warn!(
-                        "unknown bootstrap package manager '{name}' in [bootstrap.packages], ignoring"
+                        "unknown bootstrap package manager '{name}' in [bootstrap.packages], ignoring — install a package plugin: mise plugin install package:{name} <url>"
                     );
                 }
             }
@@ -1418,13 +1555,24 @@ mod tests {
                 url: Some("https://github.com/jdx/dotfiles.git".to_string()),
                 git_ref: Some("main".to_string()),
             },
+            None,
         )
         .unwrap();
         assert!(request.path.is_absolute());
         assert_eq!(request.path_raw, "~/src/dotfiles");
         assert_eq!(request.url, "https://github.com/jdx/dotfiles.git");
         assert_eq!(request.git_ref.as_deref(), Some("main"));
-        assert!(repos::RepoRequest::from_toml("relative".to_string(), Default::default()).is_err());
+        assert!(
+            repos::RepoRequest::from_toml(
+                "relative".to_string(),
+                repos::RepoTomlConfig {
+                    url: Some("https://github.com/jdx/dotfiles.git".to_string()),
+                    git_ref: None,
+                },
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]

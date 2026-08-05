@@ -2,6 +2,7 @@
 # `mise lock`
 
 - **用法**: `mise lock [FLAGS] [TOOL]…`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/lock.rs`](https://github.com/jdx/mise/blob/main/src/cli/lock.rs)
 
 更新所有指定平台的锁文件校验和和 URL
@@ -17,7 +18,7 @@
 
 要在 lockfile 中更新的工具
 例如：node python
-如果未指定，将更新 lockfile 中的所有工具
+如果未指定，将更新 lockfile 中的所有工具。
 
 ## 标志
 
@@ -40,6 +41,26 @@
 例如：linux-x64,macos-arm64,windows-x64
 如果未指定，则会更新锁文件中已存在的所有平台
 
+### `--bump`
+
+根据最新可用版本重新解析模糊版本选择器
+
+默认情况下，`mise lock` 会刷新当前已锁定版本的元数据。
+使用此标志后，诸如 "latest"、"lts" 或 "20" 这样的前缀选择器会根据远程端最新的匹配版本重新解析，因此锁文件会向前推进，但不会安装任何内容。配置文件永远不会被修改：
+明确固定的版本会解析为其自身并保持不变
+（使用 `mise upgrade --bump` 可重写 mise.toml 中的固定版本）。
+
+### `--json`
+
+以 JSON 格式输出版本变更
+
+输出一个描述锁文件版本变更的对象数组：
+name、backend、lockfile、old_versions、new_versions。
+版本列表保留配置文件/锁文件中的顺序，不会排序。
+只报告版本级别的变更：对于未改变版本的校验和/URL 刷新不会生成条目，因此普通的 `mise lock --json`
+通常会输出 `[]`，同时仍会更新锁文件。
+不输出人类可读的内容。与 `--dry-run` 结合使用，可在不写入锁文件的情况下检测可用更新。
+
 ### `--local`
 
 更新 mise.local.lock 而不是 mise.lock
@@ -57,11 +78,13 @@
 示例：
 
 ```
-mise lock                       # 为所有常见平台更新锁文件
+mise lock                       # 为所有通用平台更新锁文件
 mise lock node python           # 仅更新 node 和 python
 mise lock --platform linux-x64  # 仅更新 linux-x64 平台
 mise lock --dry-run             # 显示将会更新的内容
-mise lock --minimum-release-age 2024-01-01   # 锁定在 2024-01-01 之前发布的最新/模糊版本
+mise lock --bump                # 将 "latest" 或 "20" 等选择器重新解析为最新的匹配版本
+mise lock --bump --dry-run --json   # 以 JSON 格式列出可用更新，但不写入
+mise lock --minimum-release-age 2024-01-01   # 锁定在 2024-01-01 之前发布的 latest/模糊版本
 mise lock --local               # 为本地配置更新 mise.local.lock
 mise lock --global              # 仅更新全局配置锁文件
 ```

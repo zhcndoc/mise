@@ -9,7 +9,7 @@ mise 中的模板提供了一种强大的方式来配置环境和项目设置的
 - 大多数 `mise.toml` 配置值
   - `mise.toml` 文件本身不支持模板，且必须是有效的 toml
 - `.tool-versions` 文件
-- `.miserc.toml` 文件（上下文有限——参见 [Template Support in .miserc.toml](#miserc-template-support)）
+- `.miserc.toml` 文件（上下文有限——参见 [Template Support in .miserc.toml](#miserc-template-support)）。
 
 ## 示例
 
@@ -31,7 +31,7 @@ node = "{{ get_env(name='NODE_VERSION', default='20') }}"
 
 ## 模板渲染
 
-Mise 使用 [tera](https://keats.github.io/tera/docs/) 来提供模板功能。
+Mise 使用 [tera](https://keats.github.io/tera/) 提供模板功能。
 在模板中，有 3 种分隔符：
 
 - <span v-pre>`{{`</span> 和 <span v-pre>`}}`</span> 用于表达式
@@ -52,7 +52,7 @@ Mise 使用 [tera](https://keats.github.io/tera/docs/) 来提供模板功能。
 
 这将变成 <span v-pre>`Hello {{name}}`</span>。
 
-Tera 支持 [字面量](https://keats.github.io/tera/docs/#literals)，包括：
+Tera 支持 [字面量](https://keats.github.io/tera/#literals)，包括：
 
 - 布尔值：`true`（或 `True`）和 `false`（或 `False`）
 - 整数
@@ -66,7 +66,7 @@ Tera 支持 [字面量](https://keats.github.io/tera/docs/#literals)，包括：
 - 点号 `.`，例如 <span v-pre>`{{ product.name }}`</span>
 - 方括号 `[]`，例如 <span v-pre>`{{ product["name"] }}`</span>
 
-Tera 还支持强大的 [表达式](https://keats.github.io/tera/docs/#expressions)：
+Tera 还支持强大的[表达式](https://keats.github.io/tera/#expressions)：
 
 - 数学表达式
   - `+`
@@ -88,24 +88,75 @@ Tera 还支持强大的 [表达式](https://keats.github.io/tera/docs/#expressio
 - 连接 `~`，例如 <code v-pre>{{ "hello " ~ 'world' ~ \`!\` }}</code>
 - in 检查，例如 <span v-pre>`{{ some_var in [1, 2, 3] }}`</span>
 
-Tera 还支持 [控制结构，例如 <span v-pre>`if`</span> 和
-<span v-pre>`for`</span>](https://keats.github.io/tera/docs/#control-structures)。
+Tera 还支持[控制结构，例如 <span v-pre>`if`</span> 和
+<span v-pre>`for`</span>](https://keats.github.io/tera/#control-structures)。
+
+### Tera v2 迁移
+
+mise 使用 Tera v2。Tera v1 的部分语法和内置功能在 Tera v2 中发生了变化。mise
+仍然可以出于兼容性考虑渲染许多旧模板。Tera v1 兼容性辅助功能将于
+mise 2026.10.0 开始发出警告，并计划在 mise 2027.4.0 中移除。
+
+在新模板中，建议优先使用以下 Tera v2 形式：
+
+| Tera v1 模式                            | Tera v2 替代形式                           |
+| ---------------------------------------- | ------------------------------------------ |
+| `value \| trim_start_matches(pat="v")`   | `value \| trim_start(pat="v")`             |
+| `value \| trim_end_matches(pat="-beta")` | `value \| trim_end(pat="-beta")`           |
+| `items \| slice(start=0, end=2)`         | `items[0:2]`                               |
+| `[base] \| concat(with="file.txt")`      | `[base, "file.txt"]`                       |
+| `[...items] \| concat(with=extra_items)` | `[...items, ...extra_items]`               |
+| `items \| map(attribute="name")`         | `[item.name for item in items]`            |
+| `items \| filter(attribute="active")`    | `[item for item in items if item.active]`  |
+| `value \| as_str`                        | `value \| str`                             |
+| `value \| escape`                        | `value \| escape_html`                     |
+| `value \| linebreaksbr`                  | `value \| newlines_to_br`                  |
+| `value is divisibleby(divisor=3)`        | `value is divisible_by(divisor=3)`         |
+| `value is object`                        | `value is map`                             |
+| `value \| indent(prefix=">")`            | 仅处理空格时使用 `value \| indent(width=1)` |
+| `value \| truncate`                      | `value \| truncate(length=255)`            |
+
+Tera v2 还增加了有用的语法，可以替代许多旧的辅助过滤器：
+
+- 数组和字符串切片，例如 `parts[0:2]`、`parts[-1]` 和 `name[::-1]`
+- 数组和映射展开，例如 `[first, ...rest]` 和 `{...base, key: value}`
+- 列表推导式，例如 `[tool.name for tool in tools if tool.active]`
+- 可选链，例如 `env?.NODE_ENV or "development"`
+- 三元表达式，例如 `"prod" if release else "dev"`
+
+并非所有 Tera v1 的行为都能实现兼容。Tera v2 中对未定义变量的访问更加严格，
+并且 mise 模板不支持 Tera v1 宏。作为临时的退出方案，在运行 mise 前设置
+`MISE_TERA_V1=1`，即可使用 Tera v1 渲染模板。在共享的 `mise.toml` 文件中，
+建议使用向后兼容的环境变量形式，因为较旧版本的 mise 会将其视为普通环境变量，
+而不会因未知设置而失败：
+
+```toml
+[env]
+MISE_TERA_V1 = true
+```
+
+较新的 `[settings] tera_v1 = true` 形式也适用于支持该设置的 mise 版本，
+但与旧版本的兼容性较差。启用后，所有常规配置和任务模板都会使用实际的
+Tera v1 引擎及其原始语法和内置功能。不启用时，模板将使用 Tera v2 以及下文所述的
+辅助功能。该退出方案计划在 mise 2027.4.0 中移除。由于 miserc 文件会在加载设置前
+进行渲染，因此加载 miserc 本身时不适用。
 
 ### Tera 过滤器
 
-你可以使用 [过滤器](https://keats.github.io/tera/docs/#filters) 来修改变量。
-你可以通过管道符（`|`）过滤变量，并且可以在括号中使用命名参数。
+你可以使用[过滤器](https://keats.github.io/tera/#filters)修改变量。
+可以通过管道符号（`|`）过滤变量，并可以在括号中提供命名参数。
 你还可以串联多个过滤器。
-例如 <span v-pre>`{{ "Doctor Who" | lower | replace(from="doctor", to="Dr.") }}`</span>
+例如，<span v-pre>`{{ "Doctor Who" | lower | replace(from="doctor", to="Dr.") }}`</span>
 将输出 `Dr. who`。
 
 ### Tera 函数
 
-[函数](https://keats.github.io/tera/docs/#functions) 为模板提供额外功能。
+[函数](https://keats.github.io/tera/#functions)为模板提供
+额外功能。
 
 ### Tera 测试
 
-你也可以使用 [测试](https://keats.github.io/tera/docs/#tests) 来检查变量。
+你还可以使用[测试](https://keats.github.io/tera/#tests)检查变量。
 
 ```
 {% if my_number is not odd %}
@@ -119,8 +170,8 @@ Mise 在 tera 功能的基础上提供了额外的变量、函数、过滤器和
 
 ### 变量
 
-Mise 暴露了若干 [变量](https://keats.github.io/tera/docs/#variables)。
-这些变量提供了当前环境的关键信息：
+Mise 暴露了多个[变量](https://keats.github.io/tera/#variables)。
+这些变量提供了有关当前环境的关键信息：
 
 - `env: HashMap<String, String>` – 以键值对映射的形式访问当前环境变量。
 - `cwd: PathBuf` – 指向当前工作目录。
@@ -173,30 +224,28 @@ echo "tag count={{ usage.tags | length }}"
 
 #### Tera 内置函数
 
-Tera 提供了许多[内置函数](https://keats.github.io/tera/docs/#built-in-functions)。
+Tera 提供了许多[内置函数](https://keats.github.io/tera/#built-in-functions)。
 `[]` 表示可选的函数参数。
-一些函数：
+部分函数如下：
 
-- `range(end, [start], [step_by])` - 返回一个使用所给参数创建的整数数组。
+- `range(end, [start], [step_by])` - 返回一个使用给定参数创建的整数数组。
   - `end: usize`：在 `end` 之前停止，必填
-  - `start: usize`：从哪里开始，默认为 `0`
-  - `step_by: usize`：每次递增多少，默认为 `1`
-- `now([timestamp], [utc])` - 返回本地日期时间字符串或时间戳整数。
-  - `timestamp: bool`：是否返回时间戳而不是日期时间
-  - `utc: bool`：是否返回 UTC 日期时间而不是本地时间
-  - 提示：使用 date 过滤器来格式化日期字符串。
-    例如，<span v-pre>`{{ now() | date(format="%Y") }}`</span> 获取当前年份。
-- `throw(message)` - 抛出带有该消息的错误。
-- `get_random(end, [start])` - 返回范围内的随机整数。
-  - `end: usize`：范围的上限
-  - `start: usize`：默认为 0
-- `get_env(name, [default])`：按名称返回环境变量值。
-  建议优先使用 `env` 变量而不是此函数。
-  - `name: String`：环境变量的名称
-  - `default: String`：当找不到环境变量时使用的默认值。
-    当无法找到环境变量且未设置 `default` 时会抛出错误。
+  - `start: usize`：起始位置，默认为 `0`
+  - `step_by: usize`：递增的数值，默认为 `1`
+- `now([timezone])` - 在默认的 Tera v2 模式下，以字符串形式返回当前日期时间。
+  时区默认为 UTC，并接受诸如 `America/New_York` 这样的 IANA 名称。
+  - 提示：使用 date 过滤器格式化日期字符串。
+    例如，<span v-pre>`{{ now() | date(format="%Y") }}`</span> 可获取当前年份。
+  - 使用 `tera_v1 = true` 时，仍可使用原始的 `now([timestamp], [utc])` 签名。
+- `throw(message)` - 抛出包含指定消息的异常。
+- `get_random(start, end, [seed])` - 返回指定范围内的随机整数。
+  提供 `seed` 后，结果将可复现。
 
-Tera 提供了更多函数。更多内容请参阅[Tera 文档](https://keats.github.io/tera/docs/#functions)。
+`before` 和 `after` 测试用于比较日期，并接受 `other` 和可选的 `inclusive` 参数：
+
+<span v-pre>`{% if release_date is after(other="2026-01-01") %}...{% endif %}`</span>
+
+Tera 还提供了更多函数。请参阅 [Tera 文档](https://keats.github.io/tera/#functions)。
 
 #### 其他 Mise 函数
 
@@ -206,25 +255,28 @@ Tera 提供了更多函数。更多内容请参阅[Tera 文档](https://keats.gi
 
 这些函数在所有任务中都可用，并且无论它们用于什么任务定义，其行为始终相同。换句话说，它们的返回值在不同任务定义之间是一致的。
 
-- `exec(command) -> String` – 运行一个 shell 命令并将其输出作为字符串返回。
+- `exec(command) -> String` – 执行 shell 命令并将其输出以字符串形式返回。
+- `get_env(name, [default]) -> String` – 根据名称返回原始进程环境变量的值。此辅助函数由 mise 提供，用于兼容较旧的 Tera 模板。在新模板中，尽可能优先使用 `env` 变量。
+  当环境变量不存在时，将使用 `default` 值；空环境变量将按原样返回。
 - `arch() -> String` – 获取系统架构，例如 `x64` 或 `arm64`。
-- `os() -> String` – 返回操作系统名称，
-  例如 linux、macos、windows。
-- `os_family() -> String` – 返回操作系统家族，例如 `unix`、`windows`。
-- `num_cpus() -> usize` – 获取系统可用的 CPU 数量。
-- `choice(n, alphabet)` - 使用 `alphabet` 有放回随机抽样生成一个长度为 `n` 的字符串。例如，`choice(n=64, alphabet='0123456789abcdef')` 将生成一个随机的 64 字符小写十六进制字符串。
-- `read_file(path) -> String` – 读取给定路径下文件的内容并以字符串形式返回。
+- `os() -> String` – 返回操作系统的名称，例如 linux、macos、windows。
+- `os_family() -> String` – 返回操作系统系列，例如 `unix`、`windows`。
+- `num_cpus() -> usize` – 获取系统上可用的 CPU 数量。
+- `choice(n, alphabet)` - 从 `alphabet` 中随机抽样并允许重复，生成长度为 `n` 的字符串。例如，`choice(n=64, alphabet='0123456789abcdef')` 将生成一个随机的 64 字符小写十六进制字符串。
+- `read_file(path) -> String` – 读取给定路径下文件的内容，并将其以字符串形式返回。
 
-##### 任务特定函数
+::: warning
+`exec()` 会在模板每次渲染时运行，包括评估配置模板的 `--dry-run` 操作。试运行模式会抑制计划执行的 mise 操作，但不会对模板函数执行的命令进行沙箱隔离或抑制。请确保传递给 `exec()` 的命令不会产生副作用。
+:::
+
+##### 特定任务函数
 
 这些函数是任务特定的，并且会根据所使用的任务而表现不同。换句话说，它们的返回值**_可能_**（但不保证）在任何给定 _任务_ 的多次执行之间保持一致，并且应当预期在不同任务定义之间不一致。
 
-例如，`task_source_files()` 会根据调用它的任务的[`sources`](https://mise.en.dev/tasks/task-configuration.html#sources)返回不同的文件路径集合。
+例如，`task_source_files()` 返回的文件路径集合会根据调用它的任务的 [`sources`](https://mise.jdx.dev/tasks/task-configuration.html#sources) 而有所不同。
 
-- <span id="task-source-files">`task_source_files() -> Vec<String>`</span> – 返回任务的[`sources`](https://mise.en.dev/tasks/task-configuration.html#sources)
-  作为解析后的文件路径数组。此函数会处理任务 sources 中定义的 glob 模式和 Tera 模板字符串，
-  将它们展开为实际文件路径。如果某个模式未匹配到任何文件，它将从结果中省略。如果未配置 sources，或
-  没有文件匹配这些模式，则返回空数组。
+- <span id="task-source-files">`task_source_files() -> Vec<String>`</span> – 返回任务的 [`sources`](https://mise.jdx.dev/tasks/task-configuration.html#sources)，
+  并以解析后的文件路径数组形式呈现。此函数会处理任务源中定义的 glob 模式和 Tera 模板字符串，将它们展开为实际的文件路径。如果某个模式未匹配到任何文件，则会将其从结果中省略。如果未配置源，或没有文件匹配这些模式，则返回空数组。
 
 #### 示例
 
@@ -260,48 +312,67 @@ run = '''
 
 ### 过滤器
 
-Tera 提供了许多[内置过滤器](https://keats.github.io/tera/docs/#built-in-filters)。
+Tera 提供了许多[内置过滤器](https://keats.github.io/tera/#built-in-filters)。
 `[]` 表示可选的过滤器参数。
-一些过滤器：
+一些在 Tera v2 中被移除或重命名的 Tera v1 过滤器仍受支持，
+以确保兼容性，直到 mise 2027.4.0。mise 将从 mise 2026.10.0 开始针对这些过滤器发出弃用警告。
+`tera-contrib` 提供的辅助工具支持使用，且不会发出弃用警告。
+部分过滤器如下：
 
 - `str | lower -> String` – 将字符串转换为小写。
 - `str | upper -> String` – 将字符串转换为大写。
-- `str | capitalize -> String` – 将字符串转换为首字母大写，
-  其余字符小写。
-- `str | replace(from, to) -> String` – 将字符串中所有 `from` 替换为
-  `to`。例如，<span v-pre>`{{ name | replace(from="Robert", to="Bob")}}`</span>
+- `str | capitalize -> String` – 将字符串中除第一个字符外的所有字符转换为小写，
+  并将第一个字符转换为大写。
+- `str | replace(from, to) -> String` – 将字符串中所有的
+  `from` 替换为 `to`。例如：<span v-pre>`{{ name | replace(from="Robert", to="Bob")}}`</span>
 - `str | title -> String` – 将句子中的每个单词首字母大写。
-  例如，<span v-pre>`{{ "foo bar" | title }}`</span> 变为 `Foo Bar`。
-- `str | trim -> String` – 移除首尾空白字符。
-- `str | trim_start -> String` – 移除前导空白字符。
-- `str | trim_end -> String` – 移除尾随空白字符。
+  例如，<span v-pre>`{{ "foo bar" | title }}`</span> 会变为 `Foo Bar`。
+- `str | trim -> String` – 移除开头和结尾的空白字符。
+- `str | trim_start -> String` – 移除开头的空白字符。
+- `str | trim_end -> String` – 移除结尾的空白字符。
 - `str | truncate -> String` – 将字符串截断为指定长度。
 - `str | first -> String` – 返回数组或字符串中的第一个元素。
 - `str | last -> String` – 返回数组或字符串中的最后一个元素。
 - `str | join(sep) -> String` – 使用分隔符连接字符串数组，
-  例如 <span v-pre>`{{ ["a", "b", "c"] | join(sep=", ") }}`</span>
-  生成 `a, b, c`。
+  例如将 <span v-pre>`{{ ["a", "b", "c"] | join(sep=", ") }}`</span>
+  处理为 `a, b, c`。
 - `str | length -> usize` – 返回字符串或数组的长度。
-- `str | reverse -> String` – 反转字符串中字符的顺序，或
-  数组中元素的顺序。
-- `str | urlencode -> String` – 对字符串进行编码，以便安全地用于 URL，
+- `str | reverse -> String` – 反转字符串中字符的顺序，
+  或数组中元素的顺序。
+- `str | urlencode -> String` – 对字符串进行编码，
+  使其可以安全地用于 URL，
   将特殊字符转换为百分号编码值。
-- `arr | map(attribute) -> Array` – 从数组中的每个对象提取一个属性。
-- `arr | concat(with) -> Array` – 向数组追加值。
+- `arr | map(attribute) -> Array` – 已弃用的兼容性过滤器。从数组中的每个对象提取
+  一个属性。
+- `arr | concat(with) -> Array` – 已弃用的兼容性过滤器。将值追加
+  到数组中。建议使用数组字面量和展开语法。
 - `num | abs -> Number` – 返回数字的绝对值。
-- `num | filesizeformat -> String` – 将整数转换为
-  人类可读的文件大小（例如，110 MB）。
-- `str | date(format) -> String` – 使用提供的格式将时间戳转换为
-  格式化的日期字符串，例如 <span v-pre>`{{ ts | date(format="%Y-%m-%d") }}`</span>。
-  时间格式列表可参考[`chrono` 文档](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)。
-- `str | split(pat) -> Array` – 按给定模式拆分字符串，并
-  返回子字符串数组。
+- `num | filesize_format -> String` – 将整数转换为
+  人类可读的文件大小。`filesizeformat` 也可作为别名使用。
+- `str | date(format, [timezone]) -> String` – 使用提供的格式将时间戳转换为
+  格式化的日期字符串，
+  例如 <span v-pre>`{{ ts | date(format="%Y-%m-%d") }}`</span>。
+  时间格式列表请参阅
+  [`jiff` 文档](https://docs.rs/jiff/latest/jiff/fmt/strtime/index.html)。
+- `str | b64_encode([url_safe], [padded]) -> String` – 将字符串编码为 base64。
+- `str | b64_decode([url_safe]) -> String` – 解码 base64 字符串。
+- `value | format(spec) -> String` – 使用 Rust 风格的格式化方式格式化值。
+- `value | json_encode([pretty]) -> String` – 将值编码为 JSON。
+- `array | shuffle([seed]) -> Array` – 随机打乱数组。
+- `str | regex_replace(pattern, rep) -> String` – 替换正则表达式匹配项。
+- `str | striptags -> String` – 移除 HTML 标签。
+- `str | spaceless -> String` – 移除 HTML 标签之间的空白字符。
+- `str | slug -> String` – 将字符串转换为适合 URL 的 slug。
+  `slugify` 也可作为别名使用。
+- `str | urlencode_strict -> String` – 对所有非字母数字字符进行百分号编码。
+- `str | split(pat) -> Array` – 根据给定模式拆分字符串，
+  并返回子字符串数组。
 - `str | default(value) -> String` – 如果变量未定义或为空，
   则返回默认值。
 
-Tera 提供了更多过滤器。更多内容请参阅 [tera 文档](https://keats.github.io/tera/docs/#built-in-filters)。
+Tera 还提供了更多过滤器。请参阅 [Tera 文档](https://keats.github.io/tera/#built-in-filters)了解更多信息。
 
-#### Hash
+#### 哈希
 
 - `str | hash([algorithm], [len]) -> String` – 为输入字符串生成哈希。
   - `algorithm: "sha256" | "blake3"`：要使用的哈希算法（默认：`"sha256"`）
@@ -334,12 +405,11 @@ Tera 提供了更多过滤器。更多内容请参阅 [tera 文档](https://keat
 - `path | last_modified -> String` – 返回文件的最后修改时间。
 - `path[] | join_path -> String` – 将路径数组连接为单一路径。
 
-例如，你可以使用 `split()`、`concat()` 和 `join_path` 过滤器来
-构造文件路径：
+例如，你可以使用数组字面量和 `join_path` 来构造文件路径：
 
 ```toml
 [env]
-PROJECT_CONFIG = "{{ [config_root] | concat(with='bar.txt') | join_path }}"
+PROJECT_CONFIG = "{{ [config_root, 'bar.txt'] | join_path }}"
 ```
 
 #### 字符串操作
@@ -354,8 +424,8 @@ PROJECT_CONFIG = "{{ [config_root] | concat(with='bar.txt') | join_path }}"
 
 ### 测试
 
-Tera 提供了许多 [内置测试](https://keats.github.io/tera/docs/#built-in-tests)。
-一些测试如下：
+Tera 提供了许多[内置测试](https://keats.github.io/tera/#built-in-tests)。
+一些测试：
 
 - `defined` - 如果给定变量已定义，则返回 `true`。
 - `string` - 如果给定变量是字符串，则返回 `true`。
@@ -368,7 +438,7 @@ Tera 提供了许多 [内置测试](https://keats.github.io/tera/docs/#built-in-
 - `matching` - 如果给定变量是字符串且与参数中的正则表达式
   匹配，则返回 `true`。
 
-Tera 提供了更多测试。更多内容请参阅 [tera 文档](https://keats.github.io/tera/docs/#built-in-tests)。
+Tera 还提供了更多测试。请参阅 [Tera 文档](https://keats.github.io/tera/#built-in-tests)了解更多信息。
 
 Mise 提供了额外的测试：
 

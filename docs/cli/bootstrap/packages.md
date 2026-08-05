@@ -2,9 +2,10 @@
 # `mise bootstrap packages`
 
 - **用法**: `mise bootstrap packages <SUBCOMMAND>`
-- **源代码**: [`src/cli/bootstrap/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/mod.rs)
+- **作用**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-管理 `[bootstrap.packages]` 中的引导系统包
+管理 `[bootstrap.packages]` 中的引导系统包。
 
 ## 子命令
 

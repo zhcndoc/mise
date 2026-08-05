@@ -102,7 +102,13 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 在此示例中，我们在非交互式 shell 配置文件（如 `.bash_profile` 或 `.zprofile`）中使用 [`mise activate --shims`](/cli/activate.html#shims)，并在交互式 shell 配置文件（如 `.bashrc` 或 `.zshrc`）中使用 `mise activate`
 
 ::: info
-[`mise activate`](/cli/activate.html) 会将 shims 目录从 `PATH` 中移除，因此你可以放心地先在 shell 配置文件中调用 [`mise activate --shims`](/cli/activate.html#shims)，之后再在交互式会话中调用 `mise activate`。
+可以在 shell 配置文件中调用 [`mise activate --shims`](/cli/activate.html#shims)，然后
+稍后在交互式会话中调用 [`mise activate`](/cli/activate.html) —— shims
+目录会发生什么取决于 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install)：
+
+- **启用（默认）**：`mise activate` 会将 shims 目录保留在 `PATH` 中，并置于它所管理的工具路径之后。当前工具集中解析到的工具仍然具有优先权，而 shims 会作为备用选项保留，以便当某个工具已有 shim 但缺少相应版本时触发自动安装。`mise doctor` 不会将这种组合报告为问题。
+- **禁用**：`mise activate` 会从 `PATH` 中移除 shims 目录。`PATH` 的其余部分保持不变。
+
 :::
 
 - 如果你愿意，也可以只使用 `shims`，不过这会带来一些[限制](/dev-tools/shims.html#shims-vs-path)。
@@ -166,7 +172,7 @@ production
 
 ### Hooks 与 shims
 
-[hooks](/hooks.html) 中的 `cd`、`enter`、`exit` 和 `watch_files` 只有在使用 `mise activate` 时才会触发。不过 `preinstall` 和 `postinstall` 仍然可以与 shims 一起工作，因为它们不需要 shell 集成。
+[hooks](/hooks.html) 中的 `cd`、`enter` 和 `leave` 仅在使用 `mise activate` 时触发。单独的 [`watch_files`](/hooks.html#watch-files-hook) 配置也需要使用 `mise activate`。不过，`preinstall` 和 `postinstall` 仍然可以与 shims 一起使用，因为它们不需要 shell 集成。
 
 ### `which`
 
@@ -196,7 +202,7 @@ done
 
 换句话说，从性能角度看，哪个更好完全取决于你如何调用 mise。实际上，大多数用户不会察觉到 `mise activate` 在终端上带来的几毫秒延迟。关于如何诊断性能问题，请参见 [故障排除：缓慢的 shell 提示符](/troubleshooting.html#slow-shell-prompts)。
 
-这两者唯一的区别在于，使用 `hook-env` 时，如果你更改了目录，就需要再次调用它；而使用 shims 则不需要。`mise activate` 会自动移除 shims 目录，因此你无需担心 PATH 中的 shims 处理问题。
+这两者之间唯一的区别是：如果你更改了目录，使用 `hook-env` 就需要再次调用它，而使用 shims 则不需要。如果你同时使用两者，`mise activate` 会为你处理 shims 目录：它会将该目录保留在工具路径之后，作为自动安装的后备路径；或者在禁用 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 时，将其完全从 `PATH` 中移除。
 
 ## 既不使用 shims 也不使用 PATH {#neither-shims-nor-path}
 

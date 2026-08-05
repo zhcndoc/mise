@@ -1,6 +1,7 @@
 use crate::config::config_file::mise_toml::MiseToml;
 use crate::config::settings::{SETTINGS_META, SettingsType};
-use crate::config::top_toml_config;
+use crate::config::{ConfigPathOptions, resolve_target_config_path, top_toml_config};
+use crate::file::display_path;
 use crate::toml::dedup_toml_array;
 use clap::ValueEnum;
 use eyre::bail;
@@ -18,8 +19,10 @@ pub struct ConfigSet {
 
     /// The path to the mise.toml file to edit
     ///
+    /// Can be a file path or directory. If a directory is provided, the config file in that directory is used.
+    ///
     /// If not provided, the nearest mise.toml file will be used
-    #[clap(short, long)]
+    #[clap(short, long, visible_alias = "path", value_hint = clap::ValueHint::AnyPath)]
     pub file: Option<PathBuf>,
 
     #[clap(value_enum, short, long, default_value_t)]
@@ -57,13 +60,22 @@ impl ConfigSet {
                 (k.to_string(), v.to_string())
             }
         };
-        let mut file = self.file;
-        if file.is_none() {
-            file = top_toml_config();
-        }
+        // Only an explicitly named target goes through the shared resolver — the default is a
+        // different rule (the top TOML config of the loaded set, not the nearest writable one).
+        let file = match self.file {
+            Some(path) => Some(resolve_target_config_path(ConfigPathOptions {
+                path: Some(path),
+                prefer_toml: true,
+                ..Default::default()
+            })?),
+            None => top_toml_config(),
+        };
         let Some(file) = file else {
             bail!("No mise.toml file found");
         };
+        if !file.exists() {
+            bail!("config file not found: {}", display_path(&file));
+        }
         let mut config: toml_edit::DocumentMut = std::fs::read_to_string(&file)?.parse()?;
         let mut container = config.as_item_mut();
         let parts = full_key.split('.').collect::<Vec<&str>>();
@@ -71,7 +83,12 @@ impl ConfigSet {
         for (idx, part) in parts.iter().take(parts.len() - 1).enumerate() {
             container = container
                 .as_table_like_mut()
-                .unwrap()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "cannot set '{full_key}': '{}' is already set to a non-table value",
+                        parts[..idx].join(".")
+                    )
+                })?
                 .entry(part)
                 .or_insert({
                     let mut t = toml_edit::Table::new();
@@ -143,12 +160,14 @@ impl ConfigSet {
             TomlValueTypes::Infer => bail!("Type not found"),
         };
 
-        let mut t = toml_edit::Table::new();
-        t.set_implicit(true);
-        let mut table = toml_edit::Item::Table(t);
         container
             .as_table_like_mut()
-            .unwrap_or_else(|| table.as_table_like_mut().unwrap())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "cannot set '{full_key}': '{}' is already set to a non-table value",
+                    parts[..parts.len() - 1].join(".")
+                )
+            })?
             .insert(last_key, value);
 
         let raw = config.to_string();

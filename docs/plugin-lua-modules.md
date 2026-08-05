@@ -15,7 +15,7 @@ mise 插件可以访问一整套内置 Lua 模块，这些模块提供常见功�
 - **`semver`** - 语义化版本比较和排序
 - **`html`** - HTML 解析和操作
 - **`archiver`** - 压缩包解压
-- **`log`** - 结构化日志记录
+- **`log`** - 结构化日志记录。
 
 ## HTTP 模块
 
@@ -432,20 +432,27 @@ end
 ```lua
 local archiver = require("archiver")
 
--- 将归档解压到目录
-local err = archiver.decompress("archive.tar.gz", "extracted/")
-if err ~= nil then
-    error("解压失败: " .. err)
-end
+-- 将归档文件解压到目录
+archiver.decompress("archive.tar.gz", "extracted/")
 
--- 解压 ZIP 文件
-local err = archiver.decompress("package.zip", "destination/")
-if err ~= nil then
-    error("ZIP 解压失败: " .. err)
+-- 失败时会引发 Lua 错误。仅当插件需要拦截错误时才使用 pcall。
+local ok, err = pcall(archiver.decompress, "package.zip", "destination/")
+if not ok then
+    error("ZIP extraction failed: " .. err)
 end
 ```
 
-### 真实示例：插件安装
+要展平归档文件根目录下的版本目录，请传入
+`strip_components = 1`。已位于归档文件根目录中的文件会被保留，这与
+mise 内置的归档后端行为一致。
+
+```lua
+archiver.decompress("node-v24.18.1-linux-x64.tar.gz", "destination/", {
+    strip_components = 1,
+})
+```
+
+### 实际示例：插件安装
 
 ```lua
 local archiver = require("archiver")
@@ -454,19 +461,12 @@ local http = require("http")
 function install_from_archive(download_url, install_path)
     -- 下载归档文件
     local archive_path = install_path .. "/download.tar.gz"
-    local err = http.download_file({
+    http.download_file({
         url = download_url
     }, archive_path)
 
-    if err ~= nil then
-        error("下载失败: " .. err)
-    end
-
     -- 解压到安装目录
-    local err = archiver.decompress(archive_path, install_path)
-    if err ~= nil then
-        error("解压失败: " .. err)
-    end
+    archiver.decompress(archive_path, install_path)
 
     -- 清理归档文件
     os.remove(archive_path)
@@ -512,6 +512,30 @@ if file.exists("important_file.txt") then
 else
     print("文件不存在")
 end
+```
+
+### 列出和匹配文件
+
+```lua
+local file = require("file")
+
+-- 立即返回的条目，按排序顺序排列
+local entries = file.list("/path/to/directory")
+
+-- 匹配 glob 的路径，按排序顺序排列
+local executables = file.glob(file.join_path("/path/to/bin", "mytool-*"))
+```
+
+### 移动文件和目录
+
+`file.move` 可以移动文件或整个目录。目标路径的父目录会自动创建。
+
+```lua
+local file = require("file")
+file.move(
+    file.join_path("/path/to/bin", "mytool-linux-amd64"),
+    file.join_path("/path/to/bin", "mytool")
+)
 ```
 
 ## 环境模块
@@ -869,7 +893,7 @@ end
 
 ```lua
 local cache = {}
-local cache_ttl = 3600  -- 1 hour
+local cache_ttl = 3600  -- 1 小时
 
 function cached_http_get(url)
     local now = os.time()

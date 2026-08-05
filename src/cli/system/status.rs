@@ -1,7 +1,7 @@
 use eyre::Result;
 use serde_json::json;
 
-use crate::config::{Config, Settings};
+use crate::config::Config;
 use crate::system;
 use crate::system::packages::PackageState;
 use crate::ui::table::MiseTable;
@@ -21,7 +21,6 @@ pub struct SystemStatus {
 
 impl SystemStatus {
     pub async fn run(self) -> Result<()> {
-        Settings::get().ensure_experimental("mise bootstrap")?;
         let config = Config::get().await?;
         let mgrs = system::packages_from_config(&config);
         let mut any_missing = false;
@@ -29,12 +28,12 @@ impl SystemStatus {
         let mut json_out = serde_json::Map::new();
         for mp in mgrs {
             let name = mp.manager.name();
-            if mp.disabled || !mp.manager.is_available() {
-                let reason = if mp.disabled {
-                    "excluded by the system_packages.managers setting".to_string()
-                } else {
-                    mp.manager.unavailable_reason()
-                };
+            let reason = if mp.disabled {
+                Some("excluded by the system_packages.managers setting".to_string())
+            } else {
+                mp.manager.unavailable_reason_async().await
+            };
+            if let Some(reason) = reason {
                 if self.json {
                     json_out.insert(
                         name.to_string(),
@@ -60,6 +59,10 @@ impl SystemStatus {
                     PackageState::Missing => {
                         any_missing = true;
                         ("".to_string(), "missing")
+                    }
+                    PackageState::NeedsRepair { installed } => {
+                        any_missing = true;
+                        (installed.clone(), "needs repair")
                     }
                     PackageState::VersionMismatch { installed } => {
                         any_missing = true;
@@ -105,7 +108,7 @@ impl SystemStatus {
             }
         }
         if self.missing && any_missing {
-            crate::exit(1);
+            return Err(crate::request_exit(1));
         }
         Ok(())
     }

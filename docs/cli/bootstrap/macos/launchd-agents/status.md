@@ -2,7 +2,8 @@
 # `mise bootstrap macos launchd-agents 状态`
 
 - **用法**: `mise bootstrap macos launchd-agents status [-J --json] [--missing]`
-- **源代码**: [`src/cli/bootstrap/macos/launchd_agents/status.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/macos/launchd_agents/status.rs)
+- **效果**: 只读
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

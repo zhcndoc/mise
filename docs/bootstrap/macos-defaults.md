@@ -1,8 +1,8 @@
-# macOS 默认设置 <Badge type="warning" text="experimental" />
+# macOS 默认设置
 
-mise 可以在
-`mise.toml` 的 `[bootstrap.macos.defaults]` 部分中声明 macOS 用户默认设置（偏好设置），并通过
-`mise bootstrap macos defaults apply` 应用它们：
+mise 可以在 `mise.toml` 的 `[bootstrap.macos.defaults]` 部分中声明 macOS 用户默认设置（偏好设置），并通过
+`mise bootstrap macos defaults apply` 或作为
+[`mise bootstrap`](/bootstrap.html) 的一部分应用这些设置：
 
 ```toml
 [bootstrap.macos.dock]

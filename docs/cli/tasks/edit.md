@@ -2,6 +2,7 @@
 # `mise tasks edit`
 
 - **用法**: `mise tasks edit [-p --path] <TASK>`
+- **作用**: 修改状态
 - **源代码**: [`src/cli/tasks/edit.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/edit.rs)
 
 使用 $EDITOR 编辑任务

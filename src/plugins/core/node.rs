@@ -129,12 +129,21 @@ impl NodePlugin {
             FetchOutcome::Downloaded => Ok(()),
             FetchOutcome::NotFound => {
                 if ctx.locked {
+                    if let Some(message) = node_flavor_not_found_message(opts) {
+                        bail!("{message}\nlocked mode requires the locked precompiled artifact")
+                    }
                     bail!(
                         "precompiled node archive not found and locked mode requires the locked precompiled artifact"
                     )
                 } else if Settings::get().node.compile != Some(false) {
+                    if let Some(message) = node_flavor_not_found_message(opts) {
+                        warn!("{message}");
+                    }
                     self.install_compiling(ctx, tv, opts).await
                 } else {
+                    if let Some(message) = node_flavor_not_found_message(opts) {
+                        bail!("{message}\ncompilation is disabled")
+                    }
                     bail!("precompiled node archive not found and compilation is disabled")
                 }
             }
@@ -274,7 +283,7 @@ impl NodePlugin {
         if let Some(cflags) = settings.node.cflags() {
             cmd = cmd.env("CFLAGS", cflags);
         }
-        cmd = cmd.envs(tv.install_env());
+        cmd = cmd.env_values(tv.install_env());
         Ok(cmd)
     }
 
@@ -330,15 +339,11 @@ impl NodePlugin {
     async fn verify_with_gpg(
         &self,
         ctx: &InstallContext,
-        tv: &ToolVersion,
+        _tv: &ToolVersion,
         shasums_file: &Path,
         v: &str,
         tarball_name: &str,
     ) -> Result<()> {
-        if file::which_non_pristine("gpg").is_none() && Settings::get().node.gpg_verify.is_none() {
-            warn!("gpg not found, skipping verification");
-            return Ok(());
-        }
         let sig_file = shasums_file.with_extension("asc");
         let sig_url = format!("{}.sig", self.shasums_url(v, tarball_name)?);
         if let Err(e) = HTTP
@@ -351,17 +356,9 @@ impl NodePlugin {
             }
             return Err(e);
         }
-        gpg::add_keys_node(ctx)?;
-        CmdLineRunner::new("gpg")
-            .arg("--quiet")
-            .arg("--trust-model")
-            .arg("always")
-            .arg("--verify")
-            .arg(sig_file)
-            .arg(shasums_file)
-            .with_pr(ctx.pr.as_ref())
-            .envs(tv.install_env())
-            .execute()?;
+        let shasums = file::read(shasums_file)?;
+        let signature = file::read(&sig_file)?;
+        gpg::verify_node(&shasums, &signature)?;
         Ok(())
     }
 
@@ -390,7 +387,7 @@ impl NodePlugin {
         Ok(CmdLineRunner::new(self.npm_path(tv))
             .with_pr(pr)
             .envs(config.env().await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .env(&*env::PATH_KEY, plugins::core::path_env_with_tv_path(tv)?)
             .env("NPM_CONFIG_UPDATE_NOTIFIER", "false"))
     }
@@ -447,7 +444,7 @@ impl NodePlugin {
         CmdLineRunner::new(corepack)
             .with_pr(pr)
             .arg("enable")
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .env(&*env::PATH_KEY, plugins::core::path_env_with_tv_path(tv)?)
             .execute()?;
         Ok(())
@@ -461,7 +458,7 @@ impl NodePlugin {
             .arg("enable")
             .arg("npm")
             .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .env(&*env::PATH_KEY, plugins::core::path_env_with_tv_path(tv)?)
             .execute()?;
         Ok(())
@@ -478,7 +475,7 @@ impl NodePlugin {
             .with_pr(pr)
             .arg("-v")
             .envs(config.env().await?)
-            .envs(tv.install_env())
+            .env_values(tv.install_env())
             .execute()
     }
 
@@ -572,7 +569,7 @@ impl Backend for NodePlugin {
             algorithm: Some("sha256".to_string()),
         }];
 
-        // GPG verification is available for Node.js v20+ when gpg is installed
+        // GPG verification is available for Node.js v20+ (built-in, no external gpg required)
         if Settings::get().node.gpg_verify != Some(false) {
             features.push(SecurityFeature::Gpg);
         }
@@ -643,14 +640,6 @@ impl Backend for NodePlugin {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
         Ok(aliases)
-    }
-
-    async fn _idiomatic_filenames(&self) -> Result<Vec<String>> {
-        Ok(vec![
-            ".node-version".into(),
-            ".nvmrc".into(),
-            "package.json".into(),
-        ])
     }
 
     async fn _parse_idiomatic_file(&self, path: &Path) -> Result<Vec<String>> {
@@ -1086,6 +1075,19 @@ fn mirror_url_for(node: &crate::config::settings::SettingsNode, filename: &str) 
     mirror
 }
 
+fn node_flavor_not_found_message(opts: &BuildOpts) -> Option<String> {
+    let settings = Settings::get();
+    let flavor = settings.node.flavor.as_deref()?;
+    Some(format!(
+        "precompiled node archive not found for node.flavor={flavor:?}: {}\n\
+         Node flavors are published by the unofficial builds project. Try:\n  \
+         mise settings set node.mirror_url {UNOFFICIAL_NODE_MIRROR_URL}\n  \
+         mise settings set node.flavor {flavor}\n\
+         or unset node.flavor to use official Node binaries.",
+        opts.binary_tarball_url
+    ))
+}
+
 fn os() -> &'static str {
     NodePlugin::map_os(built_info::CFG_OS)
 }
@@ -1169,7 +1171,7 @@ mod tests {
 
     impl NodeEnvResetGuard {
         fn clear() -> Self {
-            let vars = std::env::vars()
+            let vars = env::vars_safe()
                 .filter(|(key, _)| key.starts_with("NODE_"))
                 .collect::<BTreeMap<_, _>>();
             for key in vars.keys() {
@@ -1181,7 +1183,7 @@ mod tests {
 
     impl Drop for NodeEnvResetGuard {
         fn drop(&mut self) {
-            for key in std::env::vars()
+            for key in env::vars_safe()
                 .map(|(key, _)| key)
                 .filter(|key| key.starts_with("NODE_"))
                 .collect::<Vec<_>>()
@@ -1292,6 +1294,39 @@ mod tests {
         let musl = mirror_url_for(&node, "node-v24.14.0-linux-x64-musl.tar.gz");
         assert_eq!(glibc.as_str(), "https://corp.example/node/");
         assert_eq!(musl.as_str(), "https://corp.example/node/");
+    }
+
+    #[test]
+    fn test_node_flavor_not_found_message_is_flavor_specific() {
+        let lock = TEST_SETTINGS_LOCK.lock().unwrap();
+        let _guard = SettingsResetGuard { _lock: lock };
+        let mut settings = SettingsPartial::empty();
+        settings.node.flavor = Some("glibc-217".to_string());
+        Settings::reset(Some(settings));
+
+        let opts = BuildOpts {
+            version: "24.14.0".to_string(),
+            path: vec![],
+            install_path: PathBuf::from("node-v24.14.0"),
+            build_dir: PathBuf::from("node-v24.14.0"),
+            configure_cmd: "./configure".to_string(),
+            make_cmd: "make".to_string(),
+            make_install_cmd: "make install".to_string(),
+            source_tarball_name: "node-v24.14.0.tar.gz".to_string(),
+            source_tarball_path: PathBuf::from("node-v24.14.0.tar.gz"),
+            source_tarball_url: Url::parse("https://nodejs.org/dist/v24.14.0/node-v24.14.0.tar.gz")
+                .unwrap(),
+            binary_tarball_name: "node-v24.14.0-linux-x64-glibc-217.tar.gz".to_string(),
+            binary_tarball_path: PathBuf::from("node-v24.14.0-linux-x64-glibc-217.tar.gz"),
+            binary_tarball_url: Url::parse(
+                "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64-glibc-217.tar.gz",
+            )
+            .unwrap(),
+        };
+
+        let message = node_flavor_not_found_message(&opts).unwrap();
+        assert!(message.contains("node.flavor=\"glibc-217\""));
+        assert!(message.contains(UNOFFICIAL_NODE_MIRROR_URL));
     }
 
     #[test]

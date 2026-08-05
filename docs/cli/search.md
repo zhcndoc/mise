@@ -2,6 +2,7 @@
 # `mise search`
 
 - **用法**: `mise search [FLAGS] [NAME]`
+- **效果**: 只读
 - **源代码**: [`src/cli/search.rs`](https://github.com/jdx/mise/blob/main/src/cli/search.rs)
 
 在注册表中搜索工具

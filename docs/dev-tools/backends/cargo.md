@@ -64,9 +64,22 @@ mise use cargo:https://github.com/username/demo@rev:<commit_hash>
 安装的是预编译二进制文件，那么 Cargo 的构建设置和 `cargo install` 行为不会影响该
 工件。当你需要让 Cargo 设置控制安装时，请将 `cargo.binstall = false`。
 
-当 mise 使用 `cargo-binstall` 时，mise 只会运行一次 `cargo-binstall`，并让 `cargo-binstall`
-自行处理回退顺序，包括其最终回退到使用 `cargo install` 进行编译。若 `cargo-binstall`
-以错误退出，mise 不会再单独重试一次 `cargo install` 命令。
+当 mise 使用外部 `cargo-binstall` 时，它会禁用 cargo-binstall 的 `compile` 策略。如果
+cargo-binstall 报告没有可用的预编译工件（退出代码为 94），mise 会自行运行
+`cargo install`。其他 cargo-binstall 错误不会触发此回退。当
+`cargo.binstall_only = true` 时，没有显式 Git 源的 Cargo 工具必须由 cargo-binstall
+安装：mise 不会回退到 `cargo install`，而需要 `cargo install` 的选项会产生错误。显式
+Git 源不受影响，因为它们始终使用 `cargo install --git`，也永远不符合 cargo-binstall
+的使用条件。
+
+默认情况下，mise 会禁用外部 `cargo-binstall` 使用第三方
+[cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) 工件主机。这与 crate
+作者的 GitHub 发布内容以及 `package.metadata.binstall` 中声明的工件相互独立。结合始终
+禁用的 compile 策略，外部 cargo-binstall 的默认标志为
+`--disable-strategies compile,quick-install`。设置 `cargo.binstall_quickinstall = true` 可
+启用 quick-install；此时 mise 会传递 `--disable-strategies compile`。此设置不会影响 mise
+原生的 `cargo.binstall_native` 路径，该路径不使用 quickinstall。设置 `cargo.binstall = false`
+可完全禁用 binstall。
 
 <script setup>
 import Settings from '/components/settings.vue';
@@ -81,8 +94,12 @@ import Settings from '/components/settings.vue';
 当 `cargo-binstall` 可用时，mise 会将其用于注册表安装，除非某个工具选项需要
 `cargo install` 从源码构建。
 
-对于不会跳过 `cargo-binstall` 的选项，任何源码构建回退都由
-`cargo-binstall` 自身处理。`cargo-binstall` 失败后，mise 不会再额外执行一次编译回退。
+对于不会跳过 `cargo-binstall` 的选项，mise 会禁用 cargo-binstall 的编译策略，并且仅当
+cargo-binstall 以代码 94 退出、报告没有可用的预构建构件时，才自行运行 `cargo install`。
+
+Mise 会为每个已安装的 Cargo 版本记录生效的 `features`、`default-features`、`bin`、`crate` 和 `locked` 值。
+更改其中任何选项都会重新安装相同版本，而不是重新使用使用不同选项构建或选择的二进制文件。
+特性名称会被规范化，因此更改其顺序，或在字符串与数组之间切换，不会触发不必要的重新安装。
 
 | 选项                       | `cargo-binstall` 行为                                                                        |
 | -------------------------- | ---------------------------------------------------------------------------------------- |
@@ -108,6 +125,7 @@ import Settings from '/components/settings.vue';
 ```toml
 [tools]
 "cargo:cargo-edit" = { version = "latest", features = "add" }
+"cargo:sqlx-cli" = { version = "latest", features = ["postgres", "rustls"] }
 ```
 
 此选项需要 `cargo install`；当它被设置时，mise 会跳过 `cargo-binstall`。
@@ -157,5 +175,5 @@ import Settings from '/components/settings.vue';
 "cargo:https://github.com/username/demo" = { version = "latest", locked = false }
 ```
 
-此选项不会导致 mise 跳过 `cargo-binstall`；它只会在
-`cargo-binstall` 自身回退为使用 `cargo install` 编译时影响安装。
+此选项不会导致 mise 跳过 `cargo-binstall`；当 cargo-binstall 报告没有可用的预构建构件时，
+它会影响 mise 的 `cargo install` 回退流程。

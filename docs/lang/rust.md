@@ -1,8 +1,13 @@
 # Rust
 
-可以安装 Rust/cargo，它在底层使用 rustup。mise 会在 rustup 尚未安装时先安装 rustup，并添加所请求的目标。默认情况下，mise 会遵循 `RUSTUP_HOME` 和 `CARGO_HOME` 环境变量作为主目录；如果未设置，则回退到它们的标准位置（`~/.rustup` 和 `~/.cargo`）。如果你想将 mise 的 rustup/cargo 与你其他的 rustup/cargo 安装隔离开来，可以通过设置 `MISE_RUSTUP_HOME` 和 `MISE_CARGO_HOME` 环境变量来更改这一点。
+Rust/cargo 可以安装，其底层使用 rustup。若尚未安装，mise 会安装 rustup，并安装所请求的工具链、组件和目标。默认情况下，mise 会使用
+`RUSTUP_HOME` 和 `CARGO_HOME` 环境变量作为主目录；如果未设置，则回退到其标准位置（`~/.rustup` 和 `~/.cargo`）。
+如果你希望将 mise 的 rustup/cargo 与其他 rustup/cargo 安装隔离，可以通过设置 `MISE_RUSTUP_HOME` 和
+`MISE_CARGO_HOME` 环境变量来更改此设置。
 
-与大多数工具不同，这些不会出现在 `~/.local/share/mise/installs` 中，因为它们由 rustup 管理。mise 只会将 `RUSTUP_TOOLCHAIN` 环境变量设置为所请求的版本，而如果该版本不存在，rustup 会自动安装它。
+与大多数工具不同，这些工具不会存在于 `~/.local/share/mise/installs` 中，因为它们由 rustup 管理。
+mise 会在那里保留一个用于安装跟踪的符号链接，将 `RUSTUP_TOOLCHAIN` 环境变量设置为所请求的
+版本，并在运行 `mise install` 时要求 rustup 安装所有已配置的组件或目标。
 
 ## 用法
 
@@ -43,13 +48,14 @@ rust = { version = "latest", install_env = { RUSTUP_DIST_SERVER = "https://stati
 
 ### `components`
 
-`components` 选项允许你指定要安装哪些组件。多个组件可以通过逗号分隔来指定。可用组件集合会因不同版本和
-工具链而异。请查阅 Rust 文档以获取最新的组件列表。
+`components` 选项允许你指定要安装的组件。可以将多个组件指定为数组，或使用逗号分隔。可用组件的集合可能因不同的发行版本和工具链而异。请查阅 Rust 文档以获取最新的组件列表。
 
 ```toml
 [tools]
-"rust" = { version = "1.83.0", components = "rust-src,llvm-tools" }
+"rust" = { version = "1.83.0", components = ["rust-src", "llvm-tools"] }
 ```
+
+如果 Rust 工具链已经安装，`mise install` 仍会添加任何缺失的已配置组件。
 
 ### `profile`
 
@@ -68,16 +74,17 @@ rust = { version = "latest", install_env = { RUSTUP_DIST_SERVER = "https://stati
 
 ### `targets`
 
-`targets` 选项允许你指定用于交叉编译的目标平台列表。多个 target 可以
-通过逗号分隔来指定。
+`targets` 选项允许你指定要为交叉编译安装的平台列表。可以将多个目标指定为数组，或使用逗号分隔。
 
 ```toml
 [tools]
 "rust" = {
   version = "1.83.0",
-  targets = "wasm32-unknown-unknown,thumbv2-none-eabi",
+  targets = ["wasm32-unknown-unknown", "thumbv2-none-eabi"],
 }
 ```
+
+如果 Rust 工具链已经安装，`mise install` 仍会添加任何缺失的已配置目标。
 
 ## 设置
 

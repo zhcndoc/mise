@@ -2,6 +2,7 @@
 # `mise shell-alias`
 
 - **用法**: `mise shell-alias [--no-header] <SUBCOMMAND>`
+- **作用**: 只读
 - **源代码**: [`src/cli/shell_alias/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/shell_alias/mod.rs)
 
 管理 shell 别名。

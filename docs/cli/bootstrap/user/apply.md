@@ -2,7 +2,8 @@
 # `mise bootstrap user apply`
 
 - **用法**: `mise bootstrap user apply [-n --dry-run] [-y --yes]`
-- **源代码**: [`src/cli/bootstrap/user/apply.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap/user/apply.rs)
+- **效果**: 修改状态
+- **源代码**: [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 ## 标志
 

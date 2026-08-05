@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::backend::pipx::PIPXBackend;
@@ -15,7 +16,7 @@ use crate::toolset::outdated_info::OutdatedInfo;
 use crate::toolset::outdated_info::prefixed_latest_query;
 use crate::toolset::{
     ConfigScope, InstallOptions, ResolveOptions, ToolSource, ToolVersion, ToolsetBuilder,
-    get_versions_needed_by_tracked_configs_excluding_locks,
+    get_versions_needed_by_tracked_configs_excluding_locks, get_versions_needed_by_tracked_stubs,
 };
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::progress_report::SingleReport;
@@ -23,6 +24,7 @@ use crate::{config, exit, runtime_symlinks, ui};
 use console::Term;
 use demand::DemandOption;
 use eyre::{Context, Result, eyre};
+use indexmap::IndexMap;
 use jiff::{Span, Timestamp, civil::date};
 
 /// Upgrades outdated tools
@@ -31,7 +33,7 @@ use jiff::{Span, Timestamp, civil::date};
 /// upgrade to the latest 20.x.x version available. See the `--bump` flag to use the latest version
 /// and bump the version in mise.toml.
 ///
-/// This will update mise.lock if it is enabled, see https://mise.en.dev/configuration/settings.html#lockfile
+/// This will update mise.lock if it is enabled, see https://mise.jdx.dev/configuration/settings.html#lockfile
 #[derive(Debug, clap::Args)]
 #[clap(visible_alias = "up", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
 pub struct Upgrade {
@@ -100,6 +102,14 @@ pub struct Upgrade {
     #[clap(long, verbatim_doc_comment)]
     monorepo: bool,
 
+    /// Do not uninstall the versions that were upgraded away from
+    ///
+    /// By default the old version is removed once the new one installs, unless another
+    /// tracked config or tool stub still needs it. Use this to keep it anyway, e.g. when
+    /// something outside of mise points at the old install directory.
+    #[clap(long, verbatim_doc_comment)]
+    no_prune: bool,
+
     /// Connect backend install command stdin/stdout/stderr directly to the terminal
     /// Implies --jobs=1
     #[clap(long, overrides_with = "jobs")]
@@ -139,6 +149,7 @@ impl Upgrade {
             latest_versions: true,
             before_date,
             before_date_from_default: false,
+            filter_installed_versions_by_release_date: false,
             offline: false,
             refresh_remote_versions: false,
             inactive: self.inactive,
@@ -197,45 +208,67 @@ impl Upgrade {
             .build(config)
             .await?;
 
-        let mut outdated_with_config_files: Vec<(&OutdatedInfo, Arc<dyn config_file::ConfigFile>)> =
-            vec![];
+        let mut parsed_config_files: IndexMap<PathBuf, Arc<dyn config_file::ConfigFile>> =
+            IndexMap::new();
+        let mut failed_config_files = HashSet::new();
+        let mut outdated_with_config_files = vec![];
         for o in outdated.iter() {
             if let (Some(path), Some(_bump)) = (o.source.path(), &o.bump) {
-                match config_file::parse(path).await {
-                    Ok(cf) => outdated_with_config_files.push((o, cf)),
-                    Err(e) => warn!("failed to parse {}: {e}", display_path(path)),
+                let cf = if let Some(cf) = parsed_config_files.get(path) {
+                    Some(Arc::clone(cf))
+                } else if failed_config_files.contains(path) {
+                    None
+                } else {
+                    match config_file::parse(path).await {
+                        Ok(cf) => {
+                            parsed_config_files.insert(path.to_path_buf(), Arc::clone(&cf));
+                            Some(cf)
+                        }
+                        Err(e) => {
+                            warn!("failed to parse {}: {e}", display_path(path));
+                            failed_config_files.insert(path.to_path_buf());
+                            None
+                        }
+                    }
+                };
+                if let Some(cf) = cf {
+                    outdated_with_config_files.push((o, cf));
                 }
             }
         }
         let config_file_updates = outdated_with_config_files
             .iter()
-            .filter(|(o, cf)| {
+            .filter_map(|(o, cf)| {
                 if let Ok(trs) = cf.to_tool_request_set()
                     && let Some(versions) = trs.tools.get(o.tool_request.ba())
                     && versions.len() != 1
                 {
                     warn!("upgrading multiple versions with --bump is not yet supported");
-                    return false;
+                    return None;
                 }
-                true
+                Some((*o, Arc::clone(cf)))
             })
             .collect::<Vec<_>>();
 
         // Determine which old versions should be uninstalled after upgrade
         // Skip uninstall when current == latest (channel-based versions that update in-place)
-        let to_remove: Vec<_> = outdated
-            .iter()
-            .filter_map(|o| {
-                o.current.as_ref().and_then(|current| {
-                    // Skip if current and latest version strings are identical
-                    // This handles channels like "nightly", "stable", "beta" that update in-place
-                    if &o.latest == current {
-                        return None;
-                    }
-                    Some((o, current.clone()))
+        let to_remove: Vec<_> = if self.no_prune {
+            vec![]
+        } else {
+            outdated
+                .iter()
+                .filter_map(|o| {
+                    o.current.as_ref().and_then(|current| {
+                        // Skip if current and latest version strings are identical
+                        // This handles channels like "nightly", "stable", "beta" that update in-place
+                        if &o.latest == current {
+                            return None;
+                        }
+                        Some((o, current.clone()))
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
 
         if self.is_dry_run() {
             for (o, current) in &to_remove {
@@ -279,7 +312,7 @@ impl Upgrade {
                 }
             }
             if self.dry_run_code {
-                exit::exit(1);
+                return Err(exit::request(1));
             }
             return Ok(());
         }
@@ -294,6 +327,7 @@ impl Upgrade {
                 latest_versions: true,
                 before_date,
                 before_date_from_default: false,
+                filter_installed_versions_by_release_date: false,
                 offline: false,
                 refresh_remote_versions: false,
                 inactive: self.inactive,
@@ -310,21 +344,52 @@ impl Upgrade {
             split_install_result(ts.install_all_versions(config, tool_requests, &opts).await);
 
         // Only update config files for tools that were successfully installed
+        let mut config_file_updates_by_path = IndexMap::new();
         for (o, cf) in config_file_updates {
             if successful_versions
                 .iter()
                 .any(|v| v.ba() == o.tool_version.ba())
             {
+                config_file_updates_by_path
+                    .entry(cf.get_path().to_path_buf())
+                    .or_insert_with(|| (cf, vec![]))
+                    .1
+                    .push(o);
+            }
+        }
+        let mut config_file_errors = vec![];
+        for (path, (cf, updates)) in config_file_updates_by_path {
+            let mut update_failed = false;
+            for o in updates {
                 if let Err(e) =
                     cf.replace_versions(o.tool_request.ba(), vec![o.tool_request.clone()])
                 {
-                    return Err(eyre!("Failed to update config for {}: {}", o.name, e));
-                }
-
-                if let Err(e) = cf.save() {
-                    return Err(eyre!("Failed to save config for {}: {}", o.name, e));
+                    config_file_errors.push(eyre!("Failed to update config for {}: {}", o.name, e));
+                    update_failed = true;
+                    break;
                 }
             }
+            if update_failed {
+                continue;
+            }
+            if let Err(e) = cf.save() {
+                config_file_errors.push(eyre!(
+                    "Failed to save config {}: {}",
+                    display_path(&path),
+                    e
+                ));
+            }
+        }
+        if config_file_errors.len() == 1 {
+            return Err(config_file_errors.pop().unwrap());
+        }
+        if !config_file_errors.is_empty() {
+            let errors = config_file_errors
+                .into_iter()
+                .map(|e| format!("{e:#}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(eyre!("Failed to update config files:\n{errors}"));
         }
 
         // When a specific version is provided via CLI (e.g., `mise upgrade tiny@3.0.1`),
@@ -403,13 +468,22 @@ impl Upgrade {
                 upgraded_config_paths.insert(path.clone());
             }
         }
-        let versions_needed_by_tracked = get_versions_needed_by_tracked_configs_excluding_locks(
-            config,
-            true,
-            false,
-            &upgraded_config_paths,
-        )
-        .await?;
+        // Resolving every tracked config and stub is only worth doing when something is
+        // actually up for removal — with --no-prune, or when every upgrade was in-place,
+        // the answer would be discarded.
+        let versions_needed_by_tracked = if to_remove.is_empty() {
+            HashSet::new()
+        } else {
+            let mut needed = get_versions_needed_by_tracked_configs_excluding_locks(
+                config,
+                true,
+                false,
+                &upgraded_config_paths,
+            )
+            .await?;
+            needed.extend(get_versions_needed_by_tracked_stubs(config).await?);
+            needed
+        };
 
         // Only uninstall old versions of tools that were successfully upgraded
         // and are not needed by any tracked config
@@ -427,7 +501,7 @@ impl Upgrade {
                 let version_key = (old_tv.ba().short.to_string(), old_tv.tv_pathname());
                 if versions_needed_by_tracked.contains(&version_key) {
                     debug!(
-                        "Keeping {}@{} because it's still needed by a tracked config",
+                        "Keeping {}@{} because it's still needed by a tracked config or tool stub",
                         o.name, old_version
                     );
                     continue;
@@ -623,6 +697,9 @@ impl Upgrade {
             };
             match (eligible_latest, baseline_latest) {
                 (Some(eligible), Some(baseline)) if is_outdated_version(&eligible, &baseline) => {
+                    if current_satisfies_hidden_release(config, &tv, &baseline) {
+                        continue;
+                    }
                     let suffix = format!("latest eligible release is {eligible}");
                     warn_hidden_release_ignored_by_minimum_release_age(
                         config,
@@ -634,6 +711,9 @@ impl Upgrade {
                     .await;
                 }
                 (None, Some(baseline)) => {
+                    if current_satisfies_hidden_release(config, &tv, &baseline) {
+                        continue;
+                    }
                     warn_hidden_release_ignored_by_minimum_release_age(
                         config,
                         &tv,
@@ -684,6 +764,22 @@ impl Upgrade {
         };
         backend.latest_version_unfiltered(config, query).await
     }
+}
+
+fn current_satisfies_hidden_release(
+    config: &Arc<Config>,
+    tv: &ToolVersion,
+    hidden_version: &str,
+) -> bool {
+    OutdatedInfo::new(config, tv.clone(), hidden_version.to_string())
+        .ok()
+        .and_then(|info| info.current)
+        .as_deref()
+        .is_some_and(|current| current_version_satisfies_hidden_release(current, hidden_version))
+}
+
+fn current_version_satisfies_hidden_release(current: &str, hidden_version: &str) -> bool {
+    !is_outdated_version(current, hidden_version)
 }
 
 fn backend_matches(backends: &HashSet<String>, ba: &BackendArg) -> bool {
@@ -833,8 +929,18 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_hidden_release_details, release_is_eligible_at};
+    use super::{
+        current_version_satisfies_hidden_release, format_hidden_release_details,
+        release_is_eligible_at,
+    };
     use jiff::tz::TimeZone;
+
+    #[test]
+    fn test_current_version_satisfies_hidden_release() {
+        assert!(!current_version_satisfies_hidden_release("1.0.0", "1.1.0"));
+        assert!(current_version_satisfies_hidden_release("1.1.0", "1.1.0"));
+        assert!(current_version_satisfies_hidden_release("1.2.0", "1.1.0"));
+    }
 
     #[test]
     fn test_format_hidden_release_details_with_duration_age() {

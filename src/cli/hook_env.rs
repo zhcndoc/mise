@@ -3,11 +3,12 @@ use crate::direnv::DirenvDiff;
 use crate::env::{__MISE_DIFF, PATH_KEY, TERM_WIDTH};
 use crate::env::{join_paths, split_paths};
 use crate::env_diff::{EnvDiff, EnvDiffOperation, EnvMap};
-use crate::file::{canonicalize_cached, display_rel_path};
+use crate::file::{canonicalize_cached, display_path, display_rel_path};
 use crate::hook_env::{PREV_SESSION, WatchFilePattern};
 use crate::shell::{ShellType, get_shell};
 use crate::toolset::{ResolveOptions, Toolset, ToolsetBuilder};
-use crate::{env, exit, hook_env, hooks, watch_files};
+use crate::ui::style;
+use crate::{env, hook_env, hooks, watch_files};
 use console::truncate_str;
 use eyre::Result;
 use indexmap::IndexSet;
@@ -64,9 +65,20 @@ impl HookEnv {
                     {
                         trace!("failed to mark untrusted config warning seen: {mark_err}");
                     }
-                    return Err(err);
+                    // Entering a directory is not an explicit action, so show a
+                    // single-line warning instead of the full error chain.
+                    // Explicit commands still raise the full UntrustedConfig error.
+                    // Written directly to stderr because the untrusted config's own
+                    // [settings] (e.g. quiet, log_level) are applied before the trust
+                    // check and must not be able to silence this notice.
+                    safe_eprintln!(
+                        "{} {} {} is not trusted, run `mise trust` to enable it",
+                        style::eyellow("mise"),
+                        style::eyellow("WARN"),
+                        display_path(&config_path)
+                    );
                 }
-                exit(1);
+                return Err(crate::request_exit(1));
             }
         };
         // Shell activation must stay fast and non-networked; missing tools are
@@ -83,7 +95,7 @@ impl HookEnv {
         // Try to use cached watch_files for early exit check if env_cache is enabled
         // This avoids executing plugins just to get watch_files
         let watch_files = if Settings::get().env_cache {
-            if let Ok(Some(cached)) = ts.try_load_env_cache_full(&config) {
+            if let Ok(Some(cached)) = ts.try_load_env_cache_full(&config).await {
                 trace!("env_cache: using cached watch_files for early exit check");
                 cached
                     .watch_files
@@ -238,7 +250,7 @@ impl HookEnv {
             env_diff.extend(removed_keys);
             if !env_diff.is_empty() {
                 let env_diff = env_diff.into_iter().map(patch_to_status).join(" ");
-                info!("{}", truncate_str(&env_diff, TERM_WIDTH.max(60) - 5, "…"));
+                info!("{}", format_status(&env_diff));
             }
             // Use passed config_paths instead of calling config.path_dirs()
             let old_paths = &PREV_SESSION.config_paths;
@@ -430,6 +442,10 @@ impl HookEnv {
         )?
         .to_string_lossy()
         .into_owned();
+        // This PATH goes to the user's own shell rather than to a computed child env, so
+        // `PathEnv::join`'s check never sees it — and it is the copy a tool started directly
+        // from an activated shell inherits.
+        crate::path_env::warn_if_cmd_ignores_path_str(&new_path);
         let mut ops = vec![EnvDiffOperation::Add(PATH_KEY.to_string(), new_path)];
 
         // For DIRENV_DIFF, we need to include both filtered user_paths and filtered tool_paths

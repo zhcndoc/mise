@@ -14,7 +14,7 @@
 - **复杂安装逻辑**：处理源码编译、自定义构建和复杂的设置
 - **环境配置**：设置除 PATH 之外的复杂环境变量
 - **旧版文件支持**：解析其他工具的版本文件（`.nvmrc`、`.tool-version` 等）
-- **跨平台支持**：可在 Windows、macOS 和 Linux 上运行
+- **跨平台支持**：可在 Windows、macOS 和 Linux 上运行。
 
 ## 插件架构
 
@@ -49,9 +49,9 @@ graph TD
 
 ### 必需的 Hook
 
-功能性插件必须实现这些 hook：
+功能性插件必须实现这些 Hook：
 
-#### Available Hook
+#### 可用 Hook
 
 列出工具的所有可用版本：
 
@@ -188,7 +188,7 @@ end
 
 ### 可选 Hook
 
-这些 hook 提供额外功能：
+这些 Hook 提供额外功能：
 
 #### PostInstall Hook
 
@@ -332,6 +332,57 @@ PLUGIN = {
 当安装 hooks 需要 PATH 上的其他由 mise 管理的工具时，将 `depends` 添加到 `PLUGIN` 表中。使用它们在 `mise.toml` 中出现的工具名，例如 `depends = { "go", "make" }`。如果 hooks 不需要调用其他工具，则省略它。
 
 这与 `[tools]` 中的 `depends` 是分开的，后者只会让一个已配置的工具在安装图中等待另一个已配置的工具。vfox `metadata.lua` 中的 `depends` 是插件元数据；当匹配的工具被配置时，mise 会使用它来对当前安装任务排序，并构建 hook 环境。
+
+#### 系统依赖
+
+从源代码编译（或以其他方式依赖系统库和构建工具）的插件，可以通过 `systemDependencies` 声明这些前置条件。在安装工具之前，mise 会检查每一项，并根据 [`system_deps`](/configuration/settings.html#system_deps) 设置，报告缺失项、提供安装选项或自动安装缺失项。
+
+```lua
+PLUGIN = {
+    name = "php",
+    version = "1.0.0",
+
+    systemDependencies = {
+        -- PATH 上的可执行文件，可附带版本约束
+        { bin = "bison", version = ">=3.0",
+          packages = { brew = "bison", apt = "bison", dnf = "bison" } },
+        { bin = "re2c",
+          packages = { brew = "re2c", apt = "re2c", dnf = "re2c" } },
+
+        -- 可通过 pkg-config 发现的库
+        { pkgconfig = "libxml-2.0",
+          packages = { brew = "libxml2", apt = "libxml2-dev", dnf = "libxml2-devel" } },
+        { pkgconfig = "openssl",
+          packages = { brew = "openssl@3", apt = "libssl-dev", dnf = "openssl-devel" } },
+
+        -- 运行时共享库，通过 soname 指定（仅限 Linux）
+        { sharedlib = "libaio.so.1",
+          packages = { apt = "libaio1", dnf = "libaio" } },
+
+        -- 备用方案：任何退出状态为 0 即表示“满足”的 shell 命令
+        { command = "xcode-select -p", optional = "macOS 命令行工具" },
+    },
+}
+```
+
+每个条目必须设置**且只能设置一项**检查：
+
+| 检查       | 检测方式                                             | 用途                                       |
+| ----------- | -------------------------------------------------- | ------------------------------------------ |
+| `bin`       | 可在 `PATH` 上解析的可执行文件                       | 编译器、构建工具、`*-config` 脚本          |
+| `pkgconfig` | `pkg-config --exists <name>`                       | 提供 `.pc` 文件的 C 库                     |
+| `sharedlib` | 动态链接器能够解析 soname（仅限 Linux）              | 预编译二进制文件所需的运行时库              |
+| `command`   | shell 命令退出状态为 `0`                            | 上述方式无法表达的任何依赖                  |
+
+可选字段：
+
+- **`version`** — 适用于 `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或单独的 `3.0`，表示 `>=3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则会将该依赖视为满足（存在即可），而不会阻止安装。
+- **`optional`** — 简短的原因说明。缺少可选依赖时不会提示或失败；mise 会显示一行信息，让用户可以在不需要某些功能时继续构建（例如 Erlang 的 `wxWidgets` GUI）。
+- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`mas`）映射到提供相应功能的包。
+
+**检测结果是唯一依据。** 无论某项功能是通过 Homebrew、apt、nix、MacPorts 还是从源代码安装的，只要检查通过，就视为满足；mise 不会询问它是如何安装的。只有在**提供安装缺失项的选项**时，才会查询 `packages` 映射；它只是补救提示，并不声明该工具必须来自相应的包管理器。
+
+这些声明在较旧版本的 mise 和上游 vfox 中不会产生作用（两者都会忽略未知的 `PLUGIN` 字段），因此添加它们具有向后兼容性。
 
 ### 3. 辅助库
 
@@ -838,4 +889,4 @@ end
 - [了解后端插件开发](backend-plugin-development.md)
 - [探索可用的 Lua 模块](plugin-lua-modules.md)
 - [发布你的插件](plugin-publishing.md)
-- [查看 vfox-nodejs 插件源代码](https://github.com/version-fox/vfox-nodejs)
+- [查看 vfox-nodejs 插件源代码](https://github.com/version-fox/vfox-nodejs)。

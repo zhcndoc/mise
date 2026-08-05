@@ -1,6 +1,6 @@
-# pacman <Badge type="warning" text="experimental" />
+# pacman
 
-Arch 系 Linux（Arch、Manjaro、EndeavourOS 等）的系统包。
+基于 Arch 的 Linux 发行版（Arch、Manjaro、EndeavourOS 等）的系统软件包。
 
 ```toml
 [bootstrap.packages]

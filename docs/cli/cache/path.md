@@ -3,6 +3,7 @@
 
 - **用法**: `mise cache path`
 - **别名**: `dir`
+- **作用**: 只读
 - **源代码**: [`src/cli/cache/path.rs`](https://github.com/jdx/mise/blob/main/src/cli/cache/path.rs)
 
-显示缓存目录路径
+显示缓存目录路径。

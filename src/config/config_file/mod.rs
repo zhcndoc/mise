@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -296,8 +296,25 @@ pub async fn parse(path: &Path) -> Result<Arc<dyn ConfigFile>> {
         Some(ConfigFileType::IdiomaticVersion(backends)) => Ok(Arc::new(
             IdiomaticVersionFile::parse(path.to_path_buf(), backends).await?,
         )),
-        #[allow(clippy::box_default)]
         _ => Ok(Arc::new(MiseToml::default())),
+    }
+}
+
+/// Whether parsing `path` requires a trust record.
+///
+/// Tracked config loading uses this to avoid interactive prompts without
+/// discarding plain version files that never require trust.
+pub async fn path_requires_trust(path: &Path) -> bool {
+    if Settings::safe_mode() {
+        return false;
+    }
+    if Settings::try_get().is_ok_and(|settings| settings.paranoid) {
+        return true;
+    }
+    match detect_config_file_type(path).await {
+        Some(ConfigFileType::MiseToml) => !MiseToml::path_is_trust_exempt(path),
+        Some(ConfigFileType::ToolVersions) => ToolVersions::path_requires_trust(path),
+        Some(ConfigFileType::IdiomaticVersion(_)) | None => false,
     }
 }
 
@@ -318,6 +335,13 @@ pub fn is_path_trusted(path: &Path) -> bool {
 }
 
 pub fn trust_check(path: &Path) -> eyre::Result<()> {
+    // In safe mode, config is inert (no code execution, no env injection — see
+    // MISE_SAFE / the `safe` setting), so loading an untrusted config is
+    // harmless and no trust is required. `safe` is global-only, so a project
+    // config cannot disable it for itself.
+    if Settings::safe_mode() {
+        return Ok(());
+    }
     static MUTEX: Mutex<()> = Mutex::new(());
     let _lock = MUTEX.lock().unwrap(); // Prevent multiple checks at once so we don't prompt multiple times for the same path
     let config_root = config_trust_root(path);
@@ -352,7 +376,10 @@ pub fn is_trusted(path: &Path) -> bool {
             return false;
         }
     };
-    if is_ignored(canonicalized_path.as_path()) {
+    // The `ignored_config_paths` setting is an explicit "never load this
+    // config" instruction and is a hard block that takes precedence over
+    // everything, including `trusted_config_paths`.
+    if is_ignored_via_setting(canonicalized_path.as_path()) {
         return false;
     }
     if IS_TRUSTED
@@ -362,16 +389,22 @@ pub fn is_trusted(path: &Path) -> bool {
     {
         return true;
     }
-    if config::is_global_config(path) {
+    // `trusted_config_paths` is trusted by configuration and overrides the
+    // persisted ignore list (a dismissed trust prompt or `mise trust
+    // --ignore`), matching the "still trusted via settings" warnings emitted by
+    // `mise trust`. It is therefore checked *before* the persisted ignore list.
+    if trusted_config_path_matches(canonicalized_path.as_path()) {
         add_trusted(canonicalized_path.to_path_buf());
         return true;
     }
-    let settings = Settings::get();
-    for p in settings.trusted_config_paths() {
-        if canonicalized_path.starts_with(p) {
-            add_trusted(canonicalized_path.to_path_buf());
-            return true;
-        }
+    // The persisted ignore list blocks trust only when the path is not trusted
+    // via `trusted_config_paths` above.
+    if is_persisted_ignored(canonicalized_path.as_path()) {
+        return false;
+    }
+    if config::is_global_config(path) {
+        add_trusted(canonicalized_path.to_path_buf());
+        return true;
     }
 
     // Check if this path is within a trusted monorepo root
@@ -387,6 +420,7 @@ pub fn is_trusted(path: &Path) -> bool {
             current = dir;
         }
     }
+    let settings = Settings::get();
     if settings.paranoid {
         let trusted = trust_file_hash(path).unwrap_or_else(|e| {
             warn!("trust_file_hash: {e}");
@@ -399,8 +433,16 @@ pub fn is_trusted(path: &Path) -> bool {
         // in tests/CI we trust everything
         return true;
     } else if !trust_path(path).exists() {
-        // the file isn't trusted, and we're not on a CI system where we generally assume we can
-        // trust config files
+        // No direct trust record. A config inside a linked git worktree
+        // shares trust with the equivalent path in the repo's main checkout.
+        // Not applicable in paranoid mode (excluded above), where trust is
+        // tied to file contents that can differ between worktree branches.
+        if let Some(main_path) = crate::git::main_checkout_equivalent(&canonicalized_path)
+            && is_trusted(&main_path)
+        {
+            add_trusted(canonicalized_path.to_path_buf());
+            return true;
+        }
         return false;
     }
     add_trusted(canonicalized_path.to_path_buf());
@@ -429,7 +471,59 @@ pub fn rm_ignored(path: PathBuf) -> Result<()> {
     IS_IGNORED.lock().unwrap().remove(&path);
     Ok(())
 }
-pub fn is_ignored(path: &Path) -> bool {
+/// Whether an already-canonicalized path lives under a `trusted_config_paths`
+/// entry. Callers with a raw path use [`is_trusted_via_config_paths`], which
+/// canonicalizes first.
+fn trusted_config_path_matches(canonicalized_path: &Path) -> bool {
+    Settings::get()
+        .trusted_config_paths()
+        .any(|p| canonicalized_path.starts_with(p))
+}
+
+/// Whether `path` is trusted purely via the `trusted_config_paths` setting.
+///
+/// This is the signal that overrides the persisted ignore list (a dismissed
+/// trust prompt or `mise trust --ignore`) in both [`is_trusted`] and config
+/// discovery. It does not consider global config or per-file trust records.
+pub fn is_trusted_via_config_paths(path: &Path) -> bool {
+    // Config discovery calls this, and the initial `Settings` load itself runs
+    // config discovery (`load_config_paths`). Reading `trusted_config_paths`
+    // before settings are loaded would re-enter `Settings::get()` and recurse,
+    // so treat the path as not-yet-trusted until settings exist; discovery runs
+    // again once they do.
+    if !settings::is_loaded() {
+        return false;
+    }
+    match path.canonicalize() {
+        Ok(canonicalized_path) => trusted_config_path_matches(&canonicalized_path),
+        Err(_) => false,
+    }
+}
+
+/// Whether `path` is under an explicitly-configured `ignored_config_paths`
+/// (`MISE_IGNORED_CONFIG_PATHS`) entry.
+///
+/// This is an explicit "never load this config" instruction and is a hard
+/// block: it takes precedence over `trusted_config_paths`.
+pub fn is_ignored_via_setting(path: &Path) -> bool {
+    match path.canonicalize() {
+        Ok(path) => env::MISE_IGNORED_CONFIG_PATHS
+            .iter()
+            .any(|p| path.starts_with(p)),
+        Err(_) => {
+            debug!("is_ignored_via_setting: path canonicalize failed");
+            false
+        }
+    }
+}
+
+/// Whether `path` is in the persisted ignore list.
+///
+/// Entries are recorded when the user answers "No" to a trust prompt or runs
+/// `mise trust --ignore`. Unlike [`is_ignored_via_setting`], this only records
+/// a dismissed prompt, so it is overridden by `trusted_config_paths` (see
+/// [`is_trusted_via_config_paths`]).
+pub fn is_persisted_ignored(path: &Path) -> bool {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         if !dirs::IGNORED_CONFIGS.exists() {
@@ -442,15 +536,20 @@ pub fn is_ignored(path: &Path) -> bool {
             }
         }
     });
-    if let Ok(path) = path.canonicalize() {
-        env::MISE_IGNORED_CONFIG_PATHS
-            .iter()
-            .any(|p| path.starts_with(p))
-            || IS_IGNORED.lock().unwrap().contains(&path)
-    } else {
-        debug!("is_ignored: path canonicalize failed");
-        true
+    match path.canonicalize() {
+        Ok(path) => IS_IGNORED.lock().unwrap().contains(&path),
+        Err(_) => {
+            debug!("is_persisted_ignored: path canonicalize failed");
+            true
+        }
     }
+}
+
+/// Whether `path` is ignored, by either the `ignored_config_paths` setting or
+/// the persisted ignore list. Callers that need to respect the
+/// `trusted_config_paths` override use the finer-grained variants directly.
+pub fn is_ignored(path: &Path) -> bool {
+    is_ignored_via_setting(path) || is_persisted_ignored(path)
 }
 
 pub fn trust(path: &Path) -> Result<()> {
@@ -562,15 +661,61 @@ fn trust_file_hash(path: &Path) -> eyre::Result<bool> {
     Ok(hash == actual)
 }
 
-async fn filename_is_idiomatic(file_name: String) -> Option<Vec<Arc<dyn Backend>>> {
-    let mut backends = vec![];
+pub(crate) fn matching_idiomatic_filenames<'a>(
+    path: &Path,
+    filenames: impl IntoIterator<Item = &'a str>,
+) -> Vec<&'a str> {
+    let matches = filenames
+        .into_iter()
+        .filter(|filename| path.ends_with(filename))
+        .collect::<Vec<_>>();
+    let max_components = matches
+        .iter()
+        .map(|filename| Path::new(filename).components().count())
+        .max()
+        .unwrap_or_default();
+    matches
+        .into_iter()
+        .filter(|filename| Path::new(filename).components().count() == max_components)
+        .collect()
+}
+
+async fn path_is_idiomatic(path: &Path) -> Option<Vec<Arc<dyn Backend>>> {
+    let disable_files = Settings::try_get()
+        .map(|settings| settings.idiomatic_version_file_disable_files.clone())
+        .unwrap_or_default();
+    path_is_idiomatic_with_disabled_files(path, &disable_files).await
+}
+
+async fn path_is_idiomatic_with_disabled_files(
+    path: &Path,
+    disable_files: &BTreeSet<String>,
+) -> Option<Vec<Arc<dyn Backend>>> {
+    let mut backends_by_filename = BTreeMap::<String, Vec<Arc<dyn Backend>>>::new();
     for b in backend::list() {
         match b.idiomatic_filenames().await {
-            Ok(filenames) if filenames.contains(&file_name) => backends.push(b),
+            Ok(filenames) => {
+                for filename in filenames {
+                    if super::idiomatic_version_file_disabled(disable_files, b.id(), &filename) {
+                        continue;
+                    }
+                    backends_by_filename
+                        .entry(filename)
+                        .or_default()
+                        .push(b.clone());
+                }
+            }
             Err(e) => debug!("idiomatic_filenames failed for {}: {:?}", b, e),
-            _ => {}
         }
     }
+    let mut seen = HashSet::new();
+    let backends =
+        matching_idiomatic_filenames(path, backends_by_filename.keys().map(String::as_str))
+            .into_iter()
+            .flat_map(|filename| backends_by_filename.get(filename).into_iter().flatten())
+            .filter(|backend| seen.insert(backend.id().to_string()))
+            .cloned()
+            .collect::<Vec<_>>();
     if backends.is_empty() {
         None
     } else {
@@ -596,7 +741,7 @@ async fn detect_config_file_type(path: &Path) -> Option<ConfigFileType> {
         f if env::MISE_OVERRIDE_CONFIG_FILENAMES.contains(f) => Some(ConfigFileType::MiseToml),
         f if env::MISE_DEFAULT_CONFIG_FILENAME.as_str() == f => Some(ConfigFileType::MiseToml),
         f => {
-            if let Some(backends) = filename_is_idiomatic(f.to_string()).await {
+            if let Some(backends) = path_is_idiomatic(path).await {
                 Some(ConfigFileType::IdiomaticVersion(backends))
             } else if f.ends_with(".toml") {
                 Some(ConfigFileType::MiseToml)
@@ -610,7 +755,7 @@ async fn detect_config_file_type(path: &Path) -> Option<ConfigFileType> {
 impl Display for dyn ConfigFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let toolset = self.to_toolset().unwrap().to_string();
-        write!(f, "{}: {toolset}", &display_path(self.get_path()))
+        write!(f, "{}: {toolset}", display_path(self.get_path()))
     }
 }
 
@@ -629,9 +774,17 @@ impl Hash for dyn ConfigFile {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct TaskConfig {
+    pub cascade: Option<bool>,
     pub includes: Option<Vec<String>>,
     pub dir: Option<String>,
+    pub shell: Option<String>,
+    pub cache: Option<crate::task::TaskCacheConfig>,
+    pub global_env: Vec<String>,
+    pub global_pass_through_env: Vec<String>,
+    pub global_inputs: Vec<String>,
+    pub input_groups: IndexMap<String, Vec<String>>,
 }
 
 #[cfg(test)]
@@ -644,6 +797,7 @@ mod tests {
     #[tokio::test]
     async fn test_detect_config_file_type() {
         env::set_var("MISE_EXPERIMENTAL", "true");
+        backend::load_tools().await.unwrap();
         assert!(matches!(
             detect_config_file_type(Path::new("/foo/bar/.nvmrc")).await,
             Some(ConfigFileType::IdiomaticVersion(_))
@@ -664,6 +818,48 @@ mod tests {
             detect_config_file_type(Path::new("/foo/bar/rust-toolchain.toml")).await,
             Some(ConfigFileType::IdiomaticVersion(_))
         ));
+        assert!(matches!(
+            detect_config_file_type(Path::new("/foo/bar/.config/goreleaser.yaml")).await,
+            Some(ConfigFileType::IdiomaticVersion(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_parse_nested_registry_idiomatic_file() -> Result<()> {
+        env::set_var("MISE_EXPERIMENTAL", "true");
+        backend::load_tools().await?;
+        let dir = tempfile::tempdir()?;
+        let config_dir = dir.path().join(".config");
+        std::fs::create_dir_all(&config_dir)?;
+        let path = config_dir.join("goreleaser.yaml");
+        file::write(&path, "version: 2\n")?;
+
+        let tools = parse(&path)
+            .await?
+            .to_tool_request_set()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let (_, versions, _) = tools
+            .iter()
+            .find(|(backend, _, _)| backend.short == "goreleaser")
+            .expect("goreleaser should be parsed from its nested idiomatic path");
+
+        assert_eq!(versions[0].version(), "2");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_path_is_idiomatic_respects_disabled_files() -> Result<()> {
+        backend::load_tools().await?;
+        let disabled = BTreeSet::from(["node:package.json".to_string()]);
+
+        let backends = path_is_idiomatic_with_disabled_files(Path::new("package.json"), &disabled)
+            .await
+            .expect("package.json should remain idiomatic for package managers");
+
+        assert!(!backends.iter().any(|backend| backend.id() == "node"));
+        assert!(backends.iter().any(|backend| backend.id() == "pnpm"));
+        Ok(())
     }
 
     #[test]

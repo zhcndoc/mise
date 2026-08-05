@@ -36,6 +36,19 @@ mise x --deny-all --allow-read=. --allow-write=./dist --allow-net=registry.npmjs
 
 这些标志可同时用于 `mise exec`（`mise x`）和 `mise run`。
 
+## 默认限制
+
+通过以下设置，可以为每次 `mise exec` 和 `mise run` 调用启用沙箱拒绝规则：
+
+```toml
+[settings.sandbox]
+deny_all = true
+```
+
+可用设置与拒绝标志对应：`deny_all`、`deny_read`、`deny_write`、`deny_net` 和
+`deny_env`。任务和 CLI 标志仍可根据需要添加 `allow_read`、`allow_write`、`allow_net` 或
+`allow_env` 例外。
+
 ## 任务沙箱
 
 在 `mise.toml` 中定义的任务可以声明沙箱权限：
@@ -87,7 +100,7 @@ mise run --allow-net=registry.npmjs.org build
 ### 隐式规则
 
 - `--allow-write` 路径会被隐式视为可读
-- `--allow-read` 路径包含上面的系统必需路径
+- `--allow-read` 路径包含上面的系统必需路径。
 
 ## 平台支持
 

@@ -1,6 +1,8 @@
-# Shell 激活 <Badge type="warning" text="experimental" />
+# Shell 激活
 
-mise 可以通过 `[bootstrap.mise_shell_activate]` 声明式地为 bash、zsh 和 fish 添加 shell 激活片段。当你希望将 shims 和普通激活设置分开时，可以直接配置启动文件目标：
+mise 可以通过 `[bootstrap.mise_shell_activate]` 声明式地为 bash、zsh 和 fish 添加 [Shell 激活](/getting-started.html#activate-mise)
+代码片段，这些代码片段可通过 `mise bootstrap mise-shell-activate apply` 应用，也可以作为
+[`mise bootstrap`](/bootstrap.html) 的一部分应用。每个键表示一个 shell 启动文件，每个值选择一种模式：
 
 ```toml
 [bootstrap.mise_shell_activate]
@@ -40,7 +42,7 @@ Shell 键是快捷方式。例如，`zsh = true` 会展开为
 这些标记与 [Dotfiles](/dotfiles.html) 使用的编辑标记相同：
 
 ```sh
-# >>> mise:activate >>> managed by mise - do not edit between markers
+# >>> mise:activate >>> 由 mise 管理 - 不要编辑标记之间的内容
 eval "$(mise activate zsh)"
 # <<< mise:activate <<<
 ```
@@ -49,11 +51,16 @@ eval "$(mise activate zsh)"
 
 `[bootstrap.mise_shell_activate]` 遵循与其他 bootstrap 部分相同的手动、幂等模型：
 
-- **按目标覆盖** - 项目配置可以通过 `zshrc = false` 覆盖某个启动文件的全局设置，而不会更改 `zprofile`。
-- **仅手动应用** - mise 从不隐式编辑 shell 的 rc 文件。只有 `mise bootstrap mise-shell-activate apply` 和 `mise bootstrap` 会应用此部分。
-- **基于标记的编辑归属** - mise 只拥有其标记之间的块。rc 文件中的其他内容保持不变。
-- **默认情况下，shims 不会进入 `zshenv`** - 当显式配置时支持 `zshenv`，但 shell shortcuts 不会写入它，因为 zsh 会在每次调用时读取它，包括脚本。
-- **显式 dotfiles 优先** - 如果 `[dotfiles]` 已经将同一个 rc 文件作为整体文件管理，或者为同一目标/id 定义了编辑，例如 `"~/.zshrc/activate"`，mise 会跳过该 shell 的生成式 shell activation 条目。
+- **按目标覆盖** — 项目配置可以针对某个启动文件覆盖全局设置，例如设置
+  `zshrc = false`，而不改变 `zprofile`。
+- **仅手动应用** — mise 不会隐式编辑 shell rc 文件。
+  只有 `mise bootstrap mise-shell-activate apply` 和 `mise bootstrap` 会应用此部分。
+- **仅编辑标记所拥有的内容** — mise 只负责其标记之间的代码块。rc 文件中的其他
+  内容保持不变。
+- **默认不将 Shims 写入 `zshenv`** — 配置中可以显式支持 `zshenv`，但 shell 快捷方式不会写入其中，因为 zsh
+  会在每次调用时读取它，包括执行脚本时。
+- **显式 dotfiles 优先** — 如果 `[dotfiles]` 已经将同一个 rc 文件作为完整文件进行管理，或者为同一目标/id 定义了编辑操作，例如
+  `"~/.zshrc/activate"`，mise 会跳过为该 shell 生成的激活条目。
 
 对于完全由其管理的 rc 文件或自定义激活块，请直接改用 `[dotfiles]`。
 

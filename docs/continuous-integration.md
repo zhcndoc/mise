@@ -38,6 +38,22 @@ script: |
   ./bin/mise x -- npm test
 ```
 
+默认情况下，生成的脚本会安装生成该脚本时所使用的版本，但它也遵循与[安装脚本](/installing-mise.html)相同的
+`MISE_VERSION` 和 `MISE_INSTALL_PATH` 变量。
+如果显式指定了 `MISE_INSTALL_PATH`，则始终按原样使用；否则，`MISE_VERSION` 也会选择
+默认缓存路径，因此在 CI 中更新该变量会安装所请求的版本，而不是重新使用最先缓存的版本。
+
+## 针对不受信任的配置运行（安全模式）
+
+当作业从其无法控制的配置中解析工具版本时——最常见的情况是，某个机器人在拉取请求分支上刷新 `mise.lock`——请设置 `MISE_SAFE=1`，这样项目配置就无法执行代码。在安全模式下，mise 会拒绝（报错，绝不会静默回退）运行模板 `exec()`/`read_file()`、`_.source` 脚本、钩子、任务、asdf 插件脚本或安装插件，同时基于 HTTP 的后端仍可继续进行版本解析。
+
+```yaml
+script: |
+  MISE_SAFE=1 mise lock --bump --json
+```
+
+请参阅[安全模式](/security.html#safe-mode)，了解完整的允许和不允许操作列表。
+
 ## GitHub Actions
 
 如果你使用 GitHub Actions，我们提供了一个 [mise-action](https://github.com/jdx/mise-action)，用于封装 Mise 以及各工具的安装。你只需要将该 action 添加到你的工作流中：
@@ -74,7 +90,7 @@ jobs:
 
 ## GitLab CI
 
-你可以使用任何安装了 `mise` 的 docker 镜像来运行你的 CI 作业。
+你可以使用任何安装了 `mise` 的 Docker 镜像来运行你的 CI 作业。
 下面是一个使用 `debian-slim` 作为基础镜像的示例：
 ::: details 示例 Dockerfile
 
@@ -119,7 +135,7 @@ build-job:
 mise generate bootstrap -l -w
 ```
 
-你现在可以使用一个通用的 docker 镜像，例如下面这个，在 CI 中运行并安装 `mise`。
+你现在可以使用一个通用的 Docker 镜像，例如下面这个，在 CI 中运行并安装 `mise`。
 
 ::: details 示例 Dockerfile
 

@@ -50,7 +50,7 @@ mise unset NODE_ENV
 
 ## 使用环境变量
 
-在使用 [`mise x|exec`](/cli/exec.html) 时，或者在使用 [`mise r|run`](/cli/run.html)（即使用 [tasks](/tasks/)）时，环境变量可用：
+在使用 [`mise x|exec`](/cli/exec.html) 时，或者在使用 [`mise r|run`](/cli/run.html)（即使用 [任务](/tasks/)）时，环境变量可用：
 
 ```shell
 mise set MY_VAR=123
@@ -58,7 +58,7 @@ mise exec -- bash -c 'echo $MY_VAR'
 # 123
 ```
 
-当然，你也可以将它们与 [tools](/dev-tools/) 结合使用：
+当然，你也可以将它们与 [工具](/dev-tools/) 结合使用：
 
 ```sh
 mise use node@26
@@ -72,7 +72,7 @@ mise exec -- node --eval 'console.log(process.env.MY_VAR)'
 # 123
 ```
 
-如果 [mise is activated](/getting-started.html#activate-mise)，当你 `cd` 进入某个目录时，它会自动在当前 shell 会话中设置环境变量。
+如果 [mise 已激活](/getting-started.html#activate-mise)，当你 `cd` 进入某个目录时，它会自动在当前 shell 会话中设置环境变量。
 
 ```shell
 cd /path/to/project
@@ -90,7 +90,7 @@ echo $NODE_ENV
 ```shell
 mise set NODE_ENV=production
 mise use node@26
-# using the absolute path for the example
+# 使用绝对路径作为示例
 ~/.local/share/mise/shims/node --eval 'console.log(process.env.NODE_ENV)'
 ```
 
@@ -115,8 +115,12 @@ env = { _.file = '/path/to/file.env', "MY_VAR" = "my variable" }
 
 ## 延迟求值
 
-环境变量通常会在工具之前解析——这样你就可以使用环境变量来配置工具安装。
-不过，有时你希望访问由工具生成的环境变量。为此，将该值转换为一个映射，并设置 `tools = true`：
+环境变量通常会在工具之前解析——这样你就可以使用环境变量配置工具安装
+子进程。这不适用于配置 mise 本身的变量，例如 `MISE_DATA_DIR` 或 `MISE_INSTALLS_DIR`。这些变量会在进程启动时读取，
+因此应在调用 mise 之前在 shell 或 CI 环境中设置它们，而不是在 `[env]` 中设置。
+
+有时你可能希望访问工具生成的环境变量。为此，请使用 `tools = true` 将值转换为
+映射：
 
 ```toml
 [env]
@@ -143,6 +147,14 @@ redactions = ["SECRET_*", "*_TOKEN", "PASSWORD"]
 SECRET_KEY = "sensitive_value"
 API_TOKEN = "token_123"
 PASSWORD = "my_password"
+```
+
+在单个变量上设置 `redact = false`，可以将其排除在 `redactions` 模式的匹配范围之外，
+包括从全局配置继承的模式：
+
+```toml
+[env]
+TEST_TOKEN = { value = "not-sensitive", redact = false }
 ```
 
 ### 查看已脱敏的环境变量
@@ -290,7 +302,7 @@ ENABLE_BETA_FEATURES = { required = true }
 
 下面是一些示例配置文件及其对应的 `config_root`：
 
-| Config File                                 | `config_root` |
+| 配置文件                                    | `config_root` |
 | ------------------------------------------- | ------------- |
 | `~/src/foo/.config/mise/conf.d/config.toml` | `~/src/foo`   |
 | `~/src/foo/.config/mise/config.toml`        | `~/src/foo`   |
@@ -315,6 +327,14 @@ _.source = "scripts/env.sh"          # == "{{config_root}}/scripts/env.sh"
 `env._.*` 用于定义设置环境变量时的特殊行为。（例如：从文件中读取 env 变量）。由于嵌套的环境变量没有意义，
 我们利用这一点创建一个名为 “\_” 的键，它是一个
 用于配置这些指令的 TOML 表。
+
+::: warning
+`env._` 或 `vars._` 下内置的 `file`、`path` 和 `source` 指令对象中的 `value` 和 `values` 键已被弃用。请改用
+`path`，它接受单个字符串或字符串数组。这些键将在 mise 2026.12.0 中移除。这不影响普通环境变量
+对象中的 `value`，也不影响插件提供的指令选项。
+
+旧版的 `env.mise.*` 写法已被弃用。请改用 `env._.*`。它将在 mise 2026.12.0 中移除。
+:::
 
 ### `env._.file`
 
@@ -342,7 +362,7 @@ _.file = '.env'
 - 多个文件，可以是字符串和对象数组
 - 使用相对路径或绝对路径
 - 使用 `dotenv`、`json`、`yaml` 或 `toml` 文件格式
-- `redact` 和 `tools` 选项
+- `redact`、`tools` 和 `expand` 选项
 
 ```toml
 [env]
@@ -359,6 +379,18 @@ _.file = '.env.toml'
 # 在 tools 定义环境变量后，再从 dotenv 文件加载 env
 _.file = { path = ".env", tools = true }
 ```
+
+结构化 JSON、YAML 和 TOML 文件中的 Shell 风格展开默认处于禁用状态，因此包含字面量 `$` 字符的值会被保留。设置
+`expand = true` 可允许文件中的值引用同一文件中较早定义的变量、较早文件中的变量，或较早的 `[env]` 块中的变量：
+
+```toml
+[env]
+BASE = "/opt/project"
+_.file = { path = ".env.json", expand = true }
+```
+
+`env_shell_expand` 设置仍是全局开关，即使文件设置了 `expand = true`，它也可以禁用展开。无论如何，dotenv 文件都会保留 dotenvy
+正常的同文件展开行为；对于 dotenv 文件，`expand = true` 还会额外启用对之前加载的值的引用。
 
 ```toml
 [env]
@@ -437,6 +469,13 @@ source ./script.sh
 
 shebang 会被**忽略**。请参阅 [#1448](https://github.com/jdx/mise/discussions/6734)
 了解一种可能的替代方案，它可用于二进制文件或其他脚本语言。
+:::
+
+::: info Windows
+在 Windows 上，source 操作需要真正的 POSIX bash，例如 [Git for Windows](https://gitforwindows.org/)
+或 MSYS2。mise 会以与 bash 任务相同的方式自动检测它（即使 bash 不在 `PATH` 中，也会探测常见的安装位置；设置
+`MISE_BASH_PATH` 可指向特定的 bash；由于 WSL 无法读取 Windows 脚本路径，位于 `C:\Windows\System32\bash.exe` 的 WSL 启动器绝不会被自动选中）。脚本添加到开头的 `PATH`
+条目（以 `/c/...` 或 `/cygdrive/c/...` 形式表示）会被转换回 Windows 格式。
 :::
 
 `env._.source` 指令支持：
@@ -536,24 +575,12 @@ _.git-env = { production_branch = "main" }
 
 ## 多个 `env._` 指令
 
-有时可能需要使用多个 `env._` 指令，不过 TOML 会因为这种语法而失败，因为它在一个表中有 2 个相同的键：
+某些指令在需要多次应用时接受数组。例如，可以使用单个 `_.source` 键按顺序加载多个脚本：
 
 ```toml
 [env]
-_.source = "./script_1.sh"
-_.source = "./script_2.sh" # 无效 // [!code error]
+_.source = ["./script_1.sh", "./script_2.sh"]
 ```
-
-对于这个用例，你也可以选择通过使用 `[[env]]` 将 `[env]` 改为表数组：
-
-```toml
-[[env]]
-_.source = "./script_1.sh"
-[[env]]
-_.source = "./script_2.sh"
-```
-
-它的工作方式完全相同，但你可以拥有多个表。
 
 ## 模板
 
@@ -578,7 +605,7 @@ LD_LIBRARY_PATH = "/some/path:{{env.MY_PROJ_LIB}}"
 
 ## Shell 风格变量展开
 
-作为引用环境变量的 Tera 模板的一种更简单替代方案，你可以使用 shell 风格的 `$VAR` 语法：
+作为引用环境变量的 Tera 模板的一种更简单替代方案，你可以使用 Shell 风格的 `$VAR` 语法：
 
 ```toml
 [env]
@@ -595,10 +622,10 @@ LD_LIBRARY_PATH = "$MY_PROJ_LIB:$LD_LIBRARY_PATH"
 | `${VAR:-default}` | 如果 `VAR` 未设置或为空，则使用 `default`                                             |
 | `${VAR:-}`        | 如果 `VAR` 未设置，则展开为空字符串（抑制未定义变量警告）                              |
 
-展开会在 Tera 模板渲染之后运行，因此两种语法可以混合使用。
+展开会在 Tera 模板渲染之后运行，因此两种语法可以混合使用。  
 没有默认值的未定义变量会保持不展开，并产生警告。
 
-该设置控制 shell 展开：
+`env_shell_expand` 设置控制 Shell 展开：
 
-- **`true`** 或 **未设置**（默认）— 启用 shell 展开
-- **`false`** — 禁用 shell 展开
+- **`true`** 或 **未设置**（默认）— 启用 Shell 展开
+- **`false`** — 禁用 Shell 展开

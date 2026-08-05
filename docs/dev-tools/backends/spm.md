@@ -142,6 +142,26 @@ swift-testing-revolutionary --help
 "spm:swiftlang/swiftly" = { version = "latest", filter_bins = "swiftly" }
 ```
 
+### `install_command`
+
+从已检出的包目录中运行显式命令，而不是发现可执行产品并运行 `swift build --product`。
+该命令使用 mise 的默认内联 shell，并继承 [`install_env`](#install_env) 以及 Swift 依赖项的
+`PATH`。`PREFIX` 和 `MISE_TOOL_INSTALL_PATH` 都会设置为工具的安装目录。
+
+此选项仅适用于源代码安装，不能与 `filter_bins` 结合使用。mise 不会自动运行包的
+Makefile 或其他安装脚本；必须显式配置该命令。
+
+适用于可执行文件并非唯一需要安装的产物的包——例如某个包还附带动态库或 Swift 模块，
+其自身的 `make install` 目标会将这些文件放置在二进制文件旁边：
+
+```toml
+[tools]
+"spm:owner/repo" = { version = "1.2.3", artifactbundle = false, install_command = "make install PREFIX=\"$MISE_TOOL_INSTALL_PATH\"" }
+```
+
+有些安装脚本即使底层的 `swift build` 失败也会成功退出，因此 mise
+会验证该命令是否至少将一个可执行文件安装到了 `bin/` 中；否则安装将失败。
+
 ## 设置
 
 ### `spm.artifactbundle_only`

@@ -42,8 +42,20 @@ $ mise run deploy staging --verbose --region us-west-2
 # $usage_region = "us-west-2"
 ```
 
-除了环境变量之外，**usage 值还可以通过 `usage` 映射在任务运行脚本中的 Tera
-模板里使用**：
+对于普通任务执行，包括没有 usage 规范的任务，继承的 `usage_*` 值会被清除。使用 `raw_args = true` 的任务会保留继承的 `usage_*` 值。若要在正常解析的任务中有意继承某个值，请使用单独命名的环境变量，也可以通过 `env=` 指定：
+
+```mise-toml [mise.toml]
+[tasks.deploy]
+usage = 'arg "[environment]" env="DEPLOY_ENV"'
+run = 'echo "Deploying to ${usage_environment:-default}"'
+```
+
+```shell
+DEPLOY_ENV=staging mise run deploy
+```
+
+除了环境变量之外，**usage 值还可以通过 `usage` 映射在任务运行脚本的 Tera
+模板中使用**：
 
 ```mise-toml [mise.toml]
 [tasks.deploy]
@@ -456,7 +468,7 @@ fi
 | `${var:?}`        | 未设置或为空时出错           | 当你需要确保值非空时                               | `${usage_target:?}`           |
 | `${var:-default}` | 未设置时使用默认值           | usage 规范中没有 `default=` 的布尔标志             | `${usage_clean:-false}`       |
 | `${var:=default}` | 未设置时设置并使用默认值     | 当你希望为后续使用设置变量时                       | `${usage_dir:=.}`             |
-| `${var:+value}`   | 已设置时使用该值             | 条件性传递标志                                   | `${usage_verbose:+--verbose}` |
+| `${var:+value}`   | 已设置时使用该值             | 条件性传递标志                                     | `${usage_verbose:+--verbose}` |
 
 ### Usage 变量的指南
 
@@ -737,4 +749,4 @@ done
 - [TOML 任务](/tasks/toml-tasks) - TOML 任务语法
 - [文件任务](/tasks/file-tasks) - 基于文件的任务语法
 - [运行任务](/tasks/running-tasks) - 如何执行任务
-- [Usage 规范文档](https://usage.jdx.dev/spec/) - 完整的 usage 规范参考
+- [用法规范文档](https://usage.jdx.dev/spec/) - 完整的用法规范参考

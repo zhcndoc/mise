@@ -2,7 +2,7 @@
 
 ## 我不想把 `mise.toml`/`.tool-versions` 文件放进我的项目里，因为 git 会把它显示为未跟踪文件
 
-请使用 [`mise.local.toml`](https://mise.en.dev/configuration.html#mise-toml)，并把它加入你的全局 gitignore 文件。这个文件绝不应该被提交。
+使用 [`mise.local.toml`](https://mise.jdx.dev/configuration.html#mise-toml)，并将其添加到全局 gitignore 文件中。此文件不应被提交。
 
 如果你真的想使用 `mise.toml` 或 `.tool-versions`，这里有 3 种方法让 git 忽略这些文件：
 
@@ -23,7 +23,11 @@
 别名相关的功能出现了问题，请提交工单，或者直接坚持使用“node”和“go”。
 在内部，当 mise 读取配置文件或接收 CLI 输入时，它会将“nodejs”和“golang”替换掉。
 
-## `mise activate` 做什么？
+当 mise _写入_ `mise.toml`（`mise use`、`mise unuse`）时，它会写入规范名称——
+`nodejs` 条目会变成 `node`，同时保留其注释。`.tool-versions` 文件不受影响，仍然
+使用 asdf 的拼写方式。
+
+## `mise activate` 有什么作用？
 
 它会注册一个 shell 钩子，使得每次显示 shell 提示符时都运行 `mise hook-env`。
 `mise hook-env` 会检查当前的环境变量（最重要的是 `PATH`，但某些工具还会用到其他变量，比如
@@ -49,7 +53,7 @@ export PATH=$HOME/.local/share/installs/java/18/bin:$PATH
 由于它是在提示符显示时运行的，如果你尝试在
 非交互式会话中使用 `mise activate`（比如 bash 脚本），它将永远不会调用 `mise hook-env`，实际上也就
 永远不会修改 `PATH`，因为它从不显示提示符。对于这种设置，你可以每次需要更新 PATH 时手动调用
-`mise hook-env`，或者改用 [shims](/dev-tools/shims.md)
+`mise hook-env`，或者改用 [垫片](/dev-tools/shims.md)
 （更推荐）。
 或者，如果你只需要在某些命令中使用 mise，只需在命令前加上
 [`mise x --`](./cli/exec)。
@@ -75,7 +79,7 @@ export PATH=$HOME/.local/share/installs/java/18/bin:$PATH
 
 简短答案：只需设置 `http_proxy` 和 `https_proxy` 环境变量。这些变量应使用小写。
 
-如果某些插件未配置为使用这些环境变量，那么这对它们可能不起作用。
+如果某些插件未配置为使用这些环境变量，那么这对它们可能不起作用。  
 如果你在通过代理安装某个特定内容时遇到问题，你应该在该插件的仓库中提交一个 issue。
 
 ## 简写插件名称如何映射到仓库？
@@ -124,7 +128,7 @@ mv ~/.tool-versions ~/.tool-versions.bak
 cat ~/.tool-versions.bak | tr -s ' ' | tr ' ' '@' | xargs -n2 mise use -g
 ```
 
-当你对 mise 感到满意后，可以删除 `.tool-versions.bak` 文件，并[卸载 `asdf`](https://asdf-vm.com/manage/core.html#uninstall)
+当你对 mise 感到满意后，可以删除 `.tool-versions.bak` 文件，并[卸载 `asdf`](https://asdf-vm.com/manage/core.html#uninstall)。
 
 ## mise 与 asdf 的兼容性如何？
 
@@ -177,7 +181,7 @@ pitchfork（<https://pitchfork.jdx.dev/>）是一个面向开发者的进程管�
 
 在 VSCode 中，由于一个 [Node.js 安全修复](https://nodejs.org/en/blog/vulnerability/april-2024-security-releases-2#command-injection-via-args-parameter-of-child_processspawn-without-shell-option-enabled-on-windows-cve-2024-27980---high)，许多扩展会抛出“error spawn EINVAL”错误。
 
-默认的 `exe` shim 模式应该可以解决这个问题。如果你使用的是较旧的模式，可以将 [windows_shim_mode](https://mise.en.dev/configuration/settings.html#windows_shim_mode) 更改为 `exe`、`hardlink` 或 `symlink`。
+默认的 `exe` shim 模式应该可以解决此问题。如果你使用的是较旧的模式，可以将 [windows_shim_mode](https://mise.jdx.dev/configuration/settings.html#windows_shim_mode) 更改为 `exe`、`hardlink` 或 `symlink`。
 
 ## `mise install` 和 `mise use` 有什么区别？
 

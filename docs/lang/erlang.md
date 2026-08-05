@@ -23,10 +23,11 @@ mise use -g erlang@26
 该插件在底层使用 [kerl](https://github.com/kerl/kerl) 来构建 erlang。  
 有关如何配置 kerl 的信息，请参阅 kerl 的文档。
 
-在 GitHub Actions 的 Linux runner 上，`ImageOS=ubuntu24`、`ImageOS=ubuntu22` 和 `ImageOS=ubuntu20`  
-分别映射到预编译的 Erlang 构建目标 `ubuntu-24.04`、`ubuntu-22.04` 和  
-`ubuntu-20.04`。不受支持的值会在默认的 `erlang.compile` 模式下禁用预编译 lockfile URL 解析，  
-因此锁定安装可以回退到 kerl。
+在 GitHub Actions Linux runner 上，`ImageOS=ubuntu24`、`ImageOS=ubuntu22` 和 `ImageOS=ubuntu20`
+分别对应预编译的 Erlang 构建目标 `ubuntu-24.04`、`ubuntu-22.04` 和
+`ubuntu-20.04`。在默认的 `erlang.compile` 模式下，不受支持的值会将
+Erlang/OTP 源代码归档记录为平台锁定的输入，以便安装时能够复现
+kerl 的回退行为。
 
 ## 工具选项
 

@@ -81,8 +81,11 @@ mise 使用已配置的默认内联 shell 执行此命令。目标主机名可�
 mise 可以从 [glab](https://gitlab.com/gitlab-org/cli) 配置中读取令牌作为回退方案。它会检查：
 
 1. `$GLAB_CONFIG_DIR/config.yml`
-2. `$XDG_CONFIG_HOME/glab-cli/config.yml`（默认为 `~/.config/glab-cli/config.yml`）
-3. `~/Library/Application Support/glab-cli/config.yml`（macOS）
+2. `~/.config/glab-cli/config.yml` — glab 在每个平台上的旧位置，只要该文件存在，glab 仍会优先使用它
+3. `$XDG_CONFIG_HOME/glab-cli/config.yml`
+4. `~/Library/Application Support/glab-cli/config.yml`（macOS）
+5. `%LOCALAPPDATA%\glab-cli\config.yml`（Windows — glab 会将 `XDG_CONFIG_HOME` 解析为
+   `%LOCALAPPDATA%`，不同于使用 `%APPDATA%` 的 `gh`）
 
 使用以下配置禁用此回退方案：
 
@@ -343,16 +346,33 @@ no_app = true
 ### `bin_path`
 
 ::: v-pre
-指定解压后的归档中包含二进制文件的目录，或下载文件的放置位置。这支持使用 Tera 模板变量，例如 `{{ version }}`、`{{ os }}`、`{{ arch }}` 以及架构别名（`{{ darwin_os }}`、`{{ amd64_arch }}`、`{{ x86_64_arch }}`、`{{ gnu_arch }}`）：
+指定解压归档中包含二进制文件的目录，或指定下载文件的放置位置。此选项支持使用 `{{ version }}` 以及 `{{ os() }}` / `{{ arch() }}` 函数进行 Tera 模板化：
 :::
 
 ```toml
 [tools."gitlab:gitlab-org/gitlab-runner"]
 version = "latest"
-bin_path = "gitlab-runner-{{ version }}/bin" # expands to gitlab-runner-1.0.0/bin
+bin_path = "gitlab-runner-{{ version }}/bin" # 展开为 gitlab-runner-1.0.0/bin
 ```
 
-**二进制路径查找顺序：**
+这两个函数都接受关键字参数，用于重新映射 mise 将要输出的值（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），以适应上游项目使用不同目录名称的情况：
+
+```toml
+[tools."gitlab:owner/repo"]
+version = "latest"
+# 展开为 tool-1.0.0-linux-x86_64/bin
+bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/bin'
+```
+
+::: tip
+如上所示，当模板包含双引号时，请使用单引号括起来的 TOML 字符串。
+:::
+
+::: v-pre
+不存在单独的 `{{ os }}` / `{{ arch }}` 变量，也不存在 `{{ x86_64_arch }}` 风格的别名——要获取这些名称，应使用 `{{ arch(x64="x86_64", arm64="aarch64") }}`。
+:::
+
+**二进制文件路径查找顺序：**
 
 1. 如果指定了 `bin_path`，则使用该目录
 2. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
@@ -363,11 +383,12 @@ bin_path = "gitlab-runner-{{ version }}/bin" # expands to gitlab-runner-1.0.0/bi
 
 ### `filter_bins`
 
-以逗号分隔的二进制文件列表，将它们符号链接到一个经过过滤的 `.mise-bins` 目录中。当工具自带一些你不想暴露在 PATH 中的额外二进制文件时，这很有用。
+要链接到筛选后的 `.mise-bins` 目录中的二进制文件列表。当工具附带你不希望暴露在 PATH 中的额外二进制文件时，这很有用。
 
 ```toml
 [tools]
 "gitlab:myorg/mytool" = { version = "1.0.0", filter_bins = "mybin" }
+"gitlab:myorg/other-tool" = { version = "1.0.0", filter_bins = ["mybin", "helper"] }
 ```
 
 启用后：

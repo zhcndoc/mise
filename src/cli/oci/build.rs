@@ -6,7 +6,7 @@ use eyre::Result;
 use crate::cli::oci::common::{perform_build, short_digest};
 use crate::config::Settings;
 use crate::file::display_path;
-use crate::oci::{BuildOptions, LayerOwner};
+use crate::oci::{BuildOptions, LayerOwner, OciCopy};
 
 /// [experimental] Build an OCI image from the current mise.toml
 ///
@@ -20,6 +20,10 @@ use crate::oci::{BuildOptions, LayerOwner};
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
 pub struct Build {
+    /// Copy a host file, directory, or symlink into the image (repeatable, HOST:IMAGE)
+    #[clap(long, value_name = "HOST_PATH:IMAGE_PATH")]
+    copy: Vec<OciCopy>,
+
     /// Output directory for the OCI image layout
     #[clap(long, short, default_value = "./mise-oci", value_hint = ValueHint::DirPath)]
     output: PathBuf,
@@ -71,6 +75,10 @@ impl Build {
             mount_point: self.mount_point.clone(),
             owner: self.owner,
             include_mise: !self.no_mise,
+            copy: self.copy.clone(),
+            // Layer reuse would leave blob-less holes in the layout; `build`
+            // must produce a complete, standalone image directory.
+            reuse_from: None,
         };
         let out = perform_build(opts, self.include_global).await?;
 
@@ -103,7 +111,7 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
     $ <bold>skopeo inspect oci:./mise-oci</bold>
 
     Push to a registry:
-    $ <bold>skopeo copy oci:./mise-oci docker://ghcr.io/me/dev:latest</bold>
+    $ <bold>mise oci push --image-dir ./mise-oci ghcr.io/me/dev:latest</bold>
 
 <bold><underline>Notes:</underline></bold>
 

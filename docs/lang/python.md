@@ -74,12 +74,16 @@ mise 有两种方式来管理 Python 虚拟环境：
 | `python.uv_venv_auto` | uv 项目（带有 `uv.lock`）      | `[settings]` 部分   |
 | `_.python.venv`       | 不使用 uv 的项目              | `[env]` 部分        |
 
-**`python.uv_venv_auto`** 会检测并加载由 `uv` 管理的 `.venv`。使用 `"source"` 仅激活已存在的 venv，或使用 `"create|source"` 在缺失时创建。完整示例请参见 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
+**`python.uv_venv_auto`** 会检测并加载由 `uv` 管理的虚拟环境（默认为 `.venv`，或由 `UV_PROJECT_ENVIRONMENT` 配置的路径）。使用 `"source"` 只激活已存在的虚拟环境，或使用 `"create|source"` 在虚拟环境不存在时创建。mise 会通过向上查找 `uv.lock` 文件来定位 uv 项目，因此必须存在 `uv.lock`——没有该文件时，此设置不会执行任何操作。完整示例请参阅 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
 
 **`_.python.venv`** 会创建/激活一个 venv，并将其添加到 PATH。它既适用于 `mise activate`，也适用于 `mise exec`。对于不使用 uv 的项目，请使用此项。
 
 ::: warning
 这些是彼此独立的机制，代码路径不同。`_.python.venv` 中的 `uv_create_args` 和 `python_create_args` 等选项不会被 `python.uv_venv_auto` 使用。
+:::
+
+::: warning
+旧版的 `virtualenv` 工具选项（`[tools]` 中的 `python = { version = "3.15", virtualenv = ".venv" }`）已弃用，并将在未来版本中移除。请改用下面的 `_.python.venv`。
 :::
 
 ### `_.python.venv` 配置
@@ -108,8 +112,8 @@ _.python.venv = {
 _.python.venv = { path = ".venv", create = true, uv_create_args = ['--seed'] }
 ```
 
-除非设置 `create=true`，否则需要手动使用 `python -m venv /path/to/venv` 创建该 venv。
-有关 `_.python.venv`，请参见 [env-directives](https://mise.en.dev/environments/#env-directives)。
+除非设置了 `create=true`，否则需要使用 `python -m venv /path/to/venv` 手动创建 venv。
+有关 `_.python.venv` 的信息，请参阅 [env-directives](https://mise.jdx.dev/environments/#env-directives)。
 
 ::: tip
 虚拟环境激活需要使用 `mise activate` 或 `mise exec`。仅使用 [shims](/dev-tools/shims) 时，不会将 venv 的 `bin/` 目录加入 PATH，因此 `which python` 指向的会是 shim，而不是 venv 的解释器。
@@ -117,13 +121,23 @@ _.python.venv = { path = ".venv", create = true, uv_create_args = ['--seed'] }
 
 ### `python.uv_venv_auto` 设置
 
-对于由 uv 管理的项目（即包含 `uv.lock` 文件的项目），你可以使用 `python.uv_venv_auto` 设置，自动加载或创建由 uv 管理的 `.venv`。完整示例请参见 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
+对于由 uv 管理的项目（包含 `uv.lock` 文件的项目），可以使用 `python.uv_venv_auto` 设置来自动加载或创建由 uv 管理的虚拟环境。mise 会通过向上查找 `uv.lock` 来找到项目根目录；该锁定文件的存在是 mise 判断项目使用 uv 的依据，因此必须存在 `uv.lock`。如果找不到 `uv.lock`，此设置不会执行任何操作——请先运行 `uv sync`（或 `uv lock`）生成该文件。完整示例请参阅 [mise + uv Cookbook](/mise-cookbook/python.html#mise-uv)。
 
 ```toml [mise.toml]
 [settings]
 python.uv_venv_auto = "source"        # 激活已存在的 .venv
 # 或
 python.uv_venv_auto = "create|source" # 如果缺失则创建 .venv，然后激活
+```
+
+mise 在选择环境路径时会遵循 uv 的 `UV_PROJECT_ENVIRONMENT` 变量。相对路径会相对于 uv 项目根目录（包含 `uv.lock` 的目录）解析，而绝对路径则按原样使用。当该变量未设置或为空时，mise 使用 `.venv`。
+
+```toml [mise.toml]
+[env]
+UV_PROJECT_ENVIRONMENT = "my.venv"
+
+[settings]
+python.uv_venv_auto = "create|source"
 ```
 
 ## mise & uv
@@ -194,13 +208,32 @@ pipenv
 
 不过，这些二进制文件可能无法在较旧的 CPU 上运行；但你可以通过将 `MISE_PYTHON_PRECOMPILED_ARCH` 设置为不同的版本，选择与旧 CPU 更兼容的二进制文件。有关此选项的更多信息，请参见 <https://gregoryszorc.com/docs/python-build-standalone/main/running.html>。将其设置为 "x86_64" 可获得最兼容的二进制文件。
 
+## Windows
+
+mise 在 Windows 上使用相同的预编译 python-build-standalone 二进制文件
+（不支持在那里使用 python-build 进行编译）。mise 对上游的两个
+[问题](https://github.com/astral-sh/python-build-standalone/blob/main/docs/quirks.rst)
+进行了平滑处理：
+
+- 压缩包中只包含 `python.exe`，因此 mise 会在其旁边创建一个
+  `python3.exe` 别名。
+- 压缩包中不包含 `pip.exe`（pip 只能通过 `python -m pip` 使用），
+  因此 mise 会在安装根目录中创建 `pip.cmd`/`pip3.cmd` 包装器，
+  将调用委托给 `python -m pip`。由于它们采用委托方式，即使 pip
+  自行升级后仍然可以正常工作。
+
+安装目录中的 `Scripts` 目录会被加入 `PATH`，因此通过 `pip install`
+安装的控制台脚本（例如 `black`）可以直接运行。如果你依赖 shim
+而不是 `mise activate`，请在执行 `pip install` 后运行 `mise reshim`，
+为新安装的可执行文件生成 shim。
+
 ## python-build
 
-可选地，mise
-使用 [python-build](https://github.com/pyenv/pyenv/tree/master/plugins/python-build)（pyenv 的一部分）
-来编译 Python 运行时，
-你需要确保在使用
-python-build 安装 Python 之前，
+可选地，mise  
+使用 [python-build](https://github.com/pyenv/pyenv/tree/master/plugins/python-build)（pyenv 的一部分）  
+来编译 Python 运行时，  
+你需要确保在使用  
+python-build 安装 Python 之前，  
 其[依赖项](https://github.com/pyenv/pyenv/wiki#suggested-build-environment)已安装。
 
 ## 安装无 GIL Python

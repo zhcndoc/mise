@@ -53,13 +53,18 @@ pub struct SystemImport {
     dry_run: bool,
 
     /// Write to this config file or directory
-    #[clap(long, short, value_name = "PATH", conflicts_with = "global")]
+    #[clap(
+        long,
+        short,
+        visible_alias = "file",
+        value_name = "PATH",
+        conflicts_with = "global"
+    )]
     path: Option<PathBuf>,
 }
 
 impl SystemImport {
     pub async fn run(self) -> Result<()> {
-        Settings::get().ensure_experimental("mise bootstrap")?;
         if Settings::get()
             .system_packages
             .managers

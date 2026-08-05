@@ -256,6 +256,15 @@ rename_exe = "kubectl-openunison-cli"  # 重命名解压后的二进制文件，
 
 其工作方式是：在解压后的目录中（如果指定了 `bin_path`，则在其中）查找第一个可执行文件，并将其重命名为指定名称。
 
+要从一个归档中重命名**多个**二进制文件，请使用表格形式——每个键都是源文件名（精确文件名或 glob），每个值都是新名称：
+
+```toml
+[tools."http:mytool"]
+version = "1.0.0"
+url = "https://example.com/mytool-v{{version}}-linux.zip"
+rename_exe = { "mytool-*" = "mytool", "myhelper-*" = "myhelper" }
+```
+
 ::: tip
 对于重命名单个二进制下载文件，请使用 `bin`；对于重命名归档内的可执行文件，请使用 `rename_exe`。
 :::
@@ -430,7 +439,7 @@ bin_path = "my-tool-{{version}}/bin" # 展开为 my-tool-1.0.0/bin
 1. 如果指定了 `bin_path`，则使用该目录
 2. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
 3. 如果不存在 `bin/` 目录，则在子目录中搜索 `bin/` 目录
-4. 如果未找到任何 `bin/` 目录，则使用解压目录的根目录
+4. 如果未找到任何 `bin/` 目录，则使用解压目录的根目录。
 
 ## 缓存行为
 
@@ -499,4 +508,4 @@ HTTP 后端缓存遵循 mise 的标准缓存管理：
 - 可使用 `mise cache clear` 清除缓存条目
 - 缓存目录会遵守 `MISE_CACHE_DIR` 环境变量
 - **自动清理器**：mise 会在 30 天无活动后自动清理未使用的缓存条目
-- 如有需要，可使用 `mise cache clear` 进行手动清理
+- 如有需要，可使用 `mise cache clear` 进行手动清理。

@@ -32,6 +32,9 @@ impl TasksInfo {
         let tasks = if task_name.starts_with("//") {
             let ctx = crate::task::TaskLoadContext::from_pattern(&task_name);
             config.tasks_with_context(Some(&ctx)).await?
+        } else if crate::task::is_workspace_project_task(&task_name) {
+            let ctx = crate::task::TaskLoadContext::all();
+            config.tasks_with_context(Some(&ctx)).await?
         } else {
             config.tasks().await?
         };
@@ -47,7 +50,9 @@ impl TasksInfo {
             let mut tasks = vec![task.clone()];
             // always pass no_cache=false as the command doesn't take no-cache argument
             // MISE_TASK_REMOTE_NO_CACHE env var is still respected if set
-            TaskFetcher::new(false).fetch_tasks(&mut tasks).await?;
+            TaskFetcher::new(false)
+                .fetch_tasks(&config, &mut tasks)
+                .await?;
             let task = &tasks[0];
 
             if self.json {
@@ -71,7 +76,10 @@ impl TasksInfo {
             info::inline_section("Aliases", task.aliases.join(", "))?;
         }
         info::inline_section("Description", &task.description)?;
-        info::inline_section("Source", display_path(&task.config_source))?;
+        info::inline_section(
+            "Source",
+            task.config_sources().iter().map(display_path).join(", "),
+        )?;
         let mut properties = vec![];
         if task.hide {
             properties.push("hide");
@@ -101,6 +109,9 @@ impl TasksInfo {
         let outputs = task.outputs.paths(task, &root);
         if !outputs.is_empty() {
             info::inline_section("Outputs", outputs.join(", "))?;
+        }
+        if task.cache.as_ref().is_some_and(|cache| cache.enabled) {
+            info::inline_section("Cache", "enabled")?;
         }
         if let Some(file) = &task.file {
             info::inline_section("File", display_path(file))?;
@@ -138,6 +149,7 @@ impl TasksInfo {
             "aliases": task.aliases,
             "description": task.description,
             "source": task.config_source,
+            "config_sources": task.config_sources(),
             "depends": task.depends,
             "depends_post": task.depends_post,
             "wait_for": task.wait_for,
@@ -154,6 +166,7 @@ impl TasksInfo {
             "interactive": task.interactive,
             "sources": task.sources,
             "outputs": task.outputs,
+            "cache": task.cache.clone().unwrap_or_default(),
             "shell": task.shell,
             "quiet": task.quiet,
             "silent": task.silent,
@@ -182,6 +195,7 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
       "aliases": "t",
       "description": "Test the application",
       "source": "~/src/myproj/mise.toml",
+      "config_sources": ["~/src/myproj/mise.toml"],
       "depends": [],
       "env": {},
       "dir": null,

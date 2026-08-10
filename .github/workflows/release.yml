@@ -212,7 +212,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-tarball-linux]
     timeout-minutes: 10
-    container: ghcr.io/jdx/mise:rpm@sha256:6ddbe457496dd7ee81f6516e6600c83955c5418c8096c03d806d313256180bfe
+    container: ghcr.io/jdx/mise:rpm@sha256:95e831359aa26f7858edcf4912dd4e09e4eb0750f9589ffadabadd2a3a2ac3a5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7
@@ -236,7 +236,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.head_ref == 'release'
     runs-on: ubuntu-latest
     needs: [build-tarball-linux]
-    container: ghcr.io/jdx/mise:deb@sha256:c87709c0a4530fe3a455657439b17ec1988a6636414e5541263f9359f22bf404
+    container: ghcr.io/jdx/mise:deb@sha256:c26b116c725f0f3bd2caa1276de1111e52be2585548369a9fa248bf838d4ad36
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

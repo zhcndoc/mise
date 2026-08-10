@@ -5,10 +5,11 @@
 - **作用**：修改状态
 - **源代码**：[`src/cli/generate/task_stubs.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/task_stubs.rs)
 
-生成用于运行 mise 任务的 shim
+生成用于运行 mise 任务的垫片
 
-默认情况下，这将生成类似于 ./bin/&lt;task> 的 shim。这些可以与 `mise generate bootstrap` 搭配使用，
-这样项目的贡献者就可以在不将 mise 安装到系统中的情况下执行 mise 任务。
+默认情况下，这会构建类似于 ./bin/&lt;task> 的垫片。这些垫片可以与 `mise generate bootstrap` 配合使用，
+使项目贡献者无需将 mise 安装到系统中即可执行 mise 任务。
+当父任务和嵌套任务同时存在时，父任务的存根会写入 `<parent>/_default`。
 
 ## 标志
 

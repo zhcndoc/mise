@@ -1,8 +1,8 @@
 # Bootstrap 软件包
 
-mise 可以通过 `mise.toml` 的
-`[bootstrap.packages]` 部分确保安装机器级系统软件包，该配置可通过
-`mise bootstrap packages apply` 应用，或作为
+mise 可以通过 `mise.toml` 中的
+`[bootstrap.packages]` 部分确保主机软件包已安装，该配置可通过
+`mise bootstrap packages apply` 应用，也可以作为
 [`mise bootstrap`](/bootstrap.html) 的一部分应用：
 
 ```toml
@@ -14,16 +14,16 @@ mise 可以通过 `mise.toml` 的
 "brew:ffmpeg" = "latest"
 "brew-cask:firefox" = "latest"
 "flatpak:org.mozilla.firefox" = "latest"
+"flatpak-user:org.gnome.Builder" = "latest"
 "mas:497799835" = "latest"
 ```
 
 每一项的键为 `"manager:package"` —— 必须包含管理器前缀 —— 值为版本：`"latest"` 表示由该管理器安装的最新版本，或者在支持的情况下使用该管理器原生格式的固定版本（见各管理器对应页面）。
 
-系统软件包与 [`[tools]`](/configuration.html) 有意分开：
-它们不会按项目固定版本，不会生成 shim，并且由平台的软件包管理器在机器范围内安装——或者对于
-`brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装器安装，这些安装器不要求系统中已安装
-Homebrew。请使用它们安装共享库、构建依赖项和机器级 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、
-`firefox`），而不要将其用于项目开发工具——项目开发工具应放在 `[tools]` 中。
+主机软件包有意与 [`[tools]`](/configuration.html) 分开：
+它们不会按项目固定版本，不会生成 shim，并且由平台的软件包管理器在项目之外进行管理——或者对于
+`brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装器管理，这些安装器不要求系统中已有 Homebrew。
+请将它们用于共享库、构建依赖项和主机 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、`firefox`），而不要用于项目开发工具——这些工具应放在 `[tools]` 中。
 
 管理器列表可通过[软件包管理器插件](./plugins.md)扩展，这些插件涵盖由主机管理的状态，例如 VS Code 扩展、Helm 插件、krew
 插件和 GitHub CLI 扩展。
@@ -40,26 +40,27 @@ Homebrew。请使用它们安装共享库、构建依赖项和机器级 GUI 应�
 
 ## 支持的包管理器
 
-| 管理器      | 平台                                                           | 页面                                                |
-| ----------- | -------------------------------------------------------------- | --------------------------------------------------- |
-| `apk`       | Alpine Linux                                                   | [apk](/bootstrap/packages/apk.html)                 |
-| `apt`       | Debian、Ubuntu                                                 | [apt](/bootstrap/packages/apt.html)                 |
-| `dnf`       | Fedora、RHEL、CentOS、Rocky、Alma                              | [dnf](/bootstrap/packages/dnf.html)                 |
-| `pacman`    | Arch、Manjaro                                                  | [pacman](/bootstrap/packages/pacman.html)           |
-| `brew`      | macOS (arm64)、Linux (x86_64/arm64) — **无需 Homebrew**        | [brew](/bootstrap/packages/brew.html)               |
-| `brew-cask` | macOS — **无需 Homebrew**                                      | [brew](/bootstrap/packages/brew.html)               |
-| `flatpak`   | 带有位于 `PATH` 中的 `flatpak` CLI 的 Linux                    | [Flatpak](/bootstrap/packages/flatpak.html)         |
-| `mas`       | 带有位于 `PATH` 中的 `mas` CLI 的 macOS                        | [mas](/bootstrap/packages/mas.html)                 |
-| 插件        | 由插件声明                                                   | [包插件](/bootstrap/packages/plugins.html) |
+| 管理器        | 平台                                                         | 页面                                                |
+| -------------- | -------------------------------------------------------------- | --------------------------------------------------- |
+| `apk`          | Alpine Linux                                                   | [apk](/bootstrap/packages/apk.html)                 |
+| `apt`          | Debian、Ubuntu                                                 | [apt](/bootstrap/packages/apt.html)                 |
+| `dnf`          | Fedora、RHEL、CentOS、Rocky、Alma                              | [dnf](/bootstrap/packages/dnf.html)                 |
+| `pacman`       | Arch、Manjaro                                                  | [pacman](/bootstrap/packages/pacman.html)           |
+| `brew`         | macOS (arm64)、Linux (x86_64/arm64) — **无需 Homebrew** | [brew](/bootstrap/packages/brew.html)               |
+| `brew-cask`    | macOS；Linux（字体 cask）— **无需 Homebrew**           | [brew](/bootstrap/packages/brew.html)               |
+| `flatpak`      | Linux，且 `flatpak` CLI 位于 `PATH` 中（系统范围）          | [Flatpak](/bootstrap/packages/flatpak.html)         |
+| `flatpak-user` | Linux，且 `flatpak` CLI 位于 `PATH` 中（用户范围）            | [Flatpak](/bootstrap/packages/flatpak.html)         |
+| `mas`          | macOS，且 `mas` CLI 位于 `PATH` 中                             | [mas](/bootstrap/packages/mas.html)                 |
+| plugin         | 由插件声明                                         | [包插件](/bootstrap/packages/plugins.html) |
 
 ## 语义
 
-- **默认采用声明式和追加式** — 条目会跨越
-  [配置层级](/configuration.html)（全局 → 项目）按照键的并集进行合并。项目可以在全局列表之上添加软件包（并覆盖全局条目的版本固定值），但不能移除它们。对于 Homebrew 软件包，
-  `mise bootstrap packages prune --manager brew` 是一个显式的破坏性命令，用于移除当前配置或受信任且可加载的已跟踪配置不再需要的已链接软件包。
-- **按操作系统筛选** — 当前计算机上不可用的软件包管理器对应的条目不会执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 同时支持 macOS 和 Linux；`brew-cask` 支持 macOS；当 `flatpak` CLI 位于 `PATH` 中时，`flatpak` 支持 Linux；当 `mas` CLI 位于 `PATH` 中时，`mas` 支持 macOS。状态命令仍会列出不可用的软件包管理器，因此不会有任何内容被静默隐藏。
-- **仅手动安装** — mise 从不隐式安装系统软件包。当软件包缺失时，`mise install` 会显示一次性提示，但只有 `mise bootstrap packages apply` 会实际安装任何内容。
-- **未知的软件包管理器会在发出警告的同时被忽略**，并提供安装软件包插件的提示，因此使用更新版本 mise 中软件包管理器的配置仍然可以被解析。
+- **默认采用声明式和增量式方式** — 条目会跨越
+  [配置层级](/configuration.html)（全局 → 项目）按键合并为并集。项目可以在全局列表的基础上添加软件包（并覆盖全局条目的版本固定），但不能移除它们。对于 Homebrew formula，
+  `mise bootstrap packages prune` 是一个显式的破坏性命令，用于移除当前配置或受信任且可加载的已跟踪配置不再需要的已链接 formula，或可安全清理的、由 mise 管理的 cask。
+- **按操作系统筛选** — 当前计算机上不可用的软件包管理器对应的条目不会执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 在 macOS 和 Linux 上均可用；`brew-cask` 在 macOS 上可用，并在 Linux 上支持仅字体的 cask，但不支持生命周期钩子或结构化 flight 步骤；当 `flatpak` CLI 位于 `PATH` 中时，`flatpak` 和 `flatpak-user` 可在 Linux 上使用；当 `mas` CLI 位于 `PATH` 中时，`mas` 可在 macOS 上使用。状态命令仍会列出不可用的软件包管理器，因此不会有任何内容被静默隐藏。
+- **仅手动安装** — mise 绝不会隐式安装系统软件包。缺少软件包时，`mise install` 会提示一次，但只有 `mise bootstrap packages apply` 会实际执行安装。
+- **未知的软件包管理器会被忽略并发出警告**，同时提示安装软件包插件，因此使用较新 mise 版本中软件包管理器的配置仍然可以被解析。
 
 对于当前用户的登录 shell 设置，请使用 `[bootstrap.user].login_shell`：
 
@@ -84,10 +85,10 @@ mise bootstrap packages apply --yes     # 跳过确认提示
 mise bootstrap packages apply --manager apt
 mise bootstrap packages apply --update  # 先刷新包管理器元数据
 
-mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox mas:497799835
-mise bootstrap packages use -g brew:ffmpeg     # write globally
-mise bootstrap packages use apt:curl@8.5.0-2   # pin a version
-    # (brew pins via the formula name instead: brew:postgresql@17)
+mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox flatpak-user:org.gnome.Builder mas:497799835
+mise bootstrap packages use -g brew:ffmpeg     # 写入全局配置
+mise bootstrap packages use apt:curl@8.5.0-2   # 固定版本
+    # （brew 通过 formula 名称固定版本：brew:postgresql@17）
 
 mise bootstrap packages import --manager brew   # 添加已安装且被请求的 brew formula
 mise bootstrap packages import --manager brew --all
@@ -96,11 +97,14 @@ mise bootstrap packages import --manager brew --dry-run
 mise bootstrap packages prune --manager brew    # 移除不再需要的已链接 brew formula
 mise bootstrap packages prune --manager brew --dry-run
 mise bootstrap packages prune --manager brew --yes
+mise bootstrap packages prune --manager brew-cask # 安全移除可清理的 mise cask
+mise bootstrap packages prune --manager brew-cask --dry-run
 
 mise bootstrap packages upgrade           # 将已安装包升级到当前版本
 mise bootstrap packages upgrade --manager brew
 mise bootstrap packages upgrade --manager brew-cask
 mise bootstrap packages upgrade --manager flatpak
+mise bootstrap packages upgrade --manager flatpak-user
 mise bootstrap packages upgrade --manager mas
 ```
 
@@ -112,16 +116,13 @@ formulae 的反向操作：它读取当前激活的 Homebrew `opt` 链接，并�
 formulae 以 `"brew:<formula>" = "latest"` 的形式写入 `[bootstrap.packages]`。默认只导入 keg 收据表明是“按请求安装”的 formulae；传入 `--all` 可同时包含依赖 formulae。导入的 formulae 会在之后的 prune 运行中保留下来，因为它们现在已经在配置中声明了。
 
 `mise bootstrap packages prune --manager brew` 会移除当前配置或受信任、可加载的已跟踪配置不再需要的已链接 brew formulae。这包括由真实的 Homebrew 安装的 formulae。它是 mise 的声明式清理命令，精神上类似于
-[Homebrew Bundle cleanup](https://docs.brew.sh/Manpage)，而不是 Homebrew 已移除的旧上游
+[Homebrew Bundle 清理](https://docs.brew.sh/Manpage)，而不是 Homebrew 已移除的旧上游
 `brew prune` 命令。
 
-`mise bootstrap packages upgrade` 会刷新包管理器元数据，并将已安装的、已配置的包升级到
-最新可用版本——apk、apt 和 dnf 还会遵循配置中固定的版本（pacman、brew、
-brew-cask、flatpak 和 mas [无法安装固定版本](/bootstrap/packages/pacman.html)，因此
-固定版本的条目会被跳过并发出警告）。尚未安装的包会被跳过——这是
-`mise bootstrap packages apply` 的职责。对于 brew，此命令会安装 formula 当前的 bottle
-并替换旧的 keg；对于 brew-cask，它会安装当前的 cask 构件；对于 flatpak，它会更新已配置的
-应用程序和运行时；对于 mas，它会执行 `mas upgrade`。
+`mise bootstrap packages prune --manager brew-cask` 只会移除由 mise 所有、具有当前安装时收据且内容指纹未发生变化的直接产物。它会跳过旧收据、由 Homebrew 所有的 cask、pkg 和命令包装器产物、具有生命周期操作的 cask、已更改或共享的目标，以及不完整的事务。跳过操作会附带原因，并且绝不会应用 `zap` 元数据。
+
+`mise bootstrap packages upgrade` 会刷新包管理器元数据，并将已安装的已配置包升级到最新可用版本——apk、apt 和 dnf 还会遵循配置中固定的版本（pacman、brew、brew-cask、flatpak、flatpak-user 和 mas
+[无法安装固定版本](/bootstrap/packages/pacman.html)，因此固定的条目会伴随警告被跳过）。尚未安装的包会被跳过——这是 `mise bootstrap packages apply` 的工作。对于 brew，此命令会安装 formula 当前的 bottle 并替换旧 keg；对于 brew-cask，它会安装当前的 cask 产物；对于 flatpak 和 flatpak-user，它会分别在各自的作用域中更新已配置的应用程序和运行时；对于 mas，它会运行 `mas upgrade`。
 
 `mise doctor` 也会报告已配置的系统包，并在有任何缺失时发出警告。
 

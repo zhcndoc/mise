@@ -7,17 +7,19 @@
 
 清理不再在 `[bootstrap.packages]` 中声明的已安装系统包
 
-目前仅支持 Homebrew formulae。清理会移除当前配置或受信任、可加载的已跟踪配置不再需要的已链接 formulae。
+支持 Homebrew formula，以及可安全移除且由 mise 管理的 cask。  
+清理操作会保留当前配置所需的包，以及受信任且可加载的已跟踪配置所需的包。
 
 ## 标志
 
 ### `-m --manager <MANAGER>`
 
-仅清理此管理器的包。目前仅支持 `brew`
+仅清理由此管理器管理的软件包
 
 **可选值：**
 
 - `brew`
+- `brew-cask`
 
 **默认值：** `brew`
 
@@ -35,4 +37,5 @@
 mise bootstrap packages prune --manager brew
 mise bootstrap packages prune --manager brew --dry-run
 mise bootstrap packages prune --manager brew --yes
+mise bootstrap packages prune --manager brew-cask --dry-run
 ```

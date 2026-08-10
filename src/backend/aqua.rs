@@ -1,6 +1,6 @@
 use crate::backend::VersionInfo;
 use crate::backend::backend_type::BackendType;
-use crate::backend::options::BackendOptions;
+use crate::backend::options::{BackendOptions, VersionOrder};
 
 use crate::backend::platform_target::PlatformTarget;
 use crate::backend::static_helpers::get_filename_from_url;
@@ -159,6 +159,10 @@ enum GithubAttestationStatus {
 
 #[async_trait]
 impl Backend for AquaBackend {
+    fn version_order(&self, opts: &ToolVersionOptions) -> Result<VersionOrder> {
+        VersionOrder::from_options_or(opts, self.ba.registry_version_order().unwrap_or_default())
+    }
+
     fn get_type(&self) -> BackendType {
         BackendType::Aqua
     }
@@ -350,7 +354,7 @@ impl Backend for AquaBackend {
         // Always fetch the pre-release superset; the shared remote-versions
         // cache stores it untouched and the trait's read path filters on
         // `VersionInfo.prerelease` based on the current tool opts.
-        let tags_with_timestamps = match get_tags_with_created_at(&pkg).await {
+        let tags_with_timestamps = match get_tags_with_release_dates(&pkg).await {
             Ok(tags) => tags,
             Err(e) => {
                 if strict_metadata() {
@@ -4442,7 +4446,7 @@ packages:
 }
 
 async fn get_tags(pkg: &AquaPackage) -> Result<Vec<String>> {
-    Ok(get_tags_with_created_at(pkg)
+    Ok(get_tags_with_release_dates(pkg)
         .await?
         .into_iter()
         .map(|(tag, _, _)| tag)
@@ -4489,15 +4493,15 @@ fn package_has_asset(pkg: &AquaPackage) -> bool {
     !pkg.no_asset.unwrap_or(false) && pkg.error_message.is_none()
 }
 
-/// Get tags with optional created_at timestamps and a pre-release flag.
-/// Returns `(tag_name, Option<created_at>, prerelease)` triples.
+/// Get tags with optional release timestamps and a pre-release flag.
+/// Returns `(tag_name, Option<released_at>, prerelease)` triples.
 ///
 /// Always fetches the pre-release superset so the shared remote-versions cache
 /// is independent of the `prerelease` tool option; callers filter on the
 /// returned `prerelease` bit at read time. Git tags (the `github_tag` version
 /// source) carry no pre-release flag, so those entries are reported as
 /// `prerelease = false` and rely on the shared regex-based fuzzy-match filter.
-async fn get_tags_with_created_at(
+async fn get_tags_with_release_dates(
     pkg: &AquaPackage,
 ) -> Result<Vec<(String, Option<String>, bool)>> {
     if let Some("github_tag") = pkg.version_source.as_deref() {
@@ -4509,7 +4513,10 @@ async fn get_tags_with_created_at(
     let releases = github::list_releases_including_prereleases(&repo).await?;
     Ok(releases
         .into_iter()
-        .map(|r| (r.tag_name, Some(r.created_at), r.prerelease))
+        .map(|r| {
+            let released_at = r.released_at().to_string();
+            (r.tag_name, Some(released_at), r.prerelease)
+        })
         .collect())
 }
 

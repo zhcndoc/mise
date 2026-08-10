@@ -6,24 +6,30 @@
   "type": "object",
   "patternProperties": {
     "^[a-zA-Z0-9_]+$": {
+      "$ref": "#/$defs/node"
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "node": {
       "oneOf": [
         {
           "$ref": "#/$defs/setting"
         },
         {
-          "type": "object",
-          "patternProperties": {
-            "^[a-zA-Z0-9_]+$": {
-              "$ref": "#/$defs/setting"
-            }
-          },
-          "unevaluatedProperties": false
+          "$ref": "#/$defs/group"
         }
       ]
-    }
-  },
-  "unevaluatedProperties": false,
-  "$defs": {
+    },
+    "group": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z0-9_]+$": {
+          "$ref": "#/$defs/node"
+        }
+      },
+      "unevaluatedProperties": false
+    },
     "setting": {
       "type": "object",
       "properties": {
@@ -110,6 +116,10 @@
         "env": {
           "type": "string",
           "description": "Environment variable name that can set this setting"
+        },
+        "env_only": {
+          "type": "boolean",
+          "description": "Setting is read before config files load, so it only works as an environment variable; a value in a config file is dropped with a warning"
         },
         "hide": {
           "type": "boolean",

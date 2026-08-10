@@ -62,7 +62,16 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 "brew-cask:homebrew/cask/visual-studio-code" = "latest"
 ```
 
-`brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制文件和生成的命令包装器 cask（`binary` 和 `command_wrapper` 制品）、简单的 macOS 安装器软件包（`pkg` 制品），以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。软件包安装器会通过 mise 的常规系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而挂起。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，以便在安装器将文件写入 Caskroom 之外后，mise 能够验证其安装状态。`zap` 的 `pkgutil` ID 被视为清理元数据，而不是安装收据。对于包含生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持结构化的 `preflight_steps` 和 `postflight_steps`，用于针对 `staged_path` 执行 `move`/`remove` 操作，使用 Homebrew 序列化命令基础、参数、环境、守卫条件和 sudo 设置执行 `run` 操作，以及执行具有与 Homebrew 兼容的名称/完整匹配、重试、通知和失败策略的 `terminate_process` 操作。需要自定义安装器选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会明确报告不受支持的制品错误，而不是委托给 Homebrew。
+在 Linux 上，初始的 cask 支持仅限于不包含生命周期钩子、结构化 `preflight_steps` 或 `postflight_steps` 的纯字体 cask——这些概念来自 Homebrew 的 cask DSL，相关文档请参阅 [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)。字体会安装到 `$XDG_DATA_HOME/fonts`，该目录默认为 `~/.local/share/fonts`：
+
+```toml
+[bootstrap.packages]
+"brew-cask:font-heavy-data-nerd-font" = "latest"
+```
+
+其他 Linux cask 会失败，并显示明确的平台不支持错误。随着 mise 为更多 cask 制品类型提供可移植实现，这一支持边界将逐步扩展。
+
+`brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制文件和生成命令包装器 cask（`binary` 和 `command_wrapper` 制品）、简单的 macOS 安装程序包（`pkg` 制品），以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。软件包安装程序会通过 mise 常规的系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而卡住。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写入 Caskroom 之外后验证安装状态。`zap` 的 `pkgutil` ID 会被视为清理元数据，而不是安装收据。对于包含生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持结构化的 `preflight_steps` 和 `postflight_steps`，用于针对 `staged_path` 执行 `move`/`remove` 操作；支持使用 Homebrew 序列化的命令基、参数、环境、守卫条件和 sudo 设置执行 `run` 操作；以及支持执行 `terminate_process` 操作，包括与 Homebrew 兼容的名称/完整匹配、重试、提示和失败策略。需要自定义安装程序选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会失败并显示明确的不支持制品错误，而不会委托给 Homebrew。
 
 直接执行的 cask 安装仍由 mise 管理。其完成状态会记录在 `.mise-cask.toml` 中；mise 不会生成 Homebrew 私有的 `.metadata` 收据。如果某个 cask 已存在 Homebrew 元数据，mise 会保留这些元数据，并在进行修改前失败，而不是接管 Homebrew 的生命周期状态。状态检查使用已记录的安装事实，而不是根据更新后的 cask 定义重新构建这些事实；缺失或未知的收据以及待处理的事务会被报告为不健康状态，以便下一次应用操作能够协调它们。
 
@@ -125,7 +134,11 @@ Prune 会移除活动 keg、其 `opt` 和已链接 keg 记录，以及指向该 
 [`brew bundle cleanup`](https://docs.brew.sh/Manpage)。它不是上游的
 `brew prune`，后者已被 Homebrew 移除，转而采用 cleanup 命令。
 
-## 倒酒是如何工作的
+`mise bootstrap packages prune --manager brew-cask` 会将相同的合并配置模型应用于直接的 cask 构件，同时有意采用更窄的所有权边界。只有当 cask 的安装时 `.mise-cask.toml` 收据明确将其标记为可安全清理，并且每个记录的目标仍与 mise 安装后记录的确切内容指纹一致时，才会移除该 cask。该命令会移除这些目标及该 cask 的 Caskroom 条目；`--dry-run` 可预览计划，`--yes` 可跳过确认。
+
+在其收据包含清理元数据之前安装的 cask 会被跳过，直到后续升级或重新安装刷新该收据。带有 pkg 或命令包装器构件、安装或卸载生命周期操作、待处理事务、Homebrew `.metadata`、已更改目标，或与其他 mise cask 共享目标的 cask，也会被跳过并说明原因。Prune 从不运行 `zap` 元数据，也不会根据当前的 Homebrew API 重建历史卸载行为。
+
+## 倒酒的工作原理
 
 对于依赖闭包中的每个公式（先处理依赖项）：
 
@@ -134,7 +147,7 @@ Prune 会移除活动 keg、其 `opt` 和已链接 keg 记录，以及指向该 
 3. **重定位**：瓶子中嵌入了类似 `@@HOMEBREW_PREFIX@@` 的占位路径。mise 会将其重写为实际路径——在文本文件和二进制文件支持的可执行文件（例如 zipapp）的 shebang 前导部分中进行纯文本替换，同时保持其负载内容不变；并在 Mach-O 二进制文件中原地重写和重写加载命令（必要时将加载命令扩展到头部填充区域中），其行为与 brew 的 ruby-macho 完全一致。在 Linux 上，ELF 解释器和 rpath 会按照 brew 的 PatchELF gem 的方式进行修补：如果字符串不再适合原位置，就会将其移动到附加在二进制文件末尾的新段中，并将解释器指向 `<prefix>/lib/ld.so`（mise 会维护一个符号链接，将其指向系统的动态加载器；如果安装了通过 brew 构建的 glibc，则指向该 glibc）。
 4. **重新签名**（macOS）：任何被修改的二进制文件都会使用 `codesign` 进行临时签名——在 arm64 上这是必需的，因为内核会终止签名不匹配的二进制文件。
 5. **写入收据**：写入兼容 brew 的 `INSTALL_RECEIPT.json`。
-6. **链接**：创建 `<prefix>/opt/<name>`，并将 keg 的 `bin`、`lib`、`include`、`share` 等目录符号链接到 prefix 中。对于非 keg-only 公式，还会创建 Homebrew 的 linked-keg 记录。[keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) 公式会获得 `opt` 链接，但不会链接到 prefix 中，与 brew 的行为相同。
+6. **链接**：创建 `<prefix>/opt/<name>`，并将 keg 的 `bin`、`lib`、`include`、`share` 等目录符号链接到 prefix 中。对于非 keg-only 公式，还会创建 Homebrew 的 linked-keg 记录。[仅 keg 公式](https://docs.brew.sh/FAQ#what-does-keg-only-mean) 会获得 `opt` 链接，但不会链接到 prefix 中，与 brew 的行为相同。
 
 ## 源码公式
 
@@ -157,17 +170,18 @@ Prune 会移除活动 keg、其 `opt` 和已链接 keg 记录，以及指向该 
 
 ## 限制
 
-- **Cask 资源覆盖范围故意保持得很窄。** `brew-cask` 支持
-  应用包、二进制资源，以及来自 dmg 和常见
-  归档格式的简单 pkg 安装器。其他资源类型、不带 `pkgutil` ID 的 pkg 安装器，
-  以及带有自定义选项的 pkg 安装器都会明确失败。
-- **未实现 `brew services`。**
-- **未实现 Cask 导入/清理。** 在 cask 卸载语义能够对应用和 pkg 资源安全之前，`import` 和 `prune` 仅适用于 formula。
-- **源码构建覆盖常见的 formula 形态。** mise 的 formula shim
-  实现了广泛使用的 DSL 子集（参见
-  [源代码 formulae](#source-formulae)）；超出该范围的 formulae 会失败，并清楚地报出不受支持的功能名称。
-- **请使用规范的 formula 名称。** `postgresql@17` 是一个 formula 名称，而不是
-  mise 版本 pin——由 API 当前的稳定版本决定将安装什么。别名（`postgres`）可以正确安装，但 `mise bootstrap packages status`
-  无法跟踪它们；mise 会发出警告并告诉你规范名称。
-- `PATH` 由你决定：要使用链接
-  二进制文件，`<prefix>/bin` 必须在 `PATH` 中，就像使用 Homebrew 本身一样。
+- **Cask 工件覆盖范围有意保持狭窄。** 在 macOS 上，`brew-cask`
+  支持应用程序包、二进制工件、字体工件，以及来自 dmg 和常见归档格式的简单
+  pkg 安装程序。在 Linux 上，它支持不带生命周期钩子的纯字体 cask，也不支持结构化的
+  `preflight_steps` 或 `postflight_steps`。其他工件类型、不带 `pkgutil`
+  ID 的 pkg 安装程序，以及带有自定义选项的 pkg 安装程序都会明确失败。
+- **尚未实现 `brew services`。**
+- **尚未实现 Cask 导入。** Cask prune 仅限于由 mise 所有、且其安装时收据证明可以安全移除的直接
+  工件。在支持这些工件的卸载语义之前，pkg 工件和包含生命周期操作的 cask 会被跳过。
+- **源代码构建涵盖常见的 formula 形态。** mise 的 formula shim
+  实现了 DSL 中广泛使用的子集（请参阅
+  [源代码 formula](#source-formulae)）；超出该范围的 formula 会失败，并清晰指出不受支持的功能。
+- **使用规范的 formula 名称。** `postgresql@17` 是 formula 名称，而不是 mise 的版本固定值——API 的当前稳定版本决定实际安装的版本。别名（`postgres`）可以正确安装，但 `mise bootstrap packages status`
+  无法跟踪它们；mise 会发出警告并告知你规范名称。
+- `PATH` 由你自行设置：必须将 `<prefix>/bin` 添加到 `PATH`，才能使用链接的
+  二进制文件，这与 Homebrew 本身的使用方式相同。

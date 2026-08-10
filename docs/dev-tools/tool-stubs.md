@@ -125,7 +125,7 @@ mise generate tool-stub ./bin/node \
 
 # 从 URL 自动检测平台（检测为 'linux-x64'）
 mise generate tool-stub ./bin/node \
-  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-unknown-linux-musl.tar.gz
+  --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-linux-x64.tar.gz
 ```
 
 或者通过一次添加一个平台来增量构建它们：

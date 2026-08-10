@@ -87,8 +87,9 @@ $ mise run build
 ### `-j --jobs <JOBS>`
 
 并行运行的任务数量  
-[default: 4]  
-可通过 `jobs` 配置或 `MISE_JOBS` 环境变量进行配置
+小于 1 的值按 1 处理  
+[默认值：4]  
+通过 `jobs` 配置或 `MISE_JOBS` 环境变量进行配置
 
 ### `-n --dry-run`
 

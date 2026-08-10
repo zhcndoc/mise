@@ -133,6 +133,18 @@ direct URL to a `registry.yaml` or `registry.yml` file, or an absolute `file://`
 registry directory or file. For repository and directory sources, mise loads `registry.yaml` from
 the source root and falls back to `registry.yml` if needed.
 
+A source that is not a URL is read as a filesystem path, resolved against the config root of the
+file that declared it. This is how you reference a registry committed alongside the project:
+
+```toml
+[settings]
+aqua.registries = ["registry.yaml"]
+```
+
+Path resolution applies only to sources set in a config file, since only those have a config root
+to resolve against. A path given via `MISE_AQUA_REGISTRIES` or the CLI must be an absolute
+`file://` URL.
+
 Downloaded registries are cached according to `aqua.registry_cache_ttl`, which defaults to one
 week. To refresh sooner, run `mise cache clear`, set `aqua.registry_cache_ttl = "0s"`, or change
 `MISE_CACHE_DIR` to use a different cache location. Local `file://` sources bypass the downloaded
@@ -461,12 +473,14 @@ type = "Bool"
 default = "mise.toml"
 description = "The default config filename read. `mise use` and other commands that create new config files will use this value. This must be an env var."
 env = "MISE_DEFAULT_CONFIG_FILENAME"
+env_only = true
 type = "String"
 
 [default_tool_versions_filename]
 default = ".tool-versions"
 description = "The default .tool-versions filename read. This will not ignore .tool-versions—use override_tool_versions_filename for that. This must be an env var."
 env = "MISE_DEFAULT_TOOL_VERSIONS_FILENAME"
+env_only = true
 type = "String"
 
 [disable_backends]
@@ -1036,12 +1050,14 @@ type = "Bool"
 [global_config_file]
 description = "Path to the global mise config file. Default is `~/.config/mise/config.toml`. This must be an env var."
 env = "MISE_GLOBAL_CONFIG_FILE"
+env_only = true
 optional = true
 type = "Path"
 
 [global_config_root]
 description = "Path which is used as `{{config_root}}` for the global config file. Default is `$HOME`. This must be an env var."
 env = "MISE_GLOBAL_CONFIG_ROOT"
+env_only = true
 optional = true
 type = "Path"
 
@@ -1078,7 +1094,7 @@ optional = true
 type = "Bool"
 
 [go.set_gopath]
-deprecated = "Use env._go.set_goroot instead."
+deprecated = "mise no longer manages GOPATH. Set GOPATH in [env] if you need a specific value."
 description = "[deprecated] Set to true to set GOPATH=~/.local/share/mise/installs/go/.../packages."
 env = "MISE_GO_SET_GOPATH"
 type = "Bool"
@@ -1330,7 +1346,7 @@ type = "String"
 
 [jobs]
 default = 8
-description = "How many jobs to run concurrently such as tool installs."
+description = "How many jobs to run concurrently such as tool installs. Values below 1 are treated as 1."
 env = "MISE_JOBS"
 rust_type = "usize"
 type = "Integer"
@@ -1357,8 +1373,19 @@ type = "SetString"
 default_docs = '"glibc" | "musl"'
 description = "Libc implementation to use for precompiled Linux binaries."
 docs = """
-Libc implementation to use for precompiled Linux binaries. This is used by backends that publish
-separate glibc and musl builds. If unset, mise will detect the current system's libc.
+Libc implementation to use for precompiled Linux binaries, for backends that publish separate
+glibc and musl builds.
+
+mise detects the host libc, but only a musl result is carried through: a glibc host is left
+unqualified rather than pinned to glibc. That distinction matters when a backend selects an asset
+by name, because an unqualified target can still match a musl artifact on a glibc host. Set this
+to `gnu` when you need the glibc build specifically — for example when a package publishes both
+glibc and musl builds and the musl one misbehaves:
+
+```toml
+[settings]
+libc = "gnu"
+```
 
 `gnu` is accepted as an alias for `glibc`.
 """
@@ -1439,11 +1466,13 @@ gh = "latest"
 But you'd like the versions installed to be consistent within a project. When this is enabled, mise will update mise.lock
 files next to mise.toml files containing pinned versions. When installing tools, mise will reference this lockfile if it exists and this setting is enabled to resolve versions.
 
-The lockfiles are not created automatically. To generate them, run the following (assuming the config file is `mise.toml`):
+When set to `true` in a TOML settings file, project lockfiles are created and maintained automatically. When unset, existing lockfiles are read and updated but new lockfiles are not created. `MISE_LOCKFILE=1` retains this existing-lockfile behavior for backwards compatibility. To generate one explicitly, run:
 
 ```sh
-touch mise.lock && mise install
+mise lock
 ```
+
+Global lockfiles are only created with `mise lock --global`.
 
 The lockfile is named the same as the config file but with `.lock` instead of `.toml` as the extension, e.g.:
 
@@ -1451,9 +1480,9 @@ The lockfile is named the same as the config file but with `.lock` instead of `.
 - `mise.local.toml` -> `mise.local.lock`
 - `.config/mise.toml` -> `.config/mise.lock`
 
-When set to `true`, lockfiles are read and written. When set to `false`, lockfiles are explicitly disabled—this
+When set to `true`, project lockfiles are created, read, and written. When set to `false`, lockfiles are explicitly disabled—this
 will cause an error if `locked = true` is also set, since locked mode requires reading lockfiles.
-When unset (the default), lockfiles are enabled (same as `true`) but there is no conflict with `locked` mode.
+When unset (the default), existing lockfiles are read and written, but new lockfiles are not created.
 """
 env = "MISE_LOCKFILE"
 optional = true
@@ -1763,6 +1792,21 @@ the tool installed first, so it cannot auto-install completely new tools.
 This also runs in shims if the terminal is interactive.
 """
 env = "MISE_NOT_FOUND_AUTO_INSTALL"
+type = "Bool"
+
+[not_found_system_fallback]
+default = true
+description = "Set to false to stop shims from falling back to a same-named binary found elsewhere on PATH."
+docs = """
+When a shim cannot resolve a mise-managed tool, it falls back to the first same-named executable found on
+`PATH` outside the shims directory. That is useful for tools you also want to work outside of mise, but it
+means a configured-but-uninstalled version can silently run an unrelated system binary instead of erroring
+— common for tools the OS also ships, like `python3`.
+
+Set to false, alongside [`not_found_auto_install`](#not_found_auto_install), to make an unresolvable shim
+fail loudly instead.
+"""
+env = "MISE_NOT_FOUND_SYSTEM_FALLBACK"
 type = "Bool"
 
 
@@ -2554,6 +2598,7 @@ type = "String"
 [system_config_file]
 description = "Path to the system mise config file. Default is `/etc/mise/config.toml`. This must be an env var."
 env = "MISE_SYSTEM_CONFIG_FILE"
+env_only = true
 optional = true
 type = "Path"
 
@@ -2638,6 +2683,80 @@ parse_env = "set_by_comma"
 rust_type = "BTreeSet<String>"
 type = "SetString"
 
+[task.cache.remote_mode]
+default = "read-write"
+description = "[experimental] Remote task and action cache access mode."
+docs = """
+Control access to the remote cache used by task result and action caching:
+
+- `read-write` reads remote misses and uploads successful local results.
+- `read-only` reads remote misses without uploading results.
+- `write-only` uploads results without reading remote entries.
+
+The per-run `--task-cache=local-only` mode disables remote task-result access. Action-cache adapters
+may further restrict this mode; local developer task runs are read-only by default.
+"""
+enum = ["read-write", "read-only", "write-only"]
+env = "MISE_TASK_CACHE_REMOTE_MODE"
+rust_type = "crate::cache::CacheRemoteMode"
+type = "String"
+
+[task.cache.remote_namespace]
+description = "[experimental] Namespace sent to the remote build cache."
+docs = """
+Opaque repository or organization namespace used to isolate remote build-cache entries. This
+setting is required when [`task.cache.remote_url`](#task-cache-remote-url) is configured.
+"""
+env = "MISE_TASK_CACHE_REMOTE_NAMESPACE"
+optional = true
+type = "String"
+
+[task.cache.remote_oidc_audience]
+description = "[experimental] Audience for an automatically acquired remote cache OIDC token."
+docs = """
+Acquire a short-lived OIDC token for this audience when running in a supported workload identity
+environment. GitHub Actions is supported through its OIDC request environment variables. This
+setting is global-only so shared project configuration cannot choose a token audience.
+"""
+env = "MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE"
+global_only = true
+optional = true
+type = "String"
+
+[task.cache.remote_token]
+description = "[experimental] Bearer token for remote build-cache authentication."
+docs = """
+Authenticate remote build-cache requests with an HTTP `Authorization: Bearer` header. Prefer the
+`MISE_TASK_CACHE_REMOTE_TOKEN` environment variable or a protected global configuration file; this
+setting is global-only so shared project configuration cannot supply credentials.
+"""
+env = "MISE_TASK_CACHE_REMOTE_TOKEN"
+global_only = true
+optional = true
+type = "String"
+
+[task.cache.remote_token_file]
+description = "[experimental] File containing a remote build-cache bearer token."
+docs = """
+Read the remote build-cache bearer token from this file before each request. This supports rotating
+credentials such as Kubernetes projected service account tokens. This setting is global-only so
+shared project configuration cannot select a credential file.
+"""
+env = "MISE_TASK_CACHE_REMOTE_TOKEN_FILE"
+global_only = true
+optional = true
+type = "Path"
+
+[task.cache.remote_url]
+description = "[experimental] Base URL for the remote build-cache service."
+docs = """
+Enable the versioned HTTP remote build-cache protocol at this base URL. Remote access also requires
+[`task.cache.remote_namespace`](#task-cache-remote-namespace). Leave unset to use only local caches.
+"""
+env = "MISE_TASK_CACHE_REMOTE_URL"
+optional = true
+type = "Url"
+
 [task.cache_dir]
 description = "[experimental] Directory for task output cache artifacts."
 docs = """
@@ -2673,77 +2792,61 @@ optional = true
 type = "String"
 
 [task.cache_remote_mode]
-default = "read-write"
-description = "[experimental] Remote task cache access mode."
-docs = """
-Control remote cache access while keeping the local task cache enabled:
-
-- `read-write` reads remote misses and uploads successful local results.
-- `read-only` reads remote misses without uploading results.
-- `write-only` uploads results without reading remote entries.
-
-The per-run `--task-cache` mode remains authoritative. In particular, `--task-cache=local-only`
-disables all remote access.
-"""
+deprecated = "Use task.cache.remote_mode instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_mode."
 enum = ["read-write", "read-only", "write-only"]
-env = "MISE_TASK_CACHE_REMOTE_MODE"
-rust_type = "crate::task::TaskCacheRemoteMode"
+hide = true
+optional = true
+rust_type = "crate::cache::CacheRemoteMode"
 type = "String"
 
 [task.cache_remote_namespace]
-description = "[experimental] Namespace sent to the remote task cache."
-docs = """
-Opaque repository or organization namespace used to isolate remote cache entries. This setting is
-required when [`task.cache_remote_url`](#task-cache-remote-url) is configured.
-"""
-env = "MISE_TASK_CACHE_REMOTE_NAMESPACE"
+deprecated = "Use task.cache.remote_namespace instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_namespace."
+hide = true
 optional = true
 type = "String"
 
 [task.cache_remote_oidc_audience]
-description = "[experimental] Audience for an automatically acquired remote cache OIDC token."
-docs = """
-Acquire a short-lived OIDC token for this audience when running in a supported workload identity
-environment. GitHub Actions is supported through its OIDC request environment variables. This
-setting is global-only so shared project configuration cannot choose a token audience.
-"""
-env = "MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE"
+deprecated = "Use task.cache.remote_oidc_audience instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_oidc_audience."
 global_only = true
+hide = true
 optional = true
 type = "String"
 
 [task.cache_remote_token]
-description = "[experimental] Bearer token for remote task cache authentication."
-docs = """
-Authenticate remote task cache requests with an HTTP `Authorization: Bearer` header. Prefer the
-`MISE_TASK_CACHE_REMOTE_TOKEN` environment variable or a protected global configuration file; this
-setting is global-only so shared project configuration cannot supply credentials.
-"""
-env = "MISE_TASK_CACHE_REMOTE_TOKEN"
+deprecated = "Use task.cache.remote_token instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_token."
 global_only = true
+hide = true
 optional = true
 type = "String"
 
 [task.cache_remote_token_file]
-description = "[experimental] File containing a remote task cache bearer token."
-docs = """
-Read the remote task cache bearer token from this file before each request. This supports rotating
-credentials such as Kubernetes projected service account tokens. This setting is global-only so
-shared project configuration cannot select a credential file.
-"""
-env = "MISE_TASK_CACHE_REMOTE_TOKEN_FILE"
+deprecated = "Use task.cache.remote_token_file instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_token_file."
 global_only = true
+hide = true
 optional = true
 type = "Path"
 
 [task.cache_remote_url]
-description = "[experimental] Base URL for the remote task cache service."
-docs = """
-Enable the versioned HTTP remote task cache protocol at this base URL. Remote access also requires
-[`task.cache_remote_namespace`](#task-cache-remote-namespace). Leave unset to use only the local
-task cache.
-"""
-env = "MISE_TASK_CACHE_REMOTE_URL"
+deprecated = "Use task.cache.remote_url instead."
+deprecated_remove_at = "2027.8.0"
+deprecated_warn_at = "2027.2.0"
+description = "Compatibility alias for task.cache.remote_url."
+hide = true
 optional = true
 type = "Url"
 
@@ -3075,6 +3178,20 @@ description = "Default shell arguments for Unix to be used for inline commands. 
 env = "MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS"
 global_only = true
 type = "String"
+
+[upgrade.auto_prune]
+default = true
+description = "Uninstall the version `mise upgrade` replaced once the new one has installed."
+docs = """
+`mise upgrade` removes the version it upgraded away from, deleting its install directory. Set this
+to `false` when something outside of mise resolves through that path — a virtualenv built from a
+mise-managed interpreter, for example — and the old version is left in place instead.
+
+Versions that another tracked config or tool stub still needs are kept regardless of this setting.
+`mise upgrade --prune` overrides it for a single run, and `--no-prune` does the opposite.
+"""
+env = "MISE_UPGRADE_AUTO_PRUNE"
+type = "Bool"
 
 [url_replacements]
 description = "Map of URL patterns to replacement URLs applied to all requests."

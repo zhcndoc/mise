@@ -1,7 +1,7 @@
 use crate::backend::VersionInfo;
 use crate::backend::asset_matcher::{self, Asset, AssetPicker, ChecksumFetcher};
 use crate::backend::backend_type::BackendType;
-use crate::backend::options::BackendOptions;
+use crate::backend::options::{BackendOptions, VersionOrder};
 use crate::backend::platform_target::PlatformTarget;
 use crate::backend::static_helpers::{
     get_filename_from_url, install_artifact, lookup_platform_key, lookup_with_fallback,
@@ -323,6 +323,10 @@ pub fn install_time_option_keys() -> Vec<String> {
 
 #[async_trait]
 impl Backend for UnifiedGitBackend {
+    fn version_order(&self, opts: &ToolVersionOptions) -> Result<VersionOrder> {
+        VersionOrder::from_options_or(opts, self.ba.registry_version_order().unwrap_or_default())
+    }
+
     fn get_type(&self) -> BackendType {
         if self.is_gitlab() {
             BackendType::Gitlab
@@ -510,12 +514,15 @@ impl Backend for UnifiedGitBackend {
                 .await?
                 .into_iter()
                 .filter(|r| version_prefix.is_none_or(|p| r.tag_name.starts_with(p)))
-                .map(|r| VersionInfo {
-                    version: self.strip_version_prefix(&r.tag_name, &opts),
-                    created_at: Some(r.created_at),
-                    release_url: Some(format!("{}/releases/tag/{}", web_url_base, r.tag_name)),
-                    prerelease: r.prerelease,
-                    ..Default::default()
+                .map(|r| {
+                    let created_at = Some(r.released_at().to_string());
+                    VersionInfo {
+                        version: self.strip_version_prefix(&r.tag_name, &opts),
+                        created_at,
+                        release_url: Some(format!("{}/releases/tag/{}", web_url_base, r.tag_name)),
+                        prerelease: r.prerelease,
+                        ..Default::default()
+                    }
                 })
                 .collect()
         };
@@ -576,7 +583,10 @@ impl Backend for UnifiedGitBackend {
                 .get_github_release_for_url(&api_url, &repo, "latest")
                 .await
             {
-                Ok(r) => Some((r.tag_name, r.created_at, r.prerelease)),
+                Ok(r) => {
+                    let released_at = r.released_at().to_string();
+                    Some((r.tag_name, released_at, r.prerelease))
+                }
                 Err(e) => {
                     debug!("Failed to fetch latest GitHub release for {repo}: {e}");
                     None

@@ -8,7 +8,7 @@
 
 从 `[bootstrap.packages]` 升级已安装的引导包
 
-刷新包管理器元数据并升级已配置且已经安装的软件包：apk/apt/dnf/pacman 升级到最新可用版本（apk、apt 和 dnf 遵循配置中锁定的版本），brew 倒入公式当前的 bottle 并替换旧的 keg，brew-cask 安装当前的 cask 构件，flatpak 更新应用程序和运行时，mas 升级 App Store 应用。尚未安装的软件包会被跳过——请使用 `mise bootstrap packages apply` 安装这些软件包。
+刷新包管理器元数据，并升级已安装的已配置包：apk/apt/dnf/pacman 升级到最新可用版本（apk、apt 和 dnf 遵循配置中固定的版本），brew 倾倒公式的当前 bottle 并替换旧的 keg，brew-cask 安装当前的 cask 构件，flatpak 和 flatpak-user 更新应用程序及运行时，mas 升级 App Store 应用。尚未安装的软件包会被跳过——请使用 `mise bootstrap packages apply` 安装这些包。
 
 包也可以显式地以 `manager:package` 形式提供。
 

@@ -18,12 +18,12 @@ use crate::task::task_helpers::task_needs_permit;
 use crate::task::task_list::{get_task_lists, resolve_depends};
 use crate::task::task_output::TaskOutput;
 use crate::task::task_output_handler::OutputHandler;
-use crate::task::{Deps, Task, TaskCacheMode};
+use crate::task::{Deps, Task, TaskCacheMode, usage_command_for_args};
 use crate::toolset::{InstallOptions, ResolveOptions, ToolVersion, ToolsetBuilder};
 use crate::ui::{ctrlc, info, style};
 use bytesize::ByteSize;
 use clap::{CommandFactory, ValueHint};
-use eyre::{Result, bail, eyre};
+use eyre::{Context, Result, bail, eyre};
 use futures_util::FutureExt;
 use itertools::Itertools;
 use serde::Serialize;
@@ -121,6 +121,7 @@ pub struct Run {
     pub force: bool,
 
     /// Number of tasks to run in parallel
+    /// Values below 1 are treated as 1
     /// [default: 4]
     /// Configure with `jobs` config or `MISE_JOBS` env var
     #[clap(long, short, env = "MISE_JOBS", verbatim_doc_comment)]
@@ -293,6 +294,9 @@ pub struct Run {
 
     #[clap(skip)]
     pub executor: Option<crate::task::task_executor::TaskExecutor>,
+
+    #[clap(skip)]
+    pub cache_session: Option<crate::cache::session::CacheSession>,
 }
 
 fn affected_task_args(args: &[String]) -> Vec<String> {
@@ -862,8 +866,30 @@ impl Run {
                 .await?;
         }
 
-        // Step 4: Create TaskExecutor after tool installation
+        // Step 4: Bracket action caching with this top-level task run. The
+        // session owns the local agent and is flushed before results report.
+        self.setup_cache_session(&tasks).await?;
+
+        // Step 5: Create TaskExecutor after tool installation
         self.setup_executor()?;
+
+        // Validate every scheduled invocation before starting the scheduler so
+        // an invalid parent or dependency cannot run any task commands first.
+        let executor = self.executor.as_ref().expect("task executor initialized");
+        for task in tasks.all() {
+            if let Err(err) = executor
+                .preflight_task_usage(&config, task)
+                .await
+                .wrap_err_with(|| format!("failed to validate task {}", task.name))
+            {
+                if let Some(session) = &self.cache_session
+                    && let Err(finish_err) = session.finish().await
+                {
+                    warn!("failed to finish action cache session: {finish_err:#}");
+                }
+                return Err(err);
+            }
+        }
 
         // Disable exit-on-ctrl-c so tasks can handle SIGINT gracefully
         ctrlc::exit_on_ctrl_c(false);
@@ -872,7 +898,7 @@ impl Run {
         let this = Arc::new(self);
         let config = config.clone();
 
-        // Step 4: Initialize scheduler and run tasks
+        // Step 6: Initialize scheduler and run tasks
         let mut scheduler = crate::task::task_scheduler::Scheduler::new(this.jobs());
         let main_deps = Arc::new(Mutex::new(tasks));
 
@@ -903,9 +929,13 @@ impl Run {
             )
             .await?;
 
-        scheduler.join_all(this.continue_on_error).await?;
+        let join_result = scheduler.join_all(this.continue_on_error).await;
+        if let Some(session) = &this.cache_session {
+            crate::cache::session::display_stats(session.finish().await?);
+        }
+        join_result?;
 
-        // Step 5: Display results and handle failures
+        // Step 7: Display results and handle failures
         let results_display = crate::task::task_results_display::TaskResultsDisplay::new(
             this.output_handler.clone().unwrap(),
             this.executor.as_ref().unwrap().failed_tasks.clone(),
@@ -1196,6 +1226,10 @@ impl Run {
             task_cache: self.task_cache,
             task_cache_explain: self.task_cache_explain,
             task_cache_explain_json: self.task_cache_explain_json,
+            cache_session: self
+                .cache_session
+                .as_ref()
+                .map(crate::cache::session::CacheSession::environment),
             sandbox: crate::sandbox::SandboxConfig::from_settings_and_cli(
                 &Settings::get().sandbox,
                 self.deny_all,
@@ -1219,6 +1253,24 @@ impl Run {
             executor_config,
         ));
 
+        Ok(())
+    }
+
+    async fn setup_cache_session(&mut self, tasks: &Deps) -> Result<()> {
+        let enabled = !self.dry_run
+            && tasks
+                .all()
+                .any(|task| task.rust_cache.as_ref().is_some_and(|cache| cache.enabled));
+        if !enabled {
+            return Ok(());
+        }
+        self.cache_session = Some(
+            crate::cache::session::CacheSession::start(
+                &self.tmpdir,
+                crate::task::task_cache::task_cache_dir().join("actions"),
+            )
+            .await?,
+        );
         Ok(())
     }
 
@@ -1303,6 +1355,9 @@ impl Run {
         use crate::ui;
         if self.task_cache.enabled() && task.cache.as_ref().is_some_and(|cache| cache.enabled) {
             Settings::get().ensure_experimental("task artifact caching")?;
+        }
+        if task.rust_cache.as_ref().is_some_and(|cache| cache.enabled) {
+            Settings::get().ensure_experimental("Rust action caching")?;
         }
         if !task.pass_through_env.is_empty() {
             Settings::get().ensure_experimental("task environment pass-through")?;
@@ -1404,59 +1459,6 @@ fn display_task_help(task: &Task) -> Result<()> {
 fn render_usage_help(spec: &usage::Spec, args: &[String]) -> String {
     let cmd = usage_command_for_args(spec, args);
     usage::docs::cli::render_help(spec, cmd, true)
-}
-
-fn usage_command_for_args<'a>(spec: &'a usage::Spec, args: &[String]) -> &'a usage::SpecCommand {
-    let mut cmd = &spec.cmd;
-    let mut idx = 0;
-    let mut used_default_subcommand = false;
-
-    while idx < args.len() {
-        let arg = &args[idx];
-        if arg == "-h" || arg == "--help" {
-            break;
-        }
-        if let Some(subcommand) = cmd.find_subcommand(arg) {
-            cmd = subcommand;
-            idx += 1;
-            continue;
-        }
-        if arg.starts_with('-') {
-            if !arg.contains('=')
-                && (flag_takes_value(&spec.cmd, arg) || flag_takes_value(cmd, arg))
-            {
-                idx += 1;
-            }
-            idx += 1;
-            continue;
-        }
-        if !used_default_subcommand
-            && let Some(default_name) = &spec.default_subcommand
-            && let Some(subcommand) = cmd.find_subcommand(default_name)
-        {
-            cmd = subcommand;
-            used_default_subcommand = true;
-            continue;
-        }
-        break;
-    }
-
-    cmd
-}
-
-fn flag_takes_value(cmd: &usage::SpecCommand, flag: &str) -> bool {
-    let flag = flag.split_once('=').map(|(flag, _)| flag).unwrap_or(flag);
-    if let Some(long) = flag.strip_prefix("--") {
-        cmd.flags
-            .iter()
-            .any(|f| f.arg.is_some() && f.long.iter().any(|f| f == long))
-    } else if let Some(short) = flag.strip_prefix('-').and_then(|f| f.chars().next()) {
-        cmd.flags
-            .iter()
-            .any(|f| f.arg.is_some() && f.short.contains(&short))
-    } else {
-        false
-    }
 }
 
 static AFTER_LONG_HELP: &str = color_print::cstr!(

@@ -16,8 +16,8 @@
 
 ### `[TOOL]…`
 
-要在 lockfile 中更新的工具
-例如：node python
+要在 lockfile 中更新的工具  
+例如：node python  
 如果未指定，将更新 lockfile 中的所有工具。
 
 ## 标志
@@ -29,7 +29,8 @@
 
 ### `-j --jobs <JOBS>`
 
-并行运行的任务数量
+并行运行的任务数
+小于 1 的值将按 1 处理
 
 ### `-n --dry-run`
 

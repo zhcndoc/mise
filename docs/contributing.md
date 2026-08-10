@@ -17,13 +17,13 @@ mise 有明确的范围和设计理念。在提交 PR 之前，除非是显而�
 
 我每周会在各个项目中收到数百个 PR，因此没有时间为每个 PR 都提供详细背景说明。拒绝理由可能会很简短。
 
-## Pull Request 检查清单
+## 拉取请求检查清单
 
 1. **先进行讨论**：对于不明显的更改，请使用 GitHub Discussions 或 Discord
 2. **使用规范的标题**：PR 标题会自动进行验证
    - 对于注册表中的新工具：使用 `registry: add tool-name (backend:full/name)`
 3. **运行本地检查**：在适用的情况下，提交 PR 前运行 `mise run render` 和 `mise run lint-fix`
-4. **进行全面测试**：确保相关的单元测试和 E2E 测试通过
+4. **进行全面测试**：确保相关的单元测试和端到端测试通过
 5. **更新文档**：为面向用户的更改添加或更新文档
 6. **保持依赖项健康**：新依赖项会通过 cargo-deny 进行验证
 
@@ -32,7 +32,7 @@ mise 有明确的范围和设计理念。在提交 PR 之前，除非是显而�
 1. **开发期间禁用 mise**：如果你在 shell 中使用 mise，请在运行测试时禁用它，以避免冲突
 2. **测试特定功能**：使用 `cargo test test_name` 进行定向测试
 3. **更新快照**：更改测试输出时使用 `mise run snapshots`
-4. **速率限制**：设置 `MISE_GITHUB_TOKEN` 以避免开发期间受到 GitHub API 速率限制
+4. **速率限制**：设置 `MISE_GITHUB_TOKEN` 以避免开发期间受到 GitHub API 速率限制。
 
 ## 打包与自更新说明
 
@@ -313,7 +313,7 @@ cargo insta test --accept --unreferenced delete
 ### 前置条件
 
 - [Rust](https://www.rust-lang.org/)（最新稳定版，我们不使用 mise
-  管理 rust）
+  管理 Rust）
 - mise
 
 ### 开始使用
@@ -604,7 +604,7 @@ mise 使用多个自动化工作流来维护代码质量并简化开发流程：
 - **release-plz**：基于约定式提交的自动化发布管理
 - 自动创建发布 PR 并发布版本
 - 通过定时工作流每日运行
-- 处理版本号更新和变更日志生成
+- 处理版本号更新和变更日志生成。
 
 ## 添加新设置
 
@@ -631,10 +631,10 @@ mise 使用多个自动化工作流来维护代码质量并简化开发流程：
 2. **添加到 registry/**：
 
    ```toml
-   [tools.your-tool]
+   version_order = "semver"
    description = "Brief description of the tool"
    backends = ["aqua:owner/repo", "github:owner/repo"]
-   test = ["your-tool --version", "{{version}}"]
+   test = { cmd = "your-tool --version", expected = "{{version}}" }
    ```
 
 3. 使用 `mise test-tool your-tool` **测试工具**是否正常工作
@@ -689,19 +689,22 @@ mise 使用多个自动化工作流来维护代码质量并简化开发流程：
 
 ```toml
 # 工具名称 "your-tool"（将成为 `mise use` 的简短名称）
-[tools.your-tool]
+version_order = "semver"
 description = "Tool description"
 backends = [
     "aqua:owner/repo",           # 优先使用的后端
     "github:owner/repo",         # 后备后端
 ]
-test = [
-    "your-tool --version",       # 要运行的命令
-    "{{version}}"                # 预期的输出模式
-]
+test = { cmd = "your-tool --version", expected = "{{version}}" }
 aliases = ["alt-name"] # 可选的替代名称
 os = ["linux", "macos"] # 可选的操作系统限制
 ```
+
+每个注册表条目都必须明确将 `version_order` 设置为 `semver` 或
+`source`。仅当工具的稳定版本始终使用严格的 `MAJOR.MINOR.PATCH` 语义版本时，才使用
+`semver`。对于日期版本、两段式版本、渠道、引用、工具特定格式、版本历史混杂的情况，
+或无法确定约定时，使用 `source`。语义排序目前会影响 Aqua、GitHub、GitLab、Forgejo
+和 HTTP 后端；对于当前由后端自行负责版本排序的工具，该字段仍用于记录相关策略。
 
 #### 约定式版本文件
 
@@ -751,7 +754,8 @@ mise settings add idiomatic_version_file_enable_tools your-tool
 按偏好顺序列出后端。用户将获得第一个可用的后端，但可以使用
 `mise use aqua:owner/repo` 等显式语法覆盖。
 
-仅当工具已有非 npm 主后端且 npm 软件包在禁用生命周期脚本的情况下也能正常工作时，才将 `npm` 作为后备选项。
+仅当工具已有非 npm 主后端且 npm 软件包在禁用生命周期脚本的情况下也能正常工作时，才将
+`npm` 作为后备选项。
 
 ### 工具测试
 

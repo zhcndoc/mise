@@ -376,9 +376,9 @@ PLUGIN = {
 
 可选字段：
 
-- **`version`** — 适用于 `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或单独的 `3.0`，表示 `>=3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则会将该依赖视为满足（存在即可），而不会阻止安装。
-- **`optional`** — 简短的原因说明。缺少可选依赖时不会提示或失败；mise 会显示一行信息，让用户可以在不需要某些功能时继续构建（例如 Erlang 的 `wxWidgets` GUI）。
-- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`mas`）映射到提供相应功能的包。
+- **`version`** — `bin` 和 `pkgconfig` 的版本约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或仅写 `3.0`，表示 `>=3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将该依赖视为满足（存在即可），而不会阻止安装。
+- **`optional`** — 简短的原因字符串。缺少可选依赖时不会提示或失败；它们会以一行信息的形式显示，让用户可以在不需要某些功能的情况下进行构建（例如 Erlang 的 `wxWidgets` 图形界面）。
+- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`）映射到提供相应功能的包。
 
 **检测结果是唯一依据。** 无论某项功能是通过 Homebrew、apt、nix、MacPorts 还是从源代码安装的，只要检查通过，就视为满足；mise 不会询问它是如何安装的。只有在**提供安装缺失项的选项**时，才会查询 `packages` 映射；它只是补救提示，并不声明该工具必须来自相应的包管理器。
 

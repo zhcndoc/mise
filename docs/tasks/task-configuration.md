@@ -172,7 +172,7 @@ run = 'echo "deploying {{usage.app}}"'
 [tasks.deploy]
 usage = 'arg "<app>"'
 depends = ["build {{usage.app}}"]
-run = 'echo "deploying {{usage.app}}'"
+run = 'echo "deploying {{usage.app}}"'
 ```
 
 以及标志：
@@ -598,19 +598,19 @@ mise run --task-cache off build
 
 #### 远程缓存和敏感数据
 
-使用 `task.cache_remote_url` 和非空的 `task.cache_remote_namespace` 配置实验性远程服务。命名空间是不透明的仓库或组织标识符；服务器必须同时根据命名空间和缓存键隔离条目。它是路由元数据，不是身份验证机制或机密。凡是写入者不应相互影响缓存条目的地方，都应使用不同的命名空间。
+使用 `task.cache.remote_url` 和非空的 `task.cache.remote_namespace` 配置实验性的远程构建缓存服务。命名空间是不透明的仓库或组织标识符；服务器必须同时根据命名空间和缓存键隔离条目。它是路由元数据，不是身份验证机制或机密。对于不应相互影响缓存条目的写入者，应使用不同的命名空间。
 
 ```mise-toml
 [settings]
 experimental = true
-task.cache_remote_url = "https://cache.example.com/mise/"
-task.cache_remote_namespace = "acme/widgets"
-task.cache_remote_mode = "read-write"
+task.cache.remote_url = "https://cache.example.com/mise/"
+task.cache.remote_namespace = "acme/widgets"
+task.cache.remote_mode = "read-write"
 ```
 
-在进程环境中设置 `MISE_TASK_CACHE_REMOTE_TOKEN`，即可发送 bearer 凭据。等效的 `task.cache_remote_token` 设置只能是全局设置，但更推荐使用环境变量，这样无需将令牌写入磁盘。mise 会从设置跟踪输出中隐藏令牌，并将其 HTTP 标头标记为敏感信息。对于非回环服务，mise 要求使用 HTTPS；仅本地开发服务器接受普通 HTTP。服务器仍应使用短期、最小权限的凭据，限制命名空间访问，避免记录授权标头，并根据存储缓存对象的敏感性和保留要求对其加密或采取其他保护措施。
+在进程环境中设置 `MISE_TASK_CACHE_REMOTE_TOKEN`，即可发送 bearer 凭据。等效的 `task.cache.remote_token` 设置仅适用于全局配置，但更推荐使用环境变量，这样就无需将令牌写入磁盘。mise 会在设置跟踪输出中隐藏令牌，并将其 HTTP 标头标记为敏感信息。对于非回环服务，它要求使用 HTTPS；仅允许本地开发服务器使用普通 HTTP。服务器仍应使用短期、最小权限的凭据，限制命名空间访问，避免记录授权标头，并根据缓存对象的敏感性和保留要求对其进行加密或采取其他保护措施。
 
-要轮换凭据，请将 `MISE_TASK_CACHE_REMOTE_TOKEN_FILE` 设置为一个只包含 bearer 令牌的文件。mise 会在每次请求前重新读取该文件，因此支持 Kubernetes 投影的服务账户令牌，无需重启长时间运行的进程。等效的 `task.cache_remote_token_file` 设置只能是全局设置。
+如需轮换凭据，可将 `MISE_TASK_CACHE_REMOTE_TOKEN_FILE` 设置为一个仅包含 bearer 令牌的文件。mise 会在每次请求前重新读取该文件，这支持 Kubernetes 投射的服务账户令牌，而无需重启长时间运行的进程。等效的 `task.cache.remote_token_file` 设置仅适用于全局配置。
 
 在 GitHub Actions 中，mise 可以自行获取并刷新短期 OIDC 令牌。授予工作流请求身份令牌的权限，并明确设置其受众：
 
@@ -629,11 +629,11 @@ jobs:
       - run: mise run test
 ```
 
-缓存服务必须信任 GitHub 的签发方，接受配置的受众，并针对所选命名空间授权工作流的身份声明。mise 从 GitHub 的作业 OIDC 端点获取令牌，仅将其保存在内存中，并在过期前刷新。受众设置只能是全局设置；当工作流缺少 `id-token: write` 权限时，获取操作会明确失败。
+缓存服务必须信任 GitHub 的签发者，接受配置的受众，并根据所选命名空间授权工作流的身份声明。mise 从 GitHub 的作业 OIDC 端点获取令牌，仅将其保存在内存中，并在令牌过期前刷新。受众设置仅适用于全局配置；如果工作流缺少 `id-token: write` 权限，获取过程会明确失败。
 
 凭据优先级依次为显式令牌、令牌文件，然后是自动 OIDC。这样无需更改项目配置，即可使用紧急静态凭据覆盖工作负载身份。其他 CI 提供商可以通过 `MISE_TASK_CACHE_REMOTE_TOKEN` 直接提供其签发的 OIDC 令牌，无需协议专用的集成。
 
-任务缓存条目并非不含机密信息的元数据。它们包含捕获的标准输出和标准错误，以及每个声明的输出文件。mise 会在存储日志前应用已配置的输出脱敏规则，但这不是通用的机密扫描器：任务可能打印未知凭据，或将凭据写入输出产物。除非这些值适合保留并与本地和远程缓存的所有读取者共享，否则不要缓存此类任务。清除本地条目不会删除已经上传到远程服务的副本；同样请使用远程服务的保留和删除控制。
+任务缓存条目并非不含机密的元数据。它们包含捕获的标准输出和标准错误，以及每个声明的输出文件。mise 会在存储日志前应用已配置的输出脱敏规则，但这不是通用的机密扫描器：任务可能打印未知凭据，或将凭据写入输出产物。除非这些值适合保留并与本地和远程缓存的所有读取者共享，否则不要缓存此类任务。清除本地条目不会删除已经上传到远程服务的副本；同样请使用远程服务的保留和删除控制。
 
 产物校验和可以检测损坏，HTTPS 可以在传输过程中验证已配置服务器的身份，但校验和不是原始任务运行器签发的签名。任何获准向某个命名空间写入的主体都可以发布其读取者会信任的条目。为不受信任的拉取请求作业提供只读凭据或不提供远程凭据，使用 `--task-cache read-only` 防止发布，并将信任度较低的写入者隔离到单独的命名空间中。
 
@@ -723,10 +723,30 @@ pass_through_env = ["NPM_TOKEN"]
 
 可缓存的依赖会将其产物键贡献给依赖任务的键，因此依赖任务执行、跳过或恢复后，依赖它的任务可以恢复匹配的产物。如果某个依赖在没有稳定产物键的情况下执行，其依赖任务会采取保守策略继续执行。
 
+### `rust_cache` <Badge type="warning" text="实验性" />
+
+- **类型**：`boolean | table`
+- **默认值**：`false`
+
+仅对本次任务运行启用 Rust 编译器操作缓存。`true` 和 `{}` 都会启用默认配置；`false` 和 `{ enabled = false }` 会禁用缓存。表格形式从一开始就可用，因此未来新增 Rust 专用选项时无需重命名该字段。
+
+```mise-toml
+[tasks.build]
+run = "cargo build"
+rust_cache = true
+```
+
+mise 只会将编译器集成注入任务子进程的环境中。Shell 激活、直接运行的 `cargo build`、编辑器进程和发布构建都不会被拦截。顶层的 `mise run` 会管理缓存会话，在成功之前刷新待上传内容，并报告命中次数、未命中次数和传输字节数。编译器操作键收集和预取功能会随编译器适配器一起提供，而不会作为未使用的任务清单字段存在。
+
+Rust 操作缓存会在本次任务运行中禁用增量编译，因为两种缓存模型彼此不兼容。这可能会使本地快速编辑并构建的循环变慢。在 CI、冷克隆、工作树和分支切换场景中使用 `rust_cache`；本地增量开发循环则使用直接运行的 `cargo build`。在 CI 之外，操作缓存会话会读取本地和远程结果，但不会上传结果。
+
+`rust_cache` 独立于任务结果缓存 `cache`：操作缓存可以复用单个编译器操作，同时任务仍会继续执行；而无需拦截编译器，也可以使用任务结果缓存。设置 `task_config.rust_cache` 可提供作用域内的默认值；任务本地的 `false` 会禁用该继承的默认值。
+
 ### `shell`
 
 - **类型**: `string`
-- **默认值**: [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) 或 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)
+- **默认值**: 设置了 [`task_config.shell`](#task-config-shell) 时使用该值（配置作用域）；否则使用
+  [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)/[`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)（仅全局）。
 - **注意**: 仅适用于 toml-tasks。
 
 用于运行任务的 shell。如果你想使用与默认不同的 shell 来运行任务，这很有用，例如 `fish`、`zsh` 或 `pwsh`。不过通常更建议使用 [shebang](./toml-tasks#shell-shebang)，因为这会让支持 mise 的 IDE 显示脚本的语法高亮和 lint 提示。
@@ -948,7 +968,7 @@ cascade = true
 shell = "bash -c"
 ```
 
-这适用于 `dir`、`shell`、`cache` 和 `includes`。继承的 include 路径仍相对于定义它们的配置根目录，因此单仓库根目录可以提供一组共享任务。
+这适用于 `dir`、`shell`、`cache`、`rust_cache` 和 `includes`。继承的 include 路径仍然相对于其定义所在的配置根目录，因此单仓库根目录可以提供一组共享任务。
 
 ### `task_config.dir`
 
@@ -959,7 +979,7 @@ shell = "bash -c"
 dir = "{{cwd}}"
 ```
 
-### `task_config.shell`
+### `task_config.shell` {#task-config-shell}
 
 设置此配置作用域中任务的默认 shell。任务显式设置的 `shell` 优先级更高，包括从任务模板继承的 `shell`。当 `task_config.cascade = true` 时，后代配置根目录会继承此默认值，并可以使用自己的 `task_config.shell` 覆盖它。
 
@@ -984,6 +1004,15 @@ shell = "bash -c"
 enabled = true
 env = ["NODE_ENV", "CI"]
 command_inputs = ["node --version"]
+```
+
+### `task_config.rust_cache` <Badge type="warning" text="实验性" />
+
+设置 Rust 操作缓存的作用域默认值。任务本地或任务模板中的值优先级更高；显式设置为 `false` 会禁用继承的默认值。
+
+```toml
+[task_config]
+rust_cache = true
 ```
 
 ### `task_config.global_env` <Badge type="warning" text="实验性" />
@@ -1071,6 +1100,11 @@ includes = [
 
 条目会按顺序进行求值，当多个 include 定义了同名任务时，列表中的**最后**一个条目获胜。
 这一规则同样适用于目录、toml 文件和 `git::` include，因此若要用本地任务覆盖来自 `git::` include 的任务，请将本地目录放在 `git::` 条目之后：
+
+来自选择该 include 的配置或优先级更高配置的内联 `[tasks.<name>]` 命令，其优先级高于包含的 TOML 文件中的同名任务。不包含 `run`、`run_windows` 或
+`file` 的内联块则会覆盖描述、环境和依赖关系等元数据。对于可执行文件任务，脚本仍然是该任务的命令，而内联定义会覆盖其元数据。
+
+相同的覆盖规则也适用于分层的内联任务定义。例如，`mise.local.toml` 中仅包含元数据的任务，会覆盖 `mise.toml` 中最近的、优先级较低的带命令定义。具有自身命令的更高优先级定义仍会替换较低层级的任务。所选的、包含命令的基础定义之上的所有仅包含元数据的定义，都会按照优先级顺序贡献元数据；其下方的定义则不会贡献元数据。
 
 ```toml
 [task_config]

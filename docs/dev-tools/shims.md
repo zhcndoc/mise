@@ -111,8 +111,16 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 
 :::
 
-- 如果你愿意，也可以只使用 `shims`，不过这会带来一些[限制](/dev-tools/shims.html#shims-vs-path)。
-- [`mise activate --shims`](/cli/activate.html#shims) 的另一种替代方案是使用 `export PATH="$HOME/.local/share/mise/shims:$PATH"`。如果在那一时刻 `mise` 还不可用，这会很有帮助。
+::: info
+当 shim 无法解析由 mise 管理的工具时（例如，`mise.toml` 中固定的版本尚未安装，且 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 已禁用），它不会报错，而是回退到在 `PATH` 其他位置找到的第一个同名可执行文件。
+
+对于你也希望在 mise 外部使用的工具，这很方便；但对于操作系统本身也提供的工具（例如 Debian/Ubuntu 上的 `python3`），这意味着 shim 可能会悄悄运行一个完全不同且无关的二进制文件，而不是明确报错。
+
+如果你希望无法解析的 shim 直接失败，可以将 [`not_found_system_fallback`](/configuration/settings.html#not_found_system_fallback) 设置为 `false`，并同时将 `not_found_auto_install` 设置为 `false`。
+:::
+
+- 如果你更喜欢，也可以决定只使用 `shims`，不过这会带来一些[限制](/dev-tools/shims.html#shims-vs-path)。
+- [`mise activate --shims`](/cli/activate.html#shims) 的另一种替代方法是使用 `export PATH="$HOME/.local/share/mise/shims:$PATH"`。如果此时 `mise` 尚不可用，这种方法会很有帮助。
 
 ### mise reshim
 
@@ -130,7 +138,7 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 
 - 在 mise 中定义的 [环境变量](/environments/) 仅对 mise 工具可用
 - 大多数 [hooks](/hooks.html) 不会触发
-- unix 的 `which` 命令会指向 shim，从而遮蔽真实可执行文件的位置
+- Unix 的 `which` 命令会指向 shim，从而遮蔽真实可执行文件的位置
 
 一般来说，在 _交互式_ 场景中，推荐使用 PATH（`mise activate`）而不是 shims。
 
@@ -204,20 +212,20 @@ done
 
 这两者之间唯一的区别是：如果你更改了目录，使用 `hook-env` 就需要再次调用它，而使用 shims 则不需要。如果你同时使用两者，`mise activate` 会为你处理 shims 目录：它会将该目录保留在工具路径之后，作为自动安装的后备路径；或者在禁用 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 时，将其完全从 `PATH` 中移除。
 
-## 既不使用 shims 也不使用 PATH {#neither-shims-nor-path}
+## 既不使用 shims，也不使用 PATH {#neither-shims-nor-path}
 
-加载 mise 环境有很多种方式，而且都不需要二者之一，主要包括：
+加载 mise 环境有很多种方式，而且都不需要二者中的任何一个，主要包括：
 [`mise x|exec`](/cli/exec.html)、[`mise r|run`](/cli/run.html) 或 [`mise en`](/cli/en.html)。
 
 这些方式都会在执行某些操作之前加载所有工具和环境变量。这可能
-是理想的，因为你完全不需要修改 shell 的 rc 文件，而且环境始终是显式加载的。
+很理想，因为你完全不需要修改 shell 的 rc 文件，而且环境始终会被显式加载。
 有些人可能会觉得这是一种“干净”的工作方式。
 
-明显的缺点是，每当想使用 `mise` 时，都需要在前面加上 `mise exec|run`。不过，你可以很容易地将它们别名为 `mx|mr`。
+明显的缺点是，每当想使用 `mise` 时，都需要在前面加上 `mise exec|run`。不过，你可以很容易地将它们分别别名为 `mx|mr`。
 
 - 如果你更喜欢“精确”而不是“省事”，这就是你会偏好的方式。
-- 又或者，如果你只是想在单个项目中使用 mise，因为你的团队就是这么用的，并且你倾向于
-  不把它用来管理系统上的其他任何东西。为这种场景使用 shell 扩展就有点过度了。
+- 或者，如果你只想在单个项目中使用 mise，因为你的团队就是这么使用的，并且你倾向于
+  不让它管理系统上的其他任何内容，那么在这种场景下使用 shell 扩展就有些过度了。
 
 ## 对 `cd` 的钩子 {#hook-on-cd}
 
@@ -253,7 +261,7 @@ node some_script.js
 ```
 
 ```sh [shims]
-eval "$(mise activate zsh --shims)" # 应该放在第一行
+eval "$(mise activate zsh --shims)" # 应放在第一行
 eval "$(mise activate zsh)"
 node some_script.js
 ```

@@ -71,7 +71,6 @@ pub mod workspace;
 pub(crate) use task_cache::TaskCacheOutput;
 pub use task_cache::{TaskArtifactCache, TaskCacheConfig, TaskCacheMode};
 pub(crate) use task_cache_audit::TaskCacheAudit;
-pub use task_cache_store::TaskCacheRemoteMode;
 pub use task_confirm::TaskConfirm;
 pub(crate) use task_load_context::monorepo_scope;
 pub use task_load_context::{TaskLoadContext, expand_colon_task_syntax, is_workspace_project_task};
@@ -568,6 +567,73 @@ pub struct TaskWatchOptions {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TaskLanguageCacheOptions {
+    enabled: bool,
+}
+
+impl Default for TaskLanguageCacheOptions {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+macro_rules! task_language_cache_config {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $name {
+            pub enabled: bool,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self { enabled: true }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct LanguageCacheVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for LanguageCacheVisitor {
+                    type Value = $name;
+
+                    fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+                        formatter.write_str("a boolean or language cache options table")
+                    }
+
+                    fn visit_bool<E>(self, enabled: bool) -> std::result::Result<Self::Value, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        Ok($name { enabled })
+                    }
+
+                    fn visit_map<M>(self, map: M) -> std::result::Result<Self::Value, M::Error>
+                    where
+                        M: serde::de::MapAccess<'de>,
+                    {
+                        let options = TaskLanguageCacheOptions::deserialize(
+                            serde::de::value::MapAccessDeserializer::new(map),
+                        )?;
+                        Ok($name {
+                            enabled: options.enabled,
+                        })
+                    }
+                }
+
+                deserializer.deserialize_any(LanguageCacheVisitor)
+            }
+        }
+    };
+}
+
+task_language_cache_config!(TaskRustCacheConfig);
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
     /// Internal execution occurrence. A task referenced as both a regular and
@@ -649,6 +715,9 @@ pub struct Task {
     /// Experimental local artifact cache configuration.
     #[serde(default)]
     pub cache: Option<TaskCacheConfig>,
+    /// Rust compiler action caching enabled only for this task run.
+    #[serde(default)]
+    pub rust_cache: Option<TaskRustCacheConfig>,
     #[serde(skip)]
     pub raw_outputs: RawOutputTemplates,
     #[serde(default)]
@@ -686,6 +755,20 @@ pub struct Task {
     // file type
     #[serde(default)]
     pub file: Option<PathBuf>,
+
+    /// This task was loaded from a TOML file in `task_config.includes`.
+    ///
+    /// Included TOML tasks and executable file tasks share the same loading
+    /// pipeline, but inline config tasks override the former while only
+    /// contributing metadata to the latter.
+    #[serde(skip)]
+    pub(crate) is_toml_include: bool,
+
+    /// Relative precedence of the config that defined this task or selected
+    /// its TOML include. Lower values have higher precedence. This is scoped
+    /// to one config root and is only used while task sources are merged.
+    #[serde(skip)]
+    pub(crate) config_precedence: usize,
 
     // Store the original remote file source (git::/http:/https:) before it's replaced with local path
     // This is used to determine if the task should use monorepo config file context
@@ -1111,6 +1194,71 @@ fn normalize_root_mount_node(line: &str) -> String {
     }
 }
 
+pub(crate) fn usage_command_for_args<'a>(
+    spec: &'a usage::Spec,
+    args: &[String],
+) -> &'a usage::SpecCommand {
+    let mut cmd = &spec.cmd;
+    let mut idx = 0;
+    let mut used_default_subcommand = false;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+        if arg == "-h" || arg == "--help" {
+            break;
+        }
+        if let Some(subcommand) = cmd.find_subcommand(arg) {
+            cmd = subcommand;
+            idx += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            let flag_takes_value =
+                usage_flag_takes_value(&spec.cmd, arg) || usage_flag_takes_value(cmd, arg);
+            if !flag_takes_value
+                && !used_default_subcommand
+                && let Some(default_name) = &spec.default_subcommand
+                && let Some(subcommand) = cmd.find_subcommand(default_name)
+            {
+                cmd = subcommand;
+                used_default_subcommand = true;
+                continue;
+            }
+            if !arg.contains('=') && flag_takes_value {
+                idx += 1;
+            }
+            idx += 1;
+            continue;
+        }
+        if !used_default_subcommand
+            && let Some(default_name) = &spec.default_subcommand
+            && let Some(subcommand) = cmd.find_subcommand(default_name)
+        {
+            cmd = subcommand;
+            used_default_subcommand = true;
+            continue;
+        }
+        break;
+    }
+
+    cmd
+}
+
+fn usage_flag_takes_value(cmd: &usage::SpecCommand, flag: &str) -> bool {
+    let flag = flag.split_once('=').map(|(flag, _)| flag).unwrap_or(flag);
+    if let Some(long) = flag.strip_prefix("--") {
+        cmd.flags
+            .iter()
+            .any(|f| f.arg.is_some() && f.long.iter().any(|f| f == long))
+    } else if let Some(short) = flag.strip_prefix('-').and_then(|f| f.chars().next()) {
+        cmd.flags
+            .iter()
+            .any(|f| f.arg.is_some() && f.short.contains(&short))
+    } else {
+        false
+    }
+}
+
 impl Task {
     pub fn config_sources(&self) -> Vec<&Path> {
         once(self.config_source.as_path())
@@ -1245,6 +1393,13 @@ impl Task {
             .map(|v| {
                 TaskCacheConfig::deserialize(v.clone())
                     .map_err(|e| eyre!("failed to parse cache field in task header: {e}"))
+            })
+            .transpose()?;
+        task.rust_cache = p
+            .get_raw("rust_cache")
+            .map(|value| {
+                TaskRustCacheConfig::deserialize(value.clone())
+                    .map_err(|error| eyre!("failed to parse rust_cache field: {error}"))
             })
             .transpose()?;
         task.file = Some(path.to_path_buf());
@@ -1689,6 +1844,43 @@ impl Task {
             .any(|a| a == "--help" || a == "-h")
     }
 
+    /// Reconstruct the command-line separator clap consumed before populating
+    /// `trailing_args` when the active usage command requires it.
+    pub fn args_for_usage_parser(&self, spec: &usage::Spec, args: &[String]) -> Vec<String> {
+        if self.trailing_args.is_empty() {
+            return args.to_vec();
+        }
+
+        debug_assert!(
+            args.ends_with(&self.trailing_args),
+            "task trailing_args must be a suffix of the arguments passed to usage"
+        );
+        let Some(prefix) = args.strip_suffix(self.trailing_args.as_slice()) else {
+            return args.to_vec();
+        };
+        debug_assert!(
+            self.args.ends_with(&self.trailing_args),
+            "task trailing_args must be a suffix of task args"
+        );
+        let Some(task_prefix) = self.args.strip_suffix(self.trailing_args.as_slice()) else {
+            return args.to_vec();
+        };
+        if !usage_command_for_args(spec, task_prefix)
+            .args
+            .iter()
+            .any(|arg| arg.double_dash == usage::SpecDoubleDashChoices::Required)
+        {
+            return args.to_vec();
+        }
+
+        prefix
+            .iter()
+            .cloned()
+            .chain(once("--".to_string()))
+            .chain(self.trailing_args.iter().cloned())
+            .collect()
+    }
+
     fn populate_spec_metadata(&self, spec: &mut usage::Spec) {
         spec.name = self.display_name.clone();
         spec.bin = self.display_name.clone();
@@ -1801,6 +1993,37 @@ impl Task {
         Ok(spec)
     }
 
+    /// Parse usage metadata without resolving task- or subproject-specific
+    /// environment directives. This is used before the scheduler starts, where
+    /// source/module hooks must not run ahead of task dependencies.
+    pub(crate) async fn parse_usage_spec_for_preflight(
+        &self,
+        config: &Arc<Config>,
+    ) -> Result<usage::Spec> {
+        let mut spec = if let Some(file) = self.file_path_raw() {
+            parse_task_script_usage(&file)
+                .inspect_err(|e| {
+                    warn!(
+                        "failed to parse task file {} with usage: {e:?}",
+                        file::display_path(&file)
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            let scripts_only = self.run_script_strings();
+            TaskScriptParser::new(self.config_root.clone())
+                .parse_run_scripts_for_preflight(config, self, &scripts_only)
+                .await?
+        };
+        self.populate_spec_metadata(&mut spec);
+        self.populate_usage_about(&mut spec);
+        Ok(spec)
+    }
+
+    pub(crate) fn validate_template_syntax_for_preflight(&self, input: &str) -> Result<()> {
+        TaskScriptParser::new(self.config_root.clone()).validate_template_syntax(self, input)
+    }
+
     pub async fn render_run_scripts_with_args(
         &self,
         config: &Arc<Config>,
@@ -1821,13 +2044,14 @@ impl Task {
         if !self.should_bypass_usage_parser() && has_any_args_defined(&spec) {
             let mut env = env.clone();
             clear_usage_env(&mut env);
+            let args = self.args_for_usage_parser(&spec, args);
             let parser_dir = match cwd {
                 Some(cwd) => Some(cwd),
                 None => self.dir(config).await?,
             };
             let scripts_only = self.run_script_strings();
             let scripts = Self::make_script_parser(parser_dir, extra_vars)
-                .parse_run_scripts_with_args(config, self, &scripts_only, &env, args, &spec)
+                .parse_run_scripts_with_args(config, self, &scripts_only, &env, &args, &spec)
                 .await?;
             Ok(scripts.into_iter().map(|s| (s, vec![])).collect())
         } else {
@@ -1913,7 +2137,7 @@ impl Task {
 
     /// Get file path without templating (for display purposes)
     /// This is a non-async version used when we just need the path for display
-    fn file_path_raw(&self) -> Option<PathBuf> {
+    pub(crate) fn file_path_raw(&self) -> Option<PathBuf> {
         self.file.as_ref().map(|file| {
             if file.is_absolute() {
                 file.clone()
@@ -1931,6 +2155,14 @@ impl Task {
 
     pub(crate) async fn tera_ctx_for_usage(&self, config: &Arc<Config>) -> Result<tera::Context> {
         self.build_tera_ctx(config, !self.raw_args).await
+    }
+
+    pub(crate) fn tera_ctx_for_usage_preflight(&self, config: &Config) -> tera::Context {
+        let mut tera_ctx = config.tera_ctx.clone();
+        tera_ctx.insert("env", &EnvMap::new());
+        tera_ctx.insert("vars", &IndexMap::<String, String>::new());
+        tera_ctx.insert("config_root", &self.config_root);
+        tera_ctx
     }
 
     async fn build_tera_ctx(
@@ -2299,6 +2531,9 @@ impl Task {
         }
         if other.cache.is_some() {
             self.cache = other.cache;
+        }
+        if other.rust_cache.is_some() {
+            self.rust_cache = other.rust_cache;
         }
         if other.raw_outputs.templates.is_some() {
             self.raw_outputs = other.raw_outputs;
@@ -2864,6 +3099,7 @@ impl Default for Task {
             watch: None,
             outputs: Default::default(),
             cache: Default::default(),
+            rust_cache: Default::default(),
             raw_outputs: Default::default(),
             shell: None,
             silent: Silent::Off,
@@ -2872,6 +3108,8 @@ impl Default for Task {
             run_windows: vec![],
             args: vec![],
             file: None,
+            is_toml_include: false,
+            config_precedence: usize::MAX,
             quiet: false,
             tools: Default::default(),
             usage: "".to_string(),
@@ -3105,12 +3343,19 @@ where
             if !exact.is_empty() {
                 return Ok(exact);
             }
-            return Ok(self
+            let ext_stripped: Vec<&T> = self
                 .iter()
                 .filter(|(name, _)| task_name_matches(&matcher, name, true))
                 .map(|(_, task)| task)
                 .unique()
-                .collect());
+                .collect();
+            if !ext_stripped.is_empty() {
+                return Ok(ext_stripped);
+            }
+            if self.keys().any(|k| k.starts_with("//")) {
+                return self.get_matching(&format!("//{pat}"));
+            }
+            return Ok(vec![]);
         }
 
         // === Parse monorepo pattern ===
@@ -3288,7 +3533,7 @@ pub async fn parse_usage_values_from_task(
     }
     // Build args list with empty first element (usage parser expects argv[0] to be the command)
     let args: Vec<String> = once(String::new())
-        .chain(task.args.iter().cloned())
+        .chain(task.args_for_usage_parser(&spec, &task.args))
         .collect();
     let po = match usage::Parser::new(&spec).parse(&args) {
         Ok(po) => po,
@@ -3317,7 +3562,7 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::task::workspace;
-    use crate::task::{RunEntry, Task, TaskWatchOptions};
+    use crate::task::{RunEntry, Task, TaskRustCacheConfig, TaskWatchOptions};
     use crate::{config::Config, dirs};
     use indexmap::IndexMap;
     use pretty_assertions::assert_eq;
@@ -3403,6 +3648,73 @@ watch = { no_vcs_ignore = true }
                 no_vcs_ignore: true
             })
         );
+    }
+
+    #[test]
+    fn test_task_rust_cache_deserializes_boolean_and_table() {
+        let enabled: Task = toml::from_str(
+            r#"
+run = "cargo build"
+rust_cache = true
+"#,
+        )
+        .unwrap();
+        let table: Task = toml::from_str(
+            r#"
+run = "cargo build"
+rust_cache = {}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            enabled.rust_cache,
+            Some(TaskRustCacheConfig { enabled: true })
+        );
+        assert_eq!(
+            table.rust_cache,
+            Some(TaskRustCacheConfig { enabled: true })
+        );
+    }
+
+    #[test]
+    fn test_task_rust_cache_deserializes_disabled() {
+        let disabled: Task = toml::from_str(
+            r#"
+run = "cargo build"
+rust_cache = false
+"#,
+        )
+        .unwrap();
+        let table: Task = toml::from_str(
+            r#"
+run = "cargo build"
+rust_cache = { enabled = false }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            disabled.rust_cache,
+            Some(TaskRustCacheConfig { enabled: false })
+        );
+        assert_eq!(
+            table.rust_cache,
+            Some(TaskRustCacheConfig { enabled: false })
+        );
+    }
+
+    #[test]
+    fn test_task_language_cache_rejects_unknown_option() {
+        let error = toml::from_str::<Task>(
+            r#"
+run = "cargo build"
+rust_cache = { unknown = true }
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `unknown`"));
     }
 
     #[test]
@@ -4640,6 +4952,7 @@ echo "hello world"
 #MISE watch={no_vcs_ignore=true}
 #MISE outputs=["out1.txt"]
 #MISE cache={enabled=true,env=["PROFILE"]}
+#MISE rust_cache=true
 #MISE pass_through_env=["DEPLOY_TOKEN"]
 #MISE shell="bash -c"
 #MISE quiet=true
@@ -4683,6 +4996,7 @@ echo "test"
                 command_inputs: vec![],
             })
         );
+        assert_eq!(task.rust_cache, Some(TaskRustCacheConfig { enabled: true }));
         assert_eq!(task.pass_through_env, ["DEPLOY_TOKEN"]);
         assert_eq!(task.shell, Some("bash -c".to_string()));
         assert_eq!(task.quiet, true);
@@ -5652,6 +5966,49 @@ echo "test"
                 &"node:@scope/app#test:units:local".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_get_matching_monorepo_project_without_slash_prefix() {
+        use std::collections::BTreeMap;
+
+        use super::GetMatchingExt;
+
+        let tasks = BTreeMap::from([
+            ("//web:build".to_string(), "//web:build".to_string()),
+            ("//web:dev".to_string(), "//web:dev".to_string()),
+            ("//api:build".to_string(), "//api:build".to_string()),
+        ]);
+
+        assert_eq!(
+            tasks.get_matching("web:build").unwrap(),
+            vec![&"//web:build".to_string()]
+        );
+        assert_eq!(
+            tasks.get_matching("web:*").unwrap(),
+            vec![&"//web:build".to_string(), &"//web:dev".to_string()]
+        );
+        assert_eq!(
+            tasks.get_matching("api:build").unwrap(),
+            vec![&"//api:build".to_string()]
+        );
+        assert!(tasks.get_matching("web:missing").unwrap().is_empty());
+        assert!(tasks.get_matching("missing:build").unwrap().is_empty());
+
+        // A root task whose name contains `:` still wins over the project
+        // interpretation of the same pattern.
+        let shadowed = BTreeMap::from([
+            ("//web:build".to_string(), "//web:build".to_string()),
+            ("web:build".to_string(), "web:build".to_string()),
+        ]);
+        assert_eq!(
+            shadowed.get_matching("web:build").unwrap(),
+            vec![&"web:build".to_string()]
+        );
+
+        // Outside a monorepo the pattern must not gain a `//` interpretation.
+        let flat = BTreeMap::from([("test:units".to_string(), "test:units".to_string())]);
+        assert!(flat.get_matching("web:build").unwrap().is_empty());
     }
 
     #[test]

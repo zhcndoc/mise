@@ -9,6 +9,7 @@ use confique::{Config, Layer};
 use eyre::{Result, bail};
 use indexmap::{IndexMap, indexmap};
 use itertools::Itertools;
+use path_absolutize::Absolutize;
 use serde::Serialize;
 use serde::ser::Error;
 use serde::{Deserialize, Deserializer, Serializer};
@@ -54,6 +55,8 @@ pub struct SettingsMeta {
     pub deprecated_warn_at: Option<&'static str>,
     pub deprecated_remove_at: Option<&'static str>,
     pub global_only: bool,
+    /// Consumed before config files are read, so a value in one can never apply.
+    pub env_only: bool,
 }
 
 #[derive(
@@ -404,6 +407,42 @@ fn normalize_hidden_config_aliases(mut partial: SettingsPartial) -> SettingsPart
             partial.minimum_release_age = Some(v);
         }
     }
+    if let Some(v) = partial.task.cache_remote_mode.take() {
+        warn_deprecated("task.cache_remote_mode");
+        if partial.task.cache.remote_mode.is_none() {
+            partial.task.cache.remote_mode = Some(v);
+        }
+    }
+    if let Some(v) = partial.task.cache_remote_namespace.take() {
+        warn_deprecated("task.cache_remote_namespace");
+        if partial.task.cache.remote_namespace.is_none() {
+            partial.task.cache.remote_namespace = Some(v);
+        }
+    }
+    if let Some(v) = partial.task.cache_remote_oidc_audience.take() {
+        warn_deprecated("task.cache_remote_oidc_audience");
+        if partial.task.cache.remote_oidc_audience.is_none() {
+            partial.task.cache.remote_oidc_audience = Some(v);
+        }
+    }
+    if let Some(v) = partial.task.cache_remote_token.take() {
+        warn_deprecated("task.cache_remote_token");
+        if partial.task.cache.remote_token.is_none() {
+            partial.task.cache.remote_token = Some(v);
+        }
+    }
+    if let Some(v) = partial.task.cache_remote_token_file.take() {
+        warn_deprecated("task.cache_remote_token_file");
+        if partial.task.cache.remote_token_file.is_none() {
+            partial.task.cache.remote_token_file = Some(v);
+        }
+    }
+    if let Some(v) = partial.task.cache_remote_url.take() {
+        warn_deprecated("task.cache_remote_url");
+        if partial.task.cache.remote_url.is_none() {
+            partial.task.cache.remote_url = Some(v);
+        }
+    }
     partial
 }
 
@@ -427,6 +466,23 @@ fn strip_local_only_settings(settings: &mut toml::Table, path: &Path, is_global:
     }
 }
 
+/// Drop settings the config loader consumes *before* any config file is read — the config
+/// filenames and paths. A value written here can never take effect, and leaving it in the
+/// partial makes `mise settings get` report it as if it were live, which is what
+/// <https://github.com/jdx/mise/discussions/5791> ran into. Unlike the global-only strip this
+/// applies to every config, global included: the ordering problem is the same either way.
+fn strip_env_only_settings(settings: &mut toml::Table, path: &Path) {
+    for (key, meta) in SETTINGS_META.iter().filter(|(_, meta)| meta.env_only) {
+        if remove_nested_toml_value(settings, key).is_some() {
+            warn!(
+                "{key} in {} is ignored: mise reads it before config files load. Set {} instead.",
+                file::display_path(path),
+                meta.env.unwrap_or("the matching MISE_* variable")
+            );
+        }
+    }
+}
+
 fn remove_nested_toml_value(table: &mut toml::Table, key: &str) -> Option<toml::Value> {
     let mut parts = key.split('.').collect_vec();
     let last = parts.pop()?;
@@ -439,6 +495,59 @@ fn remove_nested_toml_value(table: &mut toml::Table, key: &str) -> Option<toml::
 
 fn should_warn_ignored_global_only_value(value: &toml::Value) -> bool {
     !matches!(value, toml::Value::String(s) if s.is_empty())
+}
+
+/// `aqua.registries` entries must be URLs — `github_repo_slug` requires a
+/// parseable `https` URL, and anything else fails later with `relative URL
+/// without a base`. A value that is not a URL is therefore dead today, so
+/// reading it as a path relative to the config file that declared it is a pure
+/// widening: it lets a registry committed alongside the project be referenced
+/// portably, without changing any config that works now. See discussion #4306.
+///
+/// Returns `None` when the value should be left as written.
+fn resolve_registry_source(value: &str, config_root: &Path) -> Option<String> {
+    let looks_like_path = match Url::parse(value) {
+        Err(_) => true,
+        // A Windows path such as `C:\registry.yaml` parses as a URL whose scheme
+        // is the drive letter. No real URL scheme is a single character.
+        Ok(url) => url.scheme().len() == 1,
+    };
+    if !looks_like_path {
+        return None;
+    }
+    // Joining an absolute path returns it unchanged, so absolute entries are
+    // normalized rather than rebased onto the config root.
+    let joined = config_root.join(value);
+    let absolute = joined
+        .absolutize()
+        .map(|p| p.into_owned())
+        .unwrap_or(joined);
+    // Leave the value alone if it cannot be expressed as a file URL rather than
+    // substituting something the user did not write.
+    Url::from_file_path(&absolute).ok().map(String::from)
+}
+
+/// Rewrite relative `aqua.registries` entries so they resolve against the config
+/// root of the file that declared them. Both `aqua.registries = [..]` under
+/// `[settings]` and `[settings.aqua]` + `registries = [..]` parse to the same
+/// nested table, so navigating the table covers either spelling.
+fn resolve_aqua_registry_paths(settings: &mut toml::Table, path: &Path) {
+    let Some(registries) = settings
+        .get_mut("aqua")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|aqua| aqua.get_mut("registries"))
+        .and_then(toml::Value::as_array_mut)
+    else {
+        return;
+    };
+    let config_root = crate::config::config_file::config_root::config_root(path);
+    for entry in registries.iter_mut() {
+        if let Some(value) = entry.as_str()
+            && let Some(resolved) = resolve_registry_source(value, &config_root)
+        {
+            *entry = toml::Value::String(resolved);
+        }
+    }
 }
 
 impl Settings {
@@ -516,6 +625,8 @@ impl Settings {
         }
         if settings.raw {
             settings.jobs = 1;
+        } else {
+            settings.jobs = crate::jobs::normalize(settings.jobs);
         }
         // Handle NO_COLOR environment variable
         if *env::NO_COLOR {
@@ -765,6 +876,10 @@ impl Settings {
         let tera_v1_from_env = tera_v1_from_env_config(&raw);
         if let Some(settings) = raw.get_mut("settings").and_then(toml::Value::as_table_mut) {
             strip_local_only_settings(settings, path, crate::config::is_global_config(path));
+            strip_env_only_settings(settings, path);
+            // After the strips, so a setting that will not survive them is
+            // never rewritten.
+            resolve_aqua_registry_paths(settings, path);
         }
         let deprecated = deprecated_settings_in_toml_config(&raw);
         let settings_file: SettingsFile = raw.try_into()?;
@@ -844,6 +959,10 @@ impl Settings {
 
     pub fn lockfile_enabled(&self) -> bool {
         self.lockfile.unwrap_or(true)
+    }
+
+    pub fn lockfile_creation_enabled(&self) -> bool {
+        self.lockfile == Some(true)
     }
 
     /// Returns configured lockfile platforms parsed into Platform structs, or None for defaults.
@@ -1028,6 +1147,7 @@ impl Settings {
     pub fn partial_as_dict(partial: &SettingsPartial) -> eyre::Result<toml::Table> {
         let s = toml::to_string(partial)?;
         let mut table = toml::from_str(&s)?;
+        remove_empty_nested_settings(&mut table, "");
         redact_settings_table(&mut table);
         Ok(table)
     }
@@ -1171,19 +1291,39 @@ impl Settings {
 
 fn redacted_settings_for_debug(settings: &Settings) -> Settings {
     let mut debug_settings = settings.clone();
-    if debug_settings.task.cache_remote_token.is_some() {
-        debug_settings.task.cache_remote_token = Some("[redacted]".to_string());
+    if debug_settings.task.cache.remote_token.is_some() {
+        debug_settings.task.cache.remote_token = Some("[redacted]".to_string());
     }
     debug_settings
 }
 
+fn remove_empty_nested_settings(table: &mut toml::Table, prefix: &str) {
+    table.retain(|key, value| {
+        let path = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        let Some(child) = value.as_table_mut() else {
+            return true;
+        };
+        remove_empty_nested_settings(child, &path);
+        !child.is_empty() || SETTINGS_META.contains_key(path.as_str())
+    });
+}
+
 fn redact_settings_table(table: &mut toml::Table) {
-    let Some(task) = table.get_mut("task").and_then(toml::Value::as_table_mut) else {
+    let Some(cache) = table
+        .get_mut("task")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|task| task.get_mut("cache"))
+        .and_then(toml::Value::as_table_mut)
+    else {
         return;
     };
-    if task.contains_key("cache_remote_token") {
-        task.insert(
-            "cache_remote_token".to_string(),
+    if cache.contains_key("remote_token") {
+        cache.insert(
+            "remote_token".to_string(),
             toml::Value::String("[redacted]".to_string()),
         );
     }
@@ -1384,7 +1524,7 @@ mod tests {
     #[test]
     fn debug_settings_redact_remote_cache_token() {
         let mut settings = Settings::default();
-        settings.task.cache_remote_token = Some("super-secret-token".to_string());
+        settings.task.cache.remote_token = Some("super-secret-token".to_string());
 
         let debug = format!("{:?}", redacted_settings_for_debug(&settings));
 
@@ -1395,13 +1535,46 @@ mod tests {
     #[test]
     fn settings_dictionary_redacts_remote_cache_token() {
         let mut settings = Settings::default();
-        settings.task.cache_remote_token = Some("super-secret-token".to_string());
+        settings.task.cache.remote_token = Some("super-secret-token".to_string());
 
         let table = settings.as_dict().unwrap();
         let encoded = toml::to_string(&table).unwrap();
 
         assert!(!encoded.contains("super-secret-token"));
         assert!(encoded.contains("[redacted]"));
+    }
+
+    #[test]
+    fn settings_partial_dictionary_omits_empty_nested_groups() {
+        let settings = toml::from_str::<toml::Value>("[task.cache]")
+            .unwrap()
+            .as_table()
+            .unwrap()
+            .clone();
+        let partial = settings_partial_from_table(settings);
+
+        assert!(
+            !Settings::partial_as_dict(&partial)
+                .unwrap()
+                .contains_key("task")
+        );
+    }
+
+    #[test]
+    fn settings_partial_dictionary_preserves_empty_map_values() {
+        let settings = toml::from_str::<toml::Value>("url_replacements = {}")
+            .unwrap()
+            .as_table()
+            .unwrap()
+            .clone();
+        let partial = settings_partial_from_table(settings);
+
+        assert_eq!(
+            Settings::partial_as_dict(&partial)
+                .unwrap()
+                .get("url_replacements"),
+            Some(&toml::Value::Table(toml::Table::new()))
+        );
     }
 
     fn credential_command_settings_table() -> toml::Table {
@@ -1468,6 +1641,43 @@ mod tests {
     #[test]
     fn test_split_default_shell_or_fallback_reports_parse_errors() {
         assert!(split_default_shell_or_fallback("\"unterminated", "cmd /c").is_err());
+    }
+
+    /// The shape #5791 reported: the setting is accepted into the file, so without this it
+    /// survives into the partial and `mise settings get` echoes it back while the config
+    /// loader — which already ran — never saw it.
+    #[test]
+    fn test_parse_settings_file_strips_env_only_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mise.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [settings]
+            default_config_filename = ".mise.toml"
+            default_tool_versions_filename = ".tool-versions-custom"
+            "#,
+        )
+        .unwrap();
+
+        let partial = Settings::parse_settings_file(&path).unwrap();
+
+        assert_eq!(partial.default_config_filename, None);
+        assert_eq!(partial.default_tool_versions_filename, None);
+    }
+
+    /// Unlike `global_only`, being in the *global* config does not rescue these — the loader
+    /// has read the file by the time the value would be applied either way.
+    #[test]
+    fn test_parse_settings_file_strips_env_only_settings_from_global_too() {
+        let mut settings = toml::Table::new();
+        settings.insert(
+            "global_config_file".to_string(),
+            toml::Value::String("/tmp/elsewhere.toml".to_string()),
+        );
+        strip_env_only_settings(&mut settings, Path::new("/tmp/global-config.toml"));
+
+        assert!(settings.get("global_config_file").is_none());
     }
 
     #[test]
@@ -1633,6 +1843,114 @@ mod tests {
         let partial = Settings::parse_settings_file(&path).unwrap();
 
         assert_eq!(partial.tera_v1, Some(false));
+    }
+
+    /// Run the rewrite over a `[settings]` block and return the resulting
+    /// `aqua.registries` entries, as `parse_settings_file` would see them.
+    fn rewritten_registries(dir: &Path, body: &str) -> Vec<String> {
+        let mut settings = toml::from_str::<toml::Table>(body).unwrap();
+        resolve_aqua_registry_paths(&mut settings, &dir.join(".mise.toml"));
+        settings["aqua"]["registries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// discussion #4306: a registry committed next to the project could not be
+    /// referenced, because a relative entry failed as `relative URL without a
+    /// base`.
+    #[test]
+    fn relative_aqua_registry_resolves_against_config_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let registries = rewritten_registries(dir.path(), r#"aqua.registries = ["registry.yaml"]"#);
+
+        let expected = Url::from_file_path(dir.path().join("registry.yaml"))
+            .unwrap()
+            .to_string();
+        assert_eq!(registries, vec![expected]);
+    }
+
+    /// `aqua.registries = [..]` and `[aqua]` + `registries = [..]` parse to the
+    /// same nested table, so both spellings must be picked up.
+    #[test]
+    fn table_form_registries_also_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        let registries = rewritten_registries(
+            dir.path(),
+            r#"
+            [aqua]
+            registries = ["registry.yaml"]
+            "#,
+        );
+
+        let expected = Url::from_file_path(dir.path().join("registry.yaml"))
+            .unwrap()
+            .to_string();
+        assert_eq!(registries, vec![expected]);
+    }
+
+    #[test]
+    fn absolute_registry_urls_are_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let registries = rewritten_registries(
+            dir.path(),
+            r#"
+            aqua.registries = [
+              "https://github.com/aquaproj/aqua-registry",
+              "file:///somewhere/registry.yaml",
+            ]
+            "#,
+        );
+
+        assert_eq!(
+            registries,
+            vec![
+                "https://github.com/aquaproj/aqua-registry".to_string(),
+                "file:///somewhere/registry.yaml".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parent_relative_registry_path_is_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let registries = rewritten_registries(
+            dir.path(),
+            r#"aqua.registries = ["../shared/registry.yaml"]"#,
+        );
+
+        assert!(
+            !registries[0].contains(".."),
+            "expected `..` to be normalized away, got {}",
+            registries[0]
+        );
+    }
+
+    #[test]
+    fn registries_without_aqua_table_are_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = toml::from_str::<toml::Table>("offline = true").unwrap();
+        resolve_aqua_registry_paths(&mut settings, &dir.path().join(".mise.toml"));
+        assert_eq!(settings["offline"].as_bool(), Some(true));
+    }
+
+    /// A drive-letter path parses as a URL whose scheme is one character, so it
+    /// must not be mistaken for an absolute URL and left unusable.
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_registry_path_is_treated_as_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let registries =
+            rewritten_registries(dir.path(), r#"aqua.registries = ['C:\reg\registry.yaml']"#);
+
+        assert_eq!(registries.len(), 1);
+        assert!(
+            registries[0].starts_with("file:///C:/reg/"),
+            "expected a file URL, got {}",
+            registries[0]
+        );
     }
 
     #[test]
@@ -1832,6 +2150,20 @@ mod tests {
     }
 
     #[test]
+    fn test_three_level_task_cache_setting() {
+        let settings = Settings::builder().load().unwrap();
+        assert_eq!(
+            settings.task.cache.remote_mode,
+            crate::cache::CacheRemoteMode::ReadWrite
+        );
+
+        let meta = SETTINGS_META
+            .get("task.cache.remote_mode")
+            .expect("task.cache.remote_mode setting should exist");
+        assert_eq!(meta.env, Some("MISE_TASK_CACHE_REMOTE_MODE"));
+    }
+
+    #[test]
     fn test_offline_setting_enables_offline() {
         let mut partial = SettingsPartial::empty();
         partial.offline = Some(true);
@@ -1894,6 +2226,36 @@ mod tests {
         let settings = Settings::get();
         assert_eq!(settings.minimum_release_age.as_deref(), Some("3d"));
         Settings::reset(None);
+    }
+
+    #[test]
+    fn test_task_cache_hidden_aliases_map_to_nested_settings() {
+        let settings_file: SettingsFile = toml::from_str(
+            r#"
+            [settings.task]
+            cache_remote_mode = "read-only"
+            cache_remote_token = "secret"
+            cache_remote_url = "https://old.example.com"
+
+            [settings.task.cache]
+            remote_url = "https://new.example.com"
+            "#,
+        )
+        .unwrap();
+
+        let partial = normalize_hidden_config_aliases(settings_file.settings);
+        assert_eq!(partial.task.cache_remote_mode, None);
+        assert_eq!(partial.task.cache_remote_token, None);
+        assert_eq!(partial.task.cache_remote_url, None);
+        assert_eq!(
+            partial.task.cache.remote_mode,
+            Some(crate::cache::CacheRemoteMode::ReadOnly)
+        );
+        assert_eq!(
+            partial.task.cache.remote_url.as_deref(),
+            Some("https://new.example.com")
+        );
+        assert_eq!(partial.task.cache.remote_token.as_deref(), Some("secret"));
     }
 
     #[test]

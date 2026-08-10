@@ -8,7 +8,7 @@
 
 安装一个插件
 
-注意，mise 在你安装工具时可以自动安装插件
+注意，mise 在你安装工具时可以自动安装插件  
 例如：`mise install cmake@3.30` 将自动安装 cmake 插件
 
 此行为可以在 ~/.config/mise/config.toml 中修改。
@@ -39,7 +39,8 @@
 
 ### `-j --jobs <JOBS>`
 
-并行运行的任务数量
+并行运行的任务数  
+小于 1 的值将按 1 处理
 
 ### `-v --verbose…`
 

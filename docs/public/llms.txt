@@ -26,7 +26,7 @@
 - [Tool Stubs](https://mise.jdx.dev/dev-tools/tool-stubs.html): Tool stubs allow you to create executable files with embedded TOML configuration for tool execution. They provide a convenient way to define tool versions, backends, and execution parameters directly…
 - [Registry](https://mise.jdx.dev/registry.html): List of all tools aliased by default in mise.
 - [GitHub Tokens](https://mise.jdx.dev/dev-tools/github-tokens.html): Many tools in mise are hosted on GitHub. For public releases, mise uses mise-versions by default as a shared cache for version lists, release metadata, and GitHub artifact attestations.
-- [mise.lock Lockfile](https://mise.jdx.dev/dev-tools/mise-lock.html): mise.lock is a lockfile that pins exact versions and checksums of tools for reproducible environments. Lockfiles are not created automatically—you must run mise lock to generate them.
+- [mise.lock Lockfile](https://mise.jdx.dev/dev-tools/mise-lock.html): mise.lock is a lockfile that pins exact versions and checksums of tools for reproducible environments.
 - [Security](https://mise.jdx.dev/security.html): mise includes several supply-chain controls for installing and managing tools. These controls have different coverage depending on the backend and the metadata available from upstream.
 - [OCI Images (experimental)](https://mise.jdx.dev/dev-tools/mise-oci.html): mise oci build turns a mise.toml into a container image, with one OCI layer per installed tool.
 - [Deps](https://mise.jdx.dev/dev-tools/deps.html): The mise deps command manages project dependencies by hashing source files (e.g., package-lock.json) and running install commands when changes are detected.
@@ -67,7 +67,7 @@
 
 - [Overview](https://mise.jdx.dev/bootstrap.html): mise bootstrap sets up a machine for the current config in one command: Linux users and groups, OS packages, privileged files and directories, system services, Linux host firewall policy, Docker…
 - [Remote Hosts](https://mise.jdx.dev/bootstrap/remote.html): mise bootstrap remote applies a bootstrap project to one or more machines through the locally installed OpenSSH client.
-- [Bootstrap Packages](https://mise.jdx.dev/bootstrap/packages/): mise can ensure machine-global system packages are installed via the [bootstrap.packages] section of mise.toml, applied by mise bootstrap packages apply or as part of mise bootstrap.
+- [Bootstrap Packages](https://mise.jdx.dev/bootstrap/packages/): mise can ensure host packages are installed via the [bootstrap.packages] section of mise.toml, applied by mise bootstrap packages apply or as part of mise bootstrap.
 - [apk](https://mise.jdx.dev/bootstrap/packages/apk.html): System packages for Alpine Linux.
 - [apt](https://mise.jdx.dev/bootstrap/packages/apt.html): System packages for Debian-family Linux (Debian, Ubuntu, Mint, ...).
 - [dnf](https://mise.jdx.dev/bootstrap/packages/dnf.html): System packages for RedHat-family Linux (Fedora, RHEL, CentOS Stream, Rocky, Alma, ...).
@@ -107,7 +107,7 @@
 - [File Tasks](https://mise.jdx.dev/tasks/file-tasks.html): In addition to defining tasks through the configuration, they can also be defined as standalone script files in one of the following directories.
 - [Task Arguments](https://mise.jdx.dev/tasks/task-arguments.html): Task arguments allow you to pass parameters to tasks, making them more flexible and reusable. There are three ways to define task arguments in mise, but only two are recommended for current use.
 - [Task Configuration](https://mise.jdx.dev/tasks/task-configuration.html): This is an exhaustive list of all the configuration options available for tasks in mise.toml or as file tasks.
-- [Remote Cache Protocol](https://mise.jdx.dev/tasks/remote-cache-protocol.html): [!WARNING] Remote task caching is experimental and is not yet configurable. This document defines the first public protocol, version 1. There is no earlier remote-cache protocol to preserve.
+- [Remote Cache Protocol](https://mise.jdx.dev/tasks/remote-cache-protocol.html): [!WARNING] Remote build caching is experimental. This document defines protocol version 1, which generalizes the original task-only store contract into a shared action-cache protocol.
 - [Task Templates](https://mise.jdx.dev/tasks/templates.html): Task templates allow you to define reusable task definitions that can be extended by multiple tasks. This is particularly useful in monorepos or projects with similar task patterns across different…
 - [Monorepo Tasks](https://mise.jdx.dev/tasks/monorepo.html): mise supports monorepo-style task organization with target path syntax. This feature allows you to manage tasks across multiple projects in a single repository, where each project can have its own…
 - [Sandboxing](https://mise.jdx.dev/sandboxing.html): Mise supports lightweight process sandboxing for mise exec and mise run, inspired by zerobox. Sandboxing restricts filesystem, network, and environment variable access with granular controls.

@@ -31,7 +31,10 @@ use crate::file::display_path;
 use crate::shorthands::{Shorthands, get_shorthands};
 use crate::task::task_file_providers::TaskFileProvidersBuilder;
 use crate::task::task_sources::TaskOutputs;
-use crate::task::{RunEntry, Task, TaskCacheConfig, TaskTemplate, monorepo_scope, strip_extension};
+use crate::task::{
+    RunEntry, Task, TaskCacheConfig, TaskRustCacheConfig, TaskTemplate, monorepo_scope,
+    strip_extension,
+};
 use crate::tera::{contains_template_syntax, get_empty_tera, render_str, take_tera_accessed_files};
 use crate::toolset::env_cache::{CachedNonToolEnv, compute_settings_hash, get_file_mtime};
 use crate::toolset::{
@@ -422,6 +425,13 @@ impl Config {
             .map(crate::toolset::parse_tool_options)
     }
 
+    pub fn get_configured_plugin_type(&self, plugin_name: &str) -> Option<PluginType> {
+        self.repo_urls.keys().find_map(|key| {
+            let (plugin_type, name) = PluginType::from_plugin_config(key);
+            (key != name && name == plugin_name).then_some(plugin_type)
+        })
+    }
+
     pub fn get_repo_url(&self, plugin_name: &str) -> Option<String> {
         if let Some(url) = self.repo_urls.get(plugin_name)
             && (Path::new(url).is_absolute() || url.starts_with("file://"))
@@ -585,6 +595,18 @@ impl Config {
             Ok(config_roots) if !config_roots.is_empty() => Some(monorepo_root),
             Ok(_) | Err(_) => None,
         }
+    }
+
+    /// Returns true when lockfile creation is enabled by a TOML settings file.
+    ///
+    /// `MISE_LOCKFILE=1` predates automatic creation and continues to mean
+    /// "read and maintain existing lockfiles" for backwards compatibility.
+    pub fn lockfile_creation_enabled(&self) -> bool {
+        Settings::get().lockfile_creation_enabled()
+            && self.config_files.values().any(|cf| {
+                cf.settings()
+                    .is_some_and(|settings| settings.lockfile == Some(true))
+            })
     }
 
     pub(crate) fn monorepo_config_root_dirs_for_lockfiles(&self) -> Result<Vec<PathBuf>> {
@@ -2717,6 +2739,12 @@ fn apply_task_config_cache_default(task: &mut Task, cache: &Option<TaskCacheConf
     }
 }
 
+fn apply_task_config_rust_cache_default(task: &mut Task, rust_cache: &Option<TaskRustCacheConfig>) {
+    if task.rust_cache.is_none() {
+        task.rust_cache = rust_cache.clone();
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct ResolvedTaskEnvironment {
     global_env: Vec<String>,
@@ -2787,6 +2815,7 @@ struct ResolvedTaskConfig {
     dir: Option<String>,
     shell: Option<String>,
     cache: Option<TaskCacheConfig>,
+    rust_cache: Option<TaskRustCacheConfig>,
 }
 
 impl ResolvedTaskInputs {
@@ -3678,11 +3707,13 @@ async fn load_global_tasks(config: &Arc<Config>, templates: &TaskDefinitions) ->
 /// files) with inline `[tasks.*]` blocks.
 ///
 /// `config_tasks` are collected in config-file precedence order (highest first).
-/// When a name appears in both a script file task
-/// (`file.is_some()`) and an inline block, the script stays as the base and the
-/// TOML block is overlaid via [`Task::merge_toml_overlay`]. When the same name
-/// appears in multiple inline blocks (e.g. `.config/mise.toml` and
-/// `.mise/config.toml`), the first entry wins and later ones are skipped.
+/// When a name appears in both an executable script task and an inline block,
+/// the script stays as the base and the TOML block is overlaid via
+/// [`Task::merge_toml_overlay`]. An inline block replaces a same-named task from
+/// an included TOML file. When the same name appears in multiple inline blocks
+/// (e.g. `mise.toml` and `mise.local.toml`), the highest-precedence block wins.
+/// If that block has no command, it overlays the nearest lower-precedence
+/// command-bearing block; definitions below that selected base are skipped.
 /// When the same name appears in more than one file task (e.g. a local
 /// `.mise/tasks` script and a same-named task from a `git::` include), the last
 /// one wins. Callers load `file_tasks` in declared `task_config.includes`
@@ -3694,15 +3725,46 @@ fn merge_file_and_config_tasks(file_tasks: Vec<Task>, config_tasks: Vec<Task>) -
         by_name.insert(t.name.clone(), t);
     }
     let mut seen_config_task_names = BTreeSet::new();
+    let mut pending_inline_overlays: IndexMap<String, Vec<Task>> = IndexMap::new();
     for t in config_tasks {
         if !seen_config_task_names.insert(t.name.clone()) {
+            let has_command = !t.run.is_empty() || !t.run_windows.is_empty() || t.file.is_some();
+            if pending_inline_overlays.contains_key(&t.name) && has_command {
+                let overlays = pending_inline_overlays
+                    .shift_remove(&t.name)
+                    .expect("pending inline overlays should be present");
+                let mut base = t;
+                for overlay in overlays.into_iter().rev() {
+                    base.merge_toml_overlay(overlay);
+                }
+                by_name.insert(base.name.clone(), base);
+            } else if let Some(overlays) = pending_inline_overlays.get_mut(&t.name) {
+                overlays.push(t);
+            }
             continue;
         }
-        if let Some(existing) = by_name.get_mut(&t.name) {
+        if let Some(existing) = by_name
+            .get_mut(&t.name)
+            .filter(|existing| existing.is_toml_include)
+        {
+            if t.config_precedence <= existing.config_precedence {
+                if t.run.is_empty() && t.run_windows.is_empty() && t.file.is_none() {
+                    existing.merge_toml_overlay(t);
+                } else {
+                    *existing = t;
+                }
+            }
+        } else if let Some(existing) = by_name.get_mut(&t.name) {
             if existing.file.is_some() {
                 existing.merge_toml_overlay(t);
             }
         } else {
+            if t.run.is_empty() && t.run_windows.is_empty() && t.file.is_none() {
+                pending_inline_overlays
+                    .entry(t.name.clone())
+                    .or_default()
+                    .push(t.clone());
+            }
             by_name.insert(t.name.clone(), t);
         }
     }
@@ -3827,6 +3889,7 @@ async fn load_config_tasks(
             Ok(()) => {
                 apply_task_config_inputs(&mut t, &config, &task_config.inputs).await?;
                 apply_task_config_cache_default(&mut t, &task_config.cache);
+                apply_task_config_rust_cache_default(&mut t, &task_config.rust_cache);
                 task_config.environment.apply(&mut t)?;
                 tasks.push(t);
             }
@@ -4221,6 +4284,12 @@ fn merge_cascaded_task_config(
     if let Some(cache) = configs.iter().find_map(|cf| cf.task_config().cache.clone()) {
         cascaded.task_config.cache = Some(cache);
     }
+    if let Some(rust_cache) = configs
+        .iter()
+        .find_map(|cf| cf.task_config().rust_cache.clone())
+    {
+        cascaded.task_config.rust_cache = Some(rust_cache);
+    }
     if let Some(global_env) = configs.iter().find_map(|cf| {
         let env = &cf.task_config().global_env;
         (!env.is_empty()).then(|| env.clone())
@@ -4378,10 +4447,11 @@ async fn load_task_sources_from_configs(
     // a config can only vouch for task include files when it was actually
     // trusted — safe configs load without trust and cannot vouch for anything
     let require_task_include_trust = !configs.iter().any(|cf| is_path_trusted(cf.get_path()));
-    let (includes, resolve_dir) = configs
+    let (includes, resolve_dir, include_config_precedence) = configs
         .iter()
-        .find_map(|cf| match cf.task_config_includes() {
-            Ok(Some(includes)) => Some(Ok((includes, cf.config_root()))),
+        .enumerate()
+        .find_map(|(precedence, cf)| match cf.task_config_includes() {
+            Ok(Some(includes)) => Some(Ok((includes, cf.config_root(), precedence))),
             Ok(None) => None,
             Err(err) => Some(Err(err)),
         })
@@ -4391,10 +4461,10 @@ async fn load_task_sources_from_configs(
                 tc.task_config
                     .includes
                     .clone()
-                    .map(|includes| (includes, tc.includes_root.clone()))
+                    .map(|includes| (includes, tc.includes_root.clone(), configs.len()))
             })
         })
-        .unwrap_or_else(|| (default_task_includes(), dir.to_path_buf()));
+        .unwrap_or_else(|| (default_task_includes(), dir.to_path_buf(), configs.len()));
 
     // Resolve task defaults once for the config root so inline tasks from
     // lower-precedence overlay files use the same defaults as file tasks.
@@ -4416,23 +4486,29 @@ async fn load_task_sources_from_configs(
             .iter()
             .find_map(|cf| cf.task_config().cache.clone())
             .or_else(|| cascaded_task_config.and_then(|tc| tc.task_config.cache.clone())),
+        rust_cache: configs
+            .iter()
+            .find_map(|cf| cf.task_config().rust_cache.clone())
+            .or_else(|| cascaded_task_config.and_then(|tc| tc.task_config.rust_cache.clone())),
     };
 
     let mut config_tasks = vec![];
-    for cf in &configs {
+    for (precedence, cf) in configs.iter().enumerate() {
         let dir = dir.to_path_buf();
         let monorepo_cf = monorepo_context.then_some(*cf);
-        config_tasks.extend(
-            load_config_tasks(
-                config,
-                (*cf).clone(),
-                &dir,
-                templates,
-                monorepo_cf,
-                &task_config,
-            )
-            .await?,
-        );
+        let mut loaded = load_config_tasks(
+            config,
+            (*cf).clone(),
+            &dir,
+            templates,
+            monorepo_cf,
+            &task_config,
+        )
+        .await?;
+        for task in &mut loaded {
+            task.config_precedence = precedence;
+        }
+        config_tasks.extend(loaded);
     }
 
     let mut file_tasks = vec![];
@@ -4462,8 +4538,12 @@ async fn load_task_sources_from_configs(
             )
             .await?;
             for task in &mut loaded {
+                if task.is_toml_include {
+                    task.config_precedence = include_config_precedence;
+                }
                 apply_task_config_inputs(task, config, &task_config.inputs).await?;
                 apply_task_config_cache_default(task, &task_config.cache);
+                apply_task_config_rust_cache_default(task, &task_config.rust_cache);
                 task_config.environment.apply(task)?;
             }
             if is_global || is_global_task_include_path(&p) {
@@ -4521,6 +4601,7 @@ async fn load_task_file(
         task.name = name.clone();
         task.config_source = path.to_path_buf();
         task.config_root = Some(config_root.to_path_buf());
+        task.is_toml_include = true;
         if let Some(monorepo_cf) = monorepo_cf {
             task.cf = Some(monorepo_cf.clone());
         }
@@ -4578,11 +4659,29 @@ fn mark_tasks_as_global(tasks: &mut [Task]) {
 #[cfg(unix)]
 mod tests {
     use insta::assert_debug_snapshot;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs::{self, File};
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn test_task_config_rust_cache_is_a_default() {
+        let rust_default = Some(TaskRustCacheConfig { enabled: true });
+        let mut inherited = Task::default();
+        apply_task_config_rust_cache_default(&mut inherited, &rust_default);
+        assert_eq!(inherited.rust_cache, rust_default);
+
+        let mut disabled = Task {
+            rust_cache: Some(TaskRustCacheConfig { enabled: false }),
+            ..Default::default()
+        };
+        apply_task_config_rust_cache_default(&mut disabled, &rust_default);
+        assert_eq!(
+            disabled.rust_cache,
+            Some(TaskRustCacheConfig { enabled: false })
+        );
+    }
 
     #[test]
     fn test_collect_task_files_skips_dangling_symlinks() -> Result<()> {
@@ -5713,6 +5812,14 @@ config_roots = ["apps/api", "apps/web"]
                 "vfox:remote-vfox".to_string(),
                 "owner/vfox-plugin".to_string(),
             ),
+            (
+                "asdf:explicit-asdf".to_string(),
+                "owner/asdf-plugin".to_string(),
+            ),
+            (
+                "vfox-backend:explicit-backend".to_string(),
+                "owner/backend-plugin".to_string(),
+            ),
         ]);
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
@@ -5751,6 +5858,19 @@ config_roots = ["apps/api", "apps/web"]
             config.get_repo_url("remote-vfox").as_deref(),
             Some("https://github.com/owner/vfox-plugin.git")
         );
+        assert_eq!(
+            config.get_configured_plugin_type("local-vfox"),
+            Some(PluginType::Vfox)
+        );
+        assert_eq!(
+            config.get_configured_plugin_type("explicit-asdf"),
+            Some(PluginType::Asdf)
+        );
+        assert_eq!(
+            config.get_configured_plugin_type("explicit-backend"),
+            Some(PluginType::VfoxBackend)
+        );
+        assert_eq!(config.get_configured_plugin_type("local-asdf"), None);
     }
 
     #[tokio::test]

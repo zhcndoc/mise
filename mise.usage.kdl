@@ -13,7 +13,7 @@ flag "-E --env" help="Set the environment for loading `mise.<ENV>.toml`" var=#tr
     arg <ENV>
 }
 flag "-f --force" help="Force the operation" hide=#true
-flag "-j --jobs" help="How many jobs to run in parallel [default: 8]" global=#true {
+flag "-j --jobs" help="How many jobs to run in parallel; values below 1 are treated as 1 [default: 8]" global=#true {
     arg <JOBS>
 }
 flag "-n --dry-run" help="Dry run, don't actually do anything" hide=#true
@@ -428,7 +428,7 @@ Examples:
             }
             flag "-n --dry-run" help="Print the config/source updates without writing anything"
             flag --no-apply help="Add the entry without applying it"
-            flag "-p --path --file" help="Write to this config file or directory" {
+            flag "-p --path" help="Write to this config file or directory" {
                 arg <PATH>
             }
             flag "-s --source" help="Source path to use for a single target" {
@@ -627,7 +627,7 @@ only. `install` is accepted as an alias for this command.
 Examples:
 
     $ mise bootstrap packages apply
-    $ mise bootstrap packages apply apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox mas:497799835
+    $ mise bootstrap packages apply apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox flatpak-user:org.gnome.Builder mas:497799835
     $ mise bootstrap packages apply --dry-run
     $ mise bootstrap packages apply --manager apt --yes
 
@@ -715,9 +715,9 @@ Examples:
             long_help #"""
 Prune installed system packages no longer declared in `[bootstrap.packages]`
 
-Currently supports Homebrew formulae only. Pruning removes linked formulae
-that are not needed by the current config or by trusted, loadable tracked
-configs.
+Supports Homebrew formulae and conservatively removable, mise-owned casks.
+Pruning keeps packages needed by the current config or by trusted, loadable
+tracked configs.
 """#
             after_long_help #"""
 Examples:
@@ -725,11 +725,12 @@ Examples:
     $ mise bootstrap packages prune --manager brew
     $ mise bootstrap packages prune --manager brew --dry-run
     $ mise bootstrap packages prune --manager brew --yes
+    $ mise bootstrap packages prune --manager brew-cask --dry-run
 
 """#
-            flag "-m --manager" help="Only prune packages for this manager. Currently only `brew` is supported" default=brew {
+            flag "-m --manager" help="Only prune packages for this manager" default=brew {
                 arg <MANAGER> {
-                    choices brew
+                    choices brew brew-cask
                 }
             }
             flag "-n --dry-run" help="Print what would be removed without deleting anything"
@@ -757,7 +758,7 @@ Refreshes package manager metadata and upgrades the configured packages
 that are already installed: apk/apt/dnf/pacman upgrade to the newest available
 version (apk, apt, and dnf honor a version pinned in config), brew pours the
 formula's current bottle and replaces the old keg, brew-cask installs
-the current cask artifact, flatpak updates applications and runtimes, and mas upgrades App Store apps. Packages that
+the current cask artifact, flatpak and flatpak-user update applications and runtimes, and mas upgrades App Store apps. Packages that
 are not installed yet are skipped — use `mise bootstrap packages apply`
 for those.
 
@@ -799,7 +800,7 @@ a mise version selector. mas uses numeric ADAM IDs and does not support pins.
             after_long_help #"""
 Examples:
 
-    $ mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox mas:497799835
+    $ mise bootstrap packages use apk:zlib-dev apt:curl brew:jq brew-cask:firefox flatpak:org.mozilla.firefox flatpak-user:org.gnome.Builder mas:497799835
     $ mise bootstrap packages use -g brew:postgresql@17
     $ mise bootstrap packages use apt:curl@8.5.0-2
 
@@ -1214,7 +1215,7 @@ Examples:
         }
         flag "-n --dry-run" help="Print the config/source updates without writing anything"
         flag --no-apply help="Add the entry without applying it"
-        flag "-p --path --file" help="Write to this config file or directory" {
+        flag "-p --path" help="Write to this config file or directory" {
             arg <PATH>
         }
         flag "-s --source" help="Source path to use for a single target" {
@@ -1421,6 +1422,7 @@ Examples:
     }
     flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
@@ -1625,6 +1627,7 @@ Generates shims to run mise tasks
 
 By default, this will build shims like ./bin/<task>. These can be paired with `mise generate bootstrap`
 so contributors to a project can execute mise tasks without installing mise into their system.
+When a parent and nested task both exist, the parent stub is written to `<parent>/_default`.
 """#
         after_long_help #"""
 Examples:
@@ -1931,9 +1934,13 @@ Examples:
     $ mise install              # installs everything specified in mise.toml
 
 """#
-    flag "-f --force" help="Force reinstall even if already installed"
+    flag "-f --force" help=#"""
+Force reinstall even if already installed
+With no tools specified, reinstall all configured tools
+"""#
     flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
@@ -2142,7 +2149,10 @@ Examples:
 Target only global config lockfiles (~/.config/mise/mise.lock and system config)
 By default, only the active project config root is locked
 """#
-    flag "-j --jobs" help="Number of jobs to run in parallel" {
+    flag "-j --jobs" help=#"""
+Number of jobs to run in parallel
+Values below 1 are treated as 1
+"""# {
         arg <JOBS>
     }
     flag "-n --dry-run" help="Show what would be updated without making changes"
@@ -2794,7 +2804,10 @@ This will only install plugins that have matching shorthands.
 i.e.: they don't need the full git repo url
 """#
         flag "-f --force" help="Reinstall even if plugin exists"
-        flag "-j --jobs" help="Number of jobs to run in parallel" {
+        flag "-j --jobs" help=#"""
+Number of jobs to run in parallel
+Values below 1 are treated as 1
+"""# {
             arg <JOBS>
         }
         flag "-v --verbose" help="Show installation output" var=#true count=#true
@@ -2919,6 +2932,7 @@ Examples:
 """#
         flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 Default: 4
 """# {
             arg <JOBS>
@@ -3213,6 +3227,7 @@ Defaults to MISE_AFFECTED_HEAD, CI metadata, or HEAD
     flag "-f --force" help="Force the tasks to run even if outputs are up to date"
     flag "-j --jobs" help=#"""
 Number of tasks to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 Configure with `jobs` config or `MISE_JOBS` env var
 """# {
@@ -3640,6 +3655,7 @@ Examples:
 """#
     flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
@@ -4066,6 +4082,7 @@ Defaults to MISE_AFFECTED_HEAD, CI metadata, or HEAD
         flag "-f --force" help="Force the tasks to run even if outputs are up to date"
         flag "-j --jobs" help=#"""
 Number of tasks to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 Configure with `jobs` config or `MISE_JOBS` env var
 """# {
@@ -4234,6 +4251,7 @@ Examples:
     flag "-a --all" help="Test every tool specified in registry/"
     flag "-j --jobs" help=#"""
 Number of tool tests to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
@@ -4563,6 +4581,7 @@ Examples:
     flag "-i --interactive" help="Display multiselect menu to choose which tools to upgrade"
     flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
@@ -4621,6 +4640,16 @@ Do not uninstall the versions that were upgraded away from
 By default the old version is removed once the new one installs, unless another
 tracked config or tool stub still needs it. Use this to keep it anyway, e.g. when
 something outside of mise points at the old install directory.
+
+Set `upgrade.auto_prune = false` to make this the default.
+"""#
+    }
+    flag --prune help="Uninstall the versions that were upgraded away from" {
+        long_help #"""
+Uninstall the versions that were upgraded away from
+
+This is already the default. Use it to override `upgrade.auto_prune = false`
+for a single run.
 """#
     }
     flag --raw help="Connect backend install command stdin/stdout/stderr directly to the terminal Implies --jobs=1"
@@ -4688,12 +4717,13 @@ Examples:
     flag "-g --global" help="Use the global config file (`~/.config/mise/config.toml`) instead of the local one"
     flag "-j --jobs" help=#"""
 Number of jobs to run in parallel
+Values below 1 are treated as 1
 [default: 4]
 """# {
         arg <JOBS>
     }
     flag "-n --dry-run" help="Perform a dry run, showing what would be installed and modified without making changes"
-    flag "-p --path --file" help="Specify a path to a config file or directory" {
+    flag "-p --path" help="Specify a path to a config file or directory" {
         long_help #"""
 Specify a path to a config file or directory
 

@@ -5,9 +5,19 @@ Rust/cargo 可以安装，其底层使用 rustup。若尚未安装，mise 会安
 如果你希望将 mise 的 rustup/cargo 与其他 rustup/cargo 安装隔离，可以通过设置 `MISE_RUSTUP_HOME` 和
 `MISE_CARGO_HOME` 环境变量来更改此设置。
 
+这些变量也可以在 mise 配置中设置。它们会应用于同一次 mise 调用中的 Rust 操作：
+
+```toml
+[env]
+MISE_RUSTUP_HOME = "{{env.HOME}}/.local/share/rustup"
+MISE_CARGO_HOME = "{{env.HOME}}/.local/share/cargo"
+```
+
+`[env]` 中显式设置的 `RUSTUP_HOME` 和 `CARGO_HOME` 值优先于对应的 `MISE_` 变量。
+
 与大多数工具不同，这些工具不会存在于 `~/.local/share/mise/installs` 中，因为它们由 rustup 管理。
 mise 会在那里保留一个用于安装跟踪的符号链接，将 `RUSTUP_TOOLCHAIN` 环境变量设置为所请求的
-版本，并在运行 `mise install` 时要求 rustup 安装所有已配置的组件或目标。
+版本，并在运行 `mise install` 时要求 rustup 安装任何已配置的组件或目标。
 
 ## 用法
 

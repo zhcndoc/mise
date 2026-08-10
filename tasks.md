@@ -3,7 +3,7 @@
 - **用法**: `build`
 - **别名**: `b`
 
-构建项目
+构建项目。
 
 ## `ci`
 
@@ -17,7 +17,7 @@
 
 - **用法**：`clean`
 
-清理构建产物
+清理构建产物。
 
 ## `docs`
 
@@ -25,7 +25,7 @@
 
 - **用法**：`docs`
 
-启动文档开发服务器
+启动文档开发服务器。
 
 ## `docs:build`
 
@@ -33,13 +33,13 @@
 
 - **用法**：`docs:build`
 
-构建文档网站
+构建文档网站。
 
 ## `docs:demos`
 
 - **用法**：`docs:demos`
 
-使用 vhs 创建录制内容
+使用 vhs 创建录制内容。
 
 ## `docs:preview`
 
@@ -47,7 +47,7 @@
 
 - **用法**：`docs:preview`
 
-预览文档网站
+预览文档网站。
 
 ## `docs:release`
 
@@ -55,31 +55,31 @@
 
 - **用法**：`docs:release`
 
-将文档网站发布到生产环境或远程环境
+将文档网站发布到生产环境或远程环境。
 
 ## `docs:setup`
 
 - **用法**：`docs:setup`
 
-安装文档依赖
+安装文档依赖。
 
 ## `fetch-gpg-keys`
 
 - **用法**：`fetch-gpg-keys`
 
-获取用于签名或验证的 GPG 密钥
+获取用于签名或验证的 GPG 密钥。
 
 ## `flamegraph`
 
 - **用法**：`flamegraph`
 
-生成用于性能分析的火焰图
+生成用于性能分析的火焰图。
 
 ## `install-dev`
 
 - **用法**：`install-dev`
 
-以调试模式安装当前项目
+以调试模式安装当前项目。
 
 ## `lint`
 
@@ -94,21 +94,25 @@
 - **用法**: `lint-fix`
 - **别名**: `format`、`fix`
 
-自动修复代码检查问题
+自动修复代码检查问题。
 
 ## `lint:hk`
 
 - **用法**：`lint:hk`
 
-检查 HK 文件
+检查 HK 文件。
 
 ## `perf`
 
 - **用法**：`perf`
 
+## `perf:cache-shim`
+
+- **用法**：`perf:cache-shim`
+
 ## `perf:record`
 
-- **用法**: `perf:record`
+- **用法**: `perf:record`。
 
 ## `perf:task-cache`
 
@@ -118,7 +122,7 @@
 
 - **用法**：`pre-commit`
 
-运行 pre-commit 钩子
+运行 pre-commit 钩子。
 
 ## `release-plz`
 
@@ -132,7 +136,7 @@
 
 - **用法**：`render`
 
-运行所有渲染任务
+运行所有渲染任务。
 
 ## `render:completions`
 
@@ -140,7 +144,7 @@
 
 - **用法**：`render:completions`
 
-生成 Shell 补全命令
+生成 Shell 补全命令。
 
 ## `render:help`
 
@@ -148,7 +152,7 @@
 
 - **用法**：`render:help`
 
-渲染帮助文档
+渲染帮助文档。
 
 ## `render:llms`
 
@@ -156,7 +160,7 @@
 
 - **用法**：`render:llms`
 
-生成 docs/public/llms.txt（面向 AI 代理的文档索引）
+生成 docs/public/llms.txt（面向 AI 代理的文档索引）。
 
 ## `render:mangen`
 
@@ -164,7 +168,7 @@
 
 - **用法**：`render:mangen`
 
-生成 man 手册页
+生成 man 手册页。
 
 ## `render:schema`
 
@@ -172,7 +176,7 @@
 
 - **用法**：`render:schema`
 
-渲染 JSON Schema
+渲染 JSON Schema。
 
 ## `render:usage`
 
@@ -180,24 +184,24 @@
 
 - **用法**：`render:usage`
 
-生成用法文档
+生成用法文档。
 
 ## `show-output-on-failure`
 
 - **用法**：`show-output-on-failure`
 
-文档生成失败时显示输出
+文档生成失败时显示输出。
 
 ## `snapshots`
 
 - **用法**：`snapshots`
 
-更新测试快照
+更新测试快照。
 
 ## `test`
 
-- **Usage**: `test`
-- **Aliases**: `t`
+- **用法**: `test`
+- **别名**: `t`
 
 运行所有测试
 
@@ -228,13 +232,13 @@
 
 - **用法**：`test:build-perf-workspace`
 
-任务描述
+任务描述。
 
 ## `test:coverage`
 
 - **用法**: `test:coverage`
 
-运行所有测试并生成覆盖率报告
+运行所有测试并生成覆盖率报告。
 
 ## `test:e2e`
 
@@ -243,7 +247,7 @@
 - **用法**：`test:e2e`
 - **别名**：`e`、`e2e`
 
-运行端到端测试
+运行端到端测试。
 
 ## `test:perf`
 
@@ -251,13 +255,13 @@
 
 - **用法**：`test:perf`
 
-运行性能测试
+运行性能测试。
 
 ## `test:shuffle`
 
 - **用法**: `test:shuffle`
 
-启用随机排序运行测试
+启用随机排序运行测试。
 
 ## `test:unit`
 

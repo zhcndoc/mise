@@ -8,10 +8,10 @@
 
 安装一个工具版本
 
-将工具版本安装到 `~/.local/share/mise/installs/<TOOL>/<VERSION>`
-仅安装不会激活这些工具，因此它们不会出现在 PATH 中。
-若要在一条命令中同时安装和/或激活，请使用 `mise use`，它会在当前目录中创建一个 `mise.toml` 文件，
-以便在位于该目录内时激活此工具。
+将工具版本安装到 `~/.local/share/mise/installs/<TOOL>/<VERSION>`  
+仅安装不会激活这些工具，因此它们不会出现在 PATH 中。  
+若要在一条命令中同时安装和/或激活，请使用 `mise use`，它会在当前目录中创建一个 `mise.toml` 文件，  
+以便在位于该目录内时激活此工具。  
 或者，运行 `mise exec <TOOL>@<VERSION> -- <COMMAND>` 来执行工具，而无需创建配置文件。
 
 工具将并行安装。要禁用此行为，请设置 `--jobs=1` 或 `MISE_JOBS=1`
@@ -26,12 +26,14 @@
 
 ### `-f --force`
 
-即使已安装也强制重新安装
+即使已经安装，也强制重新安装  
+未指定工具时，重新安装所有已配置的工具
 
 ### `-j --jobs <JOBS>`
 
-并行运行的作业数量
-[default: 4]
+并行运行的任务数  
+小于 1 的值将按 1 处理  
+[默认值：4]
 
 ### `-n --dry-run`
 
@@ -45,7 +47,7 @@
 
 ### `--dry-run-code`
 
-类似 --dry-run，但如果有工具需要安装，则以代码 1 退出
+类似于 `--dry-run`，但如果有工具需要安装，则以代码 1 退出
 
 这对脚本检查是否需要安装工具很有用。
 
@@ -59,25 +61,26 @@
 
 从每个 [monorepo].config_roots 配置根目录安装工具
 
-使用当前激活的 MISE_ENV，并且需要 monorepo_root = true，以及在 monorepo 根配置中显式指定
+使用当前激活的 MISE_ENV，并且需要 monorepo_root = true，以及在 monorepo 根配置中显式指定  
 [monorepo].config_roots。
 
 ### `--raw`
 
-将后端安装命令的 stdin/stdout/stderr 直接连接到终端 这会隐含设置 --jobs=1
+将后端安装命令的 stdin/stdout/stderr 直接连接到终端  
+这会隐含设置 --jobs=1
 
 ### `--shared <SHARED>`
 
 将工具安装到共享目录
 
-安装到指定目录，而不是默认安装位置。
+安装到指定目录，而不是默认安装位置。  
 根据路径不同，可能需要提升权限。
 
 ### `--system`
 
 将工具安装到系统级共享目录
 
-安装到 /usr/local/share/mise/installs（或 MISE_SYSTEM_DATA_DIR/installs）。
+安装到 /usr/local/share/mise/installs（或 MISE_SYSTEM_DATA_DIR/installs）。  
 可能需要提升权限（例如 sudo）。
 
 示例：

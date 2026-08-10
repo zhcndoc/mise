@@ -1,11 +1,11 @@
-# Dev 工具
+# 开发工具
 
-> _安装并在 dev 工具之间切换，例如 node、python、cmake、terraform，
-> 以及[数百种更多](/registry.html)，全部来自同一个项目配置。_
+> _安装并在开发工具之间切换，例如 node、python、cmake、terraform，
+> 以及[数百种更多工具](/registry.html)，全部来自同一个项目配置。_
 
 `mise` 是一个用于管理编程语言运行时和其他本地开发工具安装的工具。例如，它可用于在同一台机器上管理 Node.js、Python、Ruby、Go 等的多个版本。
 
-一旦[激活](/getting-started.html#activate-mise)，mise 就可以根据你所在的目录，在不同版本的工具之间自动切换。
+一旦[激活](/getting-started.html#activate)，mise 就可以根据你所在的目录，在不同版本的工具之间自动切换。
 这意味着，如果你有一个需要 Node.js 18 的项目，另一个需要 Node.js 22 的项目，mise 会在你在这两个项目之间切换时自动切换它们。可在 [registry](/registry) 中查看 mise 可用的工具。
 
 为了知道该使用哪个工具版本，mise 通常会在当前目录及其父目录中查找 `mise.toml` 文件。为了了解工具是如何指定的，下面是一个 [mise.toml](/configuration.html) 文件示例：
@@ -149,7 +149,22 @@ port = 6379
 
 在内部，嵌套选项会被展平成点号记法（例如 `platforms.macos-x64.url`、`database.host`、`cache.redis.port`），供后端访问。
 
-### 工具 postinstall 命令
+### 版本排序
+
+后端通常会保留其版本源返回的顺序。当上游在较新的发布线之后发布回溯版本时，Aqua、GitHub、GitLab、Forgejo 和 HTTP 工具可以选择采用语义版本优先级：
+
+```toml
+[tools]
+"github:owner/tool" = { version = "latest", version_order = "semver" }
+```
+
+对于 `latest`，后端返回的权威结果仍然具有优先权——例如 GitHub 或 Forgejo 上标记为 **Latest** 的发布版本。如果该发布版本与请求的软件包不匹配，或者后端没有权威的最新版本结果，mise 会回退到版本列表，并在那里应用 `version_order`。这对于包含多个产品的仓库非常重要：仓库范围内的 Latest 发布版本可能并不包含每个软件包对应的资源。
+
+使用 `version_order = "semver"` 时，mise 在解析回退列表或版本前缀时，会根据优先级对有效的语义版本进行排序。不透明版本会在语义版本之前保留其源顺序，因此 `nightly` 等精确请求仍可正常工作。构建元数据不会影响优先级。对于已知遵循语义版本规范的工具，注册表条目可以设置此选项；用户可以设置 `version_order = "source"`，以恢复后端的默认排序。
+
+该选项只影响版本解析。`mise ls-remote` 仍会显示后端返回的规范顺序。
+
+### 工具安装后命令
 
 通过在某个工具的配置中添加 `postinstall` 字段，可以在工具完成安装后立即运行一条命令。这与 `[hooks].postinstall` 是分开的，并且只在安装特定工具时生效。
 

@@ -101,6 +101,22 @@ import Settings from '/components/settings.vue';
 
 以下 [tool-options](/dev-tools/#tool-options) 适用于 `pipx` 后端——这些内容应放在 `mise.toml` 的 `[tools]` 中。
 
+### `registry_url`
+
+设置 mise 用于解析此工具版本的包注册表 URL。该 URL 必须包含一个用于包名称的
+`{}` 占位符。这会仅针对该工具覆盖 `pipx.registry_url` 设置；安装注册表参数仍需通过
+`uvx_args` 或 `pipx_args` 单独配置。
+
+```toml
+[tools]
+"pipx:my-tool" = {
+  version = "latest",
+  registry_url = "https://packages.example.com/pypi/{}/json",
+  uvx_args = "--extra-index-url https://packages.example.com/pypi/simple",
+  pipx_args = "--pip-args='--extra-index-url https://packages.example.com/pypi/simple'"
+}
+```
+
 ### `install_env`
 
 为 `uv tool install` 或 `pipx install` 设置环境变量。mise 在应用 `install_env` 后，仍会设置工具目录、二进制目录以及已配置的 Python 包索引变量。

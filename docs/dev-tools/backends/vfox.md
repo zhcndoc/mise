@@ -101,11 +101,15 @@ mise plugin install vfox-cmake https://github.com/mise-plugins/vfox-cmake/archiv
 
 - [使用插件](../../plugin-usage.md) - 最终用户指南
 - [插件开发](../../tool-plugin-development.md) - 开发者指南
-- [插件模板](https://github.com/jdx/mise-tool-plugin-template) - 创建插件的快速开始模板
+- [插件模板](https://github.com/jdx/mise-tool-plugin-template) - 创建插件的快速开始模板。
+
+## URL 替换
+
+vfox 后端遵循 mise 的 [`url_replacements`](/url-replacements.html) 设置，该设置同时适用于工具制品下载以及通过插件内置的 Lua HTTP 模块发出的请求。这包括 `http.get`、`http.head`、`http.download_file` 及其 `try_*` 变体。
 
 ## 工具选项
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `vfox` 后端——这些选项
+以下 [工具选项](/dev-tools/#tool-options) 适用于 `vfox` 后端——这些选项
 应放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`

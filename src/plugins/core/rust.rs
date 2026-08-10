@@ -10,12 +10,14 @@ use crate::cmd::{CmdLineRunner, cmd};
 use crate::config::{Config, Settings};
 use crate::http::HTTP;
 use crate::install_context::InstallContext;
+use crate::lock_file::LockFile;
 use crate::toolset::outdated_info::OutdatedInfo;
 use crate::toolset::{ResolveOptions, ToolRequest, ToolVersion, ToolVersionOptions, Toolset};
 use crate::ui::progress_report::SingleReport;
 use crate::{dirs, env, file, github, plugins};
 use async_trait::async_trait;
 use eyre::Result;
+use indexmap::IndexMap;
 use xx::regex;
 
 #[derive(Debug)]
@@ -103,17 +105,35 @@ impl RustPlugin {
         }
     }
 
-    async fn setup_rustup(&self, ctx: &InstallContext, tv: &ToolVersion) -> Result<()> {
+    async fn setup_rustup(
+        &self,
+        ctx: &InstallContext,
+        tv: &ToolVersion,
+        homes: &RustHomes,
+    ) -> Result<()> {
         let settings = Settings::get();
-        if rustup_home().join("settings.toml").exists() && cargo_bin().exists() {
+        if rustup_is_initialized(homes) {
+            return Ok(());
+        }
+        let _installer_lock = tokio::task::spawn_blocking(|| {
+            LockFile::new(&rustup_path())
+                .with_callback(|path| {
+                    debug!(
+                        "waiting for rustup-init lock on {}",
+                        file::display_path(path)
+                    );
+                })
+                .lock()
+        })
+        .await??;
+        if rustup_is_initialized(homes) {
             return Ok(());
         }
         ctx.pr.set_message("Downloading rustup-init".into());
         HTTP.download_file(rustup_url(&settings), &rustup_path(), Some(ctx.pr.as_ref()))
             .await?;
         file::make_executable(rustup_path())?;
-        file::create_dir_all(rustup_home())?;
-        let ts = ctx.config.get_toolset().await?;
+        file::create_dir_all(&homes.rustup)?;
         let mut cmd = CmdLineRunner::new(rustup_path())
             .with_pr(ctx.pr.as_ref())
             .arg("--no-modify-path")
@@ -121,7 +141,7 @@ impl RustPlugin {
             .arg("none")
             .arg("-y")
             .env_values(tv.install_env())
-            .envs(self.exec_env(&ctx.config, ts, tv).await?);
+            .envs(rustup_env(homes, &tv.version));
         if let Some(host) = settings.rust.default_host.as_ref() {
             cmd = cmd.arg("--default-host").arg(host);
         }
@@ -129,15 +149,19 @@ impl RustPlugin {
         Ok(())
     }
 
-    async fn test_rust(&self, ctx: &InstallContext, tv: &ToolVersion) -> Result<()> {
+    async fn test_rust(
+        &self,
+        ctx: &InstallContext,
+        tv: &ToolVersion,
+        homes: &RustHomes,
+    ) -> Result<()> {
         ctx.pr.set_message(format!("{RUSTC_BIN} -V"));
-        let ts = ctx.config.get_toolset().await?;
         CmdLineRunner::new(RUSTC_BIN)
             .with_pr(ctx.pr.as_ref())
             .arg("-V")
             .env_values(tv.install_env())
-            .envs(self.exec_env(&ctx.config, ts, tv).await?)
-            .prepend_path(self.list_bin_paths(&ctx.config, tv).await?)?
+            .envs(rustup_env(homes, &tv.version))
+            .prepend_path(vec![homes.cargo_bindir()])?
             .execute()
     }
 
@@ -149,6 +173,7 @@ impl RustPlugin {
         &self,
         tv: &ToolVersion,
         subcommand: &str,
+        homes: &RustHomes,
     ) -> Result<Option<BTreeSet<String>>> {
         let args = vec![
             subcommand.to_string(),
@@ -158,11 +183,11 @@ impl RustPlugin {
             tv.version.clone(),
         ];
         let mut cmd = cmd(RUSTUP_BIN, args)
-            .env("PATH", rustup_path_env()?)
+            .env("PATH", rustup_path_env(homes)?)
             .stdout_capture()
             .stderr_capture()
             .unchecked();
-        for (key, value) in rustup_env(&tv.version) {
+        for (key, value) in rustup_env(homes, &tv.version) {
             cmd = cmd.env(key, value);
         }
         let output = match cmd.run() {
@@ -239,13 +264,22 @@ impl Backend for RustPlugin {
             return Ok(false);
         }
 
+        let homes = RustHomes::resolve(config).await?;
+        if !file::is_symlink_to(&tv.install_path(), &homes.cargo_bindir()) {
+            debug!(
+                "{} points outside the configured Cargo home",
+                tv.install_path().display()
+            );
+            return Ok(false);
+        }
+
         let raw_opts = tv.request.options();
         let (_, components, targets) = RustOptions::new(&raw_opts).install_args();
 
         if let Some(components) = components
             && !components.is_empty()
         {
-            let Some(installed) = self.rustup_installed_items(tv, "component")? else {
+            let Some(installed) = self.rustup_installed_items(tv, "component", &homes)? else {
                 return Ok(false);
             };
             let missing = self.missing_components(&components, &installed);
@@ -262,7 +296,7 @@ impl Backend for RustPlugin {
         if let Some(targets) = targets
             && !targets.is_empty()
         {
-            let Some(installed) = self.rustup_installed_items(tv, "target")? else {
+            let Some(installed) = self.rustup_installed_items(tv, "target", &homes)? else {
                 return Ok(false);
             };
             let missing = self.missing_targets(&targets, &installed);
@@ -292,11 +326,14 @@ impl Backend for RustPlugin {
         let versions: Vec<VersionInfo> = github::list_releases("rust-lang/rust")
             .await?
             .into_iter()
-            .map(|r| VersionInfo {
-                release_url: Some(format!("https://releases.rs/docs/{}/", r.tag_name)),
-                version: r.tag_name,
-                created_at: Some(r.created_at),
-                ..Default::default()
+            .map(|r| {
+                let created_at = Some(r.released_at().to_string());
+                VersionInfo {
+                    release_url: Some(format!("https://releases.rs/docs/{}/", r.tag_name)),
+                    version: r.tag_name,
+                    created_at,
+                    ..Default::default()
+                }
             })
             .rev()
             .chain(vec![
@@ -346,8 +383,9 @@ impl Backend for RustPlugin {
     }
 
     async fn install_version_(&self, ctx: &InstallContext, tv: ToolVersion) -> Result<ToolVersion> {
-        self.setup_rustup(ctx, &tv).await?;
-        let ts = ctx.config.get_toolset().await?;
+        let homes = RustHomes::resolve(&ctx.config).await?;
+        let _state_locks = lock_rust_state(&homes).await?;
+        self.setup_rustup(ctx, &tv, &homes).await?;
 
         let raw_opts = tv.request.options();
         let (profile, components, targets) = RustOptions::new(&raw_opts).install_args();
@@ -359,18 +397,18 @@ impl Backend for RustPlugin {
             .arg(&tv.version)
             .opt_args("--component", components)
             .opt_args("--target", targets)
-            .prepend_path(self.list_bin_paths(&ctx.config, &tv).await?)?
+            .prepend_path(vec![homes.cargo_bindir()])?
             .env_values(tv.install_env())
-            .envs(self.exec_env(&ctx.config, ts, &tv).await?);
+            .envs(rustup_env(&homes, &tv.version));
         if let Some(profile) = profile.as_ref() {
             cmd = cmd.arg("--profile").arg(profile);
         }
         cmd.execute()?;
 
         file::remove_all(tv.install_path())?;
-        file::make_symlink(&cargo_home().join("bin"), &tv.install_path())?;
+        file::make_symlink(&homes.cargo_bindir(), &tv.install_path())?;
 
-        self.test_rust(ctx, &tv).await?;
+        self.test_rust(ctx, &tv, &homes).await?;
 
         Ok(tv)
     }
@@ -381,34 +419,34 @@ impl Backend for RustPlugin {
         pr: &dyn SingleReport,
         tv: &ToolVersion,
     ) -> Result<()> {
-        let ts = config.get_toolset().await?;
-        let mut env = self.exec_env(config, ts, tv).await?;
+        let homes = RustHomes::resolve(config).await?;
+        let mut env = rustup_env(&homes, &tv.version);
         env.remove("RUSTUP_TOOLCHAIN");
         CmdLineRunner::new(RUSTUP_BIN)
             .with_pr(pr)
             .arg("toolchain")
             .arg("uninstall")
             .arg(&tv.version)
-            .prepend_path(self.list_bin_paths(config, tv).await?)?
+            .prepend_path(vec![homes.cargo_bindir()])?
             .envs(env)
             .execute()
     }
 
     async fn list_bin_paths(
         &self,
-        _config: &Arc<Config>,
+        config: &Arc<Config>,
         _tv: &ToolVersion,
     ) -> Result<Vec<PathBuf>> {
-        Ok(vec![cargo_bindir()])
+        Ok(vec![RustHomes::resolve(config).await?.cargo_bindir()])
     }
 
     async fn exec_env(
         &self,
-        _config: &Arc<Config>,
+        config: &Arc<Config>,
         _ts: &Toolset,
         tv: &ToolVersion,
     ) -> Result<BTreeMap<String, String>> {
-        Ok(rustup_env(&tv.version))
+        Ok(rustup_env(&RustHomes::resolve(config).await?, &tv.version))
     }
 
     async fn outdated_info(
@@ -572,13 +610,116 @@ fn rustup_path() -> PathBuf {
     dirs::CACHE.join("rust").join(RUSTUP_INIT_BIN)
 }
 
-fn rustup_home() -> PathBuf {
-    let path = Settings::get()
-        .rust
-        .rustup_home
-        .clone()
-        .or(env::var_path("RUSTUP_HOME"))
-        .unwrap_or(dirs::HOME.join(".rustup"));
+fn rust_state_lock_identities(rustup_home: &Path, cargo_home: &Path) -> Vec<PathBuf> {
+    let mut identities = vec![
+        file::desymlink_path(rustup_home),
+        file::desymlink_path(cargo_home),
+    ];
+    identities.sort();
+    identities.dedup();
+    identities
+}
+
+async fn lock_rust_state(homes: &RustHomes) -> Result<Vec<fslock::LockFile>> {
+    let identities = rust_state_lock_identities(&homes.rustup, &homes.cargo);
+    tokio::task::spawn_blocking(move || {
+        identities
+            .into_iter()
+            .map(|identity| {
+                let display_identity = identity.clone();
+                LockFile::new(&identity)
+                    .with_callback(move |_| {
+                        debug!(
+                            "waiting for Rust state lock on {}",
+                            file::display_path(&display_identity)
+                        );
+                    })
+                    .lock()
+            })
+            .collect()
+    })
+    .await?
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RustHomes {
+    cargo: PathBuf,
+    rustup: PathBuf,
+}
+
+impl RustHomes {
+    async fn resolve(config: &Arc<Config>) -> Result<Self> {
+        let config_env = config.env().await?;
+        let settings = Settings::get();
+        Ok(Self::from_sources(
+            &config_env,
+            settings.rust.cargo_home.clone(),
+            env::var_path("CARGO_HOME"),
+            settings.rust.rustup_home.clone(),
+            env::var_path("RUSTUP_HOME"),
+        ))
+    }
+
+    fn from_sources(
+        config_env: &IndexMap<String, String>,
+        configured_cargo: Option<PathBuf>,
+        ambient_cargo: Option<PathBuf>,
+        configured_rustup: Option<PathBuf>,
+        ambient_rustup: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            cargo: select_rust_home(
+                config_env,
+                "CARGO_HOME",
+                "MISE_CARGO_HOME",
+                configured_cargo,
+                ambient_cargo,
+                dirs::HOME.join(".cargo"),
+            ),
+            rustup: select_rust_home(
+                config_env,
+                "RUSTUP_HOME",
+                "MISE_RUSTUP_HOME",
+                configured_rustup,
+                ambient_rustup,
+                dirs::HOME.join(".rustup"),
+            ),
+        }
+    }
+
+    fn cargo_bindir(&self) -> PathBuf {
+        self.cargo.join("bin")
+    }
+
+    fn cargo_bin(&self) -> PathBuf {
+        self.cargo_bindir().join(CARGO_BIN)
+    }
+}
+
+fn rustup_is_initialized(homes: &RustHomes) -> bool {
+    homes.rustup.join("settings.toml").exists() && homes.cargo_bin().exists()
+}
+
+fn select_rust_home(
+    config_env: &IndexMap<String, String>,
+    direct_key: &str,
+    mise_key: &str,
+    configured: Option<PathBuf>,
+    ambient: Option<PathBuf>,
+    default: PathBuf,
+) -> PathBuf {
+    let path = config_env
+        .get(direct_key)
+        .or_else(|| config_env.get(mise_key))
+        .map(PathBuf::from)
+        .or(configured)
+        .or(ambient)
+        .unwrap_or(default);
+    resolve_rust_home(path)
+}
+
+fn resolve_rust_home(path: PathBuf) -> PathBuf {
+    let path = file::replace_path(path);
     if path.is_relative() {
         std::env::current_dir()
             .map(|cwd| cwd.join(&path))
@@ -588,47 +729,24 @@ fn rustup_home() -> PathBuf {
     }
 }
 
-fn cargo_home() -> PathBuf {
-    let path = Settings::get()
-        .rust
-        .cargo_home
-        .clone()
-        .or(env::var_path("CARGO_HOME"))
-        .unwrap_or(dirs::HOME.join(".cargo"));
-    if path.is_relative() {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(&path))
-            .unwrap_or(path)
-    } else {
-        path
-    }
-}
-
-fn cargo_bin() -> PathBuf {
-    cargo_bindir().join(CARGO_BIN)
-}
-fn cargo_bindir() -> PathBuf {
-    cargo_home().join("bin")
-}
-
-fn rustup_env(toolchain: &str) -> BTreeMap<String, String> {
+fn rustup_env(homes: &RustHomes, toolchain: &str) -> BTreeMap<String, String> {
     [
         (
             "CARGO_HOME".to_string(),
-            cargo_home().to_string_lossy().to_string(),
+            homes.cargo.to_string_lossy().to_string(),
         ),
         (
             "RUSTUP_HOME".to_string(),
-            rustup_home().to_string_lossy().to_string(),
+            homes.rustup.to_string_lossy().to_string(),
         ),
         ("RUSTUP_TOOLCHAIN".to_string(), toolchain.to_string()),
     ]
     .into()
 }
 
-fn rustup_path_env() -> Result<OsString> {
+fn rustup_path_env(homes: &RustHomes) -> Result<OsString> {
     Ok(env::join_paths(
-        std::iter::once(cargo_bindir()).chain(env::PATH.clone()),
+        std::iter::once(homes.cargo_bindir()).chain(env::PATH.clone()),
     )?)
 }
 
@@ -866,5 +984,129 @@ targets = ["wasm32-wasip1", " wasm32-wasip1 "]
         let opts = opts_with("profile", "");
 
         assert_eq!(RustOptions::new(&opts).lockfile_options(), BTreeMap::new());
+    }
+
+    #[test]
+    fn rust_home_paths_expand_tilde() {
+        assert_eq!(
+            resolve_rust_home(PathBuf::from("~/.cargo-custom")),
+            dirs::HOME.join(".cargo-custom")
+        );
+        assert_eq!(
+            resolve_rust_home(PathBuf::from("~/.rustup-custom")),
+            dirs::HOME.join(".rustup-custom")
+        );
+    }
+
+    #[test]
+    fn rust_state_locks_are_shared_by_either_home() {
+        let first = rust_state_lock_identities(Path::new("/rustup/shared"), Path::new("/cargo/a"));
+        let same_rustup =
+            rust_state_lock_identities(Path::new("/rustup/shared"), Path::new("/cargo/b"));
+        let same_cargo =
+            rust_state_lock_identities(Path::new("/rustup/other"), Path::new("/cargo/a"));
+        let separate =
+            rust_state_lock_identities(Path::new("/rustup/other"), Path::new("/cargo/b"));
+
+        assert!(first.iter().any(|identity| same_rustup.contains(identity)));
+        assert!(first.iter().any(|identity| same_cargo.contains(identity)));
+        assert!(!first.iter().any(|identity| separate.contains(identity)));
+    }
+
+    #[test]
+    fn rust_state_locks_are_ordered_and_deduplicated() {
+        let cargo = file::desymlink_path(Path::new("/a/cargo"));
+        let rustup = file::desymlink_path(Path::new("/z/rustup"));
+        assert_eq!(
+            rust_state_lock_identities(Path::new("/z/rustup"), Path::new("/a/cargo")),
+            vec![cargo, rustup]
+        );
+        assert_eq!(
+            rust_state_lock_identities(Path::new("/shared"), Path::new("/shared")),
+            vec![file::desymlink_path(Path::new("/shared"))]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_state_locks_resolve_filesystem_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let alias = root.path().join("alias");
+        std::fs::create_dir_all(&state).unwrap();
+        symlink(&state, &alias).unwrap();
+
+        assert_eq!(
+            rust_state_lock_identities(&state, &state),
+            rust_state_lock_identities(&alias, &alias)
+        );
+    }
+
+    #[test]
+    fn rust_homes_use_defaults_without_overrides() {
+        let homes = RustHomes::from_sources(&indexmap::IndexMap::new(), None, None, None, None);
+
+        assert_eq!(homes.cargo, dirs::HOME.join(".cargo"));
+        assert_eq!(homes.rustup, dirs::HOME.join(".rustup"));
+    }
+
+    #[test]
+    fn rust_homes_follow_config_environment_precedence() {
+        let config_env = indexmap::IndexMap::from([
+            (
+                "MISE_CARGO_HOME".to_string(),
+                "/config/mise-cargo".to_string(),
+            ),
+            ("CARGO_HOME".to_string(), "/config/cargo".to_string()),
+            (
+                "MISE_RUSTUP_HOME".to_string(),
+                "/config/mise-rustup".to_string(),
+            ),
+            ("RUSTUP_HOME".to_string(), "/config/rustup".to_string()),
+        ]);
+
+        let homes = RustHomes::from_sources(
+            &config_env,
+            Some("/settings/cargo".into()),
+            Some("/ambient/cargo".into()),
+            Some("/settings/rustup".into()),
+            Some("/ambient/rustup".into()),
+        );
+
+        assert_eq!(
+            homes.cargo,
+            resolve_rust_home(PathBuf::from("/config/cargo"))
+        );
+        assert_eq!(
+            homes.rustup,
+            resolve_rust_home(PathBuf::from("/config/rustup"))
+        );
+    }
+
+    #[test]
+    fn rust_homes_use_config_mise_environment_before_existing_sources() {
+        let config_env = indexmap::IndexMap::from([(
+            "MISE_CARGO_HOME".to_string(),
+            "/config/cargo".to_string(),
+        )]);
+
+        let homes = RustHomes::from_sources(
+            &config_env,
+            Some("/settings/cargo".into()),
+            Some("/ambient/cargo".into()),
+            Some("/settings/rustup".into()),
+            Some("/ambient/rustup".into()),
+        );
+
+        assert_eq!(
+            homes.cargo,
+            resolve_rust_home(PathBuf::from("/config/cargo"))
+        );
+        assert_eq!(
+            homes.rustup,
+            resolve_rust_home(PathBuf::from("/settings/rustup"))
+        );
     }
 }

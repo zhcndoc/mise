@@ -1,9 +1,9 @@
-# sops <Badge type="warning" text="experimental" />
+# sops <Badge type="warning" text="实验性" />
 
 mise 会读取加密的密钥文件，并通过 `env._.file` 将值作为环境变量提供。
 
-- **格式**: `.env.json`、`.env.yaml`、`.env.toml`
-- **加密**: 由 [age](https://github.com/FiloSottile/age) 提供支持的 [sops](https://getsops.io)
+- **格式**：`.env.json`、`.env.yaml`、`.env.toml`
+- **加密**：[sops](https://getsops.io)，使用内置的 age 支持或外部的 `sops` CLI
 
 ## 示例
 
@@ -24,7 +24,9 @@ _.file = ".env.json"
 ## 使用 sops 加密
 
 :::: info
-目前 age 是唯一受支持的 sops 加密方法。
+默认的 `sops.rops = true` 实现支持使用 age 加密的文件。设置
+`sops.rops = false` 可使用 SOPS 支持的其他密钥服务和方法对应的外部 `sops` CLI，例如 AWS KMS、GCP KMS、Azure Key Vault、Vault
+和 PGP。
 ::::
 
 :::: warning
@@ -102,12 +104,12 @@ mise env --redacted --values
 ### CI 掩码处理（GitHub Actions）
 
 ```yaml
-- name: Mask secrets
+- name: 掩码处理密钥
   run: |
     for value in $(mise env --redacted --values); do
       echo "::add-mask::$value"
     done
-- name: Use secrets safely
+- name: 安全使用密钥
   run: |
     mise exec -- ./deploy.sh
 ```

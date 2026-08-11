@@ -69,7 +69,8 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 "brew-cask:font-heavy-data-nerd-font" = "latest"
 ```
 
-其他 Linux cask 会失败，并显示明确的平台不支持错误。随着 mise 为更多 cask 制品类型提供可移植实现，这一支持边界将逐步扩展。
+其他 Linux cask 会被报告为不可用，并在其来自
+`[bootstrap.packages]` 时跳过，从而允许 macOS 和 Linux 共享软件包列表。像 `mise bootstrap packages apply brew-cask:firefox` 这样的显式请求仍会失败，并显示明确的平台不支持错误。你也可以使用 `{ os = "macos" }` 显式标记 macOS cask。随着 mise 为更多 cask 制品类型获得可移植实现，这一边界将逐步扩展。
 
 `brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制文件和生成命令包装器 cask（`binary` 和 `command_wrapper` 制品）、简单的 macOS 安装程序包（`pkg` 制品），以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。软件包安装程序会通过 mise 常规的系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而卡住。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写入 Caskroom 之外后验证安装状态。`zap` 的 `pkgutil` ID 会被视为清理元数据，而不是安装收据。对于包含生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持结构化的 `preflight_steps` 和 `postflight_steps`，用于针对 `staged_path` 执行 `move`/`remove` 操作；支持使用 Homebrew 序列化的命令基、参数、环境、守卫条件和 sudo 设置执行 `run` 操作；以及支持执行 `terminate_process` 操作，包括与 Homebrew 兼容的名称/完整匹配、重试、提示和失败策略。需要自定义安装程序选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会失败并显示明确的不支持制品错误，而不会委托给 Homebrew。
 

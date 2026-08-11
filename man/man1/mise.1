@@ -2180,7 +2180,7 @@ Staged files are passed to the task as `STAGED`.
 
 For more advanced pre\-commit functionality, see mise's sister project: https://hk.jdx.dev/
 .PP
-\fBUsage:\fR mise generate git\-pre\-commit [OPTIONS]
+\fBUsage:\fR mise generate git\-pre\-commit [OPTIONS] [<MISE_ARG>] ...
 .PP
 \fBOptions:\fR
 .PP
@@ -2199,6 +2199,15 @@ Which hook to generate (saves to .git/hooks/$hook)
 .RS
 \fIDefault: \fRpre\-commit
 .RE
+\fBArguments:\fR
+.PP
+.TP
+\fB<MISE_ARG>\fR
+mise flags to embed in the generated hook, given after `\-\-`
+
+These are inserted between `mise` and `run`, so the hook carries the same context you
+would pass on the command line. Useful when the config is not at the repository root,
+since git runs hooks from the top level: `\-\- \-C subdir` makes the hook find it.
 .SH "MISE GENERATE GITHUB-ACTION"
 Generate a GitHub Action workflow file
 
@@ -5414,6 +5423,7 @@ This shows the manual page for Watchexec, if the output is a terminal and the 'm
 Tasks to run
 Can specify multiple tasks by separating with `:::`
 e.g.: `mise run task1 arg1 arg2 ::: task2 arg1 arg2`
+Defaults to `default`
 .TP
 \fB<ARGS>\fR
 Task and arguments to run

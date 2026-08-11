@@ -388,10 +388,10 @@ mise 提供了若干机制，可根据需要自动安装缺失的工具或版本
 
 如果你在 shell 中输入一个命令（例如 `node`）但系统找不到它，mise 可以在知道该二进制文件由哪个工具提供的情况下，尝试自动安装缺失的工具版本。
 
-- **何时触发：** 当命令在 shell 中未找到且处理程序已启用时。
+- **触发时机：** 当 shell 中找不到某个命令且处理程序已启用时。
 - **如何控制：**
   - 设置：[`not_found_auto_install`](/configuration/settings.html#not_found_auto_install)（默认：true）
-- **限制：** 仅适用于至少已经安装了一个版本的工具，因为否则 mise 无法知道哪个工具提供了该二进制文件。
+- **限制：** mise 通过注册表的 bin 元数据识别提供者，因此即使配置的工具从未安装过，也可以处理这些工具；但无法处理通过原始后端规范配置的工具（例如 `cargo:some-crate`），因为这类工具不包含此类元数据。请使用 `mise install` 显式安装，或使用 `mise x` 一步完成安装和运行。请参阅[故障排除](/troubleshooting.html#auto-install-on-command-not-found-does-not-trigger)。
 
 ::: tip
 通过将 [`auto_install_disable_tools`](/configuration/settings.html#auto_install_disable_tools) 设置为工具名称列表，可以为特定工具禁用自动安装。

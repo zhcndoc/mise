@@ -321,15 +321,18 @@ eval "$(mise hook-env)"
 
 另请参阅 Tips & Tricks 中的 [CI/CD 部分](/tips-and-tricks.html#ci-cd)。
 
-## 命令未找到处理器上的自动安装对新工具不起作用
+## 找不到命令时不会触发自动安装
 
-如果你期望 mise 在运行一个未找到的命令时自动安装工具（使用 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 功能），请注意一个重要限制：
+当你运行一个找不到的命令时，mise 可以安装提供该命令的工具（[`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 功能）。它使用 mise 注册表中的 `bins` 元数据将命令映射回工具，这意味着已配置但从未安装过的工具也会被处理，而不仅仅是你已有工具的缺失版本。
 
-**mise 只能自动安装那些至少已经安装过一个版本的工具的缺失版本。**
+如果没有任何反应，通常是以下原因之一：
 
-这是因为 mise 无法知道某个工具提供了哪些二进制文件，除非该工具已经有一个已安装的（即使是非活动的）版本。如果你从未安装过某个工具的任何版本，mise 就无法判断某个二进制名称对应的是哪个工具，因此也就无法按需自动安装它。
+- **工具是通过原始后端规范配置的。** `"cargo:some-crate" = "1.0.0"` 或 `"ubi:owner/repo" = "1.0.0"` 不是注册表条目，因此不包含 bin 元数据，也就无法将你输入的命令与其关联起来。
+- **工具根本没有配置。** 处理程序只会安装当前目录中配置要求的工具；对于从未声明过的命令，它不会自行选择对应的工具。
+- **该工具的功能已关闭**——可能是 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 为 `false`，也可能是该工具列在 [`auto_install_disable_tools`](/configuration/settings.html#auto_install_disable_tools) 中。
 
 **解决方法：**
 
-- 手动安装你希望将来能自动安装的工具的至少一个版本。之后，自动安装功能就可以为该工具的缺失版本正常工作。
-- 使用 [`mise x|exec`](/cli/exec) 或 [`mise r|run`](/cli/run) 来触发缺失工具的自动安装，即使当前没有安装任何版本。这些命令会尝试自动安装所需的工具版本。
+- 如果存在注册表条目，请使用工具的注册表名称（`ripgrep`），而不是原始后端规范（`ubi:BurntSushi/ripgrep`），这样处理程序就能将命令映射到该工具。
+- 否则请显式安装，而不要按需安装：使用 `mise install`，或使用 [`mise x|exec`](/cli/exec) 在一步中完成安装并运行。二者都会实际安装整个已配置的工具集，因此与后端无关。[`mise r|run`](/cli/run) 也会执行相同操作，但仅作为运行任务的一部分。
+- 手动安装一次后，处理程序就能从此正常工作：有了已安装的版本后，mise 也可以从已安装的可执行文件中发现该映射。

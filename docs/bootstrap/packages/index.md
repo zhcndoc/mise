@@ -20,10 +20,16 @@ mise 可以通过 `mise.toml` 中的
 
 每一项的键为 `"manager:package"` —— 必须包含管理器前缀 —— 值为版本：`"latest"` 表示由该管理器安装的最新版本，或者在支持的情况下使用该管理器原生格式的固定版本（见各管理器对应页面）。
 
-主机软件包有意与 [`[tools]`](/configuration.html) 分开：
-它们不会按项目固定版本，不会生成 shim，并且由平台的软件包管理器在项目之外进行管理——或者对于
-`brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装器管理，这些安装器不要求系统中已有 Homebrew。
-请将它们用于共享库、构建依赖项和主机 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、`firefox`），而不要用于项目开发工具——这些工具应放在 `[tools]` 中。
+使用表格形式可以根据操作系统或操作系统/架构限制单个软件包。`os` 接受单个值或列表，并使用与 `[tools]` 相同的名称和别名（`linux`、`macos`、`windows`、`linux/x64`、`macos/arm64` 等）。省略 `version` 时默认为 `"latest"`：
+
+```toml
+[bootstrap.packages]
+"brew:coreutils" = "latest"
+"brew-cask:1password" = { os = "macos" }
+"brew-cask:font-jetbrains-mono" = { os = ["linux", "macos"] }
+```
+
+主机软件包与 [`[tools]`](/configuration.html) 有意分开：它们不会按项目固定版本，不会获得 shim，并且由平台的软件包管理器在项目之外进行管理——或者对于 `brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装程序进行管理，这些安装程序不要求系统本身已安装 Homebrew。应将它们用于共享库、构建依赖项和主机 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、`firefox`），而不是项目开发工具——后者应放在 `[tools]` 中。
 
 管理器列表可通过[软件包管理器插件](./plugins.md)扩展，这些插件涵盖由主机管理的状态，例如 VS Code 扩展、Helm 插件、krew
 插件和 GitHub CLI 扩展。
@@ -56,11 +62,11 @@ mise 可以通过 `mise.toml` 中的
 ## 语义
 
 - **默认采用声明式和增量式方式** — 条目会跨越
-  [配置层级](/configuration.html)（全局 → 项目）按键合并为并集。项目可以在全局列表的基础上添加软件包（并覆盖全局条目的版本固定），但不能移除它们。对于 Homebrew formula，
-  `mise bootstrap packages prune` 是一个显式的破坏性命令，用于移除当前配置或受信任且可加载的已跟踪配置不再需要的已链接 formula，或可安全清理的、由 mise 管理的 cask。
-- **按操作系统筛选** — 当前计算机上不可用的软件包管理器对应的条目不会执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 在 macOS 和 Linux 上均可用；`brew-cask` 在 macOS 上可用，并在 Linux 上支持仅字体的 cask，但不支持生命周期钩子或结构化 flight 步骤；当 `flatpak` CLI 位于 `PATH` 中时，`flatpak` 和 `flatpak-user` 可在 Linux 上使用；当 `mas` CLI 位于 `PATH` 中时，`mas` 可在 macOS 上使用。状态命令仍会列出不可用的软件包管理器，因此不会有任何内容被静默隐藏。
-- **仅手动安装** — mise 绝不会隐式安装系统软件包。缺少软件包时，`mise install` 会提示一次，但只有 `mise bootstrap packages apply` 会实际执行安装。
-- **未知的软件包管理器会被忽略并发出警告**，同时提示安装软件包插件，因此使用较新 mise 版本中软件包管理器的配置仍然可以被解析。
+  [配置层级](/configuration.html)（全局 → 项目）按键的并集进行合并。项目可以在全局列表之上添加软件包（并覆盖全局条目的版本固定值），但不能移除它们。对于 Homebrew formula，
+  `mise bootstrap packages prune` 是一个显式的破坏性命令，用于移除当前配置或受信任且可加载的已跟踪配置不再需要的已链接 formula，或可安全清理的、由 mise 所有的 cask。
+- **按操作系统筛选** — `os` 选择器不匹配的条目，以及当前机器上不可用的软件包管理器对应的条目，都不会被执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 在 macOS 和 Linux 上均可用；`brew-cask` 在 macOS 上可用，并且在 Linux 上支持仅字体的 cask，但不支持生命周期钩子或结构化的 flight 步骤；当 `flatpak` CLI 位于 `PATH` 中时，`flatpak` 和 `flatpak-user` 可在 Linux 上使用；当 `mas` CLI 位于 `PATH` 中时，`mas` 可在 macOS 上使用。状态命令仍会列出不可用的软件包管理器，因此不会有任何内容被静默隐藏。
+- **仅手动安装** — mise 绝不会隐式安装系统软件包。当软件包缺失时，`mise install` 会显示一次性提示，但只有 `mise bootstrap packages apply` 会实际执行安装操作。
+- **未知的软件包管理器会被忽略并显示警告**，同时提示安装软件包插件，因此使用较新版本 mise 中软件包管理器的配置仍然可以被解析。
 
 对于当前用户的登录 shell 设置，请使用 `[bootstrap.user].login_shell`：
 
@@ -126,20 +132,19 @@ formulae 以 `"brew:<formula>" = "latest"` 的形式写入 `[bootstrap.packages]
 
 `mise doctor` 也会报告已配置的系统包，并在有任何缺失时发出警告。
 
-## 选择要运行的管理器
+## Selecting Which Managers to Run
 
-默认情况下，mise 会对当前机器上可用的每个已配置管理器执行操作。由于可用性意味着操作系统（`apt` 只存在于 Debian 系列系统上，`brew` 则在存在 bottle 的任何地方都可用），这通常无需配置就能正常工作。
+By default, mise operates on every configured manager available on the current machine. Since availability means the operating system (`apt` only exists on Debian-based systems, while `brew` is available anywhere bottles exist), this generally works without any configuration.
 
-如果有多个管理器都可能适用——例如一台机器上安装了多个包管理器，或者共享配置列出了你不想在这里使用的管理器——可以通过 [`system_packages.managers`](/configuration/settings.html)
-设置选择一个子集：
+If multiple managers could apply—for example, multiple package managers are installed on a machine, or shared configuration lists managers you don’t want to use here—you can select a subset using [`system_packages.managers`](/configuration/settings.html):
 
 ```toml
 [settings]
 system_packages.managers = ["apt"]
 ```
 
-当你希望针对不同操作系统选择不同的管理器时，这可以与 [平台特定配置文件](/configuration.html)
-（`mise.macos.toml`、`mise.linux.toml`）结合使用。
+This can be combined with [platform-specific configuration files](/configuration.html)
+(`mise.macos.toml`, `mise.linux.toml`) when you want to select different managers for different operating systems.
 
 ## sudo
 

@@ -50,18 +50,22 @@ swift-testing-revolutionary --help
 
 ### 支持的语法
 
-| 描述                                   | 用法                                           |
-| -------------------------------------- | ---------------------------------------------- |
-| GitHub 简写，表示最新发布版本          | `spm:tuist/tuist`                               |
-| GitHub 简写，表示特定发布版本          | `spm:tuist/tuist@4.15.0`                        |
-| GitHub URL，表示最新发布版本           | `spm:https://github.com/tuist/tuist.git`        |
-| GitHub URL，表示特定发布版本           | `spm:https://github.com/tuist/tuist.git@4.15.0` |
+| 描述                                           | 用法                                                 |
+| --------------------------------------------- | ---------------------------------------------------- |
+| GitHub 最新发布版本的简写                     | `spm:tuist/tuist`                                    |
+| GitHub 特定发布版本的简写                     | `spm:tuist/tuist@4.15.0`                             |
+| GitHub 最新发布版本的 URL                     | `spm:https://github.com/tuist/tuist.git`             |
+| GitHub 特定发布版本的 URL                     | `spm:https://github.com/tuist/tuist.git@4.15.0`      |
+| GitHub 特定提交的简写                         | `spm:owner/repo@rev:<commit>`                        |
+| GitHub 特定提交的 URL                         | `spm:https://github.com/owner/repo.git@rev:<commit>` |
 
 其他语法可能可用，但不受支持且未经测试。
 
+提交选择器（`rev:<commit>` 和兼容的 `ref:<commit>` 形式）始终会从源代码构建资源包。要实现可复现的安装，请使用完整的提交 SHA。资源包归档是发布资源，不能与提交选择器结合使用。
+
 ## 工具选项
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于后端——这些
+以下 [工具选项](/dev-tools/#tool-options) 适用于后端——这些
 放在 `mise.toml` 的 `[tools]` 中。
 
 ### `install_env`
@@ -166,8 +170,8 @@ Makefile 或其他安装脚本；必须显式配置该命令。
 
 ### `spm.artifactbundle_only`
 
-将 `spm.artifactbundle_only = true` 设置为要求所有 `spm:` 安装都必须使用 SwiftPM artifact bundles。
-这与 `cargo.binstall_only` 类似：如果没有可用的匹配 artifact bundle，mise 将会失败，
+将 `spm.artifactbundle_only = true` 设置为要求所有 `spm:` 安装都必须使用 SwiftPM 制品包。
+这与 `cargo.binstall_only` 类似：如果没有可用的匹配制品包，mise 将会失败，
 而不是从源代码进行编译。
 
 ```toml

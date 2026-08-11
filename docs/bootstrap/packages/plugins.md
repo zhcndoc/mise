@@ -4,12 +4,13 @@
 而无需向 mise 核心添加包管理器。它们适用于由其他工具管理的机器级全局
 状态，例如 VS Code 扩展、Helm 插件、krew 插件和 GitHub CLI 扩展。
 
-同时声明插件源和软件包：
+同时声明插件源和软件包。下面的 `example/*` 仓库 URL 仅用于演示语法，
+是**占位符**——在运行这些命令之前，请将其替换为受维护且可安装的插件仓库：
 
 ```toml
 [bootstrap.plugins]
-vscode = "https://github.com/mise-plugins/mise-vscode-extensions"
-krew = "https://github.com/mise-plugins/mise-krew"
+vscode = "https://github.com/example/mise-vscode-extensions" # 占位符
+krew = "https://github.com/example/mise-krew" # 占位符
 
 [bootstrap.packages]
 "vscode:ms-python.python" = "latest"
@@ -33,7 +34,8 @@ mise bootstrap packages apply
 你可以在不声明插件的情况下安装插件：
 
 ```sh
-mise plugin install package:vscode https://github.com/mise-plugins/mise-vscode-extensions
+# 占位符 URL — 请将其替换为真实的软件包插件仓库
+mise plugin install package:vscode https://github.com/example/mise-vscode-extensions
 ```
 
 软件包插件会安装到主机应用自身的状态目录中。

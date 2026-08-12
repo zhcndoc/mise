@@ -24,8 +24,8 @@ flag "--region <region>" help="AWS 区域" default="us-east-1" env="AWS_REGION"
 '''
 
 run = '''
-echo "正在部署到 ${usage_environment?}，位于 ${usage_region?}"
-[[ "${usage_verbose?}" == "true" ]] && set -x
+echo "Deploying to ${usage_environment?} in ${usage_region?}"
+[[ "${usage_verbose:-false}" == "true" ]] && set -x
 ./deploy.sh "${usage_environment?}" "${usage_region?}"
 '''
 ```
@@ -567,8 +567,8 @@ run = [
 
    ```toml
    # 这不会按预期工作！
-   run = 'echo "File: {{arg(name="file")}}" > {{arg(name="file")}}.log'
-   # 第一遍：'echo "File: " > .log'（无效！）
+   run = 'echo "文件：{{arg(name="file")}}" > {{arg(name="file")}}.log'
+   # 第一遍：'echo "文件：" > .log'（无效！）
    ```
 
 2. **转义复杂**：不同的 shell 类型需要不同的转义方式：
@@ -600,7 +600,7 @@ run = '''
 cargo test {{arg(
   name="file",
   default="all",
-  help="Test file"
+  help="测试文件"
 )}}
 '''
 ```
@@ -613,7 +613,7 @@ cargo test {{arg(
 
 ```mise-toml
 [tasks.test]
-usage = 'arg "<file>" help="Test file" default="all"'
+usage = 'arg "<file>" help="测试文件" default="all"'
 run = 'cargo test ${usage_file?}'
 ```
 
@@ -651,7 +651,7 @@ flag "-v --verbose"
 '''
 run = [
   'cargo build ${usage_target?}',
-  './package.sh ${usage_verbose?}'
+  './package.sh ${usage_verbose:-false}'
 ]
 ```
 
@@ -691,7 +691,7 @@ flag "--env <env>" {
 }
 flag "--force"
 '''
-run = 'deploy --env ${usage_env?} ${usage_force?}'
+run = 'deploy --env ${usage_env?} ${usage_force:+--force}'
 ```
 
 </div>
@@ -749,4 +749,4 @@ done
 - [TOML 任务](/tasks/toml-tasks) - TOML 任务语法
 - [文件任务](/tasks/file-tasks) - 基于文件的任务语法
 - [运行任务](/tasks/running-tasks) - 如何执行任务
-- [用法规范文档](https://usage.jdx.dev/spec/) - 完整的用法规范参考
+- [用法规范文档](https://usage.jdx.dev/spec/) - 完整的用法规范参考。

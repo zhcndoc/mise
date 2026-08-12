@@ -485,6 +485,16 @@ shebang 会被**忽略**。请参阅 [#1448](https://github.com/jdx/mise/discuss
 - 使用相对路径或绝对路径
 - `redact` 和 `tools` 选项
 
+对于 `PATH`，source 的脚本可以通过将原始值保留为精确的
+后缀来添加前置条目：
+
+```sh
+export PATH="/new/bin:$PATH"
+```
+
+不支持追加、移除、重新排序或替换现有的 `PATH` 条目。这些
+更改会被忽略，因为 mise 会单独跟踪路径添加，以便保留激活顺序，并在环境发生变化时将其干净地移除。相对的前置条目会根据 <span v-pre>`{{config_root}}`</span> 进行解析，空条目则会被忽略，而不会将当前目录添加到 `PATH` 中。
+
 ```toml
 [env]
 _.source = 'source.sh'
@@ -628,4 +638,4 @@ LD_LIBRARY_PATH = "$MY_PROJ_LIB:$LD_LIBRARY_PATH"
 `env_shell_expand` 设置控制 Shell 展开：
 
 - **`true`** 或 **未设置**（默认）— 启用 Shell 展开
-- **`false`** — 禁用 Shell 展开
+- **`false`** — 禁用 Shell 展开。

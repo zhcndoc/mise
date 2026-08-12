@@ -92,8 +92,10 @@ mise use ubi:BurntSushi/ripgrep[exe=rg]
 
 ### `--pin`
 
-将精确版本保存到配置文件
-例如：`mise use --pin node@20` 会将 20.0.0 保存为版本
+将解析出的具体版本保存到配置文件
+
+如果请求与可用版本完全匹配，则优先选择该版本，而不是已安装的模糊匹配版本。使用 `prefix:` 可显式请求递归前缀匹配。
+例如：`mise use --pin node@20` 会保存解析出的 `20.x.y` 版本
 设置 `MISE_PIN=1` 可使其成为默认行为
 
 考虑使用 mise.lock 作为在 mise.toml 中固定版本的更好替代方案：

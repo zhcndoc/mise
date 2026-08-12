@@ -33,7 +33,9 @@ leave = "echo '我离开了项目'"
 
 ## 预安装/后安装钩子
 
-这些钩子会分别在工具安装之前和之后运行。与其他钩子不同，这些钩子不需要 `mise activate`。
+这些钩子分别在工具安装前后运行。与其他钩子不同，这些钩子不需要 `mise activate`。
+它们以项目根目录作为工作目录，即使从子目录调用 `mise install` 也是如此。调用目录仍可通过
+`MISE_ORIGINAL_CWD` 获取。
 
 ```toml
 [hooks]
@@ -247,4 +249,4 @@ enter = [
 run = "echo 'I changed directories'"
 [[hooks.cd]]
 run = "echo 'I also changed directories'"
-```
+]```

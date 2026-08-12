@@ -98,7 +98,7 @@ mise install php@latest
 
 环境变量中的工具名应使用 SHOUTY_SNAKE_CASE（大写并使用下划线）。例如，`my-tool` 会变成 `MISE_BACKENDS_MY_TOOL`。
 
-来源：<https://github.com/jdx/mise/blob/main/registry/>】【。
+来源：<https://github.com/jdx/mise/blob/main/registry/>
 
 ## 工具 {#tools}
 

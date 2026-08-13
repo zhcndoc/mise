@@ -59,6 +59,10 @@ $ mise run build
 
 以 JSON 格式输出受影响的项目和任务，但不运行任务
 
+### `--all`
+
+打开交互式选择器，其中包含整个 monorepo 中的所有任务
+
 ### `-c --continue-on-error`
 
 即使有一个任务失败也继续运行任务

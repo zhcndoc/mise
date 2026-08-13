@@ -6,7 +6,11 @@ Anaconda 频道安装软件包，而无需安装 conda 或 mamba。
 这个后端从 anaconda.org API 获取预先构建的软件包并直接解压它们，
 使其成为将 conda 软件包作为独立 CLI 工具安装的一种轻量级方式。
 
-其代码位于 mise 仓库中的 [`./src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs)。
+来自所选软件包的命令会在该软件包隔离的 conda 前缀中运行。mise 会设置
+`CONDA_PREFIX`，为命令进程添加该前缀的可执行文件目录，并在启动命令前应用
+`etc/conda/activate.d` 脚本。这样，命令就可以使用其打包的运行时依赖项，而无需将依赖命令添加到交互式 shell 的 `PATH` 中。
+
+相关代码位于 mise 仓库的 [`./src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs) 中。
 
 ## 依赖项
 
@@ -99,4 +103,4 @@ import Settings from '/components/settings.vue';
 
 - 只能安装单个包，不能安装带依赖项的完整 conda 环境
 - 最适合不需要复杂依赖树的独立 CLI 工具
-- 不管理 Python 环境或像完整 conda/mamba 那样的包依赖
+- 不管理 Python 环境或像完整 conda/mamba 那样的包依赖。

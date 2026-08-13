@@ -129,8 +129,11 @@ python 的 `virtualenv` 工具选项已弃用，并将在未来版本中移除�
 请改用 `[env]` 部分中的 [`_.python.venv`](/lang/python.html#automatic-virtualenv-activation)。
 :::
 
-这将作为 `MISE_TOOL_OPTS__VIRTUALENV=.venv` 传递给所有插件脚本。用户可以指定
-任意选项，并且该选项将以此格式传递给插件。
+对于 asdf 插件和特定版本的 vfox 生命周期钩子，这些选项会作为
+`MISE_TOOL_OPTS__VIRTUALENV=.venv` 和兼容旧版的
+`RTX_TOOL_OPTS__VIRTUALENV=.venv` 传递。这些变量仅作用于插件钩子环境；mise
+不会将它们导出到用户的 shell。自定义后端选项会以该格式传递给插件；mise 管理的字段（例如
+`depends`、`install_env` 和 `os`）不会被导出。
 
 目前，这只支持简单字符串，但如果有需要，我们可以相当容易地将其兼容为更复杂的类型
 （数组、表）。

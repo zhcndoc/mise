@@ -30,8 +30,7 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
 
 ### 配置合并的工作方式
 
-这些文件会向上递归，所以如果你有一个 `~/src/work/myproj/mise.toml` 文件，那么其中定义的内容将覆盖
-`~/src/work/mise.toml` 或 `~/.config/mise.toml` 中设置的任何内容。配置内容会被合并在一起。
+这些文件会向上递归，所以如果你有一个 `~/src/work/myproj/mise.toml` 文件，那么其中定义的内容将覆盖 `~/src/work/mise.toml` 或 `~/.config/mise.toml` 中设置的任何内容。配置内容会被合并在一起。
 
 ### 配置解析过程
 
@@ -80,7 +79,14 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
 # 结果：node@20, python@3.11, go@1.21
 ```
 
-**环境变量** (`[env]`): 以覆盖方式叠加
+**工具策略** (`[tool_config]`): 仅应用于由共享同一配置根目录的配置声明的工具；不会合并到整个调用范围的设置中
+
+```toml
+[tool_config]
+locked = true
+```
+
+**环境变量** (`[env]`): 累加并允许覆盖
 
 ```toml
 # 全局：NODE_ENV=development
@@ -146,8 +152,7 @@ run = 'npm run dev'
 run = 'pytest'
 ```
 
-`mise.toml` 文件是层级化的。当前目录中的文件配置会覆盖父目录中的冲突配置。例如，如果 `~/src/myproj/mise.toml`
-定义如下：
+`mise.toml` 文件是层级化的。当前目录中的文件配置会覆盖父目录中的冲突配置。例如，如果 `~/src/myproj/mise.toml` 定义如下：
 
 ```toml
 [tools]
@@ -163,15 +168,13 @@ node = '18'
 ruby = '3.1'
 ```
 
-那么在 `~/src/myproj/backend` 目录中，`node` 将为 `18`，`python` 将为 `3.10`，`ruby`
-将为 `3.1`。你可以使用 `mise ls --current` 查看当前生效的版本。
+那么在 `~/src/myproj/backend` 目录中，`node` 将为 `18`，`python` 将为 `3.10`，`ruby` 将为 `3.1`。你可以使用 `mise ls --current` 查看当前生效的版本。
 
-你还可以使用诸如 `.mise.production.toml` 之类的特定环境配置文件，更多详情请参见
-[配置环境](/configuration/environments)。
+你还可以使用诸如 `.mise.production.toml` 之类的特定环境配置文件，更多详情请参见 [配置环境](/configuration/environments)。
 
 ### `[tools]` - 开发工具
 
-参见 [Tools](/dev-tools/)。除了指定版本之外，每个工具条目还可以包含以下选项：
+参见 [工具](/dev-tools/)。除了指定版本之外，每个工具条目还可以包含以下选项：
 
 - `os`: 将安装限制在某些操作系统上
 - `depends`: 仅在此配置中相对于其他工具的安装顺序；vfox 插件钩子依赖应放在插件的 `metadata.lua` 中（参见 [工具依赖](/dev-tools/#tool-dependencies)）
@@ -185,17 +188,31 @@ ruby = '3.1'
 node = { version = "22", postinstall = "corepack enable" }
 ```
 
+### `[tool_config]` - 配置根目录范围的工具策略
+
+`[tool_config]` 会将策略应用于由共享同一配置根目录的配置声明的工具。例如，`mise.local.toml` 中的策略也会应用于其旁边的 `mise.toml` 中的工具。它不会影响从全局、系统或父级配置根目录继承的工具。
+
+```toml
+[tool_config]
+locked = true
+
+[tools]
+node = "24"
+```
+
+目前，`locked` 是唯一受支持的策略。它要求此配置根目录中的工具从其锁定文件解析并安装。参见 [mise.lock](/dev-tools/mise-lock.html#strict-lockfile-mode)。
+
 ### `[env]` - 任意环境变量
 
-请参阅 [environments](/environments/)。
+请参阅 [环境](/environments/)。
 
 ### `[tasks.*]` - 运行文件或 shell 脚本
 
-参见 [Tasks](/tasks/)。
+参见 [任务](/tasks/)。
 
 ### `[settings]` - Mise 设置
 
-参见 [Settings](/configuration/settings) 获取完整的设置列表。
+参见 [设置](/configuration/settings) 获取完整的设置列表。
 
 ### `[plugins]` - 指定自定义插件仓库 URL
 
@@ -215,8 +232,7 @@ node = "https://github.com/my-org/mise-node.git#DEADBEEF" # 支持特定 gitref
 如果你只是想从某个特定 URL 安装一次插件，最好使用
 `mise plugin install <NAME> <GIT_URL>`。如果你想与项目中的其他开发者共享插件位置/修订版本，请将此部分添加到 `mise.toml` 中。
 
-本地插件目录同样受支持。绝对路径和以 `~/` 开头的路径会直接使用。以 `./` 或 `../`
-开头的显式相对路径，会相对于声明它们的文件所在配置根目录进行解析：
+本地插件目录同样受支持。绝对路径和以 `~/` 开头的路径会直接使用。以 `./` 或 `../` 开头的显式相对路径，会相对于声明它们的文件所在配置根目录进行解析：
 
 ```toml
 [plugins]
@@ -240,7 +256,7 @@ example = "./plugins/mise-example"
 :::
 
 以下配置会使 `mise install node@my_custom_node` 安装 node-20.x
-这也可以在 [plugin](/dev-tools/aliases.md) 中指定。
+这也可以在 [插件](/dev-tools/aliases.md) 中指定。
 注意，添加别名还会添加一个符号链接，在这种情况下：
 
 ```sh
@@ -264,7 +280,7 @@ dev = "npm run dev"
 ```
 
 它们的工作方式类似于环境变量——会根据你当前所在的目录动态设置。
-有关更多详情，请参阅 [Shell Aliases](/shell-aliases)。
+有关更多详情，请参阅 [Shell 别名](/shell-aliases)。
 
 ### 最低 mise 版本
 
@@ -306,7 +322,7 @@ monorepo_root = true
 - 当根目录受信任时，所有后代配置文件都会被**隐式信任**
 - 无需为每个子目录的配置单独授予信任
 
-有关详细用法和示例，请参见 [Monorepo Tasks](/tasks/monorepo)。
+有关详细用法和示例，请参见 [Monorepo 任务](/tasks/monorepo)。
 
 ### `mise.toml` 架构
 
@@ -318,7 +334,7 @@ monorepo_root = true
 
 可以在 `~/.config/mise/config.toml` 中配置 mise。它的作用类似于本地的 `mise.toml`，但会应用于每个目录。
 
-这里只展示了一些常见设置。完整列表和说明请参阅 [Settings](/configuration/settings)。
+这里只展示了一些常见设置。完整列表和说明请参阅 [设置](/configuration/settings)。
 
 ```toml [~/.config/mise/config.toml]
 [tools]
@@ -353,8 +369,7 @@ foo = "bar"
 ## `.tool-versions`
 
 `.tool-versions` 文件是 asdf 的配置文件，它可以像 `mise.toml` 一样在 mise 中使用。
-不过它不如 `mise.toml` 灵活，所以更推荐使用 `mise.toml`。如果你
-已经有很多 `.tool-versions` 文件，或者在使用 asdf 的团队中工作，它会很有用。
+不过它不如 `mise.toml` 灵活，所以更推荐使用 `mise.toml`。如果你已经有很多 `.tool-versions` 文件，或者在使用 asdf 的团队中工作，它会很有用。
 
 下面是一个包含所有受支持语法的示例：
 
@@ -379,20 +394,13 @@ python      sub-0.1:latest # 从解析出的次版本号中减去 1（例如：3
 `mise.toml` 和 `.tool-versions` 都支持“作用域”，用于修改版本的行为：
 
 - `ref:<SHA>` - 从版本控制系统（通常是 git）的引用编译
-- `prefix:<PREFIX>` - 使用与此前缀匹配的最新版本。对 Go 很有用，因为 `1.20`
-  只能精确匹配 `1.20`，而 `prefix:1.20` 将匹配 `1.20.1`、`1.20.2` 等版本。
-- `path:<PATH>` - 使用指定路径中自定义编译的版本。一个使用场景是重新使用
-  Homebrew 工具（例如：`path:/opt/homebrew/opt/node@20`）。
-- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 解析 `ORIG_VERSION`，从解析得到的版本组件中减去
-  `PARTIAL_VERSION` 中对应的数字组件，然后将结果作为版本前缀再次解析。例如，`sub-2:lts` 会解析
-  `lts`，并从其主版本组件中减去 2（`20` 变为 `18`）；而 `sub-0.1:latest` 会从解析得到的次版本组件中减去 1（`3.11` 变为 `3.10`）。这是数字版本运算，而不是请求第 N 个之前发布的版本。
+- `prefix:<PREFIX>` - 使用与此前缀匹配的最新版本。对 Go 很有用，因为 `1.20` 只能精确匹配 `1.20`，而 `prefix:1.20` 将匹配 `1.20.1`、`1.20.2` 等版本。
+- `path:<PATH>` - 使用指定路径中自定义编译的版本。一个使用场景是重新使用 Homebrew 工具（例如：`path:/opt/homebrew/opt/node@20`）。
+- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 解析 `ORIG_VERSION`，从解析得到的版本组件中减去 `PARTIAL_VERSION` 中对应的数字组件，然后将结果作为版本前缀再次解析。例如，`sub-2:lts` 会解析 `lts`，并从其主版本组件中减去 2（`20` 变为 `18`）；而 `sub-0.1:latest` 会从解析得到的次版本组件中减去 1（`3.11` 变为 `3.10`）。这是数字版本运算，而不是请求第 N 个之前发布的版本。
 
 ## 惯用版本文件
 
-mise 支持像 asdf 一样的“惯用版本文件”。它们是语言特定的文件，
-例如 `.node-version`
-和 `.python-version`。这些文件非常适合在不强迫
-其他开发者使用 mise 或 asdf 之类特定工具的情况下，为项目设置运行时版本。
+mise 支持像 asdf 一样的“惯用版本文件”。它们是语言特定的文件，例如 `.node-version` 和 `.python-version`。这些文件非常适合在不强迫其他开发者使用 mise 或 asdf 之类特定工具的情况下，为项目设置运行时版本。
 
 它们支持别名，这意味着你可以使用一个包含 `lts/hydrogen` 的 `.nvmrc` 文件，并且它会在
 mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
@@ -502,7 +510,7 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 ### `MISE_TMP_DIR`
 
-默认：[`std::env::temp_dir()`](https://doc.rust-lang.org/std/env/fn.temp_dir.html) 在 rust 中的实现
+默认：[`std::env::temp_dir()`](https://doc.rust-lang.org/std/env/fn.temp_dir.html) 在 Rust 中的实现
 
 这用于临时存储，例如安装工具时。
 
@@ -519,8 +527,7 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 这是配置文件的路径。
 
-当你希望全局写入（例如从 `$HOME` 运行 `mise use` 或 `mise set`）指向不同的配置文件时，请使用此项。[`MISE_DEFAULT_CONFIG_FILENAME`](#mise_default_config_filename)
-会自定义默认的本地配置文件名，而不是全局配置路径。
+当你希望全局写入（例如从 `$HOME` 运行 `mise use` 或 `mise set`）指向不同的配置文件时，请使用此项。[`MISE_DEFAULT_CONFIG_FILENAME`](#mise_default_config_filename) 会自定义默认的本地配置文件名，而不是全局配置路径。
 
 ### `MISE_DEFAULT_CONFIG_FILENAME`
 
@@ -549,14 +556,11 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 ### `MISE_TRUSTED_CONFIG_PATHS`
 
-这是一个路径列表，mise 会自动将其标记为
-受信任的路径。它们按照平台对 PATH
-环境变量的约定进行分隔：Unix 上使用 `:`，Windows 上使用 `;`。
+这是一个路径列表，mise 会自动将其标记为受信任的路径。它们按照平台对 PATH 环境变量的约定进行分隔：Unix 上使用 `:`，Windows 上使用 `;`。
 
 ### `MISE_CEILING_PATHS`
 
-这是一个路径列表，mise 会在这些路径中停止搜索
-配置文件和文件任务。这对于阻止 mise 在加载缓慢的目录中搜索文件很有用。它们按照平台对 PATH 环境变量的约定进行分隔。在大多数 Unix 平台上，分隔符是 `:`，在 Windows 上是 `;`。
+这是一个路径列表，mise 会在这些路径中停止搜索配置文件和文件任务。这对于阻止 mise 在加载缓慢的目录中搜索文件很有用。它们按照平台对 PATH 环境变量的约定进行分隔。在大多数 Unix 平台上，分隔符是 `:`，在 Windows 上是 `;`。
 
 ### `MISE_LOG_LEVEL=trace|debug|info|warn|error`
 
@@ -571,8 +575,7 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 ### `MISE_LOG_FILE_LEVEL=trace|debug|info|warn|error`
 
-与 `MISE_LOG_LEVEL` 相同，但用于日志_文件_输出级别。如果你想
-保存日志但又不希望它们占满显示区域，这会很有用。
+与 `MISE_LOG_LEVEL` 相同，但用于日志_文件_输出级别。如果你想保存日志但又不希望它们占满显示区域，这会很有用。
 
 ### `MISE_LOG_HTTP=1`
 
@@ -580,11 +583,7 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 ### `MISE_LOG_VERBOSE_DEPS=1`
 
-来自噪声较大的第三方 crate（`h2`、`hyper`、
-`reqwest`、`rustls` 等，它们会为每个 HTTP/2 帧或套接字
-读取输出一行）的调试和跟踪日志会始终被丢弃——否则它们会淹没调试/跟踪
-输出。将其设为 `1` 可让这些日志通过；这是唯一能
-看到它们的方法，包括在 `--log-level=trace`/`-vv` 下。
+来自噪声较大的第三方 crate（`h2`、`hyper`、`reqwest`、`rustls` 等，它们会为每个 HTTP/2 帧或套接字读取输出一行）的调试和跟踪日志会始终被丢弃——否则它们会淹没调试/跟踪输出。将其设为 `1` 可让这些日志通过；这是唯一能看到它们的方法，包括在 `--log-level=trace`/`-vv` 下。
 
 ### `MISE_QUIET=1`
 
@@ -596,22 +595,17 @@ mise 也可以通过环境变量进行配置。可用的选项如下：
 
 ### `MISE_RAW=1`
 
-设置为 "1" 可将插件脚本直接通过管道传入 stdin/stdout/stderr。默认情况下 stdin 是禁用的，
-因为当并行安装一堆插件时，你不会看到提示信息。如果某个
-插件接受输入，或者看起来没有正确安装，请使用此项。
+设置为 "1" 可将插件脚本直接通过管道传入 stdin/stdout/stderr。默认情况下 stdin 是禁用的，因为当并行安装一堆插件时，你不会看到提示信息。如果某个插件接受输入，或者看起来没有正确安装，请使用此项。
 
 设置 `MISE_JOBS=1`，因为同一时间只能执行 1 个插件脚本。
 
 ### `MISE_TERM_WIDTH`
 
 覆盖 mise 用于渲染表格和列表（例如 `mise ls`）的终端宽度。
-默认情况下，mise 会从终端检测宽度。这在 CI 或其他非交互式环境中很有用，
-因为这些环境中的检测可能会返回错误值（例如 CircleCI 会将宽度报告为 `0`），
-从而导致输出出现异常换行。
+默认情况下，mise 会从终端检测宽度。这在 CI 或其他非交互式环境中很有用，因为这些环境中的检测可能会返回错误值（例如 CircleCI 会将宽度报告为 `0`），从而导致输出出现异常换行。
 
 如果未设置 `MISE_TERM_WIDTH`，mise 会回退到常用的 `COLUMNS`
-环境变量，最后才使用自动检测。该覆盖值会被严格遵守，
-因此你也可以强制使用更窄的宽度：
+环境变量，最后才使用自动检测。该覆盖值会被严格遵守，因此你也可以强制使用更窄的宽度：
 
 ```sh
 MISE_TERM_WIDTH=120 mise ls
@@ -620,7 +614,6 @@ MISE_TERM_WIDTH=120 mise ls
 ### `MISE_FISH_AUTO_ACTIVATE=1`
 
 配置 fish shell 的 vendor_conf.d 脚本以自动激活。
-该文件会在 homebrew 以及其他某些安装方式中自动使用，
-以便在不进行额外配置的情况下自动激活 mise。
+该文件会在 Homebrew 以及其他某些安装方式中自动使用，以便在不进行额外配置的情况下自动激活 mise。
 
 默认启用，设置为 "0" 可禁用。

@@ -38,11 +38,9 @@ $ mise run build
 
 ### `[TASK]`
 
-要运行的任务  
-可以通过使用 `:::` 分隔来指定多个任务  
-例如：mise run task1 arg1 arg2 ::: task2 arg1 arg2
-
-**默认值：** `default`
+要运行的任务
+可以使用 `:::` 分隔多个任务来指定多个任务，例如：mise run task1 arg1 arg2 ::: task2 arg1 arg2
+省略时默认为 `default`
 
 ### `[ARGS]…`
 
@@ -71,6 +69,10 @@ $ mise run build
 ### `--affected-json`
 
 以 JSON 格式输出受影响的项目和任务，但不运行任务
+
+### `--all`
+
+打开交互式选择器，其中包含整个 monorepo 中的所有任务
 
 ### `-c --continue-on-error`
 

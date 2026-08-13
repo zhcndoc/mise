@@ -112,6 +112,20 @@ vfox 后端遵循 mise 的 [`url_replacements`](/url-replacements.html) 设置�
 以下 [工具选项](/dev-tools/#tool-options) 适用于 `vfox` 后端——这些选项
 应放在 `mise.toml` 的 `[tools]` 中。
 
+传统的 vfox 生命周期钩子可以从其钩子环境中读取所选工具版本的自定义选项。选项名称会转换为大写，并使用当前前缀和兼容旧版本的前缀同时公开：
+
+```toml
+[tools]
+"vfox:example/plugin" = { version = "1.0.0", extensions = "opentelemetry,swoole" }
+```
+
+```lua
+local extensions = os.getenv("MISE_TOOL_OPTS__EXTENSIONS")
+-- RTX_TOOL_OPTS__EXTENSIONS contains the same value for legacy compatibility.
+```
+
+这些变量仅在 mise 运行插件钩子期间可用，不会导出到用户的 shell 中。后端插件应改用结构化的 `ctx.options` 值。
+
 ### `install_env`
 
 为在安装钩子期间通过 `cmd.exec` 启动的 vfox 插件命令设置环境变量。

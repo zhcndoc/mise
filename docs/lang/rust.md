@@ -15,9 +15,9 @@ MISE_CARGO_HOME = "{{env.HOME}}/.local/share/cargo"
 
 `[env]` 中显式设置的 `RUSTUP_HOME` 和 `CARGO_HOME` 值优先于对应的 `MISE_` 变量。
 
-与大多数工具不同，这些工具不会存在于 `~/.local/share/mise/installs` 中，因为它们由 rustup 管理。
-mise 会在那里保留一个用于安装跟踪的符号链接，将 `RUSTUP_TOOLCHAIN` 环境变量设置为所请求的
-版本，并在运行 `mise install` 时要求 rustup 安装任何已配置的组件或目标。
+当标准 Rust 主目录尚未初始化且未配置主目录覆盖时，mise 也可以复用由软件包管理器安装的 rustup。原始的 `PATH` 必须包含一个目录，其中有由 Homebrew、APT 和 pacman 等软件包管理器提供的 `rustup`、`cargo` 和 `rustc` 代理程序。显式设置 Rust 或 Cargo 主目录后，mise 将继续使用其管理的 rustup 初始化，而不是外部代理目录。
+
+与大多数工具不同，这些工具不会存在于 `~/.local/share/mise/installs` 中，因为它们由 rustup 管理。mise 会在那里保留一个用于安装跟踪的符号链接，将 `RUSTUP_TOOLCHAIN` 环境变量设置为所请求的版本，并在运行 `mise install` 时要求 rustup 安装任何已配置的组件或目标。
 
 ## 用法
 

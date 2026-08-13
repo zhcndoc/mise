@@ -180,7 +180,22 @@ MISE_LOCKED=1 mise install
 所有 mise 设置的作用域都是全局的。在项目的 `mise.toml` 中设置 `locked = true` 会应用于**所有**工具解析，包括来自全局 `~/.config/mise/config.toml` 的工具。如果你看到有关全局工具缺少锁文件条目的警告，请运行 `mise lock -g` 来生成全局锁文件。
 :::
 
-启用后，如果某个工具在锁文件中没有当前平台对应的 URL，`mise install` 将失败。要修复这一点，首先用 URL 填充锁文件：
+若要仅对由某个配置根目录声明的工具强制执行严格模式，请使用
+`tool_config.locked`，而不是对整个调用生效的设置：
+
+```toml
+[tool_config]
+locked = true
+
+[tools]
+node = "24"
+```
+
+此策略归属于包含该工具的配置根目录：由 `mise.toml`、
+`mise.local.toml` 以及与该根目录共享的其他配置文件声明的工具，都必须存在于各自的锁文件中。从全局配置根目录或父级配置根目录继承的工具则保留其自身的策略。`--locked`、`MISE_LOCKED=1` 和 `[settings] locked = true`
+仍会应用于整个活动工具集。
+
+启用后，如果某个工具在锁文件中没有当前平台对应的 URL，`mise install` 将失败。要修复此问题，请先使用 URL 填充锁文件：
 
 ```sh
 mise lock                    # 为所有平台生成 URL

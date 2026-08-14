@@ -393,10 +393,10 @@ python      sub-0.1:latest # 从解析出的次版本号中减去 1（例如：3
 
 `mise.toml` 和 `.tool-versions` 都支持“作用域”，用于修改版本的行为：
 
-- `ref:<SHA>` - 从版本控制系统（通常是 git）的引用编译
-- `prefix:<PREFIX>` - 使用与此前缀匹配的最新版本。对 Go 很有用，因为 `1.20` 只能精确匹配 `1.20`，而 `prefix:1.20` 将匹配 `1.20.1`、`1.20.2` 等版本。
-- `path:<PATH>` - 使用指定路径中自定义编译的版本。一个使用场景是重新使用 Homebrew 工具（例如：`path:/opt/homebrew/opt/node@20`）。
-- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 解析 `ORIG_VERSION`，从解析得到的版本组件中减去 `PARTIAL_VERSION` 中对应的数字组件，然后将结果作为版本前缀再次解析。例如，`sub-2:lts` 会解析 `lts`，并从其主版本组件中减去 2（`20` 变为 `18`）；而 `sub-0.1:latest` 会从解析得到的次版本组件中减去 1（`3.11` 变为 `3.10`）。这是数字版本运算，而不是请求第 N 个之前发布的版本。
+- `ref:<SHA>` - 从 vcs（通常是 git）引用编译
+- `prefix:<PREFIX>` - 使用与前缀匹配的最新版本。对 Go 很有用，因为 `1.20` 只会精确匹配 `1.20`，而 `prefix:1.20` 会匹配 `1.20.1`、`1.20.2` 等版本
+- `path:<PATH>` - 使用给定路径中的自定义编译版本。一个使用场景是重新使用 Homebrew 工具（例如：`path:/opt/homebrew/opt/node@20`）。在 Windows 上，两种分隔符都可以使用，mise 无论如何都会存储正斜杠形式，但要注意 TOML 引号：反斜杠在_基本_（双引号）字符串中是转义字符，因此可以将 `{ path = 'C:\tools\node' }` 写成字面量字符串，或者将其加倍写成 `"C:\\tools\\node"`。`"C:\tools\node"` 不会被拒绝——TOML 会将 `\t` 读取为制表符——因此路径会静默变成其他内容。包含 `cmd.exe` 元字符（`& | < > ^ %`）的路径会在那里被拒绝，因为路径会被传递给使用它构建 shell 命令的工具插件；尤其是 `%` 并非字面量
+- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - 解析 `ORIG_VERSION`，从相应的已解析版本组件中减去 `PARTIAL_VERSION` 中的数字组件，然后将结果解析为版本前缀。例如，`sub-2:lts` 会解析 `lts`，并从其主版本组件中减去 2（`20` 变为 `18`）；而 `sub-0.1:latest` 会从已解析的次版本组件中减去 1（`3.11` 变为 `3.10`）。这是数字版本运算，而不是请求第 N 个之前的版本
 
 ## 惯用版本文件
 
@@ -427,7 +427,7 @@ mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 | node          | `.nvmrc`, `.node-version`, `package.json`                                                                                                                                                                                                                                                                  |
 | npm           | `package.json`                                                                                                                                                                                                                                                                                             |
 | opentofu      | `.opentofu-version`                                                                                                                                                                                                                                                                                        |
-| packer        | `.packer-version`                                                                                                                                                                                                                                                                                          |
+| packer        | `.packer-version`                                                                                                                                                                                                                                                                                            |
 | perl          | `.perl-version`                                                                                                                                                                                                                                                                                            |
 | pixi          | `pixi.toml`, `pyproject.toml`                                                                                                                                                                                                                                                                              |
 | pnpm          | `package.json`                                                                                                                                                                                                                                                                                             |

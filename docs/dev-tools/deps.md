@@ -153,7 +153,41 @@ run = "npx prisma generate"
 | `depends`     | string[] | 此提供者运行前必须完成的其他提供者名称                                |
 | `timeout`     | string   | 运行命令的超时时间，例如 `"30s"`、`"5m"`（默认：无超时）              |
 
-## 新鲜度检查
+如果省略这些选项，内置提供者会使用其文档中规定的源文件和输出。设置 `sources` 或 `outputs` 会替换该提供者的默认值，而不是在其基础上添加内容。空数组（例如 `outputs = []`）会显式禁用该类路径跟踪；它还会禁用内置提供者提供的任何可选输出。
+
+相对路径和 glob 模式会在应用 `dir` 后从提供者的配置根目录解析。绝对路径则按原样使用。例如，某个将已安装包保存在应用程序目录下的 pnpm 工作区可以覆盖根级默认值：
+
+```toml
+[deps.pnpm]
+sources = ["pnpm-lock.yaml", "packages/app/package.json"]
+outputs = ["packages/app/node_modules"]
+```
+
+### 模板和环境变量
+
+提供者配置中的字符串值支持 Tera 模板，例如
+`{{ config_root }}`、`{{ env.NAME }}` 和 `{{ vars.name }}`。Shell 风格的环境变量
+（例如 `$NAME` 和 `${NAME:-default}`）会在 Tera 模板之后展开，并使用与 `[env]` 值相同的
+`env_shell_expand` 设置。
+
+```toml
+[vars]
+package = "api"
+
+[deps.codegen]
+sources = ["{{ config_root }}/schemas/$SCHEMA_NAME.graphql"]
+outputs = ["{{ config_root }}/generated/${SCHEMA_NAME:-default}/"]
+dir = "{{ config_root }}"
+env = { OUTPUT_PACKAGE = "{{ vars.package }}-$BUILD_MODE" }
+run = "npm run codegen -- $OUTPUT_PACKAGE"
+```
+
+`run` 中的 `$VAR` 表达式会留给提供者的 shell，在执行时展开。这样一来，
+`run` 就可以使用提供者 `env` 表中的值。`run` 中的 Tera 表达式会在加载提供者配置时渲染。
+
+提供者 ID 和环境变量名称不会进行模板化。无效的 Tera 模板会在提供者命令启动前作为配置错误报告。未定义的 Shell 风格变量会在发出警告后保持不变；使用 `${NAME:-}` 可将其显式默认为空字符串。
+
+## Freshness Checking
 
 mise 使用 blake3 哈希来确定自上次成功运行以来，源文件或有效提供者命令是否发生了更改。哈希存储在
 `$MISE_STATE_DIR/deps/<hash>.toml` 中，并以项目根目录为键（因此不会在项目目录内写入任何内容）。命令哈希包含运行命令、shell、提供者 `env`

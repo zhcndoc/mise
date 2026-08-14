@@ -205,6 +205,25 @@ mise ls-remote ruby
 [设置](https://github.com/rbenv/ruby-build?tab=readme-ov-file#custom-build-configuration)，
 此外，mise 还有一些额外的设置：
 
+要向 `ruby-build` 本身传递选项，请使用 `ruby.ruby_build_cli_opts`。例如，`--keep`
+会在安装后保留源代码树；设置 `RUBY_BUILD_BUILD_PATH` 可选择其保留位置：
+
+```toml
+[settings.ruby]
+ruby_build_cli_opts = "--keep"
+
+[env]
+RUBY_BUILD_BUILD_PATH = "{{ config_root }}/.ruby-build"
+```
+
+诸如 `--enable-yjit` 的配置参数应放在 `ruby.ruby_build_opts` 中。mise 会将这些参数传递到
+ruby-build 的 `--` 分隔符之后：
+
+```toml
+[settings.ruby]
+ruby_build_opts = "--enable-yjit"
+```
+
 <script setup>
 import Settings from '/components/settings.vue';
 </script>

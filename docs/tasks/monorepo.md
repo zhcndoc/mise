@@ -88,8 +88,11 @@ cd projects/frontend
 mise :build  # 从 frontend 的 config_root 运行 build 任务
 ```
 
+这适用于 config_root 下的任意目录，而不仅仅是 config_root 本身。任务名称会解析到最近的上层 config_root，因此，`cd projects/frontend/src/components
+&& mise :build` 也会运行 frontend 的 `build`。如果当前目录不在任何 config_root 内，则该名称会相对于 monorepo 根目录解析。
+
 ::: tip 可选的冒号语法
-在从子目录运行任务或定义任务依赖时，前导 `:` 是可选的。虽然两种语法都能工作，**但我们建议使用 `:` 前缀**，以明确表示这是 monorepo 任务引用。
+从子目录运行任务或定义任务依赖时，开头的 `:` 是可选的。两种语法都有效，但**我们建议使用 `:` 前缀，以明确表示** monorepo 任务引用。
 
 **从子目录运行：**
 

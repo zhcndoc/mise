@@ -127,12 +127,9 @@ linux-x64 = {
 
 ### `checksum_url`
 
-已发布的校验和源的 URL。设置后，[`mise lock`](/dev-tools/mise-lock)
-会为每个目标平台解析校验和——包括你当前运行平台之外的
-平台——**而无需下载制品**。这使得单台机器也能生成完整的跨平台锁定文件。
+已发布的校验和源的 URL。设置后，[`mise lock`](/dev-tools/mise-lock) 会为每个目标平台解析校验和——包括你当前运行平台之外的平台——**而无需下载制品**。这使得单台机器也能生成完整的跨平台锁定文件。
 
-`checksum_url` 是一个模板（支持 <code v-pre>{{ version }}</code>、<code v-pre>{{ os() }}</code>、<code v-pre>{{ arch() }}</code>
-，并且可通过 `platforms.<key>.checksum_url` 针对不同平台进行设置）。它可以指向以下任意一种：
+`checksum_url` 是一个模板（支持 <code v-pre>{{ version }}</code>、<code v-pre>{{ os() }}</code>、<code v-pre>{{ arch() }}</code>，并且可通过 `platforms.<key>.checksum_url` 针对不同平台进行设置）。它可以指向以下任意一种：
 
 - 一个**单独的校验和文件**（例如 `<artifact>.sha256`），其中可以只包含哈希值，或 `<hash>  <filename>`；
 - 一个类似 **SHASUMS** 的文件，列出多个平台的 `<hash>  <filename>`（该行会根据制品的文件名进行匹配）；
@@ -156,12 +153,9 @@ checksum_url = 'https://example.com/{{ version }}/other_{{ version }}_SHASUMS'
 
 ### `checksum_expr`
 
-当校验和存在于清单中（而不是普通的校验和文件中）时，使用
-`checksum_expr` 来提取它。从 `checksum_url` 获取的清单正文会使用
-[expr-lang](https://expr-lang.org) 进行求值。可用的变量有：`body`（原始清单）、`version`、`os`、`arch`、`url`（目标已解析的制品 URL）以及 `filename`。
+当校验和存在于清单中（而不是普通的校验和文件中）时，使用 `checksum_expr` 来提取它。从 `checksum_url` 获取的清单正文会使用 [expr-lang](https://expr-lang.org) 进行求值。可用的变量有：`body`（原始清单）、`version`、`os`、`arch`、`url`（目标已解析的制品 URL）以及 `filename`。
 
-该表达式必须求值为一个带限定的 `algo:hash` **字符串**（例如
-`sha256:<hash>`、`sha512:<hash>`）。请在表达式中构建前缀：如果算法是固定的，就追加一个字面量（`"sha256:" + entry.hash`）；如果算法会变化，就从清单中读取它（`entry.algo + ":" + entry.hash`）。
+该表达式必须求值为一个带限定的 `algo:hash` **字符串**（例如 `sha256:<hash>`、`sha512:<hash>`）。请在表达式中构建前缀：如果算法是固定的，就追加一个字面量（`"sha256:" + entry.hash`）；如果算法会变化，就从清单中读取它（`entry.algo + ":" + entry.hash`）。
 
 ```toml
 [tools."http:my-tool"]
@@ -447,10 +441,12 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 
 ### 缓存位置
 
-下载并解压的文件会缓存到 `$MISE_CACHE_DIR/http-tarballs/`，而不是为每个工具安装单独存储。默认情况下：
+对于普通用户安装，下载和解压的文件会缓存在 `$MISE_DATA_DIR/http-tarballs/` 中，而不是为每个工具安装单独存储。默认位置：
 
-- **Linux**: `~/.cache/mise/http-tarballs/`
-- **macOS**: `~/Library/Caches/mise/http-tarballs/`
+- **Linux**：`~/.local/share/mise/http-tarballs/`
+- **macOS**：`~/.local/share/mise/http-tarballs/`
+
+显式使用 `mise install --system`、`mise install --shared` 和 `mise install-into` 的安装会直接解压到目标位置。它们不会使用此持久化解压缓存，因此生成的安装是自包含的，不会链接到安装用户的主目录。
 
 ### 缓存键生成
 
@@ -462,30 +458,30 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 示例缓存目录结构：
 
 ```
-~/.cache/mise/http-tarballs/
+~/.local/share/mise/http-tarballs/
 ├── 71f774faa03daf1a58cc3339f8c73e6557348c8e0a2f3fb8148cc26e26bad83f/
-│   ├── extracted/
-│   │   └── bin/my-tool
+│   ├── bin/my-tool
 │   └── metadata.json
 └── 1c2af379bdf1fed266bc44b49271e2df5b0dafae09f1cc744b3505ec50c84719_strip_1/
-    ├── extracted/
-    │   └── my-tool
+    ├── my-tool
     └── metadata.json
 ```
 
 ### 符号链接安装
 
-工具安装会通过符号链接指向缓存中已解压的内容：
+普通用户安装是指向缓存解压内容的符号链接：
 
 ```bash
-~/.local/share/mise/installs/http-my-tool/1.0.0 → ~/.cache/mise/http-tarballs/71f774.../extracted
+~/.local/share/mise/installs/http-my-tool/1.0.0 → ~/.local/share/mise/http-tarballs/71f774...
 ```
 
 这种方式带来了几个好处：
 
-- **空间效率**：使用相同 tarball 的多个工具共享同一份缓存副本
-- **更快的安装**：命中缓存可避免重新下载和重新解压文件
-- **一致性**：相同的文件内容始终使用同一个缓存条目
+- **节省空间**：普通用户安装会在各工具之间共享相同的 tarball
+- **安装更快**：命中缓存后无需重新下载和解压文件
+- **一致性**：相同的文件内容始终使用相同的缓存条目
+
+系统、共享和 install-into 目标位置包含真实文件，而不是这些符号链接。这样可以避免卸载后留下隐藏的缓存条目，并使共享安装不依赖于特定用户的数据目录。
 
 ### 缓存元数据
 
@@ -503,9 +499,6 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 
 ### 缓存管理
 
-HTTP 后端缓存遵循 mise 的标准缓存管理：
+普通 HTTP 安装会将缓存存储在 `$MISE_DATA_DIR/http-tarballs/` 中。它有意位于 `MISE_CACHE_DIR` 之外，因此 `mise cache clear` 不会删除仍被已安装符号链接引用的内容。
 
-- 可使用 `mise cache clear` 清除缓存条目
-- 缓存目录会遵守 `MISE_CACHE_DIR` 环境变量
-- **自动清理器**：mise 会在 30 天无活动后自动清理未使用的缓存条目
-- 如有需要，可使用 `mise cache clear` 进行手动清理。
+系统、共享和 install-into 目标位置不会创建持久化的 HTTP 解压缓存。

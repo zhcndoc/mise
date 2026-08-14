@@ -3,7 +3,7 @@ use eyre::{Context, Result, bail, eyre};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use path_absolutize::Absolutize;
-pub use settings::Settings;
+pub use settings::{CompilePurpose, Settings};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env::join_paths;
 use std::fmt::{Debug, Formatter};
@@ -646,7 +646,10 @@ impl Config {
     /// `None` matches any existing directory and is used for lockfile migration
     /// and routing. `Some(filenames)` requires a recognized config or idiomatic
     /// version file and is used for full monorepo union/task loading.
-    fn monorepo_config_root_dirs(&self, filenames: Option<&[String]>) -> Result<Vec<PathBuf>> {
+    pub(crate) fn monorepo_config_root_dirs(
+        &self,
+        filenames: Option<&[String]>,
+    ) -> Result<Vec<PathBuf>> {
         let monorepo_config = find_monorepo_config(&self.config_files)
             .ok_or_else(|| eyre!("no config file in scope sets monorepo_root = true"))?;
         let monorepo_root = monorepo_config

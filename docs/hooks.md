@@ -112,7 +112,9 @@ enter = ["echo 'entering project'", { task = "setup" }]
 
 任务 hooks 适用于所有 hook 类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
 
-## 文件监视钩子
+用作 `preinstall` hooks 的任务引用不会自动安装缺失的项目级或任务级工具。这样可以让该 hook 保持在它所准备的安装操作之前。`preinstall` 任务所需的命令必须已经可从系统或现有安装中获得。其他由任务支持的 hook 类型仍会保留正常的任务工具安装行为。
+
+## 监视文件钩子
 
 在使用 `mise activate` 时，你可以让 mise 监视文件变化，并在文件发生变化时执行脚本或任务。
 

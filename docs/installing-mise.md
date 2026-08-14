@@ -279,8 +279,8 @@ nix-env -iA mise
 `mise-flake.packages.${system}.mise` 导入该包。它支持所有默认的 Nix
 系统。
 
-::: tip NixOS 默认从源码编译
-如需预编译二进制文件，请启用 [nix-ld](https://github.com/Mic92/nix-ld) 并禁用 [`all_compile`](/configuration/settings.html#all_compile)。
+::: warning NixOS 从源代码构建的默认设置已弃用
+NixOS 目前默认从源代码编译工具。此自动行为已弃用：受影响的源代码安装会从 mise 2026.8.0 开始发出警告，并且默认设置将在 mise 2027.8.0 中切换为预编译二进制文件。请在此变更之前启用 [nix-ld](https://github.com/Mic92/nix-ld)。如果要继续从源代码编译，请显式设置 [`all_compile = true`](/configuration/settings.html#all_compile)。
 :::
 
 ### yum（RHEL 8、CentOS Stream 8、Amazon Linux 2）

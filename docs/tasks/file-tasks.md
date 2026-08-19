@@ -8,7 +8,7 @@
 - `.mise/tasks/:task_name`
 - `.config/mise/tasks/:task_name`
 
-这些是默认的文件任务目录。如果为当前配置作用域设置了 [`task_config.includes`](/tasks/task-configuration.html#task-config-includes)，mise 将只会搜索其中列出的路径。
+这些是默认的文件任务目录。如果为当前配置范围设置了 [`task_config.includes`](/tasks/task-configuration.html#task_config.includes)，mise 将只搜索其中列出的路径。
 
 下面是一个构建 Rust CLI 的文件任务示例：
 
@@ -25,6 +25,7 @@ cargo build
 chmod +x mise-tasks/build
 ```
 
+在 Windows 上没有可设置的权限位，`chmod` 也不是解决方案——请参阅[Windows](#windows)，了解文件任务需要满足什么条件才能被检测到
 :::
 
 将代码放在 bash 文件中而不是 TOML 中，有助于在编辑器中更好地工作，因为编辑器可以更轻松地进行语法高亮和 lint 检查。
@@ -121,6 +122,60 @@ Write-Host "Hello from PowerShell, current directory is $current_directory"
 ```
 
 :::
+
+## Windows
+
+Windows 没有供 mise 检查的执行权限，因此它会以另一种方式判断一个文件是否为任务。满足以下**任一**条件的文件都是任务：
+
+- 其扩展名属于 [`windows_executable_extensions`](/configuration/settings.html#windows_executable_extensions) 之一——默认包括 `exe`、`bat`、`cmd`、`com`、`ps1`、`vbs`
+- 以 **shebang** 开头
+
+这两者回答的是不同的问题。扩展名意味着 Windows 自身可以运行该文件；shebang 意味着 mise 可以确定用于运行它的解释器。Windows 不实现 shebang——mise 会读取这一行并自行启动解释器——这就是为什么 `.sh` 脚本或完全没有扩展名的文件，只要包含 shebang，在 Windows 上仍然会被视为任务。
+
+实际结果是，在 Windows 上，**两者都没有**的文件将不可见，即使它在 Linux 和 macOS 上可以正常工作：
+
+```bash [mise-tasks/build]
+# no shebang, no extension -> not a task on Windows
+cargo build
+```
+
+通常只需添加 `#!/usr/bin/env bash` 即可，并且不会对其他平台造成任何影响。
+
+### 为两个平台编写一个任务
+
+文件任务没有等同于 TOML 任务 [`run_windows`](/tasks/task-configuration.html#run-windows) 的机制——脚本**就是**命令，因此没有地方放置第二个命令。只需将两个脚本并排放置，并为 Windows 版本指定一个可执行扩展名：
+
+```
+mise-tasks/
+  build.sh       # #!/usr/bin/env bash
+  build.ps1      # the Windows version
+```
+
+两个文件必须共享同一个目录和文件名主体——正是这种配对关系使它们成为一个任务，而不是两个碰巧名称相同的任务。
+
+在 Windows 上，mise 会优先使用原生脚本：`build.ps1` 会响应 `build`，而 POSIX 版本会被舍弃。在 Linux 和 macOS 上，`.ps1` 没有执行权限，因此只会找到 `build.sh`。`mise run build` 会在每个平台上执行正确的版本。
+
+POSIX 版本是指**不带有** [`windows_executable_extensions`](/configuration/settings.html#windows_executable_extensions) 中任何扩展名的文件，因此完全没有扩展名的文件也能以相同方式工作：
+
+```
+mise-tasks/
+  build          #!/usr/bin/env bash
+  build.ps1      # the Windows version
+```
+
+在 Linux 或 macOS 上将 `.ps1` 标记为可执行并不会破坏这一机制——它只会作为一个名为 `build.ps1` 的独立任务出现在那里，因为只有在 Windows 上才会将其重命名为 `build`。
+
+如果你希望为两个文件使用完全无关的名称，或者明确指定哪个文件对应哪个平台，可以使用一个调用它们的 [TOML 任务](/tasks/toml-tasks.html)：
+
+```toml
+[tasks.build]
+run = "./scripts/build.sh"
+run_windows = "pwsh -File ./scripts/windows-build.ps1"
+```
+
+这里写成完整形式，而不是 `./scripts/windows-build.ps1`，因为 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args) 的默认值是 `cmd /c`，而 cmd 不会自行启动 `.ps1` 文件。
+
+如果 Windows 候选文件不止一个——例如同时存在 `build.ps1` **和** `build.cmd`——mise 无法在它们之间进行选择，因此会保持原样：三个文件都会保留，并分别列为 `build.sh`、`build.ps1` 和 `build.cmd`。
 
 ## 编辑任务
 

@@ -6,7 +6,7 @@
 
 ## 1. 安装 `mise` CLI {#installing-mise}
 
-有关安装 mise 的其他方式（`macport`、`apt`、`yum`、`nix` 等），请参见[安装 mise](/installing-mise)。
+请参阅[安装 mise](/installing-mise.html)了解其他安装 mise 的方式（`macport`、`apt`、`yum`、`nix` 等）。
 
 :::tabs key:installing-mise
 == Linux/macOS
@@ -311,7 +311,7 @@ rg --version
 
 ## 信任配置文件 {#trust}
 
-当你或队友向项目添加 `mise.toml` 时，mise 会在运行任何 env 指令或钩子之前提示你信任它：
+当你或团队成员将 `mise.toml` 添加到项目中时，mise 可能会提示你信任该文件，然后才会运行其中的环境指令或钩子：
 
 ```
 mise ~/my-project/mise.toml is not trusted. Trust it? [y/n]
@@ -323,9 +323,9 @@ mise ~/my-project/mise.toml is not trusted. Trust it? [y/n]
 mise trust
 ```
 
-这只需要针对每个文件执行一次。有关更多详情，请参阅 [`mise trust`](/cli/trust)。
+在普通模式下，`mise run`、裸任务调用（例如 `mise <TASK>`）、`mise install`、`mise exec` 和 `mise watch` 会自动信任活动配置，因为这些命令会显式执行项目定义的行为。严格模式要求对所有非全局配置运行 `mise trust`，包括在普通模式下安全的配置。
 
-要完全禁用信任提示，可以信任根路径：
+要禁用某个路径的信任提示，请配置：
 
 ```sh
 mise settings trusted_config_paths=["/"]
@@ -334,8 +334,10 @@ mise settings trusted_config_paths=["/"]
 或者设置环境变量 `MISE_TRUSTED_CONFIG_PATHS=/`。
 
 ::: tip
-`mise use` 会自动信任它创建的文件，因此只有在拉取别人编写的配置，或手动编辑 `mise.toml` 时，你才会看到此提示。
+`mise use` 会自动信任它创建的文件。
 :::
+
+请参阅 [`mise trust`](/cli/trust) 了解更多详情。
 
 ## 5. 设置环境变量 {#environment-variables}
 

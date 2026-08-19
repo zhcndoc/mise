@@ -17,6 +17,7 @@ dotfiles.default_mode = "symlink"
 "~/.gitconfig" = "dotfiles/gitconfig"                                # 显式源
 "~/.config/alacritty.toml" = { mode = "copy" }                       # ~/.dotfiles/.config/alacritty.toml
 "~/.config/starship.toml" = { source = "dotfiles/starship.toml", mode = "copy" }
+"~/.config/tool.conf" = { content = "enabled = true\n" }                # inline whole-file content
 "~/.ssh/config" = { source = "dotfiles/ssh_config.tmpl", mode = "template" }
 "~/.config/nvim" = "dotfiles/nvim"                                   # 目录本身使用符号链接
 "~/.local/bin" = { source = "dotfiles/bin", mode = "symlink-each" }  # 为其中每个文件创建符号链接
@@ -31,12 +32,12 @@ dotfiles.default_mode = "symlink"
 
 ## 整文件条目
 
-整文件条目以目标路径为键——绝对路径或以
+整文件条目以目标路径为键——目标路径可以是绝对路径或以
 `~/` 开头——并且可以指向源文件或目录。如果省略 `source`，
-mise 会在 `dotfiles.root` 下镜像相对于主目录的目标路径：`~/.zshrc`
+mise 会将相对于主目录的目标路径映射到 `dotfiles.root` 下：`~/.zshrc`
 使用 `~/.dotfiles/.zshrc`，而 `~/.config/foo.toml` 使用
-`~/.dotfiles/.config/foo.toml`。`$HOME` 之外的目标必须指定
-`source`。
+`~/.dotfiles/.config/foo.toml`。位于 `$HOME` 之外的目标必须指定 `source`
+或内联的 `content`。
 
 字符串条目是使用 `dotfiles.default_mode` 的显式源的简写形式。
 `mise bootstrap dotfiles add` 会省略隐含的源和内置的 `symlink` 模式，
@@ -50,8 +51,17 @@ mise 会在 `dotfiles.root` 下镜像相对于主目录的目标路径：`~/.zsh
 
 相对的显式源会相对于声明该条目的配置文件所在目录进行解析，因此全局的 `~/.config/mise/config.toml` 可以管理放在其旁边的 dotfiles，而项目配置可以从仓库中提供机器设置。
 
-源路径可以包含诸如 `*`、`**`、`?` 或 `[ab]` 之类的通配符。
-当一个包含通配符的源匹配多个路径时，目标路径必须包含匹配的通配符，这样每个源才能展开为唯一的目标：
+`mise bootstrap dotfiles status --json` 会为每个条目包含一个 `origin` 对象。它会报告声明该条目的配置文件、其 `config_root`、由该配置文件名编码的任何配置环境，以及解析后的源路径。路径在有效 UTF-8 的情况下会作为普通字符串处理。在 Unix 上，包含非 UTF-8 字节的路径会使用 `mise:path-bytes:<base64url>`，从而保持来源信息无损。这使得分层的 dotfile 声明可以直接检查，而无需手动重建其优先级。
+
+使用 `content` 可以直接内联声明字面意义上的整个文件，而无需保留单独的源文件。内联内容会写入为私有普通文件（Unix 上为 `0600`），并且不能与 `source`、`mode` 或 `exclude` 组合使用：
+
+```toml
+[dotfiles]
+"~/.config/example.conf" = { content = "enabled = true\n" }
+```
+
+源路径可以包含类似 `*`、`**`、`?` 或 `[ab]` 的 glob 通配符。
+当通配符源匹配多个路径时，目标路径必须包含相应的通配符，以便每个源都能展开为唯一的目标：
 
 ```toml
 [dotfiles]
@@ -230,5 +240,9 @@ dotfiles.root = "~/.dotfiles"
 
 ## Windows
 
-文件符号链接在 Windows 上需要提升权限，因此 `symlink` 和 `symlink-each`
-在文件上会回退为复制；目录符号链接则使用 junctions。
+`symlink` 在 Windows 上可行时会创建真正的文件符号链接。启用开发者模式后，Windows 允许在无需提升权限的情况下执行此操作——同一项权限也是
+[`windows_shim_mode`](/configuration/settings.html#windows_shim_mode) 的
+`symlink` 选项所依赖的——如果没有该权限，mise 会回退为复制文件，因此无论哪种情况，条目都能继续应用。
+`mise bootstrap dotfiles status` 会读取磁盘上实际存在的形式。
+
+`symlink-each` 在 Windows 上仍会复制文件。目录符号链接使用联接点。

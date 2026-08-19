@@ -10,9 +10,10 @@
 - `mise.toml`
 - `mise/config.toml`
 - `.mise/config.toml`
-- `.config/mise.toml` - 可将配置文件集中放在一个公共目录中
+- `.mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载
+- `.config/mise.toml` - 使用此路径可以将配置文件归入同一个目录
 - `.config/mise/config.toml`
-- `.config/mise/conf.d/*.toml` - 该目录中的所有文件都会按字母顺序加载
+- `.config/mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载
 
 ::: tip
 运行 [`mise cfg`](/cli/config.html) 来查看 mise 在你的具体环境中按什么顺序加载文件。通常这比去弄清 mise 的规则要容易得多。
@@ -59,8 +60,11 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
     └── work/
         ├── mise.toml                 # 工作区范围设置
         └── myproject/
-            ├── mise.local.toml       # 本地覆盖（git 忽略）
+            ├── mise.local.toml       # 本地覆盖（被 git 忽略）
             ├── mise.toml             # 项目配置
+            ├── .mise/
+            │   ├── config.toml       # 归入 .mise 的项目配置
+            │   └── conf.d/*.toml     # 项目分片，按字母顺序加载
             ├── mise.<env>.toml       # 特定环境的项目配置
             ├── mise.<env>.local.toml # 特定环境的项目本地覆盖
             └── backend/
@@ -206,7 +210,11 @@ node = "24"
 
 请参阅 [环境](/environments/)。
 
-### `[tasks.*]` - 运行文件或 shell 脚本
+### `[vars]` - 配置变量
+
+定义可在 Tera 渲染的配置中重复使用的值，而不会将它们导出给子进程。请参阅 [变量](/configuration/vars)。
+
+### `[tasks.*]` - 运行文件或 Shell 脚本
 
 参见 [任务](/tasks/)。
 
@@ -451,8 +459,14 @@ mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 
 有些文件声明的是最低兼容版本或配置格式主版本，而不是确切的二进制版本。mise 会将该值视为普通的版本请求，因此像 `3.25` 这样的值会选择最新的 CMake 3.25 版本，而 GoReleaser 配置中的 `version: 2` 会选择最新的 GoReleaser 2.x 版本。
 
-对于 `go.mod`，如果存在 `toolchain goX.Y.Z` 指令（精确的工具链固定版本），则会使用该指令。
-否则会使用 `go X.Y` 指令；由于它只声明了所需 Go 版本的_最低值_，mise 会将其解析为匹配的最新补丁版本（例如，`go 1.22` → 最新的 `1.22.x`）。
+对于 `package.json`（由 `node`、`deno`、`bun`、`npm`、`pnpm` 和 `yarn` 支持）：
+
+- 运行时工具（`node`、`deno` 和 `bun`）读取 `devEngines.runtime`（同时支持单对象和数组格式）。
+- 包管理器（`npm`、`pnpm` 和 `yarn`）读取 `devEngines.packageManager` 或顶层的 `packageManager`（例如 `pnpm@9.1.0` 或 `npm@10.0.0`）。
+- 对于 `bun`，mise 会首先检查 `devEngines.runtime`，然后回退到 `devEngines.packageManager` 和顶层的 `packageManager`（例如 `bun@1.2.0`）。
+
+对于 `go.mod`，如果存在 `toolchain goX.Y.Z` 指令（精确的工具链固定版本），则使用该指令。
+否则使用 `go X.Y` 指令；由于它只声明所需的 _最低_ Go 版本，mise 会将其解析为匹配的最新补丁版本（例如，`go 1.22` → 最新的 `1.22.x`）。
 
 在 mise 中，这些默认是禁用的，原因说明见 <https://github.com/jdx/mise/discussions/4345>。
 

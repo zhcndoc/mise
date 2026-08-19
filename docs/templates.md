@@ -173,25 +173,26 @@ Mise 在 tera 功能的基础上提供了额外的变量、函数、过滤器和
 Mise 暴露了多个[变量](https://keats.github.io/tera/#variables)。
 这些变量提供了有关当前环境的关键信息：
 
-- `env: HashMap<String, String>` – 以键值对映射的形式访问当前环境变量。
+- `env: HashMap<String, String>` – 以键值映射的形式访问当前环境变量。
+- `vars: HashMap<String, String>` – 访问用户定义的[配置变量](/configuration/vars)。
 - `cwd: PathBuf` – 指向当前工作目录。
-- `config_root: PathBuf` – 定位包含你的 `mise.toml` 文件的目录，或者在类似 `~/src/myproj/.config/mise.toml` 的情况下，它会指向 `~/src/myproj`。
+- `config_root: PathBuf` – 定位包含你的 `mise.toml` 文件的目录；例如对于 `~/src/myproj/.config/mise.toml` 这样的路径，它会指向 `~/src/myproj`。
 - `mise_bin: String` - 指向当前 mise 可执行文件的路径
 - `mise_pid: String` - 指向当前 mise 进程的 pid
-- `mise_env: Vec<String>` - 由 `MISE_ENV`、`-E` 或 `--env` 指定的配置环境。如果未设置配置环境，则该变量未定义。
+- `mise_env: Vec<String>` - 由 `MISE_ENV`、`-E` 或 `--env` 指定的配置环境。如果未设置配置环境，则未定义此变量。
 - `xdg_cache_home: PathBuf` - 指向 XDG 缓存主目录
 - `xdg_config_home: PathBuf` - 指向 XDG 配置主目录
 - `xdg_data_home: PathBuf` - 指向 XDG 数据主目录
 - `xdg_state_home: PathBuf` - 指向 XDG 状态主目录
 - `tools: HashMap<String, ToolInfo | ToolInfo[]>` – 将已安装的工具名称映射到其信息。
-  在任务模板和 `tools = true` 的环境指令中可用。
-  - 当安装了单个版本时：
-    - `tools.<name>.version: String` – 解析后的版本（例如，`"22.1.0"`）
+  可用于任务模板和设置了 `tools = true` 的 env 指令。
+  - 安装了单个版本时：
+    - `tools.<name>.version: String` – 解析后的版本（例如 `"22.1.0"`）
     - `tools.<name>.path: String` – 安装路径
-  - 当安装了多个版本时，它会变成数组：
+  - 安装了多个版本时，它会变成数组：
     - `tools.<name>[0].version: String` – 第一个版本
     - `tools.<name>[0].path: String` – 第一个安装路径
-    - `tools.<name>[1].version: String` – 第二个版本，等等。
+    - `tools.<name>[1].version: String` – 第二个版本，依此类推
 
 在 **任务运行脚本** 中，当任务有 usage 规范时，mise 还会暴露一个 `usage` 映射（参见 [任务参数](/tasks/task-arguments#usage-field)）：
 
@@ -414,13 +415,19 @@ PROJECT_CONFIG = "{{ [config_root, 'bar.txt'] | join_path }}"
 
 #### 字符串操作
 
-- `str | quote -> String` – 给字符串加引号。将 `'` 转换为 `\'`，然后
-  为字符串加引号，例如 `'it\'s str'`。
+- `str | quote -> String` – 为 POSIX shell 中的字符串加引号。嵌入的单引号使用 POSIX 安全的 `'\''` 形式，例如 `'it'\''s str'`。此过滤器不会针对 PowerShell、cmd 或其他非 POSIX shell 调整其输出。
 - `str | kebabcase -> String` – 将字符串转换为 kebab-case
 - `str | lowercamelcase -> String` – 将字符串转换为 lowerCamelCase
 - `str | uppercamelcase -> String` – 将字符串转换为 UpperCamelCase
 - `str | snakecase -> String` – 将字符串转换为 snake_case
 - `str | shoutysnakecase -> String` – 将字符串转换为 SHOUTY_SNAKE_CASE
+
+将模板值插入 POSIX shell 命令时，请使用 `quote`。带引号和不带引号的片段可以连接到同一个参数中：
+
+```toml
+[tasks.create-config]
+run = "touch {{ config_root | quote }}/generated.toml"
+```
 
 ### 测试
 
@@ -456,9 +463,9 @@ Mise 提供了额外的测试：
 - `env: HashMap<String, String>` – 操作系统环境变量（与 `mise.toml` 中相同）
 - `config_root: PathBuf` – 包含 `.miserc.toml` 文件的目录
 - `cwd: PathBuf` – 当前工作目录
-- `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home` – XDG 基础目录
-- 所有 [函数](#functions)：`arch()`、`os()`、`os_family()`、`num_cpus()`、`choice()` 等
-- 所有 [过滤器](#filters)：`absolute`、`dirname`、`basename`、`hash` 等
+- `xdg_cache_home`、`xdg_config_home`、`xdg_data_home`、`xdg_state_home` – XDG 基础目录
+- 所有[函数](#functions)：`arch()`、`os()`、`os_family()`、`num_cpus()`、`choice()` 等
+- 所有[过滤器](#filters)：`absolute`、`dirname`、`basename`、`hash` 等
 
 ### 不可用内容
 

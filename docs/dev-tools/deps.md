@@ -166,8 +166,9 @@ outputs = ["packages/app/node_modules"]
 ### 模板和环境变量
 
 提供者配置中的字符串值支持 Tera 模板，例如
-`{{ config_root }}`、`{{ env.NAME }}` 和 `{{ vars.name }}`。Shell 风格的环境变量
-（例如 `$NAME` 和 `${NAME:-default}`）会在 Tera 模板之后展开，并使用与 `[env]` 值相同的
+<span v-pre>`{{ config_root }}`</span>、<span v-pre>`{{ env.NAME }}`</span> 和
+<span v-pre>`{{ vars.name }}`</span>。Shell 风格的环境变量，例如
+`$NAME` 和 `${NAME:-default}`，会在 Tera 模板之后展开，并使用与 `[env]` 值相同的
 `env_shell_expand` 设置。
 
 ```toml
@@ -187,7 +188,7 @@ run = "npm run codegen -- $OUTPUT_PACKAGE"
 
 提供者 ID 和环境变量名称不会进行模板化。无效的 Tera 模板会在提供者命令启动前作为配置错误报告。未定义的 Shell 风格变量会在发出警告后保持不变；使用 `${NAME:-}` 可将其显式默认为空字符串。
 
-## Freshness Checking
+## 新鲜度检查
 
 mise 使用 blake3 哈希来确定自上次成功运行以来，源文件或有效提供者命令是否发生了更改。哈希存储在
 `$MISE_STATE_DIR/deps/<hash>.toml` 中，并以项目根目录为键（因此不会在项目目录内写入任何内容）。命令哈希包含运行命令、shell、提供者 `env`

@@ -4,8 +4,8 @@
 
 ## 核心概念
 
-**激活**
-: 将 mise 的上下文（工具、环境变量、PATH 修改）加载到你的 shell 会话中的过程。通常在你的 shell rc 文件中通过 `eval "$(mise activate bash)"` 完成。有关设置说明，请参见 [安装 mise](/installing-mise)。
+**Activation**
+: 将 mise 的上下文（工具、环境变量、PATH 修改）加载到 shell 会话中的过程。通常通过在 shell rc 文件中使用 `eval "$(mise activate bash)"` 完成。有关设置说明，请参见 [Installing mise](/installing-mise.html)。
 
 **后端**
 : mise 用来安装和管理工具的软件包管理器或生态系统。每个后端都知道如何从各自的来源获取、安装和管理工具。更多细节请参见下面的 [后端](#backends) 和 [后端架构](/dev-tools/backend_architecture)。

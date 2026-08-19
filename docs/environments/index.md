@@ -157,6 +157,19 @@ PASSWORD = "my_password"
 TEST_TOKEN = { value = "not-sensitive", redact = false }
 ```
 
+脱敏也涵盖调用方提供的值。使用 `required = true` 声明的变量只会被验证——mise 从不为其赋值——但调用方传入的值在
+`redact = true` 或 `redactions` 模式匹配其名称时仍会被脱敏：
+
+```toml
+redactions = ["*_KEY_*"]
+
+[tasks.deploy]
+env = { ASC_KEY_ID = { required = true, redact = true } }
+run = "./deploy.sh"
+```
+
+调用方覆盖 `default` 的回退值时，同样适用。
+
 ### 查看已脱敏的环境变量
 
 `mise env` 命令提供了用于处理已脱敏变量的标志：
@@ -218,7 +231,10 @@ DATABASE_URL = { required = true }
 API_KEY = { required = true }
 ```
 
-你还可以提供帮助文本，指导用户如何设置该变量：
+必需变量会被 mise 验证，但从不会由 mise 赋值。其值仍会参与
+[redactions](#redactions)，因此 `redact = true` 或匹配的 `redactions` 模式会遮盖调用方传入的任何值。
+
+你也可以提供帮助文本，指导用户如何设置变量：
 
 ```toml
 [env]

@@ -82,13 +82,15 @@ GitHub Actions 受保护分支的 `push` 作业和 GitLab 受保护分支的推�
   },
   "features": {
     "batch": true,
+    "blob_packs": true,
     "resumable_uploads": true,
     "delegated_transfers": true
   },
   "limits": {
     "max_batch_items": 1000,
     "max_inline_blob_bytes": 1048576,
-    "max_blob_bytes": 107374182400
+    "max_blob_bytes": 107374182400,
+    "max_pack_bytes": 107374182400
   }
 }
 ```
@@ -233,6 +235,26 @@ URL。重定向只能授予对所请求不可变对象的访问权限。客户�
 
 客户端在使用下载内容前会验证完整的未压缩摘要。摘要不匹配时视为缓存未命中，发出可见的完整性警告；
 启用报告能力后，还必须将其报告到服务器遥测系统。
+
+### 读取 Blob 数据包
+
+声明 `features.blob_packs` 的服务器接受针对 `/v1/blobs:pack` 的 `POST` 请求，请求正文与
+`blobs:missing` 使用相同的 `application/vnd.mise.cache-digests.v1+json` 格式。声明的总大小
+不得超过 `limits.max_pack_bytes`，摘要数量不得超过
+`limits.max_batch_items`。超过项目数量限制时，服务器返回 `400 Bad Request`；声明的总大小超过
+字节限制时，返回 `413 Content Too Large`。
+
+成功响应使用 `application/vnd.mise.cache-blob-pack.v1`，并以八字节 ASCII 魔数
+`MISEPK01` 开始。其余部分是按请求顺序排列的帧流：
+
+| Field     | Encoding                                    |
+| --------- | ------------------------------------------- |
+| Algorithm | one byte: `1` for BLAKE3 or `2` for SHA-256 |
+| Hash      | raw 32-byte digest                          |
+| Size      | unsigned big-endian 64-bit byte length      |
+| Content   | exactly `size` bytes                        |
+
+服务器会省略缺失和未经授权的 Blob，并且每个重复请求只输出一次。客户端会拒绝未请求或重复的帧，将每个帧流式传输到有界临时存储中，验证其完整摘要，然后才将其纳入本地 CAS。当能力不可用、摘要超过公布的数据包限制，或预期 Blob 被省略时，客户端会回退到普通的单 Blob 读取。数据包仅是传输优化；其帧格式不会改变 CAS 标识或操作语义。
 
 ### 上传 blob
 

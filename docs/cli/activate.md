@@ -17,7 +17,7 @@
 echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
 ```
 
-不过，这要求 "mise" 已经在你的 PATH 中。如果不在，你需要
+不过，这要求 “mise” 已经在你的 PATH 中。如果不在，你需要
 像这样指定完整路径：
 
 ```
@@ -41,6 +41,7 @@ echo 'eval "$(/path/to/mise activate zsh)"' >> ~/.zshrc
 - `xonsh`
 - `zsh`
 - `pwsh`
+- `powershell`
 
 ## 标志
 

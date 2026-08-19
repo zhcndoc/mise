@@ -32,18 +32,20 @@ stderr_path = "~/Library/Logs/my-sync.err.log"
 | `run_at_load`             | `RunAtLoad`               |
 | `keep_alive`              | `KeepAlive`               |
 | `start_interval`          | `StartInterval`           |
+| `throttle_interval`       | `ThrottleInterval`        |
 | `start_calendar_interval` | `StartCalendarInterval`   |
+| `queue_directories`       | `QueueDirectories`        |
 | `environment`             | `EnvironmentVariables`    |
 | `working_directory`       | `WorkingDirectory`        |
 | `stdout_path`             | `StandardOutPath`         |
 | `stderr_path`             | `StandardErrorPath`       |
 | `kickstart`               | 运行 `launchctl kickstart` |
 
-在写入 plist 之前，`program`、`working_directory`、`stdout_path` 和
-`stderr_path` 会将单独出现的 `~` 和 `~/` 展开为当前用户的主目录。
-`args` 会完全按照原样传递。
-`start_calendar_interval` 接受 `minute`（0-59）、`hour`（0-23）、`day`
-（1-31）、`weekday`（0-7）和 `month`（1-12），并写入对应的
+`program`、`working_directory`、`stdout_path`、`stderr_path` 以及
+`queue_directories` 中的每个条目，在写入 plist 前都会将单独的 `~` 和
+`~/` 展开为当前用户的主目录。`args` 会完全按照
+原样传递。`start_calendar_interval` 接受 `minute`（0-59）、`hour`（0-23）、`day`
+（1-31）、`weekday`（0-7）和 `month`（1-12），并写入相应的
 launchd 日历键。对于多个相互独立的日历计划，请使用内联表数组：
 
 ```toml
@@ -52,6 +54,10 @@ start_calendar_interval = [{ hour = 3 }, { hour = 12, weekday = 1 }]
 
 `start_interval` 和 `start_calendar_interval` 是相互独立的 launchd
 触发器。如果两者都设置，launchd 可以根据任一计划启动代理。
+
+`throttle_interval` 是 launchd 在代理两次运行之间等待的最小秒数（launchd 的默认值为 10）。
+
+`queue_directories` 会在所列目录中的任意一个非空时启动代理；launchd 希望代理清空这些目录。launchd 要求此处使用绝对路径，因此每个条目必须以 `/` 开头，或使用展开后为绝对路径的 `~` 或 `~/` 路径。
 
 ## 语义
 

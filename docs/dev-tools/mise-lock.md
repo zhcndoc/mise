@@ -30,6 +30,8 @@ lockfile = true
 2. **版本解析**：如果存在 `mise.lock`，mise 将优先使用其中锁定的版本，而不是 `mise.toml` 中的版本范围
 3. **校验和验证**：对于受支持的后端，mise 会存储并验证下载工具的校验和
 
+`mise lock` 会解析配置级工具以及在单个任务中声明的工具。它会读取任务定义——包括继承的模板和包含的任务文件——但不会运行任务、任务依赖项、钩子或工具安装器。这样便可以在首次执行任务之前锁定任务专用工具。它们的条目使用相同的 `[[tools.*]]` 格式，并会写入拥有该任务的配置所对应的锁文件。
+
 ## 文件格式
 
 `mise.lock` 是一个 TOML 文件，采用基于平台的格式，按平台组织资产信息：
@@ -115,7 +117,7 @@ options = { swift_platform = "fedora39" }
 | `mise.toml`            | `mise.lock`            |
 | `mise.test.toml`       | `mise.test.lock`       |
 | `mise.staging.toml`    | `mise.staging.lock`    |
-| `mise.local.toml`      | `mise.local.lock`      |
+| `mise.local.toml`      | `mise.local.lock`       |
 | `mise.test.local.toml` | `mise.test.local.lock` |
 
 例如，在 `MISE_ENV=test` 时：

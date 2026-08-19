@@ -90,9 +90,9 @@ python = { version = "3.12", postinstall = "pip install pipx" }
 - `MISE_TOOL_INSTALL_PATH`: 工具的安装路径
 - 来自该工具 `install_env` 选项中的变量。
 
-## 任务 hooks
+## 任务钩子
 
-hooks 可以引用 mise 任务，而不是内联脚本。任务会通过 `mise run` 作为子进程执行，因此它会复用完整的任务系统，包括依赖、环境变量以及基于文件的任务定义。
+钩子可以引用 mise 任务，而不是内联脚本。任务会通过 `mise run` 作为子进程执行，因此它会复用完整的任务系统，包括依赖、环境变量以及基于文件的任务定义。
 
 ```toml
 [tasks.setup]
@@ -110,9 +110,9 @@ enter = { task = "setup" }
 enter = ["echo 'entering project'", { task = "setup" }]
 ```
 
-任务 hooks 适用于所有 hook 类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
+任务钩子适用于所有钩子类型（`enter`、`leave`、`cd`、`preinstall`、`postinstall`）。
 
-用作 `preinstall` hooks 的任务引用不会自动安装缺失的项目级或任务级工具。这样可以让该 hook 保持在它所准备的安装操作之前。`preinstall` 任务所需的命令必须已经可从系统或现有安装中获得。其他由任务支持的 hook 类型仍会保留正常的任务工具安装行为。
+用作 `preinstall` 钩子的任务引用不会自动安装缺失的项目级或任务级工具。这样可以让该钩子保持在它所准备的安装操作之前。`preinstall` 任务所需的命令必须已经可从系统或现有安装中获得。其他由任务支持的钩子类型仍会保留正常的任务工具安装行为。
 
 ## 监视文件钩子
 
@@ -154,12 +154,17 @@ task = "sync-deps"
 
 钩子会在设置了以下环境变量的情况下执行：
 
-- `MISE_ORIGINAL_CWD`：用户所在的目录。
-- `MISE_PROJECT_ROOT`：项目的根目录。
-- `MISE_PREVIOUS_DIR`：目录更改之前用户所在的目录（仅在发生目录更改时）。
-- `MISE_INSTALLED_TOOLS`：已安装工具的 JSON 数组（仅用于 `postinstall` 钩子）。
+- `MISE_ORIGINAL_CWD`: 用户所在的目录。
+- `MISE_PROJECT_ROOT`: 项目的根目录。
+- `MISE_CONFIG_ROOT`: 定义该钩子的配置的根目录。
+- `MISE_PREVIOUS_DIR`: 用户在目录更改之前所在的目录（仅在发生目录更改时）。
+- `MISE_INSTALLED_TOOLS`: 已安装工具的 JSON 数组（仅用于 `postinstall` 钩子）。
 
-内联 `run` 钩子可以针对任何钩子类型写成 `{ run = "..." }`。字符串简写
+全局钩子会将活动项目的根目录用于 `MISE_PROJECT_ROOT`，并将全局配置根目录用于
+`MISE_CONFIG_ROOT`。对于 `mise use --global` 等仅限全局的操作，两个变量都会使用
+全局配置根目录，并且项目钩子不会运行。
+
+对于任何钩子类型，内联 `run` 钩子都可以写成 `{ run = "..." }`。字符串简写形式
 （`enter = "echo hi"`）等同于 `{ run = "echo hi" }`。
 
 `run` 和 `run_windows` 必须是字符串。`run = ["echo one", "echo two"]` 不受支持。

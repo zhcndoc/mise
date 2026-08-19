@@ -54,7 +54,7 @@ mise bootstrap packages brew untap acme/tools
 
 ## Cask
 
-Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 tap API 元数据）获取 cask 元数据，下载制品，在 cask 提供 sha256 时验证其 sha256，解压归档文件，并将应用程序包安装到 `/Applications`，同时将版本记录在 `<prefix>/Caskroom` 中。
+Cask 使用 `brew-cask:` 管理器。mise 直接从 Homebrew cask API（或 tap API 元数据）获取 cask 元数据，下载制品，在 cask 提供 sha256 时验证其 sha256，提取归档，并将应用程序包安装到 `/Applications`，同时将版本记录在 `<prefix>/Caskroom` 下。与 Homebrew 一样，mise 会将每个应用程序包移动到 `/Applications`，并在其版本化的 Caskroom 路径留下一个符号链接，而不是在该处保留应用程序的第二份副本。
 
 ```toml
 [bootstrap.packages]
@@ -62,7 +62,41 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 "brew-cask:homebrew/cask/visual-studio-code" = "latest"
 ```
 
-在 Linux 上，初始的 cask 支持仅限于不包含生命周期钩子、结构化 `preflight_steps` 或 `postflight_steps` 的纯字体 cask——这些概念来自 Homebrew 的 cask DSL，相关文档请参阅 [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)。字体会安装到 `$XDG_DATA_HOME/fonts`，该目录默认为 `~/.local/share/fonts`：
+### 覆盖应用程序目录
+
+默认情况下，`app` 制品会安装到 `/Applications`，与 Homebrew 的行为一致。设置 `MISE_BREW_CASK_OPT_APPDIR` 环境变量可将其安装到其他位置——例如无需提升权限、用户可写的 `~/Applications`：
+
+```sh
+MISE_BREW_CASK_OPT_APPDIR="$HOME/Applications" mise bootstrap packages apply brew-cask:firefox
+```
+
+该值必须是绝对路径，不能包含 `..`，并且不能解析为文件系统根目录。在使用前，它会被解析为真实路径（会跟随符号链接），因此会作为 mise 创建的应用程序链接的固定包含边界。空值会被忽略，并回退到 `/Applications`。设置覆盖项后，目标为默认 `/Applications` 的 cask（大多数 cask 都是如此）会被重新定位到覆盖目录，同时保留 cask 请求的任何子目录；cask 固定在 `$HOMEBREW_PREFIX/Applications` 下的目标会留在 Homebrew 前缀中，绝不会被重新定位。这与 Homebrew 自身的 `--appdir` 安装选项一致。
+要接管已安装在 cask 目标位置的应用程序，请使用带有 `adopt = true` 的表格形式：
+
+```toml
+[bootstrap.packages]
+"brew-cask:textmate" = { version = "latest", adopt = true }
+```
+
+要为所有已配置的 cask 启用接管，请设置 Homebrew bootstrap 默认值。单个 cask 可以使用 `adopt = false` 选择退出：
+
+```toml
+[bootstrap.brew]
+adopt = true
+
+[bootstrap.packages]
+"brew-cask:textmate" = "latest"
+"brew-cask:replace-me" = { adopt = false }
+```
+
+与 Homebrew 的 `brew install --cask --adopt` 一样，mise 会下载并验证当前 cask 制品，只有在其内容完全一致时才会接管现有应用程序。已有的不同应用程序会保持不变，并且安装会失败，但声明了 `auto_updates: true` 的 cask 除外：与 Homebrew 一致，这些 cask 会直接接管已有应用程序，因为它可能已经自行更新。被接管的应用程序会由 mise 收据进行跟踪，但不会在 Caskroom 中保留重复的应用程序包。
+
+在 Homebrew 元数据中声明 `auto_updates: true` 的 cask 会以当前版本安装，之后交由其自行更新。mise 不提供 `auto_updates` 覆盖项：cask 定义仍然具有决定权。这些自行更新的应用程序也会由收据跟踪，但不会保留重复的 Caskroom 应用程序包，普通的 mise 升级会跳过它们。
+
+`mise bootstrap status` 会将这些条目标记为 `installed (auto-updates)`。
+`Current` 列是 cask 收据中记录的版本；实际应用程序可能已经自行更新到不同版本。JSON 状态会保留稳定的 `"state": "installed"` 值，并添加 `"auto_updates": true`。
+
+在 Linux 上，初始的 cask 支持仅限于不带生命周期钩子、不带结构化 `preflight_steps` 或 `postflight_steps` 的纯字体 cask——这些概念来自 Homebrew 的 cask DSL，详见 [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)。字体会安装到 `$XDG_DATA_HOME/fonts`，默认值为 `~/.local/share/fonts`：
 
 ```toml
 [bootstrap.packages]
@@ -72,7 +106,8 @@ Cask 使用 `brew-cask:` 管理器。mise 会直接从 Homebrew cask API（或 t
 其他 Linux cask 会被报告为不可用，并在其来自
 `[bootstrap.packages]` 时跳过，从而允许 macOS 和 Linux 共享软件包列表。像 `mise bootstrap packages apply brew-cask:firefox` 这样的显式请求仍会失败，并显示明确的平台不支持错误。你也可以使用 `{ os = "macos" }` 显式标记 macOS cask。随着 mise 为更多 cask 制品类型获得可移植实现，这一边界将逐步扩展。
 
-`brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制文件和生成命令包装器 cask（`binary` 和 `command_wrapper` 制品）、简单的 macOS 安装程序包（`pkg` 制品），以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。软件包安装程序会通过 mise 常规的系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而卡住。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写入 Caskroom 之外后验证安装状态。`zap` 的 `pkgutil` ID 会被视为清理元数据，而不是安装收据。对于包含生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持结构化的 `preflight_steps` 和 `postflight_steps`，用于针对 `staged_path` 执行 `move`/`remove` 操作；支持使用 Homebrew 序列化的命令基、参数、环境、守卫条件和 sudo 设置执行 `run` 操作；以及支持执行 `terminate_process` 操作，包括与 Homebrew 兼容的名称/完整匹配、重试、提示和失败策略。需要自定义安装程序选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会失败并显示明确的不支持制品错误，而不会委托给 Homebrew。
+`brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制和生成的命令包装器 cask（`binary` 和 `command_wrapper` 制品）、通用前缀制品（`artifact`）、简单的 macOS 安装程序包（`pkg` 制品）、基于脚本的 cask 安装程序，以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。安装程序会通过 mise 的常规系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而挂起。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写入 Caskroom 之外后验证安装状态。`zap` 的 `pkgutil` ID 会被视为清理元数据，而不是安装收据。对于带有生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持针对 `staged_path` 执行 `move`/`remove` 操作的结构化 `preflight_steps` 和 `postflight_steps`，支持使用 Homebrew 序列化命令基础、参数、环境、守卫和 sudo 设置的 `run` 操作，以及具有 Homebrew 兼容的名称／完整匹配、重试、通知和失败策略的 `terminate_process` 操作。结构化的 `copy` 和 `symlink` 步骤支持 Homebrew 路径基础、模板、守卫、源 glob、替换和 sudo 行为。生命周期步骤创建的外部路径会记录在 mise 收据中，如果安装事务失败，会恢复这些路径。Cask formula 和 cask 依赖会优先安装，声明的 cask 冲突会在修改前导致失败。
+需要自定义安装程序选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会显示明确的不支持制品错误并失败，而不是委托给 Homebrew。
 
 直接执行的 cask 安装仍由 mise 管理。其完成状态会记录在 `.mise-cask.toml` 中；mise 不会生成 Homebrew 私有的 `.metadata` 收据。如果某个 cask 已存在 Homebrew 元数据，mise 会保留这些元数据，并在进行修改前失败，而不是接管 Homebrew 的生命周期状态。状态检查使用已记录的安装事实，而不是根据更新后的 cask 定义重新构建这些事实；缺失或未知的收据以及待处理的事务会被报告为不健康状态，以便下一次应用操作能够协调它们。
 
@@ -135,7 +170,7 @@ Prune 会移除活动 keg、其 `opt` 和已链接 keg 记录，以及指向该 
 [`brew bundle cleanup`](https://docs.brew.sh/Manpage)。它不是上游的
 `brew prune`，后者已被 Homebrew 移除，转而采用 cleanup 命令。
 
-`mise bootstrap packages prune --manager brew-cask` 会将相同的合并配置模型应用于直接的 cask 构件，同时有意采用更窄的所有权边界。只有当 cask 的安装时 `.mise-cask.toml` 收据明确将其标记为可安全清理，并且每个记录的目标仍与 mise 安装后记录的确切内容指纹一致时，才会移除该 cask。该命令会移除这些目标及该 cask 的 Caskroom 条目；`--dry-run` 可预览计划，`--yes` 可跳过确认。
+`mise bootstrap packages prune --manager brew-cask` 会将相同的合并配置模型应用于直接 cask 制品，但其所有权边界有意更加狭窄。只有当 cask 的安装时 `.mise-cask.toml` 收据明确标记其可安全清理，并且每个记录的目标仍具有 mise 在安装后记录的完全一致内容指纹时，才会移除该 cask。该命令会移除这些目标及 cask 的 Caskroom 条目；`--dry-run` 可预览计划，`--yes` 可跳过确认。被接管的应用程序和自行更新的应用程序会在没有重复 Caskroom 包的情况下进行跟踪，因此 mise 无法证明目标位置后来存在的应用程序包仍然是其所拥有的那个。这些仅存在元数据的应用程序因此永远不会被 prune 移除。
 
 在其收据包含清理元数据之前安装的 cask 会被跳过，直到后续升级或重新安装刷新该收据。带有 pkg 或命令包装器构件、安装或卸载生命周期操作、待处理事务、Homebrew `.metadata`、已更改目标，或与其他 mise cask 共享目标的 cask，也会被跳过并说明原因。Prune 从不运行 `zap` 元数据，也不会根据当前的 Homebrew API 重建历史卸载行为。
 

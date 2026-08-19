@@ -13,7 +13,26 @@
 公式、dotfile 仓库、shell rc 文件、编辑器配置、macOS
 偏好设置、用户服务，以及一次性机器设置。
 
-## 它的运行方式
+## 组合配置根
+
+`[bootstrap].config_roots` 会将独立配置根中的声明式资源组合到当前 bootstrap 操作中：
+
+```toml
+[bootstrap]
+config_roots = ["bundles/*"]
+```
+
+条目相对于声明它的配置根，并且可以使用单层级的 `*`
+glob。每个匹配的目录都会使用正常的活动配置环境加载。相对资源源和模板 `config_root` 值仍然相对于声明它们的配置。由选定根声明的变量可供该根的 dotfile 模板使用，但不会泄漏到同级根。
+
+组合内容包括 `[dotfiles]`、`[bootstrap.files]`、
+`[bootstrap.directories]`、`[bootstrap.services]` 和 `[bootstrap.compose]`。
+等效声明会被去重。对于相同的 dotfile 目标、编辑项
+`(path, id)`、托管文件、托管目录、服务或 Compose 项目，不同的声明会报错，并标识两个声明配置。独立根不会因其在 `config_roots` 中的顺序而获得优先级。
+
+其他配置（例如工具、任务、软件包、钩子和仓库）不会从这些根中收集。如果这些资源需要聚合行为，请使用现有的显式工作流。
+
+## 执行方式
 
 `mise bootstrap` 按以下顺序执行这些步骤：
 
@@ -329,4 +348,4 @@ dotfiles.root = "~/.dotfiles"
 "~/.config/mise/config.toml" = "~/src/dotfiles/mise/config.toml"
 ```
 
-在第一次应用之前，仓库/源必须已存在。对于首次运行期间所需的源，请使用真实的仓库路径；`~/.dotfiles` 在 mise 创建该符号链接之前并不存在。替换当前生效的全局配置会影响后续的 mise 调用，因此请谨慎使用此模式。
+在第一次应用之前，仓库／源必须已存在。对于首次运行期间所需的源，请使用真实的仓库路径；`~/.dotfiles` 在 mise 创建该符号链接之前并不存在。替换当前生效的全局配置会影响后续的 mise 调用，因此请谨慎使用此模式。

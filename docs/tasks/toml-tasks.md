@@ -54,7 +54,7 @@ description = '发布一个新版本'
 file = 'scripts/release.sh' # 执行外部脚本
 ```
 
-你可以使用[环境变量](/environments/)或[`vars`](/tasks/task-configuration.html#vars)来定义通用参数：
+你可以使用[环境变量](/environments/)或 [`vars`](/configuration/vars) 来定义通用参数：
 
 ```mise-toml [mise.toml]
 [env]
@@ -87,7 +87,7 @@ run = "echo pre-commit"
 
 ## 常用选项
 
-完整列表请参见 [任务配置](/tasks/task-configuration)。
+完整列表请参见[任务配置](/tasks/task-configuration)。
 
 ### 运行命令
 
@@ -192,7 +192,7 @@ outputs = ['target/debug/mycli']
 ```
 
 如果与 [`mise watch`](/cli/watch.html) 一起使用，你也可以只使用 `sources` 来在源文件变化时运行任务。
-你可以在任务的 [模板](../templates.md) 中使用 [`task_source_files()`](../templates.md#task-source-files) 函数来获取其 `sources` 的解析路径。
+你可以在任务的[模板](../templates.md)中使用 [`task_source_files()`](../templates.md#task-source-files) 函数来获取其 `sources` 的解析路径。
 
 ### 确认
 
@@ -236,9 +236,7 @@ cargo clippy
 '''
 ```
 
-Shebang 任务会作为脚本文件执行。未在
-[`usage` 规范](/tasks/task-arguments#usage-field)中定义的额外参数会作为普通脚本参数传递，
-例如 Bash 中的 `$1` 和 `$@`：
+Shebang 任务会作为脚本文件执行。未在 [`usage` 规范](/tasks/task-arguments#usage-field)中定义的额外参数会作为普通脚本参数传递，例如 Bash 中的 `$1` 和 `$@`：
 
 ```mise-toml
 [tasks.greet]
@@ -439,7 +437,7 @@ URL 格式必须遵循以下模式 `git::<protocol>://<url>//<path>?<ref>`
 ## 参数
 
 ::: tip
-有关任务参数的完整信息，请参阅专门的 [任务参数](/tasks/task-arguments) 页面。
+有关任务参数的完整信息，请参阅专门的[任务参数](/tasks/task-arguments)页面。
 :::
 
 默认情况下，参数会传递给 `run` 数组中的最后一个脚本。因此，如果一个任务定义为：
@@ -468,9 +466,9 @@ run = 'cargo test ${usage_file?} --format ${usage_format?}'
 
 在 usage 字段中定义的参数可作为以 `usage_` 为前缀的环境变量使用。
 
-完整文档请参阅 [任务参数](/tasks/task-arguments#usage-field) 页面。
+完整文档请参阅[任务参数](/tasks/task-arguments#usage-field)页面。
 
-### Tera 模板函数 <Badge type="danger" text="deprecated" />
+### Tera 模板函数 <Badge type="danger" text="已弃用" />
 
 ::: danger 已弃用 - 将于 2027.5.0 移除
 在运行脚本中使用 Tera 模板函数（`arg()`、`option()`、`flag()`）**已弃用**，并且将于 **mise 2027.5.0** 中**移除**。版本 >= 2026.5.0 将显示弃用警告。
@@ -481,7 +479,7 @@ run = 'cargo test ${usage_file?} --format ${usage_format?}'
 - Shell 转义规则复杂且不可预测
 - 在 TOML/文件任务之间无法稳定一致地工作
 
-**请迁移到改用 `usage` 字段。** 参见 [迁移指南](/tasks/task-arguments#tera-templates)。
+**请迁移到改用 `usage` 字段。** 参见[迁移指南](/tasks/task-arguments#tera-templates)。
 :::
 
 <details>
@@ -502,8 +500,7 @@ run = [
 
 #### 位置参数
 
-这些参数在脚本中使用 <span v-pre>`{{arg()}}`</span> 定义。它们用于顺序很重要的
-位置参数。
+这些参数在脚本中使用 <span v-pre>`{{arg()}}`</span> 定义。它们用于顺序很重要的位置参数。
 
 示例：
 
@@ -514,16 +511,14 @@ run = 'cargo test {{arg(name="file")}}'
 # 运行：cargo test my-test-file
 ```
 
-- `i`：参数的索引。可用于指定参数顺序。默认值为
-  它们在脚本中的定义顺序。
+- `i`：参数的索引。可用于指定参数顺序。默认值为它们在脚本中的定义顺序。
 - `name`：参数的名称。用于帮助/错误消息。
 - `var`：如果为 `true`，可以传递多个参数。
 - `default`：如果未提供该参数，则使用默认值。
 
 #### 选项
 
-这些参数在脚本中使用 <span v-pre>`{{option()}}`</span> 定义。它们用于有名称的
-参数，顺序不重要。
+这些参数在脚本中使用 <span v-pre>`{{option()}}`</span> 定义。它们用于有名称的参数，顺序不重要。
 
 示例：
 

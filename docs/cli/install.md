@@ -51,6 +51,13 @@
 
 这对脚本检查是否需要安装工具很有用。
 
+### `--include-task-tools`
+
+还会安装当前作用域内的任务所需的工具
+
+这会准备任务工具，但不会运行任务命令或依赖项。  
+与 `--monorepo` 结合使用，可包含每个已配置根目录中的任务。
+
 ### `--minimum-release-age <MINIMUM_RELEASE_AGE>`
 
 仅安装在此日期之前发布或早于此时长的版本
@@ -86,8 +93,9 @@
 示例：
 
 ```
-mise install node@20.0.0  # 安装指定的 node 版本
-mise install node@20      # 安装模糊匹配的 node 版本
-mise install node         # 安装 mise.toml 中指定的版本
-mise install              # 安装 mise.toml 中指定的所有内容
+mise install node@20.0.0  # install specific node version
+mise install node@20      # install fuzzy node version
+mise install node         # install version specified in mise.toml
+mise install              # installs everything specified in mise.toml
+mise install --include-task-tools # also install tools required by tasks
 ```

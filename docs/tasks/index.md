@@ -50,10 +50,12 @@ cargo build
 
 以下环境变量会传递给任务：
 
-- `MISE_ORIGINAL_CWD`：运行任务时的原始工作目录。
+- `MISE_ORIGINAL_CWD`：运行任务时所在的原始工作目录。
 - `MISE_CONFIG_ROOT`：包含定义任务的 `mise.toml` 文件的目录；如果配置路径类似于 `~/src/myproj/.config/mise.toml`，则它将是 `~/src/myproj`。
-- `MISE_PROJECT_ROOT`：定义该任务的项目根目录。对于 monorepo 子项目任务来说，这是子项目的目录，并且无论从哪个目录调用任务，它都保持不变。
-- `MISE_MONOREPO_ROOT`：monorepo 的根目录（包含 `monorepo_root = true` 配置的目录）。仅在 monorepo 内部设置。
+- `MISE_PROJECT_ROOT`：定义任务的项目根目录。对于 monorepo 子项目任务，这是子项目的目录，并且无论从哪个目录调用任务都保持不变。
+- `MISE_MONOREPO_ROOT`：monorepo 的根目录（包含 `monorepo_root = true` 配置的目录）。仅在 monorepo 中设置。
 - `MISE_TASK_NAME`：正在运行的任务名称。
+- `MISE_TASK_COLOR`：用于开始任务前缀颜色和强调效果的 ANSI 序列。当禁用颜色或选定的输出模式不显示任务前缀时，该值为空字符串。请在文本后添加 ANSI 重置序列，例如
+  `printf '%smessage\033[0m\n' "$MISE_TASK_COLOR"`。替换输出在使用文本回退时也会提供该值；它描述的是任务标签样式，并不意味着每一行都会自动添加前缀。
 - `MISE_TASK_DIR`：包含任务脚本的目录。
 - `MISE_TASK_FILE`：任务脚本的完整路径。

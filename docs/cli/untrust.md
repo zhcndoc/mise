@@ -5,7 +5,7 @@
 - **作用**：修改状态
 - **源代码**：[`src/cli/untrust.rs`](https://github.com/jdx/mise/blob/main/src/cli/untrust.rs)
 
-取消对某个配置的信任，之后将来会提示确认。
+移除配置的显式信任
 
 ## 参数
 

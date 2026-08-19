@@ -56,17 +56,15 @@ jq = "1.8.1"
 
 `mise oci build` 会生成大致如下的分层：
 
-1. **基础镜像层**（例如 `debian:bookworm-slim`）——直接从
-   registry 原样复制，因此会触发 registry 去重。
-2. **mise 二进制文件** 位于 `/usr/local/bin/mise`（可通过 `--no-mise` 跳过）。
-3. **每个工具一个层**，每层都以
-   `/mise/installs/<plugin>/<version>/` 为根目录。并标注
-   `dev.mise.tool.short` 和 `dev.mise.tool.version`。
-4. **已配置的 apt `[bootstrap.packages]`**，如果有的话，会安装到基础
-   rootfs 中，并作为一个包层输出。
-5. **已配置的 `[dotfiles]`**，如果有的话，会被烘焙为镜像文件。
-6. **生成的 `/etc/mise/config.toml`**，其中引用 `/mise` 作为数据
-   目录。
+1. **基础镜像层**（例如 `debian:bookworm-slim`）——从 registry 原样复制，因此 registry
+   去重机制可以生效。
+2. `/usr/local/bin/mise` 中的 **mise 二进制文件**（使用 `--no-mise` 跳过）。
+3. **配置的 apt 或 apk `[bootstrap.packages]`**（如果有），安装到基础 rootfs 中，并作为一个软件包层输出。
+4. **每个工具一个层**，每个层的根目录为
+   `/mise/installs/<plugin>/<version>/`。使用
+   `dev.mise.tool.short` 和 `dev.mise.tool.version` 注解。
+5. **配置的 `[dotfiles]`**（如果有），作为镜像文件写入。
+6. **生成的 `/etc/mise/config.toml`**，将 `/mise` 作为数据目录。
 
 将 `node` 从 `20.10` 升级到 `20.11` 只会使 node 层失效。
 Python、jq、mise、基础层以及生成的配置都会从
@@ -283,10 +281,14 @@ CLI 复制项最后输出。
 "~/.config/app/config.toml" = { source = "config.toml", mode = "template" }
 ```
 
-对于包，OCI 构建目前支持基于 Debian/Ubuntu
-基础镜像的 `apt:` 条目。mise 会将基础镜像解包到临时 rootfs 中，调用宿主机的
-`apt-get` 安装到该 rootfs，然后把文件系统变更作为一个 OCI 层输出，并标注
-`dev.mise.system.packages=apt`。目前其他系统包管理器在 OCI 构建中会被拒绝。
+对于软件包，OCI 构建支持 Debian/Ubuntu 基础镜像中的 `apt:` 条目，以及 Alpine/Wolfi 基础镜像中的
+`apk:` 条目。mise 会将基础镜像解包到临时 rootfs 中，调用匹配的主机软件包管理器将软件包安装到该 rootfs，
+然后将文件系统变更作为一个 OCI 层输出，并使用
+`dev.mise.system.packages=apt` 或 `dev.mise.system.packages=apk` 进行注解。一次构建只能使用与其基础镜像匹配的软件包管理器；混用 `apt:` 和 `apk:` 条目会被拒绝。
+
+对于 apt 层，主机必须提供 `apt-get` 和 `dpkg`；对于 apk 层，主机必须提供 `apk`。
+apk 软件包脚本会在 chroot 中执行，因此 apk 层目前要求在以 root 身份运行 mise 的 Linux 主机上构建。
+`--no-cache` 会传递给 apk，并且会在创建层之前删除临时软件包管理器缓存和日志文件。
 
 对于镜像构建，`symlink` 和 `symlink-each` 条目会作为文件内容复制。
 宿主机上的符号链接通常会指回检出路径，在容器内会失效，因此镜像会改为接收解析后的内容。

@@ -8,6 +8,7 @@
 [bootstrap.remote]
 source = "."
 exclude = [".env.local", "artifacts"]
+copy_link = ["modules/common", "playbooks/shared"]
 
 [bootstrap.remote.hosts.cache]
 host = "cache.example.com"
@@ -59,7 +60,11 @@ mise bootstrap remote --host ubuntu@cache.example.com \
 
 默认情况下，源归档会排除 `.git`、`target` 和 `node_modules`。对于生成的文件和本地机密信息，请添加可重复的 `exclude` 配置项或 `--exclude` 标志。仅在调试时使用 `--keep-staging`；它会打印保留的路径，而不是删除该路径。
 
-## 配置 mise 本身
+符号链接默认会以链接形式归档。使用可重复的、相对于源目录的 `copy_link` 条目或 `--copy-link <PATH>` 标志，可以仅将指定链接替换为暂存项目中的目标。选中的目录链接会被复制为真实目录，而其目标内部嵌套的链接仍会保留为链接。这是共享选定模块或 playbook 的更安全选择，不会更改深层依赖树中的无关链接。主机级别的 `copy_link` 条目会追加到顶层列表中，命令行条目则会追加到两者中。
+
+设置 `copy_links = true` 或传递 `--copy-links`，可以递归取消遇到的所有符号链接的引用。这与 `rsync --copy-links` 等工具的行为一致，但可能会意外展开供应商目录、生成目录或依赖树深处的小型链接，并且可能复制源目录之外的内容。启用此全局模式时，会忽略显式的 `copy_link` 选择。
+
+## Provisioning mise itself
 
 默认情况下，mise 会检测远程操作系统、架构和 Linux libc 家族。当当前本地可执行文件与目标兼容时，mise 会上传该文件。这确保远程进程支持与其编排器相同的引导配置，而不会在不知不觉中使用较旧的已安装版本。
 

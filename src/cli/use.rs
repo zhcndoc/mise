@@ -147,11 +147,12 @@ impl Use {
             .with_scope(scope)
             .build(&config)
             .await?;
-        let cf = self.get_config_file().await?;
+        let mut cf = self.get_config_file().await?;
         let pin = self.pin || !self.fuzzy && (Settings::get().pin || Settings::get().asdf_compat);
         let mut resolve_options = ResolveOptions {
             latest_versions: false,
             use_locked_version: true,
+            resolve_rolling_channels: false,
             prefer_exact_version: pin,
             before_date: self.get_before_date()?,
             before_date_from_default: false,
@@ -191,11 +192,24 @@ impl Use {
                     jobs: self.jobs,
                     raw: self.raw,
                     dry_run: self.is_dry_run(),
+                    global_hooks_only: self.global,
                     resolve_options,
                     ..Default::default()
                 },
             )
             .await?;
+
+        // Installation can take long enough for another `mise use` process to update this file.
+        // Serialize only the read-modify-write phase, then re-read under the lock so we apply our
+        // changes to the latest contents instead of overwriting them with the stale snapshot used
+        // during resolution and installation.
+        let mut config_lock = if self.is_dry_run() {
+            None
+        } else {
+            let (lock, latest_cf) = config_file::lock_and_parse_or_init(cf.get_path()).await?;
+            cf = latest_cf;
+            Some(lock)
+        };
 
         for (ba, tvl) in &versions.iter().chunk_by(|tv| tv.ba()) {
             let versions: Vec<_> = tvl
@@ -232,6 +246,7 @@ impl Use {
 
         if !self.is_dry_run() {
             cf.save()?;
+            drop(config_lock.take());
             for tv in &mut versions {
                 // update the source so the lockfile is updated correctly
                 tv.request.set_source(cf.source());

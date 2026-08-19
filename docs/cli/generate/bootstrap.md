@@ -31,10 +31,21 @@
 
 **默认：** `.mise`
 
+### `--windows`
+
+同时写入一个 Windows 启动器，即 `<WRITE>.cmd`
+
+Windows 无法执行 `#!/usr/bin/env bash` 脚本，因此在 Windows 上克隆项目的贡献者如果没有此文件就没有可运行的内容。
+
+在每台主机上都会生成，而不仅仅是在 Windows 上生成：该文件会被提交，并且在 Windows 上运行它的人并不是生成它的人。需要使用 `--write`，因为 stdout 无法承载两个文件。
+
 示例：
 
 ```
-mise generate bootstrap >./bin/mise
-chmod +x ./bin/mise
-./bin/mise install – 如果尚未安装，则自动将 mise 下载到 .mise
+$ mise generate bootstrap --write ./bin/mise
+$ ./bin/mise install                                    # downloads mise to .mise if not already installed
+
+# add a launcher for contributors who clone the project on Windows
+$ mise generate bootstrap --write ./bin/mise --windows  # also writes bin/mise.cmd
+$ .\bin\mise.cmd install
 ```

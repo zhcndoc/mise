@@ -18,6 +18,7 @@
 - `bash`
 - `fish`
 - `powershell`
+- `pwsh`
 - `zsh`
 
 ## 标志

@@ -70,6 +70,15 @@ mise generate task-stubs --mise-bin ./bin/mise
 生成的任务存根会像小型项目命令一样运行，而 `bin/mise`
 会下载并运行该项目固定版本的 mise 二进制文件。
 
+如果贡献者在 Windows 上工作，请添加 `--windows`。Windows 无法执行 shebang 脚本，因此
+`mise generate bootstrap --write ./bin/mise --windows` 会在其旁边写入 `bin/mise.cmd`，他们可以
+运行 `.\bin\mise.cmd`。启动器会下载该版本的独立 `mise.exe`，并将其与脚本生成时嵌入的校验和进行比对，因此除了 Windows
+本身已提供的内容外，不需要其他依赖。
+
+出于同样的原因，每个任务存根旁边都会生成一个 `.cmd` 启动器，因此上面示例的 Windows 形式是
+`.\bin\test.cmd`。这两部分会在每个平台上生成，因此在 Linux 或 macOS 上提交的 `bin/`
+目录对于在 Windows 上克隆仓库的用户仍然有效。
+
 ## 机器引导
 
 除了 `[tools]` 之外，mise 还可以声明项目或工作站所需的其余机器设置，并且 [`mise bootstrap`](/cli/bootstrap.html)
@@ -237,9 +246,9 @@ mise watch --restart dev
 
 ## 共享任务目录
 
-对于拥有大量任务的项目，
-[`task_config.includes`](/tasks/task-configuration.html#task-config-includes)
-可以从额外的目录、`tasks.toml` 文件或远程 git 仓库加载任务定义：
+对于包含大量任务的项目，
+[`task_config.includes`](/tasks/task-configuration.html#task_config.includes)
+可以从其他目录、`tasks.toml` 文件或远程 git 仓库中加载任务定义：
 
 ```toml
 [task_config]

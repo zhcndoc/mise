@@ -185,9 +185,6 @@ mise 原生验证 Cosign 签名，无需安装 `cosign` CLI 工具。
 ```bash
 # 启用/禁用 Cosign 验证（默认：true）
 export MISE_AQUA_COSIGN=true
-
-# 向验证过程传递额外参数
-export MISE_AQUA_COSIGN_EXTRA_ARGS="--key /path/to/key.pub"
 ```
 
 ### SLSA 溯源验证

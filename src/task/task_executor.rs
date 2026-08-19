@@ -3,7 +3,7 @@ use crate::cmd::CmdLineRunner;
 use crate::config::{Config, Settings, env_directive::EnvDirective};
 use crate::duration;
 use crate::env_diff::EnvDiff;
-use crate::file::{can_execute_directly, display_path, replace_path};
+use crate::file::{can_execute_directly, display_path, replace_path, strip_utf8_bom};
 use crate::sandbox::SandboxConfig;
 use crate::task::TaskArtifactCache;
 use crate::task::task_cache::{
@@ -29,6 +29,8 @@ use crate::ui::{style, time};
 use duct::IntoExecutablePath;
 use eyre::{Context, Report, Result, ensure, eyre};
 use indexmap::IndexMap;
+#[cfg(windows)]
+use indoc::formatdoc;
 use itertools::Itertools;
 #[cfg(unix)]
 use nix::errno::Errno;
@@ -173,6 +175,41 @@ enum InlineArgsStyle {
     PosixCommandText,
     CmdCommandText,
     SeparateArgv,
+}
+
+/// Whether the shell mise is about to spawn cannot use `dir` as its working directory.
+///
+/// cmd.exe refuses a UNC working directory. It says so on stderr, starts in `C:\Windows` instead,
+/// and carries on — so the task runs somewhere the user never asked for while mise reports success.
+/// Reuses [`crate::path::is_cmd_shell_program`] and [`crate::file::is_unc_path`]; both already know
+/// the shapes involved, including `cmd`/`cmd.exe`/`CMD.EXE` and the verbatim `\\?\UNC\` form.
+#[cfg(windows)]
+fn cmd_shell_cannot_use_dir(program: &str, dir: &Path) -> bool {
+    crate::path::is_cmd_shell_program(Path::new(program)) && crate::file::is_unc_path(dir)
+}
+
+/// What to say when it cannot. Names both ways out, because neither setting is guessable.
+#[cfg(windows)]
+fn unc_working_dir_error(dir: &Path) -> String {
+    formatdoc! {r#"
+        cmd.exe cannot use a UNC path as a working directory
+
+          working directory: {dir}
+
+        It would start in C:\Windows instead and run the command there, so mise stops rather
+        than running it somewhere you did not ask for.
+
+        Use a shell that accepts UNC paths, either for this task:
+
+          shell = "pwsh -c"
+
+        or for every task:
+
+          mise settings windows_default_inline_shell_args="pwsh -c"
+
+        A file task takes its shell from windows_default_file_shell_args instead."#,
+        dir = display_path(dir),
+    }
 }
 
 fn inline_args_style(program: &str, shell_args: &[String]) -> InlineArgsStyle {
@@ -1308,6 +1345,16 @@ impl TaskExecutor {
             }
             let (program, args, cmd_verbatim) =
                 self.get_cmd_program_and_args(command, task, &[])?;
+            // The same refusal as in `exec_program`, and it matters more here: these commands feed
+            // the cache key, so running them from C:\Windows would hash the wrong directory's
+            // answer. Measured on 2026.8.6 with the project on a UNC share — a `command_inputs`
+            // entry reading a file that exists in the project fails, while the same config on a
+            // local path succeeds. `--dry-run` does not reach here (see the cache branch in
+            // `run_task`), so there is nothing to exempt.
+            #[cfg(windows)]
+            if cmd_shell_cannot_use_dir(&program, &root) {
+                eyre::bail!("{}", unc_working_dir_error(&root));
+            }
             #[cfg(not(windows))]
             let _ = cmd_verbatim;
             let program = program.to_executable();
@@ -1423,6 +1470,12 @@ impl TaskExecutor {
         } = ctx;
         #[cfg(not(windows))]
         let _ = cmd_verbatim;
+        // `program` is shadowed several times below — `to_executable`, POSIX-shell resolution,
+        // audit wrapping — so keep the shell mise was asked to spawn for the working-directory
+        // check further down. `cmd_verbatim` is not a substitute: it is only set for inline
+        // scripts, and a file task can reach cmd.exe through windows_default_file_shell_args.
+        #[cfg(windows)]
+        let requested_program = program.to_string();
         let config = Config::get().await?;
         let program = program.to_executable();
         let redactions = config.redactions();
@@ -1671,6 +1724,12 @@ impl TaskExecutor {
                     display_path(&dir)
                 ),
             );
+        }
+        // Not under `--dry-run`: nothing is spawned there, so a preview of what *would* run has no
+        // reason to fail on where it would have run.
+        #[cfg(windows)]
+        if !self.dry_run && cmd_shell_cannot_use_dir(&requested_program, &dir) {
+            eyre::bail!("{}", unc_working_dir_error(&dir));
         }
         cmd = cmd.current_dir(dir);
         if self.dry_run {
@@ -2020,6 +2079,13 @@ impl TaskExecutor {
             "MISE_TASK_NAME",
             task.name.clone(),
         );
+        let task_color = self.output_handler.task_prefix_color(task);
+        Self::insert_env_excluded_from_nested_mise_diff(
+            &mut env,
+            &mut nested_mise_diff_exclude_keys,
+            "MISE_TASK_COLOR",
+            task_color,
+        );
         let task_file = task
             .file_path(config)
             .await?
@@ -2288,13 +2354,17 @@ fn msys_drive_prefix_for(program: &Path, env: &BTreeMap<String, String>) -> Stri
 /// Read the shebang from a file and parse it into a shell command.
 /// e.g. `#!/usr/bin/env bash` → `["bash"]`
 /// e.g. `#!/bin/bash` → `["/bin/bash"]`
+///
+/// A byte-order mark in front of the `#!` is skipped, the same way `crate::file::has_shebang`
+/// skips one when deciding the file is a task at all. Without that, a marked script fell through
+/// to `default_file_shell` -- `cmd /c` on Windows -- not the interpreter its author named.
 fn shell_from_shebang(path: &Path) -> Option<Vec<String>> {
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(path).ok()?;
     let mut reader = BufReader::new(f);
     let mut first_line = String::new();
     reader.read_line(&mut first_line).ok()?;
-    let shebang = first_line.strip_prefix("#!")?;
+    let shebang = strip_utf8_bom(&first_line).strip_prefix("#!")?;
     let shebang = shebang.strip_prefix("/usr/bin/env -S").unwrap_or(shebang);
     let shebang = shebang.strip_prefix("/usr/bin/env").unwrap_or(shebang);
     let mut parts = shebang.split_whitespace();
@@ -2333,6 +2403,29 @@ mod tests {
         env
     }
 
+    /// Not gated on Windows: the mark reaches a shared repository from any platform, and the
+    /// fallback it caused -- `default_file_shell` instead of the named interpreter -- is wrong
+    /// everywhere, just most visible where that default is `cmd /c`.
+    #[test]
+    fn shell_from_shebang_looks_past_a_utf8_bom() {
+        let tmp = tempfile::tempdir().unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        const SCRIPT: &[u8] = b"#!/usr/bin/env bash\necho hi\n";
+        let mut marked = b"\xef\xbb\xbf".to_vec();
+        marked.extend_from_slice(SCRIPT);
+
+        let expected = Some(vec!["bash".to_string()]);
+        assert_eq!(shell_from_shebang(&write("bom", &marked)), expected);
+        // Control: the unmarked twin resolves the same way, so the mark was the only difference.
+        assert_eq!(shell_from_shebang(&write("plain", SCRIPT)), expected);
+        // A file with no shebang still yields nothing, so callers keep falling back as before.
+        assert_eq!(shell_from_shebang(&write("none", b"echo hi\n")), None);
+    }
+
     #[test]
     #[cfg(windows)]
     fn test_shell_from_extension_has_a_mapping_for_every_interpreter_only_extension() {
@@ -2343,14 +2436,28 @@ mod tests {
         // the machine's file association points at, where `wscript` writes to message boxes
         // instead of the pipes mise reads.
         //
-        // Iterating the list is the point. `shell_from_extension` cannot match against it
-        // directly because that function is not cfg(windows)-gated while the list is, so
-        // adding an entry there without a mapping here would otherwise go unnoticed.
-        for ext in crate::file::INTERPRETER_ONLY_EXTENSIONS {
+        // Derived from the setting rather than from a hand-kept list of interpreter-only
+        // extensions, so that adding one to the shipped default without a mapping here is caught
+        // too. `shell_from_extension` cannot do the check itself: it is not cfg(windows)-gated
+        // while `os_can_launch_extension` is.
+        let needs_interpreter: Vec<String> = Settings::get()
+            .windows_executable_extensions
+            .iter()
+            .filter(|ext| !crate::file::os_can_launch_extension(ext))
+            .cloned()
+            .collect();
+        // Guards the loop below against passing vacuously if the two lists ever stop overlapping.
+        assert!(
+            !needs_interpreter.is_empty(),
+            "expected the default windows_executable_extensions to include extensions the OS \
+             cannot launch (ps1, vbs)"
+        );
+        for ext in needs_interpreter {
             let path = PathBuf::from(format!("task.{ext}"));
             assert!(
                 shell_from_extension(&path).is_some(),
-                "{ext} is rejected as interpreter-only but has no interpreter mapping"
+                "{ext} is executable per settings but the OS cannot launch it, and it has no \
+                 interpreter mapping"
             );
         }
         // The console host specifically, and case-insensitively.
@@ -2651,5 +2758,47 @@ mod tests {
         let env = env_with_path("/usr/bin:/bin");
         let out = maybe_convert_env_for_msys_shell(Path::new("bash"), &env);
         assert_eq!(out.get(&*crate::env::PATH_KEY).unwrap(), "/usr/bin:/bin");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cmd_will_not_take_a_unc_working_directory() {
+        // Measured on 2026.8.6 against \\wsl.localhost\<distro>\...: `cmd /c cd` printed
+        // C:\Windows and the task still reported success, so the spawn has to be refused.
+        assert!(cmd_shell_cannot_use_dir(
+            "cmd.exe",
+            Path::new(r"\\server\share\proj")
+        ));
+        // The verbatim form std hands back from canonicalize names the same directory.
+        assert!(cmd_shell_cannot_use_dir(
+            "cmd.exe",
+            Path::new(r"\\?\UNC\server\share\proj")
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn another_shell_on_the_same_unc_directory_is_left_alone() {
+        // Control: pwsh runs in that directory correctly, so the shell is half of the decision.
+        assert!(!cmd_shell_cannot_use_dir(
+            "pwsh",
+            Path::new(r"\\server\share\proj")
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cmd_on_an_ordinary_directory_is_left_alone() {
+        // Control: the UNC shape is the other half. cmd is fine everywhere else.
+        assert!(!cmd_shell_cannot_use_dir("cmd.exe", Path::new(r"C:\proj")));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_error_names_the_directory_and_a_way_out() {
+        let msg = unc_working_dir_error(Path::new(r"\\server\share\proj"));
+        assert!(msg.contains(r"\\server\share\proj"), "{msg}");
+        assert!(msg.contains("pwsh -c"), "{msg}");
+        assert!(msg.contains("windows_default_inline_shell_args"), "{msg}");
     }
 }

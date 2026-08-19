@@ -29,7 +29,11 @@ mise 可以通过 `mise.toml` 中的
 "brew-cask:font-jetbrains-mono" = { os = ["linux", "macos"] }
 ```
 
-主机软件包与 [`[tools]`](/configuration.html) 有意分开：它们不会按项目固定版本，不会获得 shim，并且由平台的软件包管理器在项目之外进行管理——或者对于 `brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装程序进行管理，这些安装程序不要求系统本身已安装 Homebrew。应将它们用于共享库、构建依赖项和主机 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、`firefox`），而不是项目开发工具——后者应放在 `[tools]` 中。
+`brew-cask` 条目还接受 `adopt = true`，用于采用已安装在 cask 目标位置且与其完全相同的应用。设置 `bootstrap.brew.adopt = true` 可使采用行为成为所有 cask 的默认设置，并可通过单个 cask 的 `adopt = false` 进行覆盖。请参阅
+[brew cask 文档](/bootstrap/packages/brew.html#casks)。
+
+主机软件包与 [`[tools]`](/configuration.html) 有意分开：
+它们不会按项目固定版本，不会获得 shim，并由平台的软件包管理器在项目外部管理——或者对于 `brew` 和 `brew-cask`，由 mise 内置的 Homebrew 安装程序管理，这些安装程序不要求安装 Homebrew 本身。请将它们用于共享库、构建依赖项和主机 GUI 应用（`libssl-dev`、`postgresql`、`ffmpeg`、`firefox`），而不是项目开发工具——后者应放在 `[tools]` 中。
 
 管理器列表可通过[软件包管理器插件](./plugins.md)扩展，这些插件涵盖由主机管理的状态，例如 VS Code 扩展、Helm 插件、krew
 插件和 GitHub CLI 扩展。
@@ -132,19 +136,18 @@ formulae 以 `"brew:<formula>" = "latest"` 的形式写入 `[bootstrap.packages]
 
 `mise doctor` 也会报告已配置的系统包，并在有任何缺失时发出警告。
 
-## Selecting Which Managers to Run
+## 选择要运行的管理器
 
-By default, mise operates on every configured manager available on the current machine. Since availability means the operating system (`apt` only exists on Debian-based systems, while `brew` is available anywhere bottles exist), this generally works without any configuration.
+默认情况下，mise 会操作当前机器上所有已配置且可用的管理器。由于可用性取决于操作系统（`apt` 仅存在于基于 Debian 的系统上，而 `brew` 在存在 bottle 的任何地方都可用），因此通常无需任何配置即可正常工作。
 
-If multiple managers could apply—for example, multiple package managers are installed on a machine, or shared configuration lists managers you don’t want to use here—you can select a subset using [`system_packages.managers`](/configuration/settings.html):
+如果多个管理器都可能适用——例如机器上安装了多个软件包管理器，或共享配置列出了你不想在此处使用的管理器——可以使用 [`system_packages.managers`](/configuration/settings.html) 选择一个子集：
 
 ```toml
 [settings]
 system_packages.managers = ["apt"]
 ```
 
-This can be combined with [platform-specific configuration files](/configuration.html)
-(`mise.macos.toml`, `mise.linux.toml`) when you want to select different managers for different operating systems.
+如果你希望为不同操作系统选择不同的管理器，也可以将其与[平台特定的配置文件](/configuration.html)（`mise.macos.toml`、`mise.linux.toml`）结合使用。
 
 ## sudo
 

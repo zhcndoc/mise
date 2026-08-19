@@ -52,7 +52,10 @@ sops encrypt -i --age "<公钥>" .env.json
 `-i` 会覆盖原文件。加密后的文件可以安全提交到仓库。设置 `SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` 或 `MISE_SOPS_AGE_KEY_FILE=~/.config/mise/age.txt` 可使用 sops 解密/编辑。
 ::::
 
-4. 在配置中引用它：
+Age 密钥文件使用标准的 SOPS/age 格式：每行放置一个身份。
+空行和以 `#` 开头的行会被忽略，解密时会尝试所有身份。
+
+4. 在配置中引用：
 
 ```toml
 [env]

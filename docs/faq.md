@@ -218,26 +218,15 @@ mise upgrade --bump node
 
 ## 我的配置文件被忽略了 / `mise trust` 问题
 
-mise 要求你信任那些不是由你创建的配置文件。安全的配置文件——
-即只包含 `min_version`、带有普通版本字符串（或其数组）的 `[tools]` 条目，以及 `[tasks]`（不含模板和工具选项）——会在未被信任的情况下加载，因为其中没有任何内容会在加载时执行代码：工具安装和任务运行都只会在显式命令下执行，例如 `mise install` 或 `mise run`。其他所有内容（环境变量、hooks、设置、aliases、templates、
-工具选项）都需要信任。常见问题：
+mise 要求你信任不是由你创建的配置文件。安全配置文件——仅包含 `min_version`、值为纯版本字符串或字符串数组的 `[tools]` 条目，以及不包含模板的 `[tasks]`——无需信任即可加载。工具选项表和其他顶层设置需要信任。在普通模式下，`mise run`、裸任务调用（例如 `mise <TASK>`）、`mise install`、`mise exec` 和 `mise watch` 会自动信任当前活动配置，因为它们会明确执行项目定义的行为。其他不安全的配置需要信任。常见问题：
 
-- **意外拒绝了信任**：如果 mise 提示你信任某个文件，而你选择了否，它会被
-  添加到忽略列表。检查你 [mise 状态目录](/directories.html) 中的 `ignored-configs` 目录（默认：`~/.local/state/mise/ignored-configs/`）
-  并移除对应的符号链接，以取消忽略。
-- **符号链接配置**：如果你的配置是符号链接（例如通过 GNU Stow），mise 可能会跟踪
-  符号链接目标路径。尝试让 `mise trust` 指向实际文件路径。
-- **CI**：在检测到的 CI 环境中，mise 会假定配置已被信任，除非启用了偏执模式。
-- **非交互模式**：在检测到的 CI 之外的非交互式 shell 中，例如 IDE 扩展或
-  没有 TTY 的脚本，mise 无法提示你信任配置。直接加载
-  未受信任的 `mise.toml` 的命令可能会因未信任配置错误而失败。发现之前
-  跟踪到的配置的命令则可能会跳过未受信任的条目。你可以先运行 `mise trust`，或者在全局设置中为你信任的配置设置
-  [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)。
-- **全局配置**（`~/.config/mise/config.toml`）应该会自动被信任。如果没有，
-  请显式运行 `mise trust ~/.config/mise/config.toml`。
+- **意外拒绝信任**：如果 mise 提示你信任某个文件而你选择了否，它会将该文件添加到忽略列表中。检查[ mise 状态目录](/directories.html)中的 `ignored-configs` 目录（默认：`~/.local/state/mise/ignored-configs/`），并删除相关符号链接以取消忽略它。
+- **符号链接配置**：如果你的配置是符号链接（例如通过 GNU Stow），mise 可能会跟踪符号链接目标路径。尝试使用指向实际文件路径的 `mise trust`。
+- **CI**：在检测到 CI 时，除非启用了 paranoid 模式，否则 mise 会假定配置已受信任。
+- **非交互模式**：在非交互式 shell 中，例如 IDE 扩展或没有 TTY 的脚本中，mise 无法提示你信任配置。在普通模式的 `mise run`、`mise <TASK>`、`mise install`、`mise exec` 和 `mise watch` 之外，直接加载不受信任的 `mise.toml` 的命令可能会因不受信任配置错误而失败。发现之前已跟踪配置的命令则可能改为跳过不受信任的条目。你可以提前运行 `mise trust`，或者在全局设置中设置 [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)，以指定你信任的配置。
+- **全局配置**（`~/.config/mise/config.toml`）应该会自动受信任。如果没有，请明确运行 `mise trust ~/.config/mise/config.toml`。
 
-运行 `mise doctor`（`mise dr`）查看是否有任何配置文件未被信任——它会将它们列在
-“problems”下。
+运行 `mise doctor`（`mise dr`）可以查看是否有配置文件不受信任——它会在“problems”下列出这些文件。
 
 ## 习惯用法版本文件（`.python-version`、`.node-version` 等）是如何工作的？
 

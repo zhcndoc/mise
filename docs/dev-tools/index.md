@@ -20,8 +20,9 @@ ruby = 'latest'
 它也兼容 asdf 的 `.tool-versions` 文件，以及像 `.node-version` 和
 `.ruby-version` 这样的[惯用版本文件](/configuration#idiomatic-version-files)。更多细节请参见[配置](/configuration)。
 
-在指定工具版本和工具选项时，你也可以引用环境变量，或引用在你的配置层级中定义的
-[`vars`](/tasks/task-configuration.html#vars)，包括由 `_.source`、`_.file` 或 env modules 等指令生成的值。这些内容会在渲染工具版本和选项模板之前解析。
+指定工具版本和工具选项时，你还可以引用配置层级中定义的环境变量或
+[`vars`](/configuration/vars)，包括由 `_.source`、`_.file` 等指令或环境模块生成的值。这些值会在渲染工具
+版本和选项模板之前解析。
 
 ::: info
 mise 兼容 asdf 的 `.tool-versions` 文件，并且在需要时仍然可以使用 asdf
@@ -340,9 +341,13 @@ node = "26"
 它有很多种用法：
 
 - `mise install node@20.0.0` - 安装特定版本
-- `mise install node@20` - 安装匹配此前缀的最新版本
+- `mise install node@20` - 安装与此前缀匹配的最新版本
 - `mise install node` - 安装当前在 `mise.toml`（或其他配置文件）中指定的 node 版本
 - `mise install` - 安装配置文件中指定的所有插件和工具
+- `mise install --include-task-tools` - 同时安装当前范围内任务所需的每个工具，但不运行这些任务
+
+最后一种形式适用于在运行任务前预热 CI、容器或离线缓存。添加
+`--monorepo` 可包含每个已配置 monorepo 根目录中的任务工具。
 
 ### [`mise exec`|`mise x`](/cli/exec)
 

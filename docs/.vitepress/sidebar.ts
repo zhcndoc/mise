@@ -25,6 +25,7 @@ export const sidebar: SidebarItem[] = [
     text: "配置",
     items: [
       { text: "mise.toml", link: "/configuration" },
+      { text: "变量", link: "/configuration/vars" },
       { text: "设置", link: "/configuration/settings" },
       {
         text: "配置环境",

@@ -39,6 +39,7 @@
 - `xonsh`
 - `zsh`
 - `pwsh`
+- `powershell`
 
 ### `--json-extended`
 

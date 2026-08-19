@@ -31,7 +31,8 @@ MISE_SAFE=1 mise lock --bump --dry-run --json
 启用后，mise 会**拒绝并报错**（绝不会静默回退）执行以下操作：
 
 - 在配置模板中运行 `exec()` 或 `read_file()`
-- 运行钩子（行为类似于 `--no-hooks`，因为钩子会从 `mise env`/`hook-env` 中以环境方式触发）
+- 运行钩子（像 `--no-hooks` 一样被抑制，因为钩子会从 `mise env`/`hook-env` 中以环境方式触发）
+- 运行工具级别的 `postinstall` 钩子，或在安装期间应用工具级别的 `install_env`
 - 运行任务
 - 执行 asdf 插件脚本
 - 安装插件

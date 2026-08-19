@@ -77,7 +77,7 @@ impl DotfilesAdd {
             None => system::files::default_mode(),
         };
         let config = Config::get().await?;
-        let managed = system::files::files_from_config(&config);
+        let managed = system::files::files_from_config(&config)?;
         let config_path = resolve_target_config_path(ConfigPathOptions {
             global: self.global || !self.local,
             path: self.path.clone(),
@@ -88,7 +88,7 @@ impl DotfilesAdd {
         })?;
 
         let mut planned = vec![];
-        let managed_edits = system::edits::edits_from_config(&config);
+        let managed_edits = system::edits::edits_from_config(&config)?;
         for target_raw in &self.targets {
             let target = system::files::resolve_target_arg(target_raw)
                 .components()
@@ -385,12 +385,19 @@ impl PlannedAdd {
             target_raw: self.target_raw.clone(),
             target: self.target.clone(),
             source: self.source.clone(),
+            content: None,
             mode: self.mode,
             exclude: vec![],
             base: config_path
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .to_path_buf(),
+            origin: crate::system::resources::ResourceOrigin {
+                config: config_path.to_path_buf(),
+                config_root: crate::config::config_file::config_root::config_root(config_path),
+                environment: crate::config::environments_for_config_path(config_path),
+                source: Some(self.source.clone()),
+            },
         }
     }
 }
@@ -457,6 +464,7 @@ fn describe_apply(item: &PlannedAdd) -> String {
         FileMode::Copy if item.source.is_dir() => format!("cp -r {source} {target}"),
         FileMode::Copy => format!("cp {source} {target}"),
         FileMode::Template => format!("render {source} -> {target}"),
+        FileMode::Content => unreachable!("dotfiles add always captures a source file"),
     }
 }
 

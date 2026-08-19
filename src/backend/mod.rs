@@ -1476,6 +1476,36 @@ mod tests {
     }
 
     #[test]
+    fn test_fuzzy_match_versions_flavour_query_does_not_cross_a_plus() {
+        // "truffleruby" and "truffleruby+graalvm" are distinct flavours, so a
+        // bare flavour name must not select the other one.
+        let versions = ["truffleruby-34.0.1", "truffleruby+graalvm-34.0.1"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            fuzzy_match_versions(versions.clone(), "truffleruby", true),
+            ["truffleruby-34.0.1".to_string()]
+        );
+        assert_eq!(
+            fuzzy_match_versions(versions, "truffleruby+graalvm", true),
+            ["truffleruby+graalvm-34.0.1".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_match_versions_numeric_query_still_matches_build_metadata() {
+        // `+` remains a separator for numeric queries, where it introduces
+        // semver build metadata rather than a different flavour.
+        let versions = ["1.9.1", "v1.9.1+hotfix.2", "1.9.10"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            fuzzy_match_versions(versions, "1.9.1", true),
+            ["1.9.1".to_string(), "v1.9.1+hotfix.2".to_string()]
+        );
+    }
+
+    #[test]
     fn test_fuzzy_match_versions_pep440_drops_alphas_but_honors_exact_match() {
         let versions = vec![
             "3.13.0".to_string(),
@@ -2239,6 +2269,12 @@ pub trait Backend: Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Whether an opaque version string should use [`Backend::resolve_exact_version`]
+    /// even when it does not have the usual dotted release shape.
+    fn is_exact_version(&self, _version: &str) -> bool {
+        false
+    }
+
     /// Whether `version` names a rolling release channel (e.g. zig's "master")
     /// rather than a concrete version. Cheap (no network). Channels are re-resolved
     /// to a concrete version like "latest" so `mise upgrade`/`outdated` can track
@@ -2268,6 +2304,13 @@ pub trait Backend: Debug + Send + Sync {
         _version: &str,
     ) -> eyre::Result<Option<String>> {
         Ok(None)
+    }
+
+    /// Whether a rolling channel must be resolved to a concrete version before it
+    /// can be used. Backends that opt in fail in offline mode when neither a lock
+    /// entry nor a concrete installed channel build is available.
+    fn requires_concrete_channel_version(&self, _version: &str) -> bool {
+        false
     }
 
     /// Backend opt-in for installing an unresolved `latest` request.
@@ -2936,6 +2979,10 @@ pub trait Backend: Debug + Send + Sync {
         ctx: InstallContext,
         mut tv: ToolVersion,
     ) -> eyre::Result<ToolVersion> {
+        // Toolset installs preflight these options before doing any work, but
+        // direct callers such as `install-into` must be protected here too.
+        tv.request.ensure_safe_install_options()?;
+
         // Check for --locked mode: if enabled and no lockfile URL exists, fail early
         // Exempt tool stubs from lockfile requirements since they are ephemeral
         // Also exempt backends that don't support URL locking (e.g., Rust uses rustup)
@@ -3858,6 +3905,12 @@ pub trait Backend: Debug + Send + Sync {
         _opts: &ResolveOptions,
     ) -> Result<Option<OutdatedInfo>> {
         Ok(None)
+    }
+
+    /// Whether [`Backend::outdated_info`] fully replaces the generic outdated
+    /// resolver rather than supplementing it.
+    fn uses_custom_outdated_info(&self) -> bool {
+        false
     }
 
     // ========== Lockfile Metadata Fetching Methods ==========
@@ -4834,10 +4887,23 @@ pub(crate) fn fuzzy_match_versions(
     // but NOT "1.20". The old pattern achieved this by requiring a separator after the query.
     // However, vendor-prefixed queries like "temurin-" need to match digits immediately after
     // the prefix (e.g. "temurin-25.0.1").
+    // `+` separates semver build metadata ("1.9.1" -> "1.9.1+hotfix.2"), but it
+    // also separates flavour names ("truffleruby" -> "truffleruby+graalvm"). Only
+    // treat it as a separator for numeric queries, so a bare flavour name cannot
+    // select a different flavour.
+    let numeric_query = query
+        .strip_prefix(['v', 'V'])
+        .unwrap_or(query)
+        .starts_with(|c: char| c.is_ascii_digit());
+    let sep = if query == "latest" || numeric_query {
+        "[+\\-.]"
+    } else {
+        "[\\-.]"
+    };
     let query_regex = if query != "latest" && query.ends_with('-') {
         Regex::new(&format!("^{query_pattern}.*$")).unwrap()
     } else {
-        Regex::new(&format!("^{query_pattern}([+\\-.].+)?$")).unwrap()
+        Regex::new(&format!("^{query_pattern}({sep}.+)?$")).unwrap()
     };
 
     // Also create a regex without the 'v' prefix if query starts with 'v'
@@ -4847,7 +4913,7 @@ pub(crate) fn fuzzy_match_versions(
         let re = if query.ends_with('-') {
             Regex::new(&format!("^{without_v}.*$")).unwrap()
         } else {
-            Regex::new(&format!("^{without_v}([+\\-.].+)?$")).unwrap()
+            Regex::new(&format!("^{without_v}({sep}.+)?$")).unwrap()
         };
         Some(re)
     } else {

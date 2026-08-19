@@ -125,7 +125,7 @@ Examples:
     flag "-q --quiet" help="Suppress non-error messages"
     flag "-s --shell" help="Shell type to generate the script for" hide=#true {
         arg <SHELL> {
-            choices bash elvish fish nu xonsh zsh pwsh
+            choices bash elvish fish nu xonsh zsh pwsh powershell
         }
     }
     flag --no-hook-env help="Do not automatically call hook-env" {
@@ -151,7 +151,7 @@ See https://mise.jdx.dev/dev-tools/shims.html#shims-vs-path for more information
     }
     flag --status help="Show \"mise: <TOOL>@<VERSION>\" message when changing directories" hide=#true
     arg "[SHELL_TYPE]" help="Shell type to generate the script for" required=#false {
-        choices bash elvish fish nu xonsh zsh pwsh
+        choices bash elvish fish nu xonsh zsh pwsh powershell
     }
 }
 cmd tool-alias help="Manage tool version aliases." effect=read {
@@ -838,6 +838,10 @@ Examples:
         flag --connect-timeout help="SSH connection timeout in seconds" default="10" {
             arg <CONNECT_TIMEOUT>
         }
+        flag --copy-link help="Dereference one source-relative symbolic link; repeat for multiple links" var=#true {
+            arg <PATH>
+        }
+        flag --copy-links help="Dereference every symbolic link in the source archive"
         flag --exclude help="Additional archive pattern to exclude; repeat for multiple patterns" var=#true {
             arg <PATTERN>
         }
@@ -996,7 +1000,7 @@ Examples:
 """#
     flag "-s --shell" help="Shell type to generate completions for" hide=#true {
         arg <SHELL_TYPE> {
-            choices bash fish powershell zsh
+            choices bash fish powershell pwsh zsh
         }
     }
     flag --include-bash-completion-lib help="Include the bash completion library in the bash completion script" {
@@ -1022,7 +1026,7 @@ https://usage.jdx.dev
 """#
     }
     arg "[SHELL]" help="Shell type to generate completions for" required=#false {
-        choices bash fish powershell zsh
+        choices bash fish powershell pwsh zsh
     }
 }
 cmd config help="Manage config files" effect=read {
@@ -1383,7 +1387,7 @@ Examples:
     flag "-J --json" help="Output in JSON format"
     flag "-s --shell" help="Shell type to generate environment variables for" {
         arg <SHELL> {
-            choices bash elvish fish nu xonsh zsh pwsh
+            choices bash elvish fish nu xonsh zsh pwsh powershell
         }
     }
     flag --json-extended help="Output in JSON format with additional information (source, tool)"
@@ -1484,9 +1488,12 @@ This is designed to be used in a project where contributors may not have mise in
         after_long_help #"""
 Examples:
 
-    $ mise generate bootstrap >./bin/mise
-    $ chmod +x ./bin/mise
-    $ ./bin/mise install – automatically downloads mise to .mise if not already installed
+    $ mise generate bootstrap --write ./bin/mise
+    $ ./bin/mise install                                    # downloads mise to .mise if not already installed
+
+    # add a launcher for contributors who clone the project on Windows
+    $ mise generate bootstrap --write ./bin/mise --windows  # also writes bin/mise.cmd
+    $ .\bin\mise.cmd install
 
 """#
         flag "-l --localize" help="Sandboxes mise internal directories like MISE_DATA_DIR and MISE_CACHE_DIR into a `.mise` directory in the project" {
@@ -1504,6 +1511,18 @@ This is necessary if users may use a different version of mise outside the proje
         }
         flag --localized-dir help="Directory to put localized data into" default=.mise {
             arg <LOCALIZED_DIR>
+        }
+        flag --windows help="Also write a Windows launcher, `<WRITE>.cmd`" {
+            long_help #"""
+Also write a Windows launcher, `<WRITE>.cmd`
+
+Windows cannot execute the `#!/usr/bin/env bash` script, so a contributor who clones the
+project on Windows has nothing to run without this.
+
+Generated on every host, not only on Windows: the file is committed, and whoever runs it
+on Windows is not the person who generated it. Requires `--write`, since stdout cannot
+carry two files.
+"""#
         }
     }
     cmd config help="Generate a mise.toml file" effect=write {
@@ -1750,6 +1769,16 @@ Use this to pin to a specific version (e.g., "2025.1.0").
 """#
             arg <BOOTSTRAP_VERSION>
         }
+        flag --checksum-algorithm help="Checksum algorithm to use when downloading artifacts" default=blake3 {
+            long_help #"""
+Checksum algorithm to use when downloading artifacts
+
+Accepts `blake3` or `sha256` and defaults to `blake3`. Cannot be used with `--lock` or `--skip-download` because those modes do not calculate checksums.
+"""#
+            arg <CHECKSUM_ALGORITHM> {
+                choices blake3 sha256
+            }
+        }
         flag --fetch help="Fetch checksums and sizes for an existing tool stub file" {
             long_help #"""
 Fetch checksums and sizes for an existing tool stub file
@@ -1877,7 +1906,7 @@ cmd hook-env hide=#true help="[internal] called by activate hook to update env v
     flag "-q --quiet" help="Hide warnings such as when a tool is not installed"
     flag "-s --shell" help="Shell type to generate script for" {
         arg <SHELL> {
-            choices bash elvish fish nu xonsh zsh pwsh
+            choices bash elvish fish nu xonsh zsh pwsh powershell
         }
     }
     flag --reason help="Reason for calling hook-env (e.g., \"precmd\", \"chpwd\")" hide=#true {
@@ -1890,7 +1919,7 @@ cmd hook-env hide=#true help="[internal] called by activate hook to update env v
 cmd hook-not-found hide=#true help="[internal] called by shell when a command is not found" effect=write {
     flag "-s --shell" help="Shell type to generate script for" {
         arg <SHELL> {
-            choices bash elvish fish nu xonsh zsh pwsh
+            choices bash elvish fish nu xonsh zsh pwsh powershell
         }
     }
     arg <BIN> help="Attempted bin to run"
@@ -1942,6 +1971,7 @@ Examples:
     $ mise install node@20      # install fuzzy node version
     $ mise install node         # install version specified in mise.toml
     $ mise install              # installs everything specified in mise.toml
+    $ mise install --include-task-tools # also install tools required by tasks
 
 """#
     flag "-f --force" help=#"""
@@ -1968,6 +1998,14 @@ This argument will print backend output such as download, configuration, and com
 Like --dry-run but exits with code 1 if there are tools to install
 
 This is useful for scripts to check if tools need to be installed.
+"""#
+    }
+    flag --include-task-tools help="Also install tools required by tasks in the current scope" {
+        long_help #"""
+Also install tools required by tasks in the current scope
+
+This prepares task tools without running task commands or dependencies.
+Combine with --monorepo to include tasks from every configured root.
 """#
     }
     flag --minimum-release-age help="Only install versions released before this date or older than this duration" {
@@ -2137,7 +2175,8 @@ cmd lock help="Update lockfile checksums and URLs for all specified platforms" e
 Update lockfile checksums and URLs for all specified platforms
 
 Updates checksums and download URLs for all platforms already specified in the lockfile.
-If no lockfile exists, shows what would be created based on the current configuration.
+If no lockfile exists, shows what would be created based on the current configuration,
+including tools declared by tasks.
 This allows you to refresh lockfile data for platforms other than the one you're currently on.
 Operates on the lockfile in the current config root. Use TOOL arguments to target specific tools.
 """#
@@ -2217,7 +2256,7 @@ Existing matching lockfile entries are preserved and are not downgraded solely b
     arg "[TOOL]…" help=#"""
 Tool(s) to update in lockfile
 e.g.: node python
-If not specified, all tools in lockfile will be updated
+If not specified, all configured and task-specific tools will be updated
 """# required=#false var=#true
 }
 cmd ls help="List installed and active tool versions" effect=read {
@@ -4394,17 +4433,18 @@ cmd trust help="Marks a config file as trusted" effect=write {
 Marks a config file as trusted
 
 This means mise is allowed to parse the file when it needs to read config
-that may execute code or affect the environment. mise checks trust before
-parsing `mise.toml`. Without trust, mise may prompt, skip the config in some
-discovery paths, fail with an untrusted-config error when it cannot prompt,
-or assume trust in detected CI unless paranoid mode is enabled.
+that may execute code or affect the environment. Without trust, mise may
+prompt, skip the config in some discovery paths, or fail with an
+untrusted-config error when it cannot prompt.
 
-Safe config files do not require trust: files that only contain
-`min_version`, `[tools]` entries with plain version strings (or arrays
-of them), and `[tasks]` (no templates and no tool options) are loaded
-without prompting, since nothing in them executes code at load time —
-tools install and tasks run only on explicit commands like `mise install`
-or `mise run`.
+In normal mode, commands that execute project-defined behavior (`mise run`,
+naked task invocations such as `mise <TASK>`, `mise install`, `mise exec`,
+and `mise watch`) automatically trust their active config. Paranoid mode
+requires explicit, content-bound trust for every non-global config.
+
+In normal mode, safe config files do not require trust: files that only contain
+`min_version`, `[tools]` entries with plain version strings (or arrays of
+them), and `[tasks]` without templates or tool options.
 
 Trust is shared across git worktrees: a config file inside a linked
 worktree is trusted when the equivalent path in the repository's main
@@ -4434,7 +4474,7 @@ and common build/dependency directories (node_modules, vendor, target, dist, bui
 Show the trusted status of config files from the current directory and its parents.
 Does not trust or untrust any files.
 """#
-    flag --untrust help="No longer trust this config, will prompt in the future"
+    flag --untrust help="Remove explicit trust for this config"
     arg "[CONFIG_FILE]" help="The config file to trust" required=#false
 }
 cmd uninstall help="Removes installed tool versions" effect=destructive {
@@ -4499,7 +4539,7 @@ Environment variable(s) to remove
 e.g.: NODE_ENV
 """# required=#false var=#true
 }
-cmd untrust help="No longer trust a config, will prompt in the future" effect=write {
+cmd untrust help="Remove explicit trust for a config" effect=write {
     arg "[CONFIG_FILE]" help="The config file to untrust" required=#false
 }
 cmd unuse help="Removes installed tool versions from mise.toml" effect=destructive {

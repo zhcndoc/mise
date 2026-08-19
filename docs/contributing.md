@@ -117,13 +117,13 @@ cargo test <test_name>
 # 运行所有 E2E 测试
 mise run test:e2e
 
-# 运行指定的 E2E 测试
-./e2e/run_test test_name
+# Run specific E2E tests (preferred; always use this mise task)
+mise run test:e2e e2e/cli/test_version
 
-# 运行匹配模式的 E2E 测试
-./e2e/run_test task  # 运行匹配 *task* 的测试
+# Run E2E tests under a feature directory
+mise run test:e2e e2e/tasks
 
-# 运行所有测试，包括慢速测试
+# Run all tests including slow ones (`*_slow`)
 TEST_ALL=1 mise run test:e2e
 ```
 
@@ -147,7 +147,9 @@ TEST_ALL=1 mise run test:e2e
 - **慢速测试**（`test_*_slow`）：仅在设置 `TEST_ALL=1` 时运行
 - **隔离环境**：每个测试都在干净、隔离的环境中运行
 
-### 覆盖率测试
+不要直接执行 `e2e/` 下的文件；`mise run test:e2e` 是受支持的入口点（它依赖于 `build` 并使用 `e2e/run_all_tests`）。设置 `MISE_GITHUB_TOKEN`（或 `GITHUB_TOKEN`）以避免 GitHub API 速率限制。
+
+### Coverage Tests
 
 覆盖率测试用于衡量代码库中有多少代码被测试覆盖：
 
@@ -367,15 +369,15 @@ mise/
 ### 常见任务
 
 - `mise run build` - 构建项目
-- `mise run test` - 运行所有测试（单元测试 + E2E 测试）
+- `mise run test` - 运行所有测试（单元测试 + E2E）
 - `mise run test:unit` - 仅运行单元测试
 - `mise run test:e2e` - 仅运行 E2E 测试
 - `mise run lint` - 运行代码检查
-- `mise run lint:fix` - 运行代码检查并修复问题
+- `mise run lint-fix` - 运行并修复代码检查问题
 - `mise run format` - 格式化代码
 - `mise run clean` - 清理构建产物
 - `mise run snapshots` - 更新测试快照
-- `mise run render` - 生成文档和补全内容
+- `mise run render` - 生成文档和补全文件
 
 ### 文档任务
 
@@ -424,23 +426,20 @@ hk check --step shellcheck
 
 ### 在开发中使用 hk
 
+`hk.pkl` 目前仅定义了 `check` 和 `fix` 步骤（没有 git `pre-commit` 钩子）。
+`hk install --mise` 可能会报告没有安装任何内容，这是正常的。请使用
+mise 任务：
+
 ```bash
-# 运行代码检查（CI 和预提交中使用）
-mise run lint  # 运行 hk check --all
+# 运行代码检查（CI 中使用）
+mise run lint  # This runs hk check --all
 
 # 运行并修复代码检查问题
-hk fix --all
+mise run lint-fix
 
 # 检查特定文件类型
 hk check --step prettier
 hk check --step shellcheck
-```
-
-### 设置预提交钩子
-
-```bash
-# 设置 Git 钩子，使其在预提交时运行 hk
-hk install --mise
 ```
 
 ### 手动运行检查
@@ -485,7 +484,7 @@ eval "$(@mise activate zsh)"
 ## 代码检查
 
 - 检查代码库：`mise run lint`
-- 检查并修复代码库：`mise run lint:fix`
+- 检查并修复代码库：`mise run lint-fix`
 
 ## 生成 readme 和 shell 补全文件
 
@@ -551,9 +550,12 @@ mise 中常用的作用域：
 
 - `cli` - 命令行界面变更
 - `config` - 配置系统变更
-- `parser` - 解析逻辑变更
-- `deps` - 依赖更新
+- `task` - 任务运行器变更（使用 `task`，而不是 `run`）
+- `backend` - 工具后端变更
+- `ci` - CI / Cloud Agent / 基础设施
+- `deps` - 依赖项更新
 - `security` - 安全相关变更
+- `registry` - 注册表条目（通常用作**类型**，而不是作用域）
 
 ### 破坏性变更
 

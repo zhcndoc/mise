@@ -104,8 +104,8 @@ docs = "cd {{config_root}}/docs"
 
 ## 限制
 
-- **在任务中不可用**：Shell 别名仅在运行 `mise activate` 的交互式 shell 中可用。它们在 TOML 任务 `run` 块或文件任务中**不可用**，因为任务运行在非交互式子 shell 中。请在任务中直接使用底层命令，或者通过 [`env._.path`](/environments/#path) 将包装脚本添加到你的 `PATH`。
-- **Shell 支持**：仅支持 bash、zsh、fish 和 xonsh。详情请参见 [shell 功能兼容性矩阵](/getting-started.html#shell-feature-compatibility)。
+- **任务中不可用**：Shell 别名仅在运行 `mise activate` 的交互式 shell 中处于活动状态。它们在 TOML 任务的 `run` 块或文件任务中**不可用**，因为任务在非交互式子 shell 中运行。在任务中直接使用底层命令，或通过 [`env._.path`](/environments/#env-path) 将包装脚本添加到你的 `PATH` 中。
+- **Shell 支持**：仅支持 bash、zsh、fish 和 xonsh。详情请参阅 [Shell 功能兼容性矩阵](/getting-started.html#shell-feature-compatibility)。
 
 ## 与工具别名的比较
 

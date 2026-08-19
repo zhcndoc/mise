@@ -148,13 +148,26 @@ mise generate tool-stub ./bin/rg \
 
 ### 生成选项
 
-- `--version VERSION` - 指定工具版本（默认值为 "latest"）。
-- `--bin PATH` - 覆盖自动检测到的二进制文件路径
-- `--platform-url PLATFORM:URL` - 添加特定平台的 URL（可多次使用）
-- `--platform-url URL` - 使用从 URL 文件名自动检测的平台添加特定平台的 URL
-- `--platform-bin PLATFORM:PATH` - 设置特定平台的二进制文件路径
-- `--skip-download` - 跳过下载以加快生成速度（不进行校验和或二进制检测）
-- `--lock` - 解析并将锁文件数据（固定版本 + 平台 URL/校验和）嵌入到现有存根中
+- `--version VERSION` - 指定工具版本（默认为 `"latest"`）
+- `--bin PATH` - 覆盖自动检测的二进制路径
+- `--platform-url PLATFORM:URL` - 添加特定平台的 URL（可以多次使用）
+- `--platform-url URL` - 添加特定平台的 URL，并从 URL 文件名自动检测平台
+- `--platform-bin PLATFORM:PATH` - 设置平台特定的二进制路径
+- `--checksum-algorithm ALGORITHM` - 生成 `blake3`（默认）或 `sha256` 校验和
+- `--skip-download` - 跳过下载以加快生成速度（不生成校验和或检测二进制文件）
+- `--lock` - 解析并将锁定文件数据（固定版本＋平台 URL／校验和）嵌入现有存根
+
+`--checksum-algorithm` 不能与 `--lock` 或 `--skip-download` 结合使用，因为这些模式不会计算校验和。
+
+对于 Bazel 等需要 SHA256 校验和的使用者，请在生成存根时选择它：
+
+```bash
+mise generate tool-stub ./bin/tool \
+  --url "https://example.com/tool.tar.gz" \
+  --checksum-algorithm sha256
+```
+
+所选算法也会应用于通过 `--fetch` 填充的缺失校验和。现有校验和会被保留。
 
 ### 支持的归档格式
 
@@ -183,10 +196,10 @@ size = 12345678
 
 生成器会自动：
 
-- 计算 BLAKE3 校验和以进行完整性验证
+- 默认计算 BLAKE3 校验和，或者在请求时计算 SHA256 校验和
 - 检测文件大小
-- 识别归档中的正确二进制文件路径
-- 使用输出文件名作为工具名称。
+- 识别归档中的正确二进制路径
+- 使用输出文件名作为工具名称
 
 ## 示例
 
@@ -292,6 +305,20 @@ url = "https://releases.example.com/v{{version}}/tool-macos-arm64.tar.gz"
 chmod +x ./bin/my-tool
 ./bin/my-tool --version
 ```
+
+#### 在 Windows 上
+
+Windows 无法执行 shebang 脚本，因此 `mise generate tool-stub` 会在存根旁边写入一个 `.cmd` 启动器。请按名称运行存根，Windows 会通过 `PATHEXT` 找到它：
+
+```powershell
+.\bin\my-tool.cmd --version
+```
+
+只要存根可以在 Windows 上运行，就会生成启动器——也就是说，存根要么列出了一个 `[platforms.windows-*]` 条目，要么完全没有列出平台。仅为 Linux 和 macOS 提供的存根不会生成启动器；存根自身名称已经以 `.cmd`、`.bat` 或 `.exe` 结尾时也不会生成启动器。启动器会在每个平台上写入，而不只是 Windows，因此在 Linux 上生成并提交到代码仓库的存根，在其他人在 Windows 上克隆该仓库后仍然可以正常工作。
+
+如果存根后来不再为 Windows 提供支持，重新生成存根时会删除启动器，因此它不会继续针对存根已不再声明的平台运行。只有由 mise 生成的启动器会被删除——你自行编写的启动器会被保留。
+
+不带扩展名的存根也会被保留：Git Bash 和 Cygwin 会通过 shebang 运行它，这与 [shims](/dev-tools/shims) 在 Windows 上同时放置不带扩展名的脚本和原生启动器的方式相同。
 
 ### 通过 mise 命令
 

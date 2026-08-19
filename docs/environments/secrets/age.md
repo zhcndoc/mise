@@ -1,4 +1,4 @@
-# 直接 age 加密 <Badge type="warning" text="experimental" />
+# 直接 age 加密 <Badge type="warning" text="实验性" />
 
 使用 [age](https://github.com/FiloSottile/age) 加密，在 `mise.toml` 中直接加密单个环境变量值。无需安装 age 工具——mise 已内置支持。
 
@@ -75,7 +75,12 @@ mise 按以下顺序查找身份：
 4. 如果存在，则使用默认的 `~/.config/mise/age.txt`
 5. 来自 `settings.age.ssh_identity_files` 的 SSH 身份以及常见默认值（`~/.ssh/id_ed25519`、`~/.ssh/id_rsa`）
 
-解密后的值始终会被标记为已隐藏。
+在 `settings.age.key_file`、`settings.age.identity_files` 和
+`settings.age.ssh_identity_files` 中配置的路径，是相对于声明它们的文件的配置根目录解析的。它们还支持 Tera 模板，包括
+<span v-pre>`{{ config_root }}`</span> 以及来自 `env` 的值。绝对路径和以
+`~` 开头的路径保留其现有含义。
+
+解密后的值始终会标记为已隐藏。
 
 Age 解密默认是严格模式。如果没有找到任何身份、没有可用身份能够解密该值，或者 age 载荷无效，mise 会失败，而不是继续使用部分解析的环境。
 

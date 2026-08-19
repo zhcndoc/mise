@@ -1,14 +1,14 @@
 use dashmap::DashMap;
 use eyre::{Context, Result, bail, eyre};
 use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use path_absolutize::Absolutize;
 pub use settings::{CompilePurpose, Settings};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env::join_paths;
 use std::fmt::{Debug, Formatter};
 use std::iter::once;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock as Lazy;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
@@ -69,8 +69,16 @@ pub(crate) struct MonorepoUnion {
     pub repo_urls: HashMap<String, String>,
 }
 
+/// One independently composed bootstrap hierarchy and its scoped template context.
+#[derive(Clone)]
+struct BootstrapConfigMap {
+    config_files: ConfigMap,
+    tera_ctx: tera::Context,
+}
+
 pub struct Config {
     pub config_files: ConfigMap,
+    bootstrap_config_maps: Vec<BootstrapConfigMap>,
     pub project_root: Option<PathBuf>,
     pub all_aliases: AliasMap,
     pub repo_urls: HashMap<String, String>,
@@ -84,7 +92,7 @@ pub struct Config {
     aliases: AliasMap,
     env: OnceCell<EnvResults>,
     env_with_sources: OnceCell<EnvWithSources>,
-    hooks: OnceCell<Vec<(PathBuf, Hook)>>,
+    hooks: OnceCell<Vec<(PathBuf, Option<PathBuf>, Hook)>>,
     tasks_cache: Arc<DashMap<crate::task::TaskLoadContext, Arc<BTreeMap<String, Task>>>>,
     /// Lenient graph shared across task-loading and strict inspection contexts.
     /// Provider errors remain on the graph so strict consumers can reject it.
@@ -169,6 +177,7 @@ impl Config {
         Arc::new(Self {
             tera_ctx: self.tera_ctx.clone(),
             config_files,
+            bootstrap_config_maps: self.bootstrap_config_maps.clone(),
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: self.shorthands.clone(),
@@ -213,9 +222,39 @@ impl Config {
             load_all_config_files(&config_paths, &idiomatic_files).await?
         });
 
+        let config = Self::load_from_config_files(config_files, false).await?;
+        *_CONFIG.write().unwrap() = Some(config.clone());
+        Ok(config)
+    }
+
+    /// Load only user-global and system configuration without replacing the process-wide config.
+    ///
+    /// This is intended for bootstrap paths such as completion generation, where consulting the
+    /// current project could trigger a trust prompt before the requested command can run.
+    pub(crate) async fn load_global() -> Result<Arc<Self>> {
+        backend::load_tools().await?;
+        let idiomatic_files = measure!("config::load_global idiomatic_files", {
+            load_idiomatic_filenames().await
+        });
+        let config_paths = measure!("config::load_global config_paths", {
+            load_global_config_paths(false)
+        });
+        trace!("global config_paths: {config_paths:?}");
+        let config_files = measure!("config::load_global config_files", {
+            load_all_config_files(&config_paths, &idiomatic_files).await?
+        });
+
+        Self::load_from_config_files(config_files, true).await
+    }
+
+    async fn load_from_config_files(
+        config_files: ConfigMap,
+        global_only: bool,
+    ) -> Result<Arc<Self>> {
         let mut config = Self {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files,
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -236,6 +275,7 @@ impl Config {
         let vars_config = Arc::new(Self {
             tera_ctx: config.tera_ctx.clone(),
             config_files: config.config_files.clone(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: config.shorthands.clone(),
@@ -276,6 +316,7 @@ impl Config {
         measure!("config::load validate", {
             config.validate()?;
         });
+        config.bootstrap_config_maps = load_bootstrap_config_maps(&config).await?;
 
         config.all_aliases = measure!("config::load all_aliases", { config.load_all_aliases() });
 
@@ -298,8 +339,10 @@ impl Config {
             }
         }
 
-        warn_if_auto_env_files_exist();
-        warn_if_monorepo_lockfile_default_changes(&config);
+        if !global_only {
+            warn_if_auto_env_files_exist();
+            warn_if_monorepo_lockfile_default_changes(&config);
+        }
 
         time!("load done");
 
@@ -325,7 +368,6 @@ impl Config {
 
         let config = Arc::new(config);
         config.env_results().await?;
-        *_CONFIG.write().unwrap() = Some(config.clone());
         Ok(config)
     }
     pub fn env_maybe(&self) -> Option<IndexMap<String, String>> {
@@ -334,6 +376,28 @@ impl Config {
                 .map(|(k, (v, _))| (k.clone(), v.clone()))
                 .collect()
         })
+    }
+
+    /// Returns the independent config hierarchies that contribute bootstrap resources.
+    pub(crate) fn bootstrap_config_maps(&self) -> impl Iterator<Item = &ConfigMap> {
+        if self.bootstrap_config_maps.is_empty() {
+            Either::Left(std::iter::once(&self.config_files))
+        } else {
+            Either::Right(
+                self.bootstrap_config_maps
+                    .iter()
+                    .map(|config| &config.config_files),
+            )
+        }
+    }
+
+    /// Returns the root-scoped template context for a bootstrap resource declaration.
+    pub(crate) fn bootstrap_tera_ctx(&self, config_path: &Path) -> &tera::Context {
+        self.bootstrap_config_maps
+            .iter()
+            .find(|config| config.config_files.contains_key(config_path))
+            .map(|config| &config.tera_ctx)
+            .unwrap_or(&self.tera_ctx)
     }
     pub async fn env(self: &Arc<Self>) -> eyre::Result<IndexMap<String, String>> {
         Ok(self
@@ -1106,6 +1170,7 @@ impl Config {
                 env_scripts: cached.env_scripts.clone(),
                 redactions: cached.redactions.clone(),
                 redaction_exclusions: cached.redaction_exclusions.clone(),
+                caller_env_keys: cached.caller_env_keys.clone(),
                 tool_add_paths: Vec::new(),
                 watch_files: cached.watch_files.clone(),
                 has_uncacheable: false,
@@ -1117,11 +1182,7 @@ impl Config {
                 .collect_vec();
             self.add_redactions_excluding(
                 redact_keys,
-                &env_results
-                    .env
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.0.clone()))
-                    .collect(),
+                &env_results.redactable_env(&env::PRISTINE_ENV),
                 &env_results.redaction_exclusions,
             );
             if log::log_enabled!(log::Level::Trace) {
@@ -1184,11 +1245,7 @@ impl Config {
             .collect_vec();
         self.add_redactions_excluding(
             redact_keys,
-            &env_results
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.0.clone()))
-                .collect(),
+            &env_results.redactable_env(&env::PRISTINE_ENV),
             &env_results.redaction_exclusions,
         );
         if cache_enabled
@@ -1214,6 +1271,7 @@ impl Config {
                 env_scripts: env_results.env_scripts.clone(),
                 redactions: env_results.redactions.clone(),
                 redaction_exclusions: env_results.redaction_exclusions.clone(),
+                caller_env_keys: env_results.caller_env_keys.clone(),
                 watch_files,
                 watch_file_mtimes,
                 created_at: now,
@@ -1232,26 +1290,27 @@ impl Config {
         Ok(env_results)
     }
 
-    pub async fn hooks(&self) -> Result<&Vec<(PathBuf, Hook)>> {
+    pub async fn hooks(&self) -> Result<&Vec<(PathBuf, Option<PathBuf>, Hook)>> {
         self.hooks
             .get_or_try_init(|| async {
                 self.config_files
                     .values()
                     .map(|cf| {
-                        let is_global = cf.project_root().is_none();
-                        let root = cf.project_root().unwrap_or_else(|| cf.config_root());
+                        let project_root = cf.project_root();
+                        let is_global = project_root.is_none();
+                        let config_root = cf.config_root();
                         let mut hooks = cf.hooks()?;
                         if is_global {
                             for h in &mut hooks {
                                 h.global = true;
                             }
                         }
-                        Ok((root, hooks))
+                        Ok((config_root, project_root, hooks))
                     })
-                    .map_ok(|(root, hooks)| {
+                    .map_ok(|(config_root, project_root, hooks)| {
                         hooks
                             .into_iter()
-                            .map(|h| (root.clone(), h))
+                            .map(|h| (config_root.clone(), project_root.clone(), h))
                             .collect::<Vec<_>>()
                     })
                     .flatten_ok()
@@ -1364,8 +1423,7 @@ fn configs_at_root<'a>(dir: &Path, config_files: &'a ConfigMap) -> Vec<&'a Arc<d
         .flat_map(|f| {
             if f.contains('*') {
                 // Handle glob patterns by matching against actual config file paths
-                glob(dir, f)
-                    .unwrap_or_default()
+                config_glob(dir, f)
                     .into_iter()
                     .rev()
                     .filter_map(|path| config_files.get(&path))
@@ -1414,6 +1472,65 @@ fn find_monorepo_config(config_files: &ConfigMap) -> Option<&Arc<dyn ConfigFile>
     config_files
         .values()
         .find(|cf| cf.monorepo_root() == Some(true))
+}
+
+/// Loads each selected bootstrap root as an independent hierarchy with scoped variables.
+async fn load_bootstrap_config_maps(config: &Config) -> Result<Vec<BootstrapConfigMap>> {
+    let Some((declaring_config, patterns)) = config.config_files.iter().find_map(|(path, cf)| {
+        cf.bootstrap_config()
+            .and_then(|bootstrap| bootstrap.config_roots.map(|patterns| (path, patterns)))
+    }) else {
+        return Ok(vec![]);
+    };
+    if patterns.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let declaring_root = config
+        .config_files
+        .get(declaring_config)
+        .expect("declaring bootstrap config is loaded")
+        .config_root();
+    let mut roots = expand_bootstrap_config_roots(&declaring_root, &patterns)?;
+    roots.sort();
+    roots.dedup();
+    if roots.is_empty() {
+        bail!("[bootstrap].config_roots did not match any config roots");
+    }
+
+    let mut base = config.config_files.clone();
+    base.retain(|path, _| {
+        is_global_config(path)
+            || !path
+                .canonicalize()
+                .is_ok_and(|path| roots.iter().any(|root| path.starts_with(root)))
+    });
+    let mut maps = vec![BootstrapConfigMap {
+        config_files: base,
+        tera_ctx: config.tera_ctx.clone(),
+    }];
+    let idiomatic_filenames = BTreeMap::new();
+    for root in roots {
+        let paths = config_paths_in_dir_with_filenames(&root, &DEFAULT_CONFIG_FILENAMES);
+        let config_files = load_config_files_from_paths(&paths, &idiomatic_filenames).await?;
+        let vars_config = config.with_config_files(config_files.clone());
+        let vars_results = load_vars(&vars_config).await?;
+        let mut vars = config.vars.clone();
+        vars.extend(
+            vars_results
+                .vars
+                .iter()
+                .map(|(key, (value, _))| (key.clone(), value.clone())),
+        );
+        let mut tera_ctx = config.tera_ctx.clone();
+        tera_ctx.insert("vars", &vars);
+        tera_ctx.insert("config_root", &root);
+        maps.push(BootstrapConfigMap {
+            config_files,
+            tera_ctx,
+        });
+    }
+    Ok(maps)
 }
 
 async fn load_idiomatic_filenames() -> BTreeMap<String, Vec<String>> {
@@ -1557,6 +1674,7 @@ static LOCAL_CONFIG_FILENAMES: Lazy<IndexSet<&'static str>> = Lazy::new(|| {
             ".config/mise/config.toml",
             ".config/mise/mise.toml",
             ".config/mise.toml",
+            ".mise/conf.d/*.toml",
             ".mise/config.toml",
             "mise/config.toml",
             ".rtx.toml",
@@ -1670,15 +1788,49 @@ pub fn glob(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn config_glob(dir: &Path, pattern: &str) -> Vec<PathBuf> {
+    // Match global/system conf.d discovery: editor backups and other hidden
+    // files are not configuration fragments.
+    glob(dir, pattern)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| {
+            !is_conf_d_file(path)
+                || !path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        })
+        .collect()
+}
+
 pub fn config_files_in_dir(dir: &Path) -> IndexSet<PathBuf> {
     DEFAULT_CONFIG_FILENAMES
         .iter()
-        .flat_map(|f| glob(dir, f).unwrap_or_default())
+        .flat_map(|f| config_glob(dir, f))
         .collect()
 }
 
 pub(crate) fn config_paths_in_dir(dir: &Path) -> Vec<PathBuf> {
     config_paths_in_dir_with_filenames(dir, &DEFAULT_CONFIG_FILENAMES)
+}
+
+/// Return the active configuration environment encoded in a loaded config
+/// filename. A vector matches the ordered MISE_ENV model and leaves room for
+/// future config forms that represent more than one environment.
+pub(crate) fn environments_for_config_path(path: &Path) -> Vec<String> {
+    let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+        return vec![];
+    };
+    env::MISE_ENV_WITH_AUTO
+        .iter()
+        .filter(|environment| {
+            ["config", "mise", ".mise"].into_iter().any(|prefix| {
+                filename == format!("{prefix}.{environment}.toml")
+                    || filename == format!("{prefix}.{environment}.local.toml")
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 fn config_paths_in_dir_with_filenames(dir: &Path, filenames: &[String]) -> Vec<PathBuf> {
@@ -1687,7 +1839,7 @@ fn config_paths_in_dir_with_filenames(dir: &Path, filenames: &[String]) -> Vec<P
         .rev()
         .flat_map(|f| {
             if f.contains('*') {
-                glob(dir, f).unwrap_or_default().into_iter().rev().collect()
+                config_glob(dir, f).into_iter().rev().collect()
             } else {
                 let path = dir.join(f);
                 if path.exists() { vec![path] } else { vec![] }
@@ -1721,12 +1873,21 @@ pub(crate) fn is_tool_versions_file(p: &Path) -> bool {
 /// it's the only option. This ensures commands like `mise use` write to mise.toml
 /// instead of mise.local.toml or .tool-versions when multiple configs exist.
 /// See: https://github.com/jdx/mise/discussions/6475
+///
+/// The two exclusions are not the same kind. `.tool-versions` is a *preference*: it is passed
+/// over while choosing and comes back once nothing else qualifies. A `conf.d` drop-in must not
+/// be written to at all, so it is excluded from the fallback as well, and this returns `None`
+/// instead — every caller turns that into a config of its own, which is the wanted outcome.
+///
+/// Carrying the drop-in exclusion in a filtered view rather than repeating it in each arm is
+/// what keeps the two apart: the preference needs a fallback, the exclusion must not have one,
+/// and a chain of `or_else` arms only holds that line for as long as every arm remembers to.
+/// See: <https://github.com/jdx/mise/discussions/5842>
 fn first_config_file(files: &IndexSet<PathBuf>) -> Option<&PathBuf> {
-    files
-        .iter()
-        .find(|p| !is_tool_versions_file(p) && !is_conf_d_file(p))
-        .or_else(|| files.iter().find(|p| is_tool_versions_file(p)))
-        .or_else(|| files.first())
+    let writable = || files.iter().filter(|p| !is_conf_d_file(p));
+    writable()
+        .find(|p| !is_tool_versions_file(p))
+        .or_else(|| writable().next())
 }
 
 fn is_conf_d_file(p: &Path) -> bool {
@@ -1746,7 +1907,7 @@ fn loadable_config_files_in_dir(dir: &Path, filenames: &[String]) -> IndexSet<Pa
     }
     filenames
         .iter()
-        .flat_map(|f| glob(dir, f).unwrap_or_default())
+        .flat_map(|f| config_glob(dir, f))
         .unique_by(|p| file::desymlink_path(p))
         .filter(|p| !config_path_is_ignored(p, false))
         .collect()
@@ -1854,6 +2015,21 @@ pub fn load_config_paths(config_filenames: &[String], include_ignored: bool) -> 
 
     config_files
         .into_iter()
+        .unique_by(|p| file::desymlink_path(p))
+        .filter(|p| !config_path_is_ignored(p, include_ignored))
+        .collect()
+}
+
+fn load_global_config_paths(include_ignored: bool) -> Vec<PathBuf> {
+    if Settings::no_config() {
+        return vec![];
+    }
+
+    // rev: these groups are lowest-first, this list is highest-first
+    global_config_files()
+        .into_iter()
+        .rev()
+        .chain(system_config_files().into_iter().rev())
         .unique_by(|p| file::desymlink_path(p))
         .filter(|p| !config_path_is_ignored(p, include_ignored))
         .collect()
@@ -2087,7 +2263,7 @@ pub async fn load_config_hierarchy_from_dir(
                 config_filenames
                     .iter()
                     .rev()
-                    .flat_map(|f| glob(dir, f).unwrap_or_default().into_iter().rev())
+                    .flat_map(|f| config_glob(dir, f).into_iter().rev())
                     .collect()
             }
         })
@@ -2296,11 +2472,6 @@ fn config_files_from_dir(dir: &Path) -> IndexSet<PathBuf> {
 pub fn global_config_path() -> PathBuf {
     let files = global_config_files();
     first_config_file(&files)
-        // Never write into a `conf.d` drop-in. `first_config_file` skips them
-        // while choosing, but falls back to `files.first()` when nothing else
-        // qualifies — and `config_files_from_dir` inserts conf.d entries first,
-        // so a config dir holding only drop-ins would hand one back here.
-        .filter(|p| !is_conf_d_file(p.as_path()))
         .cloned()
         .or_else(|| env::MISE_GLOBAL_CONFIG_FILE.clone())
         .unwrap_or_else(|| dirs::CONFIG.join("config.toml"))
@@ -3424,13 +3595,52 @@ fn expand_config_roots_inner(
     ctx: Option<&crate::task::TaskLoadContext>,
     filenames: Option<&[String]>,
 ) -> Result<Vec<PathBuf>> {
+    expand_config_roots_inner_for("monorepo", root, patterns, ctx, filenames, false)
+}
+
+/// Expands bootstrap root patterns using the normal mise config filenames.
+fn expand_bootstrap_config_roots(root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
+    expand_config_roots_inner_for(
+        "bootstrap",
+        root,
+        patterns,
+        None,
+        Some(&DEFAULT_CONFIG_FILENAMES),
+        true,
+    )
+}
+
+/// Expands safe, single-level config-root patterns for a named config section.
+fn expand_config_roots_inner_for(
+    section: &str,
+    root: &Path,
+    patterns: &[String],
+    ctx: Option<&crate::task::TaskLoadContext>,
+    filenames: Option<&[String]>,
+    canonicalize_results: bool,
+) -> Result<Vec<PathBuf>> {
     let mut subdirs = Vec::new();
+    let canonical_root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(err) => {
+            warn!(
+                "[{section}].config_roots: failed to resolve config root {}: {err}",
+                root.display()
+            );
+            return Ok(subdirs);
+        }
+    };
 
     for pattern in patterns {
-        // Reject absolute paths and parent directory escapes
-        if pattern.starts_with('/') || pattern.starts_with("..") || pattern.contains("/../") {
+        // Reject absolute paths and parent directory escapes.
+        if Path::new(pattern).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
             warn!(
-                "[monorepo] config_roots: '{}' must be a relative path within the monorepo",
+                "[{section}].config_roots: '{}' must be a relative path within the config root",
                 pattern
             );
             continue;
@@ -3439,7 +3649,7 @@ fn expand_config_roots_inner(
         // Reject recursive glob patterns (**)
         if pattern.contains("**") {
             warn!(
-                "[monorepo] config_roots: recursive glob '**' not supported in '{}', use single-level '*' instead",
+                "[{section}].config_roots: recursive glob '**' not supported in '{}', use single-level '*' instead",
                 pattern
             );
             continue;
@@ -3453,59 +3663,79 @@ fn expand_config_roots_inner(
                     for entry in entries {
                         match entry {
                             Ok(path) => {
-                                // Verify path is within monorepo root
-                                if path.strip_prefix(root).is_err() {
+                                let canonical = match path.canonicalize() {
+                                    Ok(path) => path,
+                                    Err(err) => {
+                                        warn!(
+                                            "[{section}].config_roots: failed to resolve glob match {}: {err}",
+                                            path.display()
+                                        );
+                                        continue;
+                                    }
+                                };
+                                if !canonical.starts_with(&canonical_root) {
                                     warn!(
-                                        "[monorepo] config_roots: glob matched path outside monorepo root: {}",
+                                        "[{section}].config_roots: glob matched path outside config root: {}",
                                         path.display()
                                     );
                                     continue;
                                 }
-                                if path.is_dir()
+                                if canonical.is_dir()
                                     && filenames.is_none_or(|filenames| {
-                                        has_mise_config_with_filenames(&path, filenames)
+                                        has_mise_config_with_filenames(&canonical, filenames)
                                     })
                                 {
-                                    subdirs.push(path);
+                                    subdirs.push(if canonicalize_results {
+                                        canonical
+                                    } else {
+                                        path
+                                    });
                                 }
                             }
                             Err(e) => {
-                                warn!("[monorepo] config_roots glob error: {e}");
+                                warn!("[{section}].config_roots glob error: {e}");
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("[monorepo] config_roots invalid glob pattern '{pattern}': {e}");
+                    warn!("[{section}].config_roots invalid glob pattern '{pattern}': {e}");
                 }
             }
         } else {
             // Explicit path
             let path = root.join(pattern);
-            // Verify path is within monorepo root after resolution
-            if let Ok(canonical) = path.canonicalize()
-                && let Ok(canonical_root) = root.canonicalize()
-                && !canonical.starts_with(&canonical_root)
-            {
+            let canonical = match path.canonicalize() {
+                Ok(path) => path,
+                Err(_) => {
+                    warn!("[{section}].config_roots: '{}' does not exist", pattern);
+                    continue;
+                }
+            };
+            if !canonical.starts_with(&canonical_root) {
                 warn!(
-                    "[monorepo] config_roots: '{}' resolves outside monorepo root",
+                    "[{section}].config_roots: '{}' resolves outside config root",
                     pattern
                 );
                 continue;
             }
-            if path.is_dir() {
+            if canonical.is_dir() {
                 if filenames
-                    .is_none_or(|filenames| has_mise_config_with_filenames(&path, filenames))
+                    .is_none_or(|filenames| has_mise_config_with_filenames(&canonical, filenames))
                 {
-                    subdirs.push(path);
+                    subdirs.push(if canonicalize_results {
+                        canonical
+                    } else {
+                        path
+                    });
                 } else {
                     warn!(
-                        "[monorepo] config_roots: '{}' has no mise config file",
+                        "[{section}].config_roots: '{}' has no mise config file",
                         pattern
                     );
                 }
             } else {
-                warn!("[monorepo] config_roots: '{}' does not exist", pattern);
+                warn!("[{section}].config_roots: '{}' is not a directory", pattern);
             }
         }
     }
@@ -3526,14 +3756,19 @@ fn expand_config_roots_inner(
 }
 
 fn has_mise_config_with_filenames(dir: &Path, filenames: &[String]) -> bool {
+    has_config_file_with_filenames(dir, filenames)
+        || dir.join(".mise/tasks").is_dir()
+        || dir.join("mise-tasks").is_dir()
+}
+
+fn has_config_file_with_filenames(dir: &Path, filenames: &[String]) -> bool {
     filenames.iter().any(|f| {
         if f.contains('*') {
-            !glob(dir, f).unwrap_or_default().is_empty()
+            !config_glob(dir, f).is_empty()
         } else {
             dir.join(f).exists()
         }
-    }) || dir.join(".mise/tasks").is_dir()
-        || dir.join("mise-tasks").is_dir()
+    })
 }
 
 fn discover_monorepo_subdirs(
@@ -3608,9 +3843,7 @@ fn discover_monorepo_subdirs(
                 }
 
                 // Check if this directory has a mise config file
-                let has_config = DEFAULT_CONFIG_FILENAMES
-                    .iter()
-                    .any(|f| dir.join(f).exists());
+                let has_config = has_config_file_with_filenames(dir, &DEFAULT_CONFIG_FILENAMES);
                 let has_task_includes = has_task_includes(dir);
                 if has_config || has_task_includes {
                     // Apply context filtering if provided
@@ -3645,9 +3878,7 @@ fn discover_monorepo_subdirs(
             if entry.file_type().is_dir() {
                 let dir = entry.path();
                 // Check if this directory has a mise config file
-                let has_config = DEFAULT_CONFIG_FILENAMES
-                    .iter()
-                    .any(|f| dir.join(f).exists());
+                let has_config = has_config_file_with_filenames(dir, &DEFAULT_CONFIG_FILENAMES);
                 let has_task_includes = has_task_includes(dir);
                 if has_config || has_task_includes {
                     // Apply context filtering if provided
@@ -3819,62 +4050,77 @@ fn prefer_windows_file_task_siblings(file_tasks: Vec<Task>) -> Vec<Task> {
     prefer_windows_file_task_siblings_inner(file_tasks)
 }
 
+/// On Windows, keep the native script when a task exists in both a POSIX and a Windows form.
+///
+/// File tasks have no way to branch on platform — `run_windows` is a TOML-task key and is rejected
+/// in a file-task header — so writing the task twice, once per platform, is the only option
+/// available. Both files then reduce to the same task name, because the name is the file stem, and
+/// `mise run <name>` would run both.
+///
+/// The POSIX side is anything *not* carrying a Windows-native extension, which includes both
+/// `build` and `build.sh`. Keying on "no extension at all" is what this used to do, and it stopped
+/// being enough once shebang scripts became discoverable (#7941): `build.sh` is the shape people
+/// actually write, and it was passing straight through.
 fn prefer_windows_file_task_siblings_inner(file_tasks: Vec<Task>) -> Vec<Task> {
     let windows_exts = Settings::get()
         .windows_executable_extensions
         .iter()
         .map(|ext| ext.to_lowercase())
         .collect::<IndexSet<_>>();
-    let extensionless_task_keys = file_tasks
-        .iter()
-        .filter(|task| task.config_source.extension().is_none())
-        .map(|task| (task.config_source.clone(), task.name.clone()))
-        .collect::<IndexSet<_>>();
-    let mut windows_native_task_key_counts = IndexMap::new();
-    for task in &file_tasks {
-        let Some(ext) = task
-            .config_source
+    let is_windows_native = |task: &Task| {
+        task.config_source
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(str::to_lowercase)
-        else {
-            continue;
-        };
-        if windows_exts.contains(&ext) {
-            *windows_native_task_key_counts
-                .entry((
-                    task.config_source.with_extension(""),
-                    strip_task_extension(&task.name).to_string(),
-                ))
-                .or_insert(0) += 1;
-        }
+            .is_some_and(|ext| windows_exts.contains(&ext.to_lowercase()))
+    };
+    // Path and name with the extension dropped, so `build.sh` and `build.ps1` land on one key.
+    // `with_extension("")` keeps the directory, which is what confines a pair to a single
+    // task-file family instead of matching same-named tasks from unrelated directories.
+    //
+    // The name has to be stripped too: `name_from_path` keeps the extension, so a file task is
+    // named `build.sh` and only `display_name` drops it. `strip_task_extension` removes just the
+    // last one, so `build.release.sh` keys as `build.release` rather than `build`.
+    let task_key = |task: &Task| {
+        (
+            task.config_source.with_extension(""),
+            strip_task_extension(&task.name).to_string(),
+        )
+    };
+    let posix_task_keys = file_tasks
+        .iter()
+        .filter(|task| !is_windows_native(task))
+        .map(&task_key)
+        .collect::<IndexSet<_>>();
+    let mut windows_native_task_key_counts = IndexMap::new();
+    for task in file_tasks.iter().filter(|task| is_windows_native(task)) {
+        *windows_native_task_key_counts
+            .entry(task_key(task))
+            .or_insert(0) += 1;
     }
-    let windows_takeover_keys = extensionless_task_keys
+    // Exactly one, deliberately: with two Windows siblings there is no basis for choosing between
+    // them, so everything is left alone rather than picking arbitrarily.
+    let windows_takeover_keys = posix_task_keys
         .iter()
         .filter(|key| windows_native_task_key_counts.get(*key) == Some(&1))
         .cloned()
         .collect::<IndexSet<_>>();
 
+    // The POSIX half is dropped and the Windows one is renamed to the bare stem, so `build.ps1`
+    // becomes the `build` the POSIX file used to answer to. Without that the task would only be
+    // reachable as `build.ps1`, which is not a name anyone wrote down.
     file_tasks
         .into_iter()
         .filter_map(|mut task| {
-            if task.config_source.extension().is_none()
-                && windows_takeover_keys.contains(&(task.config_source.clone(), task.name.clone()))
-            {
-                return None;
+            let key = task_key(&task);
+            if !is_windows_native(&task) {
+                return if windows_takeover_keys.contains(&key) {
+                    None
+                } else {
+                    Some(task)
+                };
             }
-            if task
-                .config_source
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| windows_exts.contains(&ext.to_lowercase()))
-            {
-                let stem = strip_task_extension(&task.name);
-                if windows_takeover_keys
-                    .contains(&(task.config_source.with_extension(""), stem.to_string()))
-                {
-                    task.name = stem.to_string();
-                }
+            if windows_takeover_keys.contains(&key) {
+                task.name = key.1;
             }
             Some(task)
         })
@@ -5027,14 +5273,53 @@ mod tests {
     #[test]
     fn test_has_mise_config_with_glob_filenames() -> Result<()> {
         let tmp = TempDir::new()?;
-        let confd = tmp.path().join(".config/mise/conf.d");
-        fs::create_dir_all(&confd)?;
-        fs::write(confd.join("tools.toml"), "[tools]\n")?;
+        for pattern in [".config/mise/conf.d/*.toml", ".mise/conf.d/*.toml"] {
+            let confd = tmp.path().join(pattern.trim_end_matches("/*.toml"));
+            fs::create_dir_all(&confd)?;
+            fs::write(confd.join("tools.toml"), "[tools]\n")?;
 
-        assert!(has_mise_config_with_filenames(
-            tmp.path(),
-            &[".config/mise/conf.d/*.toml".to_string()]
-        ));
+            assert!(has_mise_config_with_filenames(
+                tmp.path(),
+                &[pattern.to_string()]
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_mise_conf_d_precedence() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let confd = tmp.path().join(".mise/conf.d");
+        fs::create_dir_all(&confd)?;
+        fs::write(confd.join("01-base.toml"), "[env]\nORDER = 'base'\n")?;
+        fs::write(
+            confd.join("02-override.toml"),
+            "[env]\nORDER = 'override'\n",
+        )?;
+        fs::write(confd.join(".hidden.toml"), "[env]\nORDER = 'hidden'\n")?;
+        fs::write(
+            tmp.path().join(".mise/config.toml"),
+            "[env]\nORDER = 'config'\n",
+        )?;
+
+        let filenames = vec![
+            ".mise/conf.d/*.toml".to_string(),
+            ".mise/config.toml".to_string(),
+        ];
+        let paths = config_paths_in_dir_with_filenames(tmp.path(), &filenames);
+        let relative = paths
+            .iter()
+            .map(|path| path.strip_prefix(tmp.path()).unwrap())
+            .collect_vec();
+        assert_eq!(
+            relative,
+            vec![
+                Path::new(".mise/config.toml"),
+                Path::new(".mise/conf.d/02-override.toml"),
+                Path::new(".mise/conf.d/01-base.toml"),
+            ]
+        );
 
         Ok(())
     }
@@ -5054,12 +5339,14 @@ mod tests {
             },
         ];
 
-        let names = prefer_windows_file_task_siblings_inner(file_tasks)
-            .into_iter()
-            .map(|task| task.name)
-            .collect_vec();
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
 
-        assert_eq!(names, vec!["pkl:gen"]);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "pkl:gen");
+        assert_eq!(
+            tasks[0].config_source,
+            PathBuf::from("mise-tasks/pkl/gen.ps1")
+        );
     }
 
     #[test]
@@ -5226,6 +5513,140 @@ mod tests {
         );
     }
 
+    /// The case this function exists for.
+    ///
+    /// `name_from_path` keeps the extension, so these arrive as `build.sh` and `build.ps1`; both
+    /// reduce to `build` once the extension is stripped, which is why they collide.
+    #[test]
+    fn test_prefer_windows_file_task_siblings_takes_over_a_posix_extension() {
+        let file_tasks = vec![
+            Task {
+                name: "build.sh".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.sh"),
+                ..Default::default()
+            },
+            Task {
+                name: "build.ps1".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.ps1"),
+                ..Default::default()
+            },
+        ];
+
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "build");
+        assert_eq!(
+            tasks[0].config_source,
+            PathBuf::from("mise-tasks/build.ps1")
+        );
+    }
+
+    /// A dot inside the task name is not the extension.
+    ///
+    /// `build.release.sh` is named `build.release.sh`, and `strip_task_extension` takes off only
+    /// the last extension — so the pair keys as `build.release` and the survivor is renamed to
+    /// `build.release`, not to `build`. Getting that wrong would leave `mise run build.release`
+    /// with nothing to resolve.
+    #[test]
+    fn test_prefer_windows_file_task_siblings_keeps_a_dotted_task_name() {
+        let file_tasks = vec![
+            Task {
+                name: "build.release.sh".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.release.sh"),
+                ..Default::default()
+            },
+            Task {
+                name: "build.release.ps1".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.release.ps1"),
+                ..Default::default()
+            },
+        ];
+
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "build.release");
+        assert_eq!(
+            tasks[0].config_source,
+            PathBuf::from("mise-tasks/build.release.ps1")
+        );
+    }
+
+    /// A control for the test above: taking over requires something to take over *from*. A `.sh`
+    /// with no Windows sibling is the common shape on a project that never had a Windows script,
+    /// and it has to keep working — dropping it would break every such project on Windows.
+    #[test]
+    fn test_prefer_windows_file_task_siblings_keeps_a_lone_posix_extension() {
+        let file_tasks = vec![Task {
+            name: "build.sh".to_string(),
+            config_source: PathBuf::from("mise-tasks/build.sh"),
+            ..Default::default()
+        }];
+
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
+
+        assert_eq!(tasks.len(), 1);
+        // Name untouched as well as kept: renaming it to `build` here would invent a task the
+        // POSIX-only project never had.
+        assert_eq!(tasks[0].name, "build.sh");
+        assert_eq!(tasks[0].config_source, PathBuf::from("mise-tasks/build.sh"));
+    }
+
+    /// The other control: two POSIX files are not a platform pair, so neither is Windows' to
+    /// prefer. Widening the POSIX side must not turn "same stem" alone into a reason to delete.
+    #[test]
+    fn test_prefer_windows_file_task_siblings_keeps_two_posix_files() {
+        let file_tasks = vec![
+            Task {
+                name: "build".to_string(),
+                config_source: PathBuf::from("mise-tasks/build"),
+                ..Default::default()
+            },
+            Task {
+                name: "build.sh".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.sh"),
+                ..Default::default()
+            },
+        ];
+
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
+
+        assert_eq!(tasks.len(), 2);
+    }
+
+    /// Ambiguity is unchanged by the widening: with two Windows siblings there is no basis for
+    /// choosing, so the `.sh` survives alongside them rather than being deleted for nothing.
+    #[test]
+    fn test_prefer_windows_file_task_siblings_keeps_posix_when_windows_is_ambiguous() {
+        let file_tasks = vec![
+            Task {
+                name: "build.sh".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.sh"),
+                ..Default::default()
+            },
+            Task {
+                name: "build.ps1".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.ps1"),
+                ..Default::default()
+            },
+            Task {
+                name: "build.cmd".to_string(),
+                config_source: PathBuf::from("mise-tasks/build.cmd"),
+                ..Default::default()
+            },
+        ];
+
+        let tasks = prefer_windows_file_task_siblings_inner(file_tasks);
+
+        assert_eq!(tasks.len(), 3);
+        // Names untouched too: nothing was chosen, so nothing should have been renamed.
+        assert_eq!(
+            tasks.iter().map(|task| task.name.as_str()).collect_vec(),
+            vec!["build.sh", "build.ps1", "build.cmd"]
+        );
+    }
+
     #[test]
     fn test_env_config_patterns() {
         assert_eq!(
@@ -5359,6 +5780,7 @@ mod tests {
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files: Default::default(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5437,6 +5859,7 @@ mod tests {
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files: Default::default(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5519,6 +5942,7 @@ mod tests {
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files: Default::default(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5603,6 +6027,7 @@ mod tests {
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files: Default::default(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5662,6 +6087,7 @@ mod tests {
             let config = Config {
                 tera_ctx: BASE_CONTEXT.clone(),
                 config_files: Default::default(),
+                bootstrap_config_maps: vec![],
                 env: OnceCell::new(),
                 env_with_sources: OnceCell::new(),
                 shorthands: get_shorthands(&Settings::get()),
@@ -5746,6 +6172,7 @@ config_roots = ["apps/api", "apps/web"]
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files,
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5918,6 +6345,7 @@ config_roots = ["apps/api", "apps/web"]
         let config = Config {
             tera_ctx: BASE_CONTEXT.clone(),
             config_files: Default::default(),
+            bootstrap_config_maps: vec![],
             env: OnceCell::new(),
             env_with_sources: OnceCell::new(),
             shorthands: get_shorthands(&Settings::get()),
@@ -5996,5 +6424,72 @@ vars = { target = "linux" }
         assert_eq!(tasks[0].name, "build");
         assert_eq!(tasks[0].description, "linux");
         Ok(())
+    }
+}
+
+/// Deliberately not inside the `#[cfg(unix)]` module above: `first_config_file` only inspects
+/// path components, so it behaves the same everywhere and is worth compiling on Windows too.
+#[cfg(test)]
+mod write_target_tests {
+    use super::*;
+
+    fn set(paths: &[&str]) -> IndexSet<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn a_drop_in_never_wins_over_tool_versions() {
+        // `global_config_files` lists conf.d entries first and appends `~/.tool-versions`
+        // after them, so a fallback that does not skip drop-ins hands one back — and
+        // `global_config_path`, refusing it, creates a `config.toml` rather than writing to
+        // the `.tool-versions` sitting right there. That ordering is what makes this
+        // reachable, and nothing else in the file says so.
+        let files = set(&[
+            "/home/u/.config/mise/conf.d/10-drop-in.toml",
+            "/home/u/.tool-versions",
+        ]);
+        assert_eq!(
+            first_config_file(&files),
+            Some(&PathBuf::from("/home/u/.tool-versions"))
+        );
+    }
+
+    #[test]
+    fn nothing_but_drop_ins_means_no_write_target() {
+        // Every caller turns `None` into a config of its own, which is the wanted outcome:
+        // creating `config.toml` beats editing somebody's drop-in.
+        let files = set(&["/home/u/.config/mise/conf.d/10-drop-in.toml"]);
+        assert_eq!(first_config_file(&files), None);
+    }
+
+    #[test]
+    fn a_real_config_still_wins() {
+        let files = set(&[
+            "/home/u/.config/mise/conf.d/10-drop-in.toml",
+            "/home/u/.config/mise/config.toml",
+            "/home/u/.tool-versions",
+        ]);
+        assert_eq!(
+            first_config_file(&files),
+            Some(&PathBuf::from("/home/u/.config/mise/config.toml"))
+        );
+    }
+
+    #[test]
+    fn tool_versions_stays_deprioritised() {
+        // Control for the change above: `.tool-versions` is skipped *while choosing* and only
+        // returned when nothing else qualifies. Excluding drop-ins outright must not turn that
+        // preference into an exclusion as well.
+        let files = set(&["/proj/.tool-versions", "/proj/mise.toml"]);
+        assert_eq!(
+            first_config_file(&files),
+            Some(&PathBuf::from("/proj/mise.toml"))
+        );
+
+        let only = set(&["/proj/.tool-versions"]);
+        assert_eq!(
+            first_config_file(&only),
+            Some(&PathBuf::from("/proj/.tool-versions"))
+        );
     }
 }

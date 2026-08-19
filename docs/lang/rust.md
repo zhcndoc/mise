@@ -35,7 +35,24 @@ mise use -g rust@beta
 cargo build
 ```
 
-使用指定版本的 rust：
+使用滚动 nightly 通道：
+
+```sh
+mise use -g rust@nightly
+cargo build
+```
+
+配置仍然是 `nightly`，而 mise 会将当前 Rust 通道清单解析为具体的 `nightly-YYYY-MM-DD` 工具链，以用于安装和锁定文件。这会使配置的通道保持滚动更新，同时让锁定安装具有可复现性。运行 `mise upgrade rust` 或 `mise lock --bump` 以推进锁定的 nightly。
+
+如果要改为保留特定的 nightly，请显式配置其日期：
+
+```sh
+mise use -g rust@nightly-2026-08-13
+```
+
+显式指定日期的 nightly 是精确固定版本。使用 `--bump` 的命令（例如 `mise upgrade --bump rust`）可以将该固定版本替换为当前 nightly。
+
+使用特定版本的 rust：
 
 ```sh
 mise use -g rust@1.82

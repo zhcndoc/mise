@@ -11,11 +11,11 @@ use crate::env;
 static CONFIG_ROOT_CACHE: Lazy<Mutex<HashMap<PathBuf, PathBuf>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub fn reset() {
+pub(crate) fn reset() {
     CONFIG_ROOT_CACHE.lock().unwrap().clear();
 }
 
-pub fn config_root(path: &Path) -> PathBuf {
+pub(crate) fn config_root(path: &Path) -> PathBuf {
     let path = path
         .absolutize()
         .map(|p| p.to_path_buf())
@@ -107,6 +107,8 @@ mod tests {
             "/foo/bar/mise.toml",
             "/foo/bar/mise/config.local.toml",
             "/foo/bar/mise/config.toml",
+            "/foo/bar/mise/conf.d/config.toml",
+            "/foo/bar/mise/conf.d/foo.toml",
             "/foo/bar/mise/tasks/build.toml",
             "/foo/bar/.config/mise/config.env.toml",
             "/foo/bar/.config/mise.env.toml",
@@ -144,6 +146,8 @@ mod tests {
             "/foo/mise/mise.toml",
             "/foo/mise/mise/config.local.toml",
             "/foo/mise/mise/config.toml",
+            "/foo/mise/mise/conf.d/config.toml",
+            "/foo/mise/mise/conf.d/foo.toml",
             "/foo/mise/mise/tasks/build.toml",
             "/foo/mise/.config/mise/config.env.toml",
             "/foo/mise/.config/mise.env.toml",

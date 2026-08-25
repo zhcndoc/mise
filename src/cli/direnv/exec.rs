@@ -9,9 +9,9 @@ use crate::toolset::ToolsetBuilder;
 
 /// [internal] This is an internal command that writes an envrc file
 /// for direnv to consume.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, hide = true)]
-pub struct DirenvExec {}
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, hide = true)]
+pub(super) struct DirenvExec {}
 
 #[derive(Debug, Default, Deserialize)]
 struct DirenvWatches {
@@ -20,7 +20,7 @@ struct DirenvWatches {
 }
 
 impl DirenvExec {
-    pub async fn run(self, config: &Arc<Config>) -> Result<()> {
+    pub(super) async fn run(self, config: &Arc<Config>) -> Result<()> {
         let ts = ToolsetBuilder::new().build(config).await?;
 
         let mut cmd = env_cmd();

@@ -141,13 +141,27 @@ cargo build
 
 通常只需添加 `#!/usr/bin/env bash` 即可，并且不会对其他平台造成任何影响。
 
+### 没有 `.ps1` 扩展名的 PowerShell 任务
+
+Windows PowerShell 拒绝打开名称不以 `.ps1` 结尾的脚本——Linux
+和 macOS 版本没有这项限制。因此，为了让 `#!/usr/bin/env pwsh` 任务在各个平台上的行为一致，
+mise 会在临时目录中从 `.ps1` 副本运行它，并在任务完成后删除该副本。
+
+只有脚本对自身位置的认知会发生变化：`$PSScriptRoot` 和 `$PSCommandPath` 指向的是
+副本，而不是任务文件。工作目录、`$args` 和环境变量都不会改变。
+
+需要查找自身旁边文件的任务有两种解决方法，第一种在所有平台上都适用：
+
+- 读取 [`MISE_TASK_DIR`](/tasks/#environment-variables-passed-to-tasks)，它指明任务文件所在的目录。mise 会根据任务文件设置它，而不是根据实际执行的文件设置，因此副本不会改变该值——在完全不会创建副本的 Linux 和 macOS 上读取到的值也相同。
+- 为任务指定 `.ps1` 扩展名，这样它就会在原位置运行。
+
 ### 为两个平台编写一个任务
 
 文件任务没有等同于 TOML 任务 [`run_windows`](/tasks/task-configuration.html#run-windows) 的机制——脚本**就是**命令，因此没有地方放置第二个命令。只需将两个脚本并排放置，并为 Windows 版本指定一个可执行扩展名：
 
 ```
 mise-tasks/
-  build.sh       # #!/usr/bin/env bash
+  build.sh       #!/usr/bin/env bash
   build.ps1      # the Windows version
 ```
 
@@ -212,7 +226,7 @@ test:units                    ./mise-tasks/test/units
 ## 参数
 
 ::: tip
-有关任务参数的全面信息，请参阅专门的 [Task Arguments](/tasks/task-arguments) 页面。
+有关任务参数的全面信息，请参阅专门的 [任务参数](/tasks/task-arguments) 页面。
 :::
 
 [usage](https://usage.jdx.dev) 规范可用于这些文件中，以提供参数解析、自动补全、
@@ -220,8 +234,8 @@ test:units                    ./mise-tasks/test/units
 功能完备的 CLI。
 
 :::tip
-执行 mise 任务时，不需要安装 `usage` CLI 也能使用 usage 规范。
-但是，要让补全功能正常工作，必须安装 `usage` CLI，并且它需要在 PATH 中可用。
+不需要单独安装 `usage` CLI，即可使用 usage 规范执行或补全 mise 任务。
+安装并启用 mise 的 shell 补全脚本后，任务补全即可正常工作。
 :::
 
 ### 带参数的文件任务示例
@@ -251,7 +265,7 @@ cargo build --profile "${usage_profile?}" --target "${usage_target?}"
 有关 Bash 参数展开模式（如 `${var?}`、`${var:-default}` 和 `${var:+value}`）的详细信息，请参阅 [Bash Variable Expansion for Usage Variables](/tasks/task-arguments#bash-variable-expansion)。
 :::
 
-如果你安装了 `usage`，你的任务就会启用补全功能。在这个示例中，
+启用 mise 的 shell 补全后，此示例会提供以下任务补全：
 
 - `mise run -- build --profile <tab><tab>`
   会将 `debug` 和 `release` 显示为可选项。
@@ -328,7 +342,7 @@ mise run greet invalid.txt --user Alice
 #   0: Invalid choice for arg output_file: invalid.txt, expected one of greeting.txt, file.txt
 ```
 
-如果安装了 `usage`，自动补全会显示 `output_file` 参数可用的选项。
+启用 mise 的 shell 补全后，自动补全会显示 `output_file` 参数的可用选项。
 
 ```shell
 mise run greet <TAB>
@@ -361,4 +375,4 @@ cd "$MISE_ORIGINAL_CWD"
 mise run ./path/to/script.sh
 ```
 
-请注意，路径必须以 `/` 或 `./` 开头才会被视为文件路径。（在 Windows 上，它可以是 `C:\` 或 `.\`）
+请注意，路径必须以 `/` 或 `./` 开头才会被视为文件路径。（在 Windows 上，它可以是 `C:\` 或 `.\`）。

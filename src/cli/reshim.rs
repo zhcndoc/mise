@@ -22,21 +22,21 @@ use crate::toolset::ToolsetBuilder;
 ///
 /// Note that this creates shims for _all_ installed tools, not just the ones that are
 /// currently active in mise.toml.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Reshim {
-    #[clap(hide = true)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Reshim {
+    #[usage(hide = true)]
     pub tool: Option<String>,
-    #[clap(hide = true)]
+    #[usage(hide = true)]
     pub version: Option<String>,
 
     /// Removes all shims before reshimming
-    #[clap(long, short)]
+    #[usage(long, short)]
     pub force: bool,
 }
 
 impl Reshim {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let ts = ToolsetBuilder::new().build(&config).await?;
 

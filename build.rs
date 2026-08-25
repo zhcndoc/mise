@@ -1,3 +1,6 @@
+#![allow(unknown_lints)]
+#![deny(dead_code_pub_in_binary, unreachable_pub)]
+
 use heck::ToUpperCamelCase;
 use indexmap::IndexMap;
 use serde::Serialize as _;
@@ -6,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use aqua_registry::encode_package_rkyv;
-use aqua_registry::types::{AquaPackage, RegistryPackageRow, RegistryYaml};
+use aqua_registry::types::{AquaPackage, AquaPackageType, RegistryPackageRow, RegistryYaml};
 use eyre::{Result, eyre};
 use serde_yaml::Value;
 
@@ -33,6 +36,17 @@ struct AquaPackageRegistry {
     id: String,
     content: Vec<u8>,
     aliases: Vec<String>,
+    search_backend: Option<String>,
+    search_overrides: Vec<AquaSearchOverrideRegistry>,
+}
+
+#[derive(Debug)]
+struct AquaSearchOverrideRegistry {
+    goos: Option<String>,
+    goarch: Option<String>,
+    envs: Vec<String>,
+    libc: Option<String>,
+    backend: Option<String>,
 }
 
 /// Generate a raw string literal that safely contains the given content.
@@ -263,7 +277,7 @@ fn codegen_registry() {
                     .iter()
                     .map(|f| match f {
                         toml::Value::String(path) => format!(
-                            "RegistryIdiomaticFile {{ path: {}, version_regex: None, version_json_path: None, version_expr: None }}",
+                            "RegistryIdiomaticFile {{ path: {}, version_regex: None, version_json_path: None, version_expr: None, deprecated: None }}",
                             raw_string_literal(path)
                         ),
                         toml::Value::Table(spec) => {
@@ -275,6 +289,7 @@ fn codegen_registry() {
                                             | "version_regex"
                                             | "version_json_path"
                                             | "version_expr"
+                                            | "deprecated"
                                     ),
                                     "[{short}] unknown idiomatic file field: {key}"
                                 );
@@ -302,11 +317,12 @@ fn codegen_registry() {
                                     .unwrap_or_else(|| "None".to_string())
                             };
                             format!(
-                                "RegistryIdiomaticFile {{ path: {}, version_regex: {}, version_json_path: {}, version_expr: {} }}",
+                                "RegistryIdiomaticFile {{ path: {}, version_regex: {}, version_json_path: {}, version_expr: {}, deprecated: {} }}",
                                 raw_string_literal(required("path")),
                                 optional("version_regex"),
                                 optional("version_json_path"),
                                 optional("version_expr"),
+                                optional("deprecated"),
                             )
                         }
                         _ => panic!(
@@ -423,6 +439,7 @@ fn codegen_aqua_standard_registry() -> Result<()> {
     let out_dir = env::var("OUT_DIR")?;
     let files_dest_path = Path::new(&out_dir).join("aqua_standard_registry_files.rs");
     let aliases_dest_path = Path::new(&out_dir).join("aqua_standard_registry_aliases.rs");
+    let search_dest_path = Path::new(&out_dir).join("aqua_standard_registry_search.rs");
     let metadata_dest_path = Path::new(&out_dir).join("aqua_standard_registry_metadata.rs");
     let packages_dir = Path::new(&out_dir).join("aqua_standard_registry_packages");
 
@@ -448,6 +465,7 @@ fn codegen_aqua_standard_registry() -> Result<()> {
         aqua_registry_files_code(&registries, &packages_dir)?,
     )?;
     fs::write(aliases_dest_path, aqua_registry_aliases_code(&registries)?)?;
+    fs::write(search_dest_path, aqua_registry_search_code(&registries))?;
 
     let metadata = serde_yaml::from_str::<Value>(&fs::read_to_string(metadata_file)?)?;
     let repository = yaml_string_field(&metadata, "repository").ok_or_else(|| {
@@ -488,13 +506,75 @@ fn aqua_package_registries(rows: &[RegistryPackageRow]) -> Result<Vec<AquaPackag
             ));
         }
         let content = encode_package_rkyv(package)?;
+        let (effective_package, allow_go_repo_fallback) =
+            package.clone().with_unconditional_version_override();
+        let search_backend = aqua_search_backend(&effective_package, allow_go_repo_fallback);
+        let mut search_overrides = effective_package
+            .platform_overrides()
+            .into_iter()
+            .map(|package_override| AquaSearchOverrideRegistry {
+                goos: package_override.goos,
+                goarch: package_override.goarch,
+                envs: package_override.envs,
+                libc: package_override.libc,
+                backend: aqua_search_backend(&package_override.package, allow_go_repo_fallback),
+            })
+            .collect::<Vec<_>>();
+        if search_overrides
+            .iter()
+            .all(|package_override| package_override.backend == search_backend)
+        {
+            search_overrides.clear();
+        }
         registries.push(AquaPackageRegistry {
             id,
             content,
             aliases: row.aliases.clone(),
+            search_backend,
+            search_overrides,
         });
     }
     Ok(registries)
+}
+
+fn aqua_search_backend(package: &AquaPackage, allow_go_repo_fallback: bool) -> Option<String> {
+    match package.package_type() {
+        AquaPackageType::Cargo => package
+            .crate_name
+            .as_deref()
+            .or_else(|| {
+                package
+                    .name
+                    .as_deref()
+                    .and_then(|name| name.strip_prefix("crates.io/"))
+            })
+            .filter(|name| !is_aqua_template(name))
+            .map(|name| format!("cargo:{name}"))
+            .or(Some(String::new())),
+        AquaPackageType::GoInstall => package
+            .path
+            .as_deref()
+            .filter(|path| !is_aqua_template(path))
+            .map(|path| format!("go:{path}"))
+            .or_else(|| {
+                (allow_go_repo_fallback
+                    && !package.repo_owner.is_empty()
+                    && !package.repo_name.is_empty()
+                    && !is_aqua_template(&package.repo_owner)
+                    && !is_aqua_template(&package.repo_name))
+                .then(|| format!("go:github.com/{}/{}", package.repo_owner, package.repo_name))
+            })
+            .or(Some(String::new())),
+        AquaPackageType::GoBuild => Some(String::new()),
+        AquaPackageType::GithubArchive
+        | AquaPackageType::GithubContent
+        | AquaPackageType::GithubRelease
+        | AquaPackageType::Http => None,
+    }
+}
+
+fn is_aqua_template(value: &str) -> bool {
+    value.contains("{{") || value.contains("}}")
 }
 
 fn aqua_registry_files_code(
@@ -579,6 +659,53 @@ fn aqua_registry_aliases_code(registries: &[AquaPackageRegistry]) -> Result<Stri
     Ok(aqua_registry_string_map_code(&entries))
 }
 
+fn aqua_registry_search_code(registries: &[AquaPackageRegistry]) -> String {
+    let entries = registries
+        .iter()
+        .filter_map(|registry| {
+            if registry.search_backend.is_none() && registry.search_overrides.is_empty() {
+                return None;
+            }
+            let overrides = registry
+                .search_overrides
+                .iter()
+                .map(|package_override| {
+                    let envs = package_override
+                        .envs
+                        .iter()
+                        .map(|env| format!("{env:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "AquaSearchBackendOverride {{ goos: {}, goarch: {}, envs: &[{envs}], libc: {}, backend: {} }}",
+                        rust_option_str(package_override.goos.as_deref()),
+                        rust_option_str(package_override.goarch.as_deref()),
+                        rust_option_str(package_override.libc.as_deref()),
+                        rust_option_str(package_override.backend.as_deref()),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some((
+                registry.id.clone(),
+                format!(
+                    "AquaSearchBackends {{ default: {}, overrides: &[{overrides}] }}",
+                    rust_option_str(registry.search_backend.as_deref()),
+                ),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut map = phf_codegen::Map::new();
+    for (key, value) in &entries {
+        map.entry(key, value);
+    }
+    map.build().to_string()
+}
+
+fn rust_option_str(value: Option<&str>) -> String {
+    value.map_or_else(|| "None".to_string(), |value| format!("Some({value:?})"))
+}
+
 fn aqua_registry_string_map_code(entries: &[(String, String)]) -> String {
     let mut map = phf_codegen::Map::new();
     let mut values = Vec::new();
@@ -615,7 +742,7 @@ fn codegen_settings() {
     let mut lines = vec![
         r#"#[derive(Config, Default, Debug, Clone, Serialize)]
 #[config(layer_attr(derive(Clone, Serialize, Default)))]
-pub struct Settings {"#
+pub(crate) struct Settings {"#
             .to_string(),
     ];
 
@@ -729,7 +856,7 @@ pub struct Settings {"#
 #[derive(Config, Default, Debug, Clone, Serialize)]
 #[config(layer_attr(derive(Clone, Serialize, Default)))]
 #[config(layer_attr(serde(deny_unknown_fields)))]
-pub struct {name} {{"#,
+pub(crate) struct {name} {{"#,
                 name = settings_struct_name(&path)
             ));
 
@@ -744,7 +871,7 @@ pub struct {name} {{"#,
 
     lines.push(
         r#"
-pub static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new(|| {
+pub(crate) static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new(|| {
     indexmap!{"#
             .to_string(),
     );
@@ -836,7 +963,7 @@ pub static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new
 /// These settings affect config file discovery and must be loaded before
 /// the main config files are parsed.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct MisercSettings {"#
+pub(crate) struct MisercSettings {"#
             .to_string(),
     );
 

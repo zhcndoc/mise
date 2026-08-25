@@ -15,10 +15,10 @@ static AQUA_REGISTRY_PATH: Lazy<PathBuf> = Lazy::new(|| dirs::CACHE.join("aqua-r
 static AQUA_DEFAULT_REGISTRY_URL: &str = "https://github.com/aquaproj/aqua-registry";
 pub(crate) const DEFAULT_AQUA_REGISTRY_CACHE_TTL: duration::Duration = duration::WEEKLY;
 
-pub static AQUA_REGISTRY: Lazy<AquaRegistry> = Lazy::new(AquaRegistry::from_settings);
+pub(crate) static AQUA_REGISTRY: Lazy<AquaRegistry> = Lazy::new(AquaRegistry::from_settings);
 
 #[derive(Debug)]
-pub struct AquaRegistry {
+pub(crate) struct AquaRegistry {
     registries: Vec<RegistrySource>,
 }
 
@@ -169,7 +169,7 @@ impl ActiveRegistry {
 }
 
 impl AquaRegistry {
-    pub async fn package(&self, id: &str) -> Result<AquaPackage> {
+    pub(crate) async fn package(&self, id: &str) -> Result<AquaPackage> {
         static CACHE: Lazy<Mutex<HashMap<String, AquaPackage>>> =
             Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -476,36 +476,82 @@ fn github_repo_slug(registry_url: &str) -> Option<(String, String)> {
 }
 
 struct AquaSuggestionsCache {
-    name_to_ids: HashMap<&'static str, Vec<&'static str>>,
+    name_to_entries: HashMap<&'static str, Vec<AquaSearchEntry>>,
     names: Vec<&'static str>,
 }
 
-static AQUA_SUGGESTIONS_CACHE: Lazy<AquaSuggestionsCache> = Lazy::new(|| {
-    let ids = super::standard_registry::package_ids();
-    let mut name_to_ids: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
-    for id in ids {
-        if let Some((_, name)) = id.rsplit_once('/') {
-            name_to_ids.entry(name).or_default().push(id);
-        }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AquaSearchEntry {
+    pub id: &'static str,
+    backend_override: Option<&'static str>,
+}
+
+impl AquaSearchEntry {
+    pub(crate) fn name(&self) -> &'static str {
+        self.id.rsplit_once('/').map_or(self.id, |(_, name)| name)
     }
-    let names = name_to_ids.keys().copied().collect();
-    AquaSuggestionsCache { name_to_ids, names }
+
+    pub(crate) fn backend(&self) -> String {
+        self.backend_override
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("aqua:{}", self.id))
+    }
+
+    pub(crate) fn backend_matches(&self, query: &str) -> bool {
+        query.strip_prefix("aqua:") == Some(self.id)
+            || self.backend_override.is_some_and(|b| b == query)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AquaSuggestion {
+    pub name: String,
+    pub backend: String,
+}
+
+pub(crate) fn aqua_search_entries() -> impl Iterator<Item = AquaSearchEntry> {
+    super::standard_registry::search_entries().map(|(id, backend_override)| AquaSearchEntry {
+        id,
+        backend_override,
+    })
+}
+
+static AQUA_SUGGESTIONS_CACHE: Lazy<AquaSuggestionsCache> = Lazy::new(|| {
+    let mut name_to_entries: HashMap<&'static str, Vec<AquaSearchEntry>> = HashMap::new();
+    for entry in aqua_search_entries() {
+        name_to_entries.entry(entry.name()).or_default().push(entry);
+    }
+    let names = name_to_entries.keys().copied().collect();
+    AquaSuggestionsCache {
+        name_to_entries,
+        names,
+    }
 });
 
-/// Search aqua packages by tool name, returning "owner/name" IDs
-/// where the name part is similar to the query.
-pub fn aqua_suggest(query: &str) -> Vec<String> {
+/// Search Aqua packages by tool name, returning runnable mise backend suggestions.
+pub(crate) fn aqua_suggest(query: &str) -> Vec<AquaSuggestion> {
     let cache = &*AQUA_SUGGESTIONS_CACHE;
 
     // Use a higher threshold (0.8) to avoid noisy suggestions
     let similar_names = xx::suggest::similar_n_with_threshold(query, &cache.names, 5, 0.8);
 
-    // Map back to full IDs
     let mut results = Vec::new();
     for matched_name in &similar_names {
-        if let Some(full_ids) = cache.name_to_ids.get(matched_name.as_str()) {
-            for full_id in full_ids {
-                results.push(full_id.to_string());
+        if let Some(entries) = cache.name_to_entries.get(matched_name.as_str()) {
+            for entry in entries {
+                let backend = entry.backend();
+                // Distinct aqua packages can translate to the same backend
+                // (e.g. crates.io/eza and eza-community/eza both to cargo:eza)
+                if results
+                    .iter()
+                    .any(|suggestion: &AquaSuggestion| suggestion.backend == backend)
+                {
+                    continue;
+                }
+                results.push(AquaSuggestion {
+                    name: matched_name.clone(),
+                    backend,
+                });
                 if results.len() >= 5 {
                     return results;
                 }
@@ -516,7 +562,7 @@ pub fn aqua_suggest(query: &str) -> Vec<String> {
 }
 
 // Re-export types and static for compatibility
-pub use aqua_registry::{
+pub(crate) use aqua_registry::{
     AquaChecksum, AquaChecksumType, AquaCosign, AquaGithubArtifactAttestations, AquaMinisign,
     AquaMinisignType, AquaPackage, AquaPackageType,
 };

@@ -1,9 +1,9 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise oci build`
 
-- **用法**：`mise oci build [FLAGS]`
-- **作用**：修改状态
-- **源代码**：[`src/cli/oci/build.rs`](https://github.com/jdx/mise/blob/main/src/cli/oci/build.rs)
+- **Usage:** `mise oci build [FLAGS]`
+- **Effect:** modifies state
+- **Source code:** [`src/cli/oci/build.rs`](https://github.com/jdx/mise/blob/main/src/cli/oci/build.rs)
 
 [实验性] 根据当前的 mise.toml 构建一个 OCI 镜像
 
@@ -15,44 +15,21 @@
 需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）。
 
 ## 标志
+- **`--copy <HOST_PATH:IMAGE_PATH>`** — 将主机文件、目录或符号链接复制到镜像中（可重复，HOST:IMAGE）
+- **`-o --output <OUTPUT>`** — OCI 镜像布局的输出目录
 
-### `--copy… <HOST_PATH:IMAGE_PATH>`
+  **默认值：** `./mise-oci`
+- **`--from <FROM>`** — 基础镜像引用（覆盖 [oci].from 和 oci.default_from 设置）
+- **`--include-global`** — 同时包含全局／系统配置中的工具（默认：仅项目）
 
-将主机文件、目录或符号链接复制到镜像中（可重复使用，HOST:IMAGE）
+  默认情况下，`mise oci build` 只会打包项目 mise 配置中声明的工具（以及项目根目录及其以下的任何父级配置，例如单体仓库根目录配置）。`~/.config/mise/config.toml` 中的个人开发工具会被排除，因此不会被打包进项目镜像。传入 `--include-global` 可恢复旧的“合并所有已加载配置”行为。
+- **`-t --tag <TAG>`** — 要记录在镜像索引中的标签（org.opencontainers.image.ref.name 注释）
+- **`--mount-point <MOUNT_POINT>`** — 将工具安装放置在镜像中的位置（默认：/mise）
+- **`--no-mise`** — 不要将当前运行的 mise 二进制文件嵌入 `/usr/local/bin/mise`
+- **`--owner <UID[:GID]>`** — 为生成层中的每个 tar 条目分配的 UID[:GID]
 
-### `-o --output <OUTPUT>`
-
-OCI 镜像布局的输出目录
-
-**默认：** `./mise-oci`
-
-### `--from <FROM>`
-
-基础镜像引用（覆盖 [oci].from 和 oci.default_from 设置）
-
-### `--include-global`
-
-同时包含来自全局 / 系统配置的工具（默认：仅项目）
-
-默认情况下，`mise oci build` 只打包在项目的 mise 配置中声明的工具（以及项目根目录及其以下层级的任何父配置，例如 monorepo 根配置）。`~/.config/mise/config.toml` 中的个人开发工具会被排除在外，因此它们不会被打包进项目镜像。传入 `--include-global` 可恢复旧的“合并所有已加载配置”行为。
-
-### `-t --tag <TAG>`
-
-记录到镜像索引中的标签（`org.opencontainers.image.ref.name` 注解）
-
-### `--mount-point <MOUNT_POINT>`
-
-在镜像中放置工具安装的位置（默认：/mise）
-
-### `--no-mise`
-
-不要将当前运行的 mise 二进制嵌入到 `/usr/local/bin/mise`
-
-### `--owner <UID[:GID]>`
-
-为生成层中的每个 tar 条目分配的 `UID[:GID]`
-
-覆盖 [oci].user_id / [oci].group_id。默认值为 0:0。如果省略 GID，则默认与 UID 相同。这只会影响文件所有权；[oci].user 控制镜像的 USER 指令。
+  覆盖 [oci].user_id／[oci].group_id。默认为 0:0。如果省略 GID，则默认为 UID。这只影响文件所有权；[oci].user 控制镜像的 USER 指令。
+- **`-h --help`** — 打印帮助
 
 示例：
 

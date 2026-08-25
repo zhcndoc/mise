@@ -7,24 +7,24 @@ use eyre::Result;
 use itertools::Itertools;
 
 /// List config files currently in use
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct ConfigLs {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct ConfigLs {
     /// Output in JSON format
-    #[clap(short = 'J', long, verbatim_doc_comment)]
+    #[usage(short = 'J', long, verbatim_doc_comment)]
     pub json: bool,
 
     /// Do not print table header
-    #[clap(long, alias = "no-headers", verbatim_doc_comment)]
+    #[usage(long, alias = "no-headers", verbatim_doc_comment)]
     pub no_header: bool,
 
     /// List all tracked config files
-    #[clap(long, verbatim_doc_comment)]
+    #[usage(long, verbatim_doc_comment)]
     pub tracked_configs: bool,
 }
 
 impl ConfigLs {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         if self.tracked_configs {
             self.display_tracked_configs().await?;
         } else if self.json {

@@ -14,25 +14,25 @@ use crate::{config, dirs, exit, file};
 /// Removes installed tool versions
 ///
 /// This only removes the installed version, it does not modify mise.toml.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Uninstall {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Uninstall {
     /// Tool(s) to remove
-    #[clap(value_name = "INSTALLED_TOOL@VERSION", required_unless_present = "all")]
+    #[usage(value_name = "INSTALLED_TOOL@VERSION", required_unless = "all")]
     installed_tool: Vec<ToolArg>,
 
     /// Delete all installed versions
-    #[clap(long, short)]
+    #[usage(long, short)]
     all: bool,
 
     /// Do not actually delete anything
-    #[clap(long, short = 'n')]
+    #[usage(long, short = 'n')]
     dry_run: bool,
 
     /// Like --dry-run but exits with code 1 if there are tools to uninstall
     ///
     /// This is useful for scripts to check if tools need to be uninstalled.
-    #[clap(long, verbatim_doc_comment)]
+    #[usage(long, verbatim_doc_comment)]
     dry_run_code: bool,
 }
 
@@ -41,7 +41,7 @@ impl Uninstall {
         self.dry_run || self.dry_run_code
     }
 
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let tool_versions = if self.installed_tool.is_empty() && self.all {
             self.get_all_tool_versions(&config).await?

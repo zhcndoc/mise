@@ -122,7 +122,7 @@ mise bootstrap macos defaults apply --yes     # 跳过确认提示
 `differs`（存在值但不匹配——会显示当前值）或
 `unset`。`mise doctor` 会汇总相同的偏离情况。
 
-## App 重启
+## 应用重启
 
 有些应用程序只有在重新启动后才会应用已更改的默认设置——mise 会在写入后打印一条提醒，而顶层的 `mise bootstrap` 会在其最终的后续摘要中包含同样的提醒。常见对象如下：
 
@@ -132,7 +132,16 @@ killall Finder
 killall SystemUIServer
 ```
 
-mise 有意不自行终止应用程序。
+mise 不会自行终止应用程序。在 `mise bootstrap`
+写入默认值后，后续摘要会提醒你重新启动应用；常见的
+`post-defaults` hook 如下：
+
+```toml
+[bootstrap.hooks.post-defaults]
+run = "killall Dock || true"
+```
+
+如果不重新启动，Dock/Finder 偏好设置可能会显示为未设置，直到下次登录。
 
 ## 查找键
 

@@ -1,9 +1,9 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise exec`
 
-- **用法**：`mise exec [FLAGS] [TOOL@VERSION]… [-- COMMAND]…`
-- **别名**：`x`
-- **源代码**：[`src/cli/exec.rs`](https://github.com/jdx/mise/blob/main/src/cli/exec.rs)
+- **用法：** `mise exec [FLAGS] [TOOL@VERSION]… [-- COMMAND]…`
+- **别名：** `x`
+- **源代码：** [`src/cli/exec.rs`](https://github.com/jdx/mise/blob/main/src/cli/exec.rs)
 
 使用已设置的工具执行命令
 
@@ -16,76 +16,31 @@
 “--” 用于将运行时与传递给子进程的命令分隔开。
 
 ## 参数
-
-### `[TOOL@VERSION]…`
-
-要启动的工具，例如：node@20 python@3.10
-
-### `[-- COMMAND]…`
-
-要执行的命令字符串（与 --command 相同）
+- **`[TOOL@VERSION]…`** — 要启动的工具，例如：node@20 python@3.10
+- **`[-- COMMAND]…`** — 要执行的命令字符串（与 --command 相同）
 
 ## 标志
+- **`-c --command <COMMAND>`** — 要执行的命令字符串
+- **`-j --jobs <JOBS>`** — 并行运行的任务数
+  小于 1 的值将按 1 处理
+  [默认值：4]
 
-### `-c --command <C>`
-
-要执行的命令字符串
-
-### `-j --jobs <JOBS>`
-
-要并行运行的任务数  
-小于 1 的值按 1 处理  
-[默认值：4]
-
-### `--allow-env… <VAR>`
-
-允许特定的环境变量通过（意味着对其他所有环境变量启用 --deny-env）  
-支持通配符，例如 --allow-env='MYAPP_*'
-
-### `--allow-net… <HOST>`
-
-允许访问特定主机的网络（意味着对其他所有网络启用 --deny-net）  
-仅在 v1 中支持 macOS；在 Linux 上则回退为允许所有网络
-
-### `--allow-read… <PATH>`
-
-允许从特定路径读取（意味着对其他所有路径启用 --deny-read）
-
-### `--allow-write… <PATH>`
-
-允许向特定路径写入（意味着对其他所有路径启用 --deny-write）
-
-### `--deny-all`
-
-阻止读取、写入、网络和环境变量
-
-### `--deny-env`
-
-阻止继承环境变量（仅 PATH、HOME、USER、SHELL、TERM、LANG 会透传）
-
-### `--deny-net`
-
-阻止所有网络访问
-
-### `--deny-read`
-
-阻止文件系统读取（系统库和工具目录仍可访问）
-
-### `--deny-write`
-
-阻止所有文件系统写入
-
-### `--fresh-env`
-
-绕过环境缓存并重新计算环境
-
-### `--no-deps`
-
-跳过自动依赖准备
-
-### `--raw`
-
-将后端安装命令的 stdin/stdout/stderr 直接连接到终端，意味着 --jobs=1
+  **环境变量：** `MISE_JOBS`
+- **`--allow-env <VAR>`** — 允许传递指定的环境变量（对其他所有环境变量隐含启用 --deny-env）
+  支持通配符，例如：--allow-env='MYAPP_*'
+- **`--allow-net <HOST>`** — 允许访问指定主机的网络（对其他所有网络隐含启用 --deny-net）
+  v1 中仅支持 macOS；在 Linux 上将回退为允许所有网络
+- **`--allow-read <PATH>`** — 允许从指定路径读取（对其他所有路径隐含启用 --deny-read）
+- **`--allow-write <PATH>`** — 允许写入指定路径（对其他所有路径隐含启用 --deny-write）
+- **`--deny-all`** — 阻止读取、写入、网络访问和环境变量
+- **`--deny-env`** — 阻止继承环境变量（仅传递 PATH、HOME、USER、SHELL、TERM、LANG）
+- **`--deny-net`** — 阻止所有网络访问
+- **`--deny-read`** — 阻止文件系统读取（系统库和工具目录仍可访问）
+- **`--deny-write`** — 阻止所有文件系统写入
+- **`--fresh-env`** — 绕过环境缓存并重新计算环境
+- **`--no-deps`** — 跳过自动依赖准备
+- **`--raw`** — 将后端安装命令的标准输入／标准输出／标准错误直接连接到终端，隐含启用 --jobs=1
+- **`-h --help`** — 打印帮助
 
 示例：
 

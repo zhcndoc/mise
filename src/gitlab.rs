@@ -17,7 +17,7 @@ use crate::cache::{CacheManager, CacheManagerBuilder};
 use crate::{dirs, env};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitlabRelease {
+pub(crate) struct GitlabRelease {
     pub tag_name: String,
     pub description: Option<String>,
     pub released_at: Option<String>,
@@ -25,25 +25,25 @@ pub struct GitlabRelease {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitlabTag {
+pub(crate) struct GitlabTag {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitlabAssets {
+pub(crate) struct GitlabAssets {
     // pub count: i64,
     pub sources: Vec<GitlabAssetSource>,
     pub links: Vec<GitlabAssetLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitlabAssetSource {
+pub(crate) struct GitlabAssetSource {
     pub format: String,
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitlabAssetLink {
+pub(crate) struct GitlabAssetLink {
     pub id: i64,
     pub name: String,
     pub url: String,
@@ -59,9 +59,9 @@ static RELEASE_CACHE: Lazy<RwLock<CacheGroup<GitlabRelease>>> = Lazy::new(Defaul
 
 static TAGS_CACHE: Lazy<RwLock<CacheGroup<Vec<String>>>> = Lazy::new(Default::default);
 
-pub static API_URL: &str = "https://gitlab.com/api/v4";
+pub(crate) static API_URL: &str = "https://gitlab.com/api/v4";
 
-pub static API_PATH: &str = "/api/v4";
+pub(crate) static API_PATH: &str = "/api/v4";
 
 async fn get_tags_cache(key: &str) -> RwLockReadGuard<'_, CacheGroup<Vec<String>>> {
     TAGS_CACHE
@@ -103,7 +103,7 @@ async fn get_release_cache(key: &str) -> RwLockReadGuard<'_, CacheGroup<GitlabRe
 }
 
 #[allow(dead_code)]
-pub async fn list_releases(repo: &str) -> Result<Vec<GitlabRelease>> {
+pub(crate) async fn list_releases(repo: &str) -> Result<Vec<GitlabRelease>> {
     let key = repo.to_kebab_case();
     let cache = get_releases_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -115,7 +115,10 @@ pub async fn list_releases(repo: &str) -> Result<Vec<GitlabRelease>> {
         .to_vec())
 }
 
-pub async fn list_releases_from_url(api_url: &str, repo: &str) -> Result<Vec<GitlabRelease>> {
+pub(crate) async fn list_releases_from_url(
+    api_url: &str,
+    repo: &str,
+) -> Result<Vec<GitlabRelease>> {
     let key = format!("{api_url}-{repo}").to_kebab_case();
     let cache = get_releases_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -137,7 +140,7 @@ async fn list_releases_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec
         urlencoding::encode(repo)
     );
 
-    let headers = get_headers(&url);
+    let headers = get_headers(&url, api_url);
     let (mut releases, mut headers) = crate::http::HTTP_FETCH
         .json_headers_with_headers::<Vec<GitlabRelease>, _>(&url, &headers)
         .await?;
@@ -149,7 +152,7 @@ async fn list_releases_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec
             // previous page at this point (that is how `next_page` reads `Link`), and
             // `json_headers_with_headers` bypasses the automatic host auth, so reusing it
             // would send page 2 onward unauthenticated. Same defect github had (#6318).
-            headers = get_headers(&url);
+            headers = get_headers(&url, api_url);
             let (more, h) = crate::http::HTTP_FETCH
                 .json_headers_with_headers::<Vec<GitlabRelease>, _>(&url, &headers)
                 .await?;
@@ -162,7 +165,7 @@ async fn list_releases_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec
 }
 
 #[allow(dead_code)]
-pub async fn list_tags(repo: &str) -> Result<Vec<String>> {
+pub(crate) async fn list_tags(repo: &str) -> Result<Vec<String>> {
     let key = repo.to_kebab_case();
     let cache = get_tags_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -174,7 +177,7 @@ pub async fn list_tags(repo: &str) -> Result<Vec<String>> {
         .to_vec())
 }
 
-pub async fn list_tags_from_url(api_url: &str, repo: &str) -> Result<Vec<String>> {
+pub(crate) async fn list_tags_from_url(api_url: &str, repo: &str) -> Result<Vec<String>> {
     let key = format!("{api_url}-{repo}").to_kebab_case();
     let cache = get_tags_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -193,7 +196,7 @@ async fn list_tags_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec<Str
         api_url,
         urlencoding::encode(repo)
     );
-    let headers = get_headers(&url);
+    let headers = get_headers(&url, api_url);
     let (mut tags, mut headers) = crate::http::HTTP_FETCH
         .json_headers_with_headers::<Vec<GitlabTag>, _>(&url, &headers)
         .await?;
@@ -202,7 +205,7 @@ async fn list_tags_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec<Str
         while let Some(next) = next_page(&headers) {
             url = crate::http::resolve_pagination_url(&url, &next)?;
             // Re-derive auth for every page — see the comment in `list_releases_`.
-            headers = get_headers(&url);
+            headers = get_headers(&url, api_url);
             let (more, h) = crate::http::HTTP_FETCH
                 .json_headers_with_headers::<Vec<GitlabTag>, _>(&url, &headers)
                 .await?;
@@ -215,7 +218,7 @@ async fn list_tags_(api_url: &str, repo: &str, list_all: bool) -> Result<Vec<Str
 }
 
 #[allow(dead_code)]
-pub async fn get_release(repo: &str, tag: &str) -> Result<GitlabRelease> {
+pub(crate) async fn get_release(repo: &str, tag: &str) -> Result<GitlabRelease> {
     let key = format!("{repo}-{tag}").to_kebab_case();
     let cache = get_release_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -225,7 +228,11 @@ pub async fn get_release(repo: &str, tag: &str) -> Result<GitlabRelease> {
         .clone())
 }
 
-pub async fn get_release_for_url(api_url: &str, repo: &str, tag: &str) -> Result<GitlabRelease> {
+pub(crate) async fn get_release_for_url(
+    api_url: &str,
+    repo: &str,
+    tag: &str,
+) -> Result<GitlabRelease> {
     let key = format!("{api_url}-{repo}-{tag}").to_kebab_case();
     let cache = get_release_cache(&key).await;
     let cache = cache.get(&key).unwrap();
@@ -242,7 +249,7 @@ async fn get_release_(api_url: &str, repo: &str, tag: &str) -> Result<GitlabRele
         urlencoding::encode(repo),
         tag
     );
-    let headers = get_headers(&url);
+    let headers = get_headers(&url, api_url);
     crate::http::HTTP_FETCH
         .json_with_headers(url, &headers)
         .await
@@ -262,13 +269,19 @@ fn cache_dir() -> PathBuf {
     dirs::CACHE.join("gitlab")
 }
 
-pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap {
+pub(crate) fn get_headers<U: IntoUrl>(url: U, api_url: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     // An invalid URL just means no auth headers; the real error surfaces when the
     // request is made. Avoid panicking here. See #3547.
     let Ok(url) = url.into_url() else {
         return headers;
     };
+    let Ok(api_url) = reqwest::Url::parse(api_url) else {
+        return headers;
+    };
+    if url.origin() != api_url.origin() {
+        return headers;
+    }
     let lookup_host = url.host_str().unwrap_or("gitlab.com");
 
     if let Some((token, _source)) = resolve_token(lookup_host) {
@@ -283,7 +296,7 @@ pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap {
 
 /// The source from which a GitLab token was resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TokenSource {
+pub(crate) enum TokenSource {
     EnvVar(&'static str),
     TokensFile,
     GlabCli,
@@ -333,7 +346,7 @@ pub(crate) mod test_support {
 /// 4. `gitlab_tokens.toml` (per-host)
 /// 5. glab CLI token (from `config.yml`)
 /// 6. `git credential fill` (if enabled)
-pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> {
+pub(crate) fn resolve_token(host: &str) -> Option<(String, TokenSource)> {
     #[cfg(test)]
     if let Some(token) = test_support::lookup_tokens_file_override(host) {
         return Some((token, TokenSource::TokensFile));
@@ -390,12 +403,6 @@ pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> {
     }
 
     None
-}
-
-/// Returns true if the given hostname has a token available from a non-env-var source.
-pub fn is_gitlab_host(host: &str) -> bool {
-    MISE_GITLAB_TOKENS.contains_key(host)
-        || (Settings::get().gitlab.glab_cli_tokens && GLAB_HOSTS.contains_key(host))
 }
 
 // ── gitlab_tokens.toml ─────────────────────────────────────────────
@@ -699,6 +706,27 @@ hosts:
             "released_at": null,
             "assets": { "sources": [], "links": [] },
         })
+    }
+
+    #[test]
+    fn test_get_headers_only_authenticates_api_origin() {
+        let api_url = "https://gitlab.example.com/api/v4";
+        let _token = TokensFileOverrideGuard::set("gitlab.example.com");
+
+        let headers = get_headers(
+            "https://gitlab.example.com/releases/download/tool.tar.gz",
+            api_url,
+        );
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            format!("Bearer {TEST_TOKEN}").as_str()
+        );
+
+        let headers = get_headers("https://downloads.example.com/tool.tar.gz", api_url);
+        assert!(!headers.contains_key(reqwest::header::AUTHORIZATION));
+
+        let headers = get_headers("http://gitlab.example.com/api/v4/page2", api_url);
+        assert!(!headers.contains_key(reqwest::header::AUTHORIZATION));
     }
 
     // Regression: every paginated request must carry the Authorization header. Before the

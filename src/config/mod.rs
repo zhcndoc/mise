@@ -3,7 +3,7 @@ use eyre::{Context, Result, bail, eyre};
 use indexmap::{IndexMap, IndexSet};
 use itertools::{Either, Itertools};
 use path_absolutize::Absolutize;
-pub use settings::{CompilePurpose, Settings};
+pub(crate) use settings::{CompilePurpose, Settings};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env::join_paths;
 use std::fmt::{Debug, Formatter};
@@ -28,8 +28,11 @@ use crate::config::env_directive::{EnvResolveOptions, EnvResults, ToolsFilter};
 use crate::config::tracking::Tracker;
 use crate::env::{MISE_DEFAULT_CONFIG_FILENAME, MISE_DEFAULT_TOOL_VERSIONS_FILENAME};
 use crate::file::display_path;
+use crate::remote_source::RemoteSource;
 use crate::shorthands::{Shorthands, get_shorthands};
-use crate::task::task_file_providers::TaskFileProvidersBuilder;
+use crate::task::task_file_providers::{
+    TaskFileArtifact, TaskFileProvidersBuilder, validate_remote_git_path,
+};
 use crate::task::task_sources::TaskOutputs;
 use crate::task::{
     RunEntry, Task, TaskCacheConfig, TaskRustCacheConfig, TaskTemplate, monorepo_scope,
@@ -44,11 +47,11 @@ use crate::toolset::{
 use crate::ui::style;
 use crate::{backend, dirs, env, file, lockfile, registry, runtime_symlinks, shims, timeout};
 
-pub mod config_file;
-pub mod env_directive;
-pub mod miserc;
-pub mod settings;
-pub mod tracking;
+pub(crate) mod config_file;
+pub(crate) mod env_directive;
+pub(crate) mod miserc;
+pub(crate) mod settings;
+pub(crate) mod tracking;
 
 use crate::env_diff::EnvMap;
 use crate::hook_env::WatchFilePattern;
@@ -61,12 +64,66 @@ use crate::wildcard::Wildcard;
 
 type AliasMap = IndexMap<String, Alias>;
 pub(crate) type ConfigMap = IndexMap<PathBuf, Arc<dyn ConfigFile>>;
-pub type EnvWithSources = IndexMap<String, (String, PathBuf)>;
+pub(crate) type EnvWithSources = IndexMap<String, (String, PathBuf)>;
+type RemoteTaskIncludeKey = (String, Option<String>);
+type RemoteTaskIncludeArtifacts = DashMap<RemoteTaskIncludeKey, Arc<OnceCell<TaskFileArtifact>>>;
+static REMOTE_TASK_INCLUDE_ARTIFACTS: Lazy<RemoteTaskIncludeArtifacts> = Lazy::new(DashMap::new);
 
+pub(crate) fn take_remote_task_include_artifacts() -> Vec<Arc<OnceCell<TaskFileArtifact>>> {
+    let keys = REMOTE_TASK_INCLUDE_ARTIFACTS
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect_vec();
+    keys.into_iter()
+        .filter_map(|key| {
+            REMOTE_TASK_INCLUDE_ARTIFACTS
+                .remove(&key)
+                .map(|(_, artifact)| artifact)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod remote_task_include_tests {
+    use super::*;
+
+    #[test]
+    fn take_remote_task_include_artifacts_drains_cache() {
+        drop(take_remote_task_include_artifacts());
+        REMOTE_TASK_INCLUDE_ARTIFACTS.insert(
+            ("https://example.test/repo.git".into(), None),
+            Arc::new(OnceCell::new()),
+        );
+
+        let artifacts = take_remote_task_include_artifacts();
+
+        assert!(REMOTE_TASK_INCLUDE_ARTIFACTS.is_empty());
+        assert_eq!(artifacts.len(), 1);
+    }
+}
 pub(crate) struct MonorepoUnion {
     pub config_files: ConfigMap,
     pub tool_request_set: ToolRequestSet,
     pub repo_urls: HashMap<String, String>,
+}
+
+fn extend_monorepo_tool_request_set(union: &mut ToolRequestSet, requests: &ToolRequestSet) {
+    union
+        .unknown_tools
+        .extend(requests.unknown_tools.iter().cloned());
+    for (_ba, tool_requests, source) in requests.iter() {
+        for request in tool_requests {
+            let already_present = union.tools.get(request.ba()).is_some_and(|existing| {
+                existing.iter().any(|existing| {
+                    existing.version() == request.version()
+                        && existing.options() == request.options()
+                })
+            });
+            if !already_present {
+                union.add_version(request.clone(), source);
+            }
+        }
+    }
 }
 
 /// One independently composed bootstrap hierarchy and its scoped template context.
@@ -76,7 +133,7 @@ struct BootstrapConfigMap {
     tera_ctx: tera::Context,
 }
 
-pub struct Config {
+pub(crate) struct Config {
     pub config_files: ConfigMap,
     bootstrap_config_maps: Vec<BootstrapConfigMap>,
     pub project_root: Option<PathBuf>,
@@ -101,10 +158,16 @@ pub struct Config {
     tool_request_set: OnceCell<ToolRequestSet>,
     toolset: OnceCell<Toolset>,
     vars_results: OnceCell<EnvResults>,
+    /// The lockfile paths this config resolves to (which key the shared
+    /// lockfile cache) plus the monorepo discovery behind them. Deriving them
+    /// walks every config path and dedups the results, and backend-identity
+    /// lookups ask for them hundreds of times per invocation, so derive once
+    /// per config.
+    lockfile_discovery: std::sync::OnceLock<Arc<crate::lockfile::LockfileDiscovery>>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Alias {
+pub(crate) struct Alias {
     pub backend: Option<String>,
     pub versions: IndexMap<String, String>,
 }
@@ -114,7 +177,7 @@ static _REDACTOR: Lazy<Mutex<Redactor>> = Lazy::new(Default::default);
 const MONOREPO_LOCKFILE_WARN_AT: &str = "2026.12.0";
 const MONOREPO_LOCKFILE_DEFAULT_AT: &str = "2027.6.0";
 
-pub fn is_loaded() -> bool {
+pub(crate) fn is_loaded() -> bool {
     _CONFIG.read().unwrap().is_some()
 }
 
@@ -122,7 +185,7 @@ impl Config {
     /// Whether the config root that owns this tool request opted it into strict
     /// lockfile enforcement. Non-config sources remain governed only by the
     /// invocation-wide `locked` setting/flag.
-    pub fn tool_config_locked(&self, source: &ToolSource) -> bool {
+    pub(crate) fn tool_config_locked(&self, source: &ToolSource) -> bool {
         let ToolSource::MiseToml(path) = source else {
             return false;
         };
@@ -140,19 +203,19 @@ impl Config {
         })
     }
 
-    pub async fn get() -> Result<Arc<Self>> {
+    pub(crate) async fn get() -> Result<Arc<Self>> {
         if let Some(config) = &*_CONFIG.read().unwrap() {
             return Ok(config.clone());
         }
         measure!("load config", { Self::load().await })
     }
-    pub fn maybe_get() -> Option<Arc<Self>> {
+    pub(crate) fn maybe_get() -> Option<Arc<Self>> {
         _CONFIG.read().unwrap().as_ref().cloned()
     }
-    pub fn get_() -> Arc<Self> {
+    pub(crate) fn get_() -> Arc<Self> {
         (*_CONFIG.read().unwrap()).clone().unwrap()
     }
-    pub async fn reset() -> Result<Arc<Self>> {
+    pub(crate) async fn reset() -> Result<Arc<Self>> {
         backend::reset().await?;
         timeout::run_with_timeout_async(
             async || {
@@ -194,7 +257,19 @@ impl Config {
             tera_files: self.tera_files.clone(),
             vars: self.vars.clone(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         })
+    }
+
+    /// Lockfile paths and monorepo discovery this config resolves to, derived
+    /// once. See [`Self::lockfile_discovery`]'s field docs.
+    pub(crate) fn lockfile_discovery(
+        &self,
+        derive: impl FnOnce() -> crate::lockfile::LockfileDiscovery,
+    ) -> Arc<crate::lockfile::LockfileDiscovery> {
+        self.lockfile_discovery
+            .get_or_init(|| Arc::new(derive()))
+            .clone()
     }
 
     pub(crate) fn with_tool_request_set(&self, tool_request_set: ToolRequestSet) -> Arc<Self> {
@@ -227,26 +302,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Load only user-global and system configuration without replacing the process-wide config.
-    ///
-    /// This is intended for bootstrap paths such as completion generation, where consulting the
-    /// current project could trigger a trust prompt before the requested command can run.
-    pub(crate) async fn load_global() -> Result<Arc<Self>> {
-        backend::load_tools().await?;
-        let idiomatic_files = measure!("config::load_global idiomatic_files", {
-            load_idiomatic_filenames().await
-        });
-        let config_paths = measure!("config::load_global config_paths", {
-            load_global_config_paths(false)
-        });
-        trace!("global config_paths: {config_paths:?}");
-        let config_files = measure!("config::load_global config_files", {
-            load_all_config_files(&config_paths, &idiomatic_files).await?
-        });
-
-        Self::load_from_config_files(config_files, true).await
-    }
-
     async fn load_from_config_files(
         config_files: ConfigMap,
         global_only: bool,
@@ -271,6 +326,7 @@ impl Config {
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         let vars_config = Arc::new(Self {
             tera_ctx: config.tera_ctx.clone(),
@@ -292,6 +348,7 @@ impl Config {
             tera_files: config.tera_files.clone(),
             vars: config.vars.clone(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         });
         let vars_results = measure!("config::load vars_results", {
             let results = load_vars(&vars_config).await?;
@@ -370,7 +427,7 @@ impl Config {
         config.env_results().await?;
         Ok(config)
     }
-    pub fn env_maybe(&self) -> Option<IndexMap<String, String>> {
+    pub(crate) fn env_maybe(&self) -> Option<IndexMap<String, String>> {
         self.env_with_sources.get().map(|env| {
             env.iter()
                 .map(|(k, (v, _))| (k.clone(), v.clone()))
@@ -399,7 +456,7 @@ impl Config {
             .map(|config| &config.tera_ctx)
             .unwrap_or(&self.tera_ctx)
     }
-    pub async fn env(self: &Arc<Self>) -> eyre::Result<IndexMap<String, String>> {
+    pub(crate) async fn env(self: &Arc<Self>) -> eyre::Result<IndexMap<String, String>> {
         Ok(self
             .env_with_sources()
             .await?
@@ -407,33 +464,33 @@ impl Config {
             .map(|(k, (v, _))| (k.clone(), v.clone()))
             .collect())
     }
-    pub async fn env_with_sources(self: &Arc<Self>) -> eyre::Result<&EnvWithSources> {
+    pub(crate) async fn env_with_sources(self: &Arc<Self>) -> eyre::Result<&EnvWithSources> {
         self.env_with_sources
             .get_or_try_init(async || Ok(self.env_results().await?.env.clone()))
             .await
     }
-    pub async fn env_results(self: &Arc<Self>) -> Result<&EnvResults> {
+    pub(crate) async fn env_results(self: &Arc<Self>) -> Result<&EnvResults> {
         self.env
             .get_or_try_init(|| async { self.load_env().await })
             .await
     }
 
-    pub fn env_results_cached(&self) -> Option<&EnvResults> {
+    pub(crate) fn env_results_cached(&self) -> Option<&EnvResults> {
         self.env.get()
     }
-    pub fn vars_results_cached(&self) -> Option<&EnvResults> {
+    pub(crate) fn vars_results_cached(&self) -> Option<&EnvResults> {
         self.vars_results.get()
     }
-    pub async fn path_dirs(self: &Arc<Self>) -> eyre::Result<&Vec<PathBuf>> {
+    pub(crate) async fn path_dirs(self: &Arc<Self>) -> eyre::Result<&Vec<PathBuf>> {
         Ok(&self.env_results().await?.env_paths)
     }
-    pub async fn get_tool_request_set(self: &Arc<Self>) -> eyre::Result<&ToolRequestSet> {
+    pub(crate) async fn get_tool_request_set(self: &Arc<Self>) -> eyre::Result<&ToolRequestSet> {
         self.tool_request_set
             .get_or_try_init(async || ToolRequestSetBuilder::new().build(self).await)
             .await
     }
 
-    pub async fn get_toolset(self: &Arc<Self>) -> Result<&Toolset> {
+    pub(crate) async fn get_toolset(self: &Arc<Self>) -> Result<&Toolset> {
         self.toolset
             .get_or_try_init(|| async {
                 let mut ts = Toolset::from(self.get_tool_request_set().await?.clone());
@@ -450,7 +507,7 @@ impl Config {
             || self.repo_urls.contains_key(short)
     }
 
-    pub async fn get_tool_opts_with_overrides(
+    pub(crate) async fn get_tool_opts_with_overrides(
         self: &Arc<Self>,
         backend_arg: &Arc<BackendArg>,
     ) -> Result<ToolOptions> {
@@ -460,7 +517,7 @@ impl Config {
             .into_options())
     }
 
-    pub async fn resolve_tool_opts_with_overrides(
+    pub(crate) async fn resolve_tool_opts_with_overrides(
         self: &Arc<Self>,
         backend_arg: &Arc<BackendArg>,
     ) -> Result<ResolvedToolOptions> {
@@ -510,14 +567,14 @@ impl Config {
             .map(crate::toolset::parse_tool_options)
     }
 
-    pub fn get_configured_plugin_type(&self, plugin_name: &str) -> Option<PluginType> {
+    pub(crate) fn get_configured_plugin_type(&self, plugin_name: &str) -> Option<PluginType> {
         self.repo_urls.keys().find_map(|key| {
             let (plugin_type, name) = PluginType::from_plugin_config(key);
             (key != name && name == plugin_name).then_some(plugin_type)
         })
     }
 
-    pub fn get_repo_url(&self, plugin_name: &str) -> Option<String> {
+    pub(crate) fn get_repo_url(&self, plugin_name: &str) -> Option<String> {
         if let Some(url) = self.repo_urls.get(plugin_name)
             && (Path::new(url).is_absolute() || url.starts_with("file://"))
         {
@@ -560,11 +617,11 @@ impl Config {
             })
     }
 
-    pub fn is_monorepo(&self) -> bool {
+    pub(crate) fn is_monorepo(&self) -> bool {
         find_monorepo_root(&self.config_files).is_some()
     }
 
-    pub fn monorepo_root(&self) -> Option<PathBuf> {
+    pub(crate) fn monorepo_root(&self) -> Option<PathBuf> {
         find_monorepo_root(&self.config_files)
     }
 
@@ -584,7 +641,7 @@ impl Config {
 
     /// Discovers the provider-neutral workspace project graph and applies the
     /// explicit overrides from the active monorepo root.
-    pub fn workspace_project_graph(
+    pub(crate) fn workspace_project_graph(
         &self,
     ) -> Result<Arc<crate::task::workspace::WorkspaceProjectGraph>> {
         let graph = self.workspace_project_graph_for_task_loading()?;
@@ -659,7 +716,7 @@ impl Config {
     /// Lockfile discovery is intentionally lenient: it only requires
     /// `[monorepo].config_roots` to match directories, because legacy lockfiles
     /// can exist in roots whose live config is idiomatic-only or was removed.
-    pub fn monorepo_lockfile_root(&self) -> Option<PathBuf> {
+    pub(crate) fn monorepo_lockfile_root(&self) -> Option<PathBuf> {
         let cf = find_monorepo_config(&self.config_files)?;
         let setting = cf.monorepo().and_then(|m| m.lockfile);
         if !monorepo_lockfile_enabled_for_version(&version::V, setting) {
@@ -686,7 +743,7 @@ impl Config {
     ///
     /// `MISE_LOCKFILE=1` predates automatic creation and continues to mean
     /// "read and maintain existing lockfiles" for backwards compatibility.
-    pub fn lockfile_creation_enabled(&self) -> bool {
+    pub(crate) fn lockfile_creation_enabled(&self) -> bool {
         Settings::get().lockfile_creation_enabled()
             && self.config_files.values().any(|cf| {
                 cf.settings()
@@ -738,11 +795,33 @@ impl Config {
         Ok(roots)
     }
 
-    pub async fn monorepo_union_tool_request_set(self: &Arc<Self>) -> Result<ToolRequestSet> {
+    pub(crate) async fn monorepo_union_tool_request_set(
+        self: &Arc<Self>,
+    ) -> Result<ToolRequestSet> {
         Ok(self.monorepo_union().await?.tool_request_set)
     }
 
+    /// Loads the union plus the monorepo root directory's own effective
+    /// requests, for lockfile maintenance of the shared root lockfile.
+    ///
+    /// `monorepo_union` merges the root's configs underneath each declared
+    /// config root, so a sibling's request for a short shadows the monorepo
+    /// root's own request for it. Treating the union as the set of live
+    /// requests for the root lockfile would then drop the root's request:
+    /// `mise lock --upgrade` migrated a v0 monorepo lockfile without binding
+    /// the root's request and pruned its locked version.
+    pub(crate) async fn monorepo_lockfile_union(self: &Arc<Self>) -> Result<MonorepoUnion> {
+        self.monorepo_union_with_root_toolset(true).await
+    }
+
     pub(crate) async fn monorepo_union(self: &Arc<Self>) -> Result<MonorepoUnion> {
+        self.monorepo_union_with_root_toolset(false).await
+    }
+
+    async fn monorepo_union_with_root_toolset(
+        self: &Arc<Self>,
+        include_root_toolset: bool,
+    ) -> Result<MonorepoUnion> {
         let idiomatic_filenames = load_idiomatic_filenames().await;
         let config_filenames = idiomatic_filenames
             .keys()
@@ -759,7 +838,7 @@ impl Config {
         let mut union = ToolRequestSet::new();
         for root in roots {
             let root_idiomatic_filenames =
-                idiomatic_filenames_for_root(&root, &idiomatic_filenames).await;
+                idiomatic_filenames_for_root(&root, &idiomatic_filenames).await?;
             let root_config_filenames = root_idiomatic_filenames
                 .keys()
                 .chain(DEFAULT_CONFIG_FILENAMES.iter())
@@ -780,19 +859,20 @@ impl Config {
                 .without_runtime_args()
                 .build(self)
                 .await?;
-            union.unknown_tools.extend(root_trs.unknown_tools.clone());
-            for (_ba, requests, source) in root_trs.iter() {
-                for request in requests {
-                    let already_present = union.tools.get(request.ba()).is_some_and(|existing| {
-                        existing.iter().any(|r| {
-                            r.version() == request.version() && r.options() == request.options()
-                        })
-                    });
-                    if !already_present {
-                        union.add_version(request.clone(), source);
-                    }
-                }
-            }
+            extend_monorepo_tool_request_set(&mut union, &root_trs);
+        }
+
+        if include_root_toolset {
+            // Each declared root overlays base_config_files, so its request
+            // for a short can shadow the monorepo root's own request. Lockfile
+            // maintenance needs the root directory as an additional effective
+            // hierarchy so its requests stay live.
+            let root_trs = ToolRequestSetBuilder::new()
+                .with_config_files(base_config_files)
+                .without_runtime_args()
+                .build(self)
+                .await?;
+            extend_monorepo_tool_request_set(&mut union, &root_trs);
         }
 
         union.unknown_tools = union.unknown_tools.into_iter().unique().collect();
@@ -804,11 +884,11 @@ impl Config {
         })
     }
 
-    pub async fn tasks(&self) -> Result<Arc<BTreeMap<String, Task>>> {
+    pub(crate) async fn tasks(&self) -> Result<Arc<BTreeMap<String, Task>>> {
         self.tasks_with_context(None).await
     }
 
-    pub async fn tasks_with_context(
+    pub(crate) async fn tasks_with_context(
         &self,
         ctx: Option<&crate::task::TaskLoadContext>,
     ) -> Result<Arc<BTreeMap<String, Task>>> {
@@ -833,7 +913,7 @@ impl Config {
         Ok(tasks_arc)
     }
 
-    pub async fn reload_tasks_with_context(
+    pub(crate) async fn reload_tasks_with_context(
         &self,
         ctx: Option<&crate::task::TaskLoadContext>,
     ) -> Result<Arc<BTreeMap<String, Task>>> {
@@ -842,7 +922,7 @@ impl Config {
         self.tasks_with_context(ctx).await
     }
 
-    pub async fn tasks_with_aliases(&self) -> Result<BTreeMap<String, Task>> {
+    pub(crate) async fn tasks_with_aliases(&self) -> Result<BTreeMap<String, Task>> {
         let tasks = self.tasks().await?;
         Ok(tasks
             .values()
@@ -856,7 +936,7 @@ impl Config {
             .collect())
     }
 
-    pub async fn resolve_alias(&self, backend: &ABackend, v: &str) -> Result<String> {
+    pub(crate) async fn resolve_alias(&self, backend: &ABackend, v: &str) -> Result<String> {
         if let Some(plugin_aliases) = self.all_aliases.get(&backend.ba().short)
             && let Some(alias) = plugin_aliases.versions.get(v)
         {
@@ -870,7 +950,7 @@ impl Config {
 
     fn load_all_aliases(&self) -> AliasMap {
         let mut aliases: AliasMap = self.aliases.clone();
-        let plugin_aliases: Vec<_> = backend::list()
+        let plugin_aliases: Vec<_> = backend::alias_backends()
             .into_iter()
             .map(|backend| {
                 let aliases = backend.get_aliases().unwrap_or_else(|err| {
@@ -1053,26 +1133,66 @@ impl Config {
         Ok(tasks)
     }
 
-    pub async fn get_tracked_config_files(&self) -> Result<ConfigMap> {
+    pub(crate) async fn get_tracked_config_files(&self) -> Result<ConfigMap> {
         let mut config_files: ConfigMap = ConfigMap::default();
+        let mut idiomatic_settings_by_root =
+            BTreeMap::<PathBuf, settings::IdiomaticVersionFileSettings>::new();
+        let require_trust_before_detection = Settings::get().paranoid && !Settings::safe_mode();
         for path in Tracker::list_all()?.into_iter() {
             if config_path_is_ignored(&path, false) {
                 debug!("skipping ignored tracked config: {}", display_path(&path));
                 continue;
             }
-            // Pre-check trust for config files that require it so tracked
-            // config loading (e.g., during `mise upgrade`) never prompts.
-            // Plain .tool-versions and idiomatic version files are safe to
-            // parse without trust and must still protect their tool versions.
             let trust_root = config_file::config_trust_root(&path);
-            if config_file::path_requires_trust(&path).await
+            // Paranoid mode must not inspect an untrusted owner's settings before
+            // classification. Safe mode intentionally loads configs inertly without trust.
+            if require_trust_before_detection
                 && !is_global_config(&path)
                 && !config_file::is_trusted(&trust_root)
             {
                 debug!("skipping untrusted tracked config: {}", display_path(&path));
                 continue;
             }
-            match config_file::parse(&path).await {
+            let detection = match config_file::detect_config_file_type_by_filename(&path) {
+                Some(config_type) => config_file::ConfigFileDetection::Recognized(config_type),
+                None => {
+                    let config_root = config_file::config_root::config_root(&path);
+                    let idiomatic_settings = match idiomatic_settings_by_root.get(&config_root) {
+                        Some(settings) => settings.clone(),
+                        None => {
+                            let settings = settings::IdiomaticVersionFileSettings::resolve_from(
+                                &config_root,
+                                settings::SettingsLoadPolicy::TRUSTED_HIERARCHY,
+                            )?;
+                            idiomatic_settings_by_root.insert(config_root, settings.clone());
+                            settings
+                        }
+                    };
+                    config_file::detect_config_file_with_settings(&path, &idiomatic_settings).await
+                }
+            };
+            // Pre-check trust for config files that require it so tracked
+            // config loading (e.g., during `mise upgrade`) never prompts.
+            // Plain .tool-versions and idiomatic version files are safe to
+            // parse without trust and must still protect their tool versions.
+            if config_file::detection_requires_trust(&path, &detection)
+                && !is_global_config(&path)
+                && !config_file::is_trusted(&trust_root)
+            {
+                debug!("skipping untrusted tracked config: {}", display_path(&path));
+                continue;
+            }
+            if matches!(
+                &detection,
+                config_file::ConfigFileDetection::DisabledIdiomatic
+            ) {
+                debug!(
+                    "skipping disabled idiomatic tracked config: {}",
+                    display_path(&path)
+                );
+                continue;
+            }
+            match config_file::parse_detected(&path, detection).await {
                 Ok(cf) => {
                     config_files.insert(path, cf);
                 }
@@ -1087,7 +1207,7 @@ impl Config {
         Ok(config_files)
     }
 
-    pub fn global_config(&self) -> Result<MiseToml> {
+    pub(crate) fn global_config(&self) -> Result<MiseToml> {
         let settings_path = global_config_path();
         match settings_path.exists() {
             false => {
@@ -1113,7 +1233,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn enforce_min_version_spec(spec: &MinVersionSpec) -> eyre::Result<()> {
+    pub(crate) fn enforce_min_version_spec(spec: &MinVersionSpec) -> eyre::Result<()> {
         let cur = &*version::V;
         if let Some(required) = spec.hard_violation(cur) {
             let min = style::eyellow(required);
@@ -1290,7 +1410,7 @@ impl Config {
         Ok(env_results)
     }
 
-    pub async fn hooks(&self) -> Result<&Vec<(PathBuf, Option<PathBuf>, Hook)>> {
+    pub(crate) async fn hooks(&self) -> Result<&Vec<(PathBuf, Option<PathBuf>, Hook)>> {
         self.hooks
             .get_or_try_init(|| async {
                 self.config_files
@@ -1319,7 +1439,7 @@ impl Config {
             .await
     }
 
-    pub fn watch_file_hooks(&self) -> Result<IndexSet<(PathBuf, WatchFile)>> {
+    pub(crate) fn watch_file_hooks(&self) -> Result<IndexSet<(PathBuf, WatchFile)>> {
         Ok(self
             .config_files
             .values()
@@ -1336,7 +1456,7 @@ impl Config {
             .collect())
     }
 
-    pub async fn watch_files(self: &Arc<Self>) -> Result<BTreeSet<WatchFilePattern>> {
+    pub(crate) async fn watch_files(self: &Arc<Self>) -> Result<BTreeSet<WatchFilePattern>> {
         let env_results = self.env_results().await?;
         Ok(self
             .config_files
@@ -1377,14 +1497,14 @@ impl Config {
             .collect())
     }
 
-    pub fn redaction_keys(&self) -> Vec<String> {
+    pub(crate) fn redaction_keys(&self) -> Vec<String> {
         self.config_files
             .values()
             .flat_map(|cf| cf.redactions().0.iter())
             .cloned()
             .collect()
     }
-    pub fn add_redactions_excluding(
+    pub(crate) fn add_redactions_excluding(
         &self,
         redactions: impl IntoIterator<Item = String>,
         env: &EnvMap,
@@ -1405,12 +1525,12 @@ impl Config {
     }
 
     /// Get the current redaction patterns.
-    pub fn redactions(&self) -> Arc<IndexSet<String>> {
+    pub(crate) fn redactions(&self) -> Arc<IndexSet<String>> {
         _REDACTOR.lock().unwrap().patterns_arc()
     }
 
     /// Redact sensitive values from a string using Aho-Corasick for efficiency.
-    pub fn redact(&self, input: &str) -> String {
+    pub(crate) fn redact(&self, input: &str) -> String {
         _REDACTOR.lock().unwrap().redact(input)
     }
 }
@@ -1421,9 +1541,9 @@ fn configs_at_root<'a>(dir: &Path, config_files: &'a ConfigMap) -> Vec<&'a Arc<d
         .iter()
         .rev()
         .flat_map(|f| {
-            if f.contains('*') {
+            if is_glob_pattern(f) {
                 // Handle glob patterns by matching against actual config file paths
-                config_glob(dir, f)
+                load_config_glob(dir, f)
                     .into_iter()
                     .rev()
                     .filter_map(|path| config_files.get(&path))
@@ -1611,45 +1731,24 @@ fn idiomatic_version_file_disabled(
     })
 }
 
-/// Resolves idiomatic version filenames for a single monorepo config root, honoring that
-/// root's own `[settings].idiomatic_version_file_enable_tools`/`idiomatic_version_file_disable_files`
-/// if it sets either.
+/// Resolves idiomatic version filenames for a single monorepo config root through the
+/// canonical settings loader.
 ///
-/// `Settings::get()` is a process-wide snapshot resolved once from the invocation directory
-/// (walking config files upward); it never walks *down* into `[monorepo].config_roots`, so a
-/// config root's own `[settings]` block is otherwise silently ignored by monorepo-wide
-/// commands (e.g. `mise ls --monorepo`) even though the same setting works fine when mise is
-/// actually invoked from within that root. See https://github.com/jdx/mise/discussions/8629.
+/// `Settings::get()` is a process-wide snapshot rooted at the invocation directory. Resolving
+/// from the monorepo config root keeps normal environment, hierarchy, global/system, safe-mode,
+/// and `--no-config` behavior without maintaining a second precedence implementation.
 async fn idiomatic_filenames_for_root(
     root: &Path,
     default_idiomatic_filenames: &BTreeMap<String, Vec<String>>,
-) -> BTreeMap<String, Vec<String>> {
-    let settings = Settings::get();
-    let mut enable_tools = settings.idiomatic_version_file_enable_tools.clone();
-    let mut disable_files = settings.idiomatic_version_file_disable_files.clone();
-    let mut overridden = false;
-    let safe_mode = Settings::safe_mode();
-    for path in config_paths_in_dir_with_filenames(root, &DEFAULT_CONFIG_FILENAMES) {
-        if safe_mode && !is_global_config(&path) {
-            // Match all_settings_files()'s safe-mode boundary: an untrusted repo's own
-            // [settings] block must not influence resolution, including here.
-            continue;
-        }
-        if let Ok(partial) = Settings::parse_settings_file(&path) {
-            if let Some(tools) = partial.idiomatic_version_file_enable_tools {
-                enable_tools = tools;
-                overridden = true;
-            }
-            if let Some(files) = partial.idiomatic_version_file_disable_files {
-                disable_files = files;
-                overridden = true;
-            }
-        }
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let rooted = settings::IdiomaticVersionFileSettings::resolve_from(
+        root,
+        settings::SettingsLoadPolicy::HIERARCHY,
+    )?;
+    if rooted == settings::IdiomaticVersionFileSettings::current() {
+        return Ok(default_idiomatic_filenames.clone());
     }
-    if !overridden {
-        return default_idiomatic_filenames.clone();
-    }
-    load_idiomatic_filenames_for_tools(&enable_tools, &disable_files).await
+    Ok(load_idiomatic_filenames_for_tools(&rooted.enable_tools, &rooted.disable_files).await)
 }
 
 static LOCAL_CONFIG_FILENAMES: Lazy<IndexSet<&'static str>> = Lazy::new(|| {
@@ -1676,6 +1775,7 @@ static LOCAL_CONFIG_FILENAMES: Lazy<IndexSet<&'static str>> = Lazy::new(|| {
             ".config/mise.toml",
             ".mise/conf.d/*.toml",
             ".mise/config.toml",
+            "mise/conf.d/*.toml",
             "mise/config.toml",
             ".rtx.toml",
             "mise.toml",
@@ -1697,23 +1797,60 @@ static LOCAL_CONFIG_FILENAMES: Lazy<IndexSet<&'static str>> = Lazy::new(|| {
 /// Config filename patterns for a single MISE_ENV environment, in precedence order
 /// (later wins, matching LOCAL_CONFIG_FILENAMES ordering)
 fn env_config_patterns(env: &str) -> Vec<String> {
-    vec![
-        format!(".config/mise/config.{env}.toml"),
-        format!(".config/mise.{env}.toml"),
-        format!("mise/config.{env}.toml"),
-        format!("mise.{env}.toml"),
-        format!(".mise/config.{env}.toml"),
-        format!(".mise.{env}.toml"),
-        format!(".config/mise/config.{env}.local.toml"),
-        format!(".config/mise.{env}.local.toml"),
-        format!("mise/config.{env}.local.toml"),
-        format!("mise.{env}.local.toml"),
-        format!(".mise/config.{env}.local.toml"),
-        format!(".mise.{env}.local.toml"),
-    ]
+    env_config_patterns_with_conf_d(env, env::env_conf_d())
 }
 
-pub static DEFAULT_CONFIG_FILENAMES: Lazy<Vec<String>> = Lazy::new(|| {
+/// `env_config_patterns` with the `env_conf_d` decision injected, so tests can
+/// cover both sides of the migration without touching global state.
+fn env_config_patterns_with_conf_d(env: &str, env_conf_d: bool) -> Vec<String> {
+    let env = glob::Pattern::escape(env);
+    let mut patterns = vec![];
+    if env_conf_d {
+        patterns.push(format!(".config/mise/conf.d/*.{env}.toml"));
+    }
+    patterns.extend([
+        format!(".config/mise/config.{env}.toml"),
+        format!(".config/mise.{env}.toml"),
+    ]);
+    if env_conf_d {
+        patterns.push(format!("mise/conf.d/*.{env}.toml"));
+    }
+    patterns.extend([
+        format!("mise/config.{env}.toml"),
+        format!("mise.{env}.toml"),
+    ]);
+    if env_conf_d {
+        patterns.push(format!(".mise/conf.d/*.{env}.toml"));
+    }
+    patterns.extend([
+        format!(".mise/config.{env}.toml"),
+        format!(".mise.{env}.toml"),
+    ]);
+    if env_conf_d {
+        patterns.push(format!(".config/mise/conf.d/*.{env}.local.toml"));
+    }
+    patterns.extend([
+        format!(".config/mise/config.{env}.local.toml"),
+        format!(".config/mise.{env}.local.toml"),
+    ]);
+    if env_conf_d {
+        patterns.push(format!("mise/conf.d/*.{env}.local.toml"));
+    }
+    patterns.extend([
+        format!("mise/config.{env}.local.toml"),
+        format!("mise.{env}.local.toml"),
+    ]);
+    if env_conf_d {
+        patterns.push(format!(".mise/conf.d/*.{env}.local.toml"));
+    }
+    patterns.extend([
+        format!(".mise/config.{env}.local.toml"),
+        format!(".mise.{env}.local.toml"),
+    ]);
+    patterns
+}
+
+pub(crate) static DEFAULT_CONFIG_FILENAMES: Lazy<Vec<String>> = Lazy::new(|| {
     let mut filenames = LOCAL_CONFIG_FILENAMES
         .iter()
         .map(|f| f.to_string())
@@ -1743,12 +1880,12 @@ static TOML_CONFIG_MATCHERS: Lazy<Vec<globset::GlobMatcher>> = Lazy::new(|| {
         })
         .collect()
 });
-pub static ALL_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
+pub(crate) static ALL_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
     load_config_paths(&DEFAULT_CONFIG_FILENAMES, false)
         .into_iter()
         .collect()
 });
-pub static IGNORED_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
+pub(crate) static IGNORED_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
     load_config_paths(&DEFAULT_CONFIG_FILENAMES, true)
         .into_iter()
         .filter(|p| {
@@ -1775,7 +1912,7 @@ pub static IGNORED_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
 type GlobResults = HashMap<(PathBuf, String), Vec<PathBuf>>;
 static GLOB_RESULTS: Lazy<Mutex<GlobResults>> = Lazy::new(Default::default);
 
-pub fn glob(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
+pub(crate) fn glob(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     let mut results = GLOB_RESULTS.lock().unwrap();
     let key = (dir.to_path_buf(), pattern.to_string());
     if let Some(glob) = results.get(&key) {
@@ -1803,7 +1940,74 @@ fn config_glob(dir: &Path, pattern: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-pub fn config_files_in_dir(dir: &Path) -> IndexSet<PathBuf> {
+fn is_unconditional_conf_d_pattern(pattern: &str) -> bool {
+    pattern.ends_with("conf.d/*.toml")
+}
+
+/// Whether a conf.d fragment reserves a filename component for an environment.
+///
+/// `name.toml` and `name.local.toml` are unconditional. `name.dev.toml` and
+/// `name.dev.local.toml` are environment-specific. Environment names themselves
+/// may contain dots; active files are selected by exact glob patterns.
+fn conf_d_file_environment(path: &Path) -> Option<(&str, bool)> {
+    if !is_conf_d_file(path) {
+        return None;
+    }
+    let filename = path.file_name()?.to_str()?;
+    let stem = filename.strip_suffix(".toml")?;
+    let (stem, local) = stem
+        .strip_suffix(".local")
+        .map_or((stem, false), |stem| (stem, true));
+    let (name, environment) = stem.split_once('.')?;
+    (!name.is_empty() && !environment.is_empty()).then_some((environment, local))
+}
+
+fn is_environment_conf_d_file(path: &Path) -> bool {
+    conf_d_file_environment(path).is_some()
+}
+
+/// Warn about a dotted `conf.d` fragment whose name will become an environment
+/// selector once `env_conf_d` defaults to on. Only fires inside the migration
+/// window: the setting is unset (so the meaning is still going to change) and
+/// the version default is still legacy (so it hasn't changed yet).
+fn warn_on_dotted_conf_d_file(path: &Path) {
+    if settings::is_loaded()
+        && env::env_conf_d_setting().is_none()
+        && !env::env_conf_d()
+        && is_environment_conf_d_file(path)
+    {
+        deprecated_at!(
+            "2026.8.10",
+            "2027.8.10",
+            "dotted_conf_d_filename",
+            "dots in unconditional conf.d filenames are deprecated because the suffix will become an environment selector; rename fragments such as `node.tools.toml` to `node-tools.toml`, or set `env_conf_d = true` in a miserc.toml file to opt in now"
+        );
+    }
+}
+
+fn load_config_glob(dir: &Path, pattern: &str) -> Vec<PathBuf> {
+    let paths = config_glob(dir, pattern);
+    if !env::env_conf_d() {
+        for path in &paths {
+            warn_on_dotted_conf_d_file(path);
+        }
+        return paths;
+    }
+    paths
+        .into_iter()
+        .filter(|path| {
+            if is_unconditional_conf_d_pattern(pattern) {
+                !is_environment_conf_d_file(path)
+            } else if let Some((environment, _)) = conf_d_file_environment(path) {
+                env::MISE_ENV_WITH_AUTO.iter().any(|env| env == environment)
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn config_files_in_dir(dir: &Path) -> IndexSet<PathBuf> {
     DEFAULT_CONFIG_FILENAMES
         .iter()
         .flat_map(|f| config_glob(dir, f))
@@ -1827,7 +2031,9 @@ pub(crate) fn environments_for_config_path(path: &Path) -> Vec<String> {
             ["config", "mise", ".mise"].into_iter().any(|prefix| {
                 filename == format!("{prefix}.{environment}.toml")
                     || filename == format!("{prefix}.{environment}.local.toml")
-            })
+            }) || (env::env_conf_d()
+                && conf_d_file_environment(path)
+                    .is_some_and(|(file_environment, _)| file_environment == environment.as_str()))
         })
         .cloned()
         .collect()
@@ -1838,8 +2044,8 @@ fn config_paths_in_dir_with_filenames(dir: &Path, filenames: &[String]) -> Vec<P
         .iter()
         .rev()
         .flat_map(|f| {
-            if f.contains('*') {
-                config_glob(dir, f).into_iter().rev().collect()
+            if is_glob_pattern(f) {
+                load_config_glob(dir, f).into_iter().rev().collect()
             } else {
                 let path = dir.join(f);
                 if path.exists() { vec![path] } else { vec![] }
@@ -1907,7 +2113,7 @@ fn loadable_config_files_in_dir(dir: &Path, filenames: &[String]) -> IndexSet<Pa
     }
     filenames
         .iter()
-        .flat_map(|f| config_glob(dir, f))
+        .flat_map(|f| load_config_glob(dir, f))
         .unique_by(|p| file::desymlink_path(p))
         .filter(|p| !config_path_is_ignored(p, false))
         .collect()
@@ -1924,7 +2130,7 @@ fn loadable_config_files_in_dir(dir: &Path, filenames: &[String]) -> IndexSet<Pa
 /// file mise will never read back. When nothing in `dir` is loadable the default name is
 /// still returned — the directory was named explicitly, so mise creates what was asked for
 /// — but the caller is warned that it will not be read.
-pub fn config_file_in_dir(dir: &Path) -> PathBuf {
+pub(crate) fn config_file_in_dir(dir: &Path) -> PathBuf {
     let files = loadable_config_files_in_dir(dir, &DEFAULT_CONFIG_FILENAMES);
     if let Some(cf) = first_config_file(&files)
         && !is_global_config(cf)
@@ -1975,7 +2181,7 @@ fn nearest_local_config_file(start: &Path, filenames: &[String]) -> Option<PathB
     None
 }
 
-pub fn config_file_from_dir(p: &Path) -> PathBuf {
+pub(crate) fn config_file_from_dir(p: &Path) -> PathBuf {
     if !p.is_dir() {
         return p.to_path_buf();
     }
@@ -1992,12 +2198,11 @@ pub fn config_file_from_dir(p: &Path) -> PathBuf {
     }
 }
 
-pub fn load_config_paths(config_filenames: &[String], include_ignored: bool) -> Vec<PathBuf> {
-    if Settings::no_config() {
-        return vec![];
-    }
-    let dirs = all_dirs().unwrap_or_default();
-
+fn load_config_paths_from_dirs(
+    dirs: Vec<PathBuf>,
+    config_filenames: &[String],
+    include_ignored: bool,
+) -> Vec<PathBuf> {
     let mut config_files = dirs
         .iter()
         .flat_map(|dir| {
@@ -2020,19 +2225,33 @@ pub fn load_config_paths(config_filenames: &[String], include_ignored: bool) -> 
         .collect()
 }
 
-fn load_global_config_paths(include_ignored: bool) -> Vec<PathBuf> {
+pub(crate) fn load_config_paths_from(
+    start_dir: &Path,
+    config_filenames: &[String],
+    include_ignored: bool,
+) -> Vec<PathBuf> {
     if Settings::no_config() {
         return vec![];
     }
+    load_config_paths_from_dirs(
+        all_dirs_from(start_dir).unwrap_or_default(),
+        config_filenames,
+        include_ignored,
+    )
+}
 
-    // rev: these groups are lowest-first, this list is highest-first
-    global_config_files()
-        .into_iter()
-        .rev()
-        .chain(system_config_files().into_iter().rev())
-        .unique_by(|p| file::desymlink_path(p))
-        .filter(|p| !config_path_is_ignored(p, include_ignored))
-        .collect()
+pub(crate) fn load_config_paths(
+    config_filenames: &[String],
+    include_ignored: bool,
+) -> Vec<PathBuf> {
+    if Settings::no_config() {
+        return vec![];
+    }
+    load_config_paths_from_dirs(
+        all_dirs().unwrap_or_default(),
+        config_filenames,
+        include_ignored,
+    )
 }
 
 /// Whether to emit the phase-2 auto_env rollout warning. Pure for unit testing.
@@ -2197,20 +2416,30 @@ fn detect_auto_env_candidate_files() -> Vec<PathBuf> {
     // same file (e.g. ~/.config/mise/config.{env}.toml when cwd is under $HOME)
     let mut found = IndexSet::new();
     for dir in all_dirs().unwrap_or_default() {
-        if env::MISE_IGNORED_CONFIG_PATHS
-            .iter()
-            .any(|p| dir.starts_with(p))
-        {
+        if config_file::is_ignored_via_setting(&dir) {
             continue;
         }
         for env_name in &candidate_envs {
             for pattern in env_config_patterns(env_name) {
-                found.extend(glob(&dir, &pattern).unwrap_or_default());
+                found.extend(
+                    glob(&dir, &pattern)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|path| {
+                            !is_conf_d_file(path)
+                                || conf_d_file_environment(path)
+                                    .is_some_and(|(environment, _)| environment == env_name)
+                        }),
+                );
             }
         }
     }
     for dir in [*dirs::CONFIG, *dirs::SYSTEM_CONFIG] {
         for env_name in &candidate_envs {
+            if env::env_conf_d() {
+                found.extend(conf_d_environment_files(dir, env_name, false));
+                found.extend(conf_d_environment_files(dir, env_name, true));
+            }
             for filename in [
                 format!("config.{env_name}.toml"),
                 format!("mise.{env_name}.toml"),
@@ -2237,7 +2466,7 @@ fn detect_auto_env_candidate_files() -> Vec<PathBuf> {
 /// including MISE_ENV-specific configs and idiomatic version files.
 /// Returns (paths, idiomatic_filenames) so callers can pass the map to
 /// load_config_files_from_paths without a redundant second computation.
-pub async fn load_config_hierarchy_from_dir(
+pub(crate) async fn load_config_hierarchy_from_dir(
     start_dir: &Path,
 ) -> Result<(Vec<PathBuf>, BTreeMap<String, Vec<String>>)> {
     if Settings::no_config() {
@@ -2263,7 +2492,7 @@ pub async fn load_config_hierarchy_from_dir(
                 config_filenames
                     .iter()
                     .rev()
-                    .flat_map(|f| config_glob(dir, f).into_iter().rev())
+                    .flat_map(|f| load_config_glob(dir, f).into_iter().rev())
                     .collect()
             }
         })
@@ -2282,11 +2511,11 @@ pub async fn load_config_hierarchy_from_dir(
     Ok((paths, idiomatic_files))
 }
 
-pub fn is_global_config(path: &Path) -> bool {
+pub(crate) fn is_global_config(path: &Path) -> bool {
     config_set_contains(&global_config_files(), path) || is_system_config(path)
 }
 
-pub fn is_system_config(path: &Path) -> bool {
+pub(crate) fn is_system_config(path: &Path) -> bool {
     config_set_contains(&system_config_files(), path)
 }
 
@@ -2373,10 +2602,7 @@ fn is_default_config_dir_override_filtered(path: &Path) -> bool {
 }
 
 fn config_dir_is_ignored(dir: &Path, include_ignored: bool) -> bool {
-    !include_ignored
-        && env::MISE_IGNORED_CONFIG_PATHS
-            .iter()
-            .any(|p| dir.starts_with(p))
+    !include_ignored && config_file::is_ignored_via_setting(dir)
 }
 
 fn config_path_is_ignored(path: &Path, include_ignored: bool) -> bool {
@@ -2403,7 +2629,7 @@ fn config_path_is_ignored(path: &Path, include_ignored: bool) -> bool {
 static GLOBAL_CONFIG_FILES: Lazy<Mutex<Option<IndexSet<PathBuf>>>> = Lazy::new(Default::default);
 static SYSTEM_CONFIG_FILES: Lazy<Mutex<Option<IndexSet<PathBuf>>>> = Lazy::new(Default::default);
 
-pub fn global_config_files() -> IndexSet<PathBuf> {
+pub(crate) fn global_config_files() -> IndexSet<PathBuf> {
     let mut g = GLOBAL_CONFIG_FILES.lock().unwrap();
     if let Some(g) = &*g {
         return g.clone();
@@ -2421,7 +2647,7 @@ pub fn global_config_files() -> IndexSet<PathBuf> {
     config_files
 }
 
-pub fn system_config_files() -> IndexSet<PathBuf> {
+pub(crate) fn system_config_files() -> IndexSet<PathBuf> {
     let mut s = SYSTEM_CONFIG_FILES.lock().unwrap();
     if let Some(s) = &*s {
         return s.clone();
@@ -2434,21 +2660,6 @@ pub fn system_config_files() -> IndexSet<PathBuf> {
     config_files
 }
 
-static CONFIG_FILENAMES: Lazy<Vec<String>> = Lazy::new(|| {
-    let mut filenames = vec!["config.toml".to_string(), "mise.toml".to_string()];
-    for env in &*env::MISE_ENV_WITH_AUTO {
-        filenames.push(format!("config.{env}.toml"));
-        filenames.push(format!("mise.{env}.toml"));
-    }
-    filenames.push("config.local.toml".to_string());
-    filenames.push("mise.local.toml".to_string());
-    for env in &*env::MISE_ENV_WITH_AUTO {
-        filenames.push(format!("config.{env}.local.toml"));
-        filenames.push(format!("mise.{env}.local.toml"));
-    }
-    filenames
-});
-
 /// Config files in a global/system config dir, lowest precedence first: `conf.d`,
 /// then `config.toml`/`mise.toml`, then the `.local` variants.
 fn config_files_from_dir(dir: &Path) -> IndexSet<PathBuf> {
@@ -2457,19 +2668,53 @@ fn config_files_from_dir(dir: &Path) -> IndexSet<PathBuf> {
         if let Some(file_name) = p.file_name().map(|f| f.to_string_lossy().to_string())
             && !file_name.starts_with(".")
             && file_name.ends_with(".toml")
+            && (!env::env_conf_d() || !is_environment_conf_d_file(&p))
         {
+            warn_on_dotted_conf_d_file(&p);
             files.insert(p);
         }
     }
-    files.extend(CONFIG_FILENAMES.iter().map(|f| dir.join(f)));
+    files.extend([dir.join("config.toml"), dir.join("mise.toml")]);
+    for environment in &*env::MISE_ENV_WITH_AUTO {
+        if env::env_conf_d() {
+            files.extend(conf_d_environment_files(dir, environment, false));
+        }
+        files.extend([
+            dir.join(format!("config.{environment}.toml")),
+            dir.join(format!("mise.{environment}.toml")),
+        ]);
+    }
+    files.extend([dir.join("config.local.toml"), dir.join("mise.local.toml")]);
+    for environment in &*env::MISE_ENV_WITH_AUTO {
+        if env::env_conf_d() {
+            files.extend(conf_d_environment_files(dir, environment, true));
+        }
+        files.extend([
+            dir.join(format!("config.{environment}.local.toml")),
+            dir.join(format!("mise.{environment}.local.toml")),
+        ]);
+    }
     files.into_iter().filter(|p| p.is_file()).collect()
+}
+
+fn conf_d_environment_files(dir: &Path, environment: &str, local: bool) -> Vec<PathBuf> {
+    file::ls(&dir.join("conf.d"))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.'))
+                && conf_d_file_environment(path) == Some((environment, local))
+        })
+        .collect()
 }
 
 /// the preferred global config file to write to, or the path where it should be created.
 /// Uses first_config_file() to pick the lowest-precedence non-local TOML (i.e., config.toml
 /// rather than config.local.toml) so that `mise use -g` writes to config.toml.
 /// See: https://github.com/jdx/mise/discussions/8236
-pub fn global_config_path() -> PathBuf {
+pub(crate) fn global_config_path() -> PathBuf {
     let files = global_config_files();
     first_config_file(&files)
         .cloned()
@@ -2478,14 +2723,14 @@ pub fn global_config_path() -> PathBuf {
 }
 
 /// the top-most mise.toml (local or global)
-pub fn top_toml_config() -> Option<PathBuf> {
+pub(crate) fn top_toml_config() -> Option<PathBuf> {
     load_config_paths(&TOML_CONFIG_FILENAMES, false)
         .iter()
         .find(|p| p.to_string_lossy().ends_with(".toml"))
         .map(|p| p.to_path_buf())
 }
 
-pub static ALL_TOML_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
+pub(crate) static ALL_TOML_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
     load_config_paths(&TOML_CONFIG_FILENAMES, false)
         .into_iter()
         .collect()
@@ -2493,7 +2738,7 @@ pub static ALL_TOML_CONFIG_FILES: Lazy<IndexSet<PathBuf>> = Lazy::new(|| {
 
 /// The lowest-precedence TOML config in the nearest local config directory, or
 /// the path where it should be written.
-pub fn local_toml_config_path() -> PathBuf {
+pub(crate) fn local_toml_config_path() -> PathBuf {
     static CWD: Lazy<PathBuf> = Lazy::new(|| PathBuf::from("."));
     local_toml_config_path_from_dir(dirs::CWD.as_ref().unwrap_or(&CWD))
 }
@@ -2502,14 +2747,14 @@ pub fn local_toml_config_path() -> PathBuf {
 ///
 /// This matches the write-target rule from the docs: choose the highest-precedence
 /// directory first, then the lowest-precedence file inside that directory.
-pub fn local_toml_config_path_from_dir(cwd: &Path) -> PathBuf {
+pub(crate) fn local_toml_config_path_from_dir(cwd: &Path) -> PathBuf {
     nearest_local_config_file(cwd, &TOML_CONFIG_FILENAMES)
         .unwrap_or_else(|| cwd.join(&*env::MISE_DEFAULT_CONFIG_FILENAME))
 }
 
 /// Options for resolving target config file path
 #[derive(Debug, Default)]
-pub struct ConfigPathOptions {
+pub(crate) struct ConfigPathOptions {
     pub global: bool,
     pub path: Option<PathBuf>,
     pub env: Option<String>,
@@ -2522,7 +2767,7 @@ pub struct ConfigPathOptions {
 ///
 /// This function centralizes the logic for determining which config file to target
 /// based on various options, ensuring consistent behavior between commands.
-pub fn resolve_target_config_path(opts: ConfigPathOptions) -> Result<PathBuf> {
+pub(crate) fn resolve_target_config_path(opts: ConfigPathOptions) -> Result<PathBuf> {
     let cwd = match opts.cwd {
         Some(ref path) => path.clone(),
         None => env::current_dir()?,
@@ -2618,7 +2863,7 @@ async fn load_all_config_files(
 /// Load config files from a list of paths (for monorepo task config contexts)
 /// Accepts a pre-computed idiomatic filenames map to avoid redundant computation
 /// when called after load_config_hierarchy_from_dir.
-pub async fn load_config_files_from_paths(
+pub(crate) async fn load_config_files_from_paths(
     config_paths: &[PathBuf],
     idiomatic_filenames: &BTreeMap<String, Vec<String>>,
 ) -> Result<ConfigMap> {
@@ -2648,6 +2893,7 @@ async fn parse_config_file(
     f: &PathBuf,
     idiomatic_filenames: &BTreeMap<String, Vec<String>>,
 ) -> Result<Arc<dyn ConfigFile>> {
+    warn_on_dotted_conf_d_file(f);
     let plugins = matching_idiomatic_tools(f, idiomatic_filenames);
     if plugins.is_empty() {
         config_file::parse(f).await
@@ -3225,7 +3471,7 @@ fn is_global_task_include_path(path: &Path) -> bool {
 }
 
 #[async_backtrace::framed]
-pub async fn rebuild_shims_and_runtime_symlinks(
+pub(crate) async fn rebuild_shims_and_runtime_symlinks(
     config: &Arc<Config>,
     ts: &Toolset,
     new_versions: &[ToolVersion],
@@ -3241,7 +3487,7 @@ pub async fn rebuild_shims_and_runtime_symlinks(
             .await
             .wrap_err("failed to rebuild shims")?;
     });
-    lockfile::migrate_monorepo_lockfiles(config)?;
+    lockfile::migrate_monorepo_lockfiles(config, false)?;
     // Snapshot the lockfiles' platform keys BEFORE update_lockfiles writes
     // current-platform entries — auto-lock uses this to tell a curated lockfile
     // (existing entries are authoritative) from a fresh one (expand to common).
@@ -3763,8 +4009,8 @@ fn has_mise_config_with_filenames(dir: &Path, filenames: &[String]) -> bool {
 
 fn has_config_file_with_filenames(dir: &Path, filenames: &[String]) -> bool {
     filenames.iter().any(|f| {
-        if f.contains('*') {
-            !config_glob(dir, f).is_empty()
+        if is_glob_pattern(f) {
+            !load_config_glob(dir, f).is_empty()
         } else {
             dir.join(f).exists()
         }
@@ -3903,42 +4149,43 @@ fn discover_monorepo_subdirs(
 }
 
 async fn load_global_tasks(config: &Arc<Config>, templates: &TaskDefinitions) -> Result<Vec<Task>> {
-    // User-global config overrides system config. Within each group the path
-    // lists are lowest-first, so reverse them before applying first-wins task
-    // precedence.
-    let config_paths = global_config_files()
-        .into_iter()
-        .rev()
-        .chain(system_config_files().into_iter().rev())
-        .collect::<Vec<_>>();
-    let configs = config_paths
-        .iter()
-        .filter_map(|path| {
-            config.config_files.get(path).or_else(|| {
-                let path = file::desymlink_path(path);
-                config
-                    .config_files
-                    .iter()
-                    .find(|(loaded, _)| file::desymlink_path(loaded) == path)
-                    .map(|(_, cf)| cf)
+    // Compose user-global and system configs as separate scopes so task_config
+    // fields follow the same override semantics as local config files. Load the
+    // user scope first so a user task replaces a same-named system task without
+    // inheriting metadata from it.
+    let mut seen_configs = BTreeSet::new();
+    let mut config_groups = vec![];
+    for config_paths in [global_config_files(), system_config_files()] {
+        let configs = config_paths
+            .iter()
+            .rev()
+            .filter_map(|path| {
+                config.config_files.get(path).or_else(|| {
+                    let path = file::desymlink_path(path);
+                    config
+                        .config_files
+                        .iter()
+                        .find(|(loaded, _)| file::desymlink_path(loaded) == path)
+                        .map(|(_, cf)| cf)
+                })
             })
-        })
-        .unique_by(|cf| file::desymlink_path(cf.get_path()))
-        .collect::<Vec<_>>();
+            .filter(|cf| seen_configs.insert(file::desymlink_path(cf.get_path())))
+            .collect::<Vec<_>>();
+        if !configs.is_empty() {
+            config_groups.push(configs);
+        }
+    }
 
-    // Global config files keep independent task include sets. Aggregate their
-    // results high-to-low. When a lower config supplies the first inline
-    // definition for a script already rediscovered by a higher config, apply
-    // only that inline metadata to the higher script so its config context is
-    // preserved.
+    // Aggregate the user and system scopes high-to-low. Each scope has already
+    // composed its file and inline tasks, so precedence between scopes is a
+    // simple first-wins replacement by task name.
     let mut tasks: IndexMap<String, Task> = IndexMap::new();
-    let mut seen_config_task_names = BTreeSet::new();
     let mut rendered_file_tasks = RenderedTaskCache::default();
-    for cf in configs {
+    for configs in config_groups {
         let sources = load_task_sources_from_configs(
             config,
-            &cf.config_root(),
-            vec![cf],
+            &env::MISE_GLOBAL_CONFIG_ROOT,
+            configs,
             templates,
             false,
             None,
@@ -3946,30 +4193,8 @@ async fn load_global_tasks(config: &Arc<Config>, templates: &TaskDefinitions) ->
         )
         .await?;
         rendered_file_tasks.finish_config();
-        let mut inline_tasks = IndexMap::new();
-        for task in &sources.config_tasks {
-            inline_tasks
-                .entry(task.name.clone())
-                .or_insert_with(|| task.clone());
-        }
-        let loaded = sources.into_tasks();
-        for task in loaded {
-            if let Some(inline_task) = inline_tasks.get(&task.name) {
-                if seen_config_task_names.insert(task.name.clone()) {
-                    if let Some(existing) = tasks.get_mut(&task.name) {
-                        let rediscovered_file = resolved_task_file(existing)
-                            .zip(resolved_task_file(&task))
-                            .is_some_and(|(left, right)| file::same_file(&left, &right));
-                        if rediscovered_file {
-                            existing.merge_toml_overlay(inline_task.clone());
-                        }
-                    } else {
-                        tasks.insert(task.name.clone(), task);
-                    }
-                }
-            } else {
-                tasks.entry(task.name.clone()).or_insert(task);
-            }
+        for task in sources.into_tasks() {
+            tasks.entry(task.name.clone()).or_insert(task);
         }
     }
     Ok(tasks.into_values().collect())
@@ -4200,14 +4425,30 @@ struct LoadTaskIncludesOptions<'a> {
     monorepo_cf: Option<&'a Arc<dyn ConfigFile>>,
     require_trust: bool,
     rendered_file_tasks: Option<&'a mut RenderedTaskCache>,
+    excludes: &'a [PathBuf],
 }
 
-fn collect_task_files(root: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn is_task_path_excluded(path: &Path, excludes: &[PathBuf]) -> bool {
+    Settings::get()
+        .task
+        .disable_paths
+        .iter()
+        .chain(excludes)
+        .any(|exclude| file::path_starts_with_resolved(path, exclude))
+}
+
+fn collect_task_files(root: &Path, excludes: &[PathBuf]) -> Result<Vec<PathBuf>> {
     WalkDir::new(root)
         .follow_links(true)
         .into_iter()
         // skip hidden directories (if the root is hidden that's ok)
-        .filter_entry(|e| e.path() == root || !e.file_name().to_string_lossy().starts_with('.'))
+        .filter_entry(|entry| {
+            entry.path() == root
+                || (!entry.file_name().to_string_lossy().starts_with('.')
+                    && !excludes
+                        .iter()
+                        .any(|exclude| file::path_starts_with_resolved(entry.path(), exclude)))
+        })
         .filter_map(|entry| match entry {
             Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.path().to_path_buf())),
             Ok(_) => None,
@@ -4237,7 +4478,11 @@ async fn load_tasks_includes(
         monorepo_cf,
         require_trust,
         mut rendered_file_tasks,
+        excludes,
     } = options;
+    if is_task_path_excluded(root, excludes) {
+        return Ok(vec![]);
+    }
     if root.is_file() && root.extension().map(|e| e == "toml").unwrap_or(false) {
         trust_check_task_include(root, require_trust)?;
         load_task_file(
@@ -4251,16 +4496,14 @@ async fn load_tasks_includes(
         )
         .await
     } else if root.is_dir() {
-        let all_files = collect_task_files(root)?
-            .into_iter()
-            .filter(|p| {
-                !Settings::get()
-                    .task
-                    .disable_paths
-                    .iter()
-                    .any(|d| p.starts_with(d))
-            })
+        let all_excludes = Settings::get()
+            .task
+            .disable_paths
+            .iter()
+            .chain(excludes)
+            .cloned()
             .collect::<Vec<_>>();
+        let all_files = collect_task_files(root, &all_excludes)?;
         let is_toml = |p: &Path| p.extension().map(|e| e == "toml").unwrap_or(false);
         let (toml_files, exec_files): (Vec<_>, Vec<_>) = all_files
             .into_iter()
@@ -4368,16 +4611,41 @@ fn is_mise_config_file_in_task_include(root: &Path, path: &Path) -> bool {
     })
 }
 
-async fn resolve_git_url_to_path(git_url: &str) -> Result<PathBuf> {
+async fn resolve_git_url_to_path(git_url: &str) -> Result<TaskFileArtifact> {
     let no_cache = Settings::get().task.remote_no_cache.unwrap_or(false);
-    let task_file_providers = TaskFileProvidersBuilder::new()
-        .with_cache(!no_cache)
-        .build();
-
-    match task_file_providers.get_provider(git_url) {
-        Some(provider) => provider.get_local_path(git_url).await,
-        None => bail!("No provider found for git URL: {}", git_url),
+    if !no_cache {
+        let task_file_providers = TaskFileProvidersBuilder::new().with_cache(true).build();
+        return match task_file_providers.get_provider(git_url) {
+            Some(provider) => provider.get_local_artifact(git_url).await,
+            None => bail!("No provider found for git URL: {}", git_url),
+        };
     }
+
+    let source = RemoteSource::parse_git(git_url)
+        .ok_or_else(|| eyre!("No provider found for git URL: {}", git_url))?;
+    let cache_key = (source.url.clone(), source.git_ref.clone());
+    let checkout = REMOTE_TASK_INCLUDE_ARTIFACTS
+        .entry(cache_key)
+        .or_insert_with(|| Arc::new(OnceCell::new()))
+        .clone();
+    let checkout = checkout
+        .get_or_try_init(|| async {
+            let task_file_providers = TaskFileProvidersBuilder::new().with_cache(false).build();
+            let provider = task_file_providers
+                .get_provider(git_url)
+                .ok_or_else(|| eyre!("No provider found for git URL: {}", git_url))?;
+            let artifact = provider.get_local_artifact(git_url).await?;
+            let checkout_path = artifact
+                .cleanup_path()
+                .ok_or_else(|| eyre!("no cleanup path for no-cache Git task include"))?
+                .to_path_buf();
+            Ok::<TaskFileArtifact, eyre::Report>(artifact.with_path(checkout_path))
+        })
+        .await?;
+
+    let artifact = checkout.with_path(checkout.path.join(source.path));
+    validate_remote_git_path(&checkout.path, &artifact.path)?;
+    Ok(artifact)
 }
 
 /// Check if a pattern contains glob metacharacters
@@ -4426,6 +4694,25 @@ fn expand_task_include(dir: &Path, pattern: &str) -> Vec<PathBuf> {
     }
 }
 
+fn resolve_task_excludes(dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    patterns
+        .iter()
+        .flat_map(|pattern| {
+            if is_glob_pattern(pattern) {
+                expand_task_include(dir, pattern)
+            } else {
+                let path = file::replace_path(pattern);
+                if path.is_absolute() {
+                    vec![path]
+                } else {
+                    vec![dir.join(path)]
+                }
+            }
+        })
+        .unique()
+        .collect()
+}
+
 fn task_include_patterns_for_dir(
     dir: &Path,
     config_files: &ConfigMap,
@@ -4464,7 +4751,7 @@ fn task_include_patterns_for_dir(
         }))
 }
 
-pub fn task_includes_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<Vec<PathBuf>> {
+pub(crate) fn task_includes_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<Vec<PathBuf>> {
     let (includes, resolve_dir, _) = task_include_patterns_for_dir(dir, config_files)?;
 
     Ok(includes
@@ -4480,13 +4767,40 @@ pub fn task_includes_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<Vec
         .collect::<Vec<_>>())
 }
 
+pub(crate) fn task_excludes_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<Vec<PathBuf>> {
+    let configs = configs_at_root(dir, config_files);
+    let cascaded_task_config =
+        if configs.iter().find_map(|cf| cf.task_config().cascade) == Some(false) {
+            None
+        } else {
+            cascaded_task_config_for_dir(dir, config_files)?
+        };
+    let (excludes, resolve_dir) = configs
+        .iter()
+        .find_map(|cf| match cf.task_config_excludes() {
+            Ok(Some(excludes)) => Some(Ok((excludes, cf.config_root()))),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
+        })
+        .transpose()?
+        .or_else(|| {
+            cascaded_task_config.and_then(|tc| {
+                tc.task_config
+                    .excludes
+                    .map(|excludes| (excludes, tc.excludes_root))
+            })
+        })
+        .unwrap_or_default();
+    Ok(resolve_task_excludes(&resolve_dir, &excludes))
+}
+
 /// Returns the directory where a new file task should be created.
 ///
 /// Existing directories are selected in effective `task_config.includes` order. When the
 /// built-in defaults are in use and none exist yet, the first default path is returned so the
 /// caller can create it. Explicit includes must contain an existing directory because a missing
 /// path cannot be distinguished from a task file.
-pub fn task_creation_dir_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<PathBuf> {
+pub(crate) fn task_creation_dir_for_dir(dir: &Path, config_files: &ConfigMap) -> Result<PathBuf> {
     let (includes, resolve_dir, uses_defaults) = task_include_patterns_for_dir(dir, config_files)?;
     let default_create_dir = if uses_defaults {
         includes
@@ -4509,7 +4823,7 @@ pub fn task_creation_dir_for_dir(dir: &Path, config_files: &ConfigMap) -> Result
     bail!("task includes do not contain an existing directory where a file task can be created")
 }
 
-pub async fn load_tasks_in_dir(
+pub(crate) async fn load_tasks_in_dir(
     config: &Arc<Config>,
     dir: &Path,
     config_files: &ConfigMap,
@@ -4554,6 +4868,7 @@ struct TaskSources {
 struct CascadedTaskConfig {
     task_config: TaskConfig,
     includes_root: PathBuf,
+    excludes_root: PathBuf,
 }
 
 fn merge_cascaded_task_config(
@@ -4599,6 +4914,18 @@ fn merge_cascaded_task_config(
         cascaded.task_config.includes = Some(includes);
         cascaded.includes_root = root;
     }
+    if let Some((excludes, root)) = configs
+        .iter()
+        .find_map(|cf| match cf.task_config_excludes() {
+            Ok(Some(excludes)) => Some(Ok((excludes, cf.config_root()))),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
+        })
+        .transpose()?
+    {
+        cascaded.task_config.excludes = Some(excludes);
+        cascaded.excludes_root = root;
+    }
     Ok(())
 }
 
@@ -4626,7 +4953,8 @@ fn cascaded_task_config_for_dir(
             Some(true) if cascaded.is_none() => {
                 cascaded = Some(CascadedTaskConfig {
                     task_config: TaskConfig::default(),
-                    includes_root: root,
+                    includes_root: root.clone(),
+                    excludes_root: root,
                 });
             }
             _ => {}
@@ -4710,9 +5038,8 @@ async fn load_tasks_from_configs(
 
 /// Load file and inline task sources without merging them.
 ///
-/// Global configs use this boundary because each config has independent file
-/// includes, while inline metadata may still need to decorate a script selected
-/// from a higher-precedence config.
+/// Global user and system scopes use this boundary so they can share rendered
+/// file tasks without merging task definitions across the scope boundary.
 async fn load_task_sources_from_configs(
     config: &Arc<Config>,
     dir: &Path,
@@ -4750,6 +5077,24 @@ async fn load_task_sources_from_configs(
             })
         })
         .unwrap_or_else(|| (default_task_includes(), dir.to_path_buf(), configs.len()));
+    let (excludes, excludes_root) = configs
+        .iter()
+        .find_map(|cf| match cf.task_config_excludes() {
+            Ok(Some(excludes)) => Some(Ok((excludes, cf.config_root()))),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
+        })
+        .transpose()?
+        .or_else(|| {
+            cascaded_task_config.and_then(|tc| {
+                tc.task_config
+                    .excludes
+                    .clone()
+                    .map(|excludes| (excludes, tc.excludes_root.clone()))
+            })
+        })
+        .unwrap_or_default();
+    let excludes = resolve_task_excludes(&excludes_root, &excludes);
 
     // Resolve task defaults once for the config root so inline tasks from
     // lower-precedence overlay files use the same defaults as file tasks.
@@ -4803,12 +5148,16 @@ async fn load_task_sources_from_configs(
         None
     };
     for include in &includes {
-        let paths = if include.starts_with("git::") {
+        let artifacts = if include.starts_with("git::") {
             vec![resolve_git_url_to_path(include).await?]
         } else {
             expand_task_include(&resolve_dir, include)
+                .into_iter()
+                .map(TaskFileArtifact::persistent)
+                .collect()
         };
-        for p in paths {
+        for artifact in artifacts {
+            let p = artifact.path;
             let mut loaded = load_tasks_includes(
                 config,
                 &p,
@@ -4819,6 +5168,7 @@ async fn load_task_sources_from_configs(
                     monorepo_cf,
                     require_trust: require_task_include_trust,
                     rendered_file_tasks: rendered_file_tasks.as_deref_mut(),
+                    excludes: &excludes,
                 },
             )
             .await?;
@@ -5030,7 +5380,24 @@ mod tests {
         fs::write(&task, "echo ok")?;
         std::os::unix::fs::symlink("missing", tmp.path().join("dangling"))?;
 
-        assert_eq!(collect_task_files(tmp.path())?, vec![task]);
+        assert_eq!(collect_task_files(tmp.path(), &[])?, vec![task]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_task_files_prunes_excluded_directories() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let excluded = tmp.path().join("excluded");
+        fs::create_dir(&excluded)?;
+        fs::write(excluded.join("pyproject.toml"), "[project]")?;
+        let task = tmp.path().join("task");
+        fs::write(&task, "echo ok")?;
+
+        assert_eq!(
+            collect_task_files(tmp.path(), std::slice::from_ref(&excluded))?,
+            vec![task]
+        );
 
         Ok(())
     }
@@ -5045,7 +5412,10 @@ mod tests {
         fs::create_dir(&root)?;
         std::os::unix::fs::symlink(&target, root.join("linked"))?;
 
-        assert_eq!(collect_task_files(&root)?, vec![root.join("linked/task")]);
+        assert_eq!(
+            collect_task_files(&root, &[])?,
+            vec![root.join("linked/task")]
+        );
 
         Ok(())
     }
@@ -5055,7 +5425,7 @@ mod tests {
         let tmp = TempDir::new()?;
         std::os::unix::fs::symlink("loop", tmp.path().join("loop"))?;
 
-        assert!(collect_task_files(tmp.path()).is_err());
+        assert!(collect_task_files(tmp.path(), &[]).is_err());
 
         Ok(())
     }
@@ -5273,7 +5643,11 @@ mod tests {
     #[test]
     fn test_has_mise_config_with_glob_filenames() -> Result<()> {
         let tmp = TempDir::new()?;
-        for pattern in [".config/mise/conf.d/*.toml", ".mise/conf.d/*.toml"] {
+        for pattern in [
+            ".config/mise/conf.d/*.toml",
+            ".mise/conf.d/*.toml",
+            "mise/conf.d/*.toml",
+        ] {
             let confd = tmp.path().join(pattern.trim_end_matches("/*.toml"));
             fs::create_dir_all(&confd)?;
             fs::write(confd.join("tools.toml"), "[tools]\n")?;
@@ -5288,9 +5662,9 @@ mod tests {
     }
 
     #[test]
-    fn test_project_mise_conf_d_precedence() -> Result<()> {
+    fn test_project_visible_mise_conf_d_precedence() -> Result<()> {
         let tmp = TempDir::new()?;
-        let confd = tmp.path().join(".mise/conf.d");
+        let confd = tmp.path().join("mise/conf.d");
         fs::create_dir_all(&confd)?;
         fs::write(confd.join("01-base.toml"), "[env]\nORDER = 'base'\n")?;
         fs::write(
@@ -5299,13 +5673,13 @@ mod tests {
         )?;
         fs::write(confd.join(".hidden.toml"), "[env]\nORDER = 'hidden'\n")?;
         fs::write(
-            tmp.path().join(".mise/config.toml"),
+            tmp.path().join("mise/config.toml"),
             "[env]\nORDER = 'config'\n",
         )?;
 
         let filenames = vec![
-            ".mise/conf.d/*.toml".to_string(),
-            ".mise/config.toml".to_string(),
+            "mise/conf.d/*.toml".to_string(),
+            "mise/config.toml".to_string(),
         ];
         let paths = config_paths_in_dir_with_filenames(tmp.path(), &filenames);
         let relative = paths
@@ -5315,11 +5689,62 @@ mod tests {
         assert_eq!(
             relative,
             vec![
-                Path::new(".mise/config.toml"),
-                Path::new(".mise/conf.d/02-override.toml"),
+                Path::new("mise/config.toml"),
+                Path::new("mise/conf.d/02-override.toml"),
+                Path::new("mise/conf.d/01-base.toml"),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_conf_d_dotted_fragments_remain_unconditional() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let confd = tmp.path().join(".mise/conf.d");
+        fs::create_dir_all(&confd)?;
+        for filename in [
+            "01-base.toml",
+            "02-local.local.toml",
+            "03-dev.dev.toml",
+            "04-dev-local.dev.local.toml",
+            "05-ci.ci.toml",
+        ] {
+            fs::write(confd.join(filename), "[env]\n")?;
+        }
+
+        let filenames = vec![".mise/conf.d/*.toml".to_string()];
+        let paths = config_paths_in_dir_with_filenames(tmp.path(), &filenames);
+        let relative = paths
+            .iter()
+            .map(|path| path.strip_prefix(tmp.path()).unwrap())
+            .collect_vec();
+        assert_eq!(
+            relative,
+            vec![
+                Path::new(".mise/conf.d/05-ci.ci.toml"),
+                Path::new(".mise/conf.d/04-dev-local.dev.local.toml"),
+                Path::new(".mise/conf.d/03-dev.dev.toml"),
+                Path::new(".mise/conf.d/02-local.local.toml"),
                 Path::new(".mise/conf.d/01-base.toml"),
             ]
         );
+
+        assert!(is_environment_conf_d_file(&confd.join("03-dev.dev.toml")));
+        assert_eq!(
+            conf_d_file_environment(&confd.join("03-dev.dev.toml")),
+            Some(("dev", false))
+        );
+        assert!(is_environment_conf_d_file(
+            &confd.join("04-dev-local.dev.local.toml")
+        ));
+        assert_eq!(
+            conf_d_file_environment(&confd.join("module.qa.prod.local.toml")),
+            Some(("qa.prod", true))
+        );
+        assert!(!is_environment_conf_d_file(
+            &confd.join("02-local.local.toml")
+        ));
 
         Ok(())
     }
@@ -5650,22 +6075,66 @@ mod tests {
     #[test]
     fn test_env_config_patterns() {
         assert_eq!(
-            env_config_patterns("linux"),
+            env_config_patterns_with_conf_d("linux", true),
             vec![
+                ".config/mise/conf.d/*.linux.toml",
                 ".config/mise/config.linux.toml",
                 ".config/mise.linux.toml",
+                "mise/conf.d/*.linux.toml",
                 "mise/config.linux.toml",
                 "mise.linux.toml",
+                ".mise/conf.d/*.linux.toml",
                 ".mise/config.linux.toml",
                 ".mise.linux.toml",
+                ".config/mise/conf.d/*.linux.local.toml",
                 ".config/mise/config.linux.local.toml",
                 ".config/mise.linux.local.toml",
+                "mise/conf.d/*.linux.local.toml",
                 "mise/config.linux.local.toml",
                 "mise.linux.local.toml",
+                ".mise/conf.d/*.linux.local.toml",
                 ".mise/config.linux.local.toml",
                 ".mise.linux.local.toml",
             ]
         );
+        assert!(
+            env_config_patterns_with_conf_d("linux", false)
+                .iter()
+                .all(|pattern| !pattern.contains("conf.d"))
+        );
+    }
+
+    #[test]
+    fn test_env_config_patterns_escape_glob_characters() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let confd = tmp.path().join(".mise/conf.d");
+        fs::create_dir_all(&confd)?;
+        fs::write(confd.join("tools.qa*.toml"), "[env]\n")?;
+        fs::write(confd.join("tools.qa1.toml"), "[env]\n")?;
+
+        let pattern = env_config_patterns_with_conf_d("qa*", true)
+            .into_iter()
+            .find(|pattern| pattern.starts_with(".mise/conf.d/") && !pattern.contains(".local."))
+            .unwrap();
+        let matches = glob(tmp.path(), &pattern)?;
+        assert_eq!(matches, vec![confd.join("tools.qa*.toml")]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_env_config_patterns_with_non_star_glob_characters() -> Result<()> {
+        for env_name in ["qa?", "qa[1]", "qa]"] {
+            let tmp = TempDir::new()?;
+            let path = tmp.path().join(format!("mise.{env_name}.toml"));
+            fs::write(&path, "[env]\n")?;
+
+            let patterns = env_config_patterns(env_name);
+            assert!(config_paths_in_dir_with_filenames(tmp.path(), &patterns).contains(&path));
+            assert!(has_config_file_with_filenames(tmp.path(), &patterns));
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -5797,6 +6266,7 @@ mod tests {
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         config.tool_request_set.set(trs).ok();
         let config = Arc::new(config);
@@ -5876,6 +6346,7 @@ mod tests {
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         config.tool_request_set.set(trs).ok();
         let config = Arc::new(config);
@@ -5959,6 +6430,7 @@ mod tests {
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         config.tool_request_set.set(trs).ok();
         let config = Arc::new(config);
@@ -6044,6 +6516,7 @@ mod tests {
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         config.tool_request_set.set(trs).ok();
         let config = Arc::new(config);
@@ -6104,6 +6577,7 @@ mod tests {
                 tera_files: Default::default(),
                 vars: Default::default(),
                 vars_results: OnceCell::new(),
+                lockfile_discovery: Default::default(),
             };
             config.tool_request_set.set(ToolRequestSet::new()).ok();
             let config = Arc::new(config);
@@ -6189,6 +6663,7 @@ config_roots = ["apps/api", "apps/web"]
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
         let config = Arc::new(config);
 
@@ -6362,6 +6837,7 @@ config_roots = ["apps/api", "apps/web"]
             tera_files: Default::default(),
             vars: Default::default(),
             vars_results: OnceCell::new(),
+            lockfile_discovery: Default::default(),
         };
 
         assert_eq!(

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use clap::Subcommand;
 use eyre::Result;
 
 use crate::config::Config;
@@ -16,14 +15,14 @@ mod exec;
 /// Because this generates the idiomatic files based on currently installed plugins,
 /// you should run this command after installing new plugins. Otherwise
 /// direnv may not know to update environment variables when idiomatic file versions change.
-#[derive(Debug, clap::Args)]
-#[clap(hide = true, verbatim_doc_comment)]
-pub struct Direnv {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(hide = true, verbatim_doc_comment)]
+pub(crate) struct Direnv {
+    #[usage(subcommand)]
     command: Option<Commands>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Activate(activate::DirenvActivate),
     Envrc(envrc::Envrc),
@@ -31,7 +30,7 @@ enum Commands {
 }
 
 impl Commands {
-    pub async fn run(self, config: &Arc<Config>) -> Result<()> {
+    pub(crate) async fn run(self, config: &Arc<Config>) -> Result<()> {
         match self {
             Self::Activate(cmd) => cmd.run().await,
             Self::Envrc(cmd) => cmd.run(config).await,
@@ -41,7 +40,7 @@ impl Commands {
 }
 
 impl Direnv {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let cmd = self
             .command

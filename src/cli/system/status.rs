@@ -7,20 +7,20 @@ use crate::system::packages::PackageState;
 use crate::ui::table::MiseTable;
 
 /// Show the status of system packages from `[bootstrap.packages]`
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "ls", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct SystemStatus {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_alias = "ls", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct SystemStatus {
     /// Output in JSON format
-    #[clap(long, short = 'J')]
+    #[usage(long, short = 'J')]
     json: bool,
 
     /// Exit with code 1 if any configured packages are not in their desired state
-    #[clap(long, verbatim_doc_comment)]
+    #[usage(long, verbatim_doc_comment)]
     missing: bool,
 }
 
 impl SystemStatus {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let mgrs = system::packages_from_config(&config);
         let mut any_missing = false;

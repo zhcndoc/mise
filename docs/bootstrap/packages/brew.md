@@ -93,8 +93,28 @@ adopt = true
 
 在 Homebrew 元数据中声明 `auto_updates: true` 的 cask 会以当前版本安装，之后交由其自行更新。mise 不提供 `auto_updates` 覆盖项：cask 定义仍然具有决定权。这些自行更新的应用程序也会由收据跟踪，但不会保留重复的 Caskroom 应用程序包，普通的 mise 升级会跳过它们。
 
-`mise bootstrap status` 会将这些条目标记为 `installed (auto-updates)`。
-`Current` 列是 cask 收据中记录的版本；实际应用程序可能已经自行更新到不同版本。JSON 状态会保留稳定的 `"state": "installed"` 值，并添加 `"auto_updates": true`。
+`mise bootstrap status` 会将这些条目标记为`已安装（自动更新）`。
+对于由 mise 管理的 cask，`Current` 列是 mise 收据中记录的版本；实时应用程序可能已经自行更新到不同版本。JSON 状态会保留稳定的 `"state": "installed"` 值，并添加 `"auto_updates": true`。
+
+### macOS 隐私与安全（TCC）
+
+替换 `/Applications`（或你配置的应用程序目录）下的应用程序包，与 `brew reinstall --cask` 属于同一类操作：macOS 可能会撤销该应用程序的隐私与安全授权（辅助功能、屏幕录制、完全磁盘访问、自动化以及类似权限）。mise 不管理 TCC；替换后，你可能需要在系统设置中重新授予权限。
+
+迁移没有 Homebrew `.metadata` 的非托管应用程序包时，优先使用接管，这样 mise 可以记录所有权，而无需替换正在运行的应用程序包：
+
+```toml
+[bootstrap.brew]
+adopt = true
+```
+
+或者选择性接管：
+
+```toml
+[bootstrap.packages]
+"brew-cask:firefox" = { version = "latest", adopt = true }
+```
+
+每当替换现有 `.app` 时，mise 都会打印警告。当上游发布新的 cask 版本时，版本升级仍会替换应用程序包——请预期需要在这些升级后重新确认 TCC 提示，这与 Homebrew 的行为相同。
 
 在 Linux 上，初始的 cask 支持仅限于不带生命周期钩子、不带结构化 `preflight_steps` 或 `postflight_steps` 的纯字体 cask——这些概念来自 Homebrew 的 cask DSL，详见 [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)。字体会安装到 `$XDG_DATA_HOME/fonts`，默认值为 `~/.local/share/fonts`：
 
@@ -109,7 +129,10 @@ adopt = true
 `brew-cask` 目前支持应用程序包 cask（`app` 制品）、二进制和生成的命令包装器 cask（`binary` 和 `command_wrapper` 制品）、通用前缀制品（`artifact`）、简单的 macOS 安装程序包（`pkg` 制品）、基于脚本的 cask 安装程序，以及来自 dmg 和常见归档格式的 shell 补全（`bash_completion`、`fish_completion`、`zsh_completion` 和 `generate_completions_from_executable`）。二进制制品和生成的包装器会暂存到 Caskroom 中，并链接到 Homebrew 前缀，通常位于 `<prefix>/bin` 下。安装程序会通过 mise 的常规系统软件包 sudo 路径运行，因此非交互式运行不会因等待密码而挂起。Pkg cask 必须在其 `uninstall` 元数据中包含 `pkgutil` 收据 ID，这样 mise 才能在安装程序将文件写入 Caskroom 之外后验证安装状态。`zap` 的 `pkgutil` ID 会被视为清理元数据，而不是安装收据。对于带有生命周期钩子的 cask，mise 会获取由 API 元数据固定且经过 sha256 验证的 cask Ruby 源代码，并通过自有的 Cask DSL shim 运行受支持的 `preflight`/`postflight` 钩子，而不会委托给 Homebrew。mise 还支持针对 `staged_path` 执行 `move`/`remove` 操作的结构化 `preflight_steps` 和 `postflight_steps`，支持使用 Homebrew 序列化命令基础、参数、环境、守卫和 sudo 设置的 `run` 操作，以及具有 Homebrew 兼容的名称／完整匹配、重试、通知和失败策略的 `terminate_process` 操作。结构化的 `copy` 和 `symlink` 步骤支持 Homebrew 路径基础、模板、守卫、源 glob、替换和 sudo 行为。生命周期步骤创建的外部路径会记录在 mise 收据中，如果安装事务失败，会恢复这些路径。Cask formula 和 cask 依赖会优先安装，声明的 cask 冲突会在修改前导致失败。
 需要自定义安装程序选项、服务、不受支持的钩子 DSL、不受支持的结构化生命周期步骤或其他 cask 制品类型的 cask，会显示明确的不支持制品错误并失败，而不是委托给 Homebrew。
 
-直接执行的 cask 安装仍由 mise 管理。其完成状态会记录在 `.mise-cask.toml` 中；mise 不会生成 Homebrew 私有的 `.metadata` 收据。如果某个 cask 已存在 Homebrew 元数据，mise 会保留这些元数据，并在进行修改前失败，而不是接管 Homebrew 的生命周期状态。状态检查使用已记录的安装事实，而不是根据更新后的 cask 定义重新构建这些事实；缺失或未知的收据以及待处理的事务会被报告为不健康状态，以便下一次应用操作能够协调它们。
+直接 cask 倒入仍归 mise 所有。其完成状态会记录在 `.mise-cask.toml` 中；mise 不会生成 Homebrew 的私有 `.metadata` 收据。带有 `.metadata` 且恰好有一个 Caskroom 版本的 Homebrew 所有 cask，可以满足匹配的 `brew-cask:` 条目，而无需转移所有权。状态会将其报告为已安装，并使用该 Caskroom 目录名称作为 `Current` 版本；apply 会保持其不变，upgrade 会跳过其生命周期。mise 不会创建 `.mise-cask.toml`、接管 cask 或更改其元数据、应用程序目标、前缀二进制文件或补全链接；请使用 Homebrew 进行升级、重新安装或移除。
+没有版本或包含多个版本的 Homebrew 元数据会失败，并显示 Homebrew 修复指导，而不是猜测哪个安装有效。
+
+对于由 mise 管理的 cask，只要其收据和记录的目标仍然存在，状态就会将 cask 视为已安装。应用程序和字体内容指纹会保留用于 prune 和接管安全检查，但现有应用程序或字体内部的内容漂移**不会**将 cask 标记为缺失，也不会在 apply 时触发重新安装——替换 `/Applications/*.app` 会重置 macOS 隐私与安全（TCC）授权。二进制文件和补全符号链接仍要求记录的链接目标存在（通过廉价的 `readlink` 检查），并且目标可解析，因此悬空或被重新指向的链接仍可修复。缺失或未知的收据以及待处理事务仍会被报告为不健康，以便下一次 apply 进行协调。版本升级以及显式 remove + apply 仍会在你希望进行全新倒入时替换应用程序。
 
 之所以存在这一点，是因为共享库包——postgres、ffmpeg、imagemagick、php——从根本上说无法由 mise 的按项目后端（如 `aqua:` 或 `github:`）提供：它们的瓶装包是针对固定安装路径和共享依赖树构建的。将它们安装到 Homebrew 的标准前缀，才是让它们正常工作的关键。
 

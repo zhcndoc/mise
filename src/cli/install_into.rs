@@ -5,7 +5,6 @@ use crate::install_context::InstallContext;
 use crate::toolset::ToolsetBuilder;
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::prompt;
-use clap::ValueHint;
 use console::style;
 use eyre::{Result, bail, eyre};
 use path_absolutize::Absolutize;
@@ -13,25 +12,26 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tokio::sync::OnceCell;
 
 /// Install a tool version to a specific path
 ///
 /// Used for building a tool to a directory for use outside of mise
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct InstallInto {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct InstallInto {
     /// Tool to install
     /// e.g.: node@20
-    #[clap(value_name = "TOOL@VERSION")]
+    #[usage(value_name = "TOOL@VERSION")]
     tool: ToolArg,
 
     /// Path to install the tool into
-    #[clap(value_hint = ValueHint::DirPath)]
+    #[usage(value_hint = ValueHint::DirPath)]
     path: PathBuf,
 }
 
 impl InstallInto {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let install_path = self.path.absolutize()?.into_owned();
         let config = Config::get().await?;
         let ts = Arc::new(
@@ -59,6 +59,7 @@ impl InstallInto {
             dry_run: false,
             locked: false, // install-into doesn't support locked mode
             before_date,
+            dependency_context: OnceCell::new(),
         };
         tv.install_path = Some(install_path.clone());
         tv.install_path_is_exact = true;
@@ -79,7 +80,8 @@ impl InstallInto {
                         display_path(&install_path)
                     ),
                     false,
-                )?;
+                )?
+                .is_yes();
             if !proceed {
                 bail!(
                     "refusing to overwrite non-empty directory {}; pass {} or choose an empty/new path",

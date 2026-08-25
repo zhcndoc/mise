@@ -12,11 +12,15 @@ use crate::env;
 #[cfg(windows)]
 use crate::file::MAX_PATH;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
 
+const AUTO_UPDATE_REEXEC_ENV: &str = "__MISE_AUTO_UPDATE_REEXEC";
 #[derive(Debug, Default, serde::Deserialize)]
 struct InstructionsToml {
     message: Option<String>,
@@ -36,7 +40,7 @@ fn read_instructions_file(path: &PathBuf) -> Option<String> {
     None
 }
 
-pub fn upgrade_instructions_text() -> Option<String> {
+pub(crate) fn upgrade_instructions_text() -> Option<String> {
     if let Some(path) = &*env::MISE_SELF_UPDATE_INSTRUCTIONS
         && let Some(msg) = read_instructions_file(path)
     {
@@ -52,17 +56,17 @@ pub fn upgrade_instructions_text() -> Option<String> {
 /// `MISE_SELF_UPDATE_AVAILABLE=false`. The wording stays neutral about which of
 /// those applies — being unable to self-update is not by itself proof that a
 /// package manager owns the install.
-pub const SELF_UPDATE_DISABLED_HINT: &str =
+pub(crate) const SELF_UPDATE_DISABLED_HINT: &str =
     "self-update is disabled for this install, update mise the same way you installed it";
 
 /// How to update mise when `mise self-update` is not available: the packager's
 /// instructions when they shipped some, otherwise the generic hint.
-pub fn upgrade_instructions_or_hint() -> String {
+pub(crate) fn upgrade_instructions_or_hint() -> String {
     upgrade_instructions_text().unwrap_or_else(|| SELF_UPDATE_DISABLED_HINT.to_string())
 }
 
 /// Appends self-update guidance and packaging instructions (if any) to a message.
-pub fn append_self_update_instructions(mut message: String) -> String {
+pub(crate) fn append_self_update_instructions(mut message: String) -> String {
     if SelfUpdate::is_available() {
         message.push_str("\nRun `mise self-update` to update mise");
     }
@@ -76,6 +80,146 @@ pub fn append_self_update_instructions(mut message: String) -> String {
     message
 }
 
+/// Checks for and installs an update before an eligible interactive command.
+/// Failures are deliberately non-fatal so the requested command still runs.
+pub(crate) async fn maybe_auto_update(
+    args: &[String],
+    original_cwd: Option<&std::path::Path>,
+    command_eligible: bool,
+) -> Result<()> {
+    let Ok(settings) = Settings::try_get() else {
+        return Ok(());
+    };
+    if !auto_update_eligible(AutoUpdateContext {
+        enabled: settings.auto_update,
+        offline: settings.offline(),
+        prefer_offline: settings.prefer_offline(),
+        ci: settings.ci || ci_info::is_ci(),
+        attended: console::user_attended_stderr(),
+        already_reexecuted: env::var_os(AUTO_UPDATE_REEXEC_ENV).is_some(),
+        self_update_available: SelfUpdate::is_available(),
+        command_eligible,
+    }) {
+        return Ok(());
+    }
+
+    let lock_path = crate::dirs::CACHE.join("auto-update");
+    let update_lock = match crate::lock_file::LockFile::new(&lock_path).try_lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            debug!("skipping auto-update because another mise process is updating");
+            return Ok(());
+        }
+        Err(err) => {
+            debug!("automatic mise update could not acquire its lock: {err:#}");
+            return Ok(());
+        }
+    };
+    let last_check_path = crate::dirs::CACHE.join("auto-update-last-check");
+    let check_duration = match settings.auto_update_check_duration() {
+        Ok(duration) => duration,
+        Err(err) => {
+            debug!("automatic mise update has an invalid check duration: {err:#}");
+            return Ok(());
+        }
+    };
+    if !auto_update_check_due(&last_check_path, check_duration) {
+        return Ok(());
+    }
+    if let Err(err) = crate::file::write(&last_check_path, "") {
+        debug!("automatic mise update could not record its check: {err:#}");
+        return Ok(());
+    }
+    // The marker above is the auto-update throttle. Bypass the separate shared
+    // version cache so a shorter-lived `mise version` lookup cannot make this
+    // due check accept stale data and advance the marker for another interval.
+    let Some(version) = crate::cli::version::check_for_new_version(Duration::ZERO).await else {
+        return Ok(());
+    };
+
+    let update = SelfUpdate {
+        version: Some(version),
+        force: false,
+        yes: true,
+        no_plugins: true,
+    };
+    if let Err(err) = update.run().await {
+        debug!("automatic mise update failed: {err:#}");
+        return Ok(());
+    }
+    drop(update_lock);
+    reexec(args, original_cwd)
+}
+
+/// Returns whether the automatic-update attempt marker has expired.
+fn auto_update_check_due(path: &std::path::Path, duration: Duration) -> bool {
+    crate::file::modified_duration(path).map_or(true, |age| age >= duration)
+}
+
+/// Runtime conditions that gate automatic updates.
+#[derive(Clone, Copy)]
+struct AutoUpdateContext {
+    enabled: bool,
+    offline: bool,
+    prefer_offline: bool,
+    ci: bool,
+    attended: bool,
+    already_reexecuted: bool,
+    self_update_available: bool,
+    command_eligible: bool,
+}
+
+/// Applies the automatic-update safety policy without side effects.
+fn auto_update_eligible(context: AutoUpdateContext) -> bool {
+    context.enabled
+        && !context.offline
+        && !context.prefer_offline
+        && !context.ci
+        && context.attended
+        && !context.already_reexecuted
+        && context.self_update_available
+        && context.command_eligible
+}
+
+/// Builds the replacement process with the original arguments, directory, and
+/// a recursion guard shared by every platform-specific re-exec path.
+fn build_reexec_command<I, S>(args: I, original_cwd: Option<&std::path::Path>) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new(&*env::MISE_BIN);
+    command.args(args).env(AUTO_UPDATE_REEXEC_ENV, "1");
+    if let Some(cwd) = original_cwd {
+        command.current_dir(cwd);
+    }
+    command
+}
+
+#[cfg(unix)]
+fn reexec(_args: &[String], original_cwd: Option<&std::path::Path>) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = build_reexec_command(std::env::args_os().skip(1), original_cwd);
+    let err = command.exec();
+    warn!("mise was updated but could not re-execute the command: {err}");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn reexec(_args: &[String], original_cwd: Option<&std::path::Path>) -> Result<()> {
+    let mut command = build_reexec_command(std::env::args_os().skip(1), original_cwd);
+    let status = command.status()?;
+    Err(crate::request_exit(status.code().unwrap_or(1)))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn reexec(args: &[String], original_cwd: Option<&std::path::Path>) -> Result<()> {
+    let mut command = build_reexec_command(&args[1..], original_cwd);
+    let status = command.status()?;
+    Err(crate::request_exit(status.code().unwrap_or(1)))
+}
+
 /// Updates mise itself.
 ///
 /// Uses the GitHub Releases API to find the latest release and binary.
@@ -85,22 +229,22 @@ pub fn append_self_update_instructions(mut message: String) -> String {
 /// Packagers can disable this command so that mise is updated through the
 /// package manager instead. See
 /// https://mise.jdx.dev/contributing.html#packaging-and-self-update-instructions
-#[derive(Debug, Default, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct SelfUpdate {
+#[derive(Debug, Default, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(crate) struct SelfUpdate {
     /// Update to a specific version
     version: Option<String>,
 
     /// Update even if already up to date
-    #[clap(long, short)]
+    #[usage(long, short)]
     force: bool,
 
     /// Skip confirmation prompt
-    #[clap(long, short)]
+    #[usage(long, short)]
     yes: bool,
 
     /// Disable auto-updating plugins
-    #[clap(long)]
+    #[usage(long)]
     no_plugins: bool,
 }
 
@@ -148,32 +292,60 @@ fn helper_name_len(exe_stem: Option<&str>) -> usize {
 /// Delete the copies of mise that earlier updates left in `TEMP`.
 ///
 /// `self-replace` moves the running binary aside and spawns a copy of it to delete the leftovers.
-/// When that copy does not recognise itself — measured with `TEMP` at 199 and 201 characters, just
-/// under the length #12062 refuses outright — the deletion never happens and a **full copy of
-/// mise.exe** stays in `TEMP` for good. Nothing else collects them: they are not under the cache, so
+/// When that copy does not delete itself the deletion never happens and a **full copy of mise.exe**
+/// stays in `TEMP` for good. Nothing else collects them: they are not under the cache, so
 /// `mise cache clear` does not reach them, and their names mean nothing to anyone else.
+///
+/// A long `TEMP` is not the only trigger, though it was the one this was first written for
+/// (measured at 199 and 201 characters, just under the length #12062 refuses outright). Measured
+/// again on a `TEMP` of 31: a successful update leaves **both** copies — the `__relocated__`
+/// original and the `__selfdelete__` helper — and neither is locked afterwards, so any later mise
+/// can remove them. That is what this exists to do.
 ///
 /// Best effort by design. A copy another mise is still using cannot be deleted on Windows, which is
 /// the outcome we want, so failures are ignored rather than warned about.
 #[cfg(windows)]
 fn sweep_helper_orphans() {
-    let Some(stem) = current_exe_stem() else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !env::is_self_replace_helper(name, &stem) {
-            continue;
-        }
-        match std::fs::remove_file(entry.path()) {
-            Ok(()) => debug!("removed stale self-update copy: {name}"),
-            Err(e) => trace!("could not remove {name}: {e}"),
+    for (path, _) in helper_orphans() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => debug!("removed stale self-update copy: {}", path.display()),
+            Err(e) => trace!("could not remove {}: {e}", path.display()),
         }
     }
+}
+
+/// The copies an earlier update left in `TEMP`, with their sizes.
+///
+/// Shared with `mise doctor` so that "what counts as a leftover" has one definition rather than two
+/// that can drift: the predicate stays [`env::is_self_replace_helper`], and this is only the walk.
+/// A file whose size cannot be read is still reported, at 0 — it exists, which is the part that
+/// matters, and the size is decoration.
+#[cfg(windows)]
+pub(crate) fn helper_orphans() -> Vec<(std::path::PathBuf, u64)> {
+    let Some(stem) = current_exe_stem() else {
+        return Vec::new();
+    };
+    helper_orphans_in(&std::env::temp_dir(), &stem)
+}
+
+#[cfg(windows)]
+fn helper_orphans_in(dir: &std::path::Path, stem: &str) -> Vec<(std::path::PathBuf, u64)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| env::is_self_replace_helper(name, stem))
+        })
+        .map(|entry| {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            (entry.path(), size)
+        })
+        .collect()
 }
 
 #[cfg(windows)]
@@ -194,19 +366,22 @@ fn current_exe_stem() -> Option<String> {
 }
 
 impl SelfUpdate {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         if !Self::is_available() && !self.force {
             if let Some(instructions) = upgrade_instructions_text() {
                 warn!("{}", instructions);
             }
             bail!("mise is installed via a package manager, cannot update");
         }
-        #[cfg(windows)]
-        Self::ensure_temp_dir_can_replace_binary()?;
         // Before the update, not after: this run is about to create a copy of its own, and that one
-        // is in use rather than stale.
+        // is in use rather than stale. Before the length check too, and that ordering is the whole
+        // point: a `TEMP` long enough to refuse the update is the case the leftovers come from, so
+        // running the sweep afterwards means the only machines that accumulate them are the only
+        // machines that never reach the code that collects them.
         #[cfg(windows)]
         sweep_helper_orphans();
+        #[cfg(windows)]
+        Self::ensure_temp_dir_can_replace_binary()?;
         let status = self.do_update()?;
 
         if status.updated() {
@@ -231,6 +406,7 @@ impl SelfUpdate {
         } else {
             miseprintln!("mise is already up to date");
         }
+        crate::cli::version::show_auto_update_hint();
         if !self.no_plugins {
             cmd!(&*env::MISE_BIN, "plugins", "update").run()?;
         }
@@ -417,7 +593,7 @@ impl SelfUpdate {
         Ok(())
     }
 
-    pub fn is_available() -> bool {
+    pub(crate) fn is_available() -> bool {
         if let Some(b) = *env::MISE_SELF_UPDATE_AVAILABLE {
             return b;
         }
@@ -465,6 +641,99 @@ impl SelfUpdate {
 
         debug!("macOS binary signature verified successfully");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod auto_update_tests {
+    use super::*;
+
+    fn eligible_context() -> AutoUpdateContext {
+        AutoUpdateContext {
+            enabled: true,
+            offline: false,
+            prefer_offline: false,
+            ci: false,
+            attended: true,
+            already_reexecuted: false,
+            self_update_available: true,
+            command_eligible: true,
+        }
+    }
+
+    #[test]
+    fn eligible_interactive_command_updates() {
+        assert!(auto_update_eligible(eligible_context()));
+    }
+
+    #[test]
+    fn safety_conditions_disable_auto_update() {
+        let context = eligible_context();
+        for ineligible in [
+            AutoUpdateContext {
+                enabled: false,
+                ..context
+            },
+            AutoUpdateContext {
+                offline: true,
+                ..context
+            },
+            AutoUpdateContext {
+                prefer_offline: true,
+                ..context
+            },
+            AutoUpdateContext {
+                ci: true,
+                ..context
+            },
+            AutoUpdateContext {
+                attended: false,
+                ..context
+            },
+            AutoUpdateContext {
+                already_reexecuted: true,
+                ..context
+            },
+            AutoUpdateContext {
+                self_update_available: false,
+                ..context
+            },
+        ] {
+            assert!(!auto_update_eligible(ineligible));
+        }
+    }
+
+    #[test]
+    fn ineligible_commands_do_not_update() {
+        assert!(!auto_update_eligible(AutoUpdateContext {
+            command_eligible: false,
+            ..eligible_context()
+        }));
+    }
+
+    #[test]
+    fn reexec_preserves_arguments_directory_and_guard() {
+        use std::ffi::OsString;
+
+        let cwd = std::path::Path::new("a directory");
+        let args = [OsString::from("install"), OsString::from("node@22 beta")];
+        let command = build_reexec_command(&args, Some(cwd));
+
+        assert_eq!(command.get_args().collect::<Vec<_>>(), args);
+        assert_eq!(command.get_current_dir(), Some(cwd));
+        assert!(command.get_envs().any(|(key, value)| {
+            key == AUTO_UPDATE_REEXEC_ENV && value == Some(OsStr::new("1"))
+        }));
+    }
+
+    #[test]
+    fn automatic_update_attempts_are_throttled() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("last-check");
+        assert!(auto_update_check_due(&marker, Duration::from_secs(60)));
+        std::fs::write(&marker, "").unwrap();
+        assert!(!auto_update_check_due(&marker, Duration::from_secs(60)));
+        assert!(auto_update_check_due(&marker, Duration::ZERO));
     }
 }
 
@@ -544,6 +813,49 @@ mod tests {
         let tmp = temp_dir_of_len(202);
         assert!(!temp_dir_breaks_self_replace(&tmp, Some("mise")));
         assert!(temp_dir_breaks_self_replace(&tmp, Some("mise-dev")));
+    }
+
+    /// The walk, not the predicate — `env::is_self_replace_helper` has its own tests. What matters
+    /// here is that `doctor` and the sweep see the same set, and that a directory full of unrelated
+    /// files does not turn into a warning about mise.
+    #[test]
+    fn only_the_generated_copies_are_collected() {
+        let dir = tempfile::tempdir().unwrap();
+        let rand = "a".repeat(env::SELF_REPLACE_RANDOM_LEN);
+        let collected = [
+            format!(".mise.{rand}.__selfdelete__.exe"),
+            format!(".mise.{rand}.__relocated__.exe"),
+        ];
+        let ignored = [
+            "mise.exe".to_string(),
+            // a different binary's leftovers are not ours to delete
+            format!(".other.{rand}.__selfdelete__.exe"),
+            // near-misses on the random segment: too short, and not lowercase
+            format!(".mise.{}.__selfdelete__.exe", "a".repeat(31)),
+            format!(".mise.{}A.__selfdelete__.exe", "a".repeat(31)),
+            "setup-x64.exe".to_string(),
+        ];
+        for name in collected.iter().chain(ignored.iter()) {
+            std::fs::write(dir.path().join(name), b"xyz").unwrap();
+        }
+
+        let found = helper_orphans_in(dir.path(), "mise");
+        let mut names = found
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        let mut want = collected.to_vec();
+        want.sort();
+        assert_eq!(names, want);
+        // the size is what `doctor` adds up, so it has to come from the files rather than a count
+        assert_eq!(found.iter().map(|(_, size)| size).sum::<u64>(), 6);
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_an_error() {
+        // `TEMP` pointing at something unreadable must not take `self-update` or `doctor` down.
+        assert!(helper_orphans_in(Path::new("C:\\nope\\nope\\nope"), "mise").is_empty());
     }
 
     #[test]

@@ -1,20 +1,20 @@
 mod token;
 
 /// GitHub related commands
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, hide = true)]
-pub struct Github {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, hide = true)]
+pub(crate) struct Github {
+    #[usage(subcommand)]
     subcommand: Commands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Token(token::Token),
 }
 
 impl Github {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(crate) async fn run(self) -> eyre::Result<()> {
         deprecated_at!(
             "2026.5.1",
             "2027.5.0",

@@ -56,13 +56,11 @@ chmod +x setup-mise.sh
 
 ## 项目本地任务入口点
 
-如果你希望贡献者在不先安装 mise 的情况下运行项目任务，可以将
-[`mise generate bootstrap`](/cli/generate/bootstrap.html) 与
-[`mise generate task-stubs`](/cli/generate/task-stubs.html) 配合使用：
+如果你希望贡献者无需先安装 mise 就能运行项目任务，可以将 [`mise generate install-script`](/cli/generate/install-script.html) 与 [`mise generate task-stubs`](/cli/generate/task-stubs.html) 配合使用：
 
 ```sh
 mkdir -p bin
-mise generate bootstrap --localize --write bin/mise
+mise generate install-script --localize --write bin/mise
 mise generate task-stubs --mise-bin ./bin/mise
 ./bin/test
 ```
@@ -71,9 +69,9 @@ mise generate task-stubs --mise-bin ./bin/mise
 会下载并运行该项目固定版本的 mise 二进制文件。
 
 如果贡献者在 Windows 上工作，请添加 `--windows`。Windows 无法执行 shebang 脚本，因此
-`mise generate bootstrap --write ./bin/mise --windows` 会在其旁边写入 `bin/mise.cmd`，他们可以
+`mise generate install-script --write ./bin/mise --windows` 会在旁边写入 `bin/mise.cmd`，他们可以
 运行 `.\bin\mise.cmd`。启动器会下载该版本的独立 `mise.exe`，并将其与脚本生成时嵌入的校验和进行比对，因此除了 Windows
-本身已提供的内容外，不需要其他依赖。
+本身已提供的内容外，不需要任何其他依赖。
 
 出于同样的原因，每个任务存根旁边都会生成一个 `.cmd` 启动器，因此上面示例的 Windows 形式是
 `.\bin\test.cmd`。这两部分会在每个平台上生成，因此在 Linux 或 macOS 上提交的 `bin/`
@@ -133,8 +131,19 @@ run = "gh auth status || gh auth login"
 mise bootstrap --yes   # 新笔记本或容器 -> 可开始工作
 ```
 
-一切都是声明式且幂等的：再次运行时会跳过任何已经处于目标状态的内容，`mise bootstrap packages status --missing` 和 `mise bootstrap dotfiles status --missing` 可用于 CI 检查，而且不会有任何内容被隐式应用。例外是 `[bootstrap.hooks]` 和 `[tasks.bootstrap]`，
-它们是在 `mise bootstrap` 期间运行的命令式命令，可能会产生副作用；除非钩子命令本身被编写为可安全收敛，否则应将其视为非幂等。参见
+接管一台已经安装了 Homebrew casks（或具有 nix-darwin brew 集成）的现有 Mac 时，请设置
+`[bootstrap.brew] adopt = true`，这样 mise 会记录所有权，而不会替换 `/Applications` 中的软件包——替换
+`.app` 可能会撤销 macOS Privacy & Security 授权。请参阅
+[brew casks / TCC](/bootstrap/packages/brew.html#macos-privacy-security-tcc)。
+
+写入 macOS 默认设置后，请重新启动 Dock/Finder（或使用 `post-defaults`
+钩子），否则偏好设置可能会在重启前看起来没有生效——请参阅
+[macOS Defaults](/bootstrap/macos-defaults.html#app-restarts)。
+
+一切都是声明式且幂等的：重新运行时会跳过任何已经处于所需状态的内容，`mise bootstrap packages status --missing`
+和 `mise bootstrap dotfiles status --missing` 可用于 CI 检查，并且不会隐式应用任何内容。例外是
+`[bootstrap.hooks]` 和 `[tasks.bootstrap]`，它们是在 `mise bootstrap` 期间运行的命令式命令，可能会产生副作用；
+除非钩子命令被编写为能够安全地收敛，否则应将其视为非幂等。请参阅
 [Bootstrap](/bootstrap.html)、[Bootstrap Packages](/bootstrap/packages/)、[Repos](/bootstrap/repos.html)、[Dotfiles](/dotfiles.html)、
 [Shell Activation](/bootstrap/shell.html)、
 [macOS Defaults](/bootstrap/macos-defaults.html)、[launchd](/bootstrap/launchd.html)、
@@ -142,15 +151,9 @@ mise bootstrap --yes   # 新笔记本或容器 -> 可开始工作
 
 ## 通过 zsh zinit 安装
 
-[Zinit](https://github.com/zdharma-continuum/zinit) 是 ZSH 的一个插件管理器，通过这段配置你将获得 mise（以及 shell 补全的用法）：
+[Zinit](https://github.com/zdharma-continuum/zinit) 是一个用于 ZSH 的插件管理器。此代码片段会安装 mise 及其 shell 补全：
 
 ```sh
-zinit as="command" lucid from="gh-r" for \
-    id-as="usage" \
-    atpull="%atclone" \
-    jdx/usage
-    #atload='eval "$(mise activate zsh)"' \
-
 zinit as="command" lucid from="gh-r" for \
     id-as="mise" mv="mise* -> mise" \
     atclone="./mise* completion zsh > _mise" \

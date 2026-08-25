@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use usage::SpecCommandEffect::{self, Destructive, Read, Write};
 
 /// Commands whose effect is fixed, keyed by their full path under `mise`.
-pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
+pub(super) const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("activate", Read),
     ("backends", Read),
     ("backends ls", Read),
@@ -158,11 +158,13 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("env", Read),
     ("fmt", Write),
     ("generate", Read),
+    // Deprecated spelling of `generate install-script`.
     ("generate bootstrap", Write),
     ("generate config", Write),
     ("generate devcontainer", Write),
     ("generate git-pre-commit", Write),
     ("generate github-action", Write),
+    ("generate install-script", Write),
     ("generate task-docs", Write),
     ("generate task-stubs", Write),
     ("generate tool-stub", Write),
@@ -269,7 +271,7 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
 ///
 /// `bootstrap packages brew` is `#[cfg(unix)]`; `render-help` is
 /// `#[cfg(debug_assertions)]`.
-pub const PLATFORM_EFFECTS: &[(&str, SpecCommandEffect)] = &[
+pub(super) const PLATFORM_EFFECTS: &[(&str, SpecCommandEffect)] = &[
     #[cfg(unix)]
     ("bootstrap packages brew", Read),
     #[cfg(unix)]
@@ -288,7 +290,7 @@ pub const PLATFORM_EFFECTS: &[(&str, SpecCommandEffect)] = &[
 // Only the coverage test reads this; it exists so the reason a command is
 // left unclassified lives next to the decision rather than in a commit message.
 #[cfg(test)]
-pub const UNCLASSIFIED: &[(&str, &str)] = &[
+pub(crate) const UNCLASSIFIED: &[(&str, &str)] = &[
     ("asdf", "proxies whatever asdf command a plugin invoked"),
     (
         "bootstrap repos exec",
@@ -307,7 +309,7 @@ pub const UNCLASSIFIED: &[(&str, &str)] = &[
 ];
 
 /// Annotate every command in the spec that has a declared effect.
-pub fn apply(spec: &mut usage::Spec) {
+pub(super) fn apply(spec: &mut usage::Spec) {
     let effects: HashMap<&str, SpecCommandEffect> =
         EFFECTS.iter().chain(PLATFORM_EFFECTS).copied().collect();
     annotate(&mut spec.cmd, &mut vec![], &effects);
@@ -331,17 +333,15 @@ fn annotate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
     use std::collections::HashSet;
 
     /// Every command in the tree, hidden ones included: a hidden command is
     /// still runnable, and `bootstrap launchd`/`systemd`/`macos-defaults` are
     /// hidden compatibility spellings of commands that change system state.
     fn all_commands() -> Vec<String> {
-        let command = crate::cli::expand_deferred_subcommands(
-            crate::cli::Cli::command().disable_help_subcommand(true),
-        );
-        let spec: usage::Spec = command.into();
+        let spec: usage::Spec = crate::cli::Cli::to_kdl()
+            .parse()
+            .expect("generated mise usage spec");
         let mut out = vec![];
         collect(&spec.cmd, &mut vec![], &mut out);
         out
@@ -361,10 +361,9 @@ mod tests {
     /// actually transfers them.
     #[test]
     fn apply_annotates_the_spec() {
-        let command = crate::cli::expand_deferred_subcommands(
-            crate::cli::Cli::command().disable_help_subcommand(true),
-        );
-        let mut spec: usage::Spec = command.into();
+        let mut spec: usage::Spec = crate::cli::Cli::to_kdl()
+            .parse()
+            .expect("generated mise usage spec");
         apply(&mut spec);
 
         let cmd = |name: &str| {
@@ -384,6 +383,33 @@ mod tests {
         // Anything in UNCLASSIFIED must be left unset, not defaulted.
         assert_eq!(cmd("run").effect, None);
         assert_eq!(cmd("exec").effect, None);
+    }
+
+    /// A flag can raise what its command does, and these tables cannot say so: `annotate` walks
+    /// commands. `mise completion` only reads, and `--install` writes a file — so the flag carries
+    /// the effect itself, declared on the field. Asserted here so a later edit cannot quietly
+    /// leave `--install` reading as safe.
+    #[test]
+    fn installing_a_completion_script_is_a_write() {
+        let completion = crate::cli::Cli::spec()
+            .root
+            .subcommands
+            .iter()
+            .find(|command| command.cmd.name == "completion")
+            .expect("completion");
+        let flag = |name: &str| {
+            completion
+                .flags
+                .iter()
+                .find(|f| f.flag.name == name)
+                .unwrap_or_else(|| panic!("`mise completion` has no --{name}"))
+        };
+        assert_eq!(flag("install").effect, Some(usage_rs::spec::Effect::Write));
+        // `--force` only widens which file an install may replace, so it writes for that reason
+        // rather than one of its own.
+        assert_eq!(flag("force").effect, Some(usage_rs::spec::Effect::Write));
+        // And a flag that changes only what is printed stays unset.
+        assert_eq!(flag("include-bash-completion-lib").effect, None);
     }
 
     /// Adding a command without deciding what it does to the world is the

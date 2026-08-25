@@ -12,12 +12,12 @@ use crate::toolset::ToolsetBuilder;
 
 /// [internal] This is an internal command that writes an envrc file
 /// for direnv to consume.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, hide = true)]
-pub struct Envrc {}
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, hide = true)]
+pub(super) struct Envrc {}
 
 impl Envrc {
-    pub async fn run(self, config: &Arc<Config>) -> Result<()> {
+    pub(super) async fn run(self, config: &Arc<Config>) -> Result<()> {
         let ts = ToolsetBuilder::new().build(config).await?;
 
         let envrc_path = env::MISE_TMP_DIR

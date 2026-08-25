@@ -1,10 +1,10 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise tool-alias ls`
 
-- **用法**：`mise tool-alias ls [--no-header] [TOOL]`
-- **别名**：`list`
-- **效果**：只读
-- **源代码**：[`src/cli/tool_alias/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_alias/ls.rs)
+- **用法：** `mise tool-alias ls [--no-header] [TOOL]`
+- **别名：** `list`
+- **效果：** 只读
+- **源代码：** [`src/cli/tool_alias/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_alias/ls.rs)
 
 列出工具版本别名  
 显示可以指定的别名。  
@@ -18,16 +18,11 @@ lts = "22.0.0"
 ```
 
 ## 参数
-
-### `[TOOL]`
-
-显示 &lt;TOOL> 的别名
+- **`[TOOL]`** — 显示 &lt;TOOL> 的别名
 
 ## 标志
-
-### `--no-header`
-
-不显示表头
+- **`--no-header`** — 不显示表头
+- **`-h --help`** — 打印帮助
 
 示例：
 

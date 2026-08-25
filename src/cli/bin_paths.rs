@@ -7,28 +7,25 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 /// List all the active runtime bin paths
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct BinPaths {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(crate) struct BinPaths {
     /// Tool(s) to look up
     /// e.g.: ruby@3
-    #[clap(value_name = "TOOL@VERSION", verbatim_doc_comment)]
+    #[usage(value_name = "TOOL@VERSION", verbatim_doc_comment)]
     tool: Option<Vec<ToolArg>>,
 
     /// Output executable names instead of bin directories
-    #[clap(
-        long,
-        default_value_if("json", clap::builder::ArgPredicate::IsPresent, Some("true"))
-    )]
+    #[usage(long)]
     bin_names: bool,
 
     /// Output executable entries in JSON format (implies --bin-names)
-    #[clap(long, short = 'J')]
+    #[usage(long, short = 'J')]
     json: bool,
 }
 
 impl BinPaths {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let mut tsb = ToolsetBuilder::new();
         if let Some(tool) = &self.tool {
@@ -40,7 +37,7 @@ impl BinPaths {
         }
         ts.notify_if_versions_missing(&config).await;
         let paths = ts.list_paths(&config).await;
-        if self.bin_names {
+        if self.bin_names || self.json {
             let bins = list_bins(paths)?;
             if self.json {
                 miseprintln!("{}", serde_json::to_string_pretty(&bins)?);

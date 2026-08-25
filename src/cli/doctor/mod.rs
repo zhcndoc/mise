@@ -17,7 +17,7 @@ use crate::plugins::PluginType;
 use crate::plugins::core::CORE_PLUGINS;
 use crate::registry::REGISTRY;
 use crate::toolset::install_state;
-use crate::toolset::{ToolVersion, Toolset, ToolsetBuilder};
+use crate::toolset::{ToolRequest, ToolVersion, Toolset, ToolsetBuilder};
 use crate::ui::{info, style};
 use crate::{backend, dirs, duration, env, file, shims};
 use console::{Alignment, pad_str, style};
@@ -30,21 +30,21 @@ use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 
 /// Check mise installation for possible problems
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "dr", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Doctor {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_alias = "dr", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Doctor {
+    #[usage(subcommand)]
     subcommand: Option<Commands>,
-    #[clap(skip)]
+    #[usage(skip)]
     errors: Vec<String>,
-    #[clap(skip)]
+    #[usage(skip)]
     warnings: Vec<String>,
-    #[clap(long, short = 'J')]
+    #[usage(long, short = 'J')]
     json: bool,
 }
 
-#[derive(Debug, clap::Subcommand)]
-pub enum Commands {
+#[derive(Debug, usage_rs::Subcommands)]
+pub(crate) enum Commands {
     Path(path::Path),
 }
 
@@ -82,7 +82,7 @@ enum SystemLoginShellDiagnosis {
 }
 
 impl Doctor {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(crate) async fn run(self) -> eyre::Result<()> {
         if let Some(cmd) = self.subcommand {
             match cmd {
                 Commands::Path(cmd) => cmd.run().await,
@@ -164,6 +164,9 @@ impl Doctor {
         self.analyze_plugins();
         self.analyze_backend_mismatches();
         self.analyze_system_deps(ts).await;
+        self.analyze_new_version().await;
+        #[cfg(windows)]
+        self.analyze_self_update_leftovers();
         self.check_path_ordering(ts, &config).await;
         self.check_shim_shadowing(&desired_shims).await;
         data.insert(
@@ -207,6 +210,11 @@ impl Doctor {
                 .map(|tv: &ToolVersion| {
                     let mut tool = serde_json::Map::new();
                     match f.is_version_installed(&config, tv, true) {
+                        true if install_is_empty(tv) => {
+                            tool.insert("version".into(), tv.version.to_string().into());
+                            tool.insert("empty".into(), true.into());
+                            self.errors.push(empty_install_error(tv));
+                        }
                         true => {
                             tool.insert("version".into(), tv.version.to_string().into());
                         }
@@ -311,13 +319,9 @@ impl Doctor {
         }
         self.analyze_settings()?;
 
-        if let Some(latest) = version::check_for_new_version(duration::HOURLY).await {
-            version::show_latest().await;
-            self.warnings.push(format!(
-                "new mise version {latest} available, currently on {}",
-                *version::V
-            ));
-        }
+        self.analyze_new_version().await;
+        #[cfg(windows)]
+        self.analyze_self_update_leftovers();
 
         miseprintln!();
 
@@ -394,6 +398,43 @@ impl Doctor {
                 self.warnings.push(msg);
             }
         }
+    }
+
+    /// Both outputs render `self.warnings`, so a check only one path runs is a hole in the other.
+    ///
+    /// The stderr notice is presentation rather than diagnosis, and `-J` is asked for by something
+    /// reading the JSON: it gets the warning below instead of a message aimed at a person.
+    async fn analyze_new_version(&mut self) {
+        if let Some(latest) = version::check_for_new_version(duration::HOURLY).await {
+            if !self.json {
+                version::show_latest().await;
+            }
+            self.warnings.push(format!(
+                "new mise version {latest} available, currently on {}",
+                *version::V
+            ));
+        }
+    }
+
+    /// Windows `self-update` moves the running mise.exe aside and spawns a copy of it to do the
+    /// deleting; when that copy fails to remove itself both stay in `TEMP`, a full mise.exe each.
+    /// Only another `self-update` collects them, so without this nothing says they are there: they
+    /// sit outside the cache, and their generated names mean nothing to anyone reading a directory
+    /// listing. Reported rather than deleted — `doctor` is not a command that should remove files.
+    #[cfg(windows)]
+    fn analyze_self_update_leftovers(&mut self) {
+        let orphans = crate::cli::self_update::helper_orphans();
+        if orphans.is_empty() {
+            return;
+        }
+        let total: u64 = orphans.iter().map(|(_, size)| size).sum();
+        let plural = if orphans.len() == 1 { "y" } else { "ies" };
+        self.warnings.push(format!(
+            "{} stale cop{plural} of mise ({}) left by self-update in {}\n`mise self-update` removes them",
+            orphans.len(),
+            bytesize::ByteSize::b(total).display().iec(),
+            display_path(std::env::temp_dir()),
+        ));
     }
 
     fn analyze_settings(&mut self) -> eyre::Result<()> {
@@ -751,6 +792,10 @@ impl Doctor {
             .list_current_versions()
             .into_iter()
             .map(|(f, tv)| match f.is_version_installed(&config, &tv, true) {
+                true if install_is_empty(&tv) => {
+                    self.errors.push(empty_install_error(&tv));
+                    (tv.to_string(), style::ndim("(empty)"))
+                }
                 true => (tv.to_string(), style::nstyle("")),
                 false => {
                     self.errors.push(format!(
@@ -1234,3 +1279,71 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
     [WARN] plugin node is not installed
 "#
 );
+
+/// An install directory that is there but holds nothing.
+///
+/// `Backend::is_version_installed` decides on path existence alone, so an
+/// interrupted download leaves a directory that passes it while providing
+/// nothing to run: `mise install` then reports "all tools are installed" and
+/// `mise ls` lists the version. `mise which` already notices; doctor did not
+/// (discussions #9324 and #9826).
+///
+/// Deliberately only the empty case. A directory holding files but no runnable
+/// binary cannot be told apart from a tool that legitimately ships none, and
+/// calling a healthy install broken is worse than missing one.
+/// Whether an install is present but has nothing in it.
+///
+/// `@system` is excluded: it points at a tool mise did not install, so a stray
+/// directory under `installs/` says nothing about its health, and
+/// `mise install --force <tool>@system` would be nonsense advice.
+fn install_is_empty(tv: &ToolVersion) -> bool {
+    if matches!(tv.request, ToolRequest::System { .. }) {
+        return false;
+    }
+    install_dir_is_empty(&tv.install_path())
+}
+
+/// One wording for an empty install, so the text and JSON paths cannot drift.
+fn empty_install_error(tv: &ToolVersion) -> String {
+    format!(
+        "tool {tv} is installed but its directory is empty, reinstall with \
+         `mise install --force {}@{}`",
+        tv.ba(),
+        tv.version
+    )
+}
+
+fn install_dir_is_empty(path: &Path) -> bool {
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_none(),
+        // Unreadable, and missing, are not the same as empty. Say nothing.
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_dir_is_empty;
+
+    #[test]
+    fn empty_directory_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_dir_is_empty(dir.path()));
+    }
+
+    #[test]
+    fn directory_with_anything_in_it_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("jq"), "").unwrap();
+        assert!(!install_dir_is_empty(dir.path()));
+    }
+
+    #[test]
+    fn missing_directory_is_not_reported() {
+        // A path that is not there means "not installed", which
+        // `is_version_installed` already covers. Claiming it is empty would
+        // duplicate that as a second, wronger message.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!install_dir_is_empty(&dir.path().join("nope")));
+    }
+}

@@ -61,10 +61,10 @@ type = "Bool"
 [all_compile]
 description = "do not use precompiled binaries for any tool"
 docs = """
-Default: false unless running Alpine. NixOS also defaults to true temporarily, but that automatic
-default is deprecated: affected source installs warn beginning in mise 2026.8.0, and the default
-will be removed in mise 2027.8.0. Afterward, NixOS users who require source builds must set
-`all_compile = true` explicitly.
+Default: false unless running Alpine or NixOS. Both automatic defaults are deprecated:
+affected source installs warn beginning in mise 2026.8.0, and the defaults will be removed in
+mise 2027.8.0. Afterward, users who require source builds must set `all_compile = true`
+explicitly.
 
 Do not use precompiled binaries for all languages. Useful if running on a Linux distribution
 like Alpine that does not use glibc and therefore likely won't be able to run precompiled binaries.
@@ -268,6 +268,29 @@ optional = true
 parse_env = "list_by_comma"
 rust_type = "Vec<String>"
 type = "ListString"
+
+[auto_update]
+default = false
+description = "Automatically update mise before running eligible commands."
+docs = """
+When enabled, mise periodically checks for a newer release before running commands that permit
+network access. If an update is available, mise installs it without updating plugins, then re-runs
+the original command with the new binary.
+
+Automatic updates are skipped in CI, offline and prefer-offline modes, non-interactive sessions,
+shell integration commands, and installations whose packager disabled self-update. This setting is
+global-only so a project's configuration cannot opt users into replacing their mise binary.
+"""
+env = "MISE_AUTO_UPDATE"
+global_only = true
+type = "Bool"
+
+[auto_update_check_duration]
+default = "7d"
+description = "How often to check for a new mise release when auto-update is enabled."
+env = "MISE_AUTO_UPDATE_CHECK_DURATION"
+global_only = true
+type = "Duration"
 
 [cache_prune_age]
 default = "30d"
@@ -678,6 +701,27 @@ tool versions, settings, or watched files change.
 """
 env = "MISE_ENV_CACHE_TTL"
 type = "Duration"
+
+[env_conf_d]
+description = "Enable environment-specific filenames in conf.d directories."
+docs = """
+When enabled, files in `.mise/conf.d` and `.config/mise/conf.d` use environment
+suffixes: `tools.development.toml` loads only when `development` is active, and
+`tools.development.local.toml` is its local variant.
+
+This behavior is opt-in during the migration period. When disabled or unset,
+all non-hidden TOML files in `conf.d` continue to load unconditionally. Dots in
+unconditional fragment names are deprecated; rename `node.tools.toml` to
+`node-tools.toml` before mise 2027.8.10.
+
+This is an early-init setting: it must be set in a `miserc.toml` file or via the
+`MISE_ENV_CONF_D` environment variable. Setting it in `mise.toml` has no effect
+because config file discovery has already occurred by the time `mise.toml` is read.
+"""
+env = "MISE_ENV_CONF_D"
+optional = true
+rc = true
+type = "Bool"
 
 [env_file]
 description = "Path to a file containing environment variables to automatically load."
@@ -1315,6 +1359,28 @@ parse_env = "set_by_comma"
 rust_type = "BTreeSet<String>"
 type = "SetString"
 
+[idiomatic_version_file_ignore_minimum_versions]
+default = false
+description = "Ignore idiomatic version file fields that only declare a minimum compatible version."
+docs = """
+Some idiomatic version files carry a *minimum* compatible version rather than the version the
+project is built with. mise used to resolve those, which is wrong -- a floor says nothing about
+which version a project is developed against. They are deprecated and warn; set this to opt into
+the final behavior now, which ignores them and silences the warning:
+
+    mise settings set idiomatic_version_file_ignore_minimum_versions true
+
+Affects `go.mod`'s `go X.Y` directive (`toolchain goX.Y.Z` is still read) and `CMakeLists.txt`'s
+`cmake_minimum_required`.
+
+This is a temporary migration setting. In mise 2026.11.0 the behavior becomes unconditional and
+this setting is removed. See
+[Idiomatic Version Files](/configuration.html#which-fields-mise-reads).
+"""
+env = "MISE_IDIOMATIC_VERSION_FILE_IGNORE_MINIMUM_VERSIONS"
+hide = true
+type = "Bool"
+
 [ignored_config_paths]
 default = []
 description = "This is a list of config paths that mise will ignore."
@@ -1327,6 +1393,11 @@ config file discovery has already occurred by the time `mise.toml` is read.
 
 Paths are separated by the OS path separator when using the environment variable,
 `mise settings set`, or `mise settings add` (`:` on Unix, `;` on Windows).
+
+Relative paths in `.miserc.toml` are resolved from the directory containing that
+file. Relative paths from the environment or CLI are resolved from the directory
+where mise was invoked. Glob patterns are supported, including recursive `**`
+patterns. Paths without glob metacharacters retain directory-prefix matching.
 """
 env = "MISE_IGNORED_CONFIG_PATHS"
 parse_env = "list_by_os_path_separator"
@@ -2239,6 +2310,14 @@ type = "Bool"
 
 [raw]
 description = "Connect stdin/stdout/stderr to child processes."
+docs = """
+Connect stdin/stdout/stderr to child processes.
+
+A raw command holds an exclusive lock for as long as it runs, so no other command runs alongside it.
+Enabling this globally therefore serializes task execution whatever `jobs` is set to: the parallel
+execution engine still schedules the tasks, but only one of them can be running a command at a time.
+`mise run --raw` goes further and sets the scheduler itself to a single job.
+"""
 env = "MISE_RAW"
 type = "Bool"
 
@@ -2926,6 +3005,9 @@ default = []
 description = "Paths that mise will not look for tasks in."
 docs = """
 Paths that mise will not look for tasks in.
+
+Relative paths set in a config file are resolved from that file's config root. Relative paths from
+the environment are resolved from the invocation's working directory.
 
 Paths are separated by the OS path separator when using the environment variable,
 `mise settings set`, or `mise settings add` (`:` on Unix, `;` on Windows).

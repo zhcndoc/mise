@@ -47,7 +47,7 @@ use std::{
 use url::Url;
 
 #[derive(Debug)]
-pub struct AquaBackend {
+pub(crate) struct AquaBackend {
     ba: Arc<BackendArg>,
     id: String,
     version_tags_cache: CacheManager<Vec<(String, String)>>,
@@ -488,7 +488,7 @@ impl Backend for AquaBackend {
                 }
             });
         }
-        validate(&pkg)?;
+        validate(&pkg, &v)?;
 
         // Validate lockfile URL matches expected asset pattern from registry
         // This handles cases where the registry format changed (e.g., raw binary -> tar.gz)
@@ -619,12 +619,20 @@ impl Backend for AquaBackend {
         let download_url = select_github_download_url(pkg.private, &url, url_api.as_deref()).await;
         self.download(ctx, &tv, &download_url, &filename).await?;
 
+        // Snapshot before any mutation so verify() knows whether the lockfile
+        // originally contained a checksum (vs. one we just wrote from api_digest).
+        let lockfile_has_checksum = tv
+            .lock_platforms
+            .get(&platform_key)
+            .is_some_and(|p| p.checksum.is_some());
+
         if validated_url.is_none() {
-            // Store the asset URL and digest (if available) in the tool version
             let platform_info = tv.lock_platforms.entry(platform_key).or_default();
             platform_info.url = Some(url.clone());
             platform_info.url_api = url_api.clone();
-            if let Some(digest) = api_digest.clone() {
+            if let Some(digest) = api_digest.clone()
+                && !lockfile_has_checksum
+            {
                 debug!("using GitHub API digest for checksum verification");
                 platform_info.checksum = Some(digest);
             }
@@ -634,7 +642,8 @@ impl Backend for AquaBackend {
         if pkg.checksum.as_ref().is_some_and(|c| c.enabled()) || api_digest.is_some() {
             ctx.pr.next_operation();
         }
-        self.verify(ctx, &mut tv, &pkg, &v, &filename).await?;
+        self.verify(ctx, &mut tv, &pkg, &v, &filename, lockfile_has_checksum)
+            .await?;
 
         // Advance to extraction operation if applicable
         if needs_extraction(format, &pkg.package_type()) {
@@ -1914,7 +1923,7 @@ impl AquaBackend {
         Ok(())
     }
 
-    pub fn from_arg(ba: BackendArg) -> Self {
+    pub(crate) fn from_arg(ba: BackendArg) -> Self {
         let full = ba.full_without_opts();
         let mut id = full.split_once(":").unwrap_or(("", &full)).1;
         if !id.contains("/") {
@@ -2416,6 +2425,7 @@ impl AquaBackend {
         pkg: &AquaPackage,
         v: &str,
         filename: &str,
+        lockfile_has_checksum: bool,
     ) -> Result<()> {
         // Skip provenance verification if the lockfile already has both a checksum and
         // provenance entry for this platform — the artifact integrity is already guaranteed
@@ -2434,8 +2444,18 @@ impl AquaBackend {
             .lock_platforms
             .get(&platform_key)
             .is_some_and(PlatformInfo::has_checksum_and_verified_provenance);
+        let locked_provenance = tv
+            .lock_platforms
+            .get(&platform_key)
+            .and_then(|p| p.provenance.clone());
         if has_lockfile_integrity && !force_verify {
             self.ensure_provenance_setting_enabled(tv, &platform_key)?;
+        } else if !force_verify && locked_provenance.is_none() && lockfile_has_checksum {
+            debug!(
+                "skipping provenance detection for {} \
+                 (lockfile has checksum but no provenance)",
+                tv.style()
+            );
         } else {
             self.verify_provenance(ctx, tv, pkg, v, filename).await?;
         }
@@ -3526,11 +3546,11 @@ fn complete_windows_dst_ext(
 /// flat top-level keys whose names are declared by the registry package. The
 /// flat names are not statically knowable here, so `is_install_time_option_key`
 /// handles the precise filtering rule.
-pub fn install_time_option_keys() -> Vec<String> {
+pub(crate) fn install_time_option_keys() -> Vec<String> {
     vec!["vars".into()]
 }
 
-pub fn is_install_time_option_key(key: &str) -> bool {
+pub(crate) fn is_install_time_option_key(key: &str) -> bool {
     key != "symlink_bins"
 }
 
@@ -3538,6 +3558,105 @@ pub fn is_install_time_option_key(key: &str) -> bool {
 mod tests {
     use super::*;
     use aqua_registry::{AquaFile, AquaVar, ParsedRegistry};
+
+    #[test]
+    fn cargo_warning_uses_crate_name() {
+        let registry = ParsedRegistry::parse_yaml(
+            r#"
+packages:
+  - type: cargo
+    repo_owner: example
+    repo_name: tool
+    crate: example-crate
+"#,
+        )
+        .unwrap();
+        let pkg = registry.package("example/tool").unwrap();
+
+        let error = validate(&pkg, "v1.0.0").unwrap_err().to_string();
+
+        assert!(error.ends_with("Use the cargo backend instead: cargo:example-crate."));
+    }
+
+    #[test]
+    fn cargo_warning_falls_back_to_crates_io_name() {
+        let registry = ParsedRegistry::parse_yaml(
+            r#"
+packages:
+  - type: cargo
+    repo_owner: example
+    repo_name: tool
+    name: crates.io/example-crate
+    crate: ""
+"#,
+        )
+        .unwrap();
+        let pkg = registry.package("crates.io/example-crate").unwrap();
+
+        let error = validate(&pkg, "v1.0.0").unwrap_err().to_string();
+
+        assert!(error.ends_with("Use the cargo backend instead: cargo:example-crate."));
+    }
+
+    #[test]
+    fn cargo_warning_escapes_terminal_control_characters() {
+        let registry = ParsedRegistry::parse_yaml(
+            r#"
+packages:
+  - type: cargo
+    repo_owner: example
+    repo_name: tool
+    crate: "example\u001b[2J\ncrate"
+"#,
+        )
+        .unwrap();
+        let pkg = registry.package("example/tool").unwrap();
+
+        let error = validate(&pkg, "v1.0.0").unwrap_err().to_string();
+
+        assert!(!error.contains('\u{1b}'));
+        assert!(!error.contains('\n'));
+        assert!(error.ends_with(r"Use the cargo backend instead: cargo:example\u{1b}[2J\ncrate."));
+    }
+
+    #[test]
+    fn go_install_warning_renders_versioned_path() {
+        let registry = ParsedRegistry::parse_yaml(
+            r#"
+packages:
+  - type: go_install
+    repo_owner: example
+    repo_name: tool
+    path: github.com/example/tool/v{{(semver .Version).Major}}/cmd/tool
+"#,
+        )
+        .unwrap();
+        let pkg = registry.package("example/tool").unwrap();
+
+        let error = validate(&pkg, "v2.3.1").unwrap_err().to_string();
+
+        assert!(
+            error.ends_with("Use the go backend instead: go:github.com/example/tool/v2/cmd/tool.")
+        );
+    }
+
+    #[test]
+    fn go_install_warning_uses_repository_when_path_is_missing() {
+        let registry = ParsedRegistry::parse_yaml(
+            r#"
+packages:
+  - type: go_install
+    repo_owner: example
+    repo_name: tool
+"#,
+        )
+        .unwrap();
+        let pkg = registry.package("example/tool").unwrap();
+
+        let error = validate(&pkg, "v1.0.0").unwrap_err().to_string();
+
+        assert!(error.ends_with("Use the go backend instead: go:github.com/example/tool."));
+    }
 
     fn aqua_var(name: &str, required: bool) -> AquaVar {
         AquaVar {
@@ -4687,16 +4806,16 @@ fn package_has_asset(pkg: &AquaPackage) -> bool {
 ///
 /// Always fetches the pre-release superset so the shared remote-versions cache
 /// is independent of the `prerelease` tool option; callers filter on the
-/// returned `prerelease` bit at read time. Git tags (the `github_tag` version
-/// source) carry no pre-release flag, so those entries are reported as
-/// `prerelease = false` and rely on the shared regex-based fuzzy-match filter.
+/// returned `prerelease` flag at read time. Git tags (the `github_tag` version
+/// source) carry no pre-release flag, so those entries are reported as `None`
+/// ("unknown") and rely on the shared regex-based fuzzy-match filter.
 async fn get_tags_with_release_dates(
     pkg: &AquaPackage,
-) -> Result<Vec<(String, Option<String>, bool)>> {
+) -> Result<Vec<(String, Option<String>, Option<bool>)>> {
     if let Some("github_tag") = pkg.version_source.as_deref() {
         // Tags don't have created_at timestamps or a prerelease flag
         let versions = github::list_tags(&format!("{}/{}", pkg.repo_owner, pkg.repo_name)).await?;
-        return Ok(versions.into_iter().map(|v| (v, None, false)).collect());
+        return Ok(versions.into_iter().map(|v| (v, None, None)).collect());
     }
     let repo = format!("{}/{}", pkg.repo_owner, pkg.repo_name);
     let releases = github::list_releases_including_prereleases(&repo).await?;
@@ -4704,12 +4823,12 @@ async fn get_tags_with_release_dates(
         .into_iter()
         .map(|r| {
             let released_at = r.released_at().to_string();
-            (r.tag_name, Some(released_at), r.prerelease)
+            (r.tag_name, Some(released_at), Some(r.prerelease))
         })
         .collect())
 }
 
-fn validate(pkg: &AquaPackage) -> Result<()> {
+fn validate(pkg: &AquaPackage, version: &str) -> Result<()> {
     if pkg.no_asset.unwrap_or(false) {
         bail!("no asset released");
     }
@@ -4728,14 +4847,25 @@ fn validate(pkg: &AquaPackage) -> Result<()> {
         AquaPackageType::Cargo => {
             bail!(
                 "package type `cargo` is not supported in the aqua backend. Use the cargo backend instead{}.",
-                pkg.name
-                    .as_ref()
-                    .and_then(|s| s.strip_prefix("crates.io/"))
-                    .map(|name| format!(": cargo:{name}"))
+                pkg.crate_name
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| {
+                        pkg.name
+                            .as_deref()
+                            .and_then(|s| s.strip_prefix("crates.io/"))
+                    })
+                    .map(|name| format!(": cargo:{}", name.escape_debug()))
                     .unwrap_or_default()
             )
         }
-        AquaPackageType::GoInstall | AquaPackageType::GoBuild => {
+        AquaPackageType::GoInstall => {
+            let backend = go_install_backend(pkg, version)?;
+            bail!(
+                "package type `go_install` is not supported in the aqua backend. Use the go backend instead: {backend}."
+            )
+        }
+        AquaPackageType::GoBuild => {
             bail!(
                 "package type `{}` is not supported in the aqua backend. Use the go backend instead{}.",
                 pkg.package_type(),
@@ -4750,6 +4880,14 @@ fn validate(pkg: &AquaPackage) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn go_install_backend(pkg: &AquaPackage, version: &str) -> Result<String> {
+    let path = match pkg.path.as_deref() {
+        Some(path) => pkg.parse_aqua_str(path, version, &Default::default(), os(), arch())?,
+        None => format!("github.com/{}/{}", pkg.repo_owner, pkg.repo_name),
+    };
+    Ok(format!("go:{path}"))
 }
 
 /// Resolve repo owner and name from an override config, falling back to pkg defaults.
@@ -4913,7 +5051,7 @@ fn asset_name_tokens(name: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn os() -> &'static str {
+pub(crate) fn os() -> &'static str {
     if cfg!(target_os = "macos") {
         "darwin"
     } else {
@@ -4921,7 +5059,7 @@ pub fn os() -> &'static str {
     }
 }
 
-pub fn arch() -> &'static str {
+pub(crate) fn arch() -> &'static str {
     if cfg!(target_arch = "x86_64") {
         "amd64"
     } else if cfg!(target_arch = "arm") {

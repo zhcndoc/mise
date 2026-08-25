@@ -11,20 +11,20 @@ use std::collections::BTreeSet;
 /// Removes mise CLI and all related data
 ///
 /// Skips config directory by default.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct Implode {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(crate) struct Implode {
     /// List directories that would be removed without actually removing them
-    #[clap(long, short = 'n', verbatim_doc_comment)]
+    #[usage(long, short = 'n', verbatim_doc_comment)]
     dry_run: bool,
 
     /// Also remove config directory
-    #[clap(long, verbatim_doc_comment)]
+    #[usage(long, verbatim_doc_comment)]
     config: bool,
 }
 
 impl Implode {
-    pub fn run(self) -> Result<()> {
+    pub(crate) fn run(self) -> Result<()> {
         let mut files: BTreeSet<&Path> = [*dirs::STATE, *dirs::DATA, *dirs::CACHE, &*env::MISE_BIN]
             .into_iter()
             .collect();
@@ -58,8 +58,7 @@ impl Implode {
         } else if settings.yes {
             Ok(true)
         } else {
-            let r = prompt::confirm(format!("remove {} ?", f.display()))?;
-            Ok(r)
+            Ok(prompt::confirm(format!("remove {} ?", f.display()))?.is_yes())
         }
     }
 }

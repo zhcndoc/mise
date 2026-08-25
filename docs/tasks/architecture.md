@@ -239,8 +239,8 @@ mise watch build test   # 监视特定任务
 ### 可视化依赖关系
 
 ```bash
-mise tasks deps build           # 显示 build 的依赖
-mise tasks deps --dot > deps.dot # 生成 graphviz 图表
+mise tasks deps build           # Show build's declared dependencies
+mise tasks deps --dot > deps.dot # Generate graphviz diagram
 ```
 
 ### 执行跟踪
@@ -271,7 +271,7 @@ Error: Task 'build' depends on 'lint' but 'lint' was not found
 **并行执行缓慢**：
 
 - 检查任务是否存在不必要的依赖
-- 使用 `mise tasks deps` 验证依赖图
-- 如果有可用 CPU 核心，考虑增加 `--jobs`
+- 使用 `mise tasks deps` 验证声明的依赖图（`depends`、`wait_for`、`depends_post`）
+- 如果有可用的 CPU 核心，可以考虑增加 `--jobs`
 
 该任务架构旨在从简单的单任务项目扩展到具有复杂构建依赖的复杂多服务应用程序。

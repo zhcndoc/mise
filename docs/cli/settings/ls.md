@@ -1,10 +1,10 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise settings ls`
 
-- **用法**：`mise settings ls [FLAGS] [SETTING]`
-- **别名**：`list`
-- **作用**：只读
-- **源代码**：[`src/cli/settings/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/settings/ls.rs)
+- **用法：** `mise settings ls [FLAGS] [SETTING]`
+- **别名：** `list`
+- **作用：** 只读
+- **源代码：** [`src/cli/settings/ls.rs`](https://github.com/jdx/mise/blob/main/src/cli/settings/ls.rs)
 
 显示当前设置
 
@@ -14,32 +14,15 @@
 但由 `mise tool-alias` 单独管理。
 
 ## 参数
+- **`[SETTING]`** — 设置名称
 
-### `[SETTING]`
-
-设置名称。
-
-## 标志
-
-### `-a --all`
-
-列出所有设置
-
-### `-J --json`
-
-以 JSON 格式输出
-
-### `-l --local`
-
-使用本地配置文件而不是全局配置文件
-
-### `-T --toml`
-
-以 TOML 格式输出
-
-### `--json-extended`
-
-以带有来源的 JSON 格式输出
+## 选项
+- **`-a --all`** — 列出所有设置
+- **`-J --json`** — 以 JSON 格式输出
+- **`-l --local`** — 使用本地配置文件而不是全局配置文件
+- **`-T --toml`** — 以 TOML 格式输出
+- **`--json-extended`** — 以包含来源的 JSON 格式输出
+- **`-h --help`** — 打印帮助
 
 示例：
 

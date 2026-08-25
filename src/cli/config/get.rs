@@ -4,9 +4,9 @@ use eyre::bail;
 use std::path::PathBuf;
 
 /// Display the value of a setting in a mise.toml file
-#[derive(Debug, clap::Args)]
-#[clap(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ConfigGet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ConfigGet {
     /// The path of the config to display
     pub key: Option<String>,
 
@@ -15,12 +15,12 @@ pub struct ConfigGet {
     /// Can be a file path or directory. If a directory is provided, the config file in that directory is used.
     ///
     /// If not provided, the nearest mise.toml file will be used
-    #[clap(short, long, visible_alias = "path", value_hint = clap::ValueHint::AnyPath)]
+    #[usage(short, long, visible_alias = "path", value_hint = usage_rs::ValueHint::AnyPath)]
     pub file: Option<PathBuf>,
 }
 
 impl ConfigGet {
-    pub fn run(self) -> eyre::Result<()> {
+    pub(super) fn run(self) -> eyre::Result<()> {
         // Only an explicitly named target goes through the shared resolver — the default is a
         // different rule (the top TOML config of the loaded set, not the nearest writable one).
         let file = match self.file {

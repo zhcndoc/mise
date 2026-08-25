@@ -3,7 +3,9 @@ use crate::cmd::CmdLineRunner;
 use crate::config::{Config, Settings, env_directive::EnvDirective};
 use crate::duration;
 use crate::env_diff::EnvDiff;
-use crate::file::{can_execute_directly, display_path, replace_path, strip_utf8_bom};
+use crate::file::{
+    can_execute_directly, canonicalize_or_self, display_path, replace_path, strip_utf8_bom,
+};
 use crate::sandbox::SandboxConfig;
 use crate::task::TaskArtifactCache;
 use crate::task::task_cache::{
@@ -16,7 +18,7 @@ use crate::task::task_output_handler::OutputHandler;
 use crate::task::task_scheduler::SchedMsg;
 use crate::task::task_script_parser::subcommand_name_from_parse;
 use crate::task::task_source_checker::{
-    remove_auto_output, save_checksum, sources_are_fresh, task_cwd,
+    remove_auto_output, save_checksum, sources_are_fresh, task_cwd, task_source_match_root,
 };
 use crate::task::{
     Deps, FailedTasks, GetMatchingExt, Task, TaskCacheAudit, TaskCacheMode, TaskCacheOutput,
@@ -25,6 +27,7 @@ use crate::task::{TaskCompletionState, TaskDependencyState};
 use crate::tera::{contains_template_syntax, render_str};
 use crate::toolset::Toolset;
 use crate::toolset::env_cache::CachedEnv;
+use crate::ui::prompt::Confirmation;
 use crate::ui::{style, time};
 use duct::IntoExecutablePath;
 use eyre::{Context, Report, Result, ensure, eyre};
@@ -90,6 +93,27 @@ struct PreparedTaskContext {
     env: BTreeMap<String, String>,
     task_env: Vec<(String, String)>,
     extra_vars: Option<IndexMap<String, String>>,
+}
+
+/// Format a task path for a child process without leaking the mixture of `/` and `\` that
+/// `PathBuf` preserves when a Windows root is joined to a multi-component config pattern.
+///
+/// Extended-length paths are exempt: `/` is an ordinary character after the `\\?\` prefix, so
+/// rewriting it there could change which file the value names. Unix paths are returned unchanged.
+fn task_env_path(path: &Path) -> String {
+    let path = path.display().to_string();
+    #[cfg(windows)]
+    {
+        if path.starts_with(r"\\?\") {
+            path
+        } else {
+            path.replace('/', "\\")
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -248,7 +272,7 @@ fn append_inline_args(script: &str, args: &[String], style: InlineArgsStyle) -> 
 }
 
 /// Configuration for TaskExecutor
-pub struct TaskExecutorConfig {
+pub(crate) struct TaskExecutorConfig {
     pub force: bool,
     pub cd: Option<PathBuf>,
     pub shell: Option<String>,
@@ -266,7 +290,7 @@ pub struct TaskExecutorConfig {
 }
 
 /// Executes tasks with proper context, environment, and output handling
-pub struct TaskExecutor {
+pub(crate) struct TaskExecutor {
     pub context_builder: TaskContextBuilder,
     pub output_handler: OutputHandler,
     pub failed_tasks: FailedTasks,
@@ -290,7 +314,7 @@ pub struct TaskExecutor {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TaskRunOutcome {
+pub(crate) struct TaskRunOutcome {
     pub did_work: bool,
     pub cache_key: Option<String>,
 }
@@ -316,7 +340,7 @@ impl TaskCacheStats {
 }
 
 impl TaskExecutor {
-    pub fn new(
+    pub(crate) fn new(
         context_builder: TaskContextBuilder,
         output_handler: OutputHandler,
         config: TaskExecutorConfig,
@@ -343,15 +367,15 @@ impl TaskExecutor {
         }
     }
 
-    pub fn is_stopping(&self) -> bool {
+    pub(crate) fn is_stopping(&self) -> bool {
         self.is_interrupted() || !self.failed_tasks.lock().unwrap().is_empty()
     }
 
-    pub fn is_interrupted(&self) -> bool {
+    pub(crate) fn is_interrupted(&self) -> bool {
         self.interrupted.load(Ordering::Relaxed)
     }
 
-    pub fn mark_interrupted(&self) {
+    pub(crate) fn mark_interrupted(&self) {
         self.interrupted.store(true, Ordering::Relaxed);
     }
 
@@ -362,7 +386,7 @@ impl TaskExecutor {
         Ok(())
     }
 
-    pub fn add_failed_task(&self, task: Task, status: Option<i32>) {
+    pub(crate) fn add_failed_task(&self, task: Task, status: Option<i32>) {
         let mut failed = self.failed_tasks.lock().unwrap();
         failed.push((task, status.or(Some(1))));
     }
@@ -455,6 +479,8 @@ impl TaskExecutor {
                     "MISE_CACHE_SOCKET".into(),
                     "MISE_CACHE_STAGING_DIR".into(),
                     "MISE_CACHE_TASK".into(),
+                    "MISE_CACHE_CARGO_TARGET_DIR".into(),
+                    "MISE_CACHE_TASK_ROOT".into(),
                     "MISE_CACHE_RUST_VERIFY".into(),
                     "MISE_CACHE_PREVIOUS_RUSTC_WRAPPER".into(),
                     "RUSTC_WRAPPER".into(),
@@ -466,7 +492,7 @@ impl TaskExecutor {
         Ok(sandbox)
     }
 
-    pub fn task_timings(&self, task: Option<&Task>) -> bool {
+    pub(crate) fn task_timings(&self, task: Option<&Task>) -> bool {
         // Resolve the style/verbosity for *this* task so a per-task `output`
         // override is honored (e.g. a task with `output = "interleave"` must not
         // get a timing line just because the global default is `prefix`).
@@ -483,7 +509,7 @@ impl TaskExecutor {
 
     /// Run a task, returning whether it did work and any stable artifact identity
     /// it produced or reused.
-    pub async fn run_task_sched(&self, ctx: TaskRunContext<'_>) -> Result<TaskRunOutcome> {
+    pub(crate) async fn run_task_sched(&self, ctx: TaskRunContext<'_>) -> Result<TaskRunOutcome> {
         let TaskRunContext {
             task,
             config,
@@ -686,8 +712,12 @@ impl TaskExecutor {
             .as_ref()
             .filter(|_| self.task_cache.writes())
             .map(|_| Arc::new(StdMutex::new(Vec::new())));
-        let action_cache_run = if let Some(session) = self.cache_session.as_ref() {
-            session.apply(task, &mut env).await
+        let action_cache_run = if task.rust_cache.as_ref().is_some_and(|cache| cache.enabled)
+            && let Some(session) = self.cache_session.as_ref()
+        {
+            let task_cwd = task_cwd(task, config).await?;
+            let task_root = canonicalize_or_self(&task_source_match_root(&task_cwd, config));
+            session.apply(task, &task_root, &mut env).await
         } else {
             None
         };
@@ -1213,30 +1243,37 @@ impl TaskExecutor {
         ))
     }
 
+    /// Assemble `(program, args)` for running `file` under an already-resolved `shell`.
+    ///
+    /// The shell arrives resolved rather than being worked out here, because `file` may be a
+    /// [`ps1_shim`] copy: resolving from the copy would let [`shell_from_extension`] answer
+    /// `pwsh -File` where the original had taken its shell from somewhere else.
     fn get_file_program_and_args(
         &self,
         file: &Path,
-        task: &Task,
+        shell: &[String],
         args: &[String],
     ) -> Result<(String, Vec<String>)> {
-        let display = file.display().to_string();
-        if !Settings::get().use_file_shell_for_executable_tasks && can_execute_directly(file) {
-            return Ok((display, args.to_vec()));
-        }
-        let mut shell = task
-            .shell()?
-            .or_else(|| shell_from_shebang(file))
-            .or_else(|| shell_from_extension(file))
-            .unwrap_or(Settings::get().default_file_shell()?);
+        let mut shell = shell.to_vec();
         Settings::get().maybe_no_profile(&mut shell);
         let (program, _) = task_shell_parts(&shell, "file shell")?;
+        let program = program.to_string();
         trace!("using shell: {}", shell.join(" "));
-        let mut full_args = shell.to_vec();
-        full_args.push(display);
+        let mut full_args = shell;
+        // What follows a `-c` is a command string, so the script path alone would *be* the
+        // command and the task's arguments would land on `$0` onward. The payload restores the
+        // shape the rest of this function assumes: a program, then its arguments. Only an exact
+        // `-c` is recognised — a combined `-ec` keeps the old behaviour rather than guessing.
+        if let Some(payload) = crate::path::command_mode_script_payload(Path::new(&program))
+            && let Some(i) = full_args.iter().position(|arg| arg == "-c")
+        {
+            full_args.insert(i + 1, payload.to_string());
+        }
+        full_args.push(file.display().to_string());
         if !args.is_empty() {
             full_args.extend(args.iter().cloned());
         }
-        Ok((program.to_string(), full_args[1..].to_vec()))
+        Ok((program, full_args[1..].to_vec()))
     }
 
     /// Build the `(program, args, cmd_verbatim)` for an inline script. When
@@ -1420,7 +1457,17 @@ impl TaskExecutor {
     }
 
     async fn exec(&self, file: &Path, args: &[String], ctx: TaskExecContext<'_>) -> Result<()> {
-        let (program, args) = self.get_file_program_and_args(file, ctx.task, args)?;
+        if runs_without_a_shell(file) {
+            let program = file.display().to_string();
+            return self.exec_program(&program, args, false, ctx).await;
+        }
+        // Resolved once, from the file the user wrote, and then used for both decisions below.
+        let shell = file_task_shell(file, ctx.task)?;
+        // Held, not dropped: the copy has to outlive the spawn below, and binding it here
+        // is what keeps it on disk for exactly that long. See [`ps1_shim`].
+        let shim = ps1_shim(file, &shell)?;
+        let script = shim.as_deref().unwrap_or(file);
+        let (program, args) = self.get_file_program_and_args(script, &shell, args)?;
         self.exec_program(&program, &args, false, ctx).await
     }
 
@@ -1822,8 +1869,15 @@ impl TaskExecutor {
                 Some(default) => Self::parse_confirm_default(default)?,
                 None => true, // keep backwards compatible default of yes if not specified
             };
-            if !crate::ui::prompt::confirm_with_default(&message, default_yes).unwrap_or(false) {
-                return Err(eyre!("aborted by user"));
+            match crate::ui::prompt::confirm_with_default(&message, default_yes) {
+                Ok(Confirmation::Yes) => {}
+                Ok(Confirmation::No) => return Err(eyre!("aborted by user")),
+                Ok(Confirmation::Unavailable) => {
+                    return Err(eyre!(
+                        "task requires confirmation but there was nobody to ask; pass --yes to accept"
+                    ));
+                }
+                Err(err) => return Err(err),
             }
         }
         Ok(())
@@ -1832,7 +1886,11 @@ impl TaskExecutor {
     /// Validate a task invocation before the scheduler starts any task commands.
     /// Runtime execution repeats this work so configuration changes made while
     /// dependencies run are still detected.
-    pub async fn preflight_task_usage(&self, config: &Arc<Config>, task: &Task) -> Result<()> {
+    pub(crate) async fn preflight_task_usage(
+        &self,
+        config: &Arc<Config>,
+        task: &Task,
+    ) -> Result<()> {
         if task.should_bypass_usage_parser() {
             return Ok(());
         }
@@ -2046,7 +2104,7 @@ impl TaskExecutor {
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_ORIGINAL_CWD",
-                cwd.display().to_string(),
+                task_env_path(cwd),
             );
         }
 
@@ -2062,7 +2120,7 @@ impl TaskExecutor {
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_PROJECT_ROOT",
-                root.display().to_string(),
+                task_env_path(&root),
             );
         }
         if let Some(monorepo_root) = config.monorepo_root() {
@@ -2070,7 +2128,7 @@ impl TaskExecutor {
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_MONOREPO_ROOT",
-                monorepo_root.display().to_string(),
+                task_env_path(&monorepo_root),
             );
         }
         Self::insert_env_excluded_from_nested_mise_diff(
@@ -2094,14 +2152,14 @@ impl TaskExecutor {
             &mut env,
             &mut nested_mise_diff_exclude_keys,
             "MISE_TASK_FILE",
-            task_file.display().to_string(),
+            task_env_path(&task_file),
         );
         if let Some(dir) = task_file.parent() {
             Self::insert_env_excluded_from_nested_mise_diff(
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_TASK_DIR",
-                dir.display().to_string(),
+                task_env_path(dir),
             );
         }
         if let Some(config_root) = &task.config_root {
@@ -2109,7 +2167,7 @@ impl TaskExecutor {
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_CONFIG_ROOT",
-                config_root.display().to_string(),
+                task_env_path(config_root),
             );
         }
         if Settings::get().env_cache {
@@ -2256,6 +2314,91 @@ fn shell_from_extension(path: &Path) -> Option<Vec<String>> {
     }
 }
 
+/// True when mise hands the file straight to the OS rather than starting a shell for it,
+/// in which case no shell resolution happens and nothing below applies.
+fn runs_without_a_shell(file: &Path) -> bool {
+    !Settings::get().use_file_shell_for_executable_tasks && can_execute_directly(file)
+}
+
+/// The shell a file task runs under, in precedence order: the task's explicit `shell`,
+/// then the shebang, then the extension, then the default file shell.
+///
+/// Called once per run, before the command line is assembled, and the answer is then used
+/// for both [`ps1_shim`] and [`TaskExecutor::get_file_program_and_args`] — asking a second
+/// time from a shim copy would not give the same answer.
+fn file_task_shell(file: &Path, task: &Task) -> Result<Vec<String>> {
+    Ok(task
+        .shell()?
+        .or_else(|| shell_from_shebang(file))
+        .or_else(|| shell_from_extension(file))
+        .unwrap_or(Settings::get().default_file_shell()?))
+}
+
+/// A `.ps1`-named copy of `file`, for the one case where PowerShell will not run the
+/// original: on **Windows**, `pwsh` rejects a script whose name does not end in `.ps1`.
+///
+/// The Linux and macOS builds have no such rule — measured on the same pwsh 7.6.5, an
+/// extensionless script runs there and is refused here — so `#!/usr/bin/env pwsh`, the
+/// shape the file-task docs show, worked everywhere except Windows. Windows has no kernel
+/// shebang either, so mise is the one starting the interpreter and the one that has to
+/// hand it a name it will accept.
+///
+/// The copy lives exactly as long as the returned [`tempfile::TempPath`], which deletes it
+/// on drop — the caller has to hold it across the spawn. `None` means the original is
+/// runnable as it stands, which is every case off Windows.
+///
+/// The script sees the copy's path in `$PSCommandPath`/`$PSScriptRoot`. `$args` and the
+/// working directory are unaffected.
+fn ps1_shim(file: &Path, shell: &[String]) -> Result<Option<tempfile::TempPath>> {
+    #[cfg(windows)]
+    {
+        if needs_ps1_shim(file, shell) {
+            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("task");
+            let path = tempfile::Builder::new()
+                .prefix(&format!("mise-task-{stem}-"))
+                .suffix(".ps1")
+                .tempfile()?
+                .into_temp_path();
+            // Overwrites the empty file `tempfile()` just created under a name nothing
+            // else can have claimed, rather than picking a name and hoping.
+            std::fs::copy(file, &path)
+                .wrap_err_with(|| format!("failed to stage {} for pwsh", display_path(file)))?;
+            return Ok(Some(path));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (file, shell);
+    }
+    Ok(None)
+}
+
+/// Whether [`ps1_shim`] applies: PowerShell is going to resolve this path as a script, and
+/// the name would make it refuse.
+///
+/// The shell's mode does not enter into it. `-File` opens the path; `-Command` resolves it
+/// as a command — and PowerShell's *command* resolution asks for `.ps1` just as its `-File`
+/// handling does, so an extensionless task under `shell = "pwsh -c"` exits 0 having quietly
+/// done nothing. Both readings are fixed by giving it a name pwsh will take.
+///
+/// A name the OS itself can start is left alone. PowerShell resolves `foo.cmd` and `foo.exe`
+/// as commands and runs them correctly, and renaming one to `.ps1` would instead feed a batch
+/// file to the PowerShell parser — which fails *and* still exits 0. That case is reachable
+/// through `use_file_shell_for_executable_tasks` with a PowerShell default file shell.
+#[cfg(windows)]
+fn needs_ps1_shim(file: &Path, shell: &[String]) -> bool {
+    let already_runnable = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("ps1") || crate::file::os_can_launch_extension(ext)
+        });
+    !already_runnable
+        && shell
+            .first()
+            .is_some_and(|program| crate::path::is_powershell_program(Path::new(program)))
+}
+
 fn task_shell_parts<'a>(shell: &'a [String], shell_kind: &str) -> Result<(&'a str, &'a [String])> {
     shell
         .split_first()
@@ -2382,6 +2525,31 @@ fn shell_from_shebang(path: &Path) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_env_path_preserves_host_path_spelling() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                task_env_path(Path::new(r"C:\Users\me\.config/mise/config.toml")),
+                r"C:\Users\me\.config\mise\config.toml"
+            );
+            assert_eq!(
+                task_env_path(Path::new(r"\\server\share/tasks/build.ps1")),
+                r"\\server\share\tasks\build.ps1"
+            );
+            // Within an extended-length path `/` is data, not a separator.
+            assert_eq!(
+                task_env_path(Path::new(r"\\?\C:\tasks/a/b")),
+                r"\\?\C:\tasks/a/b"
+            );
+        }
+        #[cfg(not(windows))]
+        assert_eq!(
+            task_env_path(Path::new(r"/tmp/tasks\build")),
+            r"/tmp/tasks\build"
+        );
+    }
 
     #[test]
     fn task_cache_stats_saturate_and_accumulate() {

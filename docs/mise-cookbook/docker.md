@@ -39,8 +39,9 @@ docker run -it --rm debian-mise
 请使用 `mise install --system` 将工具安装到 `/usr/local/share/mise/installs`。
 每个用户的 mise 都会自动找到这些系统级工具，无需任何配置。
 
-下面的示例还演示了在 Debian/Ubuntu 镜像上使用 `extrepo` 进行安装。
-采用这种方式时，你不能指定 `MISE_VERSION` 或 `MISE_INSTALL_PATH`。
+`--system` 会在用户之间共享安装位置；它不会将二进制文件放到 `PATH` 中，因此无法在不使用 mise 的情况下使用这些工具。如果你希望其他用户无需涉及 mise 即可运行这些工具，请参阅[如何安装其他用户无需使用 mise 即可运行的工具？](/faq.html#how-do-i-install-tools-other-users-can-run-without-mise)
+
+以下示例还展示了如何在 Debian/Ubuntu 镜像上使用 `extrepo` 进行安装。采用这种方式时，无法指定 `MISE_VERSION` 或 `MISE_INSTALL_PATH`。
 
 ```Dockerfile [Dockerfile]
 # syntax=docker/dockerfile:1

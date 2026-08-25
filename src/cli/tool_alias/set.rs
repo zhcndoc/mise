@@ -7,11 +7,11 @@ use crate::config::config_file::ConfigFile;
 /// Add/update an alias for a tool/backend
 ///
 /// This modifies the contents of ~/.config/mise/config.toml
-#[derive(Debug, clap::Args)]
-#[clap(visible_aliases = ["add", "create"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ToolAliasSet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_aliases = ["add", "create"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ToolAliasSet {
     /// The tool/backend to set the alias for
-    #[clap(value_name = "TOOL")]
+    #[usage(value_name = "TOOL")]
     pub tool: BackendArg,
     /// The alias to set
     pub alias: String,
@@ -20,7 +20,7 @@ pub struct ToolAliasSet {
 }
 
 impl ToolAliasSet {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let mut global_config = Config::get().await?.global_config()?;
         match &self.value {
             None => global_config.set_backend_alias(&self.tool, &self.alias)?,

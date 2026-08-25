@@ -1,10 +1,10 @@
 <!-- @由 usage-cli 根据 usage 规范生成 -->
 # `mise plugins ls-remote`
 
-- **用法**：`mise plugins ls-remote [-u --urls] [--only-names]`
-- **别名**：`list-remote`、`list-all`
-- **效果**：只读
-- **源代码**：[`src/cli/plugins/ls_remote.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/ls_remote.rs)
+- **Usage:** `mise plugins ls-remote [-u --urls] [--only-names]`
+- **Aliases:** `list-remote`, `list-all`
+- **Effect:** read-only
+- **Source code:** [`src/cli/plugins/ls_remote.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/ls_remote.rs)
 
 列出所有可用的远程插件
 
@@ -16,12 +16,7 @@
 mise plugins ls-remote
 ```
 
-## 标志
-
-### `-u --urls`
-
-显示每个插件的 git URL，例如：<https://github.com/mise-plugins/mise-poetry.git>
-
-### `--only-names`
-
-默认情况下，只显示每个插件的名称；它会在已安装的插件旁边显示一个“*”。
+## Flags
+- **`-u --urls`** — 显示每个插件的 git URL，例如：<https://github.com/mise-plugins/mise-poetry.git>
+- **`--only-names`** — 仅显示每个插件的名称，默认情况下会在已安装的插件旁显示一个“*”
+- **`-h --help`** — 打印帮助

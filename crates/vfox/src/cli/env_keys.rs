@@ -1,13 +1,13 @@
 use vfox::{Vfox, VfoxResult};
 
-#[derive(clap::Args)]
-pub struct EnvKeys {
-    pub sdk: String,
-    pub version: String,
+#[derive(usage_rs::Args)]
+pub(super) struct EnvKeys {
+    sdk: String,
+    version: String,
 }
 
 impl EnvKeys {
-    pub async fn run(&self) -> VfoxResult<()> {
+    pub(super) async fn run(&self) -> VfoxResult<()> {
         let vfox = Vfox::new();
         let env_keys = vfox
             .env_keys(

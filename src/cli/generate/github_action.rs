@@ -7,22 +7,22 @@ use crate::git::Git;
 ///
 /// This command generates a GitHub Action workflow file that runs a mise task like `mise run ci`
 /// when you push changes to your repository.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct GithubAction {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(super) struct GithubAction {
     /// The task to run when the workflow is triggered
-    #[clap(long, short, default_value = "ci")]
+    #[usage(long, short, default = "ci")]
     task: String,
     /// write to .github/workflows/$name.yml
-    #[clap(long, short)]
+    #[usage(long, short)]
     write: bool,
     /// the name of the workflow to generate
-    #[clap(long, default_value = "ci")]
+    #[usage(long, default = "ci")]
     name: String,
 }
 
 impl GithubAction {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(super) async fn run(self) -> eyre::Result<()> {
         let output = self.generate()?;
         if self.write {
             let path = Git::get_root()?

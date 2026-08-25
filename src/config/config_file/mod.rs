@@ -13,6 +13,7 @@ use crate::cli::args::{BackendArg, ToolArg};
 use crate::config::config_file::min_version::MinVersionSpec;
 use crate::config::config_file::mise_toml::{MiseToml, MonorepoConfig};
 use crate::config::env_directive::EnvDirective;
+use crate::config::settings::IdiomaticVersionFileSettings;
 use crate::config::{AliasMap, Settings, settings};
 use crate::deps::DepsConfig;
 use crate::errors::Error::UntrustedConfig;
@@ -22,6 +23,7 @@ use crate::hooks::Hook;
 use crate::redactions::Redactions;
 use crate::task::{Task, TaskRustCacheConfig, TaskTemplate};
 use crate::toolset::{ToolRequest, ToolRequestSet, ToolSource, ToolVersionList, Toolset};
+use crate::ui::prompt::Confirmation;
 use crate::ui::{prompt, style};
 use crate::watch_files::WatchFile;
 use crate::{
@@ -30,6 +32,7 @@ use crate::{
     registry::REGISTRY,
 };
 use eyre::{Result, eyre};
+use globset::{GlobBuilder, GlobMatcher};
 use idiomatic_version::IdiomaticVersionFile;
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -38,22 +41,50 @@ use tool_versions::ToolVersions;
 
 use super::Config;
 
-pub mod config_root;
-pub mod diagnostic;
-pub mod idiomatic_version;
-pub mod min_version;
-pub mod mise_toml;
-pub mod toml;
-pub mod tool_versions;
+pub(crate) mod config_root;
+pub(crate) mod diagnostic;
+pub(crate) mod idiomatic_version;
+pub(crate) mod min_version;
+pub(crate) mod mise_toml;
+pub(crate) mod toml;
+pub(crate) mod tool_versions;
 
 #[derive(Debug, PartialEq)]
-pub enum ConfigFileType {
+pub(crate) enum ConfigFileType {
     MiseToml,
     ToolVersions,
     IdiomaticVersion(Vec<Arc<dyn Backend>>),
 }
 
-pub trait ConfigFile: Debug + Send + Sync {
+/// Classification result used to share one discovery pass between trust checks and parsing.
+pub(super) enum ConfigFileDetection {
+    Recognized(ConfigFileType),
+    DisabledIdiomatic,
+    Unknown,
+    DiscoveryFailed(eyre::Report),
+}
+
+fn idiomatic_version_file_write_error(path: &Path) -> eyre::Report {
+    eyre!(
+        "cannot update idiomatic version file {}; use mise.toml, .tool-versions, or --path to choose a writable config file",
+        display_path(path)
+    )
+}
+
+fn detection_error(path: &Path, detection: ConfigFileDetection) -> eyre::Report {
+    match detection {
+        ConfigFileDetection::DisabledIdiomatic => idiomatic_version_file_write_error(path),
+        ConfigFileDetection::Unknown => {
+            eyre!("unknown config file type: {}", display_path(path))
+        }
+        ConfigFileDetection::DiscoveryFailed(err) => err,
+        ConfigFileDetection::Recognized(_) => {
+            unreachable!("recognized config detection cannot be converted to an error")
+        }
+    }
+}
+
+pub(crate) trait ConfigFile: Debug + Send + Sync {
     fn get_path(&self) -> &Path;
     fn min_version(&self) -> Option<&MinVersionSpec> {
         None
@@ -127,6 +158,10 @@ pub trait ConfigFile: Debug + Send + Sync {
         Ok(self.task_config().includes.clone())
     }
 
+    fn task_config_excludes(&self) -> eyre::Result<Option<Vec<String>>> {
+        Ok(self.task_config().excludes.clone())
+    }
+
     fn task_templates(&self) -> IndexMap<String, TaskTemplate> {
         IndexMap::new()
     }
@@ -170,7 +205,7 @@ pub trait ConfigFile: Debug + Send + Sync {
 }
 
 impl dyn ConfigFile {
-    pub async fn add_runtimes(
+    pub(crate) async fn add_runtimes(
         &self,
         config: &Arc<Config>,
         tools: &[ToolArg],
@@ -237,7 +272,7 @@ impl dyn ConfigFile {
     /// this is for `mise local|global TOOL` which will display the version instead of setting it
     /// it's only valid to use a single tool in this case
     /// returns "true" if the tool was displayed which means the CLI should exit
-    pub fn display_runtime(&self, runtimes: &[ToolArg]) -> eyre::Result<bool> {
+    pub(crate) fn display_runtime(&self, runtimes: &[ToolArg]) -> eyre::Result<bool> {
         // in this situation we just print the current version in the config file
         if runtimes.len() == 1 && runtimes[0].tvr.is_none() {
             let fa = &runtimes[0].ba;
@@ -270,17 +305,23 @@ impl dyn ConfigFile {
 }
 
 async fn init(path: &Path) -> Result<Arc<dyn ConfigFile>> {
-    match detect_config_file_type(path).await {
-        Some(ConfigFileType::MiseToml) => Ok(Arc::new(MiseToml::init(path))),
-        Some(ConfigFileType::ToolVersions) => Ok(Arc::new(ToolVersions::init(path))),
-        Some(ConfigFileType::IdiomaticVersion(backends)) => Ok(Arc::new(
-            IdiomaticVersionFile::parse(path.to_path_buf(), backends).await?,
-        )),
-        None => Err(unsupported_config_file_error(path)),
+    let settings = IdiomaticVersionFileSettings::current();
+    let detection = detect_config_file_with_settings(path, &settings).await;
+    match detection {
+        ConfigFileDetection::Recognized(ConfigFileType::MiseToml) => {
+            Ok(Arc::new(MiseToml::init(path)))
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::ToolVersions) => {
+            Ok(Arc::new(ToolVersions::init(path)))
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::IdiomaticVersion(backends)) => Ok(
+            Arc::new(IdiomaticVersionFile::parse(path.to_path_buf(), backends).await?),
+        ),
+        detection => Err(detection_error(path, detection)),
     }
 }
 
-pub async fn parse_or_init(path: &Path) -> eyre::Result<Arc<dyn ConfigFile>> {
+pub(crate) async fn parse_or_init(path: &Path) -> eyre::Result<Arc<dyn ConfigFile>> {
     let path = if path.is_dir() {
         path.join(&*env::MISE_DEFAULT_CONFIG_FILENAME)
     } else {
@@ -293,12 +334,33 @@ pub async fn parse_or_init(path: &Path) -> eyre::Result<Arc<dyn ConfigFile>> {
     Ok(cf)
 }
 
+/// Refuse a path mise would not read back as a TOML config.
+///
+/// [`parse_or_init`] gives this check to every caller that goes through a [`ConfigFile`]. Callers
+/// that write TOML directly — `mise set` builds a `MiseToml` itself — bypassed it and would happily
+/// create a file that config detection then refuses to recognize, or write TOML into a name mise
+/// reads as `.tool-versions`. One definition of "a path mise can write TOML to", rather than two
+/// that drift apart.
+pub(crate) async fn ensure_writable_as_toml(path: &Path) -> eyre::Result<()> {
+    let settings = IdiomaticVersionFileSettings::current();
+    match detect_config_file_with_settings(path, &settings).await {
+        ConfigFileDetection::Recognized(ConfigFileType::MiseToml) => Ok(()),
+        ConfigFileDetection::Recognized(ConfigFileType::ToolVersions) => Err(eyre!(
+            "cannot write TOML to {}: mise reads that name as a .tool-versions file",
+            display_path(path)
+        )),
+        ConfigFileDetection::Recognized(ConfigFileType::IdiomaticVersion(_))
+        | ConfigFileDetection::DisabledIdiomatic => Err(idiomatic_version_file_write_error(path)),
+        detection => Err(detection_error(path, detection)),
+    }
+}
+
 /// Lock a config file for a read-modify-write operation, then read its latest contents.
 ///
 /// Callers must keep the returned lock alive until after [`ConfigFile::save`]. Acquiring the
 /// lock before re-reading is what prevents two mise processes from both modifying the same stale
 /// snapshot and silently overwriting one another's changes.
-pub async fn lock_and_parse_or_init(
+pub(crate) async fn lock_and_parse_or_init(
     path: &Path,
 ) -> eyre::Result<(fslock::LockFile, Arc<dyn ConfigFile>)> {
     lock_and_parse_or_init_with_callback(path, |path| {
@@ -324,41 +386,60 @@ where
     Ok((lock, cf))
 }
 
-pub async fn parse(path: &Path) -> Result<Arc<dyn ConfigFile>> {
-    if let Ok(settings) = Settings::try_get()
-        && settings.paranoid
+pub(crate) async fn parse(path: &Path) -> Result<Arc<dyn ConfigFile>> {
+    let settings = IdiomaticVersionFileSettings::current();
+    if let Ok(current_settings) = Settings::try_get()
+        && current_settings.paranoid
     {
         trust_check(path)?;
     }
-    match detect_config_file_type(path).await {
-        Some(ConfigFileType::MiseToml) => Ok(Arc::new(MiseToml::from_file(path)?)),
-        Some(ConfigFileType::ToolVersions) => Ok(Arc::new(ToolVersions::from_file(path)?)),
-        Some(ConfigFileType::IdiomaticVersion(backends)) => Ok(Arc::new(
-            IdiomaticVersionFile::parse(path.to_path_buf(), backends).await?,
-        )),
-        None => Err(unsupported_config_file_error(path)),
+    let detection = detect_config_file_with_settings(path, &settings).await;
+    parse_detected(path, detection).await
+}
+
+/// Parse a file from a previously computed detection result without repeating discovery.
+/// Callers are responsible for applying the appropriate trust policy first.
+pub(super) async fn parse_detected(
+    path: &Path,
+    detection: ConfigFileDetection,
+) -> Result<Arc<dyn ConfigFile>> {
+    match detection {
+        ConfigFileDetection::Recognized(ConfigFileType::MiseToml) => {
+            Ok(Arc::new(MiseToml::from_file(path)?))
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::ToolVersions) => {
+            Ok(Arc::new(ToolVersions::from_file(path)?))
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::IdiomaticVersion(backends)) => Ok(
+            Arc::new(IdiomaticVersionFile::parse(path.to_path_buf(), backends).await?),
+        ),
+        detection => Err(detection_error(path, detection)),
     }
 }
 
-/// Whether parsing `path` requires a trust record.
-///
-/// Tracked config loading uses this to avoid interactive prompts without
-/// discarding plain version files that never require trust.
-pub async fn path_requires_trust(path: &Path) -> bool {
+/// Whether a detected config requires trust before tracked loading may parse it.
+pub(super) fn detection_requires_trust(path: &Path, detection: &ConfigFileDetection) -> bool {
     if Settings::safe_mode() {
         return false;
     }
     if Settings::try_get().is_ok_and(|settings| settings.paranoid) {
         return true;
     }
-    match detect_config_file_type(path).await {
-        Some(ConfigFileType::MiseToml) => !MiseToml::path_is_trust_exempt(path),
-        Some(ConfigFileType::ToolVersions) => ToolVersions::path_requires_trust(path),
-        Some(ConfigFileType::IdiomaticVersion(_)) | None => false,
+    match detection {
+        ConfigFileDetection::Recognized(ConfigFileType::MiseToml) => {
+            !MiseToml::path_is_trust_exempt(path)
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::ToolVersions) => {
+            ToolVersions::path_requires_trust(path)
+        }
+        ConfigFileDetection::Recognized(ConfigFileType::IdiomaticVersion(_))
+        | ConfigFileDetection::DisabledIdiomatic
+        | ConfigFileDetection::Unknown
+        | ConfigFileDetection::DiscoveryFailed(_) => false,
     }
 }
 
-pub fn config_trust_root(path: &Path) -> PathBuf {
+pub(crate) fn config_trust_root(path: &Path) -> PathBuf {
     if settings::is_loaded() && Settings::get().paranoid {
         path.to_path_buf()
     } else {
@@ -370,17 +451,17 @@ pub fn config_trust_root(path: &Path) -> PathBuf {
 ///
 /// Unlike a passing [`trust_check`], this is false for files that merely do
 /// not *need* trust (e.g. safe configs loaded without it).
-pub fn is_path_trusted(path: &Path) -> bool {
+pub(crate) fn is_path_trusted(path: &Path) -> bool {
     is_trusted(&config_trust_root(path)) || is_trusted(path)
 }
 
 static IMPLICITLY_TRUST_ACTIVE_CONFIG: AtomicBool = AtomicBool::new(false);
 
-pub fn set_implicitly_trust_active_config(enabled: bool) {
+pub(crate) fn set_implicitly_trust_active_config(enabled: bool) {
     IMPLICITLY_TRUST_ACTIVE_CONFIG.store(enabled, Ordering::Relaxed);
 }
 
-pub fn trust_active_config() -> Result<()> {
+pub(crate) fn trust_active_config() -> Result<()> {
     if !IMPLICITLY_TRUST_ACTIVE_CONFIG.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -405,7 +486,7 @@ pub fn trust_active_config() -> Result<()> {
     Ok(())
 }
 
-pub fn trust_check(path: &Path) -> eyre::Result<()> {
+pub(crate) fn trust_check(path: &Path) -> eyre::Result<()> {
     // In safe mode, config is inert (no code execution, no env injection — see
     // MISE_SAFE / the `safe` setting), so loading an untrusted config is
     // harmless and no trust is required. `safe` is global-only, so a project
@@ -437,23 +518,31 @@ pub fn trust_check(path: &Path) -> eyre::Result<()> {
         return Ok(());
     }
     if cmd != "hook-env" && !is_ignored(&config_root) && !is_ignored(path) {
-        let ans = (settings::is_loaded() && Settings::get().yes)
-            || prompt::confirm_with_all(format!(
+        let ans = if settings::is_loaded() && Settings::get().yes {
+            Confirmation::Yes
+        } else {
+            prompt::confirm_with_all(format!(
                 "{} config files in {} are not trusted. Trust them?",
                 style::eyellow("mise"),
                 style::epath(&config_root)
-            ))?;
-        if ans {
-            trust(&config_root)?;
-            return Ok(());
-        } else if console::user_attended_stderr() {
-            add_ignored(config_root.to_path_buf())?;
+            ))?
+        };
+        match ans {
+            Confirmation::Yes => {
+                trust(&config_root)?;
+                return Ok(());
+            }
+            // Only a real decline is worth remembering. An ignore marker is
+            // sticky and silent, so recording one for an answer nobody gave
+            // would stop the config from applying with nothing to explain why.
+            Confirmation::No => add_ignored(config_root.to_path_buf())?,
+            Confirmation::Unavailable => {}
         }
     }
     Err(UntrustedConfig(path.into()))?
 }
 
-pub fn is_trusted(path: &Path) -> bool {
+pub(crate) fn is_trusted(path: &Path) -> bool {
     let canonicalized_path = match path.canonicalize() {
         Ok(p) => p,
         Err(err) => {
@@ -540,14 +629,14 @@ static IS_IGNORED: Lazy<Mutex<HashSet<PathBuf>>> = Lazy::new(|| Mutex::new(HashS
 fn add_trusted(path: PathBuf) {
     IS_TRUSTED.lock().unwrap().insert(path);
 }
-pub fn add_ignored(path: PathBuf) -> Result<()> {
+pub(crate) fn add_ignored(path: PathBuf) -> Result<()> {
     let path = path.canonicalize()?;
     file::create_dir_all(&*dirs::IGNORED_CONFIGS)?;
     file::make_symlink_or_file(&path, &ignore_path(&path))?;
     IS_IGNORED.lock().unwrap().insert(path);
     Ok(())
 }
-pub fn rm_ignored(path: PathBuf) -> Result<()> {
+pub(crate) fn rm_ignored(path: PathBuf) -> Result<()> {
     let path = path.canonicalize()?;
     let ignore_path = ignore_path(&path);
     if ignore_path.exists() {
@@ -570,7 +659,7 @@ fn trusted_config_path_matches(canonicalized_path: &Path) -> bool {
 /// This is the signal that overrides the persisted ignore list (a dismissed
 /// trust prompt or `mise trust --ignore`) in both [`is_trusted`] and config
 /// discovery. It does not consider global config or per-file trust records.
-pub fn is_trusted_via_config_paths(path: &Path) -> bool {
+pub(crate) fn is_trusted_via_config_paths(path: &Path) -> bool {
     // Config discovery calls this, and the initial `Settings` load itself runs
     // config discovery (`load_config_paths`). Reading `trusted_config_paths`
     // before settings are loaded would re-enter `Settings::get()` and recurse,
@@ -611,13 +700,50 @@ fn path_is_under_any(path: &Path, ignored: &[PathBuf]) -> bool {
         .any(|p| canonical.starts_with(p))
 }
 
+#[derive(Default)]
+struct IgnoredConfigPathMatcher {
+    literals: Vec<PathBuf>,
+    globs: Vec<GlobMatcher>,
+}
+
+impl IgnoredConfigPathMatcher {
+    fn new(paths: &[PathBuf]) -> Self {
+        let mut matcher = Self::default();
+        for path in paths {
+            let pattern = path.to_string_lossy();
+            if !pattern.contains(['*', '?', '[', '{']) {
+                matcher.literals.push(path.clone());
+                continue;
+            }
+            match GlobBuilder::new(&pattern).literal_separator(true).build() {
+                Ok(glob) => matcher.globs.push(glob.compile_matcher()),
+                Err(err) => {
+                    warn!("invalid ignored_config_paths glob {pattern}: {err}");
+                    matcher.literals.push(path.clone());
+                }
+            }
+        }
+        matcher
+    }
+
+    fn is_match(&self, path: &Path) -> bool {
+        path_is_under_any(path, &self.literals)
+            || self.globs.iter().any(|glob| glob.is_match(path))
+            || file::canonicalize_cached(path)
+                .is_some_and(|path| self.globs.iter().any(|glob| glob.is_match(&path)))
+    }
+}
+
+static IGNORED_CONFIG_PATH_MATCHER: Lazy<IgnoredConfigPathMatcher> =
+    Lazy::new(|| IgnoredConfigPathMatcher::new(&env::MISE_IGNORED_CONFIG_PATHS));
+
 /// Whether `path` is under an explicitly-configured `ignored_config_paths`
 /// (`MISE_IGNORED_CONFIG_PATHS`) entry.
 ///
 /// This is an explicit "never load this config" instruction and is a hard
 /// block: it takes precedence over `trusted_config_paths`.
-pub fn is_ignored_via_setting(path: &Path) -> bool {
-    path_is_under_any(path, &env::MISE_IGNORED_CONFIG_PATHS)
+pub(crate) fn is_ignored_via_setting(path: &Path) -> bool {
+    IGNORED_CONFIG_PATH_MATCHER.is_match(path)
 }
 
 /// Whether `path` is in the persisted ignore list.
@@ -626,7 +752,7 @@ pub fn is_ignored_via_setting(path: &Path) -> bool {
 /// `mise trust --ignore`. Unlike [`is_ignored_via_setting`], this only records
 /// a dismissed prompt, so it is overridden by `trusted_config_paths` (see
 /// [`is_trusted_via_config_paths`]).
-pub fn is_persisted_ignored(path: &Path) -> bool {
+pub(crate) fn is_persisted_ignored(path: &Path) -> bool {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         if !dirs::IGNORED_CONFIGS.exists() {
@@ -651,11 +777,11 @@ pub fn is_persisted_ignored(path: &Path) -> bool {
 /// Whether `path` is ignored, by either the `ignored_config_paths` setting or
 /// the persisted ignore list. Callers that need to respect the
 /// `trusted_config_paths` override use the finer-grained variants directly.
-pub fn is_ignored(path: &Path) -> bool {
+pub(crate) fn is_ignored(path: &Path) -> bool {
     is_ignored_via_setting(path) || is_persisted_ignored(path)
 }
 
-pub fn trust(path: &Path) -> Result<()> {
+pub(crate) fn trust(path: &Path) -> Result<()> {
     rm_ignored(path.to_path_buf())?;
     let hashed_path = trust_path(path);
     if !hashed_path.exists() {
@@ -671,7 +797,7 @@ pub fn trust(path: &Path) -> Result<()> {
 }
 
 /// Marks a trusted config as a monorepo root, allowing all descendant configs to be trusted
-pub fn mark_as_monorepo_root(path: &Path) -> Result<()> {
+pub(crate) fn mark_as_monorepo_root(path: &Path) -> Result<()> {
     let config_root = config_trust_root(path);
     let hashed_path = trust_path(&config_root);
     let monorepo_marker = with_appended_extension(&hashed_path, "monorepo");
@@ -682,7 +808,7 @@ pub fn mark_as_monorepo_root(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn untrust(path: &Path) -> eyre::Result<()> {
+pub(crate) fn untrust(path: &Path) -> eyre::Result<()> {
     rm_ignored(path.to_path_buf())?;
     let hashed_path = trust_path(path);
     if hashed_path.exists() {
@@ -786,53 +912,76 @@ pub(crate) fn matching_idiomatic_filenames<'a>(
 fn path_matches_registry_idiomatic(path: &Path) -> bool {
     let filenames = REGISTRY
         .values()
-        .flat_map(|rt| rt.idiomatic_files.iter().map(|f| f.path));
+        .flat_map(|rt| rt.idiomatic_files.iter().map(|file| file.path));
     !matching_idiomatic_filenames(path, filenames).is_empty()
 }
 
-fn unsupported_config_file_error(path: &Path) -> eyre::Report {
-    if path_matches_registry_idiomatic(path) {
-        eyre!(
-            "cannot update idiomatic version file {}; use mise.toml, .tool-versions, or --path to choose a writable config file",
-            display_path(path)
-        )
-    } else {
-        eyre!("unknown config file type: {}", display_path(path))
-    }
+fn registry_tool_matches_idiomatic_path(tool: &str, path: &Path) -> bool {
+    REGISTRY.get(tool).is_some_and(|registry_tool| {
+        let filenames = registry_tool.idiomatic_files.iter().map(|file| file.path);
+        !matching_idiomatic_filenames(path, filenames).is_empty()
+    })
 }
 
-async fn path_is_idiomatic(path: &Path) -> Option<Vec<Arc<dyn Backend>>> {
-    let (enable_tools, disable_files) = Settings::try_get()
-        .map(|settings| {
-            (
-                settings.idiomatic_version_file_enable_tools.clone(),
-                settings.idiomatic_version_file_disable_files.clone(),
-            )
-        })
-        .unwrap_or_default();
-    path_is_idiomatic_for_enabled_tools(path, &enable_tools, &disable_files).await
-}
-
-async fn path_is_idiomatic_for_enabled_tools(
+/// Registry fallback for paths whose matching backends are not enabled and therefore not queried.
+fn path_is_disabled_registry_idiomatic(
     path: &Path,
-    enable_tools: &BTreeSet<String>,
-    disable_files: &BTreeSet<String>,
-) -> Option<Vec<Arc<dyn Backend>>> {
+    settings: &IdiomaticVersionFileSettings,
+) -> bool {
+    let active_filenames = REGISTRY
+        .values()
+        .filter(|rt| settings.enable_tools.contains(rt.short))
+        .flat_map(|rt| {
+            rt.idiomatic_files
+                .iter()
+                .filter(|file| {
+                    !super::idiomatic_version_file_disabled(
+                        &settings.disable_files,
+                        rt.short,
+                        file.path,
+                    )
+                })
+                .map(|file| file.path)
+        })
+        .collect::<Vec<_>>();
+    path_matches_registry_idiomatic(path)
+        && matching_idiomatic_filenames(path, active_filenames).is_empty()
+}
+
+enum IdiomaticBackendDetection {
+    Recognized(Vec<Arc<dyn Backend>>),
+    Disabled,
+    NoMatch,
+}
+
+async fn detect_idiomatic_backends(
+    path: &Path,
+    settings: &IdiomaticVersionFileSettings,
+) -> Result<IdiomaticBackendDetection> {
     // Idiomatic version files are opt-in per tool. Skipping non-enabled backends is
     // also what keeps `idiomatic_filenames()` from booting a Lua VM for every
     // installed vfox plugin on every invocation just to classify a config path.
-    if enable_tools.is_empty() {
-        return None;
+    if settings.enable_tools.is_empty() {
+        return Ok(IdiomaticBackendDetection::NoMatch);
     }
+    let mut first_error = None;
+    let mut unseen_tools = settings.enable_tools.clone();
+    let mut disabled_filenames = BTreeSet::new();
     let mut backends_by_filename = BTreeMap::<String, Vec<Arc<dyn Backend>>>::new();
     for b in backend::list() {
-        if !enable_tools.contains(b.id()) {
+        if !settings.enable_tools.contains(b.id()) {
             continue;
         }
+        unseen_tools.remove(b.id());
         match b.idiomatic_filenames().await {
             Ok(filenames) => {
                 for filename in filenames {
-                    if super::idiomatic_version_file_disabled(disable_files, b.id(), &filename) {
+                    if super::idiomatic_version_file_disabled(
+                        &settings.disable_files,
+                        b.id(),
+                        &filename,
+                    ) {
+                        disabled_filenames.insert(filename);
                         continue;
                     }
                     backends_by_filename
@@ -841,7 +990,15 @@ async fn path_is_idiomatic_for_enabled_tools(
                         .push(b.clone());
                 }
             }
-            Err(e) => debug!("idiomatic_filenames failed for {}: {:?}", b, e),
+            Err(err) => {
+                debug!("idiomatic_filenames failed for {}: {:?}", b, err);
+                if first_error.is_none() {
+                    first_error = Some(err.wrap_err(format!(
+                        "failed to discover idiomatic filenames for {}",
+                        b.id()
+                    )));
+                }
+            }
         }
     }
     let mut seen = HashSet::new();
@@ -852,44 +1009,84 @@ async fn path_is_idiomatic_for_enabled_tools(
             .filter(|backend| seen.insert(backend.id().to_string()))
             .cloned()
             .collect::<Vec<_>>();
-    if backends.is_empty() {
-        None
-    } else {
-        Some(backends)
+    if !backends.is_empty() {
+        return Ok(IdiomaticBackendDetection::Recognized(backends));
     }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    if let Some(tool) = unseen_tools
+        .into_iter()
+        .find(|tool| registry_tool_matches_idiomatic_path(tool, path))
+    {
+        return Err(eyre!(
+            "enabled idiomatic backend {tool} is not available for discovery"
+        ));
+    }
+    if !matching_idiomatic_filenames(path, disabled_filenames.iter().map(String::as_str)).is_empty()
+    {
+        return Ok(IdiomaticBackendDetection::Disabled);
+    }
+    Ok(IdiomaticBackendDetection::NoMatch)
 }
 
-async fn detect_config_file_type(path: &Path) -> Option<ConfigFileType> {
-    match path
+/// Detect a config type that is determined solely by its filename.
+pub(super) fn detect_config_file_type_by_filename(path: &Path) -> Option<ConfigFileType> {
+    let filename = path.file_name().and_then(|f| f.to_str())?;
+    if env::MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES
+        .as_ref()
+        .is_some_and(|filenames| filenames.contains(filename))
+        || env::MISE_DEFAULT_TOOL_VERSIONS_FILENAME.as_str() == filename
+    {
+        return Some(ConfigFileType::ToolVersions);
+    }
+    if env::MISE_OVERRIDE_CONFIG_FILENAMES.contains(filename)
+        || env::MISE_DEFAULT_CONFIG_FILENAME.as_str() == filename
+    {
+        return Some(ConfigFileType::MiseToml);
+    }
+    None
+}
+
+/// Detect a config file while preserving disabled and backend-discovery outcomes.
+pub(super) async fn detect_config_file_with_settings(
+    path: &Path,
+    settings: &IdiomaticVersionFileSettings,
+) -> ConfigFileDetection {
+    if let Some(config_type) = detect_config_file_type_by_filename(path) {
+        return ConfigFileDetection::Recognized(config_type);
+    }
+    let filename = path
         .file_name()
         .and_then(|f| f.to_str())
-        .unwrap_or("mise.toml")
-    {
-        f if env::MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES
-            .as_ref()
-            .is_some_and(|o| o.contains(f)) =>
+        .unwrap_or("mise.toml");
+
+    let registry_idiomatic = path_matches_registry_idiomatic(path);
+    match detect_idiomatic_backends(path, settings).await {
+        Ok(IdiomaticBackendDetection::Recognized(backends)) => {
+            ConfigFileDetection::Recognized(ConfigFileType::IdiomaticVersion(backends))
+        }
+        Ok(IdiomaticBackendDetection::Disabled) => ConfigFileDetection::DisabledIdiomatic,
+        Ok(IdiomaticBackendDetection::NoMatch)
+            if path_is_disabled_registry_idiomatic(path, settings) =>
         {
-            Some(ConfigFileType::ToolVersions)
+            ConfigFileDetection::DisabledIdiomatic
         }
-        f if env::MISE_DEFAULT_TOOL_VERSIONS_FILENAME.as_str() == f => {
-            Some(ConfigFileType::ToolVersions)
+        Ok(IdiomaticBackendDetection::NoMatch) if registry_idiomatic => {
+            ConfigFileDetection::Unknown
         }
-        f if env::MISE_OVERRIDE_CONFIG_FILENAMES.contains(f) => Some(ConfigFileType::MiseToml),
-        f if env::MISE_DEFAULT_CONFIG_FILENAME.as_str() == f => Some(ConfigFileType::MiseToml),
-        f => {
-            if let Some(backends) = path_is_idiomatic(path).await {
-                Some(ConfigFileType::IdiomaticVersion(backends))
-            } else if path_matches_registry_idiomatic(path) {
-                // Known idiomatic filenames stay unrecognized until the tool is
-                // opted in. Do not fall through to MiseToml for names like
-                // rust-toolchain.toml.
-                None
-            } else if f.ends_with(".toml") {
-                Some(ConfigFileType::MiseToml)
-            } else {
-                None
-            }
+        Ok(IdiomaticBackendDetection::NoMatch) if filename.ends_with(".toml") => {
+            ConfigFileDetection::Recognized(ConfigFileType::MiseToml)
         }
+        Ok(IdiomaticBackendDetection::NoMatch) => ConfigFileDetection::Unknown,
+        // An unrelated enabled backend failure must not prevent ordinary TOML parsing.
+        Err(_) if filename.ends_with(".toml") && !registry_idiomatic => {
+            ConfigFileDetection::Recognized(ConfigFileType::MiseToml)
+        }
+        Err(err) => ConfigFileDetection::DiscoveryFailed(err.wrap_err(format!(
+            "failed to classify config file {}",
+            display_path(path)
+        ))),
     }
 }
 
@@ -916,9 +1113,10 @@ impl Hash for dyn ConfigFile {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct TaskConfig {
+pub(crate) struct TaskConfig {
     pub cascade: Option<bool>,
     pub includes: Option<Vec<String>>,
+    pub excludes: Option<Vec<String>>,
     pub dir: Option<String>,
     pub shell: Option<String>,
     pub cache: Option<crate::task::TaskCacheConfig>,
@@ -935,7 +1133,7 @@ pub struct TaskConfig {
 /// an invocation-wide merged value.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ToolConfig {
+pub(crate) struct ToolConfig {
     pub locked: bool,
 }
 
@@ -1024,11 +1222,33 @@ mod ignored_config_path_tests {
             &ignored
         ));
     }
+
+    #[test]
+    fn recursive_glob_matches_config_path_but_not_sibling_name() {
+        let root = tempfile::tempdir().unwrap();
+        let pattern = root.path().join("vendor").join("**").join("mise.toml");
+        let matcher = IgnoredConfigPathMatcher::new(&[pattern]);
+
+        assert!(matcher.is_match(&root.path().join("vendor/jj/.config/mise.toml")));
+        assert!(!matcher.is_match(&root.path().join("vendor/jj/.config/.mise.toml")));
+    }
+
+    #[test]
+    fn literal_entries_keep_directory_prefix_behavior() {
+        let root = tempfile::tempdir().unwrap();
+        let ignored = root.path().join("vendor");
+        let matcher = IgnoredConfigPathMatcher::new(&[ignored]);
+
+        assert!(matcher.is_match(&root.path().join("vendor/jj/mise.toml")));
+        assert!(!matcher.is_match(&root.path().join("vendor-other/mise.toml")));
+    }
 }
 
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -1037,28 +1257,74 @@ mod tests {
     async fn test_detect_config_file_type() {
         env::set_var("MISE_EXPERIMENTAL", "true");
         backend::load_tools().await.unwrap();
+        let settings = IdiomaticVersionFileSettings::default();
         // Idiomatic version files are opt-in; with the default (empty)
-        // `idiomatic_version_file_enable_tools` they are not detected.
-        assert_eq!(
-            detect_config_file_type(Path::new("/foo/bar/.nvmrc")).await,
-            None
-        );
-        assert_eq!(
-            detect_config_file_type(Path::new("/foo/bar/package.json")).await,
-            None
-        );
-        assert_eq!(
-            detect_config_file_type(Path::new("/foo/bar/rust-toolchain.toml")).await,
-            None
-        );
-        assert_eq!(
-            detect_config_file_type(Path::new("/foo/bar/.test-tool-versions")).await,
-            Some(ConfigFileType::ToolVersions)
-        );
-        assert_eq!(
-            detect_config_file_type(Path::new("/foo/bar/mise.toml")).await,
-            Some(ConfigFileType::MiseToml)
-        );
+        // `idiomatic_version_file_enable_tools` they are classified as disabled.
+        for path in [
+            "/foo/bar/.nvmrc",
+            "/foo/bar/package.json",
+            "/foo/bar/rust-toolchain.toml",
+        ] {
+            assert!(matches!(
+                detect_config_file_with_settings(Path::new(path), &settings).await,
+                ConfigFileDetection::DisabledIdiomatic
+            ));
+        }
+        assert!(matches!(
+            detect_config_file_with_settings(Path::new("/foo/bar/.test-tool-versions"), &settings)
+                .await,
+            ConfigFileDetection::Recognized(ConfigFileType::ToolVersions)
+        ));
+        assert!(matches!(
+            detect_config_file_with_settings(Path::new("/foo/bar/mise.toml"), &settings).await,
+            ConfigFileDetection::Recognized(ConfigFileType::MiseToml)
+        ));
+    }
+
+    #[test]
+    fn test_unavailable_backend_only_matters_for_matching_registry_path() {
+        assert!(registry_tool_matches_idiomatic_path(
+            "node",
+            Path::new("/foo/package.json")
+        ));
+        assert!(!registry_tool_matches_idiomatic_path(
+            "node",
+            Path::new("/foo/.ruby-version")
+        ));
+        assert!(!registry_tool_matches_idiomatic_path(
+            "missing",
+            Path::new("/foo/package.json")
+        ));
+    }
+
+    #[test]
+    fn test_registry_idiomatic_file_is_disabled_only_when_all_matches_are_disabled() {
+        let path = Path::new("/foo/package.json");
+        let mut settings = IdiomaticVersionFileSettings {
+            enable_tools: BTreeSet::from(["node".to_string(), "yarn".to_string()]),
+            disable_files: BTreeSet::from(["yarn:package.json".to_string()]),
+        };
+        assert!(!path_is_disabled_registry_idiomatic(path, &settings));
+
+        settings
+            .disable_files
+            .insert("node:package.json".to_string());
+        assert!(path_is_disabled_registry_idiomatic(path, &settings));
+    }
+
+    #[test]
+    fn test_disabled_nested_registry_idiomatic_falls_back_to_active_shorter_match() {
+        let path = Path::new("/foo/.config/goreleaser.yaml");
+        let mut settings = IdiomaticVersionFileSettings {
+            enable_tools: BTreeSet::from(["goreleaser".to_string()]),
+            disable_files: BTreeSet::from(["goreleaser:.config/goreleaser.yaml".to_string()]),
+        };
+        assert!(!path_is_disabled_registry_idiomatic(path, &settings));
+
+        settings
+            .disable_files
+            .insert("goreleaser:goreleaser.yaml".to_string());
+        assert!(path_is_disabled_registry_idiomatic(path, &settings));
     }
 
     #[tokio::test]
@@ -1075,7 +1341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_path_is_idiomatic_for_enabled_tools() -> Result<()> {
+    async fn test_detect_idiomatic_backends_for_enabled_tools() -> Result<()> {
         backend::load_tools().await?;
         let disable_files = BTreeSet::new();
         for (enabled, path) in [
@@ -1084,22 +1350,24 @@ mod tests {
             ("rust", "/foo/bar/rust-toolchain.toml"),
             ("goreleaser", "/foo/bar/.config/goreleaser.yaml"),
         ] {
-            let enable_tools = BTreeSet::from([enabled.to_string()]);
-            let backends =
-                path_is_idiomatic_for_enabled_tools(Path::new(path), &enable_tools, &disable_files)
-                    .await
-                    .unwrap_or_else(|| panic!("{path} should be idiomatic for {enabled}"));
+            let settings = IdiomaticVersionFileSettings {
+                enable_tools: BTreeSet::from([enabled.to_string()]),
+                disable_files: disable_files.clone(),
+            };
+            let backends = match detect_idiomatic_backends(Path::new(path), &settings).await? {
+                IdiomaticBackendDetection::Recognized(backends) => backends,
+                _ => panic!("{path} should be idiomatic for {enabled}"),
+            };
             assert!(backends.iter().any(|b| b.id() == enabled));
             // A file for a non-enabled tool must not match.
-            assert!(
-                path_is_idiomatic_for_enabled_tools(
-                    Path::new(path),
-                    &BTreeSet::from(["zig".to_string()]),
-                    &disable_files,
-                )
-                .await
-                .is_none()
-            );
+            let settings = IdiomaticVersionFileSettings {
+                enable_tools: BTreeSet::from(["zig".to_string()]),
+                disable_files: disable_files.clone(),
+            };
+            assert!(matches!(
+                detect_idiomatic_backends(Path::new(path), &settings).await?,
+                IdiomaticBackendDetection::NoMatch
+            ));
         }
         Ok(())
     }
@@ -1114,13 +1382,14 @@ mod tests {
         let path = config_dir.join("goreleaser.yaml");
         file::write(&path, "version: 2\n")?;
 
-        let backends = path_is_idiomatic_for_enabled_tools(
-            &path,
-            &BTreeSet::from(["goreleaser".to_string()]),
-            &BTreeSet::new(),
-        )
-        .await
-        .expect("goreleaser should be matched from its nested idiomatic path");
+        let settings = IdiomaticVersionFileSettings {
+            enable_tools: BTreeSet::from(["goreleaser".to_string()]),
+            disable_files: BTreeSet::new(),
+        };
+        let backends = match detect_idiomatic_backends(&path, &settings).await? {
+            IdiomaticBackendDetection::Recognized(backends) => backends,
+            _ => panic!("goreleaser should be matched from its nested idiomatic path"),
+        };
         let tools = IdiomaticVersionFile::parse(path.clone(), backends)
             .await?
             .to_tool_request_set()?
@@ -1186,15 +1455,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_detect_idiomatic_backends_reports_disabled_match() -> Result<()> {
+        backend::load_tools().await?;
+        let settings = IdiomaticVersionFileSettings {
+            enable_tools: BTreeSet::from(["node".to_string()]),
+            disable_files: BTreeSet::from(["node:package.json".to_string()]),
+        };
+
+        assert!(matches!(
+            detect_idiomatic_backends(Path::new("package.json"), &settings).await?,
+            IdiomaticBackendDetection::Disabled
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_path_is_idiomatic_respects_disabled_files() -> Result<()> {
         backend::load_tools().await?;
-        let enabled = BTreeSet::from(["node".to_string(), "pnpm".to_string()]);
-        let disabled = BTreeSet::from(["node:package.json".to_string()]);
+        let settings = IdiomaticVersionFileSettings {
+            enable_tools: BTreeSet::from(["node".to_string(), "pnpm".to_string()]),
+            disable_files: BTreeSet::from(["node:package.json".to_string()]),
+        };
 
-        let backends =
-            path_is_idiomatic_for_enabled_tools(Path::new("package.json"), &enabled, &disabled)
-                .await
-                .expect("package.json should remain idiomatic for package managers");
+        let backends = match detect_idiomatic_backends(Path::new("package.json"), &settings).await?
+        {
+            IdiomaticBackendDetection::Recognized(backends) => backends,
+            _ => panic!("package.json should remain idiomatic for package managers"),
+        };
 
         assert!(!backends.iter().any(|backend| backend.id() == "node"));
         assert!(backends.iter().any(|backend| backend.id() == "pnpm"));

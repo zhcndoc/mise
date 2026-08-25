@@ -6,21 +6,21 @@ use crate::cli::settings::set::set;
 ///
 /// Used with an array setting, this will append the value to the array.
 /// This modifies the contents of ~/.config/mise/config.toml
-#[derive(Debug, clap::Args)]
-#[clap(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct SettingsAdd {
+#[derive(Debug, usage_rs::Args)]
+#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct SettingsAdd {
     /// The setting to set
-    #[clap()]
+    #[usage()]
     pub setting: String,
     /// The value to set (optional if provided as KEY=VALUE)
     pub value: Option<String>,
     /// Use the local config file instead of the global one
-    #[clap(long, short)]
+    #[usage(long, short)]
     pub local: bool,
 }
 
 impl SettingsAdd {
-    pub fn run(self) -> Result<()> {
+    pub(super) fn run(self) -> Result<()> {
         match self.value {
             Some(value) => set(&self.setting, &value, true, self.local),
             None => {

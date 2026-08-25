@@ -63,7 +63,6 @@ maven                         aqua:apache/maven vfox:mise-plugins/vfox-maven
 php                           vfox:mise-plugins/vfox-php
 scala                         vfox:mise-plugins/vfox-scala
 terraform                     aqua:hashicorp/terraform vfox:mise-plugins/vfox-terraform
-vlang                         vfox:mise-plugins/vfox-vlang
 ```
 
 这样，在运行诸如 `mise use -g cmake` 之类的命令时，它们就会被安装，而无需
@@ -107,31 +106,45 @@ mise plugin install vfox-cmake https://github.com/mise-plugins/vfox-cmake/archiv
 
 vfox 后端遵循 mise 的 [`url_replacements`](/url-replacements.html) 设置，该设置同时适用于工具制品下载以及通过插件内置的 Lua HTTP 模块发出的请求。这包括 `http.get`、`http.head`、`http.download_file` 及其 `try_*` 变体。
 
+应用 URL 替换后，vfox 还会使用 mise 的 [`netrc`](/configuration/settings.html#netrc) 设置，为目标主机添加 HTTP Basic 身份验证。当请求保持在同一源上时，插件提供的显式 `Authorization` 标头优先。
+
 ## 工具选项
 
 以下 [工具选项](/dev-tools/#tool-options) 适用于 `vfox` 后端——这些选项
 应放在 `mise.toml` 的 `[tools]` 中。
 
-传统的 vfox 生命周期钩子可以从其钩子环境中读取所选工具版本的自定义选项。选项名称会转换为大写，并使用当前前缀和兼容旧版本的前缀同时公开：
+传统 vfox `PreInstall` 和 `PostInstall` 钩子会在结构化的
+`ctx.options` 表中接收自定义选项。标量值使用 mise 现有的字符串表示形式，而数组和表则保持结构化：
 
 ```toml
 [tools]
-"vfox:example/plugin" = { version = "1.0.0", extensions = "opentelemetry,swoole" }
+"vfox:example/plugin" = { version = "1.0.0", bundled = false, channels = ["stable", "beta"] }
 ```
 
 ```lua
-local extensions = os.getenv("MISE_TOOL_OPTS__EXTENSIONS")
--- RTX_TOOL_OPTS__EXTENSIONS contains the same value for legacy compatibility.
+function PLUGIN:PreInstall(ctx)
+    local bundled = ctx.options.bundled == "false"
+    local channels = ctx.options.channels
+    -- ...
+end
 ```
 
-这些变量仅在 mise 运行插件钩子期间可用，不会导出到用户的 shell 中。后端插件应改用结构化的 `ctx.options` 值。
+现有插件可以继续从钩子环境中读取带有 `MISE_TOOL_OPTS__` 前缀的自定义选项。这些变量仅在 mise 运行插件钩子期间可用，不会导出到用户的 shell 中。新插件应使用 `ctx.options`。
 
 ### `install_env`
 
-为在安装钩子期间通过 `cmd.exec` 启动的 vfox 插件命令设置环境变量。
+用于为在安装钩子期间通过 `cmd.exec` 启动的 vfox 插件命令设置环境变量。
 vfox 内置的 Lua HTTP、archive 和 JSON 辅助工具不会直接使用这些变量。
 
 ```toml
 [tools]
 "vfox:version-fox/vfox-cmake" = { version = "latest", install_env = { HTTPS_PROXY = "http://proxy.example" } }
 ```
+
+### 安装依赖项
+
+插件作者应在 `metadata.lua` 中使用 `PLUGIN.depends` 声明固有的安装要求。用户可以通过
+[`depends` 工具选项](/dev-tools/#tool-dependencies) 补充这些声明。来自两个来源的匹配配置工具会共享一个安装依赖上下文：它们会排在依赖它们的工具之前，并且其路径和 `tools = true` 值可用于通过 `os.execute` 或
+`cmd.exec` 启动的安装钩子。
+
+声明不会配置或自动安装工具。匹配的已配置依赖项必须解析并完成安装；未配置的依赖项仍可由现有系统或配置中的 `PATH` 提供。`io.popen` 不会接收此安装环境。

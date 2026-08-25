@@ -8,29 +8,30 @@ use crate::system::files::FileState;
 use crate::ui::table::MiseTable;
 
 /// Show the status of dotfiles from `[dotfiles]`
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "ls", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct DotfilesStatus {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_alias = "ls", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct DotfilesStatus {
     /// Only show these targets
-    #[clap(value_name = "TARGET")]
+    #[usage(value_name = "TARGET")]
     targets: Vec<String>,
 
     /// Output in JSON format
-    #[clap(long, short = 'J')]
+    #[usage(long, short = 'J')]
     json: bool,
 
     /// Exit with code 1 if any configured dotfiles are not in their desired
     /// state (missing, source missing, differs)
-    #[clap(long, verbatim_doc_comment)]
+    #[usage(long, verbatim_doc_comment)]
     missing: bool,
 }
 
 impl DotfilesStatus {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let mut any_missing = false;
 
         let all_files = system::files::files_from_config(&config)?;
+        system::files::validate_composed_file_footprints(&all_files)?;
         let files = all_files
             .iter()
             .filter(|req| {

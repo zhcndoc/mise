@@ -31,7 +31,7 @@ use console::style;
 use heck::ToKebabCase;
 
 /// This represents a plugin installed to ~/.local/share/mise/plugins
-pub struct AsdfBackend {
+pub(crate) struct AsdfBackend {
     pub ba: Arc<BackendArg>,
     pub name: String,
     pub plugin_path: PathBuf,
@@ -46,7 +46,7 @@ pub struct AsdfBackend {
 }
 
 impl AsdfBackend {
-    pub fn from_arg(ba: BackendArg) -> Self {
+    pub(crate) fn from_arg(ba: BackendArg) -> Self {
         let name = ba.tool_name.clone();
         let plugin_path = dirs::PLUGINS.join(ba.short.to_kebab_case());
         let plugin = AsdfPlugin::new(name.clone(), plugin_path.clone());
@@ -86,7 +86,26 @@ impl AsdfBackend {
             return Ok(None);
         }
 
-        Ok(Some(fs::read_to_string(fp)?.trim().into()))
+        Ok(Self::cached_idiomatic_version(&fs::read_to_string(fp)?))
+    }
+
+    /// A cached idiomatic version, or `None` when the entry has to be parsed again.
+    ///
+    /// The cache holds the output of `normalize_idiomatic_contents`, and an entry written before
+    /// that stripped the byte-order mark still carries it. Nothing retires such an entry on its
+    /// own: it is compared only against the source file's modification time, and upgrading mise
+    /// moves neither. So the mark is treated as a miss — the file is re-read through the current
+    /// normaliser and the entry rewritten clean, once.
+    ///
+    /// A miss rather than a strip, because stripping repairs only the simpler shape. The old
+    /// normaliser also failed to recognise a commented first line with a mark in front of the `#`
+    /// (`starts_with('#')` is false there) and cached the comment itself as a version; only a
+    /// re-parse fixes that.
+    fn cached_idiomatic_version(cached: &str) -> Option<String> {
+        if cached.contains('\u{feff}') {
+            return None;
+        }
+        Some(cached.trim().to_string())
     }
 
     fn idiomatic_cache_file_path(&self, idiomatic_file: &Path) -> PathBuf {
@@ -228,8 +247,6 @@ impl AsdfBackend {
     ) -> Result<ScriptManager> {
         let mut sm = self.plugin.script_man.clone();
         for (key, value) in tv.request.options().opts_as_strings() {
-            let k = format!("RTX_TOOL_OPTS__{}", key.to_uppercase());
-            sm = sm.with_env(k, value.clone());
             let k = format!("MISE_TOOL_OPTS__{}", key.to_uppercase());
             sm = sm.with_env(k, value);
         }
@@ -241,7 +258,6 @@ impl AsdfBackend {
         }
         if let Some(project_root) = &config.project_root {
             let project_root = project_root.to_string_lossy().to_string();
-            sm = sm.with_env("RTX_PROJECT_ROOT", project_root.clone());
             sm = sm.with_env("MISE_PROJECT_ROOT", project_root);
         }
         let install_type = match &tv.request {
@@ -268,10 +284,6 @@ impl AsdfBackend {
             .with_env("ASDF_INSTALL_PATH", &install)
             .with_env("ASDF_INSTALL_TYPE", install_type)
             .with_env("ASDF_INSTALL_VERSION", install_version)
-            .with_env("RTX_DOWNLOAD_PATH", &download)
-            .with_env("RTX_INSTALL_PATH", &install)
-            .with_env("RTX_INSTALL_TYPE", install_type)
-            .with_env("RTX_INSTALL_VERSION", install_version)
             .with_env("MISE_DOWNLOAD_PATH", download)
             .with_env("MISE_INSTALL_PATH", install)
             .with_env("MISE_INSTALL_TYPE", install_type)
@@ -435,21 +447,14 @@ impl Backend for AsdfBackend {
     async fn install_version_(&self, ctx: &InstallContext, tv: ToolVersion) -> Result<ToolVersion> {
         let mut sm = self.script_man_for_tv(&ctx.config, &tv).await?;
 
-        // `ctx.ts` is the unresolved install toolset during a combined install, so it
-        // does not expose tools that just finished installing. Resolve this tool's
-        // declared dependencies separately so asdf install scripts can execute them
-        // on the first install (#4384). Keep the existing active-tool paths after the
-        // dependencies for compatibility, and preserve each toolset's path order.
-        let dependency_paths = self
-            .install_dependency_toolset(&ctx.config, &tv)
-            .await?
-            .list_paths(&ctx.config)
-            .await;
-        let active_paths = ctx.ts.list_paths(&ctx.config).await;
+        // Resolve this tool's declared dependencies separately so asdf install scripts
+        // can execute them on the first install. Do not expose unrelated active tools:
+        // install requirements must be declared or already available on the script's
+        // ambient PATH.
+        let dependency_paths = ctx.dependency_context(&tv.request).await?.paths.clone();
         let mut seen = HashSet::new();
         let paths: Vec<_> = dependency_paths
             .into_iter()
-            .chain(active_paths)
             .filter(|path| seen.insert(path.clone()))
             .collect();
         for p in paths.into_iter().rev() {
@@ -570,6 +575,32 @@ mod tests {
 
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn an_idiomatic_cache_entry_written_before_the_bom_was_stripped_is_a_miss() {
+        assert_eq!(
+            AsdfBackend::cached_idiomatic_version("20.0.0\n"),
+            Some("20.0.0".to_string())
+        );
+        // The mark is what `normalize_idiomatic_contents` used to leave in the cache. Modification
+        // time is the entry's only invalidation and upgrading mise moves neither file's, so
+        // without this the stale version outlives the fix indefinitely.
+        assert_eq!(
+            AsdfBackend::cached_idiomatic_version("\u{feff}20.0.0\n"),
+            None
+        );
+        // The shape a strip on read would not repair: with the mark in front, `starts_with('#')`
+        // was false, so the old normaliser cached the comment line as if it were a version.
+        assert_eq!(
+            AsdfBackend::cached_idiomatic_version("\u{feff}# only a comment\n3.12.0"),
+            None
+        );
+        // Nothing else changes: the trim the cache read has always done still happens.
+        assert_eq!(
+            AsdfBackend::cached_idiomatic_version("  3.12.0  \n"),
+            Some("3.12.0".to_string())
+        );
+    }
 
     #[test]
     fn test_verify_install_script_output() {

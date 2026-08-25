@@ -167,7 +167,7 @@ usage（<https://usage.jdx.dev/>）是一个用于定义 CLI 工具的规范和 
 
 参数、标志、环境变量和配置文件都可以在 Usage 规范中定义。可以把它看作是面向 CLI 的 OpenAPI（swagger）。
 
-可以使用 `mise` 通过 `mise use -g usage` 安装 `usage`，并且这是让自动补全工作的必需项。请参见 [自动补全](/installing-mise.html#autocompletion)。
+mise 将 usage 嵌入其中，用于任务参数解析、帮助信息和自动补全，因此不需要单独安装 `usage` CLI。请参阅[自动补全](/installing-mise.html#autocompletion)。
 
 你可以在文件任务中利用 usage 来实现自动补全，请参见 [文件任务参数](/tasks/file-tasks.html#arguments)。
 
@@ -299,7 +299,36 @@ mise **不**做的事情：
 - 管理桌面应用程序
 - 处理工具编译所需的系统级依赖
 
-如果某个由 mise 安装的工具需要系统库，请先使用你的操作系统包管理器安装该库。
+如果 mise 安装的工具需要系统库，请先使用操作系统的软件包管理器安装该库。你可以在 [`[bootstrap.packages]`](/bootstrap/packages/) 中声明这些软件包，让 `mise bootstrap` 安装它们：如果平台的软件包管理器负责管理这些软件包，就通过 apt/dnf/pacman 安装；对于 `brew:` 和 `brew-cask:` 条目，则通过 mise 内置的 Homebrew 安装程序安装，整个过程不需要安装 Homebrew。无论哪种方式，它们都是主机软件包，而不是 `[tools]` 条目。
+
+## 如何安装其他用户可以在不使用 mise 的情况下运行的工具？
+
+有两项功能可以安装运行时无需 mise、且能在 `PATH` 上使用的二进制文件。
+
+对于有 Homebrew formula 的工具，请使用带有 `brew:` 条目的 [`[bootstrap.packages]`](/bootstrap/packages/)：
+
+```toml
+[bootstrap.packages]
+"brew:ffmpeg" = "latest"
+"brew:jq" = "latest"
+```
+
+mise 会将 bottles 写入规范前缀（Linux 上为 `/home/linuxbrew/.linuxbrew`，arm64 macOS 上为 `/opt/homebrew`），并创建常规的 `<prefix>/bin` 链接，同时不要求安装 Homebrew 本身。一旦将 `<prefix>/bin` 添加到 `PATH`，这些二进制文件的行为就与其他 Homebrew 安装的程序一样。
+[Keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) formula 是例外：与 brew 一样，mise 不会将它们放入前缀目录，因此它们的二进制文件会保留在
+`<prefix>/opt/<name>/bin`。
+
+在 arm64 macOS 以及运行 mise brew 管理器的 x86_64/arm64 Linux 上，`mise bootstrap packages import --manager brew` 会将现有的 Homebrew 或 Linuxbrew 设置快照保存到你的配置中——可以保存你按需安装的 formula，也可以通过 `--all` 保存所有已链接的 formula。
+
+对于 mise 支持的任何后端，请使用 [`mise install-into`](/cli/install-into.html)。它会将一个工具版本安装到你选择的目录中，以便在 mise 之外使用：
+
+```sh
+mise install-into node@22 /opt/node
+/opt/node/bin/node -v
+```
+
+请将其指向一个新的或空的目录：`install-into` 会删除目标位置中已有的内容；执行前会显示确认提示，默认选择否，也可以通过 `--yes` 跳过询问。它只会写入该目录，因此请像处理上面的 brew 前缀一样，手动将其 `bin` 目录添加到 `PATH`。如果工具需要 `JAVA_HOME` 之类的环境变量，或需要 mise 通常在运行时应用的其他配置，仍然需要手动设置。
+
+这两种方式都与 Homebrew 做出了相同的取舍：为所有人提供 `PATH` 上的一个版本，而不支持按项目选择版本。如果你需要按项目选择版本，请将工具保留在 `[tools]` 中，并让 [`mise bootstrap`](/bootstrap.html) 通过一条命令统一配置每个用户的激活状态、配置和工具——或者通过 [`mise bootstrap remote`](/bootstrap/remote.html) 在多台主机上完成。
 
 ## mise 版本控制是如何工作的？
 

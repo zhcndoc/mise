@@ -9,6 +9,7 @@
 source = "."
 exclude = [".env.local", "artifacts"]
 copy_link = ["modules/common", "playbooks/shared"]
+mise_env = ["linux", "server"]
 
 [bootstrap.remote.hosts.cache]
 host = "cache.example.com"
@@ -17,9 +18,10 @@ port = 22
 identity_file = "~/.ssh/mise-cache"
 tags = ["cache", "production"]
 ssh_options = ["ServerAliveInterval=30"]
+mise_env = ["linux", "cache"]
 ```
 
-`source` 是发送到主机的本地项目目录。相对路径形式的 `source`、`identity_file` 和 `mise_bin` 将根据声明它们的配置文件进行解析。主机级别的 `source` 会覆盖 `[bootstrap.remote].source`。当同一个清单名称在多个层级中声明时，优先级更高的配置文件生效。顶层的 `exclude` 模式会在所有已加载的配置层之间合并，并应用于每台主机，因此即使清单条目来自全局配置，距离更近的项目也可以添加机密文件模式。这个共享集合同样适用于临时的 `--host` 目标；清单主机级别的排除项会在此基础上追加。只有选中的清单条目会被验证。Mise 会应用命令行覆盖项，并在建立任何 SSH 连接之前验证整个选中集合，因此未选中的过时条目不会阻止无关目标，而选中的无效条目也不会导致部分执行。
+`source` 是发送到主机的本地项目目录。相对的 `source`、`identity_file` 和 `mise_bin` 路径均相对于声明它们的配置文件解析。主机级别的 `source` 会覆盖 `[bootstrap.remote].source`。主机级别的 `mise_env` 会覆盖 `[bootstrap.remote].mise_env`；这些有序值会作为 `MISE_ENV` 传递给暂存的 `mise bootstrap` 进程。使用 `--remote-env <ENV>` 可以为每个选定主机覆盖已配置的列表。当同一个清单名称在多个层级中声明时，优先级更高的配置文件生效。顶层 `exclude` 模式会合并所有已加载的配置层，并应用于每台主机，因此即使清单条目来自全局配置，更近的项目也可以添加机密模式。这个共享集合也会应用于临时的 `--host` 目标；清单中的主机级别排除项会叠加。只有选定的清单条目会被验证。Mise 会应用命令行覆盖项，并在打开任何 SSH 连接之前验证整个选定集合，因此未选定的过时条目不会阻塞无关目标，而选定的无效条目也不会导致部分执行。
 
 远程清单属于编排元数据。在暂存项目内部运行的 `mise bootstrap` 进程不会递归执行其中的 `[bootstrap.remote]` 部分。
 
@@ -51,10 +53,10 @@ mise bootstrap remote --host ubuntu@cache.example.com \
 
 1. 使用用户常规的 SSH 配置和主机密钥策略打开 OpenSSH 连接；
 2. 创建经过验证的 `/tmp/mise-bootstrap.*` 目录；
-3. 在本地归档源目录，并将其解压到暂存目录中；
-4. 准备用于远程运行的确切 mise 可执行文件；
-5. 在暂存的项目中执行 `mise bootstrap`；以及
-6. 删除暂存目录，包括在 bootstrap 失败之后。
+3. 在本地归档源目录，并将其解压到暂存目录；
+4. 配置远程运行所使用的确切 mise 可执行文件；除非 `install_mise` 使其保留在主机上，否则会将其暂存；
+5. 在暂存项目中执行 `mise bootstrap`；以及
+6. 删除暂存目录，包括引导失败后也会删除。
 
 在 Unix 上，同一目标的所有命令都会复用一个 OpenSSH 控制连接。在非交互式调用中，mise 会设置 `BatchMode=yes`，使密码提示直接失败而不是一直挂起。在有人值守的终端中，bootstrap 命令会获得一个 TTY，以便 SSH、sudo、确认提示和 `--prompt-secrets` 提示仍然可用。OpenSSH 现有的主机密钥验证不会被自动弱化。
 
@@ -94,7 +96,38 @@ bootstrap_command = "nix profile install nixpkgs#mise"
 
 mise 会在引导前运行 `mise version`，以验证每个上传的或选定的远程命令。
 
-## Bootstrap 控制项和机密
+### 将 mise 保留在主机上
+
+默认情况下，配置的可执行文件位于暂存目录中，并会随暂存目录一同删除，因此目标会保留安装在 `~/.local/share/mise` 下的工具，但不会保留安装这些工具的 mise。设置 `install_mise` 可将 mise 保留在计算机上：
+
+```toml
+[bootstrap.remote]
+install_mise = true
+
+[bootstrap.remote.hosts.cache]
+host = "cache.example.com"
+install_mise = "/usr/local/bin/mise"
+```
+
+`true` 会将其安装到 `~/.local/bin/mise`，这也是 [mise.run](https://mise.run) 使用的路径。字符串值会将其安装到指定路径；该路径必须是绝对路径或以 `~/` 开头，并且表示可执行文件而不是目录——如果路径中已经存在目录，则会拒绝安装，而不是将可执行文件作为子项放入其中。主机级别的值会替换 `[bootstrap.remote].install_mise`，因此 `install_mise = false` 可以让某台主机退出项目级别的默认设置。
+
+```sh
+mise bootstrap remote cache --install-mise
+mise bootstrap remote cache --install-mise=/usr/local/bin/mise
+mise bootstrap remote cache --no-install-mise
+```
+
+`--install-mise` 在路径前要求使用 `=`，这样不带参数的标志就不会消耗目标名称。与其他命令行配置 mise 的选项一样，它会替换选定清单主机声明的 `remote_mise` 或 `bootstrap_command`。
+
+安装的内容与默认策略所暂存的可执行文件相同——本地二进制文件或经过校验和验证的官方发布构件——并且它会运行 bootstrap，因此主机会与负责编排的 mise 版本保持一致。Mise 会在目标文件旁边写入临时文件，然后将其重命名到目标位置，因此替换当前正在运行的 mise 不会截断该文件。如果目标中已经存在字节完全相同的可执行文件，则不会上传任何内容。试运行绝不会写入主机：`--dry-run` 会报告它将安装到的路径，并照常暂存可执行文件。
+
+`install_mise` 可以与 `mise_bin` 组合使用，以安装本地构建的可执行文件。它不能与 `remote_mise` 或 `bootstrap_command` 组合，因为后两者已经在主机上提供了 mise。当主机应通过系统软件包、`nix profile install` 或特定站点的安装程序自行管理安装时，`bootstrap_command` 仍然是正确的选择。
+
+SSH 用户必须能够写入安装路径；mise 不会为此提升权限，因此像 `/usr/local/bin/mise` 这样的路径需要使用已经拥有该目录的用户。请确保该目录仅对该用户可写。安装后，mise 会将目标的摘要与它写入的内容进行比较，如果不一致则失败，而不是运行其他内容，但这项检查是尽力而为的——当主机既不提供 `sha256sum` 也不提供 `shasum` 时会跳过检查，并且无法覆盖检查和运行之间的时间窗口。无论如何，任何能够写入安装目录的人都可以控制该账户在之后每次调用中作为 `mise` 运行的内容，因此目录权限才是真正的边界。在未使用 `install_mise` 时，暂存目录由 `mktemp -d` 创建，并且仅对 SSH 账户私有。
+
+安装 mise 不会将其添加到主机的 `PATH` 中。当安装目录不在登录 `PATH` 中时，mise 会发出警告；bootstrap 项目可以声明 [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)，使同一次运行将激活配置或 shim 写入主机的 shell 启动文件。
+
+## Bootstrap controls and secrets
 
 远程执行会直接转发重要的收敛控制项：
 
@@ -104,8 +137,7 @@ mise bootstrap remote cache --yes --update
 mise bootstrap remote cache --only packages,files,services,compose
 mise bootstrap remote cache --skip tools,task
 mise bootstrap remote cache --prompt-secrets
+mise bootstrap remote cache --remote-env linux,server
 ```
 
-本地环境变量不会被有意复制到 SSH 主机。请在交互式运行时使用
-`--prompt-secrets`。还可以单独叠加由提供商支持的机密环境传输，而无需将值放入配置、
-归档、进程参数、计划或日志中。
+本地环境变量不会被复制到 SSH 主机，这是有意为之。显式配置的 `mise_env` 属于远程编排元数据，而不是继承的本地环境。有人值守运行时请使用 `--prompt-secrets`。基于提供程序的机密环境传输可以单独叠加，而无需将值放入配置、归档、进程参数、计划或日志中。

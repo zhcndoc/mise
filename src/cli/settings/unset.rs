@@ -7,24 +7,24 @@ use crate::{config, file};
 /// Clears a setting
 ///
 /// This modifies the contents of ~/.config/mise/config.toml
-#[derive(Debug, clap::Args)]
-#[clap(visible_aliases = ["rm", "remove", "delete", "del"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct SettingsUnset {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_aliases = ["rm", "remove", "delete", "del"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct SettingsUnset {
     /// The setting to remove
     pub key: String,
 
     /// Use the local config file instead of the global one
-    #[clap(long, short)]
+    #[usage(long, short)]
     pub local: bool,
 }
 
 impl SettingsUnset {
-    pub fn run(self) -> Result<()> {
+    pub(super) fn run(self) -> Result<()> {
         unset(&self.key, self.local)
     }
 }
 
-pub fn unset(mut key: &str, local: bool) -> Result<()> {
+pub(super) fn unset(mut key: &str, local: bool) -> Result<()> {
     let path = if local {
         config::local_toml_config_path()
     } else {

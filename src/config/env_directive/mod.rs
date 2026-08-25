@@ -25,7 +25,7 @@ mod source;
 pub(crate) mod venv;
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub enum RequiredValue {
+pub(crate) enum RequiredValue {
     #[default]
     False,
     True,
@@ -33,11 +33,11 @@ pub enum RequiredValue {
 }
 
 impl RequiredValue {
-    pub fn is_required(&self) -> bool {
+    pub(crate) fn is_required(&self) -> bool {
         !matches!(self, RequiredValue::False)
     }
 
-    pub fn help_text(&self) -> Option<&str> {
+    pub(crate) fn help_text(&self) -> Option<&str> {
         match self {
             RequiredValue::Help(text) => Some(text.as_str()),
             _ => None,
@@ -106,7 +106,7 @@ impl serde::Serialize for RequiredValue {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct EnvDirectiveOptions {
+pub(crate) struct EnvDirectiveOptions {
     #[serde(default)]
     pub(crate) tools: bool,
     #[serde(default)]
@@ -119,14 +119,14 @@ pub struct EnvDirectiveOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum EnvValue {
+pub(crate) enum EnvValue {
     String(String),
     Integer(i64),
     Boolean(bool),
 }
 
 impl EnvValue {
-    pub fn into_string(self) -> Option<String> {
+    pub(crate) fn into_string(self) -> Option<String> {
         match self {
             Self::String(value) => Some(value),
             Self::Integer(value) => Some(value.to_string()),
@@ -135,7 +135,7 @@ impl EnvValue {
         }
     }
 
-    pub fn into_default_string(self) -> Option<String> {
+    pub(crate) fn into_default_string(self) -> Option<String> {
         match self {
             Self::String(value) => Some(value),
             Self::Integer(value) => Some(value.to_string()),
@@ -192,7 +192,7 @@ impl From<EnvValue> for toml_edit::Value {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum EnvDirective {
+pub(crate) enum EnvDirective {
     /// simple key/value pair
     Val(String, String, EnvDirectiveOptions),
     /// use a fallback value if the key is not already set
@@ -226,7 +226,7 @@ pub enum EnvDirective {
 }
 
 impl EnvDirective {
-    pub fn options(&self) -> &EnvDirectiveOptions {
+    pub(crate) fn options(&self) -> &EnvDirectiveOptions {
         match self {
             EnvDirective::Val(_, _, opts)
             | EnvDirective::Default(_, _, opts)
@@ -304,7 +304,7 @@ impl Display for EnvDirective {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-pub enum AgeFormat {
+pub(crate) enum AgeFormat {
     #[serde(rename = "zstd")]
     Zstd,
     #[serde(rename = "raw")]
@@ -313,7 +313,7 @@ pub enum AgeFormat {
 }
 
 #[derive(Default, Clone)]
-pub struct EnvResults {
+pub(crate) struct EnvResults {
     pub env: IndexMap<String, (String, PathBuf)>,
     pub vars: IndexMap<String, (String, PathBuf)>,
     pub env_remove: BTreeSet<String>,
@@ -352,9 +352,15 @@ pub(super) struct EnvDirectiveContext<'a> {
 }
 
 impl EnvDirectiveContext<'_> {
-    fn parse_template(&mut self, input: &str) -> eyre::Result<String> {
-        self.results
-            .parse_template(self.tera_ctx, self.tera, self.source, self.exec_env, input)
+    fn parse_template(&mut self, origin: &str, input: &str) -> eyre::Result<String> {
+        self.results.parse_template(
+            self.tera_ctx,
+            self.tera,
+            self.source,
+            self.exec_env,
+            origin,
+            input,
+        )
     }
 
     fn normalize_path(&self, path: PathBuf) -> PathBuf {
@@ -363,7 +369,7 @@ impl EnvDirectiveContext<'_> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub enum ToolsFilter {
+pub(crate) enum ToolsFilter {
     ToolsOnly,
     #[default]
     NonToolsOnly,
@@ -376,7 +382,7 @@ pub enum ToolsFilter {
     ToolsOnlyVals,
 }
 
-pub struct EnvResolveOptions {
+pub(crate) struct EnvResolveOptions {
     pub vars: bool,
     pub tools: ToolsFilter,
     pub warn_on_missing_required: bool,
@@ -397,7 +403,7 @@ impl EnvResults {
     /// Value map for [`crate::config::Config::add_redactions_excluding`]: the values this
     /// resolution assigned, plus caller-supplied values for [`Self::caller_env_keys`], which
     /// are absent from [`Self::env`] because those directives never assign.
-    pub fn redactable_env(&self, caller_env: &EnvMap) -> EnvMap {
+    pub(crate) fn redactable_env(&self, caller_env: &EnvMap) -> EnvMap {
         let mut out: EnvMap = self
             .env
             .iter()
@@ -411,7 +417,7 @@ impl EnvResults {
         out
     }
 
-    pub async fn resolve(
+    pub(crate) async fn resolve(
         config: &Arc<Config>,
         ctx: tera::Context,
         initial: &EnvMap,
@@ -423,7 +429,7 @@ impl EnvResults {
 
     /// [`Self::resolve`] for callers that already have a resolved toolset. See
     /// [`EnvDirectiveContext::toolset`] for why a directive would want it.
-    pub async fn resolve_with_toolset(
+    pub(crate) async fn resolve_with_toolset(
         config: &Arc<Config>,
         mut ctx: tera::Context,
         initial: &EnvMap,
@@ -532,8 +538,15 @@ impl EnvResults {
             // trace!("resolve: ctx.get('env'): {:#?}", &ctx.get("env"));
             match directive {
                 EnvDirective::Val(k, v, _opts) => {
+                    // `[vars]` are template variables rather than environment variables, so the
+                    // PATH rule does not apply to them.
+                    let k = if resolve_opts.vars {
+                        k
+                    } else {
+                        crate::env::normalize_path_key(k)
+                    };
                     r.track_redaction_override(&k, redact);
-                    let v = r.parse_template(&ctx, &mut tera, &source, &env_vars, &v)?;
+                    let v = r.parse_template(&ctx, &mut tera, &source, &env_vars, &k, &v)?;
 
                     if resolve_opts.vars {
                         if redact.unwrap_or(false) {
@@ -550,6 +563,12 @@ impl EnvResults {
                     }
                 }
                 EnvDirective::Default(k, v, _opts) => {
+                    // Same fold as `Val` above, and for the same reason.
+                    let k = if resolve_opts.vars {
+                        k
+                    } else {
+                        crate::env::normalize_path_key(k)
+                    };
                     if resolve_opts.vars {
                         if let Some((v, _)) = r.vars.get(&k).filter(|(v, _)| !v.is_empty()) {
                             if redact.unwrap_or(false) {
@@ -574,7 +593,7 @@ impl EnvResults {
                     }
 
                     r.track_redaction_override(&k, redact);
-                    let v = r.parse_template(&ctx, &mut tera, &source, &env_vars, &v)?;
+                    let v = r.parse_template(&ctx, &mut tera, &source, &env_vars, &k, &v)?;
 
                     if resolve_opts.vars {
                         if redact.unwrap_or(false) {
@@ -590,6 +609,13 @@ impl EnvResults {
                     }
                 }
                 EnvDirective::Rm(k, _opts) => {
+                    // The same fold as `Val`, so that `_.unset` naming another spelling of PATH
+                    // reaches the key `Val` stored it under rather than missing silently.
+                    let k = if resolve_opts.vars {
+                        k
+                    } else {
+                        crate::env::normalize_path_key(k)
+                    };
                     env.shift_remove(&k);
                     r.redaction_exclusions.remove(&k);
                     // The key is gone from the environment, so its caller value is no longer
@@ -631,7 +657,7 @@ impl EnvResults {
                     let decrypted_v = match res {
                         Ok(decrypted_v) => {
                             // Parse as template after decryption
-                            r.parse_template(&ctx, &mut tera, &source, &env_vars, &decrypted_v)?
+                            r.parse_template(&ctx, &mut tera, &source, &env_vars, k, &decrypted_v)?
                         }
                         Err(e) if Settings::get().age.strict => {
                             return Err(e)
@@ -920,24 +946,34 @@ impl EnvResults {
 
         // Check if required variables are defined
         for (var_name, declaring_source, required_value) in required_vars {
+            // Looked up under the folded name, reported under the one the config wrote. On
+            // Windows `Path = { required = true }` asks after the variable that is spelled
+            // `PATH` in the environment, and `Val`/`Default` store it folded, so a lookup on
+            // the literal name reads a variable that is set as missing.
+            let lookup = if vars_mode {
+                var_name.clone()
+            } else {
+                env::normalize_path_key(var_name.clone())
+            };
+
             // Variable must be defined either:
             // 1. In the initial environment (before mise runs), OR
             // 2. In a config file processed later than the one declaring it as required
-            let is_predefined = initial.contains_key(&var_name);
+            let is_predefined = initial.contains_key(&lookup);
 
             let resolved_values = if vars_mode {
                 &env_results.vars
             } else {
                 &env_results.env
             };
-            let is_defined_later = if let Some((_, var_source)) = resolved_values.get(&var_name) {
+            let is_defined_later = if let Some((_, var_source)) = resolved_values.get(&lookup) {
                 // Check if the variable comes from a different config file
                 var_source != &declaring_source
             } else {
                 false
             };
             let is_defined_in_context =
-                vars_mode && context_vars.get(&var_name).is_some_and(|v| !v.is_empty());
+                vars_mode && context_vars.get(&lookup).is_some_and(|v| !v.is_empty());
 
             if !is_predefined && !is_defined_later && !is_defined_in_context {
                 let variable_kind = if vars_mode {
@@ -986,6 +1022,7 @@ impl EnvResults {
         tera: &mut Option<TeraEngine>,
         path: &Path,
         exec_env: &EnvMap,
+        origin: &str,
         input: &str,
     ) -> eyre::Result<String> {
         let mut output = input.to_string();
@@ -1025,19 +1062,13 @@ impl EnvResults {
                 .unwrap_or_default();
             let mut missing_vars = Vec::new();
             output = shell_expand_env(&output, &env_vars, &mut missing_vars);
-            for var in missing_vars {
-                warn_once!(
-                    "env var '{var}' is not defined and will be left unexpanded. \
-                     Use ${{{var}:-}} to default to an empty string and suppress \
-                     this warning."
-                );
-            }
+            warn_unexpanded_vars(missing_vars, origin, path);
         }
 
         Ok(output)
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.env.is_empty()
             && self.vars.is_empty()
             && self.env_remove.is_empty()
@@ -1045,6 +1076,33 @@ impl EnvResults {
             && self.env_paths.is_empty()
             && self.env_scripts.is_empty()
             && self.tool_add_paths.is_empty()
+    }
+}
+
+/// The warning for a `$VAR` that `shell_expand_env` could not expand.
+///
+/// Built as a string rather than warned in place so it can be tested without
+/// `warn_once!`'s process-global dedup set, which would make any test asserting
+/// on emitted output depend on whatever ran before it.
+///
+/// Naming the missing variable alone was not actionable. The reporter in
+/// discussion #8232 could see *which* variable was missing but not which value
+/// referenced it, and `mise env` cannot show that: a missing variable is by
+/// definition absent from the environment. `origin` is the referencing `[env]`
+/// key where one exists, and the directive otherwise.
+fn unexpanded_var_warning(var: &str, origin: &str, path: &Path) -> String {
+    format!(
+        "env var '{var}' is not defined and will be left unexpanded, \
+         referenced by `{origin}` in {}. \
+         Use ${{{var}:-}} to default to an empty string and suppress this warning.",
+        display_path(path)
+    )
+}
+
+/// Warn once for each variable left unexpanded, naming what referenced it.
+pub(crate) fn warn_unexpanded_vars(missing: Vec<String>, origin: &str, path: &Path) {
+    for var in missing {
+        warn_once!("{}", unexpanded_var_warning(&var, origin, path));
     }
 }
 
@@ -1233,6 +1291,19 @@ mod tests {
     use crate::config::Config;
     use crate::env_diff::EnvMap;
     use crate::tera::BASE_CONTEXT;
+
+    /// Naming the missing variable was never the hard part — finding what
+    /// referenced it was. See discussion #8232.
+    #[test]
+    fn test_unexpanded_var_warning_names_the_reference() {
+        let path = Path::new("/p/mise.toml");
+        let msg = unexpanded_var_warning("DB_HOST", "DATABASE_URL", path);
+        assert!(msg.contains("'DB_HOST'"), "{msg}");
+        assert!(msg.contains("`DATABASE_URL`"), "{msg}");
+        assert!(msg.contains(&display_path(path)), "{msg}");
+        // The existing escape hatch has to survive the rewording.
+        assert!(msg.contains("${DB_HOST:-}"), "{msg}");
+    }
 
     /// `ToolsFilter::ToolsOnlyVals` must select only `tools = true` `Val`
     /// directives — excluding `tools = false` vars and `tools = true` *modules*

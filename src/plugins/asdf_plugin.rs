@@ -16,7 +16,6 @@ use crate::ui::progress_report::SingleReport;
 use crate::ui::prompt;
 use crate::{backend, dirs, env, file, lock_file, registry};
 use async_trait::async_trait;
-use clap::Command;
 use console::style;
 use contracts::requires;
 use eyre::{Context, bail, eyre};
@@ -28,7 +27,7 @@ use std::{collections::HashMap, sync::Arc};
 use xx::regex;
 
 #[derive(Debug)]
-pub struct AsdfPlugin {
+pub(crate) struct AsdfPlugin {
     pub name: String,
     pub plugin_path: PathBuf,
     pub repo: Mutex<Git>,
@@ -102,7 +101,10 @@ impl AsdfPlugin {
         }
         Ok(())
     }
-    pub fn fetch_remote_versions(&self, script_man: &ScriptManager) -> eyre::Result<Vec<String>> {
+    pub(crate) fn fetch_remote_versions(
+        &self,
+        script_man: &ScriptManager,
+    ) -> eyre::Result<Vec<String>> {
         Settings::ensure_not_safe("executing asdf plugin scripts")?;
         let cmd = script_man.cmd(&Script::ListAll);
         let result = run_with_timeout(
@@ -139,7 +141,10 @@ impl AsdfPlugin {
             .map(|v| regex!(r"^v(\d+)").replace(v, "$1").to_string())
             .collect())
     }
-    pub fn fetch_latest_stable(&self, script_man: &ScriptManager) -> eyre::Result<Option<String>> {
+    pub(crate) fn fetch_latest_stable(
+        &self,
+        script_man: &ScriptManager,
+    ) -> eyre::Result<Option<String>> {
         let latest_stable = script_man.read(&Script::LatestStable)?.trim().to_string();
         Ok(if latest_stable.is_empty() {
             None
@@ -148,24 +153,24 @@ impl AsdfPlugin {
         })
     }
 
-    pub fn fetch_idiomatic_filenames(&self) -> eyre::Result<Vec<String>> {
+    pub(crate) fn fetch_idiomatic_filenames(&self) -> eyre::Result<Vec<String>> {
         let stdout = self.script_man.read(&Script::ListIdiomaticFilenames)?;
         Ok(self.parse_idiomatic_filenames(&stdout))
     }
-    pub fn parse_idiomatic_filenames(&self, data: &str) -> Vec<String> {
+    pub(crate) fn parse_idiomatic_filenames(&self, data: &str) -> Vec<String> {
         data.split_whitespace().map(|v| v.into()).collect()
     }
-    pub fn has_list_alias_script(&self) -> bool {
+    pub(crate) fn has_list_alias_script(&self) -> bool {
         self.script_man.script_exists(&Script::ListAliases)
     }
-    pub fn has_list_idiomatic_filenames_script(&self) -> bool {
+    pub(crate) fn has_list_idiomatic_filenames_script(&self) -> bool {
         self.script_man
             .script_exists(&Script::ListIdiomaticFilenames)
     }
-    pub fn has_latest_stable_script(&self) -> bool {
+    pub(crate) fn has_latest_stable_script(&self) -> bool {
         self.script_man.script_exists(&Script::LatestStable)
     }
-    pub fn fetch_aliases(&self) -> eyre::Result<Vec<(String, String)>> {
+    pub(crate) fn fetch_aliases(&self) -> eyre::Result<Vec<(String, String)>> {
         let stdout = self.script_man.read(&Script::ListAliases)?;
         Ok(self.parse_aliases(&stdout))
     }
@@ -287,7 +292,9 @@ impl Plugin for AsdfPlugin {
                     if !prompt::confirm_with_all(format!(
                         "Would you like to install {}?",
                         self.name
-                    ))? {
+                    ))?
+                    .is_yes()
+                    {
                         Err(PluginNotInstalled(self.name.clone()))?
                     }
                 }
@@ -416,7 +423,7 @@ impl Plugin for AsdfPlugin {
         }
     }
 
-    fn external_commands(&self) -> eyre::Result<Vec<Command>> {
+    fn external_commands(&self) -> eyre::Result<Vec<super::ExternalCommand>> {
         let command_path = self.plugin_path.join("lib/commands");
         if !self.is_installed() || !command_path.exists() || self.name == "direnv" {
             // asdf-direnv is disabled since it conflicts with mise's built-in direnv functionality
@@ -442,18 +449,10 @@ impl Plugin for AsdfPlugin {
             return Ok(vec![]);
         }
 
-        let topic = Command::new(self.name.clone())
-            .about(format!("Commands provided by {} plugin", self.name))
-            .subcommands(commands.into_iter().map(|cmd| {
-                Command::new(cmd.join("-"))
-                    .about(format!("{} command", cmd.join("-")))
-                    .arg(
-                        clap::Arg::new("args")
-                            .num_args(1..)
-                            .allow_hyphen_values(true)
-                            .trailing_var_arg(true),
-                    )
-            }));
+        let topic = super::ExternalCommand {
+            topic: self.name.clone(),
+            subcommands: commands.into_iter().map(|cmd| cmd.join("-")).collect(),
+        };
         Ok(vec![topic])
     }
 
@@ -477,10 +476,7 @@ fn build_script_man(name: &str, plugin_path: &Path) -> ScriptManager {
     let plugin_path_s = plugin_path.to_string_lossy().to_string();
     let token = env::GITHUB_TOKEN.as_deref().unwrap_or("");
     ScriptManager::new(plugin_path.to_path_buf())
-        .with_env("ASDF_PLUGIN_PATH", plugin_path_s.clone())
-        .with_env("RTX_PLUGIN_PATH", plugin_path_s.clone())
-        .with_env("RTX_PLUGIN_NAME", name.to_string())
-        .with_env("RTX_SHIMS_DIR", *dirs::SHIMS)
+        .with_env("ASDF_PLUGIN_PATH", plugin_path_s)
         .with_env("MISE_PLUGIN_NAME", name.to_string())
         .with_env("MISE_PLUGIN_PATH", plugin_path)
         .with_env("MISE_SHIMS_DIR", *dirs::SHIMS)

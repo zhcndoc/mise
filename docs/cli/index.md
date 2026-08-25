@@ -1,81 +1,48 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise`
 
-**用法**: `mise [标志] [任务] <子命令>`
+**用法：** `mise [FLAGS] [TASK] <SUBCOMMAND>`
 
-- **用法**: `mise [标志] [任务] <子命令>`
+**作者：** Jeff Dickey <@jdx>
+
+- **用法：** `mise [FLAGS] [TASK] <SUBCOMMAND>`
 
 ## 参数
+- **`[TASK]`** — 要运行的任务
 
-### `[TASK]`
-
-要运行的任务。
-
-`mise tasks run <TASK>` 的简写。
+  `mise tasks run <TASK>` 的简写形式
 
 ## 全局标志
+- **`-C --cd <DIR>`** — 在运行命令前切换目录
+- **`-E --env <ENV>`** — 设置用于加载 `mise.<ENV>.toml` 的环境
+- **`-j --jobs <JOBS>`** — 并行运行的任务数；小于 1 的值将按 1 处理 [默认值：8]
 
-### `-C --cd <DIR>`
+  **环境变量：** `MISE_JOBS`
+- **`-q --quiet`** — 抑制非错误消息
 
-在运行命令前更改目录
+  **环境变量：** `MISE_QUIET`
+- **`-v --verbose`** — 显示额外输出（使用 -vv 可显示更多）
+- **`-y --yes`** — 对所有确认提示回答 yes
+- **`--raw`** — 直接从 stdin/stdout/stderr 读取或写入，而不是按行处理
+- **`--locked`** — 安装期间要求 lockfile 中存在 URL
 
-### `-E --env… <ENV>`
-
-设置用于加载 `mise.<ENV>.toml` 的环境
-
-### `-j --jobs <JOBS>`
-
-要并行运行的任务数；小于 1 的值按 1 处理【默认值：8】
-
-### `-q --quiet`
-
-抑制非错误消息
-
-### `-v --verbose…`
-
-显示额外输出（使用 -vv 可显示更多）
-
-### `-y --yes`
-
-对所有确认提示回答 yes
-
-### `--raw`
-
-直接读写 stdin/stdout/stderr，而不是按行处理
-
-### `--locked`
-
-安装期间要求存在锁文件 URL
-
-如果工具在当前平台的锁文件中没有预解析的 URL，则会失败。  
-这可防止对 GitHub、aqua 注册表等进行 API 调用。  
-也可通过 MISE_LOCKED=1 或 settings.locked=true 启用
-
-### `--silent`
-
-抑制所有任务输出以及 mise 的非错误消息。
+  如果当前平台的工具在 lockfile 中没有预解析的 URL，则失败
+  这可以防止向 GitHub、aqua registry 等发起 API 调用
+  也可以通过 MISE_LOCKED=1 或 settings.locked=true 启用
+- **`--silent`** — 抑制所有任务输出和 mise 非错误消息
 
 ## 标志
+- **`--no-config`** — 不加载任何配置文件
 
-### `--no-config`
+  也可以使用 `MISE_NO_CONFIG=1`
+- **`--no-env`** — 不从配置文件加载环境变量
 
-不要加载任何配置文件
+  也可以使用 `MISE_NO_ENV=1`
+- **`--no-hooks`** — 不执行配置文件中的 hook
 
-也可以使用 `MISE_NO_CONFIG=1`
-
-### `--no-env`
-
-不要从配置文件中加载环境变量
-
-也可以使用 `MISE_NO_ENV=1`
-
-### `--no-hooks`
-
-不要执行配置文件中的 hooks
-
-也可以使用 `MISE_NO_HOOKS=1`
-
-### `--output <OUTPUT>`
+  也可以使用 `MISE_NO_HOOKS=1`
+- **`--output <OUTPUT>`**
+- **`-h --help`** — 打印帮助
 
 ## 子命令
 
@@ -141,10 +108,10 @@
 - [`mise bootstrap plugins status [--missing]`](/cli/bootstrap/plugins/status.md)
 - [`mise bootstrap remote [FLAGS] [TARGET]…`](/cli/bootstrap/remote.md)
 - [`mise bootstrap repos <SUBCOMMAND>`](/cli/bootstrap/repos.md)
-- [`mise bootstrap repos apply [-n --dry-run] [-y --yes]`](/cli/bootstrap/repos/apply.md)
+- [`mise bootstrap repos apply [FLAGS]`](/cli/bootstrap/repos/apply.md)
 - [`mise bootstrap repos exec [-c --continue-on-error] [-n --dry-run] [PATH]… <-- COMMAND>…`](/cli/bootstrap/repos/exec.md)
 - [`mise bootstrap repos status [-J --json] [--missing]`](/cli/bootstrap/repos/status.md)
-- [`mise bootstrap repos update [-n --dry-run] [-y --yes] [PATH]…`](/cli/bootstrap/repos/update.md)
+- [`mise bootstrap repos update [FLAGS] [PATH]…`](/cli/bootstrap/repos/update.md)
 - [`mise bootstrap secrets <SUBCOMMAND>`](/cli/bootstrap/secrets.md)
 - [`mise bootstrap secrets status [-J --json] [--missing]`](/cli/bootstrap/secrets/status.md)
 - [`mise bootstrap services <SUBCOMMAND>`](/cli/bootstrap/services.md)
@@ -159,9 +126,9 @@
 - [`mise cache <SUBCOMMAND>`](/cli/cache.md)
 - [`mise cache clear [--task <TASK>] [TOOL]…`](/cli/cache/clear.md)
 - [`mise cache path`](/cli/cache/path.md)
-- [`mise cache prune [-v --verbose…] [--dry-run] [TOOL]…`](/cli/cache/prune.md)
+- [`mise cache prune [-v --verbose] [--dry-run] [TOOL]…`](/cli/cache/prune.md)
 - [`mise cache task [-J --json] <TASK>`](/cli/cache/task.md)
-- [`mise completion [--include-bash-completion-lib] [SHELL]`](/cli/completion.md)
+- [`mise completion [FLAGS] [SHELL]`](/cli/completion.md)
 - [`mise config [FLAGS] <SUBCOMMAND>`](/cli/config.md)
 - [`mise config get [-f --file <FILE>] [KEY]`](/cli/config/get.md)
 - [`mise config ls [FLAGS]`](/cli/config/ls.md)
@@ -174,11 +141,11 @@
 - [`mise exec [FLAGS] [TOOL@VERSION]… [-- COMMAND]…`](/cli/exec.md)
 - [`mise fmt [FLAGS]`](/cli/fmt.md)
 - [`mise generate <SUBCOMMAND>`](/cli/generate.md)
-- [`mise generate bootstrap [FLAGS]`](/cli/generate/bootstrap.md)
 - [`mise generate config [FLAGS] [PATH]`](/cli/generate/config.md)
 - [`mise generate devcontainer [FLAGS]`](/cli/generate/devcontainer.md)
 - [`mise generate git-pre-commit [FLAGS] [-- MISE_ARG]…`](/cli/generate/git-pre-commit.md)
 - [`mise generate github-action [FLAGS]`](/cli/generate/github-action.md)
+- [`mise generate install-script [FLAGS]`](/cli/generate/install-script.md)
 - [`mise generate task-docs [FLAGS]`](/cli/generate/task-docs.md)
 - [`mise generate task-stubs [-d --dir <DIR>] [-m --mise-bin <MISE_BIN>]`](/cli/generate/task-stubs.md)
 - [`mise generate tool-stub [FLAGS] <OUTPUT>`](/cli/generate/tool-stub.md)
@@ -232,7 +199,7 @@
 - [`mise sync <SUBCOMMAND>`](/cli/sync.md)
 - [`mise sync node [FLAGS]`](/cli/sync/node.md)
 - [`mise sync python [--pyenv] [--uv]`](/cli/sync/python.md)
-- [`mise sync ruby [--brew]`](/cli/sync/ruby.md)
+- [`mise sync ruby <--brew>`](/cli/sync/ruby.md)
 - [`mise tasks [FLAGS] [TASK] <SUBCOMMAND>`](/cli/tasks.md)
 - [`mise tasks add [FLAGS] <TASK> [-- RUN]…`](/cli/tasks/add.md)
 - [`mise tasks deps [FLAGS] [TASKS]…`](/cli/tasks/deps.md)
@@ -240,7 +207,7 @@
 - [`mise tasks graph [FLAGS]`](/cli/tasks/graph.md)
 - [`mise tasks info [-J --json] <TASK>`](/cli/tasks/info.md)
 - [`mise tasks ls [FLAGS]`](/cli/tasks/ls.md)
-- [`mise tasks run [FLAGS] [TASK] [ARGS]…`](/cli/tasks/run.md)
+- [`mise tasks run [FLAGS]`](/cli/tasks/run.md)
 - [`mise tasks validate [--errors-only] [--json] [TASKS]…`](/cli/tasks/validate.md)
 - [`mise test-tool [FLAGS] [TOOLS]…`](/cli/test-tool.md)
 - [`mise token <SUBCOMMAND>`](/cli/token.md)

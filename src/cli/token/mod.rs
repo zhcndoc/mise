@@ -3,14 +3,14 @@ pub(crate) mod github;
 mod gitlab;
 
 /// Display git provider tokens mise will use
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct Token {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(crate) struct Token {
+    #[usage(subcommand)]
     subcommand: Commands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     /// Forgejo token
     Forgejo(forgejo::Forgejo),
@@ -21,7 +21,7 @@ enum Commands {
 }
 
 impl Token {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(crate) async fn run(self) -> eyre::Result<()> {
         match self.subcommand {
             Commands::Forgejo(cmd) => cmd.run(),
             Commands::Github(cmd) => cmd.run(),

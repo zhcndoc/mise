@@ -30,7 +30,7 @@ use std::sync::Arc;
 use xx::regex;
 
 #[derive(Debug)]
-pub struct UnifiedGitBackend {
+pub(crate) struct UnifiedGitBackend {
     ba: Arc<BackendArg>,
 }
 
@@ -306,7 +306,7 @@ fn is_slsa_format_issue(e: &crate::github::sigstore::AttestationError) -> bool {
 }
 
 /// Returns install-time-only option keys for GitHub/GitLab backend.
-pub fn install_time_option_keys() -> Vec<String> {
+pub(crate) fn install_time_option_keys() -> Vec<String> {
     vec![
         "asset_pattern".into(),
         "additional_asset_patterns".into(),
@@ -500,7 +500,7 @@ impl Backend for UnifiedGitBackend {
                     version: self.strip_version_prefix(&r.tag_name, &opts),
                     created_at: Some(r.created_at),
                     release_url: Some(format!("{}/releases/tag/{}", web_url_base, r.tag_name)),
-                    prerelease: r.prerelease,
+                    prerelease: Some(r.prerelease),
                     ..Default::default()
                 })
                 .collect()
@@ -520,7 +520,7 @@ impl Backend for UnifiedGitBackend {
                         version: self.strip_version_prefix(&r.tag_name, &opts),
                         created_at,
                         release_url: Some(format!("{}/releases/tag/{}", web_url_base, r.tag_name)),
-                        prerelease: r.prerelease,
+                        prerelease: Some(r.prerelease),
                         ..Default::default()
                     }
                 })
@@ -599,7 +599,7 @@ impl Backend for UnifiedGitBackend {
             .map(|(tag, created_at, prerelease)| VersionInfo {
                 version: self.strip_version_prefix(&tag, &opts),
                 created_at: Some(created_at),
-                prerelease,
+                prerelease: Some(prerelease),
                 ..Default::default()
             }))
     }
@@ -933,7 +933,7 @@ impl Backend for UnifiedGitBackend {
 }
 
 impl UnifiedGitBackend {
-    pub fn from_arg(ba: BackendArg) -> Self {
+    pub(crate) fn from_arg(ba: BackendArg) -> Self {
         Self { ba: Arc::new(ba) }
     }
 
@@ -1170,9 +1170,9 @@ impl UnifiedGitBackend {
             asset.url_api.clone()
         };
         let headers = if self.is_gitlab() {
-            gitlab::get_headers(&download_url)
+            gitlab::get_headers(&download_url, &api_url)
         } else if self.is_forgejo() {
-            forgejo::get_headers(&download_url)
+            forgejo::get_headers(&download_url, &api_url)
         } else {
             github::get_headers(&download_url)?
         };
@@ -1386,10 +1386,16 @@ impl UnifiedGitBackend {
 
         // Store the asset URL and digest (if available) in the tool version
         let platform_key = self.get_platform_key();
+        let lockfile_has_checksum = tv
+            .lock_platforms
+            .get(&platform_key)
+            .is_some_and(|p| p.checksum.is_some());
         let platform_info = tv.lock_platforms.entry(platform_key).or_default();
         platform_info.url = Some(asset.url.clone());
         platform_info.url_api = (!asset.url_api.is_empty()).then(|| asset.url_api.clone());
-        if let Some(digest) = &asset.digest {
+        if let Some(digest) = &asset.digest
+            && !lockfile_has_checksum
+        {
             debug!("using GitHub API digest for checksum verification");
             platform_info.checksum = Some(digest.clone());
         }
@@ -1413,9 +1419,9 @@ impl UnifiedGitBackend {
         };
 
         let headers = if self.is_gitlab() {
-            gitlab::get_headers(&url)
+            gitlab::get_headers(&url, &opts.api_url())
         } else if self.is_forgejo() {
-            forgejo::get_headers(&url)
+            forgejo::get_headers(&url, &opts.api_url())
         } else {
             github::get_headers(&url)?
         };
@@ -1451,6 +1457,12 @@ impl UnifiedGitBackend {
             // Still check that the recorded provenance type's setting is enabled —
             // disabling a verification setting with a provenance-bearing lockfile is a downgrade.
             self.ensure_provenance_setting_enabled(tv, &platform_key)?;
+        } else if !force_verify && locked_provenance.is_none() && lockfile_has_checksum {
+            debug!(
+                "skipping provenance detection for {} \
+                 (lockfile has checksum but no provenance)",
+                tv.style()
+            );
         } else {
             let provenance_result = self
                 .verify_attestations_or_slsa(
@@ -1502,12 +1514,15 @@ impl UnifiedGitBackend {
             .and_then(|platform| platform.additional_artifacts.get(index))
             .cloned()
             .unwrap_or_default();
+        let lockfile_has_checksum = artifact_info.checksum.is_some();
+        let has_lockfile_integrity = artifact_info.has_checksum_and_verified_provenance();
         artifact_info.url = asset.url.clone();
         artifact_info.url_api = (!asset.url_api.is_empty()).then(|| asset.url_api.clone());
-        if let Some(digest) = &asset.digest {
+        if let Some(digest) = &asset.digest
+            && !lockfile_has_checksum
+        {
             artifact_info.checksum = Some(digest.clone());
         }
-        let has_lockfile_integrity = artifact_info.has_checksum_and_verified_provenance();
 
         let url = if asset.url_api.is_empty() {
             asset.url.clone()
@@ -1520,9 +1535,9 @@ impl UnifiedGitBackend {
             asset.url_api.clone()
         };
         let headers = if self.is_gitlab() {
-            gitlab::get_headers(&url)
+            gitlab::get_headers(&url, &opts.api_url())
         } else if self.is_forgejo() {
-            forgejo::get_headers(&url)
+            forgejo::get_headers(&url, &opts.api_url())
         } else {
             github::get_headers(&url)?
         };
@@ -1538,6 +1553,15 @@ impl UnifiedGitBackend {
             if let Some(provenance) = expected_provenance.as_ref() {
                 self.ensure_provenance_type_setting_enabled(tv, opts, provenance)?;
             }
+        } else if !Settings::get().force_provenance_verify()
+            && expected_provenance.is_none()
+            && lockfile_has_checksum
+        {
+            debug!(
+                "skipping provenance detection for additional asset {} \
+                 (lockfile has checksum but no provenance)",
+                asset.name
+            );
         } else {
             let provenance = self
                 .verify_attestations_or_slsa(

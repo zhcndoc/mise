@@ -5,20 +5,20 @@ use crate::tokens;
 ///
 /// Shows which token source mise would use, useful for debugging
 /// authentication issues. The token is masked by default.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Forgejo {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(super) struct Forgejo {
     /// Forgejo hostname
-    #[clap(default_value = "codeberg.org")]
+    #[usage(default = "codeberg.org")]
     host: String,
 
     /// Show the full unmasked token
-    #[clap(long)]
+    #[usage(long)]
     unmask: bool,
 }
 
 impl Forgejo {
-    pub fn run(self) -> eyre::Result<()> {
+    pub(super) fn run(self) -> eyre::Result<()> {
         match forgejo::resolve_token(&self.host) {
             Some((token, source)) => {
                 let display_token = if self.unmask {

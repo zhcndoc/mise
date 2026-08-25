@@ -24,7 +24,12 @@ run = [
 ]
 ```
 
-简单形式仍然适用，并且等价：
+`{ task }` 和 `{ tasks }` 是此任务的执行步骤，而不是
+[`depends`](#depends)。它们仍会携带各自的依赖运行。
+`mise tasks deps` 不会将它们作为图边包含在内。
+请参阅 [`mise tasks deps`](/cli/tasks/deps.html)。
+
+简单形式仍然有效，并且与以下形式等价：
 
 ```mise-toml
 tasks.a = "echo hello"
@@ -92,6 +97,9 @@ run = "cargo build"
 - **类型**：`string | (string | string[] | { task: string, args?: string[], env?: { [key: string]: string }, optional?: bool })[]`
 
 必须在此任务之前运行的任务。这是一个任务名称或别名列表。参数可以传递给任务，例如：`depends = ["build --release"]`。如果多个任务具有相同的依赖项，该依赖项只会运行一次。mise 会通过使用 `depends` 和相关属性，尽可能并行地运行它能够运行的内容（最多到 [`--jobs`](/cli/run)）。
+
+[`mise tasks deps`](/cli/tasks/deps.html) 可视化此声明的图
+（`depends`、`wait_for`、`depends_post`），而不是 `run` 内部的任务引用。
 
 ```mise-toml
 [tasks.build]
@@ -186,7 +194,7 @@ run = 'echo "deploying {{usage.app}}"'
 [tasks.deploy]
 usage = 'arg "<app>"'
 depends = ["build {{usage.app}}"]
-run = 'echo "deploying {{usage.app}}'"
+run = 'echo "deploying {{usage.app}}"'
 ```
 
 以及标志：
@@ -352,9 +360,9 @@ run = "deploy.sh ${usage_environment}"
 - **类型**: `bool`
 - **默认值**: `false`
 
-将任务直接连接到 shell 的 stdin/stdout/stderr。这对于需要以 mise 的正常任务处理方式不支持的方式接受输入或输出的任务很有用。不建议使用，因为当 mise 并行运行任务时，这会严重干扰输出。使用此功能时，请确保没有其他任务同时运行。
+将任务直接连接到 shell 的 stdin/stdout/stderr。这对于需要以 mise 的常规任务处理不支持的方式接受输入或输出的任务很有用。
 
-将来我们可能会有一个类似 `single = true` 的属性，或者其他能防止多个任务同时运行的东西。如果这听起来有用，请搜索/提交一个工单。
+原始命令会在其运行期间持有独占锁，因此 mise 不会同时运行其他命令，你也无需自行让其他任务避开它。锁是按命令而不是按任务获取的，因此两个原始任务仍可以在各自的命令之间交替运行。如果你需要整个任务在不中断的情况下运行，请提交或查找一个类似 `single = true` 的属性工单。
 
 ### `raw_args`
 
@@ -1204,7 +1212,9 @@ includes = [
 ]
 ```
 
-对于本地任务和单仓库任务发现，mise 使用最近的、定义了 `task_config.includes` 的配置文件。当父级设置了 `task_config.cascade = true` 时，其 includes 会被继承，直到某个子级定义自己的 includes。子配置的 `includes` 会替换该目录的默认 includes 以及任何继承的 `includes`。
+对于本地任务和单体仓库任务发现，mise 使用最近的、定义了 `task_config.includes` 的配置文件。当父级设置了 `task_config.cascade = true` 时，其 includes 会被继承，直到某个子级定义自己的 includes。子级配置的 `includes` 会替换该目录的默认值和所有继承的 `includes`。
+
+用户全局配置文件构成一个配置作用域，系统配置文件也构成一个配置作用域。在每个作用域内，定义了 `task_config.includes` 的最高优先级配置会替换低优先级的 includes 和默认目录。用户全局作用域和系统作用域彼此独立。用户全局任务会替换同名的系统任务，但不会继承系统任务元数据；其他名称的系统任务仍然可用。
 
 全局配置文件会被独立加载，因此每个全局配置文件使用自身的 `task_config.includes`；如果未设置 `includes`，则使用默认目录。
 
@@ -1280,6 +1290,23 @@ URL 格式：`git::<protocol>://<url>//<path>?ref=<ref>`
 
 包含的 `.toml` 文件使用[任务 toml 文件格式](#task_config.includes)（键是任务名称——不存在 `[tasks.…]` 前缀）。仓库会被克隆并缓存在 `MISE_CACHE_DIR/remote-git-tasks-cache` 中。包含内容中的任务会像本地任务一样加载。你可以通过 `MISE_TASK_REMOTE_NO_CACHE=true` 或 `--no-cache` 标志禁用缓存。
 
+### `task_config.excludes` {#task_config.excludes}
+
+设置要从文件任务发现中排除的路径或 glob 模式。相对条目从配置根目录解析，可以排除单个文件、整个目录，或 glob 匹配的文件：
+
+```toml
+[task_config]
+excludes = [
+    ".mise/tasks/python/pyproject.toml",
+    ".mise/tasks/generated",
+    ".mise/tasks/**/fixtures/*.toml",
+]
+```
+
+定义了 `task_config.excludes` 的最近配置会替换继承的排除项。将其设置为空数组，可以清除通过 `task_config.cascade = true` 继承的排除项。排除项同时适用于默认任务目录和通过 `task_config.includes` 选定的路径。
+
+任务目录会递归搜索。可执行文件会作为文件任务加载，所有不是 mise 配置文件的 `.toml` 文件都会使用[包含的任务 TOML 格式](#task_config.includes)加载。当其他 TOML 文件（例如 `pyproject.toml` 或 `Cargo.toml`）必须位于任务目录中时，请使用 `task_config.excludes`。
+
 ## 单体仓库支持
 
 mise 通过目标路径语法支持单体仓库风格的任务组织。通过在根目录的 `mise.toml` 中设置 `monorepo_root = true` 来启用它。
@@ -1295,7 +1322,7 @@ mise 通过目标路径语法支持单体仓库风格的任务组织。通过在
 
 ## `redactions` <Badge type="warning" text="实验性" />
 
-- **类型**: `string[]`
+- **类型**：`string[]`
 
 Redactions 是一种从任务输出中隐藏敏感信息的方式。这对于诸如 API 密钥、密码或其他你不想意外泄露到日志或其他输出中的敏感信息很有用。
 

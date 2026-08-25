@@ -8,26 +8,26 @@ use crate::toolset::ToolsetBuilder;
 /// Display the installation path for a tool
 ///
 /// The tool must be installed for this to work.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Where {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Where {
     /// Tool(s) to look up
     /// e.g.: ruby@3
     /// if "@<PREFIX>" is specified, it will show the latest installed version
     /// that matches the prefix
     /// otherwise, it will show the current, active installed version
-    #[clap(required = true, value_name = "TOOL@VERSION", verbatim_doc_comment)]
+    #[usage(value_name = "TOOL@VERSION", verbatim_doc_comment)]
     tool: ToolArg,
 
     /// the version prefix to use when querying the latest version
     /// same as the first argument after the "@"
     /// used for asdf compatibility
-    #[clap(hide = true, verbatim_doc_comment)]
+    #[usage(hide = true, verbatim_doc_comment)]
     asdf_version: Option<String>,
 }
 
 impl Where {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let tvr = match self.tool.tvr {
             Some(tvr) => tvr,

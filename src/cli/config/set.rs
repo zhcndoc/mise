@@ -3,14 +3,13 @@ use crate::config::settings::{SETTINGS_META, SettingsType};
 use crate::config::{ConfigPathOptions, resolve_target_config_path, top_toml_config};
 use crate::file::display_path;
 use crate::toml::dedup_toml_array;
-use clap::ValueEnum;
 use eyre::bail;
 use std::path::PathBuf;
 
 /// Set the value of a setting in a mise.toml file
-#[derive(Debug, clap::Args)]
-#[clap(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ConfigSet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ConfigSet {
     /// The path of the config to display
     pub key: String,
 
@@ -22,33 +21,33 @@ pub struct ConfigSet {
     /// Can be a file path or directory. If a directory is provided, the config file in that directory is used.
     ///
     /// If not provided, the nearest mise.toml file will be used
-    #[clap(short, long, visible_alias = "path", value_hint = clap::ValueHint::AnyPath)]
+    #[usage(short, long, visible_alias = "path", value_hint = usage_rs::ValueHint::AnyPath)]
     pub file: Option<PathBuf>,
 
-    #[clap(value_enum, short, long, default_value_t)]
+    #[usage(value_enum, short, long, default = "infer")]
     pub type_: TomlValueTypes,
 }
 
-#[derive(ValueEnum, Default, Clone, Debug)]
-pub enum TomlValueTypes {
+#[derive(usage_rs::ValueEnum, Default, Clone, Debug)]
+pub(super) enum TomlValueTypes {
     #[default]
     Infer,
-    #[value()]
+    #[usage()]
     String,
-    #[value()]
+    #[usage()]
     Integer,
-    #[value()]
+    #[usage()]
     Float,
-    #[value()]
+    #[usage()]
     Bool,
-    #[value()]
+    #[usage()]
     List,
-    #[value()]
+    #[usage()]
     Set,
 }
 
 impl ConfigSet {
-    pub fn run(self) -> eyre::Result<()> {
+    pub(super) fn run(self) -> eyre::Result<()> {
         let (full_key, value) = match self.value {
             Some(v) => (self.key, v),
             None => {

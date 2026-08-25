@@ -31,19 +31,19 @@ use crate::config::Settings;
 use crate::ui::progress_report::SingleReport;
 use crate::{dirs, env};
 
-pub fn open<P: AsRef<Path>>(path: P) -> Result<File> {
+pub(crate) fn open<P: AsRef<Path>>(path: P) -> Result<File> {
     let path = path.as_ref();
     trace!("open {}", display_path(path));
     File::open(path).wrap_err_with(|| format!("failed open: {}", display_path(path)))
 }
 
-pub fn read<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
+pub(crate) fn read<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
     let path = path.as_ref();
     trace!("cat {}", display_path(path));
     fs::read(path).wrap_err_with(|| format!("failed read: {}", display_path(path)))
 }
 
-pub fn size<P: AsRef<Path>>(path: P) -> Result<u64> {
+pub(crate) fn size<P: AsRef<Path>>(path: P) -> Result<u64> {
     let path = path.as_ref();
     trace!("du -b {}", display_path(path));
     path.metadata()
@@ -51,7 +51,7 @@ pub fn size<P: AsRef<Path>>(path: P) -> Result<u64> {
         .wrap_err_with(|| format!("failed size: {}", display_path(path)))
 }
 
-pub fn append<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
+pub(crate) fn append<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
     let path = path.as_ref();
     trace!("append {}", display_path(path));
     fs::OpenOptions::new()
@@ -141,7 +141,7 @@ fn with_io_hint(msg: String, path: &Path, err: &std::io::Error) -> String {
     }
 }
 
-pub fn remove_all<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_all<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     match path.metadata().map(|m| m.file_type()) {
         Ok(x) if x.is_symlink() || x.is_file() => {
@@ -172,7 +172,7 @@ pub fn remove_all<P: AsRef<Path>>(path: P) -> Result<()> {
 ///
 /// This remains a strict removal operation: if the directory is still non-empty after the
 /// retries are exhausted, the final error is returned to the caller.
-pub fn remove_all_with_retry<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_all_with_retry<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     retry_remove_all(|| remove_all(path))
 }
@@ -196,7 +196,7 @@ fn retry_remove_all(mut remove: impl FnMut() -> Result<()>) -> Result<()> {
     remove()
 }
 
-pub fn remove_file_or_dir<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_file_or_dir<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     match path.metadata().map(|m| m.file_type()) {
         Ok(x) if x.is_dir() => {
@@ -209,13 +209,13 @@ pub fn remove_file_or_dir<P: AsRef<Path>>(path: P) -> Result<()> {
     Ok(())
 }
 
-pub fn remove_file<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_file<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     trace!("rm {}", display_path(path));
     fs::remove_file(path).wrap_err_with(|| format!("failed rm: {}", display_path(path)))
 }
 
-pub async fn remove_file_async_if_exists<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) async fn remove_file_async_if_exists<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     trace!("rm {}", display_path(path));
     match tokio::fs::remove_file(path).await {
@@ -225,7 +225,7 @@ pub async fn remove_file_async_if_exists<P: AsRef<Path>>(path: P) -> Result<()> 
     }
 }
 
-pub fn remove_dir<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_dir<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     (|| -> Result<()> {
         if path.exists() && is_empty_dir(path)? {
@@ -237,7 +237,10 @@ pub fn remove_dir<P: AsRef<Path>>(path: P) -> Result<()> {
     .wrap_err_with(|| format!("failed to remove_dir: {}", display_path(path)))
 }
 
-pub fn remove_dir_ignore<P: AsRef<Path>>(path: P, is_empty_ignore_files: Vec<&str>) -> Result<()> {
+pub(crate) fn remove_dir_ignore<P: AsRef<Path>>(
+    path: P,
+    is_empty_ignore_files: Vec<&str>,
+) -> Result<()> {
     let path = path.as_ref();
     (|| -> Result<()> {
         if path.exists() && is_empty_dir_ignore(path, is_empty_ignore_files)? {
@@ -249,14 +252,17 @@ pub fn remove_dir_ignore<P: AsRef<Path>>(path: P, is_empty_ignore_files: Vec<&st
     .wrap_err_with(|| format!("failed to remove_dir: {}", display_path(path)))
 }
 
-pub fn remove_all_with_warning<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn remove_all_with_warning<P: AsRef<Path>>(path: P) -> Result<()> {
     remove_all(&path).map_err(|e| {
         warn!("failed to remove {}: {}", path.as_ref().display(), e);
         e
     })
 }
 
-pub fn remove_all_with_progress<P: AsRef<Path>>(path: P, pr: &dyn SingleReport) -> Result<()> {
+pub(crate) fn remove_all_with_progress<P: AsRef<Path>>(
+    path: P,
+    pr: &dyn SingleReport,
+) -> Result<()> {
     let path = path.as_ref();
     if !path.exists() {
         return Ok(());
@@ -274,7 +280,7 @@ pub fn remove_all_with_progress<P: AsRef<Path>>(path: P, pr: &dyn SingleReport) 
 /// On Windows, retries transient failures (`ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION`)
 /// that commonly occur when antivirus or the OS still holds handles to files in the source
 /// directory (e.g. after extracting an archive).
-pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+pub(crate) fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     let from = from.as_ref();
     let to = to.as_ref();
     try_rename(from, to).wrap_err_with(|| {
@@ -326,7 +332,7 @@ fn do_rename(from: &Path, to: &Path) -> std::io::Result<()> {
 /// (`ErrorKind::CrossesDevices`) when `from` and `to` live on separate mounts (for example, when
 /// downloads are cached on one volume and installs are written to another). Directory fallbacks
 /// preserve symlinks and file/directory permissions.
-pub fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+pub(crate) fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     let from = from.as_ref();
     let to = to.as_ref();
 
@@ -353,7 +359,7 @@ pub fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     }
 }
 
-pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+pub(crate) fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     let from = from.as_ref();
     let to = to.as_ref();
     trace!("cp {} {}", from.display(), to.display());
@@ -373,7 +379,7 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
 ///
 /// A hard link needs both paths on one volume and a filesystem that supports them, so
 /// failing is an ordinary outcome rather than an error worth surfacing.
-pub fn hard_link_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+pub(crate) fn hard_link_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     let from = from.as_ref();
     let to = to.as_ref();
     match fs::hard_link(from, to) {
@@ -392,7 +398,7 @@ pub fn hard_link_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Resu
     }
 }
 
-pub fn copy_dir_all<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+pub(crate) fn copy_dir_all<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
     let from = from.as_ref();
     let to = to.as_ref();
     trace!("cp -r {} {}", from.display(), to.display());
@@ -405,7 +411,7 @@ pub fn copy_dir_all<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()
     })
 }
 
-pub fn copy_dir_all_preserve_symlinks(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn copy_dir_all_preserve_symlinks(from: &Path, to: &Path) -> Result<()> {
     trace!("cp -a {} {}", from.display(), to.display());
     let mut directory_permissions = vec![(to.to_path_buf(), fs::metadata(from)?.permissions())];
     for entry in WalkDir::new(from).follow_links(false).min_depth(1) {
@@ -431,19 +437,50 @@ pub fn copy_dir_all_preserve_symlinks(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
+pub(crate) fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
     let path = path.as_ref();
     trace!("write {}", display_path(path));
     fs::write(path, contents).wrap_err_with(|| format!("failed write: {}", display_path(path)))
 }
 
-/// Writes a complete replacement beside `path`, then atomically renames it into place.
+pub(crate) struct PreparedAtomicWrite {
+    temporary: tempfile::NamedTempFile,
+    target: PathBuf,
+    parent: PathBuf,
+}
+
+impl PreparedAtomicWrite {
+    /// Atomically renames this already-written replacement into place.
+    pub(crate) fn commit(self) -> Result<()> {
+        // The hint matters most here. `tempfile`'s persist does not get the extended-length path
+        // handling `std::fs` applies, so this is the operation that fails first as a path
+        // approaches `MAX_PATH` -- measured breaking at a 253-character target while `fs::rename`
+        // on the same tree succeeded at 415.
+        persist_atomic(self.temporary, &self.target).map_err(|e| {
+            let msg = format!("failed atomic write: {}", display_path(&self.target));
+            // Resolve the hint before `wrap_err` takes `e` by value: `downcast_ref` borrows it,
+            // and doing both in one expression leaves the borrow alive across the move.
+            let msg = match e.downcast_ref::<std::io::Error>() {
+                Some(io) => with_io_hint(msg, &self.target, io),
+                None => msg,
+            };
+            e.wrap_err(msg)
+        })?;
+        sync_dir(&self.parent)?;
+        Ok(())
+    }
+}
+
+/// Writes and syncs a complete replacement beside `path` without changing `path` yet.
 ///
 /// New files use ordinary write permissions subject to the process umask. Replacements preserve
 /// the destination's existing Unix permissions.
-pub fn write_atomic<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
+pub(crate) fn prepare_atomic_write<P: AsRef<Path>, C: AsRef<[u8]>>(
+    path: P,
+    contents: C,
+) -> Result<PreparedAtomicWrite> {
     let path = path.as_ref();
-    trace!("write_atomic {}", display_path(path));
+    trace!("prepare_atomic_write {}", display_path(path));
     let target = atomic_write_target(path)?;
     let path = target.as_path();
     let parent = path
@@ -478,22 +515,19 @@ pub fn write_atomic<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Res
     temporary.write_all(contents.as_ref())?;
 
     temporary.as_file_mut().sync_all()?;
-    // The hint matters most here. `tempfile`'s persist does not get the extended-length path
-    // handling `std::fs` applies, so this is the operation that fails first as a path approaches
-    // `MAX_PATH` -- measured breaking at a 253-character target while `fs::rename` on the same
-    // tree succeeded at 415.
-    persist_atomic(temporary, path).map_err(|e| {
-        let msg = format!("failed atomic write: {}", display_path(path));
-        // Resolve the hint before `wrap_err` takes `e` by value: `downcast_ref` borrows it, and
-        // doing both in one expression leaves the borrow alive across the move.
-        let msg = match e.downcast_ref::<std::io::Error>() {
-            Some(io) => with_io_hint(msg, path, io),
-            None => msg,
-        };
-        e.wrap_err(msg)
-    })?;
-    sync_dir(parent)?;
-    Ok(())
+    let parent = parent.to_path_buf();
+    Ok(PreparedAtomicWrite {
+        temporary,
+        target,
+        parent,
+    })
+}
+
+/// Writes a complete replacement beside `path`, then atomically renames it into place.
+pub(crate) fn write_atomic<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
+    let path = path.as_ref();
+    trace!("write_atomic {}", display_path(path));
+    prepare_atomic_write(path, contents)?.commit()
 }
 
 pub(crate) fn atomic_write_target(path: &Path) -> Result<PathBuf> {
@@ -550,7 +584,10 @@ fn should_retry_atomic_persist(_err: &std::io::Error) -> bool {
     false
 }
 
-pub async fn write_async<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
+pub(crate) async fn write_async<P: AsRef<Path>, C: AsRef<[u8]>>(
+    path: P,
+    contents: C,
+) -> Result<()> {
     let path = path.as_ref();
     trace!("write {}", display_path(path));
     tokio::fs::write(path, contents)
@@ -558,7 +595,7 @@ pub async fn write_async<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -
         .wrap_err_with(|| format!("failed write: {}", display_path(path)))
 }
 
-pub fn read_to_string<P: AsRef<Path>>(path: P) -> Result<String> {
+pub(crate) fn read_to_string<P: AsRef<Path>>(path: P) -> Result<String> {
     let path = path.as_ref();
     trace!("cat {}", path.display_user());
     fs::read_to_string(path)
@@ -575,7 +612,7 @@ pub(crate) const UTF8_BOM_BYTES: [u8; 3] = [0xef, 0xbb, 0xbf];
 /// help: U+FEFF does not carry the Unicode `White_Space` property, so a mark left in front of a
 /// `#!` or a `#MISE` defeats every prefix test silently. The writers that leave one there are
 /// ordinary on Windows -- see [`decode_text`], which names them.
-pub fn strip_utf8_bom(s: &str) -> &str {
+pub(crate) fn strip_utf8_bom(s: &str) -> &str {
     s.strip_prefix('\u{feff}').unwrap_or(s)
 }
 
@@ -589,7 +626,7 @@ pub fn strip_utf8_bom(s: &str) -> &str {
 /// Only a BOM switches the encoding. Detecting UTF-16 without one means guessing from the density
 /// of NUL bytes, which can misfire on binary input; `Out-File` always writes a BOM, so the guess
 /// buys nothing here. Input with no BOM is decoded as UTF-8, exactly as before.
-pub fn decode_text(bytes: &[u8]) -> Result<String> {
+pub(crate) fn decode_text(bytes: &[u8]) -> Result<String> {
     fn from_utf16(bytes: &[u8], to_u16: fn([u8; 2]) -> u16, label: &str) -> Result<String> {
         if !bytes.len().is_multiple_of(2) {
             bail!(
@@ -622,14 +659,14 @@ pub fn decode_text(bytes: &[u8]) -> Result<String> {
 /// and lets it override the declared charset. `std::fs::read_to_string` has no such step, and that
 /// asymmetry is the only reason this function exists — reaching for it on an `HTTP.get_text` result
 /// would be redundant.
-pub fn read_to_string_bom<P: AsRef<Path>>(path: P) -> Result<String> {
+pub(crate) fn read_to_string_bom<P: AsRef<Path>>(path: P) -> Result<String> {
     let path = path.as_ref();
     trace!("cat {}", path.display_user());
     let bytes = fs::read(path).wrap_err_with(|| format!("failed read: {}", path.display_user()))?;
     decode_text(&bytes).wrap_err_with(|| format!("failed to decode {}", path.display_user()))
 }
 
-pub async fn read_to_string_async<P: AsRef<Path>>(path: P) -> Result<String> {
+pub(crate) async fn read_to_string_async<P: AsRef<Path>>(path: P) -> Result<String> {
     let path = path.as_ref();
     trace!("cat {}", path.display_user());
     tokio::fs::read_to_string(path)
@@ -637,7 +674,7 @@ pub async fn read_to_string_async<P: AsRef<Path>>(path: P) -> Result<String> {
         .wrap_err_with(|| format!("failed read_to_string: {}", path.display_user()))
 }
 
-pub fn create(path: &Path) -> Result<File> {
+pub(crate) fn create(path: &Path) -> Result<File> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
     }
@@ -645,7 +682,7 @@ pub fn create(path: &Path) -> Result<File> {
     File::create(path).wrap_err_with(|| format!("failed create: {}", display_path(path)))
 }
 
-pub fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
     static LOCK: Lazy<Mutex<u8>> = Lazy::new(Default::default);
     let _lock = LOCK.lock().unwrap();
 
@@ -668,11 +705,11 @@ pub fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
 ///
 /// The separator step lives here rather than in [`PathExt::display_user`] because that one also
 /// feeds strings mise *matches* rather than shows — see [`crate::path::settle_display_separators`].
-pub fn display_path<P: AsRef<Path>>(path: P) -> String {
+pub(crate) fn display_path<P: AsRef<Path>>(path: P) -> String {
     crate::path::settle_display_separators(path.as_ref().display_user())
 }
 
-pub fn display_filename<P: AsRef<Path>>(path: P) -> String {
+pub(crate) fn display_filename<P: AsRef<Path>>(path: P) -> String {
     let path = path.as_ref();
     path.file_name()
         .unwrap_or(path.as_os_str())
@@ -680,7 +717,7 @@ pub fn display_filename<P: AsRef<Path>>(path: P) -> String {
         .into_owned()
 }
 
-pub fn display_rel_path<P: AsRef<Path>>(path: P) -> String {
+pub(crate) fn display_rel_path<P: AsRef<Path>>(path: P) -> String {
     let path = path.as_ref();
     match path.strip_prefix(dirs::CWD.as_ref().unwrap()) {
         // Both halves take the host's separator. Hardcoding `./` and printing the remainder raw
@@ -693,7 +730,7 @@ pub fn display_rel_path<P: AsRef<Path>>(path: P) -> String {
 
 /// replaces $HOME in a string with "~" and $PATH with "$PATH", generally used to clean up output
 /// after it is rendered
-pub fn replace_paths_in_string<S: Display>(input: S) -> String {
+pub(crate) fn replace_paths_in_string<S: Display>(input: S) -> String {
     let home = env::HOME.to_string_lossy().to_string();
     input.to_string().replace(&home, "~")
 }
@@ -717,7 +754,7 @@ pub fn replace_paths_in_string<S: Display>(input: S) -> String {
 /// `C:/mise/data` stays exactly as typed. This is a tilde expander, not a path
 /// normalizer — one caller passes glob patterns through it
 /// (`config::expand_task_include`).
-pub fn replace_path<P: AsRef<Path>>(path: P) -> PathBuf {
+pub(crate) fn replace_path<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
     match path.strip_prefix("~/") {
         Ok(rest) => {
@@ -746,7 +783,7 @@ pub fn replace_path<P: AsRef<Path>>(path: P) -> PathBuf {
 /// This is the right comparator for "is this PATH entry the shims
 /// directory?" checks, where a false negative leads to mise's shim being
 /// inherited by a child process and recursing infinitely.
-pub fn paths_eq(a: &Path, b: &Path) -> bool {
+pub(crate) fn paths_eq(a: &Path, b: &Path) -> bool {
     #[cfg(any(windows, target_os = "macos"))]
     {
         let normalize =
@@ -761,7 +798,7 @@ pub fn paths_eq(a: &Path, b: &Path) -> bool {
     }
 }
 
-pub fn touch_file(file: &Path) -> Result<()> {
+pub(crate) fn touch_file(file: &Path) -> Result<()> {
     if !file.exists() {
         create(file)?;
         return Ok(());
@@ -772,7 +809,7 @@ pub fn touch_file(file: &Path) -> Result<()> {
         .wrap_err_with(|| format!("failed to touch file: {}", display_path(file)))
 }
 
-pub fn touch_dir(dir: &Path) -> Result<()> {
+pub(crate) fn touch_dir(dir: &Path) -> Result<()> {
     trace!("touch {}", dir.display());
     let now = FileTime::now();
     set_file_times(dir, now, now)
@@ -796,7 +833,7 @@ pub fn touch_dir(dir: &Path) -> Result<()> {
 /// On Unix systems, returns an error if the directory cannot be opened or synced.
 /// On Windows, always succeeds.
 #[cfg(unix)]
-pub fn sync_dir<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn sync_dir<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
     trace!("sync {}", display_path(path));
     let dir = File::open(path)
@@ -806,19 +843,19 @@ pub fn sync_dir<P: AsRef<Path>>(path: P) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub fn sync_dir<P: AsRef<Path>>(_path: P) -> Result<()> {
+pub(crate) fn sync_dir<P: AsRef<Path>>(_path: P) -> Result<()> {
     // Not implemented on Windows
     Ok(())
 }
 
-pub fn modified_duration(path: &Path) -> Result<Duration> {
+pub(crate) fn modified_duration(path: &Path) -> Result<Duration> {
     let metadata = path.metadata()?;
     let modified = metadata.modified()?;
     let duration = modified.elapsed().unwrap_or_default();
     Ok(duration)
 }
 
-pub fn find_up<FN: AsRef<str>>(from: &Path, filenames: &[FN]) -> Option<PathBuf> {
+pub(crate) fn find_up<FN: AsRef<str>>(from: &Path, filenames: &[FN]) -> Option<PathBuf> {
     let mut current = from.to_path_buf();
     loop {
         for filename in filenames {
@@ -833,7 +870,7 @@ pub fn find_up<FN: AsRef<str>>(from: &Path, filenames: &[FN]) -> Option<PathBuf>
     }
 }
 
-pub fn dir_subdirs(dir: &Path) -> Result<BTreeSet<String>> {
+pub(crate) fn dir_subdirs(dir: &Path) -> Result<BTreeSet<String>> {
     let mut output = Default::default();
 
     if !dir.exists() {
@@ -851,7 +888,7 @@ pub fn dir_subdirs(dir: &Path) -> Result<BTreeSet<String>> {
     Ok(output)
 }
 
-pub fn ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
+pub(crate) fn ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
     let mut output = Default::default();
 
     if !dir.is_dir() {
@@ -866,7 +903,7 @@ pub fn ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
     Ok(output)
 }
 
-pub fn recursive_ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
+pub(crate) fn recursive_ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
     if !dir.is_dir() {
         return Ok(Default::default());
     }
@@ -880,7 +917,7 @@ pub fn recursive_ls(dir: &Path) -> Result<BTreeSet<PathBuf>> {
 }
 
 #[cfg(unix)]
-pub fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
+pub(crate) fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
     trace!("ln -sf {} {}", target.display(), link.display());
     // Create the symlink at a unique temporary name in the same directory, then
     // atomically rename it over `link`. rename(2) replaces an existing path in a
@@ -911,13 +948,13 @@ pub fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 #[cfg(unix)]
-pub fn make_symlink_or_copy(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn make_symlink_or_copy(target: &Path, link: &Path) -> Result<()> {
     make_symlink(target, link)?;
     Ok(())
 }
 
 #[cfg(windows)]
-pub fn make_symlink_or_copy(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn make_symlink_or_copy(target: &Path, link: &Path) -> Result<()> {
     copy(target, link)?;
     Ok(())
 }
@@ -960,7 +997,7 @@ fn create_windows_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-pub fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
+pub(crate) fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
     if let Err(err) = create_windows_dir_link(target, link) {
         if err.kind() == std::io::ErrorKind::AlreadyExists {
             remove_symlink_or_junction(link)?;
@@ -976,7 +1013,7 @@ pub fn make_symlink(target: &Path, link: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 #[cfg(windows)]
-pub fn make_symlink_or_file(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn make_symlink_or_file(target: &Path, link: &Path) -> Result<()> {
     trace!("ln -sf {} {}", target.display(), link.display());
     if link.is_file() || link.is_symlink() {
         // remove existing file if exists
@@ -986,7 +1023,7 @@ pub fn make_symlink_or_file(target: &Path, link: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_symlink(link: &Path) -> Result<Option<PathBuf>> {
+pub(crate) fn resolve_symlink(link: &Path) -> Result<Option<PathBuf>> {
     // Windows symlink are write in file currently
     // may be changed to symlink in the future
     if link.is_symlink() {
@@ -998,27 +1035,27 @@ pub fn resolve_symlink(link: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
-pub fn is_symlink_to(link: &Path, target: &Path) -> bool {
+pub(crate) fn is_symlink_to(link: &Path, target: &Path) -> bool {
     is_symlink_or_junction(link) && same_file::is_same_file(link, target).unwrap_or(false)
 }
 
 #[cfg(unix)]
-pub fn is_symlink_or_junction(path: &Path) -> bool {
+pub(crate) fn is_symlink_or_junction(path: &Path) -> bool {
     path.is_symlink()
 }
 
 #[cfg(windows)]
-pub fn is_symlink_or_junction(path: &Path) -> bool {
+pub(crate) fn is_symlink_or_junction(path: &Path) -> bool {
     path.is_symlink() || junction::get_target(path).is_ok()
 }
 
 #[cfg(unix)]
-pub fn make_symlink_or_file(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn make_symlink_or_file(target: &Path, link: &Path) -> Result<()> {
     make_symlink(target, link)?;
     Ok(())
 }
 
-pub fn is_symlink_target_within(link: &Path, root: &Path) -> Result<bool> {
+pub(crate) fn is_symlink_target_within(link: &Path, root: &Path) -> Result<bool> {
     let Some(target) = dir_link_target(link)? else {
         return Ok(false);
     };
@@ -1202,7 +1239,7 @@ fn resolve_relative_link_target(link: &Path, target: PathBuf) -> PathBuf {
 }
 
 #[cfg(unix)]
-pub fn remove_symlink_or_junction(link: &Path) -> Result<()> {
+pub(crate) fn remove_symlink_or_junction(link: &Path) -> Result<()> {
     // POSIX has no standard unlink-by-handle operation, so a concurrent replacement can still
     // occur between this check and remove_file. The latter cannot remove directories; callers
     // must keep the parent directory protected from untrusted writers.
@@ -1214,7 +1251,7 @@ pub fn remove_symlink_or_junction(link: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub fn remove_symlink_or_junction(link: &Path) -> Result<()> {
+pub(crate) fn remove_symlink_or_junction(link: &Path) -> Result<()> {
     let link_handle = open_link_for_removal(link)?;
     remove_open_link(link_handle)
         .wrap_err_with(|| format!("failed to remove link or junction: {}", display_path(link)))
@@ -1282,26 +1319,8 @@ fn remove_open_link(file: File) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn remove_symlinks_with_target_prefix(
-    symlink_dir: &Path,
-    target_prefix: &Path,
-) -> Result<Vec<PathBuf>> {
-    if !symlink_dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut removed = vec![];
-    for entry in symlink_dir.read_dir()? {
-        let path = entry?.path();
-        if is_symlink_target_within(&path, target_prefix)? {
-            remove_symlink_or_junction(&path)?;
-            removed.push(path);
-        }
-    }
-    Ok(removed)
-}
-
 #[cfg(unix)]
-pub fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     if let Ok(metadata) = path.metadata() {
         return metadata.permissions().mode() & 0o111 != 0;
     }
@@ -1309,7 +1328,7 @@ pub fn is_executable(path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-pub fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     if !path.is_file() {
         return false;
     }
@@ -1325,12 +1344,12 @@ pub fn is_executable(path: &Path) -> bool {
 /// question by different rules, so the remedy differs too. `chmod +x` is not merely unavailable on
 /// Windows — it is the wrong instruction, since the Windows branch never looks at a permission bit.
 #[cfg(unix)]
-pub fn make_executable_hint(path: &Path) -> String {
+pub(crate) fn make_executable_hint(path: &Path) -> String {
     format!("Run: chmod +x {}", display_path(path))
 }
 
 #[cfg(windows)]
-pub fn make_executable_hint(path: &Path) -> String {
+pub(crate) fn make_executable_hint(path: &Path) -> String {
     format!(
         "Add a shebang line to {}, or give it one of these extensions: {}",
         display_path(path),
@@ -1342,7 +1361,7 @@ pub fn make_executable_hint(path: &Path) -> String {
 }
 
 #[cfg(windows)]
-pub fn has_known_executable_extension(path: &Path) -> bool {
+pub(crate) fn has_known_executable_extension(path: &Path) -> bool {
     path.extension().map_or(
         Settings::get()
             .windows_executable_extensions
@@ -1371,7 +1390,7 @@ pub fn has_known_executable_extension(path: &Path) -> bool {
 /// to can run a UTF-16 script, so treating one as a task would only trade silence for a
 /// confusing failure at exec time.
 #[cfg(windows)]
-pub fn has_shebang(path: &Path) -> bool {
+pub(crate) fn has_shebang(path: &Path) -> bool {
     std::fs::File::open(path)
         .and_then(|f| {
             use std::io::Read;
@@ -1426,8 +1445,8 @@ pub(crate) fn os_can_launch_extension(ext: &str) -> bool {
 /// Note that on Windows this never touches the filesystem — it is pure extension
 /// inspection, so it answers true for a `foo.exe` that does not exist. `is_executable`
 /// checks `is_file()` inline; this one does not. A lookup that walks candidate paths must
-/// compose the two, which is what `backend::is_spawnable` does.
-pub fn can_execute_directly(path: &Path) -> bool {
+/// compose the two, which is what [`is_spawnable`] does.
+pub(crate) fn can_execute_directly(path: &Path) -> bool {
     #[cfg(windows)]
     {
         has_known_executable_extension(path)
@@ -1442,8 +1461,16 @@ pub fn can_execute_directly(path: &Path) -> bool {
     }
 }
 
+/// True when the OS will accept `path` as the program argument of a spawn.
+pub(crate) fn is_spawnable(path: &Path) -> bool {
+    if cfg!(windows) && !path.is_file() {
+        return false;
+    }
+    can_execute_directly(path)
+}
+
 #[cfg(unix)]
-pub fn make_executable<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn make_executable<P: AsRef<Path>>(path: P) -> Result<()> {
     trace!("chmod +x {}", display_path(&path));
     let path = path.as_ref();
     let mut perms = path.metadata()?.permissions();
@@ -1465,12 +1492,12 @@ fn executable_mode(mode: u32) -> u32 {
 }
 
 #[cfg(windows)]
-pub fn make_executable<P: AsRef<Path>>(_path: P) -> Result<()> {
+pub(crate) fn make_executable<P: AsRef<Path>>(_path: P) -> Result<()> {
     Ok(())
 }
 
 #[cfg(unix)]
-pub async fn make_executable_async<P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) async fn make_executable_async<P: AsRef<Path>>(path: P) -> Result<()> {
     trace!("chmod +x {}", display_path(&path));
     let path = path.as_ref();
     let mut perms = path.metadata()?.permissions();
@@ -1481,11 +1508,11 @@ pub async fn make_executable_async<P: AsRef<Path>>(path: P) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub async fn make_executable_async<P: AsRef<Path>>(_path: P) -> Result<()> {
+pub(crate) async fn make_executable_async<P: AsRef<Path>>(_path: P) -> Result<()> {
     Ok(())
 }
 
-pub fn all_dirs<P: AsRef<Path>>(
+pub(crate) fn all_dirs<P: AsRef<Path>>(
     start_dir: P,
     ceiling_dirs: &HashSet<PathBuf>,
 ) -> Result<Vec<PathBuf>> {
@@ -1537,14 +1564,14 @@ fn is_empty_dir_ignore(path: &Path, ignore_files: Vec<&str>) -> Result<bool> {
         .wrap_err_with(|| format!("failed to read_dir: {}", display_path(path)))
 }
 
-pub struct FindUp {
+pub(crate) struct FindUp {
     current_dir: PathBuf,
     current_dir_filenames: Vec<String>,
     filenames: Vec<String>,
 }
 
 impl FindUp {
-    pub fn new(from: &Path, filenames: &[String]) -> Self {
+    pub(crate) fn new(from: &Path, filenames: &[String]) -> Self {
         let filenames: Vec<String> = filenames.iter().map(|s| s.to_string()).collect();
         Self {
             current_dir: from.to_path_buf(),
@@ -1577,7 +1604,7 @@ impl Iterator for FindUp {
 
 /// returns the first executable in PATH
 /// will not include mise bin paths or other paths added by mise
-pub fn which<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
+pub(crate) fn which<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
     static CACHE: Lazy<Mutex<HashMap<PathBuf, Option<PathBuf>>>> = Lazy::new(Default::default);
 
     let name = name.as_ref();
@@ -1592,9 +1619,21 @@ pub fn which<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
     path
 }
 
+/// Returns the first directly spawnable executable in PATH, expanding configured
+/// executable extensions on Windows when `name` has no extension.
+pub(crate) fn which_spawnable(name: &str) -> Option<PathBuf> {
+    let names = executable_names(name);
+    env::PATH.iter().find_map(|dir| {
+        names
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|candidate| is_spawnable(candidate))
+    })
+}
+
 /// returns the first executable in PATH
 /// will include mise bin paths or other paths added by mise
-pub fn which_non_pristine<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
+pub(crate) fn which_non_pristine<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
     _which(name, &env::PATH_NON_PRISTINE)
 }
 
@@ -1603,7 +1642,7 @@ pub fn which_non_pristine<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
 /// Use this for repeated comparisons against stable roots or PATH entries. Failed
 /// canonicalizations are not cached because many callers handle paths that may be
 /// created later in the same process.
-pub fn canonicalize_cached(path: &Path) -> Option<PathBuf> {
+pub(crate) fn canonicalize_cached(path: &Path) -> Option<PathBuf> {
     static CACHE: Lazy<Mutex<HashMap<PathBuf, PathBuf>>> = Lazy::new(Default::default);
 
     if !path.is_absolute() {
@@ -1622,7 +1661,7 @@ pub fn canonicalize_cached(path: &Path) -> Option<PathBuf> {
 
 /// Canonicalize a path using the process cache, falling back to the original
 /// path when canonicalization fails.
-pub fn canonicalize_or_self(path: &Path) -> PathBuf {
+pub(crate) fn canonicalize_or_self(path: &Path) -> PathBuf {
     canonicalize_cached(path).unwrap_or_else(|| path.to_path_buf())
 }
 
@@ -1638,7 +1677,7 @@ pub fn canonicalize_or_self(path: &Path) -> PathBuf {
 /// case-insensitive on macOS/Windows), then falls back to `canonicalize_or_self`
 /// so symlinked roots (e.g. `/usr/local/share` → `/private/usr/local/share` on
 /// macOS) still match — the cached helper keeps this off the filesystem hot path.
-pub fn is_mise_shims_dir(path: &Path) -> bool {
+pub(crate) fn is_mise_shims_dir(path: &Path) -> bool {
     let resolved = replace_path(path);
     let sys_shims = env::MISE_SYSTEM_DATA_DIR.join("shims");
     if paths_eq(&resolved, &dirs::SHIMS) || paths_eq(&resolved, &sys_shims) {
@@ -1653,7 +1692,7 @@ pub fn is_mise_shims_dir(path: &Path) -> bool {
 /// Returns true if `path` resolves to the shim that delegated to this mise
 /// process. Candidate-level filtering avoids excluding legitimate sibling
 /// executables that happen to share a directory with the active shim.
-pub fn is_active_mise_shim(path: &Path) -> bool {
+pub(crate) fn is_active_mise_shim(path: &Path) -> bool {
     env::MISE_SHIM_PATH
         .read()
         .unwrap()
@@ -1669,7 +1708,7 @@ pub fn is_active_mise_shim(path: &Path) -> bool {
 /// Uses the current process's PATH (`PATH_NON_PRISTINE`). For stripping
 /// shims from an arbitrary PATH string (e.g. from `PRISTINE_ENV`), use
 /// `strip_shims_from_path` instead.
-pub fn path_env_without_shims() -> std::ffi::OsString {
+pub(crate) fn path_env_without_shims() -> std::ffi::OsString {
     let filtered: Vec<_> = env::PATH_NON_PRISTINE
         .iter()
         .filter(|p| !is_mise_shims_dir(p))
@@ -1682,7 +1721,7 @@ pub fn path_env_without_shims() -> std::ffi::OsString {
 /// Strip mise shims from an arbitrary PATH string. Use this when the
 /// subprocess receives a custom env map (e.g. `PRISTINE_ENV`) rather
 /// than inheriting the current process's PATH.
-pub fn strip_shims_from_path(path_val: &str) -> String {
+pub(crate) fn strip_shims_from_path(path_val: &str) -> String {
     let filtered = env::split_paths(path_val).filter(|p| !is_mise_shims_dir(p));
     std::env::join_paths(filtered)
         .unwrap_or_else(|_| std::ffi::OsString::from(path_val))
@@ -1693,7 +1732,7 @@ pub fn strip_shims_from_path(path_val: &str) -> String {
 /// returns the first executable in PATH, excluding the mise shim directories
 /// use this for internal tool lookups to avoid recursive shim invocations
 /// (shims call `mise exec`, which would re-enter the same code path)
-pub fn which_no_shims<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
+pub(crate) fn which_no_shims<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
     let paths: Vec<PathBuf> = env::PATH_NON_PRISTINE
         .iter()
         .filter(|p| !is_mise_shims_dir(p))
@@ -1710,7 +1749,30 @@ fn _which<P: AsRef<Path>>(name: P, paths: &[PathBuf]) -> Option<PathBuf> {
     })
 }
 
-pub fn un_gz(input: &Path, dest: &Path) -> Result<()> {
+#[cfg(not(windows))]
+pub(crate) fn executable_names(bin: &str) -> Vec<String> {
+    vec![bin.to_string()]
+}
+
+#[cfg(windows)]
+pub(crate) fn executable_names(bin: &str) -> Vec<String> {
+    let mut names = vec![bin.to_string()];
+    if Path::new(bin).extension().is_none() {
+        for ext in &Settings::get().windows_executable_extensions {
+            let name = if ext.is_empty() {
+                bin.to_string()
+            } else {
+                format!("{bin}.{ext}")
+            };
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+pub(crate) fn un_gz(input: &Path, dest: &Path) -> Result<()> {
     debug!("gunzip {} > {}", input.display(), dest.display());
     let f = File::open(input)?;
     let mut dec = GzDecoder::new(f);
@@ -1720,7 +1782,7 @@ pub fn un_gz(input: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn un_xz(input: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn un_xz(input: &Path, dest: &Path) -> Result<()> {
     debug!("xz -d {} -c > {}", input.display(), dest.display());
     let f = File::open(input)?;
     let mut dec = xz2::read::XzDecoder::new(f);
@@ -1730,7 +1792,7 @@ pub fn un_xz(input: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn un_zst(input: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn un_zst(input: &Path, dest: &Path) -> Result<()> {
     debug!("zstd -d {} -c > {}", input.display(), dest.display());
     let f = File::open(input)?;
     let mut dec = zstd::Decoder::new(f)?;
@@ -1740,7 +1802,7 @@ pub fn un_zst(input: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn un_bz2(input: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn un_bz2(input: &Path, dest: &Path) -> Result<()> {
     debug!("bzip2 -d {} -c > {}", input.display(), dest.display());
     let f = File::open(input)?;
     let mut dec = BzDecoder::new(f);
@@ -1767,7 +1829,7 @@ fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
-pub fn decompress_file(input: &Path, dest: &Path, format: ExtractionFormat) -> Result<()> {
+pub(crate) fn decompress_file(input: &Path, dest: &Path, format: ExtractionFormat) -> Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -1787,7 +1849,7 @@ pub fn decompress_file(input: &Path, dest: &Path, format: ExtractionFormat) -> R
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, strum::EnumString, strum::Display)]
-pub enum ExtractionFormat {
+pub(crate) enum ExtractionFormat {
     #[strum(to_string = "tar.gz", serialize = "tgz")]
     TarGz,
     #[strum(serialize = "gz")]
@@ -1829,7 +1891,7 @@ pub enum ExtractionFormat {
 }
 
 impl ExtractionFormat {
-    pub fn from_file_name(filename: &str) -> Self {
+    pub(crate) fn from_file_name(filename: &str) -> Self {
         let filename = filename.to_lowercase();
 
         if let Some(idx) = filename.rfind(".tar.") {
@@ -1846,11 +1908,11 @@ impl ExtractionFormat {
         }
     }
 
-    pub fn from_ext(ext: &str) -> Option<Self> {
+    pub(crate) fn from_ext(ext: &str) -> Option<Self> {
         ext.to_lowercase().parse().ok()
     }
 
-    pub fn is_archive(&self) -> bool {
+    pub(crate) fn is_archive(&self) -> bool {
         self.is_tar_archive()
             || matches!(
                 self,
@@ -1858,7 +1920,7 @@ impl ExtractionFormat {
             )
     }
 
-    pub fn is_tar_archive(&self) -> bool {
+    pub(crate) fn is_tar_archive(&self) -> bool {
         matches!(
             self,
             ExtractionFormat::TarGz
@@ -1872,7 +1934,7 @@ impl ExtractionFormat {
         )
     }
 
-    pub fn is_compressed_file(&self) -> bool {
+    pub(crate) fn is_compressed_file(&self) -> bool {
         matches!(
             self,
             ExtractionFormat::Gz
@@ -1885,12 +1947,12 @@ impl ExtractionFormat {
         )
     }
 
-    pub fn extension(&self) -> Option<String> {
+    pub(crate) fn extension(&self) -> Option<String> {
         (*self != ExtractionFormat::Raw).then(|| self.to_string())
     }
 }
 
-pub struct ExtractOptions<'a> {
+pub(crate) struct ExtractOptions<'a> {
     pub strip_components: usize,
     pub pr: Option<&'a dyn SingleReport>,
     /// When false, files will be extracted with current timestamp instead of archive's mtime
@@ -1907,7 +1969,7 @@ impl<'a> Default for ExtractOptions<'a> {
     }
 }
 
-pub fn extract_archive(
+pub(crate) fn extract_archive(
     archive: &Path,
     dest: &Path,
     format: ExtractionFormat,
@@ -1938,7 +2000,7 @@ pub fn extract_archive(
     }
 }
 
-pub fn untar(
+pub(crate) fn untar(
     archive: &Path,
     dest: &Path,
     format: ExtractionFormat,
@@ -2057,7 +2119,7 @@ fn strip_archive_path_components(dir: &Path, strip_depth: usize) -> Result<()> {
     Ok(())
 }
 
-pub fn unzip(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<()> {
+pub(crate) fn unzip(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<()> {
     // TODO: show progress
     debug!("unzip {} -d {}", archive.display(), dest.display());
     if let Some(pr) = &opts.pr {
@@ -2087,7 +2149,7 @@ pub fn unzip(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<(
     })
 }
 
-pub fn un_dmg(archive: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn un_dmg(archive: &Path, dest: &Path) -> Result<()> {
     debug!(
         "hdiutil attach -quiet -nobrowse -mountpoint {} {}",
         dest.display(),
@@ -2117,7 +2179,7 @@ pub fn un_dmg(archive: &Path, dest: &Path) -> Result<()> {
     })
 }
 
-pub fn un_pkg(archive: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn un_pkg(archive: &Path, dest: &Path) -> Result<()> {
     debug!(
         "pkgutil --expand-full {} {}",
         archive.display(),
@@ -2127,7 +2189,7 @@ pub fn un_pkg(archive: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn un7z(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<()> {
+pub(crate) fn un7z(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<()> {
     if let Some(pr) = &opts.pr {
         pr.set_message(format!(
             "extract {}",
@@ -2162,7 +2224,7 @@ pub fn un7z(archive: &Path, dest: &Path, opts: &ExtractOptions<'_>) -> Result<()
 /// Use to validate user-supplied names (e.g. `bin`, `rename_exe`, `filter_bins`
 /// tool options) before joining them onto a directory, so a value like
 /// `../evil` or `/abs/path` cannot escape it.
-pub fn is_plain_file_name(name: &str) -> bool {
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
     // Reject both separators explicitly: `\` is a legal file-name character on
     // Unix, but these names come from cross-platform config.
     if name.contains('/') || name.contains('\\') {
@@ -2178,7 +2240,7 @@ pub fn is_plain_file_name(name: &str) -> bool {
 /// Whether `path` is a non-empty relative path containing only normal
 /// components. Both slash styles are treated as separators so config values are
 /// validated consistently across platforms.
-pub fn is_safe_relative_path(path: &str) -> bool {
+pub(crate) fn is_safe_relative_path(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
@@ -2213,7 +2275,7 @@ fn sanitize_7z_entry_path(path: &str) -> Result<PathBuf> {
     Ok(safe_path)
 }
 
-pub fn split_file_name(path: &Path) -> (String, String) {
+pub(crate) fn split_file_name(path: &Path) -> (String, String) {
     let file_name = path.file_name().unwrap().to_string_lossy();
     let (file_name_base, ext) = file_name
         .split_once('.')
@@ -2221,13 +2283,13 @@ pub fn split_file_name(path: &Path) -> (String, String) {
     (file_name_base.to_string(), ext.to_string())
 }
 
-pub fn same_file(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     a == b || desymlink_path(a) == desymlink_path(b)
 }
 
 /// Returns whether `path` starts with `prefix` either lexically or after
 /// resolving symlinks and the existing path prefix.
-pub fn path_starts_with_resolved(path: &Path, prefix: &Path) -> bool {
+pub(crate) fn path_starts_with_resolved(path: &Path, prefix: &Path) -> bool {
     path.starts_with(prefix) || desymlink_path(path).starts_with(desymlink_path(prefix))
 }
 
@@ -2284,7 +2346,7 @@ fn resolve_path_with_existing_prefix(path: &Path) -> PathBuf {
     resolved
 }
 
-pub fn desymlink_path(p: &Path) -> PathBuf {
+pub(crate) fn desymlink_path(p: &Path) -> PathBuf {
     if p.is_symlink()
         && let Ok(target) = fs::read_link(p)
     {
@@ -2301,7 +2363,7 @@ pub fn desymlink_path(p: &Path) -> PathBuf {
         .unwrap_or_else(|_| resolve_path_with_existing_prefix(p))
 }
 
-pub fn clone_dir(from: &PathBuf, to: &PathBuf) -> Result<()> {
+pub(crate) fn clone_dir(from: &PathBuf, to: &PathBuf) -> Result<()> {
     if cfg!(macos) {
         cmd!("/bin/cp", "-cR", from, to).run()?;
     } else if cfg!(windows) {
@@ -2320,7 +2382,7 @@ fn skip_curdir_components(path: &Path) -> impl Iterator<Item = std::path::Compon
         .skip_while(|c| matches!(c, std::path::Component::CurDir))
 }
 
-pub fn inspect_tar_contents(
+pub(crate) fn inspect_tar_contents(
     archive: &Path,
     format: ExtractionFormat,
 ) -> Result<Vec<(String, bool)>> {
@@ -2354,7 +2416,7 @@ pub fn inspect_tar_contents(
 }
 
 /// Inspects the top-level contents of a zip archive without extracting it
-pub fn inspect_zip_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
+pub(crate) fn inspect_zip_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
     let f = File::open(archive)?;
     let mut archive = ZipArchive::new(f)
         .wrap_err_with(|| format!("failed to open zip archive: {}", display_path(archive)))?;
@@ -2383,7 +2445,7 @@ pub fn inspect_zip_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
 }
 
 /// Adapted from inspect_tar_contents for 7z archives
-pub fn inspect_7z_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
+pub(crate) fn inspect_7z_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
     let sevenz = sevenz_rust2::Archive::open(archive)?;
     let mut top_level_components = std::collections::HashMap::new();
 
@@ -2407,7 +2469,7 @@ pub fn inspect_7z_contents(archive: &Path) -> Result<Vec<(String, bool)>> {
 }
 
 /// Determines if strip_components=1 should be applied based on archive structure
-pub fn should_strip_components(archive: &Path, format: ExtractionFormat) -> Result<bool> {
+pub(crate) fn should_strip_components(archive: &Path, format: ExtractionFormat) -> Result<bool> {
     let top_level_entries = match format {
         ExtractionFormat::Zip => inspect_zip_contents(archive)?,
         ExtractionFormat::SevenZip => inspect_7z_contents(archive)?,
@@ -2424,7 +2486,7 @@ pub fn should_strip_components(archive: &Path, format: ExtractionFormat) -> Resu
 }
 
 #[derive(Debug, Clone)]
-pub struct ArchiveContent {
+pub(crate) struct ArchiveContent {
     pub name: String,
     pub sha256: String,
 }
@@ -2435,7 +2497,7 @@ pub struct ArchiveContent {
 /// only safe when every installed regular file is covered, so ambiguous archive
 /// entries (links, unsafe paths, stripped-away file names, unsupported formats)
 /// fail closed instead of being ignored.
-pub fn archive_content_files(
+pub(crate) fn archive_content_files(
     archive_path: &Path,
     format: ExtractionFormat,
     strip_components: usize,
@@ -3018,26 +3080,6 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_symlinks_with_target_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let prefix = dir.path().join("provider");
-        let target = prefix.join("version");
-        let other = dir.path().join("other");
-        let link = dir.path().join("link");
-        let other_link = dir.path().join("other-link");
-        fs::create_dir_all(&target).unwrap();
-        fs::create_dir_all(&other).unwrap();
-        make_symlink(&target, &link).unwrap();
-        make_symlink(&other, &other_link).unwrap();
-
-        let removed = remove_symlinks_with_target_prefix(dir.path(), &prefix).unwrap();
-        assert_eq!(removed, vec![link.clone()]);
-        assert!(std::fs::symlink_metadata(&link).is_err());
-        assert!(std::fs::symlink_metadata(&other_link).is_ok());
-        assert!(target.exists());
-    }
-
-    #[test]
     #[cfg(windows)]
     fn test_symlink_prefix_detection_uses_filesystem_casing() {
         let dir = tempfile::tempdir().unwrap();
@@ -3117,7 +3159,6 @@ mod tests {
             Ok(())
         }
     }
-
     #[test]
     #[cfg(unix)]
     fn test_symlink_prefix_detection_uses_the_immediate_target() {

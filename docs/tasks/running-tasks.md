@@ -2,7 +2,7 @@
 
 使用 `mise tasks` 查看可用任务。要显示带有 `hide=true` 属性隐藏的任务，请使用选项 `--hidden`。
 
-使用 `mise tasks deps [tasks]...` 查看任务的依赖项。
+使用 `mise tasks deps [tasks]...` 列出任务声明的依赖项。该依赖关系图基于 [`depends`](/tasks/task-configuration.html#depends)、[`wait_for`](/tasks/task-configuration.html#wait-for) 和 [`depends_post`](/tasks/task-configuration.html#depends-post) 构建。`run` 数组中的任务引用（`{ task = "..." }` / `{ tasks = [...] }`）是执行步骤，因此不会显示在其中。
 
 使用 `mise tasks run <task>`、`mise run <task>`、`mise r <task>`，或者直接使用 `mise <task>` 来运行任务——不过
 最后这种方式你绝不要放进脚本或文档中，因为如果 mise 将来在某个版本中添加了同名命令，那么该任务就会被遮蔽，必须使用其他几种形式之一来运行。
@@ -51,7 +51,7 @@ _之前_——应使用 `mise run --silent build`，而不是 `mise run build --
 - [文件任务中的参数](/tasks/file-tasks#arguments)
 - [TOML 任务中的参数](/tasks/toml-tasks#arguments)
 
-如果安装了 `usage` CLI 且 mise 补全功能可用，任务的自动补全将自动生效。
+当安装并启用 mise 的 shell 自动补全功能后，任务会自动支持自动补全。
 
 可以使用 [`mise generate task-docs`](/cli/generate/task-docs) 生成 Markdown 文档。
 :::
@@ -192,3 +192,5 @@ run = [
     { tasks = ["example2", "example3"] }, # 这两个任务并行运行
 ]
 ```
+
+`mise run one_by_one` 会运行该流水线，但 `mise tasks deps one_by_one` 仍会显示一个叶节点。这些 `{ task }` / `{ tasks }` 条目是该任务自身的 `run` 步骤，而不是图中的边。嵌套任务仍会运行，包括它们自己的 `depends`。将它们重写为 `depends = ["example1", "example2", "example3"]` 会把它们放入依赖关系图中，但也会丢失上述串行/并行顺序：`depends` 只要求这些任务先完成，而不规定它们之间的顺序。

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use eyre::Result;
+use eyre::{Result, WrapErr};
 use std::sync::LazyLock as Lazy;
 
 use crate::config::Config;
@@ -16,7 +16,38 @@ use itertools::Itertools;
 pub(super) static LIST_PATHS_CACHE: Lazy<DashMap<String, Vec<PathBuf>>> = Lazy::new(DashMap::new);
 
 impl Toolset {
-    pub async fn list_paths(&self, config: &Arc<Config>) -> Vec<PathBuf> {
+    /// Enumerate install dependency paths without swallowing backend errors.
+    ///
+    /// This deliberately mirrors `list_paths` ordering while leaving that public,
+    /// forgiving API unchanged for existing callers.
+    pub(crate) async fn list_paths_strict(
+        &self,
+        config: &Arc<Config>,
+        dependent: &crate::toolset::ToolRequest,
+    ) -> Result<Vec<PathBuf>> {
+        let mut installed = self.list_current_installed_versions(config);
+        Self::sort_by_overrides(&mut installed)?;
+
+        let mut paths = Vec::new();
+        for (backend, dependency) in installed {
+            let new_paths = backend
+                .list_bin_paths(config, &dependency)
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to list bin paths for install dependency '{}' of '{}'",
+                        dependency.request, dependent
+                    )
+                })?;
+            paths.extend(new_paths);
+        }
+        Ok(paths
+            .into_iter()
+            .filter(|path| path.parent().is_some())
+            .collect())
+    }
+
+    pub(crate) async fn list_paths(&self, config: &Arc<Config>) -> Vec<PathBuf> {
         // Build a stable cache key based on project_root and current installed versions
         let mut key_parts = vec![];
         if let Some(root) = &config.project_root {
@@ -62,7 +93,7 @@ impl Toolset {
     }
 
     /// same as list_paths but includes config.list_paths, venv paths, and MISE_ADD_PATHs from self.env()
-    pub async fn list_final_paths(
+    pub(crate) async fn list_final_paths(
         &self,
         config: &Arc<Config>,
         env_results: EnvResults,
@@ -80,7 +111,7 @@ impl Toolset {
             paths.push(venv.venv_path.clone());
         }
 
-        // 4. tool_add_paths (MISE_ADD_PATH/RTX_ADD_PATH from tools)
+        // 4. tool_add_paths (MISE_ADD_PATH from tools)
         paths.extend(env_results.tool_add_paths);
 
         // 5. Tool paths
@@ -94,7 +125,7 @@ impl Toolset {
     /// Returns paths separated by their source: (user_configured_paths, tool_paths)
     /// User-configured paths should never be filtered, while tool paths should be filtered
     /// if they duplicate entries in the original PATH.
-    pub async fn list_final_paths_split(
+    pub(crate) async fn list_final_paths_split(
         &self,
         config: &Arc<Config>,
         env_results: EnvResults,
@@ -115,7 +146,7 @@ impl Toolset {
             tool_paths.push(venv.venv_path.clone());
         }
 
-        // tool_add_paths (MISE_ADD_PATH/RTX_ADD_PATH from tools)
+        // tool_add_paths (MISE_ADD_PATH from tools)
         tool_paths.extend(env_results.tool_add_paths);
 
         // Tool installation paths

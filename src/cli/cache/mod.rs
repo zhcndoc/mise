@@ -1,4 +1,3 @@
-use clap::Subcommand;
 use eyre::Result;
 
 use crate::env;
@@ -11,14 +10,14 @@ mod task;
 /// Manage the mise cache
 ///
 /// Run `mise cache` with no args to view the current cache directory.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct Cache {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(crate) struct Cache {
+    #[usage(subcommand)]
     command: Option<Commands>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Clear(clear::CacheClear),
     Path(path::CachePath),
@@ -27,7 +26,7 @@ enum Commands {
 }
 
 impl Commands {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         match self {
             Self::Clear(cmd) => cmd.run().await,
             Self::Path(cmd) => cmd.run(),
@@ -38,7 +37,7 @@ impl Commands {
 }
 
 impl Cache {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         match self.command {
             Some(cmd) => cmd.run().await,
             None => {

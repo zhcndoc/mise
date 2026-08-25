@@ -14,10 +14,18 @@
 | 任意平台（Rust 用户） | cargo binstall | cargo install   |
 | CI/Docker        | mise.run       | GitHub Releases |
 
-通过 `mise.run` 安装的官方单文件二进制版本，是 macOS 和 Linux 上的首选方式。这些二进制文件使用 mise 优化的发布配置构建，并且可以立即通过 `mise self-update` 更新。包括 Homebrew 在内的软件包管理器构建版本可能优化程度较低，并且在 mise 发布新版本后，可能无法那么快地提供。
+通过 `mise.run` 安装的官方单文件发布版本是 macOS 和 Linux 上的首选方法。这些二进制文件使用 mise 的优化发布配置构建，并且可以通过 `mise self-update` 立即更新。请优先使用它们，而不是第三方软件包构建版本：Homebrew 配方可能明显更慢且体积更大，并且软件包管理器中的发布版本也可能落后于 mise 的发布版本。
 
-::: tip 哪些方式会自动更新？
-包管理器（apt、dnf、brew、pacman 等）会在你更新系统软件包时更新 mise。其他方式可以通过 `mise self-update` 更新。
+::: tip 哪些方法会自动更新？
+软件包管理器（apt、dnf、brew、pacman 等）会在你更新系统软件包时更新 mise。其他方法可以使用 `mise self-update` 更新。
+
+对于支持 `mise self-update` 的安装方式，可以全局启用自动更新：
+
+```sh
+mise settings set auto_update true
+```
+
+随后，mise 会在符合条件的交互式命令执行前定期检查更新，在不更新插件的情况下安装较新的版本，然后使用新的二进制文件重新运行原始命令。使用 [`auto_update_check_duration`](/configuration/settings.html#auto_update_check_duration) 配置检查间隔。
 :::
 
 ::: tip 保持 mise 为最新版本
@@ -116,6 +124,10 @@ apk add mise
 
 _mise 位于
 [社区仓库](https://gitlab.alpinelinux.org/alpine/aports/-/blob/master/community/mise/APKBUILD)中。_
+
+::: warning Alpine 默认从源代码构建的设置已弃用
+Alpine 目前默认从源代码编译工具。此自动行为已弃用：受影响的源代码安装会从 mise 2026.8.0 开始发出警告，并且默认设置将在 mise 2027.8.0 中切换为预编译二进制文件。如果要继续从源代码编译，请显式设置 [`all_compile = true`](/configuration/settings.html#all_compile)。
+:::
 
 ### apt
 
@@ -444,20 +456,22 @@ edit:add-var mise~ {|@args| mise:mise $@args }
 :::
 
 [`mise completion`](/cli/completion.html) 命令可以为你的 shell 生成自动补全脚本。
-这需要先安装 `usage`。如果你没有安装，可以使用以下命令安装：
+生成的脚本是自包含的，不需要单独的 `usage` CLI。
+
+安装补全脚本最简单的方法是：
 
 ```shell
-mise use -g usage
+mise completion <shell> --install
 ```
 
-然后，运行以下命令为你的 shell 安装补全脚本：
+将 `<shell>` 替换为 `bash`、`zsh`、`fish` 或 `powershell`。或者，也可以自行选择路径：
 
 ::: code-group
 
 ```sh [bash]
 # 这需要安装 bash-completion
 mkdir -p ~/.local/share/bash-completion/completions/
-mise completion bash --include-bash-completion-lib > ~/.local/share/bash-completion/completions/mise
+mise completion bash > ~/.local/share/bash-completion/completions/mise
 ```
 
 ```sh [zsh]

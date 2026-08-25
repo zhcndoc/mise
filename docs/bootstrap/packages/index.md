@@ -65,12 +65,15 @@ mise 可以通过 `mise.toml` 中的
 
 ## 语义
 
-- **默认采用声明式和增量式方式** — 条目会跨越
-  [配置层级](/configuration.html)（全局 → 项目）按键的并集进行合并。项目可以在全局列表之上添加软件包（并覆盖全局条目的版本固定值），但不能移除它们。对于 Homebrew formula，
-  `mise bootstrap packages prune` 是一个显式的破坏性命令，用于移除当前配置或受信任且可加载的已跟踪配置不再需要的已链接 formula，或可安全清理的、由 mise 所有的 cask。
-- **按操作系统筛选** — `os` 选择器不匹配的条目，以及当前机器上不可用的软件包管理器对应的条目，都不会被执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 在 macOS 和 Linux 上均可用；`brew-cask` 在 macOS 上可用，并且在 Linux 上支持仅字体的 cask，但不支持生命周期钩子或结构化的 flight 步骤；当 `flatpak` CLI 位于 `PATH` 中时，`flatpak` 和 `flatpak-user` 可在 Linux 上使用；当 `mas` CLI 位于 `PATH` 中时，`mas` 可在 macOS 上使用。状态命令仍会列出不可用的软件包管理器，因此不会有任何内容被静默隐藏。
-- **仅手动安装** — mise 绝不会隐式安装系统软件包。当软件包缺失时，`mise install` 会显示一次性提示，但只有 `mise bootstrap packages apply` 会实际执行安装操作。
-- **未知的软件包管理器会被忽略并显示警告**，同时提示安装软件包插件，因此使用较新版本 mise 中软件包管理器的配置仍然可以被解析。
+- **默认情况下采用声明式和追加式** — 条目会在
+  [配置层级](/configuration.html)（全局 → 项目）中按键的并集进行合并。项目可以在全局列表的基础上添加软件包（并覆盖全局条目的版本固定），但不能删除它们。清理是一个显式的、限定管理器范围的破坏性操作：`mise bootstrap packages prune`
+  默认针对 Homebrew，而插件所拥有的软件包则需要使用
+  `mise bootstrap packages prune --manager <plugin>`。它只会移除当前配置或受信任、可加载的已跟踪配置不再需要的软件包。
+- **按操作系统筛选** — `os` 选择器不匹配的条目，以及当前计算机上不可用的管理器所对应的条目，都不会被执行，因此同一份配置可以跨平台使用：macOS 上会忽略 `apt` 条目，Ubuntu 上会忽略 `dnf` 条目，依此类推。`brew` 在 macOS 和 Linux 上都可用；`brew-cask` 在 macOS 上可用，并且在 Linux 上支持仅字体的 cask，但不提供生命周期钩子或结构化 flight 步骤；
+  `flatpak` 和 `flatpak-user` 在 `flatpak` CLI 位于
+  `PATH` 中时可在 Linux 上使用；`mas` 在 `mas` CLI 位于 `PATH` 中时可在 macOS 上使用。状态命令仍会列出不可用的管理器，因此不会有任何内容被静默隐藏。
+- **仅手动安装** — mise 从不隐式安装系统软件包。`mise install` 在软件包缺失时会打印一次性提示，但只有 `mise bootstrap packages apply` 会实际安装任何内容。
+- **未知管理器会在发出警告和软件包插件安装提示的情况下被忽略**，因此使用较新 mise 版本中管理器的配置仍然可以解析。
 
 对于当前用户的登录 shell 设置，请使用 `[bootstrap.user].login_shell`：
 
@@ -109,6 +112,8 @@ mise bootstrap packages prune --manager brew --dry-run
 mise bootstrap packages prune --manager brew --yes
 mise bootstrap packages prune --manager brew-cask # 安全移除可清理的 mise cask
 mise bootstrap packages prune --manager brew-cask --dry-run
+mise bootstrap packages prune --manager vscode # remove mise-owned plugin packages
+mise bootstrap packages prune --manager vscode --dry-run
 
 mise bootstrap packages upgrade           # 将已安装包升级到当前版本
 mise bootstrap packages upgrade --manager brew
@@ -131,8 +136,10 @@ formulae 以 `"brew:<formula>" = "latest"` 的形式写入 `[bootstrap.packages]
 
 `mise bootstrap packages prune --manager brew-cask` 只会移除由 mise 所有、具有当前安装时收据且内容指纹未发生变化的直接产物。它会跳过旧收据、由 Homebrew 所有的 cask、pkg 和命令包装器产物、具有生命周期操作的 cask、已更改或共享的目标，以及不完整的事务。跳过操作会附带原因，并且绝不会应用 `zap` 元数据。
 
-`mise bootstrap packages upgrade` 会刷新包管理器元数据，并将已安装的已配置包升级到最新可用版本——apk、apt 和 dnf 还会遵循配置中固定的版本（pacman、brew、brew-cask、flatpak、flatpak-user 和 mas
-[无法安装固定版本](/bootstrap/packages/pacman.html)，因此固定的条目会伴随警告被跳过）。尚未安装的包会被跳过——这是 `mise bootstrap packages apply` 的工作。对于 brew，此命令会安装 formula 当前的 bottle 并替换旧 keg；对于 brew-cask，它会安装当前的 cask 产物；对于 flatpak 和 flatpak-user，它会分别在各自的作用域中更新已配置的应用程序和运行时；对于 mas，它会运行 `mas upgrade`。
+对于软件包插件管理器，prune 只会考虑 mise 在 `PackageInstall` 期间观察到从缺失状态转变为已安装状态的软件包。现有的或手动安装的软件包绝不会被采用。插件必须实现 `PackageUninstall`；试运行会打印获准的移除批次，而不会调用该钩子，并且 mise 会在更新其所有权状态前使用 `PackageInstalled` 验证移除结果。
+
+`mise bootstrap packages upgrade` 会刷新软件包管理器元数据，并将已安装的已配置软件包升级到可用的最新版本——apk、apt 和 dnf 还会遵守配置中固定的版本（pacman、brew、brew-cask、flatpak、flatpak-user 和 mas
+[无法安装固定版本](/bootstrap/packages/pacman.html)，因此固定版本的条目会在发出警告后跳过）。尚未安装的软件包会被跳过——这是 `mise bootstrap packages apply` 的工作。对于 brew，这会安装 formula 当前的 bottle 并替换旧 keg；对于 brew-cask，这会安装当前的 cask 产物；对于 flatpak 和 flatpak-user，这会在各自的范围内更新已配置的应用程序和运行时；对于 mas，这会运行 `mas upgrade`。
 
 `mise doctor` 也会报告已配置的系统包，并在有任何缺失时发出警告。
 

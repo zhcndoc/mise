@@ -1,16 +1,16 @@
 use std::path::PathBuf;
 use vfox::{Vfox, VfoxResult};
 
-#[derive(clap::Args)]
-pub struct Install {
-    pub sdk: String,
-    pub version: String,
-    #[clap(short, long)]
-    pub output_dir: Option<PathBuf>,
+#[derive(usage_rs::Args)]
+pub(super) struct Install {
+    sdk: String,
+    version: String,
+    #[usage(short, long)]
+    output_dir: Option<PathBuf>,
 }
 
 impl Install {
-    pub async fn run(&self) -> VfoxResult<()> {
+    pub(super) async fn run(&self) -> VfoxResult<()> {
         let vfox = Vfox::new();
         let out = self
             .output_dir

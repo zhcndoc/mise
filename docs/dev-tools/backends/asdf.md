@@ -67,9 +67,8 @@ asdf 插件被视为遗留方案。**出于供应链安全原因，新的 asdf �
 
 ### 安装依赖
 
-使用 [`depends` 选项](/dev-tools/#tool-dependencies)声明的工具会在
-asdf 工具之前安装，并添加到其 `bin/download` 和 `bin/install` 脚本使用的
-`PATH` 中：
+在同一次安装操作中选定、并使用
+[`depends` 选项](/dev-tools/#tool-dependencies)声明的匹配工具，会在 asdf 工具之前安装。它们的路径会被添加到其 `bin/download` 和 `bin/install` 脚本所使用的 `PATH` 中：
 
 ```toml
 [tools]
@@ -77,4 +76,6 @@ python = "3.12"
 "asdf:owner/plugin" = { version = "latest", depends = ["python"] }
 ```
 
-这样，asdf 插件就可以在同一次 `mise install` 期间调用由其他 mise 管理的工具提供的可执行文件。
+这样，asdf 插件便可以在同一次 `mise install` 期间调用由其他 mise 管理的工具提供的可执行文件。其他处于激活状态的 mise 工具不会被隐式添加；请使用 `depends` 声明每个由 mise 管理的安装依赖项。环境中或配置 `PATH` 中已经可用的可执行文件仍然可用。
+
+`depends` 选项不会添加或安装缺失的工具。配置的依赖项必须已经安装，或在同一次安装操作中被选定。

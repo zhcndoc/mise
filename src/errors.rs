@@ -8,7 +8,7 @@ use eyre::Report;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("[{ts}] {tr}: {source:#}")]
     FailedToResolveVersion {
         tr: Box<ToolRequest>,
@@ -41,10 +41,22 @@ pub enum Error {
 }
 
 fn render_exit_status(exit_status: &Option<ExitStatus>) -> String {
-    match exit_status.and_then(|s| s.code()) {
-        Some(exit_status) => format!("exit code {exit_status}"),
-        None => "no exit status".into(),
+    if let Some(code) = exit_status.and_then(|s| s.code()) {
+        return format!("exit code {code}");
     }
+    // No code means the process was signalled, and the signal is right there.
+    // Reporting "no exit status" threw it away and left nothing to act on.
+    #[cfg(unix)]
+    if let Some(signal) = exit_status.and_then(|s| {
+        use std::os::unix::process::ExitStatusExt;
+        s.signal()
+    }) {
+        return match nix::sys::signal::Signal::try_from(signal) {
+            Ok(signal) => format!("killed by {signal}"),
+            Err(_) => format!("killed by signal {signal}"),
+        };
+    }
+    "no exit status".into()
 }
 
 fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> String {
@@ -95,7 +107,7 @@ fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> St
 }
 
 /// Split an install result into successful versions and a result preserving any error.
-pub fn split_install_result(
+pub(crate) fn split_install_result(
     result: Result<Vec<ToolVersion>, Report>,
 ) -> (Vec<ToolVersion>, Result<(), Report>) {
     match result {
@@ -114,7 +126,7 @@ pub fn split_install_result(
 }
 
 impl Error {
-    pub fn get_exit_status(err: &Report) -> Option<i32> {
+    pub(crate) fn get_exit_status(err: &Report) -> Option<i32> {
         if let Some(Error::ScriptFailed(_, Some(status))) = err.downcast_ref::<Error>() {
             status.code()
         } else {
@@ -123,7 +135,7 @@ impl Error {
     }
 
     #[cfg(unix)]
-    pub fn is_sigint(err: &Report) -> bool {
+    pub(crate) fn is_sigint(err: &Report) -> bool {
         use std::os::unix::process::ExitStatusExt;
 
         err.downcast_ref::<Error>().is_some_and(|err| {
@@ -136,19 +148,15 @@ impl Error {
     }
 
     #[cfg(not(unix))]
-    pub fn is_sigint(_err: &Report) -> bool {
+    pub(crate) fn is_sigint(_err: &Report) -> bool {
         false
     }
 
-    pub fn is_task_interrupted(err: &Report) -> bool {
-        Self::is_task_interrupted_before_start(err) || Self::is_sigint(err)
-    }
-
-    pub fn is_task_interrupted_before_start(err: &Report) -> bool {
+    pub(crate) fn is_task_interrupted_before_start(err: &Report) -> bool {
         matches!(err.downcast_ref::<Error>(), Some(Error::TaskInterrupted))
     }
 
-    pub fn is_argument_err(err: &Report) -> bool {
+    pub(crate) fn is_argument_err(err: &Report) -> bool {
         err.downcast_ref::<Error>()
             .map(|e| {
                 matches!(
@@ -162,7 +170,7 @@ impl Error {
             .unwrap_or(false)
     }
 
-    pub fn is_required_channel_resolution_err(err: &Report) -> bool {
+    pub(crate) fn is_required_channel_resolution_err(err: &Report) -> bool {
         err.chain().any(|source| {
             matches!(
                 source.downcast_ref::<Error>(),
@@ -194,9 +202,26 @@ mod tests {
     }
 
     #[test]
+    fn renders_the_signal_that_killed_the_process() {
+        // "no exit status" threw away the one fact that explains the failure.
+        let status = ExitStatus::from_raw(nix::sys::signal::SIGINT as i32);
+        assert_eq!(render_exit_status(&Some(status)), "killed by SIGINT");
+
+        let status = ExitStatus::from_raw(nix::sys::signal::SIGTERM as i32);
+        assert_eq!(render_exit_status(&Some(status)), "killed by SIGTERM");
+    }
+
+    #[test]
+    fn renders_an_exit_code_unchanged() {
+        let status = ExitStatus::from_raw(2 << 8);
+        assert_eq!(render_exit_status(&Some(status)), "exit code 2");
+        assert_eq!(render_exit_status(&None), "no exit status");
+    }
+
+    #[test]
     fn detects_interruption_before_process_start() {
         let err = Report::new(Error::TaskInterrupted);
 
-        assert!(Error::is_task_interrupted(&err));
+        assert!(Error::is_task_interrupted_before_start(&err));
     }
 }

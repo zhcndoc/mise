@@ -26,12 +26,16 @@ mise 默认下载预编译的 Ruby 二进制文件。这会显著缩短安装时
 预编译二进制文件来源于 [jdx/ruby](https://github.com/jdx/ruby)，并适用于
 以下平台：
 
-- macOS（仅限 arm64/Apple Silicon）
-- Linux arm64
-- Linux x86_64
+- macOS (arm64/Apple Silicon only)
+- Linux arm64 (glibc/manylinux2014 only)
+- Linux x86_64 (glibc/manylinux2014 only)
 
 如果你的平台或 Ruby 版本没有可用的预编译二进制文件，mise 会自动
 回退到使用 ruby-build 从源代码编译。
+
+jdx/ruby 没有 musl 构建版本，因此在 Alpine 等基于 musl 的发行版上，mise 始终会从源代码编译 Ruby
+（除非你设置了 `ruby.compile=false`，在这种情况下安装会报错）。如果你通过 `ruby.precompiled_url` 托管自己的 musl 二进制文件，请显式设置 `ruby.precompiled_arch` 和
+`ruby.precompiled_os`，以重新启用预编译安装。
 
 ### 仅使用预编译二进制文件
 

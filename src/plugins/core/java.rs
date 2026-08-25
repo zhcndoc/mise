@@ -40,7 +40,7 @@ static VERSION_REGEX: Lazy<regex::Regex> = Lazy::new(|| {
 });
 
 #[derive(Debug)]
-pub struct JavaPlugin {
+pub(super) struct JavaPlugin {
     ba: Arc<BackendArg>,
     java_metadata_ea_cache: CacheManager<HashMap<String, JavaMetadata>>,
     java_metadata_ga_cache: CacheManager<HashMap<String, JavaMetadata>>,
@@ -86,7 +86,7 @@ fn is_shorthand_java_request(requested_version: &str) -> bool {
 }
 
 impl JavaPlugin {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         let settings = Settings::get();
         let ba = Arc::new(plugins::core::new_backend_arg("java"));
         Self {
@@ -439,7 +439,9 @@ impl JavaPlugin {
             .map(|(v, m)| VersionInfo {
                 version: v.clone(),
                 created_at: m.created_at.clone(),
-                prerelease: VERSION_REGEX.is_match(v),
+                // The regex is a denylist heuristic, not a total grammar:
+                // a match proves "prerelease", a miss proves nothing.
+                prerelease: VERSION_REGEX.is_match(v).then_some(true),
                 ..Default::default()
             })
             .unique_by(|v| v.version.clone())
@@ -545,6 +547,10 @@ impl Backend for JavaPlugin {
 
     async fn _parse_idiomatic_file(&self, path: &Path) -> Result<Vec<String>> {
         let contents = file::read_to_string(path)?;
+        // The `.sdkmanrc` branch matches on the start of a line without going through
+        // `normalize_idiomatic_contents`, so a leading mark defeats `starts_with("java")` and the
+        // fallback yields an empty version.
+        let contents = file::strip_utf8_bom(&contents);
         if path.file_name() == Some(".sdkmanrc".as_ref()) {
             let version = contents
                 .lines()
@@ -576,7 +582,7 @@ impl Backend for JavaPlugin {
             }
             Ok(vec![format!("{vendor}-{version}")])
         } else {
-            Ok(normalize_idiomatic_contents(&contents)
+            Ok(normalize_idiomatic_contents(contents)
                 .lines()
                 .map(|s| s.to_string())
                 .collect())
@@ -804,7 +810,18 @@ impl JavaMetadata {
 
 // only care about these features
 static JAVA_FEATURES: Lazy<HashSet<String>> = Lazy::new(|| {
-    HashSet::from(["crac", "javafx", "jcef", "leyden", "lite", "musl"].map(|s| s.to_string()))
+    HashSet::from(
+        [
+            "crac",
+            "innovation",
+            "javafx",
+            "jcef",
+            "leyden",
+            "lite",
+            "musl",
+        ]
+        .map(|s| s.to_string()),
+    )
 });
 
 #[cfg(test)]

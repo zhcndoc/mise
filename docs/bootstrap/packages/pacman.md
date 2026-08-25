@@ -10,19 +10,10 @@
 
 ## 行为
 
-- 使用 `pacman -Q` 检查软件包状态（只读，绝不提权）。
-- 缺失的软件包使用 `pacman -S --noconfirm --needed` 安装，
-  必要时通过 sudo 提权（参见
-  [sudo](/bootstrap/packages/#sudo)）。`--needed` 使安装
-  具有幂等性。
-- 如果 `/var/lib/pacman/sync` 不包含任何数据库（全新容器），mise
-  会在安装前自动运行 `pacman -Sy`。如需强制刷新，请使用
-  `mise bootstrap packages apply --update`。
-- `mise bootstrap packages upgrade` 会运行 `pacman -Sy`，然后只升级已
-  配置的软件包。请注意，Arch 官方仅支持全系统升级（`pacman -Syu`）——
-  单独升级某个软件包属于
-  [部分升级](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported)，
-  因此在滚动发行版系统上更建议你自行运行 `pacman -Syu`。
+- 使用 `pacman -Q` 和 `pacman -T` 检查软件包状态（只读，永不提权）。已安装的软件包如果通过 `Provides` 满足所请求的名称，则视为已安装。
+- 使用 `pacman -S --noconfirm --needed` 安装缺失的软件包，必要时通过 sudo 提权（请参阅 [sudo](/bootstrap/packages/#sudo)）。`--needed` 使安装具有幂等性。
+- 如果 `/var/lib/pacman/sync` 不包含任何数据库（全新容器），mise 会在安装前自动运行 `pacman -Sy`。使用 `mise bootstrap packages apply --update` 强制刷新。
+- `mise bootstrap packages upgrade` 会运行 `pacman -Sy`，然后仅升级已配置的软件包。通过 `Provides` 满足的软件包请求会被跳过，以避免替换已安装的软件包提供者。请注意，Arch 官方仅支持完整系统升级（`pacman -Syu`）——升级单个软件包属于[部分升级](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported)，因此在滚动发布系统上，建议自行运行 `pacman -Syu`。
 
 ::: warning
 Arch 软件仓库只包含每个软件包的最新版本，因此 pacman

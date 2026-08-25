@@ -9,28 +9,28 @@ use crate::ui::prompt;
 /// Removes configured whole-file entries and edits while preserving files
 /// mise cannot identify as managed. Modified copies, templates, and plain-line
 /// edits require `--force`.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct DotfilesUnapply {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct DotfilesUnapply {
     /// Only unapply these targets
-    #[clap(value_name = "TARGET")]
+    #[usage(value_name = "TARGET")]
     targets: Vec<String>,
 
     /// Remove modified or otherwise ambiguous managed files and lines
-    #[clap(long, short)]
+    #[usage(long, short)]
     force: bool,
 
     /// Print the actions that would run without writing anything
-    #[clap(long, short = 'n')]
+    #[usage(long, short = 'n')]
     dry_run: bool,
 
     /// Skip the confirmation prompt
-    #[clap(long, short)]
+    #[usage(long, short)]
     yes: bool,
 }
 
 impl DotfilesUnapply {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let all_files = system::files::files_from_config(&config)?;
         let files = all_files
@@ -88,6 +88,7 @@ impl DotfilesUnapply {
                 file_plan.len(),
                 edit_plan.len()
             ))?
+            .is_yes()
         {
             info!("dotfiles: skipped");
             return Ok(());

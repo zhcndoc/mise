@@ -1,16 +1,15 @@
-use clap::Subcommand;
 use eyre::Result;
 
 mod ls;
 
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     about = "Manage backends",
     aliases = ["b", "backend", "backend-list"],
     after_long_help = AFTER_LONG_HELP
 )]
-pub struct Backends {
-    #[clap(subcommand)]
+pub(crate) struct Backends {
+    #[usage(subcommand)]
     command: Option<Commands>,
 }
 
@@ -22,13 +21,13 @@ Use `mise backends` instead.
 "#
 );
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Ls(ls::BackendsLs),
 }
 
 impl Commands {
-    pub fn run(self) -> Result<()> {
+    pub(crate) fn run(self) -> Result<()> {
         match self {
             Self::Ls(cmd) => cmd.run(),
         }
@@ -36,7 +35,7 @@ impl Commands {
 }
 
 impl Backends {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let cmd = self.command.unwrap_or(Commands::Ls(ls::BackendsLs {}));
 
         cmd.run()

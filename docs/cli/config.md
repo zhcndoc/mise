@@ -1,38 +1,21 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise config`
 
-- **用法**：`mise config [FLAGS] <SUBCOMMAND>`
-- **别名**：`cfg`
-- **作用**：只读
-- **源代码**：[`src/cli/config/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/config/mod.rs)
+- **用法：** `mise config [FLAGS] <SUBCOMMAND>`
+- **别名：** `cfg`、`toml`
+- **效果：** 只读
+- **源代码：** [`src/cli/config/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/config/mod.rs)
 
 管理配置文件。
 
 ## 标志
-
-### `-J --json`
-
-以 JSON 格式输出
-
-### `--no-header`
-
-不打印表头
-
-### `--tracked-configs`
-
-列出所有已跟踪的配置文件。
+- **`-J --json`** — 以 JSON 格式输出
+- **`--no-header`** — 不打印表头
+- **`--tracked-configs`** — 列出所有已跟踪的配置文件
+- **`-h --help`** — 打印帮助
 
 ## 子命令
 
 - [`mise config get [-f --file <FILE>] [KEY]`](/cli/config/get.md)
 - [`mise config ls [FLAGS]`](/cli/config/ls.md)
 - [`mise config set [-f --file <FILE>] [-t --type <TYPE>] <KEY> [VALUE]`](/cli/config/set.md)
-
-示例：
-
-```
-$ mise config ls
-路径                        工具
-~/.config/mise/config.toml  pitchfork
-~/src/mise/mise.toml        actionlint, bun, cargo-binstall, cargo:cargo-insta
-```

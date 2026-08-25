@@ -1,17 +1,16 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise doctor path`
 
-- **用法**：`mise doctor path [-f --full]`
-- **效果**：只读
-- **源代码**：[`src/cli/doctor/path.rs`](https://github.com/jdx/mise/blob/main/src/cli/doctor/path.rs)
+- **用法：** `mise doctor path [-f --full]`
+- **别名：** `paths`
+- **作用：** 只读
+- **源代码：** [`src/cli/doctor/path.rs`](https://github.com/jdx/mise/blob/main/src/cli/doctor/path.rs)
 
 打印 mise 当前提供的 PATH 条目。
 
 ## 标志
-
-### `-f --full`
-
-打印所有条目，包括那些不是由 mise 提供的条目
+- **`-f --full`** — 打印所有条目，包括那些不是由 mise 提供的条目
+- **`-h --help`** — 打印帮助
 
 示例：
 

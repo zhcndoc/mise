@@ -59,13 +59,14 @@ struct VersionEntry {
     created_at: toml::value::Datetime,
     #[serde(default)]
     release_url: Option<String>,
-    /// Pre-release flag, when the producing source can distinguish it. Defaults
-    /// to false so old host data — and entries from sources that don't track
-    /// prereleases — stay correct without any schema upgrade. Old mise clients
-    /// that don't know about this field ignore it (toml-rs accepts unknown
-    /// fields by default), so populating it in mise-versions is forward-compatible.
+    /// Pre-release flag, when the producing source can distinguish it. Absent
+    /// in old host data — and for entries from sources that don't track
+    /// prereleases — which maps to `None` ("unknown") without any schema
+    /// upgrade. Old mise clients that don't know about this field ignore it
+    /// (toml-rs accepts unknown fields by default), so populating it in
+    /// mise-versions is forward-compatible.
     #[serde(default)]
-    prerelease: bool,
+    prerelease: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -203,7 +204,7 @@ fn log_versions_host_warn(ctx: VersionsHostLogContext<'_>, outcome: &str, extra:
 
 /// List versions from the versions host (mise-versions.jdx.dev).
 /// Returns Vec<VersionInfo> with created_at timestamps from the TOML endpoint.
-pub async fn list_versions(tool: &str) -> eyre::Result<Option<Vec<VersionInfo>>> {
+pub(crate) async fn list_versions(tool: &str) -> eyre::Result<Option<Vec<VersionInfo>>> {
     let ctx = VersionsHostLogContext::version_list(tool);
     let settings = Settings::get();
     if settings.prefer_offline()
@@ -296,7 +297,7 @@ pub async fn list_versions(tool: &str) -> eyre::Result<Option<Vec<VersionInfo>>>
 ///
 /// This endpoint is intentionally shaped like GitHub's release object so the
 /// normal backend asset-selection code remains authoritative on the client.
-pub async fn github_release(repo: &str, tag: &str) -> eyre::Result<Option<GithubRelease>> {
+pub(crate) async fn github_release(repo: &str, tag: &str) -> eyre::Result<Option<GithubRelease>> {
     if !enabled_for_github_metadata() {
         return Ok(None);
     }
@@ -338,7 +339,7 @@ pub async fn github_release(repo: &str, tag: &str) -> eyre::Result<Option<Github
 ///
 /// The returned bundles are not trusted by virtue of coming from mise-versions;
 /// callers still verify them cryptographically against the downloaded artifact.
-pub async fn github_attestations(
+pub(crate) async fn github_attestations(
     repo: &str,
     digest: &str,
 ) -> eyre::Result<Option<Vec<Attestation>>> {
@@ -546,7 +547,7 @@ fn valid_github_asset_api_url(url: &str, owner: &str, repo: &str) -> bool {
 
 /// Tracks a tool installation asynchronously (fire-and-forget)
 /// Tracks all core plugins and registry tools (including java/python)
-pub fn track_install(tool: &str, full: &str, version: &str) {
+pub(crate) fn track_install(tool: &str, full: &str, version: &str) {
     let settings = Settings::get();
     if settings.offline() {
         return;

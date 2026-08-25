@@ -42,7 +42,7 @@ use xx::regex;
 const UV_EXCLUDE_NEWER_VERSION: &str = "0.2.22";
 
 #[derive(Debug)]
-pub struct PIPXBackend {
+pub(crate) struct PIPXBackend {
     ba: Arc<BackendArg>,
 }
 
@@ -182,19 +182,7 @@ impl Backend for PIPXBackend {
             }
             PipxRequest::Git { .. } => vec![],
         };
-        // PyPI versions follow PEP 440. Stamp the separator-less alpha/beta/rc
-        // suffixes (`3.12.0a1`, `1.0.0c1`) here rather than in the shared
-        // regex so the rule stays scoped to Python — hex commit hashes used
-        // by other ecosystems (e.g. Go pseudo-versions) would false-positive.
-        Ok(versions
-            .into_iter()
-            .map(|mut v| {
-                if !v.prerelease && PEP440_PRERELEASE_REGEX.is_match(&v.version) {
-                    v.prerelease = true;
-                }
-                v
-            })
-            .collect())
+        Ok(versions.into_iter().map(stamp_pep440_prerelease).collect())
     }
 
     async fn latest_stable_version(&self, config: &Arc<Config>) -> eyre::Result<Option<String>> {
@@ -428,7 +416,7 @@ impl Backend for PIPXBackend {
 }
 
 /// Returns install-time-only option keys for PIPX backend.
-pub fn install_time_option_keys() -> Vec<String> {
+pub(crate) fn install_time_option_keys() -> Vec<String> {
     vec![
         "extras".into(),
         "package_name".into(),
@@ -549,6 +537,13 @@ impl PIPXBackend {
                 VersionInfo {
                     version: r.tag_name,
                     created_at,
+                    // Carry GitHub's authoritative flag so the PEP 440 pattern
+                    // below cannot reclassify a release explicitly published
+                    // as stable. The only current caller feeds
+                    // `github::list_releases`, which pre-filters prereleases,
+                    // so this is always Some(false) today — but copying the
+                    // flag stays correct for unfiltered inputs.
+                    prerelease: Some(r.prerelease),
                     ..Default::default()
                 }
             })
@@ -571,7 +566,7 @@ impl PIPXBackend {
         }
     }
 
-    pub fn from_arg(ba: BackendArg) -> Self {
+    pub(crate) fn from_arg(ba: BackendArg) -> Self {
         Self { ba: Arc::new(ba) }
     }
 
@@ -643,7 +638,7 @@ impl PIPXBackend {
         Ok(registry_url)
     }
 
-    pub async fn reinstall_all(config: &Arc<Config>) -> Result<()> {
+    pub(crate) async fn reinstall_all(config: &Arc<Config>) -> Result<()> {
         let ts = Arc::new(ToolsetBuilder::new().build(config).await?);
         let pipx_tools = ts
             .list_installed_versions(config)
@@ -660,6 +655,7 @@ impl PIPXBackend {
                 dry_run: false,
                 locked: false,
                 before_date: None,
+                dependency_context: Default::default(),
             };
             b.install_version(ctx, tv).await?;
         }
@@ -999,6 +995,19 @@ fn fix_venv_python_symlink(install_path: &Path, pkg_name: &str) -> Result<()> {
 #[cfg(not(unix))]
 fn fix_venv_python_symlink(_install_path: &Path, _pkg_name: &str) -> Result<()> {
     Ok(())
+}
+
+/// PyPI versions follow PEP 440. Stamp the separator-less alpha/beta/rc
+/// suffixes (`3.12.0a1`, `1.0.0c1`) here rather than in the shared regex so
+/// the rule stays scoped to Python — hex commit hashes used by other
+/// ecosystems (e.g. Go pseudo-versions) would false-positive. Only fills in
+/// unknowns: an authoritative flag from a GitHub release (either value) wins
+/// over pattern detection.
+fn stamp_pep440_prerelease(mut version: VersionInfo) -> VersionInfo {
+    if version.prerelease.is_none() && PEP440_PRERELEASE_REGEX.is_match(&version.version) {
+        version.prerelease = Some(true);
+    }
+    version
 }
 
 #[cfg(test)]
@@ -1511,6 +1520,24 @@ mod tests {
         let versions = PIPXBackend::versions_from_github_releases(vec![]);
 
         assert!(versions.is_empty());
+    }
+
+    #[test]
+    fn test_github_release_stable_flag_survives_pep440_looking_tag() {
+        // A GitHub release explicitly published as a full release keeps its
+        // authoritative Some(false) even when the tag looks like a PEP 440
+        // prerelease, so the pattern stamp (None-gated) cannot reclassify it.
+        let versions = PIPXBackend::versions_from_github_releases(vec![github_release(
+            "1.0.0a1",
+            "2024-01-01T00:00:00Z",
+        )]);
+        assert_eq!(versions[0].prerelease, Some(false));
+
+        let stamped: Vec<_> = versions
+            .into_iter()
+            .map(super::stamp_pep440_prerelease)
+            .collect();
+        assert_eq!(stamped[0].prerelease, Some(false));
     }
 
     #[test]

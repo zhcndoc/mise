@@ -322,6 +322,19 @@ version_list_url = "https://example.com/releases/versions.txt"
 
 像 `v` 这样的版本前缀会自动去除。
 
+mise 会保留版本源返回的顺序。默认情况下，版本解析会将最后一个匹配项视为最新版本。如果源以其他顺序返回语义化版本，请设置 `version_order = "semver"`，以便按照语义优先级对 `mise ls-remote` 的结果进行排序并选择版本。完整的排序约定请参阅[版本排序](/dev-tools/#version-ordering)。
+
+例如，GitHub 的 releases API 会按从新到旧的顺序返回发布版本。将其用作 HTTP 版本源时，请启用语义化排序：
+
+```toml
+[tools."http:my-tool"]
+version = "latest"
+version_order = "semver"
+url = "https://example.com/my-tool-{{ version }}.tar.gz"
+version_list_url = "https://api.github.com/repos/owner/my-tool/releases"
+version_json_path = ".[].tag_name"
+```
+
 ### `version_regex`
 
 使用正则表达式从版本列表 URL 响应中提取版本：
@@ -389,7 +402,7 @@ version_list_url = "https://example.com/versions.txt"
 version_expr = 'split(body, "\n")'
 ```
 
-该表达式接收 HTTP 响应正文作为 `body` 变量，并应返回一个版本字符串数组。
+该表达式会接收 HTTP 响应正文作为 `body` 变量，并应返回一个版本字符串数组。它还会接收 `versions`，其中包含已由 `version_regex` 或 `version_json_path` 提取的值；如果之前没有提取器生成值，则该变量为空。
 
 示例表达式：
 
@@ -403,18 +416,26 @@ version_expr = 'filter(split(body, "\n"), # != "")'
 # 解析 JSON 并提取对象键（适用于 HashiCorp 风格的 JSON）
 # 例如，{"versions": {"1.0.0": {}, "2.0.0": {}}}
 version_expr = 'keys(fromJSON(body).versions)'
+
+# Sort versions with mise's version-aware comparator
+version_expr = 'fromJSON(body) | map({ trimPrefix(#.tag_name, "v") }) | sortVersions()'
 ```
 
-[expr-lang](https://expr-lang.org/) 库提供了内置函数，包括：
+[expr-lang](https://expr-lang.org/) 库提供了包括以下内容在内的内置函数：
 
-- **`fromJSON(string)`**：将 JSON 字符串解析为一个值
-- **`toJSON(value)`**：将一个值转换为 JSON 字符串
-- **`keys(map)`**：获取对象/映射的键，并作为数组返回
-- **`values(map)`**：获取对象/映射的值，并作为数组返回
-- **`len(value)`**：获取字符串、数组或映射的长度
+- **`fromJSON(string)`**：将 JSON 字符串解析为值
+- **`toJSON(value)`**：将值转换为 JSON 字符串
+- **`keys(map)`**：获取对象/map 的键并以数组形式返回
+- **`values(map)`**：获取对象/map 的值并以数组形式返回
+- **`len(value)`**：获取字符串、数组或 map 的长度
+- **`filter(array, predicate)`** 和 **`map(array, predicate)`**：过滤或转换数组值
+- **`sort(array)`** 和 **`reverse(array)`**：按字典顺序重新排列值
+- **`int(value)`**、**`float(value)`** 和 **`string(value)`**：转换兼容的值
+
+mise 添加了用于按版本排序的 **`sortVersions(array)`**。如果发现的版本遵循语义化版本规范，优先使用 `version_order = "semver"`；当表达式本身需要一个已排序的中间值时，请使用 `sortVersions()`。
 
 ::: tip
-如果同时指定了多个选项，`version_expr` 的优先级高于 `version_regex` 和 `version_json_path`。当其他选项不足以满足你的使用场景时，请使用它。
+`version_expr` 是最后的提取步骤，因此其结果会成为版本列表。使用 `versions` 变量可以对 `version_regex` 或 `version_json_path` 生成的值进行后处理。
 :::
 
 ### `bin_path`

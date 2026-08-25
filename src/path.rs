@@ -1,4 +1,4 @@
-pub use std::path::*;
+pub(crate) use std::path::*;
 
 use crate::dirs;
 
@@ -17,7 +17,7 @@ use crate::dirs;
 /// there would change identity, not presentation.
 ///
 /// Off Windows this returns its input: `\` is an ordinary filename character there.
-pub fn settle_display_separators(s: String) -> String {
+pub(crate) fn settle_display_separators(s: String) -> String {
     match cfg!(windows) {
         true => s.replace('/', "\\"),
         false => s,
@@ -67,7 +67,7 @@ fn simplify_verbatim_unc(shown: String) -> String {
     shown
 }
 
-pub trait PathExt {
+pub(crate) trait PathExt {
     /// replaces $HOME with "~", and drops a Windows extended-length prefix
     fn display_user(&self) -> String;
     fn mount(&self, on: &Path) -> PathBuf;
@@ -154,7 +154,7 @@ impl PathExt for Path {
 ///   is resolved by bash to the same executable as `/usr/bin`, so no remapping is needed
 ///   for PATH-resolution to succeed.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn windows_path_list_to_unix(path_list: &str, drive_prefix: &str) -> String {
+pub(crate) fn windows_path_list_to_unix(path_list: &str, drive_prefix: &str) -> String {
     let mut out = String::with_capacity(path_list.len());
     let mut first = true;
     for entry in path_list.split(WINDOWS_PATH_SEP) {
@@ -213,7 +213,7 @@ fn append_single_windows_path_to_unix(out: &mut String, entry: &str, drive_prefi
 ///
 /// Returns `None` only when `program` is not valid UTF-8.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn program_stem(program: &Path) -> Option<String> {
+pub(crate) fn program_stem(program: &Path) -> Option<String> {
     let s = program.to_str()?;
     let basename = s.rsplit(['/', '\\']).next().unwrap_or(s);
     let stem = match basename.rsplit_once('.') {
@@ -227,12 +227,34 @@ pub fn program_stem(program: &Path) -> Option<String> {
 /// expects a Unix-style PATH. Used on Windows to decide whether to convert the
 /// child's PATH before spawning.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn is_posix_shell_program(program: &Path) -> bool {
-    const POSIX_SHELLS: &[&str] = &["bash", "sh", "zsh", "fish", "ksh", "dash"];
+pub(crate) fn is_posix_shell_program(program: &Path) -> bool {
+    // `ash` is here because it is what `/bin/sh` is on Alpine, which mise ships musl builds
+    // for — a task written against it reaches this by name, not through the `sh` symlink.
+    const POSIX_SHELLS: &[&str] = &["bash", "sh", "zsh", "fish", "ksh", "dash", "ash"];
     let Some(stem) = program_stem(program) else {
         return false;
     };
     POSIX_SHELLS.iter().any(|name| *name == stem)
+}
+
+/// The `-c` payload that makes a shell *run* the path which follows it, treating the
+/// arguments after that as the script's own.
+///
+/// A file task hands its shell a script path, and a shell left in `-c` mode reads whatever
+/// follows as a command string instead. Without this in front of the path, the path *is* that
+/// string: the task's own arguments land on `$0` onward and never reach the script, and on
+/// Windows the backslashes are eaten as escapes before the path is even looked up.
+///
+/// `None` for the shells this does not apply to — `cmd`, whose `/c` already takes a program and
+/// forwards its arguments, and PowerShell, which has no `$0`/`$@` and already works.
+pub(crate) fn command_mode_script_payload(program: &Path) -> Option<&'static str> {
+    // fish counts as POSIX for [`is_posix_shell_program`]'s question (it wants a Unix-style
+    // PATH) but not for this one: it has no `$0`/`$@` and rejects `$@` outright. `$argv` is the
+    // whole argument list, and running it runs its first element with the rest as arguments.
+    if program_stem(program).as_deref() == Some("fish") {
+        return Some("$argv");
+    }
+    is_posix_shell_program(program).then_some(r#""$0" "$@""#)
 }
 
 /// Returns true if `program` is `cmd` / `cmd.exe`, the Windows command
@@ -242,14 +264,14 @@ pub fn is_posix_shell_program(program: &Path) -> bool {
 /// the `\"` escaping std emits for inner double quotes, so that quoting mangles
 /// commands like `python -c "import x"`. See discussion #9355.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn is_cmd_shell_program(program: &Path) -> bool {
+pub(crate) fn is_cmd_shell_program(program: &Path) -> bool {
     program_stem(program).as_deref() == Some("cmd")
 }
 
 /// Returns true if `program` is PowerShell (`pwsh` / PowerShell Core) or Windows
 /// PowerShell (`powershell`), with or without a directory prefix or `.exe`
 /// extension.
-pub fn is_powershell_program(program: &Path) -> bool {
+pub(crate) fn is_powershell_program(program: &Path) -> bool {
     matches!(
         program_stem(program).as_deref(),
         Some("pwsh" | "powershell")
@@ -274,7 +296,7 @@ pub fn is_powershell_program(program: &Path) -> bool {
 /// abbreviations (`-nop`, `-NoProfile`, `/noprofile`, …). `-NoProfileLoadTime`
 /// is deliberately *not* treated as suppressing the profile — it only affects
 /// startup timing output — so it does not block injection.
-pub fn inject_powershell_no_profile(shell: &mut Vec<String>) {
+pub(crate) fn inject_powershell_no_profile(shell: &mut Vec<String>) {
     let Some(program) = shell.first() else {
         return;
     };
@@ -322,7 +344,11 @@ pub fn inject_powershell_no_profile(shell: &mut Vec<String>) {
 /// the outer pair (cmd passes those inner quotes through untouched) — preserving
 /// the spaces-in-forwarded-args fix from #6744 instead of splitting them.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn cmd_verbatim_args(shell_flags: &[String], script: &str, args: &[String]) -> Vec<String> {
+pub(crate) fn cmd_verbatim_args(
+    shell_flags: &[String],
+    script: &str,
+    args: &[String],
+) -> Vec<String> {
     let mut body = script.to_string();
     for arg in args {
         body.push(' ');
@@ -389,7 +415,7 @@ pub(crate) fn quote_arg_for_cmd_body(arg: &str) -> String {
 /// `TaskExecutor::get_cmd_program_and_args` and the hook path in
 /// `hooks::execute`, extended to the other `cmd /c` call sites. See #9355.
 #[cfg(windows)]
-pub fn cmd_verbatim_command(
+pub(crate) fn cmd_verbatim_command(
     program: &str,
     flags: &[String],
     body: &str,
@@ -423,7 +449,7 @@ pub fn cmd_verbatim_command(
 /// explicit shell path with spaces (when double-quoted) or with backslashes
 /// reaches the spawn verbatim instead of being mangled. Returns `Err` only on
 /// an unbalanced double quote (Windows) or a `shell_words` parse error (Unix).
-pub fn split_shell_command(s: &str) -> eyre::Result<Vec<String>> {
+pub(crate) fn split_shell_command(s: &str) -> eyre::Result<Vec<String>> {
     #[cfg(windows)]
     {
         split_shell_command_windows(s)
@@ -491,7 +517,7 @@ fn split_shell_command_windows(s: &str) -> eyre::Result<Vec<String>> {
 /// `my-cygwinish-tools`) does not trip it. `MSYSTEM` is deliberately not consulted —
 /// PowerShell-launched mise inherits none, so it is not a reliable signal.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn is_cygwin_shell(program: &Path) -> bool {
+pub(crate) fn is_cygwin_shell(program: &Path) -> bool {
     let Some(s) = program.to_str() else {
         return false;
     };
@@ -514,7 +540,7 @@ pub fn is_cygwin_shell(program: &Path) -> bool {
 /// skip such entries; symmetric with the forward converter, which leaves
 /// non-default mount discovery to `MISE_CYGDRIVE_PREFIX` rather than fstab.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn unix_path_to_windows(entry: &str) -> Option<String> {
+pub(crate) fn unix_path_to_windows(entry: &str) -> Option<String> {
     // UNC round-trip: bash represents `\\server\share` as `//server/share`.
     if let Some(rest) = entry.strip_prefix("//")
         && !rest.is_empty()
@@ -583,7 +609,7 @@ pub fn unix_path_to_windows(entry: &str) -> Option<String> {
 /// gate: an explicit override is honored even when the env's PATH is missing
 /// or already Unix-form.
 #[cfg(windows)]
-pub fn resolve_posix_shell_program_path(
+pub(crate) fn resolve_posix_shell_program_path(
     program: &std::ffi::OsStr,
     env: &std::collections::BTreeMap<String, String>,
 ) -> Option<std::ffi::OsString> {
@@ -707,7 +733,7 @@ fn bash_candidates(env: &std::collections::BTreeMap<String, String>) -> Vec<Path
 /// place to run a command that uses mise-managed Windows tools or `C:\...`
 /// script paths.
 #[cfg(windows)]
-pub fn is_wsl_launcher_bash(path: &Path) -> bool {
+pub(crate) fn is_wsl_launcher_bash(path: &Path) -> bool {
     let Some(s) = path.to_str() else {
         return false;
     };
@@ -990,6 +1016,7 @@ mod tests {
         assert!(is_posix_shell_program(Path::new("sh")));
         assert!(is_posix_shell_program(Path::new("zsh")));
         assert!(is_posix_shell_program(Path::new("fish")));
+        assert!(is_posix_shell_program(Path::new("ash")));
 
         assert!(!is_posix_shell_program(Path::new("cmd")));
         assert!(!is_posix_shell_program(Path::new("cmd.exe")));
@@ -997,6 +1024,37 @@ mod tests {
         assert!(!is_posix_shell_program(Path::new("pwsh.exe")));
         assert!(!is_posix_shell_program(Path::new("rustc")));
         assert!(!is_posix_shell_program(Path::new("")));
+    }
+
+    #[test]
+    fn test_command_mode_script_payload() {
+        let payload = |p: &str| command_mode_script_payload(Path::new(p));
+
+        for posix in [
+            "bash",
+            "sh",
+            "zsh",
+            "ksh",
+            "dash",
+            // Alpine's `/bin/sh`. Measured in an alpine container: `ash -c <path> ARG1` drops
+            // the argument exactly as the others do, and the payload restores it.
+            "ash",
+            "/usr/bin/bash",
+            "BASH.EXE",
+        ] {
+            assert_eq!(payload(posix), Some(r#""$0" "$@""#), "{posix}");
+        }
+
+        // The whole reason this is not just `is_posix_shell_program`: fish answers true there
+        // and cannot use `$@`.
+        for fish in ["fish", "fish.exe", "/usr/bin/fish"] {
+            assert_eq!(payload(fish), Some("$argv"), "{fish}");
+        }
+
+        // cmd forwards arguments after `/c` already; PowerShell has no `$0`/`$@`.
+        for other in ["cmd", "cmd.exe", "pwsh", "powershell.exe", "rustc", ""] {
+            assert_eq!(payload(other), None, "{other}");
+        }
     }
 
     #[test]

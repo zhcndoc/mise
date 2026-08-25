@@ -1,9 +1,9 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise generate tool-stub`
 
-- **用法**: `mise generate tool-stub [FLAGS] <OUTPUT>`
-- **作用**: 修改状态
-- **源代码**: [`src/cli/generate/tool_stub.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/tool_stub.rs)
+- **Usage:** `mise generate tool-stub [FLAGS] <OUTPUT>`
+- **Effect:** 修改状态
+- **Source code:** [`src/cli/generate/tool_stub.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/tool_stub.rs)
 
 为基于 HTTP 的工具生成工具存根
 
@@ -12,95 +12,54 @@
 当使用特定平台的 URL 生成存根时，该命令会向现有存根文件追加新平台，而不是覆盖它们。这使你可以逐步构建跨平台工具存根。
 
 ## 参数
-
-### `<OUTPUT>`
-
-工具存根的输出文件路径。
+- **`<OUTPUT>`** — 工具存根的输出文件路径
 
 ## 标志
+- **`-b --bin <BIN>`** — 提取的归档文件中的二进制路径
 
-### `-b --bin <BIN>`
+  如果未指定且已下载归档文件，将自动检测最可能的二进制文件
+- **`--bootstrap`** — 将存根包装在引导脚本中，在尚未安装 mise 时安装它
 
-解压后的归档中的二进制路径
+  启用后，会生成一个 bash 脚本，该脚本：
+  1. 检查 mise 是否安装在预期路径
+  2. 如果未安装，则使用嵌入式安装程序下载并安装 mise
+  3. 使用 mise 执行工具存根
+- **`--bootstrap-version <BOOTSTRAP_VERSION>`** — 为引导脚本指定 mise 版本
 
-如果未指定且归档已下载，则会自动检测最可能的二进制文件
+  默认使用安装脚本中的最新版本。
+  使用此选项可固定到特定版本（例如：“2025.1.0”）。
+- **`--checksum-algorithm <CHECKSUM_ALGORITHM>`** — 下载构件时使用的校验和算法
 
-### `--bootstrap`
+  接受 `blake3` 或 `sha256`，默认为 `blake3`。不能与 `--lock` 或 `--skip-download` 一起使用，因为这些模式不会计算校验和。
 
-将存根包装在一个引导脚本中，以便在尚未安装 mise 时安装它
+  **选项：** `blake3`、`sha256`
 
-启用后，将生成一个 bash 脚本，该脚本：
-1. 检查 mise 是否已安装在预期路径中
-2. 如果没有，则使用内置安装程序下载并安装 mise
-3. 使用 mise 执行工具存根
+  **默认值：** `blake3`
+- **`--fetch`** — 获取现有工具存根文件的校验和和大小
 
-### `--bootstrap-version <BOOTSTRAP_VERSION>`
+  这会读取现有存根文件，并通过下载文件填充缺失的校验和／大小字段。存根中必须已经存在 URL。
+- **`--http <HTTP>`** — 要使用的 HTTP 后端类型
 
-为引导脚本指定 mise 版本
+  **默认值：** `http`
+- **`--lock`** — 将锁文件数据（确切版本 + 平台 URL／校验和）解析并嵌入现有存根文件，以便在不调用运行时 API 的情况下进行可复现安装
+- **`--platform-bin <PLATFORM_BIN>`** — 平台特定的二进制路径，格式为 platform:path
 
-默认使用安装脚本中的最新版本。
-可用于固定到特定版本（例如 `"2025.1.0"`）。
+  示例：--platform-bin windows-x64:tool.exe --platform-bin linux-x64:bin/tool
+- **`--platform-url <PLATFORM_URL>`** — 平台特定的 URL，格式为 platform:url 或仅为 url（自动检测平台）
 
-### `--checksum-algorithm <CHECKSUM_ALGORITHM>`
+  当输出文件已存在时，新平台将追加到现有平台表中。如果再次指定，现有平台 URL 将被更新。
 
-下载构件时使用的校验和算法
+  如果只提供 URL（不带 platform:），将根据 URL 文件名自动检测平台。
 
-接受 `blake3` 或 `sha256`，默认为 `blake3`。不能与 `--lock` 或 `--skip-download` 一起使用，因为这些模式不会计算校验和。
+  示例：--platform-url linux-x64:https://... --platform-url <https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz>
+- **`--skip-download`** — 跳过用于校验和及二进制路径检测的下载（更快但信息较少）
+- **`-u --url <URL>`** — 用于下载工具的 URL
 
-**选项：**
+  示例：<https://github.com/owner/repo/releases/download/v2.0.0/tool-linux-x64.tar.gz>
+- **`--version <VERSION>`** — 工具的版本
 
-- `blake3`
-- `sha256`
-
-**默认：** `blake3`
-
-### `--fetch`
-
-为现有工具存根文件获取校验和和大小
-
-这会读取现有的存根文件，并通过下载文件来填充任何缺失的校验和/大小字段。URL 必须已经存在于存根中。
-
-### `--http <HTTP>`
-
-要使用的 HTTP 后端类型
-
-**默认：** `http`
-
-### `--lock`
-
-将锁文件数据（精确版本 + 平台 URL/校验和）解析并嵌入到现有存根文件中，以便在不运行时 API 调用的情况下实现可复现安装
-
-### `--platform-bin… <PLATFORM_BIN>`
-
-平台特定的二进制路径，格式为 platform:path
-
-示例：--platform-bin windows-x64:tool.exe --platform-bin linux-x64:bin/tool
-
-### `--platform-url… <PLATFORM_URL>`
-
-平台特定的 URL，格式为 platform:url 或仅 url（自动检测平台）
-
-当输出文件已存在时，新的平台将追加到现有的平台表中。如果再次指定，现有的平台 URL 将被更新。
-
-如果只提供了 URL（没有 platform:），则会根据 URL 文件名自动检测平台。
-
-示例：--platform-url linux-x64:https://... --platform-url <https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz>
-
-### `--skip-download`
-
-跳过用于校验和和二进制路径检测的下载（更快，但信息较少）
-
-### `-u --url <URL>`
-
-用于下载工具的 URL
-
-示例：<https://github.com/owner/repo/releases/download/v2.0.0/tool-linux-x64.tar.gz>
-
-### `--version <VERSION>`
-
-工具版本
-
-**默认：** `latest`
+  **默认值：** `latest`
+- **`-h --help`** — 打印帮助
 
 示例：
 

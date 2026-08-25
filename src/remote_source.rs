@@ -18,21 +18,21 @@ static AZURE_DEVOPS_HTTPS_GIT_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteGitSource {
+pub(crate) struct RemoteGitSource {
     pub url: String,
     pub path: String,
     pub git_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteHttpSource {
+pub(crate) struct RemoteHttpSource {
     pub url: String,
 }
 
-pub struct RemoteSource;
+pub(crate) struct RemoteSource;
 
 impl RemoteSource {
-    pub fn parse_git(file: &str) -> Option<RemoteGitSource> {
+    pub(crate) fn parse_git(file: &str) -> Option<RemoteGitSource> {
         Self::parse_git_ssh(file).or_else(|| Self::parse_git_https(file))
     }
 
@@ -46,7 +46,7 @@ impl RemoteSource {
             .or_else(|| parse_git_with(&AZURE_DEVOPS_HTTPS_GIT_REGEX, file))
     }
 
-    pub fn parse_http(file: &str) -> Option<RemoteHttpSource> {
+    pub(crate) fn parse_http(file: &str) -> Option<RemoteHttpSource> {
         let url = url::Url::parse(file).ok()?;
         ((url.scheme() == "http" || url.scheme() == "https")
             && url.path().len() > 1
@@ -60,9 +60,13 @@ impl RemoteSource {
 fn parse_git_with(regex: &Regex, file: &str) -> Option<RemoteGitSource> {
     let captures = regex.captures(file)?;
     let path = captures.name("path").unwrap().as_str();
-    if path
-        .split('/')
-        .any(|component| component.is_empty() || component == "." || component == "..")
+    let mut components = path.split('/');
+    let first = components.next()?;
+    if path.contains('\\')
+        || is_windows_drive_component(first)
+        || std::iter::once(first)
+            .chain(components)
+            .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return None;
     }
@@ -71,6 +75,14 @@ fn parse_git_with(regex: &Regex, file: &str) -> Option<RemoteGitSource> {
         path: path.to_string(),
         git_ref: captures.name("ref").map(|m| m.as_str().to_string()),
     })
+}
+
+// Windows `Path::join` discards the base path when joining a drive-prefixed
+// path even without a root (e.g. `C:outside`), so any leading `<letter>:`
+// must be rejected, not just a bare `C:` component.
+fn is_windows_drive_component(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 #[cfg(test)]
@@ -142,6 +154,21 @@ mod tests {
         assert!(
             RemoteSource::parse_git("git::https://myserver.com/example.git//plugin/./other")
                 .is_none()
+        );
+        assert!(
+            RemoteSource::parse_git("git::https://myserver.com/example.git//..\\outside").is_none()
+        );
+        assert!(
+            RemoteSource::parse_git("git::https://myserver.com/example.git//C:/outside").is_none()
+        );
+        assert!(
+            RemoteSource::parse_git("git::https://myserver.com/example.git//C:\\outside").is_none()
+        );
+        assert!(
+            RemoteSource::parse_git("git::https://myserver.com/example.git//C:outside").is_none()
+        );
+        assert!(
+            RemoteSource::parse_git("git::https://myserver.com/example.git//C:dir/file").is_none()
         );
     }
 

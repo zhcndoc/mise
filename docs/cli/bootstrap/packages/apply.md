@@ -1,10 +1,10 @@
 <!-- @由 usage-cli 根据使用规范生成 -->
 # `mise bootstrap packages apply`
 
-- **用法**: `mise bootstrap packages apply [FLAGS] [PACKAGE]…`
-- **别名**: `i`
-- **效果**: 修改状态
-- **源代码**: [`src/cli/system/install.rs`](https://github.com/jdx/mise/blob/main/src/cli/system/install.rs)
+- **用法：** `mise bootstrap packages apply [FLAGS] [PACKAGE]…`
+- **别名：** `i`、`install`
+- **效果：** 修改状态
+- **源代码：** [`src/cli/system/install.rs`](https://github.com/jdx/mise/blob/main/src/cli/system/install.rs)
 
 从 `[bootstrap.packages]` 应用系统包
 
@@ -15,28 +15,14 @@
 也可以显式以 `manager:package` 形式提供包（例如 `apk:zlib-dev`、`apt:curl`、`brew:jq`）；无论它们是否出现在配置中，都会被安装。显式包和 `--manager` 会将运行范围限定为仅这些包。`install` 也可作为此命令的别名。
 
 ## 参数
-
-### `[PACKAGE]…`
-
-以 `manager:package` 形式指定的软件包；默认包含 [bootstrap.packages] 中配置的所有内容。
+- **`[PACKAGE]…`** — 采用 `manager:package` 形式的包；默认为 [bootstrap.packages] 中配置的全部内容
 
 ## 标志
-
-### `-m --manager <MANAGER>`
-
-仅为此内置管理器或插件管理器安装软件包
-
-### `-n --dry-run`
-
-打印将要运行的命令，但不实际执行
-
-### `-y --yes`
-
-跳过确认提示
-
-### `--update`
-
-先刷新包管理器元数据（apk：`--update-cache`，apt：`apt-get update`）
+- **`-m --manager <MANAGER>`** — 仅安装由此内置管理器或插件管理器管理的包
+- **`-n --dry-run`** — 打印将要运行的命令，但不实际运行
+- **`-y --yes`** — 跳过确认提示
+- **`--update`** — 先刷新包管理器元数据（apk：`--update-cache`，apt：`apt-get update`）
+- **`-h --help`** — 打印帮助
 
 示例：
 

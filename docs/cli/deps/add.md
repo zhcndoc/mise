@@ -1,9 +1,9 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise deps add`
 
-- **用法**：`mise deps add [-D --dev] <PACKAGES>…`
-- **作用**：修改状态
-- **源代码**：[`src/cli/deps/add.rs`](https://github.com/jdx/mise/blob/main/src/cli/deps/add.rs)
+- **用法：** `mise deps add [-D --dev] <PACKAGES>…`
+- **作用：** 修改状态
+- **源代码：** [`src/cli/deps/add.rs`](https://github.com/jdx/mise/blob/main/src/cli/deps/add.rs)
 
 添加一个依赖
 
@@ -11,13 +11,8 @@
 包规范使用 `ecosystem:package` 格式，例如 `npm:react` 或 `npm:@types/react@19`。
 
 ## 参数
-
-### `<PACKAGES>…`
-
-要添加的包（例如，npm:react、npm:@types/react@19）。
+- **`<PACKAGES>…`** — 要添加的软件包（例如：npm:react、npm:@types/react@19）
 
 ## 标志
-
-### `-D --dev`
-
-作为开发依赖项添加
+- **`-D --dev`** — 添加为开发依赖
+- **`-h --help`** — 显示帮助

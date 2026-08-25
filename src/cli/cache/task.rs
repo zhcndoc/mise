@@ -16,19 +16,19 @@ use crate::task::{GetMatchingExt, Task};
 use crate::ui::table::MiseTable;
 
 /// Inspect output cache entries for a task
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
-pub struct CacheTask {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub(super) struct CacheTask {
     /// Task name or pattern to inspect
     task: String,
 
     /// Output in JSON format
-    #[clap(short = 'J', long)]
+    #[usage(short = 'J', long)]
     json: bool,
 }
 
 impl CacheTask {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let (config, tasks) = resolve_tasks(&self.task).await?;
         let mut task_entries = Vec::with_capacity(tasks.len());
         for task in tasks {

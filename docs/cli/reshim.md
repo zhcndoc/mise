@@ -1,9 +1,9 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise reshim`
 
-- **用法**：`mise reshim [-f --force]`
-- **作用**：修改状态
-- **源代码**：[`src/cli/reshim.rs`](https://github.com/jdx/mise/blob/main/src/cli/reshim.rs)
+- **用法：** `mise reshim [-f --force]`
+- **作用：** 修改状态
+- **源代码：** [`src/cli/reshim.rs`](https://github.com/jdx/mise/blob/main/src/cli/reshim.rs)
 
 根据当前已安装工具的二进制路径创建新的 shim。
 
@@ -26,11 +26,9 @@ npm() {
 请注意，这会为 _所有_ 已安装工具创建 shim，而不仅仅是那些
 当前在 mise.toml 中处于激活状态的工具。
 
-## 标志
-
-### `-f --force`
-
-在重新生成 shim 之前移除所有 shim
+## 选项
+- **`-f --force`** — 在重新创建 shim 前移除所有 shim
+- **`-h --help`** — 打印帮助
 
 示例：
 

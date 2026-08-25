@@ -5,14 +5,14 @@ use toml_edit::{DocumentMut, Formatted, Item, Table, Value};
 
 /// Represents a TOML document with navigable sections
 #[derive(Debug)]
-pub struct TomlDocument {
+pub(crate) struct TomlDocument {
     pub sections: Vec<Section>,
     pub modified: bool,
 }
 
 /// A section in the TOML document (e.g., [tools], [env])
 #[derive(Debug, Clone)]
-pub struct Section {
+pub(crate) struct Section {
     pub name: String,
     pub entries: Vec<Entry>,
     pub expanded: bool,
@@ -22,17 +22,21 @@ pub struct Section {
 
 /// An entry within a section (key = value)
 #[derive(Debug, Clone)]
-pub struct Entry {
+pub(crate) struct Entry {
     pub key: String,
     pub value: EntryValue,
     pub expanded: bool,
     /// Comments appearing before this entry
     pub comments: Vec<String>,
+    /// The value's decor suffix when it carries a same-line comment, kept
+    /// verbatim so spacing survives. It lives in the *suffix*, which is why
+    /// reading only the prefix never picked it up.
+    pub trailing_comment: Option<String>,
 }
 
 /// The value of an entry
 #[derive(Debug, Clone)]
-pub enum EntryValue {
+pub(crate) enum EntryValue {
     /// Simple string, number, or boolean value
     Simple(String),
     /// Array of values
@@ -43,12 +47,12 @@ pub enum EntryValue {
 
 impl TomlDocument {
     /// Create a new document with default sections
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::new_with_deps(false)
     }
 
     /// Create a new document with default sections, optionally including deps
-    pub fn new_with_deps(include_deps: bool) -> Self {
+    pub(crate) fn new_with_deps(include_deps: bool) -> Self {
         let mut sections = vec![
             Section {
                 name: "tools".to_string(),
@@ -93,7 +97,7 @@ impl TomlDocument {
     }
 
     /// Parse a TOML document from a string
-    pub fn parse(content: &str) -> Result<Self, toml_edit::TomlError> {
+    pub(crate) fn parse(content: &str) -> Result<Self, toml_edit::TomlError> {
         let doc: DocumentMut = content.parse()?;
         let mut sections = Vec::new();
 
@@ -103,9 +107,13 @@ impl TomlDocument {
         // Collect top-level entries (non-table items like min_version)
         let mut root_entries = Vec::new();
         for (key, item) in doc.iter() {
+            let key_prefix = doc
+                .as_table()
+                .key(key)
+                .and_then(|k| k.leaf_decor().prefix());
             if !item.is_table()
                 && !item.is_array_of_tables()
-                && let Some(entry) = Self::parse_entry(key, item)
+                && let Some(entry) = Self::parse_entry(key, item, key_prefix)
             {
                 root_entries.push(entry);
             }
@@ -181,7 +189,7 @@ impl TomlDocument {
     }
 
     /// Load a TOML document from a file
-    pub fn load(path: &Path) -> std::io::Result<Self> {
+    pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         Self::parse(&content).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
@@ -190,7 +198,12 @@ impl TomlDocument {
         let mut entries = Vec::new();
 
         for (key, item) in table.iter() {
-            if let Some(entry) = Self::parse_entry(key, item) {
+            // The leading comment of a key/value pair belongs to the key, not the
+            // value — the value's prefix is only the space after `=`. Reading the
+            // value meant `comments` was always empty for entries, so nothing was
+            // displayed and nothing could be written back (discussion #10650).
+            let key_prefix = table.key(key).and_then(|k| k.leaf_decor().prefix());
+            if let Some(entry) = Self::parse_entry(key, item, key_prefix) {
                 entries.push(entry);
             }
         }
@@ -206,12 +219,20 @@ impl TomlDocument {
         }
     }
 
-    fn parse_entry(key: &str, item: &Item) -> Option<Entry> {
-        // Extract comments from the item's decor (handle both Values and Tables)
+    fn parse_entry(
+        key: &str,
+        item: &Item,
+        key_prefix: Option<&toml_edit::RawString>,
+    ) -> Option<Entry> {
+        // A nested table carries its own decor; a key/value pair carries it on
+        // the key.
         let comments = match item {
-            Item::Value(v) => Self::extract_comments_from_decor(v.decor().prefix()),
             Item::Table(t) => Self::extract_comments_from_decor(t.decor().prefix()),
-            _ => Vec::new(),
+            _ => Self::extract_comments_from_decor(key_prefix),
+        };
+        let trailing_comment = match item {
+            Item::Value(v) => Self::extract_trailing_comment(v.decor().suffix()),
+            _ => None,
         };
 
         let value = match item {
@@ -238,7 +259,14 @@ impl TomlDocument {
             value,
             expanded: false,
             comments,
+            trailing_comment,
         })
+    }
+
+    /// Keep a decor suffix that carries a same-line comment, spacing and all.
+    fn extract_trailing_comment(suffix: Option<&toml_edit::RawString>) -> Option<String> {
+        let raw = suffix?.as_str()?;
+        raw.trim_start().starts_with('#').then(|| raw.to_string())
     }
 
     /// Extract comment lines from a decor prefix
@@ -299,7 +327,7 @@ impl TomlDocument {
     }
 
     /// Serialize the document to a TOML string
-    pub fn to_toml(&self) -> String {
+    pub(crate) fn to_toml(&self) -> String {
         let mut doc = DocumentMut::new();
 
         for section in &self.sections {
@@ -312,6 +340,7 @@ impl TomlDocument {
                 for entry in &section.entries {
                     let item = Self::entry_value_to_item(&entry.value);
                     doc.insert(&entry.key, item);
+                    Self::apply_entry_decor(doc.as_table_mut(), entry);
                 }
                 continue;
             }
@@ -323,16 +352,51 @@ impl TomlDocument {
 
                 // Handle dotted keys (like _.path in env section) by creating nested tables
                 if entry.key.contains('.') && section.name == "env" {
+                    // The leaf sits in a subtable, so the decor helper below cannot
+                    // reach it. Comments on a dotted key stay lost for now.
                     Self::insert_dotted_key(&mut table, &entry.key, item);
                 } else {
                     table.insert(&entry.key, item);
+                    Self::apply_entry_decor(&mut table, entry);
                 }
             }
 
+            let prefix = Self::comment_prefix(&section.comments);
+            if !prefix.is_empty() {
+                table.decor_mut().set_prefix(prefix);
+            }
             doc.insert(&section.name, Item::Table(table));
         }
 
         doc.to_string()
+    }
+
+    /// Render comment lines as a decor prefix.
+    fn comment_prefix(comments: &[String]) -> String {
+        comments
+            .iter()
+            .map(|c| format!("{c}\n"))
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    /// Put an entry's comments back on the item it was written as.
+    ///
+    /// The leading comment goes on the key and a same-line comment on the value:
+    /// `to_toml` builds a fresh document, so nothing carries over unless it is
+    /// written here (discussion #10650).
+    fn apply_entry_decor(table: &mut Table, entry: &Entry) {
+        let prefix = Self::comment_prefix(&entry.comments);
+        if !prefix.is_empty()
+            && let Some(mut key) = table.key_mut(&entry.key)
+        {
+            key.leaf_decor_mut().set_prefix(prefix);
+        }
+        if let Some(trailing) = &entry.trailing_comment
+            && let Some(Item::Value(value)) = table.get_mut(&entry.key)
+        {
+            value.decor_mut().set_suffix(trailing.clone());
+        }
     }
 
     /// Insert a dotted key into a table by creating nested structure
@@ -417,7 +481,7 @@ impl TomlDocument {
     /// the worst possible moment to find out.
     ///
     /// A bare relative name gives an empty parent, which `create_dir_all` treats as a no-op.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -425,7 +489,7 @@ impl TomlDocument {
     }
 
     /// Add a new section
-    pub fn add_section(&mut self, name: String) {
+    pub(crate) fn add_section(&mut self, name: String) {
         if !self.sections.iter().any(|s| s.name == name) {
             self.sections.push(Section {
                 name,
@@ -438,25 +502,31 @@ impl TomlDocument {
     }
 
     /// Add an entry to a section with a simple string value
-    pub fn add_entry(&mut self, section_idx: usize, key: String, value: String) {
+    pub(crate) fn add_entry(&mut self, section_idx: usize, key: String, value: String) {
         self.add_entry_with_value(section_idx, key, EntryValue::Simple(value));
     }
 
     /// Add an entry to a section with a specific value type
-    pub fn add_entry_with_value(&mut self, section_idx: usize, key: String, value: EntryValue) {
+    pub(crate) fn add_entry_with_value(
+        &mut self,
+        section_idx: usize,
+        key: String,
+        value: EntryValue,
+    ) {
         if let Some(section) = self.sections.get_mut(section_idx) {
             section.entries.push(Entry {
                 key,
                 value,
                 expanded: false,
                 comments: Vec::new(),
+                trailing_comment: None,
             });
             self.modified = true;
         }
     }
 
     /// Delete an entry from a section
-    pub fn delete_entry(&mut self, section_idx: usize, entry_idx: usize) {
+    pub(crate) fn delete_entry(&mut self, section_idx: usize, entry_idx: usize) {
         if let Some(section) = self.sections.get_mut(section_idx)
             && entry_idx < section.entries.len()
         {
@@ -466,7 +536,7 @@ impl TomlDocument {
     }
 
     /// Update an entry's value
-    pub fn update_entry(&mut self, section_idx: usize, entry_idx: usize, value: String) {
+    pub(crate) fn update_entry(&mut self, section_idx: usize, entry_idx: usize, value: String) {
         if let Some(section) = self.sections.get_mut(section_idx)
             && let Some(entry) = section.entries.get_mut(entry_idx)
         {
@@ -476,7 +546,7 @@ impl TomlDocument {
     }
 
     /// Add an item to an array entry
-    pub fn add_array_item(&mut self, section_idx: usize, entry_idx: usize, value: String) {
+    pub(crate) fn add_array_item(&mut self, section_idx: usize, entry_idx: usize, value: String) {
         if let Some(section) = self.sections.get_mut(section_idx)
             && let Some(entry) = section.entries.get_mut(entry_idx)
             && let EntryValue::Array(ref mut items) = entry.value
@@ -487,7 +557,7 @@ impl TomlDocument {
     }
 
     /// Update an array item
-    pub fn update_array_item(
+    pub(crate) fn update_array_item(
         &mut self,
         section_idx: usize,
         entry_idx: usize,
@@ -505,7 +575,12 @@ impl TomlDocument {
     }
 
     /// Delete an array item
-    pub fn delete_array_item(&mut self, section_idx: usize, entry_idx: usize, array_idx: usize) {
+    pub(crate) fn delete_array_item(
+        &mut self,
+        section_idx: usize,
+        entry_idx: usize,
+        array_idx: usize,
+    ) {
         if let Some(section) = self.sections.get_mut(section_idx)
             && let Some(entry) = section.entries.get_mut(entry_idx)
             && let EntryValue::Array(ref mut items) = entry.value
@@ -517,14 +592,14 @@ impl TomlDocument {
     }
 
     /// Toggle section expanded state
-    pub fn toggle_section(&mut self, section_idx: usize) {
+    pub(crate) fn toggle_section(&mut self, section_idx: usize) {
         if let Some(section) = self.sections.get_mut(section_idx) {
             section.expanded = !section.expanded;
         }
     }
 
     /// Toggle entry expanded state (for arrays/inline tables)
-    pub fn toggle_entry(&mut self, section_idx: usize, entry_idx: usize) {
+    pub(crate) fn toggle_entry(&mut self, section_idx: usize, entry_idx: usize) {
         if let Some(section) = self.sections.get_mut(section_idx)
             && let Some(entry) = section.entries.get_mut(entry_idx)
         {
@@ -533,7 +608,7 @@ impl TomlDocument {
     }
 
     /// Delete a section
-    pub fn delete_section(&mut self, section_idx: usize) {
+    pub(crate) fn delete_section(&mut self, section_idx: usize) {
         if section_idx < self.sections.len() {
             self.sections.remove(section_idx);
             self.modified = true;
@@ -542,7 +617,7 @@ impl TomlDocument {
 
     /// Convert a simple entry value to an inline table with version key
     /// Returns true if conversion was successful
-    pub fn convert_to_inline_table(&mut self, section_idx: usize, entry_idx: usize) -> bool {
+    pub(crate) fn convert_to_inline_table(&mut self, section_idx: usize, entry_idx: usize) -> bool {
         if let Some(section) = self.sections.get_mut(section_idx)
             && let Some(entry) = section.entries.get_mut(entry_idx)
             && let EntryValue::Simple(value) = &entry.value
@@ -558,7 +633,7 @@ impl TomlDocument {
 
     /// Add a field to an inline table entry
     #[allow(dead_code)]
-    pub fn add_inline_table_field(
+    pub(crate) fn add_inline_table_field(
         &mut self,
         section_idx: usize,
         entry_idx: usize,
@@ -584,12 +659,12 @@ impl Default for TomlDocument {
 #[allow(dead_code)]
 impl EntryValue {
     /// Check if this is a complex value (array or inline table)
-    pub fn is_complex(&self) -> bool {
+    pub(crate) fn is_complex(&self) -> bool {
         !matches!(self, EntryValue::Simple(_))
     }
 
     /// Get the display string for this value
-    pub fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         match self {
             EntryValue::Simple(s) => s.clone(),
             EntryValue::Array(items) => format!("[{}]", items.join(", ")),
@@ -604,7 +679,7 @@ impl EntryValue {
     }
 
     /// Get item count for complex values
-    pub fn item_count(&self) -> Option<usize> {
+    pub(crate) fn item_count(&self) -> Option<usize> {
         match self {
             EntryValue::Simple(_) => None,
             EntryValue::Array(items) => Some(items.len()),
@@ -668,6 +743,52 @@ paths = ["./bin", "./node_modules/.bin"]
     }
 
     #[test]
+    fn test_roundtrip_keeps_comments() {
+        // Everything here came back stripped before: the banner, the comment
+        // above the section, the comment above an entry, and the same-line
+        // comment. See discussion #10650.
+        let content = r#"# managed by the platform team
+
+[tools]
+# language runtimes
+node = "22"
+
+[env]
+FOO = "bar" # why this is set
+"#;
+        let doc = TomlDocument::parse(content).unwrap();
+        let output = doc.to_toml();
+        assert!(
+            output.contains("# managed by the platform team"),
+            "banner lost: {output}"
+        );
+        assert!(
+            output.contains("# language runtimes"),
+            "section-level comment lost: {output}"
+        );
+        assert!(
+            output.contains("# why this is set"),
+            "trailing comment lost: {output}"
+        );
+        // The trailing comment has to stay on its own line, not become a leading
+        // one for the next entry.
+        assert!(
+            output.contains(r#"FOO = "bar" # why this is set"#),
+            "trailing comment moved: {output}"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_without_comments_adds_nothing() {
+        let content = r#"[tools]
+node = "22"
+"#;
+        let doc = TomlDocument::parse(content).unwrap();
+        let output = doc.to_toml();
+        assert!(!output.contains('#'), "invented a comment: {output}");
+    }
+
+    #[test]
     fn test_roundtrip() {
         let content = r#"[tools]
 node = "22"
@@ -723,6 +844,7 @@ node = "22"
             value: EntryValue::Array(vec!["./bin".to_string(), "./node_modules/.bin".to_string()]),
             expanded: false,
             comments: Vec::new(),
+            trailing_comment: None,
         });
 
         let output = doc.to_toml();

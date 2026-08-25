@@ -37,10 +37,13 @@ lockfile = true
 `mise.lock` 是一个 TOML 文件，采用基于平台的格式，按平台组织资产信息：
 
 ```toml
-# 示例 mise.lock
+# Example mise.lock
+lockfile_version = 1
+
 [[tools.node]]
 version = "20.11.0"
 backend = "core:node"
+specifiers = ["20"]
 
 [tools.node.platforms.linux-x64]
 checksum = "sha256:a6c213b7a2c3b8b9c0aaf8d7f5b3a5c8d4e2f4a5b6c7d8e9f0a1b2c3d4e5f6a7"
@@ -50,6 +53,7 @@ url = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-linux-x64.tar.xz"
 [[tools.python]]
 version = "3.11.7"
 backend = "core:python"
+specifiers = ["3.11"]
 
 [tools.python.platforms.linux-x64]
 checksum = "sha256:def456..."
@@ -67,6 +71,8 @@ size = 1234567
 
 ```
 
+新的锁文件使用当前的版本化格式。未版本化的锁文件会被视为版本 0，并在普通更新期间保持该格式，以避免锁文件发生意外变动。运行 `mise lock --upgrade` 可有意升级旧版锁文件。版本 1 会在具体条目中记录每个原始工具请求解析到的结果，因此像 `"1"` 和 `"1.0.0"` 这样的重叠请求可以可靠地选择不同的锁定版本。
+
 ### 平台信息
 
 工具的 `[tools.name.platforms]` 部分中的每个平台都使用类似 `"os-arch"` 的键格式（例如 `"linux-x64"`、`"macos-arm64"`），并且可以包含：
@@ -79,10 +85,11 @@ size = 1234567
 
 每个工具条目（`[[tools.name]]`）可以包含：
 
-- **`version`**（必需）：工具的精确版本
-- **`backend`**（可选）：用于安装该工具的后端（例如 `core:node`、`aqua:BurntSushi/ripgrep`）
-- **`options`**（可选）：用于标识制品的后端特定选项（例如 `{exe = "rg", matching = "musl"}`）
-- **`platforms`**（可选）：特定于平台的元数据（校验和、URL、大小）
+- **`version`**（必需）：工具的确切版本
+- **`backend`**（可选）：用于安装工具的后端（例如 `core:node`、`aqua:BurntSushi/ripgrep`）
+- **`specifiers`**（版本 1）：解析到此版本和选项变体的原始请求
+- **`options`**（可选）：用于标识制品的特定后端选项（例如 `{exe = "rg", matching = "musl"}`）
+- **`platforms`**（可选）：特定平台的元数据（校验和、URL、大小）
 
 当工具的制品标识不仅取决于平台键时，同一版本可以有多个条目。例如，Swift 会针对不同发行版发布不同的 Linux tarball，因此其条目会记录各自对应的发行版：
 
@@ -117,7 +124,7 @@ options = { swift_platform = "fedora39" }
 | `mise.toml`            | `mise.lock`            |
 | `mise.test.toml`       | `mise.test.lock`       |
 | `mise.staging.toml`    | `mise.staging.lock`    |
-| `mise.local.toml`      | `mise.local.lock`       |
+| `mise.local.toml`      | `mise.local.lock`      |
 | `mise.test.local.toml` | `mise.test.local.lock` |
 
 例如，在 `MISE_ENV=test` 时：
@@ -133,6 +140,19 @@ MISE_ENV=test mise lock  # 创建 mise.lock 和 mise.test.lock
 这种设计意味着未设置 `MISE_ENV` 的 CI 环境只依赖 `mise.lock`，因此 `mise.dev.lock` 中的开发工具版本升级不会使 CI 缓存失效。
 
 `mise.lock` 和 `mise.<env>.lock` 文件都应提交到版本控制。`mise.local.lock` 和 `mise.<env>.local.lock` 应与其对应的配置文件一起加入 gitignore。
+
+## 全局锁文件
+
+在全局配置（`~/.config/mise/config.toml`）中声明的工具永远不会由普通的 `mise lock` 锁定，普通的 `mise lock` 只会针对活动项目配置根目录。请使用 `mise lock --global`：
+
+```sh
+mise lock --global              # update global (and system) config lockfiles
+```
+
+::: tip
+当你的全局配置是指向 dotfiles 仓库的符号链接时也同样适用，例如
+`~/.config/mise/config.toml` -> `~/dotfiles/mise.toml`。mise 会通过两条路径访问同一个文件，并将其视为全局配置，因此在仓库中运行 `mise lock` 会报告项目作用域中未配置任何内容。请改用 `mise lock --global`；锁文件会写入符号链接目标文件旁边（`~/dotfiles/mise.lock`）。
+:::
 
 ## 本地锁文件
 
@@ -204,7 +224,9 @@ mise lock                    # 为所有平台生成 URL
 mise lock --platform linux-x64,macos-arm64  # 或指定平台
 ```
 
-这对于 CI 环境很有用，你可以在其中确保可复现构建，而不依赖任何外部 API。
+该检查只涵盖能够记录 URL 的后端。`asdf`、`cargo`、`gem`、`go`、`npm`、`pipx`、`ubi`、`core:dotnet`、`core:rust` 和 `core:swift` 通过外部工具安装，或在安装时解析其下载内容；vfox _backend_ 插件目前也无法报告 URL，因此严格模式会跳过它们而不是失败——混合使用这些后端与可锁定工具的配置仍然可以安装。vfox _tool_ 插件会记录 URL，并像其他可锁定后端一样接受检查。从[工具存根](/dev-tools/tool-stubs)解析的工具也会被跳过。有关各后端记录的内容，请参见[后端支持](#backend-support)。
+
+这对于 CI 环境很有用，可以确保可复现构建，同时不依赖任何外部 API。
 
 ## 工作流
 

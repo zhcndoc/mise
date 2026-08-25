@@ -5,20 +5,20 @@ use crate::tokens;
 ///
 /// Shows which token source mise would use, useful for debugging
 /// authentication issues. The token is masked by default.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Gitlab {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(super) struct Gitlab {
     /// GitLab hostname
-    #[clap(default_value = "gitlab.com")]
+    #[usage(default = "gitlab.com")]
     host: String,
 
     /// Show the full unmasked token
-    #[clap(long)]
+    #[usage(long)]
     unmask: bool,
 }
 
 impl Gitlab {
-    pub fn run(self) -> eyre::Result<()> {
+    pub(super) fn run(self) -> eyre::Result<()> {
         match gitlab::resolve_token(&self.host) {
             Some((token, source)) => {
                 let display_token = if self.unmask {

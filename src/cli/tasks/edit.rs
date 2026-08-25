@@ -8,20 +8,20 @@ use std::path::MAIN_SEPARATOR_STR;
 /// Edit a task with $EDITOR
 ///
 /// The task will be created as a standalone script if it does not already exist.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct TasksEdit {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(super) struct TasksEdit {
     /// Task to edit
-    #[clap()]
+    #[usage()]
     task: String,
 
     /// Display the path to the task instead of editing it
-    #[clap(long, short, verbatim_doc_comment)]
+    #[usage(long, short, verbatim_doc_comment)]
     path: bool,
 }
 
 impl TasksEdit {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let cwd = dirs::CWD.clone().unwrap_or_default();
         let project_root = config.project_root.clone().unwrap_or(cwd);

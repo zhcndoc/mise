@@ -24,10 +24,10 @@ script: |
 
 ### 引导
 
-除了调用 `curl https://mise.run | sh` 之外，还可以使用 [`mise generate bootstrap`](/cli/generate/bootstrap.html) 生成一个用于运行并安装 `mise` 的脚本。
+除了调用 `curl https://mise.run | sh`，还可以使用 [`mise generate install-script`](/cli/generate/install-script.html) 生成一个运行并安装 `mise` 的脚本
 
 ```shell
-mise generate bootstrap -l -w
+mise generate install-script -l -w
 ```
 
 将 `.mise/` 添加到你的 `.gitignore` 中，并提交生成的 `./bin/mise` 文件。现在你可以直接在 CI 中使用 `./bin/mise` 来安装和运行 `mise`。
@@ -38,10 +38,7 @@ script: |
   ./bin/mise x -- npm test
 ```
 
-默认情况下，生成的脚本会安装生成该脚本时所使用的版本，但它也遵循与[安装脚本](/installing-mise.html)相同的
-`MISE_VERSION` 和 `MISE_INSTALL_PATH` 变量。
-如果显式指定了 `MISE_INSTALL_PATH`，则始终按原样使用；否则，`MISE_VERSION` 也会选择
-默认缓存路径，因此在 CI 中更新该变量会安装所请求的版本，而不是重新使用最先缓存的版本。
+默认情况下，生成的脚本会安装生成该脚本时所使用的版本，但它会遵循与[安装脚本](/installing-mise.html)相同的 `MISE_VERSION` 和 `MISE_INSTALL_PATH` 变量。显式指定的 `MISE_INSTALL_PATH` 始终按原样使用；否则，`MISE_VERSION` 还会选择数据目录下按版本标识的默认路径（`~/.local/share/mise/bootstrap/`），因此在 CI 中升级它会安装请求的版本，而不是复用首次安装的版本。这是非本地化包装器：本地化包装器会将其二进制文件保存在本地化数据目录中（默认为 `.mise/`）。旧版 mise 生成的包装器会在 Unix 上将该二进制文件放入缓存目录，而旧版 Windows 启动器会将其直接放在 `%LOCALAPPDATA%\mise` 下；该包装器会继续运行那里已有的文件，而不是重新下载
 
 ## 针对不受信任的配置运行（安全模式）
 
@@ -129,10 +126,10 @@ build-job:
 
 ### 使用 bootstrap 脚本的示例
 
-另一种方法是使用 [`mise generate bootstrap`](/cli/generate/bootstrap.html) 来在 GitLab CI 上轻松 [引导](#bootstrapping) `mise`。
+另一种方式是使用 [`mise generate install-script`](/cli/generate/install-script.html)，在 GitLab CI 上轻松[引导](#bootstrapping) `mise`
 
 ```
-mise generate bootstrap -l -w
+mise generate install-script -l -w
 ```
 
 你现在可以使用一个通用的 Docker 镜像，例如下面这个，在 CI 中运行并安装 `mise`。

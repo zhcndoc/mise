@@ -9,11 +9,12 @@
 - `mise.local.toml` - 用于本地配置，不应提交到源代码管理
 - `mise.toml`
 - `mise/config.toml`
+- `mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载；类似 `x.base.toml` 这样的带点名称[正在弃用](/configuration/environments.html#conf-d-environments)，只有在 `env_conf_d = true` 时才会为匹配的环境加载
 - `.mise/config.toml`
-- `.mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载
-- `.config/mise.toml` - 使用此路径可以将配置文件归入同一个目录
+- `.mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载；类似 `x.base.toml` 这样的带点名称[正在弃用](/configuration/environments.html#conf-d-environments)，只有在 `env_conf_d = true` 时才会为匹配的环境加载
+- `.config/mise.toml` - 使用此路径可以将配置文件归入一个公共目录
 - `.config/mise/config.toml`
-- `.config/mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载
+- `.config/mise/conf.d/*.toml` - 在归组配置目录下，分片加载和[弃用](/configuration/environments.html#conf-d-environments)行为相同
 
 ::: tip
 运行 [`mise cfg`](/cli/config.html) 来查看 mise 在你的具体环境中按什么顺序加载文件。通常这比去弄清 mise 的规则要容易得多。
@@ -60,8 +61,11 @@ mise 使用一种复杂的分层配置系统，将来自多个来源的设置进
     └── work/
         ├── mise.toml                 # 工作区范围设置
         └── myproject/
-            ├── mise.local.toml       # 本地覆盖（被 git 忽略）
-            ├── mise.toml             # 项目配置
+            ├── mise.local.toml       # Local overrides (git-ignored)
+            ├── mise.toml             # Project config
+            ├── mise/
+            │   ├── config.toml       # Visible grouped project config
+            │   └── conf.d/*.toml     # Visible project fragments, loaded alphabetically
             ├── .mise/
             │   ├── config.toml       # 归入 .mise 的项目配置
             │   └── conf.d/*.toml     # 项目分片，按字母顺序加载
@@ -448,7 +452,7 @@ mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 | task          | `Taskfile.yml`, `Taskfile.yaml`, `taskfile.yml`, `taskfile.yaml`                                                                                                                                                                                                                                           |
 | terraform     | `.terraform-version`                                                                                                                                                                                                                                                                                       |
 | terragrunt    | `.terragrunt-version`                                                                                                                                                                                                                                                                                      |
-| terramate     | `.terramate-version`                                                                                                                                                                                                                                                                                       |
+| terramate     | `.terramate-version`                                                                                                                                                                                                                                                                                      |
 | yarn          | `.yvmrc`, `package.json`                                                                                                                                                                                                                                                                                   |
 | zig           | `.zig-version`                                                                                                                                                                                                                                                                                             |
 
@@ -457,7 +461,23 @@ mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 由注册表支持的工具还可以描述 mise 应如何从结构化的惯用文件中提取版本。注册表条目可以使用与 [HTTP 后端](/dev-tools/backends/http.html#version-listing)相同的 `version_regex`、`version_json_path` 和 `version_expr` 解析器。
 这使得通过 `aqua:` 和 `github:` 等后端安装的工具能够支持 JSON 清单和其他工具专用的版本文件，而无需 asdf 或 vfox 插件。
 
-有些文件声明的是最低兼容版本或配置格式主版本，而不是确切的二进制版本。mise 会将该值视为普通的版本请求，因此像 `3.25` 这样的值会选择最新的 CMake 3.25 版本，而 GoReleaser 配置中的 `version: 2` 会选择最新的 GoReleaser 2.x 版本。
+### mise 读取哪些字段
+
+惯用版本文件只会读取那些声明**项目构建所使用版本**的字段。声明**最低兼容版本**（即项目使用者所需的最低版本）的字段不是版本请求，mise 不会根据这些字段安装版本。最低版本并不能说明项目开发和测试所使用的版本：一个仍支持 Node 18 或 CMake 3.25 的库，几乎肯定不是使用这些版本构建的，因此解析最低版本，要么会将所有人锁定到最旧的受支持版本，要么将其作为范围读取时只意味着“最新版本”。
+
+配置格式的主版本号有所不同，仍然会被读取：GoReleaser 配置中的 `version: 2` 是有意与 CLI 主版本绑定的架构选择器，而不是兼容性最低版本，因此它会选择最新的 GoReleaser 2.x。
+
+::: warning
+mise 过去会将两个最低版本视为版本请求。这两者均已弃用，在解析出版本时会发出警告，并将在 mise 2026.11.0 中移除：`go.mod` 的 `go X.Y` 指令（请向 `go.mod` 添加 `toolchain goX.Y.Z` 行，或使用 `.go-version` 或 `mise.toml`）以及 `CMakeLists.txt` 的 `cmake_minimum_required`（请使用 `mise.toml`）。
+
+已经完成迁移的项目可以在此之前选择最终行为——忽略最低版本且不发出警告：
+
+```sh
+mise settings set idiomatic_version_file_ignore_minimum_versions true
+```
+
+该设置将在 2026.11.0 中与其控制的行为一起移除。
+:::
 
 对于 `package.json`（由 `node`、`deno`、`bun`、`npm`、`pnpm` 和 `yarn` 支持）：
 
@@ -465,8 +485,15 @@ mise 和 nvm 中正常工作。以下是一些支持的惯用版本文件：
 - 包管理器（`npm`、`pnpm` 和 `yarn`）读取 `devEngines.packageManager` 或顶层的 `packageManager`（例如 `pnpm@9.1.0` 或 `npm@10.0.0`）。
 - 对于 `bun`，mise 会首先检查 `devEngines.runtime`，然后回退到 `devEngines.packageManager` 和顶层的 `packageManager`（例如 `bun@1.2.0`）。
 
-对于 `go.mod`，如果存在 `toolchain goX.Y.Z` 指令（精确的工具链固定版本），则使用该指令。
-否则使用 `go X.Y` 指令；由于它只声明所需的 _最低_ Go 版本，mise 会将其解析为匹配的最新补丁版本（例如，`go 1.22` → 最新的 `1.22.x`）。
+不会读取 `engines` 字段，这正是上述规则最清晰的例子。`engines` 声明的是软件包兼容的 Node 版本范围——当有人在不受支持的运行时上安装软件包时，npm 会使用它来发出警告或失败。它描述的是使用者，而不是开发者；而且它通常是一个很宽的范围（`>=18`），没有人会严格使用该范围进行开发。npm 专门添加的 `devEngines` 正是为了填补这一空白，它声明项目开发者实际使用的版本，这正是 mise 所需的信息。如果你只有 `engines`，请显式固定实际版本：
+
+```sh
+mise use node@22
+```
+
+对于 `go.mod`，会使用 `toolchain goX.Y.Z` 指令——这是模块构建和测试所使用工具链的精确固定版本。`go X.Y` 指令表示最低版本，已被弃用（见上文）。
+
+### 启用惯用版本文件
 
 在 mise 中，这些默认是禁用的，原因说明见 <https://github.com/jdx/mise/discussions/4345>。
 

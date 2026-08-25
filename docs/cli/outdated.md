@@ -1,57 +1,35 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise 过期`
 
-- **用法**：`mise outdated [FLAGS] [TOOL@VERSION]…`
-- **效果**：只读
-- **源代码**：[`src/cli/outdated.rs`](https://github.com/jdx/mise/blob/main/src/cli/outdated.rs)
+- **用法：** `mise outdated [FLAGS] [TOOL@VERSION]…`
+- **作用：** 只读
+- **源代码：** [`src/cli/outdated.rs`](https://github.com/jdx/mise/blob/main/src/cli/outdated.rs)
 
 显示过期的工具版本
 
 请参阅 `mise upgrade` 以升级这些版本。
 
 ## 参数
-
-### `[TOOL@VERSION]…`
-
-用于显示过时版本的工具  
-例如：node@20 python@3.10  
-如果未指定，则会显示全局和本地配置中的所有工具。
+- **`[TOOL@VERSION]…`** — 要显示过期版本的工具
+  例如：node@20 python@3.10
+  如果未指定，将显示全局和本地配置中的所有工具
 
 ## 标志
+- **`-b --bump`** — 与可用的最新版本进行比较，而不是与当前配置匹配的版本进行比较
 
-### `-b --bump`
+  例如，如果你的配置中有 `node = "20"`，默认情况下 `mise outdated` 只会显示其他 20.x 版本，而不会显示 21.x 或 22.x 版本。
 
-与可用的最新版本进行比较，而不是与当前配置匹配的版本
+  使用此标志时，如果有 21.x 或更新的版本，将显示这些版本，而不是 20.x 版本。
+- **`-J --json`** — 以 JSON 格式输出
+- **`--inactive`** — 显示过期的工具，包括已安装但未激活且不在当前配置中的工具
 
-例如，如果你的配置中默认有 `node = "20"`，那么 `mise outdated` 只会
-显示其他 20.x 版本，而不会显示 21.x 或 22.x 版本。
+  默认情况下，`mise outdated` 只显示来自当前配置的工具。
+- **`--local`** — 仅显示本地配置文件中定义的过期工具
 
-使用此标志时，如果存在 21.x 或更新的版本，它将显示这些版本，而不是 20.x。
-
-### `-J --json`
-
-以 JSON 格式输出
-
-### `--inactive`
-
-显示过期工具，包括当前配置中不存在的、已安装但未激活的工具
-
-默认情况下，`mise outdated` 只显示来自当前配置的工具。
-
-### `--local`
-
-只显示在本地配置文件中定义的过期工具
-
-这只会显示在项目本地的 mise.toml 中定义的工具，并且
-会跳过在全局配置（~/.config/mise/config.toml）中定义的工具。
-
-### `--monorepo`
-
-用于未来 monorepo 过期检查的占位符；`mise outdated --monorepo` 目前尚未实现。
-
-### `--no-header`
-
-不显示表头
+  这将仅显示项目本地 mise.toml 中定义的工具，并跳过全局配置（~/.config/mise/config.toml）中定义的工具。
+- **`--monorepo`** — 为未来的 monorepo 过期检查预留；`mise outdated --monorepo` 尚未实现。
+- **`--no-header`** — 不显示表头
+- **`-h --help`** — 输出帮助信息
 
 弃用：
 

@@ -11,14 +11,13 @@ use crate::lockfile::PlatformInfo;
 use crate::toolset::{
     CoreToolOptions, InstallOptions, ToolRequest, ToolSource, ToolVersionOptions,
 };
-use clap::Parser;
 use color_eyre::eyre::{Result, bail, eyre};
 use eyre::ensure;
 use serde::{Deserialize, Deserializer};
 use toml::Value;
 
 #[derive(Debug, Deserialize)]
-pub struct ToolStubFile {
+pub(crate) struct ToolStubFile {
     #[serde(default = "default_version")]
     pub version: String,
     pub bin: Option<String>,  // defaults to filename if not specified
@@ -35,12 +34,12 @@ pub struct ToolStubFile {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ToolStubLock {
+pub(crate) struct ToolStubLock {
     pub platforms: BTreeMap<String, ToolStubLockPlatform>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ToolStubLockPlatform {
+pub(crate) struct ToolStubLockPlatform {
     pub url: Option<String>,
     pub checksum: Option<String>,
 }
@@ -138,7 +137,7 @@ fn extract_toml_from_bootstrap(content: &str) -> Option<String> {
 }
 
 impl ToolStubFile {
-    pub fn from_file(path: &Path) -> Result<Self> {
+    pub(crate) fn from_file(path: &Path) -> Result<Self> {
         let content = file::read_to_string(path)?;
         let stub_name = path
             .file_name()
@@ -185,7 +184,7 @@ impl ToolStubFile {
     }
 
     // Create a ToolRequest directly using ToolVersionOptions
-    pub fn to_tool_request(&self, stub_path: &Path) -> Result<ToolRequest> {
+    pub(crate) fn to_tool_request(&self, stub_path: &Path) -> Result<ToolRequest> {
         use crate::cli::args::BackendArg;
 
         let mut backend_arg = BackendArg::from(&self.tool_name);
@@ -567,25 +566,28 @@ async fn execute_with_tool_request(
     // Find the binary path using cache
     match find_cached_or_resolve_bin_path(&toolset, &*config, stub, stub_path).await? {
         Ok(bin_path) => {
-            // Get the environment with proper PATH from toolset
+            // env_with_path already has _.path and filters outer install dirs.
+            // Prepend backend dependency bins (e.g. node for npm); see #7777.
             let mut env = toolset.env_with_path(config).await?;
-            let mut path_env = crate::path_env::PathEnv::from_iter(crate::env::PATH.clone());
-            for p in toolset.list_paths(config).await {
-                path_env.add(p);
-            }
-
             if let Some((backend, _tv)) = toolset.list_current_installed_versions(config).first() {
-                let btp = backend
+                let dep_paths = backend
                     .dependency_toolset(config)
                     .await?
                     .list_paths(config)
                     .await;
-                for p in btp {
-                    path_env.add(p);
+                if !dep_paths.is_empty() {
+                    let path = env
+                        .get(crate::env::PATH_KEY.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut paths = dep_paths;
+                    paths.extend(std::env::split_paths(&path));
+                    env.insert(
+                        crate::env::PATH_KEY.to_string(),
+                        std::env::join_paths(paths)?.to_string_lossy().to_string(),
+                    );
                 }
             }
-            env.insert(crate::env::PATH_KEY.to_string(), path_env.to_string());
-
             crate::cli::exec::exec_program(bin_path, args, env, &Default::default(), false).await
         }
         Err(e) => match e {
@@ -624,31 +626,35 @@ async fn execute_with_tool_request(
 /// and execution.
 ///
 /// A tool stub consists of:
+///
 /// - A shebang line: #!/usr/bin/env -S mise tool-stub
 /// - TOML configuration specifying the tool, version, and options
 /// - Optional comments describing the tool's purpose
 ///
 /// Example stub file:
-///   #!/usr/bin/env -S mise tool-stub
-///   # Node.js v20 development environment
-///   
-///   tool = "node"
-///   version = "20.0.0"
-///   bin = "node"
+///
+/// ```toml
+/// #!/usr/bin/env -S mise tool-stub
+/// # Node.js v20 development environment
+///
+/// tool = "node"
+/// version = "20.0.0"
+/// bin = "node"
+/// ```
 ///
 /// The stub will automatically install the specified tool version if missing
 /// and execute it with any arguments passed to the stub.
 ///
 /// For more information, see: https://mise.jdx.dev/dev-tools/tool-stubs.html
-#[derive(Debug, Parser)]
-#[clap(disable_help_flag = true, disable_version_flag = true)]
-pub struct ToolStub {
+#[derive(Debug, usage_rs::Args)]
+#[usage(disable_help_flag = true, disable_version_flag = true)]
+pub(crate) struct ToolStub {
     /// Path to the TOML tool stub file to execute
     ///
     /// The stub file must contain TOML configuration specifying the tool
     /// and version to run. At minimum, it should specify a 'version' field.
     /// Other common fields include 'tool', 'bin', and backend-specific options.
-    #[clap(value_name = "FILE")]
+    #[usage(value_name = "FILE", double_dash = "automatic")]
     pub file: PathBuf,
 
     /// Arguments to pass to the tool
@@ -656,12 +662,12 @@ pub struct ToolStub {
     /// All arguments after the stub file path will be forwarded to the
     /// underlying tool. Use '--' to separate mise arguments from tool arguments
     /// if needed.
-    #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[usage(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
 
 impl ToolStub {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         // Ignore clap parsing and use raw args from env::ARGS to avoid version flag interception
         let file_str = self.file.to_string_lossy();
 

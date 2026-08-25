@@ -14,20 +14,20 @@ use crate::ui::table;
 ///
 ///     [tool_alias.node.versions]
 ///     lts = "22.0.0"
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "list", after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ToolAliasLs {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_alias = "list", after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ToolAliasLs {
     /// Show aliases for <TOOL>
-    #[clap()]
+    #[usage()]
     pub tool: Option<BackendArg>,
 
     /// Don't show table header
-    #[clap(long)]
+    #[usage(long)]
     pub no_header: bool,
 }
 
 impl ToolAliasLs {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let rows = config
             .all_aliases
@@ -50,8 +50,7 @@ impl ToolAliasLs {
             })
             .collect::<Vec<_>>();
         let mut table = tabled::Table::new(rows);
-        table::default_style(&mut table, self.no_header);
-        miseprintln!("{table}");
+        table::print(&mut table, self.no_header)?;
         Ok(())
     }
 }

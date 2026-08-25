@@ -29,6 +29,7 @@ mise bootstrap plugins status --missing
 mise bootstrap plugins apply
 mise bootstrap packages status
 mise bootstrap packages apply
+mise bootstrap packages prune --manager vscode --dry-run
 ```
 
 你可以在不声明插件的情况下安装插件：
@@ -43,7 +44,6 @@ mise plugin install package:vscode https://github.com/example/mise-vscode-extens
 `system_packages.sudo` 影响。`system_packages.managers` 设置基于名称，
 可以像内置管理器一样包含或排除插件管理器。
 
-此 API 的第一个版本不支持移除和清理软件包。
-移除配置条目不会卸载由主机管理的状态。
+插件可以实现 `PackageUninstall`，以支持显式的破坏性命令 `mise bootstrap packages prune --manager <plugin>`。mise 只会移除在插件安装期间观察到从缺失状态转变为已安装状态的软件包；此前已存在的软件包绝不会被认领。Prune 还会保留当前配置或受信任且可加载的已跟踪配置所引用的软件包。仅移除配置条目不会卸载由主机管理的状态。
 
 请参阅[软件包插件开发](/package-plugin-development.html)以创建插件。

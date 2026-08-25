@@ -76,7 +76,7 @@ function PLUGIN:Available(ctx)
                 }
             }
         }
-    }
+    end
 end
 ```
 
@@ -355,9 +355,11 @@ PLUGIN = {
         { pkgconfig = "openssl",
           packages = { brew = "openssl@3", apt = "libssl-dev", dnf = "openssl-devel" } },
 
-        -- 运行时共享库，通过 soname 指定（仅限 Linux）
+        -- a runtime shared library, by soname (Linux). apt renamed this
+        -- package in the 64-bit time_t transition, so list both names and
+        -- let mise pick the one that exists.
         { sharedlib = "libaio.so.1",
-          packages = { apt = "libaio1", dnf = "libaio" } },
+          packages = { apt = { "libaio1t64", "libaio1" }, dnf = "libaio" } },
 
         -- 备用方案：任何退出状态为 0 即表示“满足”的 shell 命令
         { command = "xcode-select -p", optional = "macOS 命令行工具" },
@@ -376,9 +378,11 @@ PLUGIN = {
 
 可选字段：
 
-- **`version`** — `bin` 和 `pkgconfig` 的版本约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或仅写 `3.0`，表示 `>=3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将该依赖视为满足（存在即可），而不会阻止安装。
-- **`optional`** — 简短的原因字符串。缺少可选依赖时不会提示或失败；它们会以一行信息的形式显示，让用户可以在不需要某些功能的情况下进行构建（例如 Erlang 的 `wxWidgets` 图形界面）。
-- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`）映射到提供相应功能的包。
+- **`version`** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则会将依赖视为满足（存在即可），而不会阻止安装
+- **`optional`** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能的情况下进行构建（例如 Erlang 的 `wxWidgets` GUI）
+- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`）映射到提供相应功能的包。值可以是单个包名（`apt = "bison"`），也可以是在不同发行版版本中以不同名称打包同一功能时使用的候选列表（`apt = { "libaio1t64", "libaio1" }`）。候选项按新名称在前的顺序排列：mise 会选择包管理器实际提供的第一个包；如果无法判断，则回退到列表中的第一个包。只有可以查询包可用性的包管理器（目前为 `apt`）会进行这种选择；其他包管理器始终使用第一个候选项，因此对它们而言使用单个名称仍是正确选择
+
+**不要在 `metadata.lua` 中探测主机。** 每次 mise 加载插件元数据时都会执行其顶层代码，因此在那里执行 shell 命令（检查哪个包名存在、读取发行版版本）会增加许多 mise 调用的开销，并且其结果会与元数据一起缓存——当用户升级操作系统后，这个特定于机器的答案仍会被保留而变得过时。请声明候选项并让 mise 解析它们。mise 会延迟执行此操作：只有当某个依赖实际检查失败，并且 mise 即将安装包时，才会解析候选项。
 
 **检测结果是唯一依据。** 无论某项功能是通过 Homebrew、apt、nix、MacPorts 还是从源代码安装的，只要检查通过，就视为满足；mise 不会询问它是如何安装的。只有在**提供安装缺失项的选项**时，才会查询 `packages` 映射；它只是补救提示，并不声明该工具必须来自相应的包管理器。
 

@@ -8,22 +8,22 @@ use crate::env;
 /// This is an alternative to `mise activate` that allows you to explicitly start a mise session.
 /// It will have the tools and environment variables in the configs loaded.
 /// Note that changing directories will not update the mise environment.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct En {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct En {
     /// Directory to start the shell in
-    #[clap(default_value = ".", verbatim_doc_comment, value_hint = clap::ValueHint::DirPath)]
+    #[usage(default = ".", verbatim_doc_comment, value_hint = usage_rs::ValueHint::DirPath)]
     pub dir: PathBuf,
 
     /// Shell to start
     ///
     /// Defaults to $SHELL
-    #[clap(verbatim_doc_comment, long, short = 's')]
+    #[usage(verbatim_doc_comment, long, short = 's')]
     pub shell: Option<String>,
 }
 
 impl En {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(crate) async fn run(self) -> eyre::Result<()> {
         env::set_current_dir(&self.dir)?;
         let shell = self.shell.unwrap_or((*env::SHELL).clone());
         let command = shell_words::split(&shell).map_err(|e| eyre::eyre!(e))?;

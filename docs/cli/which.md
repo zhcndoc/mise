@@ -1,34 +1,23 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise which`
 
-- **用法**：`mise which [FLAGS] [BIN_NAME]`
-- **作用**：只读
-- **源代码**：[`src/cli/which.rs`](https://github.com/jdx/mise/blob/main/src/cli/which.rs)
+- **用法：** `mise which [FLAGS] [BIN_NAME]`
+- **效果：** 只读
+- **源代码：** [`src/cli/which.rs`](https://github.com/jdx/mise/blob/main/src/cli/which.rs)
 
 显示工具的二进制文件所指向的路径。
 
 可用它来确定当前激活的是哪个版本的工具。
 
 ## 参数
-
-### `[BIN_NAME]`
-
-要查找的 bin
+- **`[BIN_NAME]`** — 要查找的二进制文件
 
 ## 标志
-
-### `-t --tool <TOOL@VERSION>`
-
-使用特定的 tool@version  
-例如：`mise which npm --tool=node@20`
-
-### `--plugin`
-
-显示插件名称而不是路径
-
-### `--version`
-
-显示版本而不是路径
+- **`-t --tool <TOOL@VERSION>`** — 使用指定的 tool@version
+  例如：`mise which npm --tool=node@20`
+- **`--plugin`** — 显示插件名称，而不是路径
+- **`--version`** — 显示版本，而不是路径
+- **`-h --help`** — 打印帮助
 
 示例：
 

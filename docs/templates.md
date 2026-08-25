@@ -479,13 +479,14 @@ Mise 提供了额外的测试：
 <div v-pre>
 
 ```toml
-# ~/.config/mise/miserc.toml
+# /workspaces/vcs/.config/miserc.toml
 
 # 使用 $HOME 设置一个上限路径（在 home 目录处停止配置搜索）
 ceiling_paths = ["{{ env.HOME }}"]
 
-# 忽略一个相对于 home 的配置路径
-ignored_config_paths = ["{{ env.HOME }}/shared"]
+# Paths are relative to the directory containing this miserc file.
+# Recursive glob patterns are supported.
+ignored_config_paths = ["../vendor/**/mise.toml"]
 ```
 
 </div>

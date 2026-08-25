@@ -3,7 +3,6 @@ use crate::config::Config;
 use crate::file;
 use crate::file::display_path;
 use crate::task::Task;
-use clap::ValueHint;
 use eyre::bail;
 use std::collections::HashSet;
 use std::fs;
@@ -12,25 +11,25 @@ use std::path::{Path, PathBuf};
 
 /// Generates shims to run mise tasks
 ///
-/// By default, this will build shims like ./bin/<task>. These can be paired with `mise generate bootstrap`
+/// By default, this will build shims like ./bin/<task>. These can be paired with `mise generate install-script`
 /// so contributors to a project can execute mise tasks without installing mise into their system.
 /// When a parent and nested task both exist, the parent stub is written to `<parent>/_default`.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct TaskStubs {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(super) struct TaskStubs {
     /// Directory to create task stubs inside of
-    #[clap(long, short, verbatim_doc_comment, default_value="bin", value_hint=ValueHint::DirPath)]
+    #[usage(long, short, verbatim_doc_comment, default="bin", value_hint=ValueHint::DirPath)]
     dir: PathBuf,
 
     /// Path to a mise bin to use when running the task stub.
     ///
-    /// Use `--mise-bin=./bin/mise` to use a mise bin generated from `mise generate bootstrap`
-    #[clap(long, short, verbatim_doc_comment, default_value = "mise")]
+    /// Use `--mise-bin=./bin/mise` to use a mise bin generated from `mise generate install-script`
+    #[usage(long, short, verbatim_doc_comment, default = "mise")]
     mise_bin: PathBuf,
 }
 
 impl TaskStubs {
-    pub async fn run(self) -> eyre::Result<()> {
+    pub(super) async fn run(self) -> eyre::Result<()> {
         let config = Config::get().await?;
         let tasks = config.tasks().await?;
         let task_paths = tasks.values().map(Task::name_to_path).collect::<Vec<_>>();
@@ -70,13 +69,17 @@ impl TaskStubs {
             }
             file::write(&stub.path, &stub.output)?;
             file::make_executable(&stub.path)?;
+            miseprintln!("Wrote to {}", display_path(&stub.path));
             // Windows will not execute the `#!/bin/sh` stub, so it needs something it can launch.
             // Written on every host: stubs are committed, and the contributor who runs one on
             // Windows is not the person who generated it.
+            //
+            // Reported like the stub is: it is a second committed file, and a run that names one
+            // path while leaving two behind is how it goes unnoticed into a commit.
             if let Some(launcher_path) = super::windows_launcher_path(&stub.path) {
                 file::write(&launcher_path, &stub.launcher)?;
+                miseprintln!("Wrote to {}", display_path(&launcher_path));
             }
-            miseprintln!("Wrote to {}", display_path(&stub.path));
         }
         Ok(())
     }
@@ -84,7 +87,7 @@ impl TaskStubs {
     /// The Windows launcher body for `task`, mirroring what the stub itself runs.
     ///
     /// `mise_bin` is embedded as given: with the default `mise` it resolves off PATH, and a
-    /// `--mise-bin` pointing at a `mise generate bootstrap` script will start working here as soon
+    /// `--mise-bin` pointing at a `mise generate install-script` script will start working here as soon
     /// as that script gains a Windows form of its own.
     fn generate_launcher(&self, task: &Task) -> String {
         let mise_bin = super::cmd_quote(&self.mise_bin.to_string_lossy());

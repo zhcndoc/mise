@@ -60,6 +60,33 @@ mise 还会在当前目录及其父目录中查找类似 `mise.local.toml` 和 `
 
 你也可以使用诸如 `mise/config.{MISE_ENV}.toml` 或 `.config/mise.{MISE_ENV}.toml` 之类的路径。这些规则遵循 [Configuration](/configuration) 中的顺序。
 
+## conf.d 环境
+
+::: warning 迁移进行中
+特定环境的 `conf.d` 文件名在 mise 2027.8.10 之前需要选择启用。默认情况下，所有非隐藏的
+TOML 片段仍会无条件加载，包括 `node.tools.toml` 这样的名称。
+
+无条件片段名称中的点已弃用。请在 mise 2027.8.10 之前将其重命名为使用连字符，例如
+`node-tools.toml`。届时，第一个点之后的后缀将用于选择环境。
+:::
+
+在任意 `miserc.toml` 文件中（上述位置）设置 `env_conf_d = true`，或设置
+`MISE_ENV_CONF_D=true`，即可立即选择启用新行为。此后，`mise/conf.d`、`.mise/conf.d` 和 `.config/mise/conf.d` 中的文件将使用与其他配置文件相同的环境后缀：
+
+```text
+mise/conf.d/tools.toml                    # always loaded
+mise/conf.d/tools.local.toml              # always loaded, usually gitignored
+mise/conf.d/tools.development.toml        # MISE_ENV=development
+mise/conf.d/tools.development.local.toml  # MISE_ENV=development, usually gitignored
+.mise/conf.d/tools.toml                   # always loaded
+.mise/conf.d/tools.local.toml             # always loaded, usually gitignored
+.mise/conf.d/tools.development.toml       # MISE_ENV=development
+.mise/conf.d/tools.development.local.toml # MISE_ENV=development, usually gitignored
+```
+
+由于此设置控制配置发现，因此必须在 `miserc.toml` 文件或环境中设置；在
+`mise.toml` 中设置已经太晚。在迁移期间，显式设置 `env_conf_d = false` 可保留旧行为，同时不显示弃用警告。
+
 使用 `mise config` 查看正在使用哪些文件。
 
 关于哪个文件会被写入的规则有所不同，因为我们最终需要选定一个文件。更多信息请参阅 [`mise use`](/cli/use.html) 的文档。

@@ -1,28 +1,23 @@
 <!-- @由 usage-cli 根据用法规范生成 -->
 # `mise plugins update`
 
-- **用法**：`mise plugins update [-j --jobs <JOBS>] [PLUGIN]…`
-- **别名**：`up`、`upgrade`
-- **作用**：修改状态
-- **源代码**：[`src/cli/plugins/update.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/update.rs)
+- **用法：** `mise plugins update [-j --jobs <JOBS>] [PLUGIN]…`
+- **别名：** `up`、`upgrade`
+- **效果：** 修改状态
+- **源代码：** [`src/cli/plugins/update.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/update.rs)
 
 将插件更新到最新版本
 
 注意：这会更新插件本身，而不是运行时版本。
 
 ## 参数
+- **`[PLUGIN]…`** — 要更新的插件
 
-### `[PLUGIN]…`
-
-要更新的插件
-
-## 标志
-
-### `-j --jobs <JOBS>`
-
-要并行运行的任务数  
-小于 1 的值将按 1 处理  
-默认值：4
+## 选项
+- **`-j --jobs <JOBS>`** — 并行运行的任务数
+  小于 1 的值按 1 处理
+  默认值：4
+- **`-h --help`** — 打印帮助
 
 示例：
 

@@ -7,18 +7,18 @@ use crate::config::Config;
 ///
 /// This is the contents of a tool_alias.<TOOL> entry in ~/.config/mise/config.toml
 ///
-#[derive(Debug, clap::Args)]
-#[clap(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ToolAliasGet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ToolAliasGet {
     /// The tool to show the alias for
-    #[clap(value_name = "TOOL")]
+    #[usage(value_name = "TOOL")]
     pub tool: BackendArg,
     /// The alias to show
     pub alias: String,
 }
 
 impl ToolAliasGet {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         match config.all_aliases.get(&self.tool.short) {
             Some(alias) => match alias.versions.get(&self.alias) {

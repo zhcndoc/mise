@@ -10,21 +10,21 @@ use crate::{config, duration, file};
 /// This modifies the contents of ~/.config/mise/config.toml by default.
 /// With `--local`, modifies the local config file instead.
 /// See https://mise.jdx.dev/configuration.html#target-file-for-write-operations
-#[derive(Debug, clap::Args)]
-#[clap(visible_aliases = ["create"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct SettingsSet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_aliases = ["create"], after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct SettingsSet {
     /// The setting to set
-    #[clap()]
+    #[usage()]
     pub setting: String,
     /// The value to set (optional if provided as KEY=VALUE)
     pub value: Option<String>,
     /// Use the local config file instead of the global one
-    #[clap(long, short)]
+    #[usage(long, short)]
     pub local: bool,
 }
 
 impl SettingsSet {
-    pub fn run(self) -> Result<()> {
+    pub(super) fn run(self) -> Result<()> {
         match self.value {
             Some(value) => set(&self.setting, &value, false, self.local),
             None => {
@@ -39,7 +39,7 @@ impl SettingsSet {
     }
 }
 
-pub fn set(mut key: &str, value: &str, add: bool, local: bool) -> Result<()> {
+pub(super) fn set(mut key: &str, value: &str, add: bool, local: bool) -> Result<()> {
     let meta = match SETTINGS_META.get(key) {
         Some(meta) => meta,
         None => {

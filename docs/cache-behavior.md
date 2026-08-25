@@ -45,7 +45,7 @@ env_cache_ttl = "1h"  # 可选，默认值为 1h
 ```toml
 [env]
 TIMESTAMP = { value = "{{ now() }}", cacheable = false }
-_.source = { file = "dynamic.sh", cacheable = false }
+_.source = { path = "dynamic.sh", cacheable = false }
 ```
 
 ## 缓存自动清理

@@ -1,25 +1,22 @@
 <!-- 由 usage-cli 根据使用规范生成 -->
 # `mise token gitlab`
 
-- **用法**：`mise token gitlab [--unmask] [HOST]`
-- **作用**：只读
-- **源代码**：[`src/cli/token/gitlab.rs`](https://github.com/jdx/mise/blob/main/src/cli/token/gitlab.rs)
+- **用法：** `mise token gitlab [--unmask] [HOST]`
+- **效果：** 只读
+- **源代码：** [`src/cli/token/gitlab.rs`](https://github.com/jdx/mise/blob/main/src/cli/token/gitlab.rs)
 
-GitLab 令牌。
+显示 mise 将用于指定主机的 GitLab token
+
+显示 mise 将使用哪个 token 来源，有助于调试身份验证问题。默认情况下，token 会被隐藏。
 
 ## 参数
+- **`[HOST]`** — GitLab 主机名
 
-### `[HOST]`
-
-GitLab 主机名
-
-**默认：** `gitlab.com`
+  **默认值：** `gitlab.com`
 
 ## 标志
-
-### `--unmask`
-
-显示完整的未掩码 token
+- **`--unmask`** — 显示完整的未隐藏 token
+- **`-h --help`** — 显示帮助
 
 示例：
 

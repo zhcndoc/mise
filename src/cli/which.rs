@@ -11,32 +11,32 @@ use itertools::Itertools;
 /// Shows the path that a tool's bin points to.
 ///
 /// Use this to figure out what version of a tool is currently active.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Which {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Which {
     /// The bin to look up
-    #[clap(required_unless_present = "complete")]
+    #[usage(required_unless = "complete")]
     pub bin_name: Option<String>,
 
     /// Use a specific tool@version
     /// e.g.: `mise which npm --tool=node@20`
-    #[clap(short, long, value_name = "TOOL@VERSION", verbatim_doc_comment)]
+    #[usage(short, long, value_name = "TOOL@VERSION", verbatim_doc_comment)]
     pub tool: Option<ToolArg>,
 
-    #[clap(long, hide = true)]
+    #[usage(long, hide = true)]
     pub complete: bool,
 
     /// Show the plugin name instead of the path
-    #[clap(long, conflicts_with = "version")]
+    #[usage(long, conflicts = "version")]
     pub plugin: bool,
 
     /// Show the version instead of the path
-    #[clap(long, conflicts_with = "plugin")]
+    #[usage(long, conflicts = "plugin")]
     pub version: bool,
 }
 
 impl Which {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         if self.complete {
             return self.complete(&config).await;

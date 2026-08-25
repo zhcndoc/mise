@@ -1,32 +1,24 @@
 <!-- 由 usage-cli 根据用法规范生成 -->
 # `mise plugins link`
 
-- **用法**：`mise plugins link [-f --force] <NAME> [DIR]`
-- **别名**：`ln`
-- **作用**：修改状态
-- **源代码**：[`src/cli/plugins/link.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/link.rs)
+- **用法：** `mise plugins link [-f --force] <NAME> [DIR]`
+- **别名：** `ln`
+- **作用：** 修改状态
+- **源代码：** [`src/cli/plugins/link.rs`](https://github.com/jdx/mise/blob/main/src/cli/plugins/link.rs)
 
 将一个插件符号链接到 mise 中
 
 这用于开发插件。
 
 ## 参数
-
-### `<NAME>`
-
-插件的名称  
-例如：cmake、poetry
-
-### `[DIR]`
-
-插件的本地路径  
-例如：./vfox-cmake
+- **`<NAME>`** — 插件的名称
+  例如：cmake、poetry
+- **`[DIR]`** — 插件的本地路径
+  例如：./vfox-cmake
 
 ## 标志
-
-### `-f --force`
-
-覆盖现有插件
+- **`-f --force`** — 覆盖现有插件
+- **`-h --help`** — 打印帮助
 
 示例：
 

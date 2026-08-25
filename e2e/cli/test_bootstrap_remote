@@ -22,6 +22,10 @@ cp bin/mise "bin with space/mise"
 
 cat >"$HOME/.local/bin/mise" <<'EOF'
 #!/bin/sh
+if test "${1:-}" = "--cd" && test "${MISE_ENV:-}" = "unexpected"; then
+  echo "inherited remote MISE_ENV was not cleared" >&2
+  exit 43
+fi
 if test "${1:-}" = "--cd" && test -e "$2/layered-secret"; then
   echo "layered remote exclude was not applied" >&2
   exit 42
@@ -74,6 +78,14 @@ chmod +x fakebin/uname
 
 cat >fakebin/mktemp <<'EOF'
 #!/bin/sh
+# only the bootstrap staging directory is faked; other callers get real mktemp
+case "${2:-}" in
+/tmp/mise-bootstrap.*) ;;
+*)
+  PATH=/usr/bin:/bin command mktemp "$@"
+  exit $?
+  ;;
+esac
 if test "${MISE_TEST_BAD_STAGE:-}" = 1; then
   mkdir -p "$BAD_REMOTE_STAGE"
   printf '%s\n' "$BAD_REMOTE_STAGE"
@@ -98,12 +110,14 @@ cat >source/mise.toml <<EOF
 [bootstrap.remote]
 source = "."
 exclude = ["generated", "layered-secret"]
+mise_env = ["default", "linux"]
 
 [bootstrap.remote.hosts.cache]
 host = "example.test"
 user = "ubuntu"
 tags = ["cache", "production"]
 remote_mise = "mise"
+mise_env = ["server", "linux"]
 
 [bootstrap.remote.hosts.relative]
 host = "relative.test"
@@ -132,6 +146,7 @@ assert_fail "test -d '$bad_remote_stage'"
 
 assert_succeed "mise bootstrap remote cache --dry-run --yes --skip tools"
 assert_contains "cat $ssh_log" "ubuntu@example.test"
+assert_contains "cat $ssh_log" "MISE_ENV=server,linux"
 assert_contains "cat $ssh_log" "bootstrap --dry-run --yes --skip tools"
 assert_fail "test -d $remote_stage"
 
@@ -152,7 +167,13 @@ assert_fail "test -L $copy_links_stage/project/shared/nested/value-link"
 : >"$ssh_log"
 assert_succeed "mise bootstrap remote relative --dry-run --yes"
 assert_contains "cat $ssh_log" "$remote_stage/project/bin/mise version"
+assert_contains "cat $ssh_log" "MISE_ENV=default,linux"
 assert_fail "test -d $remote_stage"
+
+: >"$ssh_log"
+assert_succeed "mise bootstrap remote cache --remote-env ci,dotfiles --dry-run --yes"
+assert_contains "cat $ssh_log" "MISE_ENV=ci,dotfiles"
+assert_not_contains "cat $ssh_log" "MISE_ENV=server,linux"
 
 : >"$ssh_log"
 assert_succeed "mise bootstrap remote relative --all --dry-run --yes"
@@ -164,6 +185,11 @@ assert_fail "test -d $remote_stage"
 : >"$ssh_log"
 assert_succeed "mise bootstrap remote layered --dry-run --yes"
 assert_contains "cat $ssh_log" "$HOME/.local/bin/mise version"
+
+: >"$ssh_log"
+assert_succeed "MISE_ENV=unexpected mise bootstrap remote layered --dry-run --yes"
+assert_contains "cat $ssh_log" "'MISE_ENV=' $HOME/.local/bin/mise --cd"
+assert_not_contains "cat $ssh_log" "MISE_ENV=unexpected"
 
 : >"$ssh_log"
 assert_succeed "mise bootstrap remote --host root@ad-hoc.test --source . --remote-mise $HOME/.local/bin/mise --dry-run --yes"
@@ -230,6 +256,57 @@ assert_fail "test -d $remote_stage"
 assert_fail "mise bootstrap remote cross --dry-run --yes --skip tools"
 assert_contains "cat $ssh_log" "uname -s"
 assert_fail "test -d $remote_stage"
+
+# install_mise keeps the provisioned executable after the staging directory is
+# removed. The target lives outside the archived source so the installed binary
+# is not sent back to the host on the next run.
+install_target="$HOME/installed bin/mise"
+
+: >"$ssh_log"
+assert_contains \
+  "mise bootstrap remote --host install.test --source . --mise-bin bin/mise --install-mise='$install_target' --dry-run --yes 2>&1" \
+  "would install mise to $install_target"
+assert_fail "test -e '$install_target'"
+
+: >"$ssh_log"
+assert_succeed "mise bootstrap remote --host install.test --source . --mise-bin bin/mise --install-mise='$install_target' --yes --skip tools"
+assert_succeed "test -x '$install_target'"
+assert_succeed "'$install_target' version"
+assert_contains "cat $ssh_log" "mise-install"
+assert_contains "cat $ssh_log" "'$install_target' --cd"
+assert_fail "test -d $remote_stage"
+
+: >"$ssh_log"
+assert_succeed "mise bootstrap remote --host install.test --source . --mise-bin bin/mise --install-mise='$install_target' --yes --skip tools"
+assert_not_contains "cat $ssh_log" "mise-install"
+assert_contains "cat $ssh_log" "'$install_target' --cd"
+
+assert_fail "mise bootstrap remote --host install.test --source . --mise-bin bin/mise --install-mise=relative/mise --yes"
+assert_fail "mise bootstrap remote --host install.test --source . --install-mise --remote-mise mise --yes"
+assert_fail "mise bootstrap remote --host install.test --source . --mise-bin bin/mise --install-mise='$HOME/installed bin' --yes --skip tools"
+
+# a command-line install replaces the strategy the inventory host declared
+: >"$ssh_log"
+assert_contains \
+  "mise bootstrap remote cache --mise-bin bin/mise --install-mise='$install_target' --dry-run --yes --skip tools 2>&1" \
+  "would install mise to $install_target"
+
+cat >>mise.toml <<'EOF'
+
+[bootstrap.remote.hosts.self-install]
+host = "self-install.test"
+install_mise = true
+mise_bin = "bin/mise"
+EOF
+
+: >"$ssh_log"
+assert_succeed "mise bootstrap remote self-install --yes --skip tools"
+assert_succeed "cmp -s bin/mise $HOME/.local/bin/mise"
+assert_contains "cat $ssh_log" "$HOME/.local/bin/mise --cd"
+
+: >"$ssh_log"
+assert_succeed "mise bootstrap remote self-install --no-install-mise --dry-run --yes"
+assert_contains "cat $ssh_log" "$remote_stage/mise version"
 
 cat >>"$HOME/.config/mise/config.toml" <<'EOF'
 

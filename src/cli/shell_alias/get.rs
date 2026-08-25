@@ -3,16 +3,16 @@ use color_eyre::eyre::{Result, eyre};
 use crate::config::Config;
 
 /// Show the command for a shell alias
-#[derive(Debug, clap::Args)]
-#[clap(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ShellAliasGet {
+#[derive(Debug, usage_rs::Args)]
+#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ShellAliasGet {
     /// The alias to show
-    #[clap(name = "shell_alias")]
+    #[usage(name = "shell_alias")]
     pub alias: String,
 }
 
 impl ShellAliasGet {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         match config.shell_aliases.get(&self.alias) {
             Some((command, _path)) => {

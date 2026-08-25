@@ -8,25 +8,25 @@ use taplo::formatter::Options;
 /// Formats mise.toml
 ///
 /// Sorts keys and cleans up whitespace in mise.toml
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
-pub struct Fmt {
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+pub(crate) struct Fmt {
     /// Format all files from the current directory
-    #[clap(short, long)]
+    #[usage(short, long)]
     pub all: bool,
 
     /// Check if the configs are formatted, no formatting is done
-    #[clap(short, long)]
+    #[usage(short, long)]
     pub check: bool,
 
     /// Read config from stdin and write its formatted version into
     /// stdout
-    #[clap(short, long)]
+    #[usage(short, long)]
     pub stdin: bool,
 }
 
 impl Fmt {
-    pub fn run(self) -> eyre::Result<()> {
+    pub(crate) fn run(self) -> eyre::Result<()> {
         if self.stdin {
             let mut toml = String::new();
             io::stdin().read_to_string(&mut toml)?;

@@ -8,16 +8,16 @@ use crate::ui::table;
 ///
 /// Shows the shell aliases that are set in the current directory.
 /// These are defined in `mise.toml` under the `[shell_alias]` section.
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "list", after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
-pub struct ShellAliasLs {
+#[derive(Debug, usage_rs::Args)]
+#[usage(visible_alias = "list", after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+pub(super) struct ShellAliasLs {
     /// Don't show table header
-    #[clap(long)]
+    #[usage(long)]
     pub no_header: bool,
 }
 
 impl ShellAliasLs {
-    pub async fn run(self) -> Result<()> {
+    pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let rows = config
             .shell_aliases
@@ -28,8 +28,7 @@ impl ShellAliasLs {
             })
             .collect::<Vec<_>>();
         let mut table = tabled::Table::new(rows);
-        table::default_style(&mut table, self.no_header);
-        miseprintln!("{table}");
+        table::print(&mut table, self.no_header)?;
         Ok(())
     }
 }

@@ -121,9 +121,23 @@ mise run --allow-net=registry.npmjs.org build
 
 **限制**：在 v1 中，Linux 不支持按主机网络过滤（`--allow-net=<host>`）。在 Linux 上，`--allow-net` 会回退为允许所有网络访问。这在 macOS 上可通过 Seatbelt 实现。
 
+**限制**：构建沙箱时必须存在允许列表条目。Landlock 会将每条规则绑定到一个打开的描述符，因此尚未创建的路径无法由规则指定，mise 会警告该规则已被丢弃。如果其他规则涵盖了该路径，例如允许访问其祖先目录，则任务仍然可以访问该路径，但被丢弃的规则不会以任何方式授予额外访问权限。若要让任务创建某个内容，请允许一个已经存在且包含该内容的目录。
+
+```toml
+[tasks.install]
+run = "npm install"
+allow_read = ["package.json", "~/.npm"]
+# not ["node_modules"] — that does not exist until the task creates it
+allow_write = [".", "~/.npm"]
+```
+
+Landlock 无法将创建限制为单个名称，因此允许访问包含目录必然会授予对其中其他所有内容的写入权限。这仅适用于 Linux；在 macOS 上，Seatbelt 规则是路径模式，不要求路径存在。
+
 ### macOS
 
 使用 Apple 的 `sandbox-exec`（Seatbelt）和生成的配置文件。支持包括按主机网络过滤在内的所有功能。
+
+当读取受到限制时，Seatbelt 要求进程启动时能够访问根目录。沙箱进程可以直接枚举 `/` 下的名称，但无法读取未获允许的条目或其后代。
 
 ### Windows
 

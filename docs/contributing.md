@@ -149,7 +149,7 @@ TEST_ALL=1 mise run test:e2e
 
 不要直接执行 `e2e/` 下的文件；`mise run test:e2e` 是受支持的入口点（它依赖于 `build` 并使用 `e2e/run_all_tests`）。设置 `MISE_GITHUB_TOKEN`（或 `GITHUB_TOKEN`）以避免 GitHub API 速率限制。
 
-### Coverage Tests
+### 覆盖率测试
 
 覆盖率测试用于衡量代码库中有多少代码被测试覆盖：
 
@@ -739,9 +739,9 @@ idiomatic_files = [
 
 这些解析器在进程内执行，无法运行 shell 命令。纯字符串条目仍与现有注册表条目和后端原生解析器兼容。
 
-只提取决定工具二进制兼容性的值。合适的候选值包括确切版本、最低/所需版本，
-或有意与 CLI 主版本绑定的配置格式主版本。不要提取不相关的项目版本、依赖版本、
-锁文件架构版本，或不限制工具本身的通用 `version` 字段。
+仅提取说明项目所构建版本的值。合适的候选值包括确切版本，或与 CLI 主版本有意绑定的配置格式主版本。不要提取**最低兼容版本**——诸如 `cmake_minimum_required` 或 `package.json` 的 `engines` 之类的下限描述的是使用者需要什么，而不是项目基于什么进行开发；解析此类值会将用户固定到受支持的最旧版本（参阅[ mise 读取哪些字段](/configuration.html#which-fields-mise-reads)）。也不要提取无关的项目版本、依赖项版本、锁文件架构修订版本，或不会约束工具本身的通用 `version` 字段。
+
+现有的、读取下限版本的条目可以通过在文件中设置 `deprecated = "<reason>"` 来弃用；这样它仍能解析，同时警告用户将版本移入 `mise.toml`。
 
 包含工具官方搜索的所有文件名，包括 `.config/tool.yml` 等文档记录的嵌套路径。当后缀重叠时，mise 会使用最具体的匹配路径。
 

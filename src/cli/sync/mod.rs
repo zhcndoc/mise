@@ -1,18 +1,18 @@
-use clap::Subcommand;
 use eyre::Result;
 
 mod node;
 mod python;
+mod reconcile;
 mod ruby;
 
-#[derive(Debug, clap::Args)]
-#[clap(about = "Synchronize tools from other version managers with mise")]
-pub struct Sync {
-    #[clap(subcommand)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(about = "Synchronize tools from other version managers with mise")]
+pub(crate) struct Sync {
+    #[usage(subcommand)]
     command: Commands,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Node(node::SyncNode),
     Python(python::SyncPython),
@@ -20,7 +20,7 @@ enum Commands {
 }
 
 impl Commands {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         match self {
             Self::Node(cmd) => cmd.run().await,
             Self::Python(cmd) => cmd.run().await,
@@ -30,7 +30,7 @@ impl Commands {
 }
 
 impl Sync {
-    pub async fn run(self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
         self.command.run().await
     }
 }

@@ -3,7 +3,7 @@
 
 - **用法：** `mise bootstrap [FLAGS] [SUBCOMMAND]`
 - **别名：** `bs`
-- **效果：** destructive — may delete or irreversibly overwrite
+- **效果：** 具有破坏性——可能删除或不可逆地覆盖
 - **源代码：** [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
 使用一条命令为当前配置设置机器
@@ -66,9 +66,11 @@
 指定部分。这两个标志都可以重复使用或以逗号分隔，但不能同时使用。
 
 ## 标志
-- **`-n --dry-run`** — 在不安装任何内容的情况下打印将要执行的操作
+- **`--from <GIT_URL>`** — 克隆 git 仓库并从其配置进行引导
+- **`--from-dir <DIR>`** — 用于存放通过 --from 克隆的仓库的目录
+- **`-n --dry-run`** — 打印将执行的操作，但不安装任何内容
 - **`-y --yes`** — 跳过确认提示
-- **`--skip-dirty`** — 跳过有本地更改的已配置仓库，而不是失败
+- **`--skip-dirty`** — 跳过存在本地更改的已配置仓库，而不是直接失败
 - **`--force-dotfiles`** — 覆盖与整文件点文件条目冲突的现有文件
 - **`--only <ONLY>`** — 仅运行一个或多个引导部分
 
@@ -104,10 +106,11 @@
 示例：
 
 ```
-mise bootstrap                    # 包裹 + 仓库 + dotfiles + 工具 + bootstrap 任务
-mise bootstrap --force-dotfiles   # 替换冲突的 dotfile 目标
-mise bootstrap --skip tools,task  # 跳过工具安装和 bootstrap 任务
-mise bootstrap --only tools       # 仅运行工具安装
+mise bootstrap                    # packages + repos + dotfiles + tools + bootstrap task
+mise -E work bootstrap --from git@github.com:example/dotfiles.git --yes
+mise bootstrap --force-dotfiles   # replace conflicting dotfile targets
+mise bootstrap --skip tools,task  # skip tool installation and the bootstrap task
+mise bootstrap --only tools       # run just tool installation
 mise bootstrap status --missing
 mise bootstrap packages apply --yes
 mise bootstrap repos status

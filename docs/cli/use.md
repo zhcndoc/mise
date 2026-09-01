@@ -25,8 +25,8 @@
 
 使用 `--global` 标志来改用全局配置文件。
 
-## 参数
-- **`[TOOL@VERSION]…`** — 要添加到配置文件中的工具
+## Arguments
+- **`<TOOL@VERSION>`** — 要添加到配置文件中的工具
 
   例如：node@20、cargo:ripgrep@latest、npm:prettier@3
   如果未指定版本，则默认为 @latest
@@ -68,9 +68,10 @@
 
   可以考虑使用 mise.lock 作为在 mise.toml 中固定版本的更好替代方案：
   <https://mise.jdx.dev/configuration/settings.html#lockfile>
-- **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含 `--jobs=1`
+- **`--raw`** — 将后端安装命令的标准输入、标准输出和标准错误直接连接到终端。隐含 `--jobs=1`
 - **`--remove <TOOL>`** — 从配置文件中移除工具
-- **`-h --help`** — 打印帮助
+- **`-h --help`** — 显示帮助
+- **`--postinstall <COMMAND>`** — 安装此工具后要运行的命令
 
 示例：
 
@@ -82,8 +83,14 @@ $ mise use
 # 会写入模糊版本（例如：20）
 $ mise use node@20
 
-# 将 ~/.config/mise/config.toml 中的 node 当前版本设置为 20.x
-# 会写入精确版本（例如：20.0.0）
+# run a command after installing a tool
+$ mise use --postinstall "mbx setup --defaults" mr-boxington
+
+# associate a different postinstall command with each tool
+$ mise use --postinstall "setup-a" tool-a --postinstall "setup-b" tool-b
+
+# set the current version of node to 20.x in ~/.config/mise/config.toml
+# will write the precise version (e.g.: 20.0.0)
 $ mise use -g --pin node@20
 
 # 设置 .mise.local.toml（其目的不是提交到项目中）

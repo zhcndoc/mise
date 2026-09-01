@@ -14,8 +14,8 @@ depends = ['lint:*']
 
 [build]
 alias = "b"
-run = "cargo build --all-features {{ get_env(name='MISE_CARGO_BUILD_EXTRA_ARGS', default='') }}"
-run_windows = "cargo build {{ get_env(name='MISE_CARGO_BUILD_EXTRA_ARGS', default='') }}"
+run = "{{ get_env(name='MISE_CARGO_BUILD_COMMAND', default='cargo build') }} --all-features {{ get_env(name='MISE_CARGO_BUILD_EXTRA_ARGS', default='') }}"
+run_windows = "{{ get_env(name='MISE_CARGO_BUILD_COMMAND', default='cargo build') }} {{ get_env(name='MISE_CARGO_BUILD_EXTRA_ARGS', default='') }}"
 description = "Build the project"
 #sources = ["Cargo.*", "src/**/*.rs"]
 #outputs = ["target/debug/mise"]
@@ -98,6 +98,9 @@ run = "usage generate manpage --file mise.usage.kdl > man/man1/mise.1"
 ["render:help"]
 description = 'Render help documentation'
 depends = ["build"]
+# markdown-magic scans docs/cli while render:usage replaces that directory.
+# When both tasks are part of `mise run render`, wait for the replacement to finish.
+wait_for = ["render:usage"]
 env = { NO_COLOR = "1" }
 sources = ["mise"]
 outputs = ["README.md"]

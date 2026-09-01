@@ -22,7 +22,8 @@ jobs:
   release-plz:
     if: github.repository == 'jdx/mise'
     timeout-minutes: 80
-    runs-on: namespace-profile-endev-linux-amd64;overrides.cache-tag=mise-release-plz-rust-linux
+    # Release builds must never restore or save persistent caches.
+    runs-on: namespace-profile-endev-linux-amd64
     permissions:
       pull-requests: write
       contents: write
@@ -41,6 +42,8 @@ jobs:
       - run: mkdir -p "$HOME/bin" && echo "$HOME/bin" >> "$GITHUB_PATH"
       - run: cargo build --all-features --ignore-rust-version && cp target/debug/mise "$HOME"/bin
       - uses: ./.github/actions/mise-tools
+        with:
+          cache: false
       - run: mise x -- bun i
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: crates-io-auth
@@ -49,6 +52,9 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
           # render tasks rebuild mise after bumping its version. Allow that nested
           # build to use dependencies whose rust-version metadata exceeds our MSRV.
+          # Keep using the same compiler path as the bootstrap build above: changing
+          # to mbx in an existing CMake tree makes AWS-LC reject the reconfigure.
+          MISE_CARGO_BUILD_COMMAND: MBX_DISABLE=1 cargo build
           MISE_CARGO_BUILD_EXTRA_ARGS: --ignore-rust-version
           # The full-feature build above already covers compilation. Avoid HK's
           # redundant cargo-check, which enforces dependency rust-version metadata.

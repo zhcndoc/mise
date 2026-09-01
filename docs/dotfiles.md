@@ -19,9 +19,10 @@ dotfiles.default_mode = "symlink"
 "~/.config/starship.toml" = { source = "dotfiles/starship.toml", mode = "copy" }
 "~/.config/tool.conf" = { content = "enabled = true\n" }                # inline whole-file content
 "~/.ssh/config" = { source = "dotfiles/ssh_config.tmpl", mode = "template" }
-"~/.config/nvim" = "dotfiles/nvim"                                   # 目录本身使用符号链接
-"~/.local/bin" = { source = "dotfiles/bin", mode = "symlink-each" }  # 为其中每个文件创建符号链接
-"~/hosts/dev" = { line = "127.0.0.1 dev.local" }                     # 编辑 ~/hosts 中的一行
+"~/.config/nvim" = "dotfiles/nvim"                                   # symlink the directory itself
+"~/.local/bin" = { source = "dotfiles/bin", mode = "symlink-each" }  # symlink each file within
+"~/managed-home" = { source = "home", mode = "symlink-each", manifest = "git" }
+"~/hosts/dev" = { line = "127.0.0.1 dev.local" }                     # edit one line in ~/hosts
 ```
 
 新条目通过 `mise bootstrap dotfiles add` 捕获并应用；传入
@@ -89,23 +90,41 @@ Markdown 文件。包含 `/` 的模式会锚定到源目录根路径：
 
 排除一个 mise 已经应用的文件，会在下一次应用时移除它留下的内容，效果与删除源文件相同。
 
+## Git 跟踪的目录
+
+在目录遍历条目上设置 `manifest = "git"`，即可仅管理
+Git 索引中的文件。对于使用 `gitignore *` 并通过 `git add -f` 选择性添加文件的仓库，此功能非常有用，因为无需在 mise 中再次列出每个路径：
+
+```toml
+[dotfiles]
+"~" = { source = ".", mode = "symlink-each", manifest = "git" }
+```
+
+mise 会从源目录运行 `git ls-files`。被忽略和未跟踪的文件会保持不变，而从索引中移除某个文件后，下一次应用时会移除由 mise 所有的
+`symlink-each` 链接。`exclude` 可以与 Git manifest 组合使用，以进行额外筛选。Git manifest 要求源为目录，并且模式必须是
+`symlink-each` 或 `copy`。
+
+当特定环境的配置为同一目标选择不同的 `symlink-each` 源时，应用新环境会协调之前源所记录的链接。这使得 `mise bootstrap -E home` 和
+`mise bootstrap -E work` 可以用作配置文件切换器：旧配置文件独有的链接会被移除，共享路径会被重新指向，而未受管理的相邻文件会被保留。
+
 ## 模式
 
-| 模式           | 行为                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `symlink`      | 将目标链接到源。适用于文件和目录——目录源会为整个目录创建一个链接。这是默认模式。                                                                                                                                                                                                                                                                                                                      |
-| `symlink-each` | 源必须是目录：在目标下重新创建其目录结构，并分别为每个文件创建符号链接，因此目标目录（例如 `~/.config`）也可以存放 mise 不管理的文件。在下一次应用时，删除源文件会移除其留下的链接；mise 未创建的文件和链接永远不会被触碰。受管理的链接会记录在 `$MISE_STATE_DIR/dotfiles` 下，因此共享目标在首次应用后不会被递归扫描。 |
-| `copy`         | 复制源文件（或递归复制目录）。当目标必须是真实文件时使用此模式——例如某些会就地重写其配置的工具。目录复制是累加式的：匹配的文件会被覆盖，mise 不管理的文件会保留。复制内容永远不会被清理，因此删除源文件后，副本仍会保留。                                                                                                                                       |
-| `template`     | 通过 [mise 模板引擎](/templates.html) 渲染源文件并写入结果。权限取自源文件（如果权限发生偏移，也会进行修复）。                                                                                                                                                                                                                                                                                                    |
+| 模式           | 行为                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `symlink`      | 将目标符号链接到源。适用于文件和目录——目录源会为整个目录创建一个链接。这是默认模式。                                                                                                                                                                                                                                                                                                                                                                |
+| `symlink-each` | 源必须是目录：在目标下重建其目录结构，并逐个为文件创建符号链接，因此目标目录（例如 `~/.config`）也可以存放 mise 不管理的文件。删除源文件或将其从选定的 manifest 中移除后，下一次应用时会移除它留下的链接；由 mise 创建以外的文件和链接永远不会被触碰。受管理的链接会记录在 `$MISE_STATE_DIR/dotfiles` 下，因此共享目标在首次应用后不会再被递归扫描。 |
+| `copy`         | 复制源文件（或递归复制目录）。当目标必须是真实文件时使用，例如需要就地重写其配置的工具。目录复制是追加式的：匹配的文件会被覆盖，mise 不管理的文件会保留。复制内容永远不会被清理，因此移除源文件后副本仍会保留。                                                                                                                                                                                 |
+| `template`     | 通过 [mise 模板引擎](/templates.html)渲染源并写入结果。权限取自源文件（如果权限发生变化也会被修复）。                                                                                                                                                                                                                                                                                                                                              |
 
 模板与其他 mise 模板（`env`、`vars`、
 `exec()` 等）使用相同的上下文，这也是使用模板的主要原因：根据机器为一个源文件
 生成输出。
 
-要检测模板的输出是否发生偏移，必须对其进行渲染，因此
-`mise bootstrap dotfiles status` 和实际应用都会从你信任的配置中评估模板——包括任何
-`exec()` 调用——就像 `[env]` 模板一样。
-`--dry-run` 是例外：它承诺不执行任何操作，因此会跳过模板渲染，并将这些条目列为 `(if changed)`。
+检测模板输出是否发生变化需要对其进行渲染，因此
+`mise bootstrap dotfiles status`、`mise bootstrap dotfiles diff` 和实际的 apply
+会从受信任的配置中计算模板，包括任何 `exec()` 调用，就像 `[env]` 模板一样。
+`--dry-run` 是例外：它承诺不执行任何操作，因此会跳过模板渲染，并将这些条目标记为
+`(if changed)`。
 
 ## 编辑条目
 
@@ -177,8 +196,10 @@ mise 拒绝_替换_它不管理的现有文件：符号链接应指向的位置�
 ## 命令
 
 ```sh
-mise bootstrap dotfiles status            # 显示已应用/缺失/不一致/源文件缺失
-mise bootstrap dotfiles status --missing  # 如果存在任何不同步内容则退出并返回 1
+mise bootstrap dotfiles status            # 显示已应用/缺失/不同/源缺失
+mise bootstrap dotfiles status --missing  # 如果有任何内容不同步则退出并返回 1
+mise bootstrap dotfiles diff              # 显示应用所需的更改
+mise bootstrap dotfiles diff ~/.zshrc     # 显示一个目标所需的更改
 
 mise bootstrap dotfiles apply                     # 应用文件和编辑
 mise bootstrap dotfiles apply --dry-run           # 显示将要执行的操作
@@ -191,7 +212,8 @@ mise bootstrap dotfiles unapply --dry-run   # 预览移除操作
 mise bootstrap dotfiles unapply --force     # 同时移除已修改/有歧义的目标
 
 mise bootstrap dotfiles add ~/.zshrc       # 将实时文件捕获到 dotfiles.root
-mise bootstrap dotfiles edit ~/.zshrc      # 编辑受管理的源文件或所属配置
+mise bootstrap dotfiles add --changed      # 捕获所有已更改的复制模式文件
+mise bootstrap dotfiles edit ~/.zshrc      # 编辑受管理的源或所属配置
 mise bootstrap dotfiles edit --apply ~/.zshrc
 ```
 
@@ -208,9 +230,10 @@ $EDITOR ~/.config/starship.toml
 mise bootstrap dotfiles add ~/.config/starship.toml
 ```
 
-对于未受管理的目标，`add` 会创建一个 `[dotfiles]` 条目，并将
-源文件播种到 `dotfiles.root` 下。对于已经受管理的目标，它会从实时目标
-更新现有源。
+使用 `mise bootstrap dotfiles add --changed` 可以一次更新所有由 `copy` 模式管理且发生更改的普通文件。目录复制会被排除，因为逆向还原追加式复制可能会删除有意从实时目录中排除的源文件。符号链接已经直接编辑其源文件，模板和内联内容无法逆向渲染，因此也不会包含在内。批量捕获还要求声明每个所选文件的配置受到信任。
+
+对于未受管理的目标，`add` 会创建一个 `[dotfiles]` 条目，并在
+`dotfiles.root` 下初始化源文件。对于已经受管理的目标，它会根据实时目标更新现有源文件。
 
 ## 自管理 mise 配置
 

@@ -123,9 +123,9 @@ minimum_release_age = "7d"
 minimum_release_age_excludes = ["trivy", "npm:*"]
 ```
 
-排除项可以匹配后端通配符，例如 `npm:*`；工具简写，例如 `trivy`；或完整的后端
-ID，例如 `npm:prettier`。匹配的工具会跳过全局设置和内置默认值。即使某个工具匹配排除列表，工具级
-`minimum_release_age` 选项和 CLI 标志仍然适用。
+排除项可以匹配类似 `npm:*` 的后端通配符、类似 `trivy` 的工具简写，或类似 `npm:prettier` 的完整后端
+ID。匹配的工具会跳过全局设置和内置默认值。即使工具匹配排除列表，按工具设置的
+`minimum_release_age` 选项和 CLI 标志仍然会生效。来自多个配置文件的排除项会合并并去重，因此项目配置可以添加排除项，而无需重复全局配置中的排除项。
 
 请参阅
 [`minimum_release_age`](/configuration/settings.html#minimum_release_age)了解设置参考。

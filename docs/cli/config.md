@@ -16,6 +16,6 @@
 
 ## 子命令
 
-- [`mise config get [-f --file <FILE>] [KEY]`](/cli/config/get.md)
+- [`mise config get [FLAGS] [KEY]`](/cli/config/get.md)
 - [`mise config ls [FLAGS]`](/cli/config/ls.md)
-- [`mise config set [-f --file <FILE>] [-t --type <TYPE>] <KEY> [VALUE]`](/cli/config/set.md)
+- [`mise config set [FLAGS] <KEY> [VALUE]`](/cli/config/set.md)

@@ -87,10 +87,13 @@ python = { version = "3.12", postinstall = "pip install pipx" }
 
 工具级 postinstall 脚本会接收以下环境变量：
 
-- `MISE_TOOL_NAME`: 工具的简称（例如 "node"、"python"）
-- `MISE_TOOL_VERSION`: 已安装的版本（例如 "20.10.0"、"3.12.0"）
-- `MISE_TOOL_INSTALL_PATH`: 工具的安装路径
-- 来自该工具 `install_env` 选项中的变量。
+- `MISE_TOOL_NAME`：工具的短名称（例如，"node"、"python"）
+- `MISE_TOOL_VERSION`：已安装的版本（例如，"20.10.0"、"3.12.0"）
+- `MISE_TOOL_INSTALL_PATH`：工具的安装路径
+- 该工具的 `install_env` 选项中的变量
+- `MISE_CONFIG_FILE`：声明该工具的确切配置文件
+- `MISE_CONFIG_ROOT`：该配置的根目录
+- `MISE_PROJECT_ROOT`：活动项目的根目录（如果没有活动项目，则为配置根目录）
 
 ## 任务钩子
 
@@ -156,11 +159,11 @@ task = "sync-deps"
 
 钩子会在设置了以下环境变量的情况下执行：
 
-- `MISE_ORIGINAL_CWD`: 用户所在的目录。
-- `MISE_PROJECT_ROOT`: 项目的根目录。
-- `MISE_CONFIG_ROOT`: 定义该钩子的配置的根目录。
-- `MISE_PREVIOUS_DIR`: 用户在目录更改之前所在的目录（仅在发生目录更改时）。
-- `MISE_INSTALLED_TOOLS`: 已安装工具的 JSON 数组（仅用于 `postinstall` 钩子）。
+- `MISE_ORIGINAL_CWD`：用户所在的目录。
+- `MISE_PROJECT_ROOT`：项目的根目录。
+- `MISE_CONFIG_ROOT`：定义该钩子的配置的根目录。
+- `MISE_PREVIOUS_DIR`：用户在目录更改之前所在的目录（仅在发生目录更改时）。
+- `MISE_INSTALLED_TOOLS`：已安装工具的 JSON 数组（仅用于 `postinstall` 钩子）。
 
 全局钩子会将活动项目的根目录用于 `MISE_PROJECT_ROOT`，并将全局配置根目录用于
 `MISE_CONFIG_ROOT`。对于 `mise use --global` 等仅限全局的操作，两个变量都会使用

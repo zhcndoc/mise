@@ -54,12 +54,13 @@
 - **`--monorepo`** — 未来 monorepo 升级的占位标志；`mise upgrade --monorepo` 尚未实现。
 - **`--no-prune`** — 不卸载已被升级版本替代的版本
 
-  默认情况下，新版本安装后会移除旧版本，除非其他受跟踪的配置或工具存根仍需要它。使用此选项可保留旧版本，例如在 mise 之外的其他程序指向旧安装目录时。
+  旧版本会保留在原处，不会安排移除。如果 mise 之外的某些程序指向安装目录，请使用此选项。
 
-  设置 `upgrade.auto_prune = false` 可将其设为默认行为。
-- **`--prune`** — 卸载已被升级版本替代的版本
+  设置 `upgrade.auto_prune = false` 可使其成为默认行为。
+- **`--prune`** — 立即卸载已被升级版本替代的版本
 
-  这已经是默认行为。使用此选项可在单次运行中覆盖 `upgrade.auto_prune = false`。
+  使用此选项可绕过 `upgrade.prune_after`，或在单次运行中覆盖
+  `upgrade.auto_prune = false`。
 - **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含使用 --jobs=1
 - **`-h --help`** — 打印帮助
 

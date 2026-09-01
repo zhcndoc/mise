@@ -576,14 +576,15 @@ pub(crate) struct TaskWatchOptions {
 #[serde(default, deny_unknown_fields)]
 struct TaskRustCacheOptions {
     enabled: bool,
-    verify: bool,
+    #[serde(rename = "verify")]
+    _verify: bool,
 }
 
 impl Default for TaskRustCacheOptions {
     fn default() -> Self {
         Self {
             enabled: true,
-            verify: false,
+            _verify: false,
         }
     }
 }
@@ -591,15 +592,11 @@ impl Default for TaskRustCacheOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskRustCacheConfig {
     pub enabled: bool,
-    pub verify: bool,
 }
 
 impl Default for TaskRustCacheConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            verify: false,
-        }
+        Self { enabled: true }
     }
 }
 
@@ -621,10 +618,7 @@ impl<'de> Deserialize<'de> for TaskRustCacheConfig {
             where
                 E: serde::de::Error,
             {
-                Ok(TaskRustCacheConfig {
-                    enabled,
-                    verify: false,
-                })
+                Ok(TaskRustCacheConfig { enabled })
             }
 
             fn visit_map<M>(self, map: M) -> std::result::Result<Self::Value, M::Error>
@@ -636,7 +630,6 @@ impl<'de> Deserialize<'de> for TaskRustCacheConfig {
                 )?;
                 Ok(TaskRustCacheConfig {
                     enabled: options.enabled,
-                    verify: options.verify,
                 })
             }
         }
@@ -727,7 +720,7 @@ pub(crate) struct Task {
     /// Experimental local artifact cache configuration.
     #[serde(default)]
     pub cache: Option<TaskCacheConfig>,
-    /// Rust compiler action caching enabled only for this task run.
+    /// Deprecated compatibility field; enabled values emit an mbx migration warning.
     #[serde(default)]
     pub rust_cache: Option<TaskRustCacheConfig>,
     #[serde(skip)]
@@ -964,8 +957,22 @@ impl MiseHeaderEntry {
 /// #MISE ]
 /// ```
 fn scan_mise_header_entries(body: &str) -> Vec<MiseHeaderEntry> {
-    let header_regex = regex!(r"^(?:#|//|::)(?:MISE| ?\[MISE\]) (.*)$");
-    let entry_regex = regex!(r"^[a-z0-9_.-]+\s*=\s*[^\n]+$");
+    // `\s*` before the marker, to match `extract_usage_from_comments`. When
+    // only that function accepted `# MISE`, a spaced `# MISE tools."x".version`
+    // was suppressed from the usage text *and* never became config: it set
+    // nothing and said nothing.
+    let header_regex = regex!(r"^(?:#|//|::)\s*(?:MISE|\[MISE\]) (.*)$");
+    // A TOML key path: bare segments, quoted segments, or a dotted mix. The old
+    // `[a-z0-9_.-]+` matched neither a quoted segment nor an uppercase one, so
+    // `tools."http:ruff".version = …` and `env.FOO = "bar"` were not recognised
+    // as config at all — they were dropped here and then handed to the usage
+    // parser, which is where the `KdlError` warning came from.
+    // Whitespace is allowed around the dots (TOML's `dot-sep = ws %x2E ws`) but
+    // not in place of them, which is what keeps usage directives out: a
+    // `flag "--jobs" default="4"` reaches a quote before it can reach the `=`.
+    let entry_regex = regex!(
+        r#"^\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*=\s*[^\n]+$"#
+    );
     let mut entries: Vec<MiseHeaderEntry> = vec![];
     let mut open: Option<(MiseHeaderEntry, TomlOpenState)> = None;
     for (i, line) in body.lines().enumerate() {
@@ -1009,6 +1016,27 @@ fn scan_mise_header_entries(body: &str) -> Vec<MiseHeaderEntry> {
         entries.push(entry);
     }
     entries
+}
+
+/// Merge one header entry's top-level key into the accumulated header table.
+///
+/// Recurses while both sides are tables. Merging only the first level was enough
+/// for two different tools on two lines, which is what it was written for, but
+/// it silently replaced the whole table when one tool was split across lines:
+/// `tools.jq.version` on one line and `tools.jq.os` on the next left `jq` with
+/// no version, reported as the confusing "tool definition must include exactly
+/// one of `version`, `path`, `prefix`, or `ref`".
+fn merge_header_value(map: &mut toml::Table, key: String, value: toml::Value) {
+    match (map.get_mut(&key), value) {
+        (Some(toml::Value::Table(existing)), toml::Value::Table(new)) => {
+            for (k, v) in new {
+                merge_header_value(existing, k, v);
+            }
+        }
+        (_, value) => {
+            map.insert(key, value);
+        }
+    }
 }
 
 /// Parse the `#MISE key=value` (and `// MISE`, `:: MISE`, `[MISE]`) header
@@ -1087,7 +1115,15 @@ fn parse_task_usage_raw(file: &Path, raw: &str) -> usage::Result<usage::Spec> {
 fn extract_usage_from_comments(full: &str) -> String {
     let usage_regex = regex!(r"^(?:#|//|::)\s*(?:(USAGE|MISE)|\[(USAGE|MISE)\])(.*)$");
     let blank_comment_regex = regex!(r"^(?:#|//|::)\s*$");
-    let mise_header_regex = regex!(r"^[a-z0-9_.-]+\s*=");
+    // The same key path `scan_mise_header_entries` looks for. Both markers now
+    // allow whitespace after the comment character, so the entry ranges below
+    // already cover the ordinary shapes; this stays as the backstop for lines
+    // that only the marker here matches (it does not require a space after
+    // `MISE`), so such a line is dropped rather than handed to the usage
+    // parser. Keep the two key-path patterns identical.
+    let mise_header_regex = regex!(
+        r#"^\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*="#
+    );
     // Continuation lines of a multi-line `#MISE key=[...]` entry are config, not
     // usage text, even though they don't look like `key=value` on their own.
     let header_entries = scan_mise_header_entries(full);
@@ -1349,25 +1385,11 @@ impl Task {
             .filter_map(|toml| toml.as_table().cloned())
             .flatten()
             .fold(toml::Table::new(), |mut map, (key, value)| {
-                // Deep-merge tables when both existing and new values are tables
-                // This allows multiple #MISE lines like:
+                // Merge tables so one field can be written per #MISE line:
                 //   #MISE tools.terraform="1"
                 //   #MISE tools.tflint="0"
-                // to be merged into a single tools table
                 // See: https://github.com/jdx/mise/discussions/7839
-                if let Some(existing) = map.get_mut(&key) {
-                    if let (toml::Value::Table(existing_table), toml::Value::Table(new_table)) =
-                        (existing, &value)
-                    {
-                        for (k, v) in new_table {
-                            existing_table.insert(k.clone(), v.clone());
-                        }
-                    } else {
-                        map.insert(key, value);
-                    }
-                } else {
-                    map.insert(key, value);
-                }
+                merge_header_value(&mut map, key, value);
                 map
             });
         let info = toml::Value::Table(info);
@@ -1886,8 +1908,8 @@ impl Task {
             .any(|a| a == "--help" || a == "-h")
     }
 
-    /// Reconstruct the command-line separator clap consumed before populating
-    /// `trailing_args` when the active usage command requires it.
+    /// Reconstruct the command-line separator the outer CLI consumed before populating
+    /// `trailing_args` when the active usage command requires or preserves it.
     pub(crate) fn args_for_usage_parser(&self, spec: &usage::Spec, args: &[String]) -> Vec<String> {
         if self.trailing_args.is_empty() {
             return args.to_vec();
@@ -1910,7 +1932,12 @@ impl Task {
         if !usage_command_for_args(spec, task_prefix)
             .args
             .iter()
-            .any(|arg| arg.double_dash == usage::SpecDoubleDashChoices::Required)
+            .any(|arg| {
+                matches!(
+                    arg.double_dash,
+                    usage::SpecDoubleDashChoices::Required | usage::SpecDoubleDashChoices::Preserve
+                )
+            })
         {
             return args.to_vec();
         }
@@ -1991,7 +2018,9 @@ impl Task {
                 Some(cwd) => Some(cwd),
                 None => self.dir(config).await?,
             };
-            let (scripts, spec) = Self::make_script_parser(parser_dir, extra_vars)
+            let (scripts, spec) = self
+                .make_script_parser(config, parser_dir, extra_vars)
+                .await
                 .parse_run_scripts(config, self, &scripts_only, &env)
                 .await?;
             (spec, scripts)
@@ -2001,11 +2030,39 @@ impl Task {
         Ok((spec, scripts))
     }
 
-    fn make_script_parser(
+    /// Build the script parser for this task.
+    ///
+    /// The source baseline is resolved here rather than inside the parser
+    /// because `task_source_files(only_changed=true)` needs the marker written
+    /// under the task's *real* working directory, and only this layer has the
+    /// config needed to determine it.
+    async fn make_script_parser(
+        &self,
+        config: &Arc<Config>,
         cwd: Option<PathBuf>,
         extra_vars: Option<IndexMap<String, String>>,
     ) -> TaskScriptParser {
         let parser = TaskScriptParser::new(cwd);
+        // Skipped for a task with no sources: `task_source_files()` returns an
+        // empty array there regardless, and resolving the baseline would mean
+        // a `task_cwd` call — and with it a possible `dir` template render —
+        // that the task would not otherwise pay for.
+        let parser = if self.sources.is_empty() {
+            parser
+        } else {
+            match task_source_checker::source_baseline_path(self, config).await {
+                Ok(baseline) => parser.with_baseline(baseline),
+                Err(err) => {
+                    // Without a baseline `only_changed` falls back to reporting
+                    // every source, which is the safe direction.
+                    trace!(
+                        "could not resolve source baseline for task {}: {err:?}",
+                        self.name
+                    );
+                    parser
+                }
+            }
+        };
         match extra_vars {
             Some(vars) => parser.with_extra_vars(vars),
             None => parser,
@@ -2095,7 +2152,9 @@ impl Task {
                 None => self.dir(config).await?,
             };
             let scripts_only = self.run_script_strings();
-            let scripts = Self::make_script_parser(parser_dir, extra_vars)
+            let scripts = self
+                .make_script_parser(config, parser_dir, extra_vars)
+                .await
                 .parse_run_scripts_with_args(config, self, &scripts_only, &env, &args, &spec)
                 .await?;
             Ok(scripts.into_iter().map(|s| (s, vec![])).collect())
@@ -2796,6 +2855,17 @@ impl Task {
 
     pub(crate) fn name_to_path(&self) -> PathBuf {
         self.name.replace(':', path::MAIN_SEPARATOR_STR).into()
+    }
+
+    /// Like [`Self::name_to_path`], but named for the task rather than for the file behind it.
+    ///
+    /// A file task's `name` keeps its file's extension while everything else about the task drops
+    /// it, so the two spellings disagree for exactly the tasks that come from a file. Anything
+    /// naming a file *after* the task -- a task stub, say -- wants this one.
+    pub(crate) fn display_name_to_path(&self) -> PathBuf {
+        self.display_name
+            .replace(':', path::MAIN_SEPARATOR_STR)
+            .into()
     }
 
     pub(crate) async fn render_env(
@@ -3596,6 +3666,119 @@ pub(crate) async fn parse_usage_values_from_task(
 
 #[cfg(test)]
 mod tests {
+    mod header_key_paths {
+        use super::super::{
+            extract_usage_from_comments, merge_header_value, parse_mise_header_toml,
+        };
+
+        fn keys(body: &str) -> Vec<String> {
+            parse_mise_header_toml(body)
+                .unwrap()
+                .into_iter()
+                .filter_map(|v| v.as_table().cloned())
+                .flat_map(|t| t.keys().cloned().collect::<Vec<_>>())
+                .collect()
+        }
+
+        /// Fails before the fix: the old `[a-z0-9_.-]+` key class stops at `F`,
+        /// so the line never reaches the `=` and is not seen as config at all.
+        #[test]
+        fn an_uppercase_dotted_key_is_config() {
+            let body = "#!/usr/bin/env bash\n#MISE env.FOO = \"bar\"\n";
+            assert_eq!(keys(body), ["env"]);
+        }
+
+        /// Fails before the fix: a quoted segment contains `\"`, which the old
+        /// key class did not allow. This is the shape a `http:`-backend tool
+        /// needs (discussions#11195).
+        #[test]
+        fn a_quoted_segment_is_config() {
+            let body = "#!/usr/bin/env bash\n#MISE tools.\"http:ruff\".version = \"0.11.0\"\n";
+            assert_eq!(keys(body), ["tools"]);
+        }
+
+        /// Fails before the fix for the same reason, and additionally proves the
+        /// line is no longer handed to the usage parser — which is where the
+        /// `KdlError` warning came from.
+        #[test]
+        fn a_config_line_is_not_usage_text() {
+            let body = "#!/usr/bin/env bash\n#MISE tools.\"http:ruff\".version = \"0.11.0\"\n";
+            assert_eq!(extract_usage_from_comments(body), "");
+        }
+
+        /// TOML allows whitespace around the dot separator
+        /// (`dot-sep = ws %x2E ws`), so a spaced key path is still config.
+        #[test]
+        fn whitespace_around_the_dots_is_config() {
+            let body = "#!/usr/bin/env bash\n#MISE tools . \"http:ruff\" . version = \"0.11.0\"\n";
+            assert_eq!(keys(body), ["tools"]);
+        }
+
+        /// A basic quoted key may contain an escaped quote. Rejecting it would
+        /// send the line to the usage parser like every other unmatched shape.
+        #[test]
+        fn an_escaped_quote_inside_a_key_is_config() {
+            let body = "#!/usr/bin/env bash\n#MISE tools.\"a\\\"b\".version = \"1\"\n";
+            assert_eq!(keys(body), ["tools"]);
+        }
+
+        /// Guards the widening: a usage directive has a space before its first
+        /// quote, so it must not be mistaken for a key path.
+        #[test]
+        fn a_usage_directive_is_still_usage_text() {
+            let body = "#!/usr/bin/env bash\n#MISE flag \"--jobs\" default=\"4\"\n";
+            assert!(keys(body).is_empty());
+            assert_eq!(
+                extract_usage_from_comments(body),
+                "flag \"--jobs\" default=\"4\""
+            );
+        }
+
+        /// Fails before the fix: merging only the first level replaced the whole
+        /// `jq` table, leaving it with no version.
+        #[test]
+        fn splitting_one_tool_across_lines_keeps_every_field() {
+            let mut map = toml::Table::new();
+            for value in parse_mise_header_toml(
+                "#!/usr/bin/env bash\n#MISE tools.jq.version = \"1.8.1\"\n#MISE tools.jq.os = [\"macos\"]\n",
+            )
+            .unwrap()
+            {
+                for (k, v) in value.as_table().unwrap().clone() {
+                    merge_header_value(&mut map, k, v);
+                }
+            }
+            let jq = map["tools"].as_table().unwrap()["jq"].as_table().unwrap();
+            assert_eq!(jq["version"].as_str(), Some("1.8.1"));
+            assert!(
+                jq.contains_key("os"),
+                "the later line must not replace the table"
+            );
+        }
+
+        /// TOML allows whitespace before the key, and the scanner matches the
+        /// raw payload after `#MISE `, so the extra spaces here have to be part
+        /// of the pattern rather than trimmed away by the caller.
+        #[test]
+        fn extra_space_after_the_marker_is_still_config() {
+            let body = "#!/usr/bin/env bash\n#MISE   env.FOO = \"bar\"\n";
+            assert_eq!(keys(body), ["env"]);
+            assert_eq!(extract_usage_from_comments(body), "");
+        }
+
+        /// Fails before the fix: `scan_mise_header_entries` only accepted
+        /// `#MISE`, so a spaced `# MISE` line was suppressed from the usage text
+        /// by the extractor and never parsed as config either — it set nothing
+        /// and reported nothing. Asserting only the suppression would pass while
+        /// the setting was still being thrown away, so assert the key lands.
+        #[test]
+        fn a_spaced_marker_with_a_quoted_key_is_still_config() {
+            let body = "#!/usr/bin/env bash\n# MISE tools.\"http:ruff\".version = \"0.11.0\"\n";
+            assert_eq!(keys(body), ["tools"]);
+            assert_eq!(extract_usage_from_comments(body), "");
+        }
+    }
+
     use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -3718,13 +3901,7 @@ rust_cache = { verify = true }
 "#,
         )
         .unwrap();
-        assert_eq!(
-            verify.rust_cache,
-            Some(TaskRustCacheConfig {
-                verify: true,
-                ..TaskRustCacheConfig::default()
-            })
-        );
+        assert_eq!(verify.rust_cache, Some(TaskRustCacheConfig::default()));
     }
 
     #[test]
@@ -3746,17 +3923,11 @@ rust_cache = { enabled = false }
 
         assert_eq!(
             disabled.rust_cache,
-            Some(TaskRustCacheConfig {
-                enabled: false,
-                ..TaskRustCacheConfig::default()
-            })
+            Some(TaskRustCacheConfig { enabled: false })
         );
         assert_eq!(
             table.rust_cache,
-            Some(TaskRustCacheConfig {
-                enabled: false,
-                ..TaskRustCacheConfig::default()
-            })
+            Some(TaskRustCacheConfig { enabled: false })
         );
     }
 

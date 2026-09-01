@@ -74,5 +74,8 @@ latest -> ./20.15.0
 
 ### `~/.local/share/mise/shims`
 
-这是 mise 放置 shim 的位置。通常这些用于 IDE 集成，或者在 `mise activate`
-由于某些原因无法正常工作时使用。
+这是 mise 放置 shim 的位置。通常，这些 shim 用于 IDE 集成，或者由于某种原因 `mise activate` 无法正常工作时使用。
+
+### `~/.local/share/mise/command-wrappers/bin`
+
+此处是 mise 放置由 `[wrappers]` 配置的分发 shim 的位置。Mise 管理此目录；添加或移除 command wrapper 后，请使用 `mise reshim`。

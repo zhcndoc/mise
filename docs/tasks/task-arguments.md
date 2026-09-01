@@ -234,6 +234,9 @@ arg "<file>" double_dash="optional"
 
 // 第一个参数之后，行为等同于使用了 --
 arg "<files>" double_dash="automatic"
+
+// Keep double dashes as values in a variadic argument
+arg "<args>..." double_dash="preserve"
 ```
 
 ### 标志（`flag`）

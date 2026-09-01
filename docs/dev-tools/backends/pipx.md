@@ -86,7 +86,9 @@ mise install -f "pipx:*"
 | Git 语法，指定分支                    | `pipx:git+https://github.com/psf/black.git@main`       |
 | 带 zip 文件的 Https                   | `pipx:https://github.com/psf/black/archive/18.9b0.zip` |
 
-其他语法可能可用，但不受支持且未经测试。
+对于 GitHub URL，`latest` 会解析为最新发布的 GitHub Release；如果没有 Release，则会回退到默认分支的 HEAD。对于其他 Git URL，`latest` 会跟踪默认分支的 HEAD，并在安装前将其解析为具体的提交。远程标签可用于显式版本请求。
+
+其他语法可能也能使用，但不受支持且未经测试。
 
 ## 设置
 

@@ -9,9 +9,15 @@
 通过 [`mise bootstrap remote`](/bootstrap/remote.html)，可以将相同的配置应用于命名的清单主机或临时 SSH
 目标。
 
-对于在项目或工作站就绪之前所需、但不属于 `[tools]` 的内容，请使用 bootstrap：原生库、Homebrew
-公式、dotfile 仓库、shell rc 文件、编辑器配置、macOS
-偏好设置、用户服务，以及一次性机器设置。
+在新机器上，mise 可以在开始之前克隆包含该配置的仓库：
+
+```sh
+mise -E work bootstrap --from git@github.com:example/dotfiles.git --yes
+```
+
+检出目录默认为 `$MISE_DATA_DIR/bootstrap-repo`；使用 `--from-dir` 选择其他位置。显式提供的检出目录在本次调用中会被信任，并且当前活动的 `-E` 环境会传递给它，因此 `mise.home.toml` 和 `mise.work.toml` 等文件可以选择不同的配置文件。现有检出目录的 `origin` 必须是请求的 URL。除非传入 `--update`，否则会原样复用现有检出目录；传入该选项时，mise 会在应用引导配置之前执行仅允许快进的拉取操作。在 `--dry-run` 期间，缺失的检出目录只会被报告，不会被克隆。
+
+对于项目或工作站准备就绪之前所需、但不属于 `[tools]` 的内容，请使用 bootstrap：原生库、Homebrew formulae、dotfile 仓库、shell rc 文件、编辑器配置、macOS 偏好设置、用户服务以及一次性的机器设置。
 
 ## 组合配置根
 

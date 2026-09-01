@@ -237,7 +237,7 @@ mise 不会自动添加 Bun 的 [`--trust`](https://bun.sh/docs/pm/cli/add#trust
 "npm:some-tool" = { version = "latest", trust_policy_excludes = ["undici@^5 || >=6 <7"] }
 ```
 
-`trust_policy_excludes` 会作为 `trustPolicyExclude` 写入 aube 安装目录的 `.npmrc`。它不会影响 `npm`、`pnpm` 或 `bun` 安装。
+`trust_policy_excludes` 会作为 `trustPolicyExclude` 写入 aube 安装目录的 `.config/aube/config.toml` 中。它不会影响 `npm`、`pnpm` 或 `bun` 安装。
 
 ### `allow_low_downloads`
 
@@ -252,7 +252,8 @@ mise 不会自动添加 Bun 的 [`--trust`](https://bun.sh/docs/pm/cli/add#trust
 "npm:some-tool" = { version = "latest", allow_low_downloads = true }
 ```
 
-此豁免仅针对你请求的包，会作为 `allowedUnpopularPackages=<package>` 写入 aube 安装目录的 `.npmrc`。传递依赖仍会受到限制，阈值本身也不会改变——因此不会悄悄放行你未主动选择的不受欢迎依赖。
+此例外仅适用于你请求安装的软件包，并会以 `allowedUnpopularPackages` 的形式写入 aube 安装目录的
+`.config/aube/config.toml` 中。传递依赖仍会受到限制，阈值本身也不会改变——因此，它不会悄悄允许你未主动选择的冷门依赖安装。
 
 从 `mise.lock` 解析出的 npm 工具会自动通过此下载量检查，因此复现现有锁文件不需要 `allow_low_downloads`。但首次无锁安装仍需要显式设置此选项才能批准。
 

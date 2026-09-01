@@ -1,7 +1,7 @@
 ## `build`
 
-- **Usage:** `build`
-- **Aliases:** `b`
+- **用法：** `build`
+- **别名：** `b`
 
 构建项目。
 
@@ -9,13 +9,13 @@
 
 - 依赖：format、build、test
 
-- **Usage:** `ci`
+- **用法：** `ci`
 
 运行所有 CI 检查
 
 ## `clean`
 
-- **Usage:** `clean`
+- **用法：** `clean`
 
 清理构建产物。
 
@@ -23,7 +23,7 @@
 
 - 依赖：docs:setup
 
-- **Usage:** `docs`
+- **用法：** `docs`
 
 启动文档开发服务器。
 
@@ -31,13 +31,13 @@
 
 - 依赖：docs:setup
 
-- **Usage:** `docs:build`
+- **用法：** `docs:build`
 
 构建文档网站。
 
 ## `docs:demos`
 
-- **Usage:** `docs:demos`
+- **用法：** `docs:demos`
 
 使用 vhs 创建录制内容。
 
@@ -45,7 +45,7 @@
 
 - 依赖：docs:build
 
-- **Usage:** `docs:preview`
+- **用法：** `docs:preview`
 
 预览文档网站。
 
@@ -53,31 +53,31 @@
 
 - 依赖：docs:build
 
-- **Usage:** `docs:release`
+- **用法：** `docs:release`
 
 将文档网站发布到生产环境或远程环境。
 
 ## `docs:setup`
 
-- **Usage:** `docs:setup`
+- **用法：** `docs:setup`
 
 安装文档依赖。
 
 ## `fetch-gpg-keys`
 
-- **Usage:** `fetch-gpg-keys`
+- **用法：** `fetch-gpg-keys`
 
 获取用于签名或验证的 GPG 密钥。
 
 ## `flamegraph`
 
-- **Usage:** `flamegraph`
+- **用法：** `flamegraph`
 
 生成用于性能分析的火焰图。
 
 ## `install-dev`
 
-- **Usage:** `install-dev`
+- **用法：** `install-dev`
 
 以调试模式安装当前项目。
 
@@ -85,48 +85,44 @@
 
 - 依赖：lint:*
 
-- **Usage:** `lint`
+- **用法：** `lint`
 
 运行所有 lint 检查
 
 ## `lint-fix`
 
-- **Usage:** `lint-fix`
-- **Aliases:** `format`, `fix`
+- **用法：** `lint-fix`
+- **别名：** `format`, `fix`
 
 自动修复代码检查问题。
 
 ## `lint:hk`
 
-- **Usage:** `lint:hk`
+- **用法：** `lint:hk`
 
 检查 HK 文件。
 
 ## `perf`
 
-- **Usage:** `perf`
-
-## `perf:cache-shim`
-
-- **Usage:** `perf:cache-shim`
+- **用法：** `perf`
 
 ## `perf:record`
 
-- **Usage:** `perf:record`
+- **用法：** `perf:record`
 
 ## `perf:task-cache`
 
-- **Usage:** `perf:task-cache`
+- **用法：** `perf:task-cache`
 
 ## `pre-commit`
 
-- **Usage:** `pre-commit`
+- **用法：** `pre-commit`
 
 运行 pre-commit 钩子。
 
 ## `release-plz`
 
-- **Usage:** `release-plz`
+- **用法：** `release-plz`
 
 使用 release-plz 发布
 
@@ -134,7 +130,7 @@
 
 - 依赖：render:*
 
-- **Usage:** `render`
+- **用法：** `render`
 
 运行所有渲染任务。
 
@@ -142,7 +138,7 @@
 
 - 依赖：build
 
-- **Usage:** `render:completions`
+- **用法：** `render:completions`
 
 生成 Shell 补全命令。
 
@@ -150,7 +146,7 @@
 
 - 依赖：build
 
-- **Usage:** `render:help`
+- **用法：** `render:help`
 
 渲染帮助文档。
 
@@ -158,7 +154,7 @@
 
 - 依赖：render:usage、render:help
 
-- **Usage:** `render:llms`
+- **用法：** `render:llms`
 
 生成 docs/public/llms.txt（面向 AI 代理的文档索引）。
 
@@ -166,7 +162,7 @@
 
 - 依赖：render:usage
 
-- **Usage:** `render:mangen`
+- **用法：** `render:mangen`
 
 生成 man 手册页。
 
@@ -174,7 +170,7 @@
 
 - 依赖：docs:setup
 
-- **Usage:** `render:schema`
+- **用法：** `render:schema`
 
 渲染 JSON Schema。
 
@@ -182,26 +178,26 @@
 
 - 依赖：build
 
-- **Usage:** `render:usage`
+- **用法：** `render:usage`
 
 生成用法文档。
 
 ## `show-output-on-failure`
 
-- **Usage:** `show-output-on-failure`
+- **用法：** `show-output-on-failure`
 
 文档生成失败时显示输出。
 
 ## `snapshots`
 
-- **Usage:** `snapshots`
+- **用法：** `snapshots`
 
 更新测试快照。
 
 ## `test`
 
-- **Usage:** `test`
-- **Aliases:** `t`
+- **用法：** `test`
+- **别名：** `t`
 
 运行所有测试
 
@@ -210,7 +206,7 @@
 在上游版本发布后的一段宽限期内，重试失败的测试工具
 
 
-- **Usage:** `test-tool-retry [--grace-period] [--check-only] <tools>…`
+- **用法：** `test-tool-retry [--grace-period] [--check-only] <tools>…`
 
 ### 参数
 - **`<tools>…`** — 要重试的失败工具
@@ -221,13 +217,13 @@
 
 ## `test:build-perf-workspace`
 
-- **Usage:** `test:build-perf-workspace`
+- **用法：** `test:build-perf-workspace`
 
 任务描述。
 
 ## `test:coverage`
 
-- **Usage:** `test:coverage`
+- **用法：** `test:coverage`
 
 运行所有测试并生成覆盖率报告。
 
@@ -235,8 +231,8 @@
 
 - 依赖：build
 
-- **Usage:** `test:e2e`
-- **Aliases:** `e`, `e2e`
+- **用法：** `test:e2e`
+- **别名：** `e`, `e2e`
 
 运行端到端测试。
 
@@ -244,18 +240,18 @@
 
 - 依赖：test:build-perf-workspace
 
-- **Usage:** `test:perf`
+- **用法：** `test:perf`
 
 运行性能测试。
 
 ## `test:shuffle`
 
-- **Usage:** `test:shuffle`
+- **用法：** `test:shuffle`
 
 启用随机排序运行测试。
 
 ## `test:unit`
 
-- **Usage:** `test:unit`
+- **用法：** `test:unit`
 
 运行单元测试。

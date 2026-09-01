@@ -18,6 +18,7 @@ use crate::task::task_helpers::task_needs_permit;
 use crate::task::task_list::{get_task_lists, resolve_depends};
 use crate::task::task_output::TaskOutput;
 use crate::task::task_output_handler::OutputHandler;
+use crate::task::task_scheduler::RunLoopHooks;
 use crate::task::{Deps, Task, TaskCacheMode, usage_command_for_args};
 use crate::toolset::{InstallOptions, ResolveOptions, ToolVersion, ToolsetBuilder};
 use crate::ui::{ctrlc, info, style};
@@ -300,9 +301,6 @@ pub(crate) struct Run {
 
     #[usage(skip)]
     pub executor: Option<crate::task::task_executor::TaskExecutor>,
-
-    #[usage(skip)]
-    pub cache_session: Option<crate::cache::session::CacheSession>,
 }
 
 fn affected_task_args(args: &[String]) -> Vec<String> {
@@ -868,29 +866,17 @@ impl Run {
                 .await?;
         }
 
-        // Step 4: Bracket action caching with this top-level task run. The
-        // session owns the local agent and is flushed before results report.
-        self.setup_cache_session(&tasks).await?;
-
-        // Step 5: Create TaskExecutor after tool installation
+        // Step 4: Create TaskExecutor after tool installation
         self.setup_executor()?;
 
         // Validate every scheduled invocation before starting the scheduler so
         // an invalid parent or dependency cannot run any task commands first.
         let executor = self.executor.as_ref().expect("task executor initialized");
         for task in tasks.all() {
-            if let Err(err) = executor
+            executor
                 .preflight_task_usage(&config, task)
                 .await
-                .wrap_err_with(|| format!("failed to validate task {}", task.name))
-            {
-                if let Some(session) = &self.cache_session
-                    && let Err(finish_err) = session.finish().await
-                {
-                    warn!("failed to finish action cache session: {finish_err:#}");
-                }
-                return Err(err);
-            }
+                .wrap_err_with(|| format!("failed to validate task {}", task.name))?;
         }
 
         // Disable exit-on-ctrl-c so tasks can handle SIGINT gracefully
@@ -900,7 +886,7 @@ impl Run {
         let this = Arc::new(self);
         let config = config.clone();
 
-        // Step 6: Initialize scheduler and run tasks
+        // Step 5: Initialize scheduler and run tasks
         let mut scheduler = crate::task::task_scheduler::Scheduler::new(this.jobs());
         let main_deps = Arc::new(Mutex::new(tasks));
 
@@ -911,13 +897,16 @@ impl Run {
             .run_loop(
                 &mut main_done_rx,
                 main_deps.clone(),
-                || this.is_stopping(),
-                // What overrides `continue_on_error` is the *user* interrupting
-                // mise, not any task being interrupted. A child that took SIGINT
-                // on its own stops that task; it is not a reason to drop work the
-                // user asked to keep going.
-                ctrlc::is_cancelled,
-                this.continue_on_error,
+                RunLoopHooks {
+                    should_stop: || this.is_stopping(),
+                    // What overrides `continue_on_error` is the *user* interrupting
+                    // mise, not any task being interrupted. A child that took SIGINT
+                    // on its own stops that task; it is not a reason to drop work the
+                    // user asked to keep going.
+                    was_interrupted: ctrlc::is_cancelled,
+                    on_task_dropped: |task: &Task| this.retire_keep_order_slot(task),
+                    continue_on_error: this.continue_on_error,
+                },
                 |task, deps_for_remove, allow_during_interruption| {
                     let this = this.clone();
                     let spawn_context = spawn_context.clone();
@@ -936,12 +925,9 @@ impl Run {
             .await?;
 
         let join_result = scheduler.join_all(this.continue_on_error).await;
-        if let Some(session) = &this.cache_session {
-            crate::cache::session::display_stats(session.finish().await?);
-        }
         join_result?;
 
-        // Step 7: Display results and handle failures
+        // Step 6: Display results and handle failures
         let results_display = crate::task::task_results_display::TaskResultsDisplay::new(
             this.output_handler.clone().unwrap(),
             this.executor.as_ref().unwrap().failed_tasks.clone(),
@@ -1145,6 +1131,21 @@ impl Run {
         Ok(())
     }
 
+    /// Retire a task's keep-order slot because it will never run.
+    ///
+    /// The completion path that normally does this lives inside the task's
+    /// execution closure, so a task abandoned before that point would leave its
+    /// slot in the buffer map. An abandoned parent's slot is an anchor, and
+    /// since only the front entry may stream, everything behind it would stay
+    /// buffered until the final flush.
+    fn retire_keep_order_slot(&self, task: &Task) {
+        if let Some(oh) = &self.output_handler
+            && oh.output(Some(task)) == TaskOutput::KeepOrder
+        {
+            oh.keep_order_state.lock().unwrap().on_task_finished(task);
+        }
+    }
+
     async fn should_abort_while_stopping(
         this: &Self,
         task: &Task,
@@ -1162,6 +1163,8 @@ impl Run {
             return false;
         }
         deps.remove(task);
+        drop(deps);
+        this.retire_keep_order_slot(task);
         true
     }
 
@@ -1224,8 +1227,10 @@ impl Run {
             });
         }
 
-        // Validate and initialize task output
-        for task in tasks.all() {
+        // Validate and initialize task output. In creation order: keep-order
+        // hands out its output slots here, and the same order is used for the
+        // tasks a run entry injects later, so the two agree by construction.
+        for task in tasks.all_in_creation_order() {
             self.validate_task(task)?;
             self.output_handler.as_mut().unwrap().init_task(task);
         }
@@ -1247,10 +1252,6 @@ impl Run {
             task_cache: self.task_cache,
             task_cache_explain: self.task_cache_explain,
             task_cache_explain_json: self.task_cache_explain_json,
-            cache_session: self
-                .cache_session
-                .as_ref()
-                .map(crate::cache::session::CacheSession::environment),
             sandbox: crate::sandbox::SandboxConfig::from_settings_and_cli(
                 &Settings::get().sandbox,
                 self.deny_all,
@@ -1274,28 +1275,6 @@ impl Run {
             executor_config,
         ));
 
-        Ok(())
-    }
-
-    async fn setup_cache_session(&mut self, tasks: &Deps) -> Result<()> {
-        let enabled = !self.dry_run
-            && tasks
-                .all()
-                .any(|task| task.rust_cache.as_ref().is_some_and(|cache| cache.enabled));
-        if !enabled {
-            return Ok(());
-        }
-        if crate::cache::release_cache_context() {
-            warn!("Rust action caching is disabled for release CI contexts");
-            return Ok(());
-        }
-        self.cache_session = Some(
-            crate::cache::session::CacheSession::start(
-                &self.tmpdir,
-                crate::task::task_cache::task_cache_dir().join("actions"),
-            )
-            .await?,
-        );
         Ok(())
     }
 
@@ -1382,7 +1361,12 @@ impl Run {
             Settings::get().ensure_experimental("task artifact caching")?;
         }
         if task.rust_cache.as_ref().is_some_and(|cache| cache.enabled) {
-            Settings::get().ensure_experimental("Rust action caching")?;
+            deprecated_at!(
+                "2026.8.14",
+                "2027.8.14",
+                "task.rust_cache",
+                "`rust_cache` no longer enables Rust action caching in mise; remove it and run Cargo through mbx instead: https://mr-boxington.jdx.dev/getting-started"
+            );
         }
         if !task.pass_through_env.is_empty() {
             Settings::get().ensure_experimental("task environment pass-through")?;

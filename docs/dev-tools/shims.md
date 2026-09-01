@@ -132,6 +132,36 @@ echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 
 不要在 `mise` 目录中添加额外的可执行文件，`mise` 会在下一次 reshim 时将它们删除。
 
+## 命令包装器
+
+当某个命令应始终通过另一个程序运行，同时保留其普通名称时，使用 `[wrappers]`。例如，下面的配置会将每次 `cargo` 调用都通过 [Mr Boxington](https://github.com/jdx/mr-boxington) 路由：
+
+```toml
+[tools]
+mr-boxington = "1.2.0"
+
+[wrappers.cargo]
+command = "mbx"
+env = { MBX_CARGO_SHIM_MODE = "1" }
+```
+
+添加或移除包装器后运行 `mise reshim`。该包装器同时适用于 `mise activate` 和 `mise activate --shims`，并且优先于同名的可执行文件。当它进行委托时，mise 会从 `PATH` 中移除其调度目录，因此在配置了由 mise 管理的 Rust 时，`mbx` 会解析到其中的 Cargo，否则会回退到 rustup 或系统安装。
+
+如果不需要参数或环境变量，也可以使用简写形式：
+
+```toml
+[wrappers]
+terraform = "tofu"
+```
+
+详细形式可以在用户提供的参数之前插入参数：
+
+```toml
+[wrappers.python]
+command = "uv"
+args = ["run", "python"]
+```
+
 ## Shims 与 PATH {#shims-vs-path}
 
 当使用 shims **而不是** [PATH 激活](#path-activation) 时，会受到以下功能影响：

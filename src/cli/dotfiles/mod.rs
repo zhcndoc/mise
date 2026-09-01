@@ -1,17 +1,51 @@
-use eyre::{Result, eyre};
+use eyre::Result;
 use std::path::Path;
 
 mod add;
 mod apply;
+mod diff;
 mod edit;
 mod status;
 mod unapply;
 
 pub(crate) use add::DotfilesAdd;
 pub(crate) use apply::DotfilesApply;
+pub(crate) use diff::DotfilesDiff;
 pub(crate) use edit::DotfilesEdit;
 pub(crate) use status::DotfilesStatus;
 pub(crate) use unapply::DotfilesUnapply;
+
+/// Load, validate, and filter whole-file and edit requests with the same
+/// target semantics for every command that acts on both kinds of entry.
+fn select_requests(
+    config: &crate::config::Config,
+    targets: &[String],
+) -> Result<(
+    Vec<crate::system::files::FileRequest>,
+    Vec<crate::system::edits::EditRequest>,
+)> {
+    let all_files = crate::system::files::files_from_config(config)?;
+    crate::system::files::validate_composed_file_footprints(&all_files)?;
+    let files = all_files
+        .iter()
+        .filter(|req| crate::system::files::matches_target(&req.target, &req.target_raw, targets))
+        .cloned()
+        .collect::<Vec<_>>();
+    let all_edits = crate::system::edits::edits_from_config(config)?;
+    let edits = all_edits
+        .iter()
+        .filter(|req| crate::system::edits::matches_target(req, targets))
+        .cloned()
+        .collect::<Vec<_>>();
+    if files.is_empty()
+        && edits.is_empty()
+        && !targets.is_empty()
+        && (!all_files.is_empty() || !all_edits.is_empty())
+    {
+        eyre::bail!("no dotfiles matched target filter: {}", targets.join(", "));
+    }
+    Ok((files, edits))
+}
 
 /// Manage dotfiles from `[dotfiles]` (deprecated)
 ///
@@ -29,6 +63,8 @@ enum Commands {
     Add(add::DotfilesAdd),
     #[usage(hide = true)]
     Apply(apply::DotfilesApply),
+    #[usage(hide = true)]
+    Diff(diff::DotfilesDiff),
     #[usage(hide = true)]
     Edit(edit::DotfilesEdit),
     #[usage(hide = true)]
@@ -48,6 +84,7 @@ impl Dotfiles {
         match self.command {
             Commands::Add(cmd) => cmd.run().await,
             Commands::Apply(cmd) => cmd.run().await.map(|_| ()),
+            Commands::Diff(cmd) => cmd.run().await,
             Commands::Edit(cmd) => cmd.run().await,
             Commands::Status(cmd) => cmd.run().await,
             Commands::Unapply(cmd) => cmd.run().await,
@@ -89,21 +126,4 @@ pub(crate) fn warn_if_dotfiles_ignored() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-}
-
-fn open_in_editor(file: &Path) -> Result<()> {
-    let (program, mut args) = split_editor_command(&crate::env::EDITOR)?;
-    args.push(file.as_os_str().into());
-    crate::cmd::cmd(&program, args).run()?;
-    Ok(())
-}
-
-fn split_editor_command(editor: &str) -> Result<(String, Vec<std::ffi::OsString>)> {
-    let mut parts = shell_words::split(editor)
-        .map_err(|e| eyre!("failed to parse EDITOR/VISUAL value {:?}: {}", editor, e))?
-        .into_iter();
-    let program = parts
-        .next()
-        .ok_or_else(|| eyre!("EDITOR/VISUAL is empty"))?;
-    Ok((program, parts.map(Into::into).collect()))
 }

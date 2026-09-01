@@ -786,26 +786,24 @@ pass_through_env = ["NPM_TOKEN"]
 
 可缓存的依赖会将其产物键贡献给依赖任务的键，因此依赖任务执行、跳过或恢复后，依赖它的任务可以恢复匹配的产物。如果某个依赖在没有稳定产物键的情况下执行，其依赖任务会采取保守策略继续执行。
 
-### `rust_cache` <Badge type="warning" text="实验性" />
+### `rust_cache` <Badge type="danger" text="deprecated" />
 
 - **类型**：`boolean | table`
 - **默认值**：`false`
 
-仅对本次任务运行启用 Rust 编译器操作缓存。`true` 和 `{}` 都会启用默认配置；`false` 和 `{ enabled = false }` 会禁用缓存。表格形式从一开始就可用，因此未来新增 Rust 专用选项时无需重命名该字段。
+此设置不再启用 Rust 编译器操作缓存。mise 暂时接受它作为已弃用的无操作设置，以便现有任务配置继续运行。启用的值会打印迁移警告；禁用的值不会打印任何信息。
+
+请改用 [mbx](https://mr-boxington.jdx.dev/getting-started) 进行 Rust 操作缓存。使用 `mise use -g mr-boxington` 全局安装，或将其添加到项目工具中，然后将 `mbx` 放在 Cargo 子命令前面：
 
 ```mise-toml
+[tools]
+mr-boxington = "latest"
+
 [tasks.build]
-run = "cargo build"
-rust_cache = true
+run = "mbx build"
 ```
 
-在为项目或编译器升级验证缓存时，设置 `rust_cache = { verify = true }`。在本应命中缓存时，mise 会将缓存结果恢复到暂存构建中，仍然运行 rustc，比较诊断信息、输出内容和文件模式，报告任何差异，并始终返回 rustc 的实时结果。验证命中永远不会直接提供缓存结果，并会在会话统计中单独报告。
-
-mise 仅将编译器集成注入任务的子进程环境中。Shell 激活、直接执行的 `cargo build`、编辑器进程和发布构建不会被拦截。顶层的 `mise run` 会管理缓存会话、刷新待上传内容，并在成功退出前报告命中数、未命中数和传输字节数。编译器操作键的收集和预取由编译器适配器提供，而不是作为未使用的任务清单字段存在。
-
-Rust 操作缓存会在本次任务运行中禁用增量编译，因为两种缓存模型彼此不兼容。这可能会使本地快速编辑并构建的循环变慢。在 CI、冷克隆、工作树和分支切换场景中使用 `rust_cache`；本地增量开发循环则使用直接运行的 `cargo build`。在 CI 之外，操作缓存会话会读取本地和远程结果，但不会上传结果。
-
-`rust_cache` 独立于任务结果缓存 `cache`：操作缓存可以复用单个编译器操作，同时任务仍会继续执行；而无需拦截编译器，也可以使用任务结果缓存。设置 `task_config.rust_cache` 可提供作用域内的默认值；任务本地的 `false` 会禁用该继承的默认值。
+更改命令后移除 `rust_cache`。该兼容性字段计划在 mise 2027.8.14 中移除。
 
 ### `shell`
 
@@ -1096,7 +1094,9 @@ cascade = true
 shell = "bash -c"
 ```
 
-这适用于 `dir`、`shell`、`cache`、`rust_cache` 和 `includes`。继承的 include 路径仍然相对于其定义所在的配置根目录，因此单仓库根目录可以提供一组共享任务。
+这适用于 `dir`、`shell`、`cache`、`rust_cache`、`global_inputs`、`input_groups` 和 `includes`。继承的 include 路径和任务输入仍相对于其定义所在的配置根目录。
+
+后代的非空 `global_inputs` 会替换继承的值。后代的 `input_groups` 会按名称与继承的组进行合并；当同一名称出现多次时，最近的定义优先。这同样适用于继承的 `global_inputs` 中的组引用。每个组仍相对于其定义所在的配置根目录。
 
 ### `task_config.dir`
 
@@ -1129,9 +1129,10 @@ env = ["NODE_ENV", "CI"]
 command_inputs = ["node --version"]
 ```
 
-### `task_config.rust_cache` <Badge type="warning" text="实验性" />
+### `task_config.rust_cache` <Badge type="danger" text="deprecated" />
 
-设置 Rust 操作缓存的作用域默认值。任务本地或任务模板中的值优先级更高；显式设置为 `false` 会禁用继承的默认值。
+此已弃用的兼容性设置不再启用 Rust 操作缓存。有效的启用值会发出一次警告，同时任务继续正常运行。请移除它，并改为通过
+[mbx](https://mr-boxington.jdx.dev/getting-started) 运行 Rust 构建命令。
 
 ```toml
 [task_config]

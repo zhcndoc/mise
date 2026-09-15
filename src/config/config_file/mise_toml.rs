@@ -88,7 +88,8 @@ fn normalize_option_template_value(value: toml::Value) -> toml::Value {
 }
 
 fn should_normalize_option_template(key: &str) -> bool {
-    !matches!(key, "os" | "depends" | "install_env") && !key.starts_with("install_env.")
+    !matches!(key, "os" | "depends" | "install_env" | "lazy" | "lazy_bins")
+        && !key.starts_with("install_env.")
 }
 
 fn insert_tool_option<E>(
@@ -197,6 +198,16 @@ fn insert_core_options(table: &mut InlineTable, options: ToolVersionOptions) {
         }
         table.insert("install_env", env.into());
     }
+    if let Some(lazy) = core.lazy {
+        table.insert("lazy", Value::from(lazy));
+    }
+    if !core.lazy_bins.is_empty() {
+        let mut bins = Array::new();
+        for bin in core.lazy_bins {
+            bins.push(Value::from(bin));
+        }
+        table.insert("lazy_bins", Value::Array(bins));
+    }
 }
 
 const TOOL_SELECTOR_KEYS: [&str; 4] = ["version", "prefix", "ref", "path"];
@@ -291,6 +302,16 @@ fn update_explicit_tool_options(table: &mut toml_edit::Table, options: &ToolVers
         }
         insert_table_item_preserving_decor(table, "depends", Item::Value(Value::Array(arr)));
     }
+    if let Some(lazy) = options.lazy {
+        insert_table_item_preserving_decor(table, "lazy", value(lazy));
+    }
+    if !options.lazy_bins.is_empty() {
+        let mut bins = Array::new();
+        for bin in &options.lazy_bins {
+            bins.push(bin.as_str());
+        }
+        insert_table_item_preserving_decor(table, "lazy_bins", Item::Value(Value::Array(bins)));
+    }
     update_install_env_table(table, options);
 }
 
@@ -384,6 +405,8 @@ pub(crate) struct MiseToml {
     #[serde(default)]
     shell_alias: IndexMap<String, String>,
     #[serde(default)]
+    daemons: IndexMap<String, crate::daemons::Declaration>,
+    #[serde(default)]
     wrappers: IndexMap<String, CommandWrapper>,
     #[serde(skip)]
     doc: Mutex<OnceCell<DocumentMut>>,
@@ -412,7 +435,11 @@ pub(crate) struct MiseToml {
     #[serde(default)]
     bootstrap: Option<BootstrapTomlConfig>,
     #[serde(default)]
+    doctor: crate::config::doctor::DoctorConfig,
+    #[serde(default)]
     dotfiles: Option<DotfilesTomlConfig>,
+    #[serde(default)]
+    history: Option<crate::system::history::config::HistoryTomlConfig>,
     #[serde(default, deserialize_with = "deserialize_vars")]
     vars: EnvList,
     #[serde(default)]
@@ -476,8 +503,7 @@ pub(crate) struct EnvList(pub(crate) Vec<EnvDirective>);
 pub(crate) struct MonorepoConfig {
     /// Explicit list of config roots for monorepo task discovery.
     /// Supports single-level glob patterns (*).
-    #[serde(default)]
-    pub config_roots: Vec<String>,
+    pub config_roots: Option<Vec<String>>,
     /// Use a single lockfile at the monorepo root for descendant config roots.
     /// None follows the rollout default; true opts in, false keeps colocated locks.
     pub lockfile: Option<bool>,
@@ -545,6 +571,15 @@ impl MiseToml {
     pub(crate) fn from_file(path: &Path) -> eyre::Result<Self> {
         let body = file::read_to_string(path)?;
         Self::from_str(&body, path)
+    }
+
+    /// Decode a proposed configuration without trusting, evaluating, or
+    /// activating it. Only static declarations may be inspected on this
+    /// value; normal loading still goes through `from_str` and its trust gate.
+    pub(crate) fn for_history_preflight(body: &str, path: &Path) -> eyre::Result<Self> {
+        let mut parsed: Self = toml::from_str(body)?;
+        parsed.path = path.to_path_buf();
+        Ok(parsed)
     }
 
     pub(crate) fn from_str(body: &str, path: &Path) -> eyre::Result<Self> {
@@ -811,17 +846,20 @@ impl MiseToml {
         version: &str,
     ) -> eyre::Result<()> {
         let packages = &mut self.bootstrap.get_or_insert_with(Default::default).packages;
-        let preserve_options = match packages.get_mut(spec) {
+        let (preserve_options, reset_absent) = match packages.get_mut(spec) {
             Some(PackageTomlConfig::Options(options)) => {
                 options.version = version.to_string();
-                true
+                let reset_absent =
+                    options.state == crate::system::PackageDesiredStateTomlConfig::Absent;
+                options.state = crate::system::PackageDesiredStateTomlConfig::Present;
+                (true, reset_absent)
             }
             _ => {
                 packages.insert(
                     spec.to_string(),
                     PackageTomlConfig::Version(version.to_string()),
                 );
-                false
+                (false, false)
             }
         };
         let mut doc = self.doc_mut()?;
@@ -842,10 +880,16 @@ impl MiseToml {
         if preserve_options && let Some(item) = packages.get_mut(spec) {
             if let Some(options) = item.as_value_mut().and_then(Value::as_inline_table_mut) {
                 options.insert("version", Value::from(version));
+                if reset_absent {
+                    options.insert("state", Value::from("present"));
+                }
                 return Ok(());
             }
             if item.as_table().is_some() {
                 insert_preserving_decor(item, "version", value(version));
+                if reset_absent {
+                    insert_preserving_decor(item, "state", value("present"));
+                }
                 return Ok(());
             }
         }
@@ -871,10 +915,11 @@ impl MiseToml {
             .is_none_or(|bootstrap| !bootstrap.packages.contains_key(spec));
         if is_missing
             && let Some(PackageTomlConfig::Options(options)) = fallback
-            && (!options.os.is_empty() || options.adopt.is_some())
+            && (!options.os.is_empty() || !options.env.is_empty() || options.adopt.is_some())
         {
             let mut options = options.clone();
             options.version = version.to_string();
+            options.state = crate::system::PackageDesiredStateTomlConfig::Present;
             self.bootstrap
                 .get_or_insert_with(Default::default)
                 .packages
@@ -903,6 +948,11 @@ impl MiseToml {
                 let mut os = Array::new();
                 os.extend(options.os);
                 value.insert("os", Value::Array(os));
+            }
+            if !options.env.is_empty() {
+                let mut env = Array::new();
+                env.extend(options.env);
+                value.insert("env", Value::Array(env));
             }
             if let Some(adopt) = options.adopt {
                 value.insert("adopt", Value::from(adopt));
@@ -1208,6 +1258,10 @@ impl ConfigFile for MiseToml {
             .collect()
     }
 
+    fn daemon_declarations(&self) -> IndexMap<String, crate::daemons::Declaration> {
+        self.daemons.clone()
+    }
+
     fn env_entries(&self) -> eyre::Result<Vec<EnvDirective>> {
         self.warn_deprecated_env_keys();
         let env_entries = self.env.0.iter().cloned();
@@ -1273,6 +1327,8 @@ impl ConfigFile for MiseToml {
             if opts.os.as_ref().is_some_and(|o| !o.is_empty())
                 || opts.depends.as_ref().is_some_and(|d| !d.is_empty())
                 || !opts.install_env.is_empty()
+                || opts.lazy.is_some()
+                || !opts.lazy_bins.is_empty()
             {
                 return false;
             }
@@ -1717,12 +1773,25 @@ impl ConfigFile for MiseToml {
         self.oci.clone()
     }
 
+    fn doctor_config(&self) -> crate::config::doctor::DoctorConfig {
+        self.doctor.clone()
+    }
+
     fn bootstrap_config(&self) -> Option<BootstrapTomlConfig> {
         self.bootstrap.clone()
     }
 
     fn dotfiles_config(&self) -> Option<DotfilesTomlConfig> {
         self.dotfiles.clone()
+    }
+}
+
+impl MiseToml {
+    /// `[history]` as declared by this file.
+    pub(crate) fn history_config(
+        &self,
+    ) -> Option<crate::system::history::config::HistoryTomlConfig> {
+        self.history.clone()
     }
 }
 
@@ -1880,6 +1949,7 @@ impl Clone for MiseToml {
             alias: self.alias.clone(),
             tool_alias: self.tool_alias.clone(),
             shell_alias: self.shell_alias.clone(),
+            daemons: self.daemons.clone(),
             wrappers: self.wrappers.clone(),
             doc: Mutex::new(self.doc.lock().unwrap().clone()),
             hooks: self.hooks.clone(),
@@ -1895,7 +1965,9 @@ impl Clone for MiseToml {
             deps: self.deps.clone(),
             oci: self.oci.clone(),
             bootstrap: self.bootstrap.clone(),
+            doctor: self.doctor.clone(),
             dotfiles: self.dotfiles.clone(),
+            history: self.history.clone(),
             vars: self.vars.clone(),
             monorepo_root: self.monorepo_root,
             experimental_monorepo_root: self.experimental_monorepo_root,
@@ -3315,7 +3387,7 @@ mod tests {
         "apt:libssl-dev" = "latest"
         "apt:curl" = "8.5.0-2"
         "brew:postgresql@17" = "latest"
-        "brew-cask:1password" = { version = "latest", os = "macos", adopt = true }
+        "brew-cask:1password" = { version = "latest", os = "macos", env = "work", adopt = true }
         "brew-cask:font-example" = { os = ["linux", "macos"] }
         "future-manager:whatever" = "latest"
 
@@ -3344,7 +3416,8 @@ mod tests {
         );
         assert!(matches!(
             system.packages.get("brew-cask:1password"),
-            Some(crate::system::PackageTomlConfig::Options(options)) if options.adopt == Some(true)
+            Some(crate::system::PackageTomlConfig::Options(options))
+                if options.adopt == Some(true) && options.env == ["work"]
         ));
         assert_eq!(
             system.packages.get("apt:curl").unwrap().version(),
@@ -3635,8 +3708,9 @@ mod tests {
             &p,
             formatdoc! {r#"
             [bootstrap.packages]
-            "brew:ripgrep" = {{ version = "14.0.0", os = ["macos"] }} # keep me
+            "brew:ripgrep" = {{ version = "14.0.0", os = ["macos"], env = "work" }} # keep me
             "apt:curl" = "8.5.0"
+            "pacman:libreoffice-fresh" = {{ state = "absent" }}
 
             [bootstrap.packages."brew:fd"]
             version = "10.0.0" # keep version comment
@@ -3648,6 +3722,8 @@ mod tests {
         cf.update_bootstrap_package("brew:ripgrep", "latest")
             .unwrap();
         cf.update_bootstrap_package("brew:fd", "latest").unwrap();
+        cf.update_bootstrap_package("pacman:libreoffice-fresh", "latest")
+            .unwrap();
         #[cfg(unix)]
         {
             let inherited = cf
@@ -3665,7 +3741,9 @@ mod tests {
                     PackageTomlConfig::Options(crate::system::PackageOptionsTomlConfig {
                         version: "1.0.0".to_string(),
                         os: vec![],
+                        env: vec![],
                         adopt: None,
+                        state: crate::system::PackageDesiredStateTomlConfig::Present,
                     });
                 cf.update_bootstrap_package_with_fallback(
                     "brew:tree",
@@ -3678,7 +3756,9 @@ mod tests {
 
         let dump = cf.dump().unwrap();
         assert!(
-            dump.contains(r#""brew:ripgrep" = { version = "latest", os = ["macos"] } # keep me"#),
+            dump.contains(
+                r#""brew:ripgrep" = { version = "latest", os = ["macos"], env = "work" } # keep me"#
+            ),
             "package selectors and comments should survive: {dump}"
         );
         assert!(
@@ -3689,9 +3769,15 @@ mod tests {
             dump.contains(r#"os = ["macos"] # keep selector comment"#),
             "nested package selectors should survive: {dump}"
         );
+        assert!(
+            dump.contains(
+                r#""pacman:libreoffice-fresh" = { state = "present", version = "latest" }"#
+            ),
+            "using an absent package should make it present: {dump}"
+        );
         #[cfg(unix)]
         assert!(
-            dump.contains(r#""brew:bat" = { version = "latest", os = ["macos"] }"#),
+            dump.contains(r#""brew:bat" = { version = "latest", os = ["macos"], env = ["work"] }"#),
             "inherited package selectors should be written locally: {dump}"
         );
         #[cfg(unix)]
@@ -4046,6 +4132,49 @@ run = 'echo "template"'
             template.confirm,
             Some(crate::task::TaskConfirm::Options { .. })
         ));
+    }
+
+    #[test]
+    fn test_task_sources_single_string() {
+        let body = r#"
+[tasks.build]
+sources = "src/**/*.rs"
+outputs = ["target/debug/mycli"]
+run = "cargo build"
+"#;
+
+        let path = std::path::Path::new("/tmp/mise.toml");
+        let rf = MiseToml::from_str(body, path).unwrap();
+        let task = rf.tasks.0.get("build").expect("build task should exist");
+
+        assert_eq!(
+            task.sources,
+            vec!["src/**/*.rs".to_string()],
+            "single string sources should be wrapped in a vec"
+        );
+    }
+
+    #[test]
+    fn test_task_template_sources_single_string() {
+        let body = r#"
+[task_templates.build]
+sources = "src/**/*.rs"
+run = "cargo build"
+"#;
+
+        let path = std::path::Path::new("/tmp/mise.toml");
+        let rf = MiseToml::from_str(body, path).unwrap();
+        let template = rf
+            .task_templates
+            .0
+            .get("build")
+            .expect("build template should exist");
+
+        assert_eq!(
+            template.sources,
+            vec!["src/**/*.rs".to_string()],
+            "single string sources should be wrapped in a vec"
+        );
     }
 
     #[tokio::test]
@@ -4701,6 +4830,7 @@ run = 'echo "template"'
             "[alias]\nnode = \"asdf:foo/bar\"",
             "[plugins]\nfoo = \"https://example.com/foo.git\"",
             "env_file = \".env\"",
+            "[doctor.checks.probe]\nrun = \"echo hi\"",
         ] {
             assert!(!is_safe_config_body(body), "should require trust: {body}");
         }
@@ -4711,7 +4841,7 @@ run = 'echo "template"'
     #[tokio::test]
     async fn test_table_syntax_preserves_registry_defaults() {
         // Test for #8039: table syntax like `ansible = { version = "latest" }`
-        // should preserve registry defaults (e.g. uvx=false, pipx_args=--include-deps)
+        // should preserve registry defaults (e.g. expose=["ansible-core"]).
         let _config = Config::get().await.unwrap();
         let cf = parse(formatdoc! {r#"
             [tools]
@@ -4727,20 +4857,15 @@ run = 'echo "template"'
             .expect("ansible should be in tool request set");
         let opts = ansible_requests[0].options();
         assert_eq!(
-            opts.get_string("uvx").as_deref(),
-            Some("false"),
-            "registry default uvx=false should be preserved with table syntax"
-        );
-        assert_eq!(
-            opts.get("pipx_args"),
-            Some("--include-deps"),
-            "registry default pipx_args=--include-deps should be preserved with table syntax"
+            opts.opts.get("expose").and_then(toml::Value::as_array),
+            Some(&vec![toml::Value::String("ansible-core".to_string())]),
+            "registry default expose should be preserved with table syntax"
         );
 
         // Also verify that user-provided options override registry defaults
         let cf2 = parse(formatdoc! {r#"
             [tools]
-            ansible = {{ version = "latest", uvx = "true" }}
+            ansible = {{ version = "latest", expose = ["custom-core"] }}
         "#});
         let trs2 = cf2.to_tool_request_set().unwrap();
         let ansible2 = trs2
@@ -4751,14 +4876,27 @@ run = 'echo "template"'
             .expect("ansible should be in tool request set");
         let opts2 = ansible2[0].options();
         assert_eq!(
-            opts2.get_string("uvx").as_deref(),
-            Some("true"),
-            "user-provided uvx=true should override registry default uvx=false"
+            opts2.opts.get("expose").and_then(toml::Value::as_array),
+            Some(&vec![toml::Value::String("custom-core".to_string())]),
+            "user-provided expose should override the registry default"
         );
+
+        let cf3 = parse(formatdoc! {r#"
+            [tools]
+            ansible = {{ version = "latest", uvx = false, expose = [] }}
+        "#});
+        let trs3 = cf3.to_tool_request_set().unwrap();
+        let ansible3 = trs3
+            .tools
+            .iter()
+            .find(|(ba, _)| ba.short == "ansible")
+            .map(|(_, reqs)| reqs)
+            .expect("ansible should be in tool request set");
+        let opts3 = ansible3[0].options();
         assert_eq!(
-            opts2.get("pipx_args"),
-            Some("--include-deps"),
-            "non-overridden registry default pipx_args should still be preserved"
+            opts3.opts.get("expose").and_then(toml::Value::as_array),
+            Some(&vec![]),
+            "an empty user-provided expose should clear the registry default"
         );
     }
 
@@ -5602,6 +5740,7 @@ run = 'echo "template"'
         description = "sync files"
         after = ["network-online.target"]
         wants = ["network-online.target"]
+        requires = ["credentials.service"]
         exec_start = "~/.local/bin/my-sync --watch"
         type = "oneshot"
         remain_after_exit = true
@@ -5611,6 +5750,9 @@ run = 'echo "template"'
         no_new_privileges = true
         private_tmp = true
         environment = { PATH = "/usr/bin:/bin" }
+        environment_file = ["-%h/.config/my-sync.env"]
+        nice = 10
+        umask = "0007"
         working_directory = "~"
         restart = "on-failure"
         restart_sec = "5s"
@@ -5635,6 +5777,7 @@ run = 'echo "template"'
         assert_eq!(unit.description.as_deref(), Some("sync files"));
         assert_eq!(unit.after, vec!["network-online.target"]);
         assert_eq!(unit.wants, vec!["network-online.target"]);
+        assert_eq!(unit.requires, vec!["credentials.service"]);
         assert_eq!(
             unit.exec_start.as_deref(),
             Some("~/.local/bin/my-sync --watch")
@@ -5653,6 +5796,9 @@ run = 'echo "template"'
             unit.environment.get("PATH").map(String::as_str),
             Some("/usr/bin:/bin")
         );
+        assert_eq!(unit.environment_file, vec!["-%h/.config/my-sync.env"]);
+        assert_eq!(unit.nice, Some(10));
+        assert_eq!(unit.umask.as_deref(), Some("0007"));
         assert_eq!(unit.working_directory.as_deref(), Some("~"));
         assert_eq!(unit.restart.as_deref(), Some("on-failure"));
         assert_eq!(unit.restart_sec.as_deref(), Some("5s"));

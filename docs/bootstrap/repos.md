@@ -1,4 +1,9 @@
-# 仓库
+---
+description: "从 mise.toml 克隆、更新和管理 Git 仓库"
+socialDescription: "从 mise.toml 克隆、更新和管理 Git 仓库"
+---
+
+# Git 仓库
 
 mise 可以在 `[bootstrap.repos]` 中声明 Git 仓库，并通过
 `mise bootstrap repos apply` 或作为 [`mise bootstrap`](/bootstrap.html) 的一部分应用这些仓库：
@@ -27,6 +32,14 @@ mise 可以在 `[bootstrap.repos]` 中声明 Git 仓库，并通过
 - **不隐式写入** —— 仓库只会通过显式的 `apply`、`update`、`exec` 或顶层 `mise bootstrap` 命令进行更改。应用操作不会在未配置 `ref` 的情况下拉取现有仓库；如果需要这种命令式行为，请使用 `mise bootstrap repos update`。
 - **不强制重置** —— 脏仓库、非空的非 git 目标路径以及不匹配的源会失败，而不会覆盖本地工作。应用或更新其余仓库时，传入 `--skip-dirty` 可跳过脏仓库。
 - **省略 `ref`** —— 如果现有仓库的源符合预期，则视为当前状态；mise 不会获取或更新它。
+
+## 选择 apply 还是 update
+
+使用 `apply` 来建立声明的检出版本。在没有 `ref` 的情况下，现有的匹配检出会保持在其当前 commit。需要 mise 获取并以快进方式更新当前分支时，请使用 `update`。声明的 `ref` 对两个命令都仍然是目标；`update` 不会覆盖该选择。
+
+Git 必须已安装，并且能够对每个已配置的源进行身份验证。
+对于这些检出目录中的 dotfiles 源，请先应用 repos，再应用 dotfiles，
+完整的 bootstrap 流程也是如此。
 
 ## 命令
 

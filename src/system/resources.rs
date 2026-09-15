@@ -44,7 +44,7 @@ impl ResourceOrigin {
 
 const ENCODED_PATH_PREFIX: &str = "mise:path-";
 
-fn serialize_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -136,6 +136,11 @@ pub(crate) struct ResourcePlan {
     pub origin: Option<ResourceOrigin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<ResourceId>,
+    /// Execution order only; these resources do not affect change prediction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order_after: Vec<ResourceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<super::managed_files::ManagedFilePhase>,
 }
 
 impl ResourcePlan {
@@ -152,11 +157,18 @@ impl ResourcePlan {
             action,
             origin: None,
             depends_on: vec![],
+            order_after: vec![],
+            phase: None,
         }
     }
 
     pub(crate) fn with_origin(mut self, origin: ResourceOrigin) -> Self {
         self.origin = Some(origin);
+        self
+    }
+
+    pub(crate) fn with_file_phase(mut self, phase: super::managed_files::ManagedFilePhase) -> Self {
+        self.phase = Some(phase);
         self
     }
 }
@@ -237,6 +249,16 @@ impl BootstrapPlan {
         Ok(BootstrapPlanOutput { resources, summary })
     }
 
+    fn add_ordering(&mut self, resource: &ResourceId, predecessor: ResourceId) -> Result<()> {
+        let Some(resource) = self.resources.get_mut(resource) else {
+            bail!("cannot order missing bootstrap resource '{resource}'");
+        };
+        if !resource.order_after.contains(&predecessor) {
+            resource.order_after.push(predecessor);
+        }
+        Ok(())
+    }
+
     fn ordered(&self) -> Result<Vec<&ResourcePlan>> {
         let mut incoming = self
             .resources
@@ -247,7 +269,7 @@ impl BootstrapPlan {
         let mut outgoing: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
 
         for resource in self.resources.values() {
-            for dependency in &resource.depends_on {
+            for dependency in resource.depends_on.iter().chain(&resource.order_after) {
                 let Some(count) = incoming.get_mut(&resource.id) else {
                     unreachable!("every resource was added to incoming")
                 };
@@ -373,11 +395,16 @@ pub(crate) async fn plan(
         }
 
         let supports_version_pins = manager.supports_version_pins();
+        let supports_remove = manager.supports_remove();
         for status in manager.installed(&manager_packages.requests).await? {
             let id = ResourceId::new("package", format!("{manager_name}:{}", status.request.name));
             let desired = desired_package(&status.request);
-            let (current, action) =
-                package_resource_state(status.state, &status.request, supports_version_pins);
+            let (current, action) = package_resource_state(
+                status.state,
+                &status.request,
+                supports_version_pins,
+                supports_remove,
+            );
             plan.insert(ResourcePlan::new(id, current, desired, action))?;
         }
     }
@@ -407,7 +434,8 @@ pub(crate) async fn plan(
         cfg!(target_os = "linux"),
     )?;
     let services = super::services::status_requests_from_config(config)?;
-    super::services::validate_notifications(&files, &directories, &services)?;
+    let user_services = super::services_common::user_service_names(config)?;
+    super::services::validate_notifications(&files, &directories, &services, &user_services)?;
     let notified_services = super::managed_files::pending_notifications(&files, &directories)?;
     let directory_states = directories
         .iter()
@@ -519,6 +547,17 @@ pub(crate) async fn plan(
     for resource in unavailable_files {
         plan.insert(resource)?;
     }
+    let builtin_packages = super::packages_from_config(config)
+        .into_iter()
+        .filter(|packages| !packages.manager.is_plugin())
+        .flat_map(|packages| {
+            let manager = packages.manager.name().to_string();
+            packages.requests.into_iter().map(move |request| {
+                ResourceId::new("package", format!("{manager}:{}", request.name))
+            })
+        })
+        .collect::<Vec<_>>();
+    add_file_phase_ordering(&mut plan, &builtin_packages)?;
     let service_dependencies = plan
         .resources
         .keys()
@@ -531,6 +570,10 @@ pub(crate) async fn plan(
         for dependency in &service_dependencies {
             plan.add_dependency(&id, dependency.clone())?;
         }
+    }
+    let user_service_requests = super::user_services::requests_from_config(config)?;
+    for status in super::user_services::status(&user_service_requests).await? {
+        plan.insert(status.plan())?;
     }
     if let Some(mut firewall) = super::firewall::prepare_request_from_config(config)? {
         super::firewall::inspect_request(&mut firewall)?;
@@ -610,6 +653,46 @@ pub(crate) async fn plan(
     Ok(plan)
 }
 
+fn add_file_phase_ordering(plan: &mut BootstrapPlan, packages: &[ResourceId]) -> Result<()> {
+    use super::managed_files::ManagedFilePhase;
+
+    let early = plan
+        .resources
+        .values()
+        .filter(|resource| resource.phase == Some(ManagedFilePhase::PrePackages))
+        .map(|resource| resource.id.clone())
+        .collect::<Vec<_>>();
+    let late = plan
+        .resources
+        .values()
+        .filter(|resource| resource.phase == Some(ManagedFilePhase::PostPackages))
+        .map(|resource| resource.id.clone())
+        .collect::<Vec<_>>();
+    for package in packages {
+        for file in &early {
+            plan.add_ordering(package, file.clone())?;
+        }
+    }
+    for file in &late {
+        for dependency in packages.iter().chain(&early) {
+            plan.add_ordering(file, dependency.clone())?;
+        }
+    }
+    // Installed and pending plugin managers both run after the file phases.
+    let plugin_packages = plan
+        .resources
+        .keys()
+        .filter(|id| id.kind == "package" && !packages.contains(id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for package in plugin_packages {
+        for predecessor in early.iter().chain(&late).chain(packages) {
+            plan.add_ordering(&package, predecessor.clone())?;
+        }
+    }
+    Ok(())
+}
+
 fn add_account_dependencies(
     plan: &mut BootstrapPlan,
     resource: &ResourceId,
@@ -648,6 +731,9 @@ fn add_account_dependencies(
 }
 
 fn desired_package(request: &super::packages::PackageRequest) -> String {
+    if request.desired == super::packages::PackageDesiredState::Absent {
+        return "absent".to_string();
+    }
     request
         .version
         .as_ref()
@@ -659,7 +745,36 @@ fn package_resource_state(
     state: PackageState,
     request: &PackageRequest,
     supports_version_pins: bool,
+    supports_remove: bool,
 ) -> (String, ResourceAction) {
+    if request.desired == super::packages::PackageDesiredState::Absent {
+        return match state {
+            PackageState::Missing => ("absent".to_string(), ResourceAction::Noop),
+            #[cfg(unix)]
+            PackageState::Unavailable { reason } => {
+                (format!("skipped ({reason})"), ResourceAction::Unknown)
+            }
+            PackageState::Installed { version }
+            | PackageState::NeedsRepair { installed: version }
+            | PackageState::VersionMismatch { installed: version } => (
+                format!("installed ({version})"),
+                if supports_remove {
+                    ResourceAction::Remove
+                } else {
+                    ResourceAction::Unknown
+                },
+            ),
+            #[cfg(unix)]
+            PackageState::InstalledAutoUpdates { version } => (
+                format!("installed ({version})"),
+                if supports_remove {
+                    ResourceAction::Remove
+                } else {
+                    ResourceAction::Unknown
+                },
+            ),
+        };
+    }
     let unsupported_pin = request.version.is_some() && !supports_version_pins;
     match state {
         PackageState::Installed { version } => {
@@ -693,6 +808,43 @@ fn package_resource_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_phases_order_resources_around_packages() {
+        use super::super::managed_files::ManagedFilePhase;
+
+        let mut plan = BootstrapPlan::default();
+        let late = ResourceId::new("file", "/etc/service.conf");
+        let package = ResourceId::new("package", "apt:vendor");
+        let early = ResourceId::new("file", "/etc/apt/sources.list.d/vendor.sources");
+        let plugin = ResourceId::new("package", "custom:vendor");
+        for (id, phase) in [
+            (plugin.clone(), None),
+            (late.clone(), Some(ManagedFilePhase::PostPackages)),
+            (package.clone(), None),
+            (early.clone(), Some(ManagedFilePhase::PrePackages)),
+        ] {
+            let mut resource = ResourcePlan::new(id, "missing", "present", ResourceAction::Create);
+            resource.phase = phase;
+            plan.insert(resource).unwrap();
+        }
+        add_file_phase_ordering(&mut plan, std::slice::from_ref(&package)).unwrap();
+        let output = plan.output().unwrap();
+        assert_eq!(
+            output
+                .resources
+                .iter()
+                .map(|resource| &resource.id)
+                .collect::<Vec<_>>(),
+            [&early, &package, &late, &plugin]
+        );
+        assert!(
+            output
+                .resources
+                .iter()
+                .all(|resource| resource.depends_on.is_empty())
+        );
+    }
 
     #[cfg(unix)]
     #[test]
@@ -739,6 +891,7 @@ mod tests {
             name: "example".to_string(),
             version: version.map(str::to_string),
             tap_url: None,
+            desired: crate::system::packages::PackageDesiredState::Present,
         }
     }
 
@@ -828,7 +981,7 @@ mod tests {
                 installed: "1.0.0".to_string(),
             },
         ] {
-            let (current, action) = package_resource_state(state, &request, false);
+            let (current, action) = package_resource_state(state, &request, false, false);
             assert_eq!(action, ResourceAction::Unknown);
             assert!(current.contains("cannot install pinned versions"));
         }
@@ -843,6 +996,7 @@ mod tests {
             },
             &request,
             false,
+            false,
         );
 
         assert_eq!(action, ResourceAction::Update);
@@ -851,16 +1005,46 @@ mod tests {
     #[test]
     fn managers_with_pin_support_plan_missing_and_mismatched_packages() {
         let request = package_request(Some("1.2.3"));
-        let (_, missing_action) = package_resource_state(PackageState::Missing, &request, true);
+        let (_, missing_action) =
+            package_resource_state(PackageState::Missing, &request, true, false);
         let (_, mismatch_action) = package_resource_state(
             PackageState::VersionMismatch {
                 installed: "1.0.0".to_string(),
             },
             &request,
             true,
+            false,
         );
 
         assert_eq!(missing_action, ResourceAction::Create);
         assert_eq!(mismatch_action, ResourceAction::Update);
+    }
+
+    #[test]
+    fn absent_package_plans_removal_only_when_supported() {
+        let mut request = package_request(None);
+        request.desired = crate::system::packages::PackageDesiredState::Absent;
+        let (_, absent_action) =
+            package_resource_state(PackageState::Missing, &request, false, true);
+        let (_, remove_action) = package_resource_state(
+            PackageState::Installed {
+                version: "1.0.0".to_string(),
+            },
+            &request,
+            false,
+            true,
+        );
+        let (_, unsupported_action) = package_resource_state(
+            PackageState::Installed {
+                version: "1.0.0".to_string(),
+            },
+            &request,
+            false,
+            false,
+        );
+
+        assert_eq!(absent_action, ResourceAction::Noop);
+        assert_eq!(remove_action, ResourceAction::Remove);
+        assert_eq!(unsupported_action, ResourceAction::Unknown);
     }
 }

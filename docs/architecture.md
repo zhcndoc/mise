@@ -1,404 +1,149 @@
 ---
-outline: [1, 3]
+description: "此地图供贡献者决定某个行为应归属何处。"
+outline: [2, 3]
 ---
 
 # mise 架构
 
-本文档全面概述了 mise 的架构，主要面向贡献者以及希望了解 mise 内部工作原理的人。
-
-有关实用的开发指导，请参阅 [贡献指南](contributing.md)。
+此地图供贡献者决定某个行为应归属何处。从暴露该行为的命令开始，然后沿着配置、工具解析或任务执行进入所属子系统。[贡献指南](/contributing.html)涵盖设置、检查和生成文件。
 
 ## 系统概览
 
-mise 是一个基于 Rust 的工具，采用模块化架构，围绕三个核心概念构建：
+mise 通过 [bootstrap](/bootstrap.html) 结合了版本化开发工具、环境构建、任务执行以及显式的机器设置。这些功能共享配置和执行辅助工具，但具有不同的状态和副作用。安装版本化工具与应用主机软件包或 dotfile 声明不是同一种操作。
 
-1. **工具版本管理** - 安装和管理不同版本的[开发工具](dev-tools/)
-2. **环境管理** - 设置[环境变量](environments/)和项目上下文
-3. **任务运行** - 执行带有依赖管理的[项目任务](tasks/)
-
-这三个支柱协同工作，提供统一的开发环境管理体验。
+```mermaid
+flowchart TD
+    CLI[CLI command] --> Config[Configuration and settings]
+    Config --> Tools[Tool requests and backend resolution]
+    Tools --> Env[Environment and PATH]
+    Env --> Exec[Child command or shell output]
+    Config --> Tasks[Task discovery and dependency graph]
+    Tasks --> Env
+    Config --> Bootstrap[Bootstrap plan and explicit apply]
+```
 
 ## 核心架构组件
 
-### 命令层 ([`src/cli/`](https://github.com/jdx/mise/tree/main/src/cli/))
+### 命令层
 
-CLI 层提供用户界面，并将请求委派给核心功能：
+[`src/cli`](https://github.com/jdx/mise/tree/main/src/cli) 使用 `usage_rs` 派生命令，并从 `src/cli/mod.rs` 分发这些命令。同一份 usage 规范会生成帮助信息、补全和 CLI 文档。应在命令源代码中修改命令描述，然后重新生成输出；不要手动编辑生成的参考页面。
 
-- **模块化命令**：每个命令都是一个独立模块（[`install.rs`](https://github.com/jdx/mise/blob/main/src/cli/install.rs)、[`use.rs`](https://github.com/jdx/mise/blob/main/src/cli/use.rs)、[`run.rs`](https://github.com/jdx/mise/blob/main/src/cli/run.rs) 等）
-- **参数解析**：利用 [`clap`](https://docs.rs/clap) 实现健壮的 CLI 解析与验证
-- **异步命令执行**：所有命令都支持并发操作
-- **统一错误处理**：所有命令采用一致的错误报告方式
+命令会委托给子系统代码。有些命令是同步的本地查询；其他命令会执行异步请求或协调并发工作。避免向原本用于检查本地状态的路径添加安装或网络副作用。
 
-**关键命令架构：**
+有用的入口包括：用于安装并选择行为的 `use.rs`、用于安装的 `install.rs`、用于子进程环境的 `exec.rs`、用于任务的 `run.rs`，以及用于机器设置的 `bootstrap.rs`。`activate.rs` 生成 shell 集成，而 `shell.rs` 设置会话专用的工具请求。
 
-- [`install`](cli/install.md) - 工具安装协调
-- [`use`](cli/use.md) - 工具激活与配置管理
-- [`run`](cli/run.md) - 带依赖解析的任务执行
-- [`env`](cli/env.md) - 环境变量管理
-- [`shell`](cli/shell.md) - Shell 集成与激活
+### 后端系统
 
-### 后端系统 ([`src/backend/`](https://github.com/jdx/mise/tree/main/src/backend/))
+[`Backend` trait](https://github.com/jdx/mise/blob/main/src/backend/mod.rs) 将共享策略与后端特定的元数据、安装和环境逻辑分离。公共包装方法处理缓存和解析等通用工作；`_list_remote_versions` 和 `install_version_` 等实现钩子则提供后端行为。
 
-后端系统是 mise 的核心工具管理抽象，采用基于 trait 的架构实现：
+根据来源选择匹配的实现系列：
 
-```rust
-pub trait Backend: Debug + Send + Sync {
-    async fn list_remote_versions(&self, config: &Arc<Config>) -> Result<Vec<String>>;
-    async fn install_version(&self, ctx: &InstallContext, tv: ToolVersion) -> Result<ToolVersion>;
-    async fn uninstall_version(&self, tv: &ToolVersion) -> Result<()>;
-    // ... other lifecycle management methods
-}
-```
+- 原生核心运行时位于 `src/plugins/core` 下。
+- Release 和 registry 集成，包括 packslip、Aqua、GitHub、GitLab 和 HTTP，位于 `src/backend` 下。
+- 语言软件包集成包括 npm、pipx、cargo、gem 和 Go。
+- asdf 和 vfox 适配器桥接外部插件接口。
 
-**后端类别：**
+后端选择可能取决于 registry 元数据、显式覆盖、请求的版本以及匹配的 lock 条目。它不是在通用版本排序器之后做出的一次性选择。版本是不透明的请求：使用后端解析方法，而不是假设 SemVer，或在新的调用点对任意已安装版本进行排序。
 
-- **核心后端**：原生 Rust 实现，性能最高
-- **语言包管理器**：npm、pipx、cargo、gem、go modules
-- **通用安装器**：github（GitHub 发布版本）、aqua（综合包管理）
-- **插件系统**：[后端插件](backend-plugin-development.md)（增强方法）、[工具插件](tool-plugin-development.md)（基于 hook）、[asdf 插件](asdf-legacy-plugins.md)（传统）
+参见 [Backend Architecture](/dev-tools/backend_architecture.html) 和
+[Adding Backends](/contributing.html#adding-backends)。
 
-有关实现新后端的指导，请参见 [贡献指南](contributing.md#adding-backends)。有关后端系统的详细设计，请参见 [后端架构](dev-tools/backend_architecture.md)。
+### 配置系统
 
-### 配置系统 ([`src/config/`](https://github.com/jdx/mise/tree/main/src/config/))
+[`src/config`](https://github.com/jdx/mise/tree/main/src/config) 负责发现、加载和合并配置。`ConfigFile` 的实现包括 `MiseToml`、`ToolVersions` 和 `IdiomaticVersionFile`。完整的优先级规则见[配置](/configuration.html)。
 
-一种分层配置系统，可合并来自多个配置文件的设置：
+要区分以下三个决策：发现哪些文件、这些文件是否可以被信任或执行，以及每个字段如何合并。设置、工具、环境指令、任务和 bootstrap 条目并不都使用相同的合并策略。写入命令还有自己的[目标文件选择](/configuration.html#target-file-for-write-operations)。
 
-**配置 Trait 架构：**
+`settings.toml` 定义设置元数据和文档。TOML 示例使用 TOML 1.1，包括多行内联表；仅支持 TOML 1.0 的验证器会拒绝有效示例。
 
-```rust
-pub trait ConfigFile: Debug + Send + Sync {
-    fn get_path(&self) -> &Path;
-    fn to_tool_request_set(&self) -> Result<ToolRequestSet>;
-    fn env_entries(&self) -> Result<Vec<EnvDirective>>;
-    fn tasks(&self) -> Vec<&Task>;
-    // ... other configuration methods
-}
-```
+### 工具集管理
 
-**具体实现：**
+[`src/toolset`](https://github.com/jdx/mise/tree/main/src/toolset) 将请求连接到选定的版本和安装状态：
 
-- `MiseToml` - 主要配置格式，支持全部特性
-- `ToolVersions` - asdf 兼容层
-- `IdiomaticVersion` - 语言特定版本文件（`.node-version` 等）
+| 类型             | 作用                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| `ToolRequest`    | 例如 `node@24`、channel 或 ref 的请求，以及后端/选项上下文                               |
+| `ToolVersion`    | 已解析的版本及其安装元数据                                                               |
+| `Toolset`        | 当前上下文中的请求和已解析版本                                                           |
+| `ToolsetBuilder` | 组合配置、运行时环境覆盖和显式参数，然后进行解析                                         |
 
-**配置层级：** 请参见 [配置文档](configuration.md) 以了解完整的层级和优先级规则。
+解析、依赖排序、安装和环境构建是相关但彼此独立的操作。只读列表不需要安装缺失的工具。执行命令可能会根据其设置安装工具。从 lock 条目解析请求时，应保留 lockfile 中的后端和校验和信息。
 
-### 工具集管理 ([`src/toolset/`](https://github.com/jdx/mise/tree/main/src/toolset/))
+### 任务系统
 
-协调工具解析、安装和环境设置：
+[`src/task`](https://github.com/jdx/mise/tree/main/src/task) 负责发现、依赖关系、新鲜度/缓存决策和执行。`Task` 存储定义；任务文件提供者加载本地和远程来源；`Deps` 表示依赖图；执行器根据配置的并发和输出策略运行就绪任务。
 
-**核心组件：**
+`depends` 选择前置任务，`depends_post` 选择后续任务，而 `wait_for` 仅在任务已经属于所选图时对任务进行排序。在任务身份中还包括参数、环境和执行阶段。在更改图构建、重复项处理或完成传播之前，请检查[任务架构](/tasks/architecture.html)。
 
-- `Toolset` - 面向某个上下文的、解析后工具的不可变集合
-- `ToolVersion` - 表示一个具体的、已解析的工具版本（例如，`node@latest` 变为 `node@18.17.0`）
-- `ToolRequest` - 用户的工具规格（例如，`node@18`、`python@latest`）
-- `ToolsetBuilder` - 通过依赖解析从配置中构建工具集
+### 插件系统
 
-**工具解析流水线：**
+[`src/plugins`](https://github.com/jdx/mise/tree/main/src/plugins) 管理插件来源和安装元数据。[`crates/vfox`](https://github.com/jdx/mise/tree/main/crates/vfox) 提供嵌入式 Lua 运行时以及钩子/模块接口。
 
-1. **配置解析**：从配置文件中提取工具需求
-2. **版本解析**：将版本规范（`latest`、`prefix:1.2`、`sub-1:latest` 等）解析为具体版本
-3. **后端选择**：为每个工具选择合适的后端
-4. **依赖分析**：解析工具依赖（例如，npm 需要 Node.js）
-5. **安装协调**：按依赖顺序安装缺失的工具
-6. **环境配置**：设置 PATH 和环境变量
+工具钩子管理一个 SDK，后端钩子管理 `plugin:tool` 请求，环境钩子返回变量/PATH，软件包钩子管理主机软件包批次。asdf 适配器执行旧版 shell 脚本。插件源安装与工具版本安装拥有独立的状态和更新操作。参见[插件](/plugins.html)。
 
-### 任务系统 ([`src/task/`](https://github.com/jdx/mise/tree/main/src/task/))
+### Shell 集成
 
-通过依赖图管理实现复杂的任务执行：
+[`src/shell`](https://github.com/jdx/mise/tree/main/src/shell) 生成特定于 shell 的激活和环境赋值。`mise activate` 注册提示符/目录钩子；钩子执行会计算环境差异，以便 mise 在应用新上下文之前撤销其之前的更改。`mise exec` 直接构建子进程环境，不需要激活。
 
-**架构组件：**
+在 mise 和子进程中保留原生 Windows PATH。仅应在明确识别出的 shell 输出边界进行转换；有关实现限制，请参见仓库的[代理指南](https://github.com/jdx/mise/blob/main/AGENTS.md)。
 
-- `Task` - 带有元数据、依赖和执行配置的任务定义
-- `Deps` - 使用 `petgraph` 进行 DAG 操作的依赖图管理器
-- `TaskFileProvider` - 从文件和配置中发现任务
-- 支持可配置并发度的并行执行引擎
+### 环境管理
 
-**任务发现：**
+`src/config/env_directive` 负责评估环境指令，`EnvDiff` 跟踪更改，`PathEnv` 处理 PATH 条目。与工具无关的指令和感知工具的指令在不同阶段运行。调用子进程时使用由 mise 构建的环境；继承过时的进程环境可能会丢失之前的指令，或使用错误的运行时。
 
-1. 来自配置目录的[基于文件的任务](tasks/file-tasks.md)
-2. 配置文件中的[TOML 定义任务](tasks/toml-tasks.md)
-3. 从父目录继承的任务
+参见[环境变量](/environments/)和[模板](/templates.html)。
 
-**依赖解析：**
+### Bootstrap 和主机状态
 
-- 使用有向无环图（DAG）进行依赖建模
-- 支持多种依赖类型：`depends`、`depends_post`、`wait_for`
-- 在依赖约束内并行执行
-- 检测并防止循环依赖
+`src/cli/bootstrap.rs` 协调计划和选定阶段。`src/system` 下的实现负责软件包、文件、编辑、仓库和特定于平台的资源。状态、预览、应用和清理具有不同的契约。例如，软件包状态检查不得安装任何内容，而选定的软件包批次并不是完整的期望状态快照。
 
-有关完整用法细节和配置选项，请参见 [任务文档](tasks/)，有关详细系统设计，请参见 [任务架构](tasks/architecture.md)。
+在更改所有权、确认、回滚或移除行为之前，请阅读相关的 [bootstrap 资源指南](/bootstrap.html)。主机管理的状态通常不包含在版本化工具的安装目录中。
 
-### 插件系统 ([`src/plugins/`](https://github.com/jdx/mise/tree/main/src/plugins/))
+### 缓存系统
 
-支持多种插件架构的扩展层：
+[`src/cache.rs`](https://github.com/jdx/mise/blob/main/src/cache.rs) 提供带有新鲜度策略和原子写入的 `CacheManager<T>`。其序列化缓存使用带 zlib 压缩的 MessagePack。其他子系统拥有自己的格式和失效规则，包括以会话密钥为键的环境缓存以及本地/远程任务缓存。
 
-**插件 Trait：**
-
-```rust
-pub trait Plugin: Debug + Send {
-    fn name(&self) -> &str;
-    fn path(&self) -> PathBuf;
-    async fn install(&self, config: &Arc<Config>, pr: &dyn SingleReport) -> Result<()>;
-    async fn update(&self, pr: &dyn SingleReport, gitref: Option<String>) -> Result<()>;
-    // ... lifecycle management methods
-}
-```
-
-**插件类型：**
-
-- **后端插件**：带有后端方法的增强型插件，用于管理多个工具
-- **工具插件**：使用传统 vfox 格式的基于 hook 的插件
-- **asdf 插件**：与 asdf 插件生态兼容的传统插件（仅限 Linux/macOS）
-
-完整插件文档请参见 [插件指南](plugins.md)。
-
-### Shell 集成 ([`src/shell/`](https://github.com/jdx/mise/tree/main/src/shell/))
-
-针对 Shell 的代码生成层，将 `mise env` 等命令进行抽象，并将所有 Shell 差异集中在一处：
-
-**Shell Trait：**
-
-```rust
-pub trait Shell: Display {
-    fn activate(&self, opts: ActivateOptions) -> String;
-    fn set_env(&self, k: &str, v: &str) -> String;
-    fn unset_env(&self, k: &str) -> String;
-    // ... shell-specific methods
-}
-```
-
-**支持的 Shell：** 完整列表请参见 [`mise activate`](cli/activate.md) 文档  
-**Shell 抽象：** 环境变量设置、PATH 修改、命令执行
-
-### 环境管理 ([`src/env*.rs`](https://github.com/jdx/mise/tree/main/src/))
-
-用于处理环境变量的辅助工具：
-
-- `EnvDiff` - 跟踪并应用环境更改
-- `EnvDirective` - 基于配置的环境变量管理
-- `PathEnv` - 带有优先级规则的智能 PATH 操作
-- 结合配置分层的上下文感知解析
-
-有关环境设置和配置，请参见 [环境文档](environments/)。
-
-### 缓存系统 ([`src/cache.rs`](https://github.com/jdx/mise/blob/main/src/cache.rs))
-
-由文件支持的通用缓存，使用 msgpack 序列化并通过 zstd 压缩：
-
-- `CacheManager<T>` - 支持 TTL 的通用缓存
-- 数据使用 msgpack 序列化并通过 zstd 压缩，以实现高效存储
-- 基于文件时间戳的自动缓存失效
-- 每个后端独立缓存隔离，保障数据完整性。
+缓存键必须包含所有会改变结果的输入，包括相关选项、环境和来源元数据。有关面向用户的刷新控制和限制，请参见[缓存行为](/cache-behavior.html)。
 
 ## 测试架构
 
-mise 采用多层测试策略，将不同的测试方法结合起来，以便对其复杂的功能集进行全面验证。
+使用能够证明该行为的最小测试层。纯解析或解析逻辑适合单元测试；shell 边界、安装和任务执行通常需要端到端测试。网络和主机软件包测试所需的前置条件不止 Rust 编译器。
 
-**测试策略概览：**
+### 单元测试
 
-1. **单元测试** - 嵌入在源文件中的 Rust `#[test]` 函数
-2. **端到端（E2E）测试** - 基于 Bash 的集成测试，并实现完整的环境隔离
-3. **快照测试** - 使用 `insta` crate 对复杂输出进行验证
+测试位于源模块旁边以及工作区 crate 中。主二进制的 `src/test.rs` 初始化共享的 fixture 目录和进程环境。测试配置为单线程运行；这并不意味着每个 Rust 测试都会使用全新的进程或 HOME。对临时环境/当前目录更改使用现有 guard，并在失败时恢复它们。
 
-::: tip 测试理念
-**mise 中的大多数测试都是端到端测试，而对于新功能来说，这通常也是首选方法**。E2E 测试能够对真实使用场景进行全面验证，并捕获单元测试可能遗漏的集成问题。不过，由于环境依赖和配置复杂性，**E2E 测试在本地运行可能比较困难**。对于开发和 CI 场景，通常更容易在 GitHub Actions 上运行测试，因为那里的环境是一致且配置妥当的。
+### 端到端测试
 
-有关详细的测试设置和指南，请参阅 [Contributing Guide](contributing.md#testing)。
-:::
+`e2e` harness 使用隔离的 mise 配置/数据/状态和临时工作目录运行 Bash 测试。通过 `mise run test:e2e` 启动它，该命令会构建 mise，并通过仓库的任务包装器选择文件。主机程序和服务仍然是外部前置条件；隔离不会替你安装 Docker、JDK 或所有 shell。
 
-### 单元测试 ([`src/` modules](https://github.com/jdx/mise/tree/main/src/))
-
-**结构和特性：**
-
-- **位置**：通过 `mod tests` 块嵌入在源文件中
-- **测试运行器**：标准 Rust `cargo test`
-- **依赖**：`pretty_assertions`、`insta`、`test-log`、`ctor`
-- **覆盖范围**：约 50+ 个测试模块，覆盖所有主要功能
-
-```rust
-mod tests {
-    use insta::assert_snapshot;
-    use pretty_assertions::assert_eq;
-    use crate::config::Config;
-    use super::*;
-
-    #[tokio::test]
-    async fn test_hash_to_str() {
-        let _config = Config::get().await.unwrap();
-        assert_eq!(hash_to_str(&"foo"), "e1b19adfb2e348a2");
-    }
-}
+```sh
+mise run test:e2e e2e/cli/test_version
+mise run test:e2e '^test_task_'
+mise run test:e2e --all
 ```
 
-**测试环境设置：**
+该包装器匹配测试**基本名称**，而不是目录前缀。在更改测试选择说明之前，请使用 `mise tasks info test:e2e` 检查其当前源代码。
 
-- **全局设置**：在 [`src/test.rs`](https://github.com/jdx/mise/blob/main/src/test.rs) 中使用 `ctor::ctor` 进行测试环境初始化
-- **隔离环境**：每个测试都会获得一个干净的环境，包含自定义的 `HOME`、缓存和配置目录
-- **异步支持**：广泛使用 `#[tokio::test]` 进行异步测试
-
-### 端到端测试 ([`e2e/`](https://github.com/jdx/mise/tree/main/e2e/))
-
-**架构：**
-
-```
-e2e/
-├── run_test          # 带环境隔离的单个测试执行器
-├── run_all_tests     # 支持并行执行的测试协调器
-├── assert.sh         # 功能丰富的断言库
-├── cli/              # CLI 命令测试
-│   ├── test_use      # 测试工具激活和配置
-│   ├── test_install  # 测试工具安装
-│   ├── test_upgrade  # 测试工具升级
-│   ├── test_uninstall # 测试工具移除
-│   └── test_version  # 测试版本命令
-├── backend/          # 后端特定测试
-│   ├── test_aqua     # 测试 aqua 包管理器
-│   ├── test_asdf     # 测试 asdf 插件兼容性
-│   └── test_npm      # 测试 npm 后端
-├── tasks/            # 任务系统测试
-│   ├── test_task_deps # 测试任务依赖
-│   ├── test_task_run_depends # 测试任务执行顺序
-│   ├── test_task_ls  # 测试任务列表
-│   └── test_task_info # 测试任务元数据
-├── config/           # 配置测试
-│   ├── test_config_ls # 测试配置列表
-│   └── test_config_set # 测试配置更新
-└── [其他领域]/  # 其他测试类别
-```
-
-**环境隔离系统：**
-
-每个测试都在完全隔离的环境中运行，并使用临时目录：
-
-```bash
-setup_isolated_env() {
-  TEST_ISOLATED_DIR="$(mktemp --tmpdir --directory "$(basename "$TEST").XXXXXX")"
-  TEST_HOME="$TEST_ISOLATED_DIR/home"
-  MISE_DATA_DIR="$TEST_HOME/.local/share/mise"
-  MISE_CACHE_DIR="$TEST_HOME/.cache/mise"
-  # ... 完整的环境隔离
-}
-```
-
-**丰富的断言框架：**
-
-[`assert.sh`](https://github.com/jdx/mise/blob/main/e2e/assert.sh) 提供了丰富的测试工具：
-
-```bash
-# 基本断言
-assert "command" "expected_output"
-assert_contains "command" "substring"
-assert_fail "command" "error_message"
-
-# JSON 测试
-assert_json "command" '{"key": "value"}'
-assert_json_partial_object "command" "field1,field2" '{"field1": "value1"}'
-
-# 文件系统断言
-assert_directory_exists "path"
-assert_directory_empty "path"
-```
-
-**测试类别：**
-
-- **CLI 测试**：验证所有命令行接口和参数解析
-- **后端测试**：测试工具安装、版本解析以及后端集成
-- **任务测试**：验证任务执行、依赖解析和并行执行
-- **配置测试**：测试配置解析、层级结构以及环境变量处理
+使用 `e2e/assert.sh` 中的辅助函数，并让 harness 管理清理工作。不要直接执行测试文件，也不要仅为了运行它们而添加可执行权限。
 
 ### Windows 测试
 
-**Windows 专用测试 ([`e2e-win/`](https://github.com/jdx/mise/tree/main/e2e-win/))：**
+`e2e-win` 使用 PowerShell 和 Pester。测试应运行生成的命令并检查真实的子进程行为，尤其是 PATH 和激活行为，而不只是比较输出字符串。参见 [Windows E2E setup](/contributing.html#windows-e2e-tests)。
 
-- **语言**：PowerShell 脚本（`.ps1`）
-- **重点**：Windows 特有功能和跨平台兼容性
-- **覆盖范围**：Go、Java、Node.js、Python、Rust 等核心工具
+### Snapshot 测试
 
-```powershell
-Describe "go" {
-    It "installs go" {
-        mise install go@latest
-        go version | Should -Match "go version"
-    }
-}
-```
-
-### 快照测试 ([`src/snapshots/`](https://github.com/jdx/mise/tree/main/src/snapshots/))
-
-**实现：**
-
-- **Crate**：使用 `insta` 进行快照测试，共有 11 个快照文件
-- **格式**：将期望输出存储为 `.snap` 文件
-- **覆盖范围**：目录列表、配置解析、环境差异等复杂输出
-
-```rust
-#[tokio::test]
-async fn test_parse() {
-    let diff = DirenvDiff::parse(input).unwrap();
-    assert_snapshot!(diff);  // 创建/验证快照
-}
-```
+`insta` snapshot 会记录结构化输出或面向用户的输出。应将每个发生更改的 snapshot 作为行为变更的一部分进行审查；接受所有 snapshot 不能证明新输出是正确的。`mise run snapshots` 使用项目的任务配置更新 snapshot。
 
 ### 测试基础设施特性
 
-**性能和实用测试 ([`xtasks/test/`](https://github.com/jdx/mise/tree/main/xtasks/test/))：**
+仓库在 `xtasks/test` 下提供用于 E2E 选择和性能工作的文件任务。运行缓慢的 E2E 文件以 `_slow` 结尾，并需要 `TEST_ALL=1`。完整运行器可以使用 `TEST_TRANCHE` 和 `TEST_TRANCHE_COUNT` 分割工作。CI 提供平台依赖和检测工具；名为 `coverage` 的任务本身不会为本地二进制添加检测。
 
-- **性能测试**：用于基准测试的 `perf` 脚本
-- **覆盖率测试**：用于测试覆盖率分析的 `coverage` 脚本
-- **E2E 运行器**：支持过滤能力的 `e2e` 脚本
-
-**测试数据管理 ([`test/`](https://github.com/jdx/mise/tree/main/test/))：**
-
-```
-test/
-├── config/           # 测试专用配置
-├── cwd/              # 测试工作目录
-├── data/             # 测试插件和模拟数据
-├── fixtures/         # 示例配置文件
-├── plugins/          # 测试插件定义
-└── state/            # 测试状态目录
-```
-
-**测试执行模式：**
-
-- **快速测试**：在 CI 中运行的常规测试
-- **慢速测试**：带有 `_slow` 后缀，除非设置 `TEST_ALL=1` 否则会被跳过
-- **分段支持**：可使用 `TEST_TRANCHE_COUNT` 将测试拆分到并行运行器中
-
-**开发体验特性：**
-
-- **环境安全**：完全隔离可防止测试影响用户实际的 mise 安装
-- **并行执行**：E2E 测试在适当隔离下支持并行执行
-- **丰富报告**：详细的测试耗时，失败时保留环境以便调试
-- **跨平台验证**：在多个操作系统上进行自动化测试
-
-**运行测试：**
-
-```bash
-# 运行所有单元测试
-cargo test
-
-# 运行所有 E2E 测试
-./e2e/run_all_tests
-
-# 运行特定 E2E 测试
-./e2e/run_test test_install
-
-# 使用覆盖率运行
-./xtasks/test/coverage
-
-# 性能测试
-./xtasks/test/perf
-```
-
-如需完整的开发环境设置和测试流程，请参阅 [Contributing Guide](contributing.md)。
-
-这一强大的测试架构确保了 mise 在其复杂功能集上的可靠性，包括工具管理、环境配置、任务执行以及多平台支持。
+有关确切命令和前置条件，请参见[测试](/contributing.html#testing)。
 
 ## 相关架构文档
 
-如需更深入地了解特定子系统：
-
-- **[任务架构](tasks/architecture.md)** - 任务依赖系统、并行执行引擎以及任务发现机制的详细设计
-- **[后端架构](dev-tools/backend_architecture.md)** - 后端类型、trait 系统以及不同安装方式工作原理的深入指南。
+- [任务架构](/tasks/architecture.html)。
+- [后端架构](/dev-tools/backend_architecture.html)。
+- [配置](/configuration.html)。
+- [贡献](/contributing.html)。

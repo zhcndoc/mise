@@ -60,6 +60,7 @@ impl PackagePluginState {
                 name: name.clone(),
                 version: owned.version.clone(),
                 tap_url: None,
+                desired: crate::system::packages::PackageDesiredState::Present,
             })
             .collect()
     }
@@ -184,8 +185,9 @@ impl PackagePluginManager {
         let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
             .map(|path| split_paths(&path).collect())
             .unwrap_or_default();
-        if !paths.iter().any(|path| path == *crate::dirs::SHIMS) {
-            paths.push(crate::dirs::SHIMS.to_path_buf());
+        let shims = crate::dirs::shims();
+        if !paths.iter().any(|path| path == &shims) {
+            paths.push(shims);
         }
         paths
     }
@@ -374,6 +376,7 @@ impl PackagePluginManager {
                     name: status.request.name,
                     version: Some(version),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 }),
                 None if matches!(status.state, PackageState::Missing) => {
                     stale.push(status.request.name);
@@ -402,6 +405,7 @@ impl PackagePluginManager {
                     name: name.clone(),
                     version: owned.version.clone(),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 })
             })
             .collect::<Vec<_>>();
@@ -427,6 +431,7 @@ impl PackagePluginManager {
                     name: status.request.name.clone(),
                     version: Some(version),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 })
             })
             .collect::<Vec<_>>();
@@ -717,6 +722,7 @@ mod tests {
             name: "keep".to_string(),
             version: Some("a-different-pin".to_string()),
             tap_url: None,
+            desired: crate::system::packages::PackageDesiredState::Present,
         }];
         assert_eq!(
             state("fake").prune_requests(&configured),
@@ -724,6 +730,7 @@ mod tests {
                 name: "remove".to_string(),
                 version: Some("release:edge".to_string()),
                 tap_url: None,
+                desired: crate::system::packages::PackageDesiredState::Present,
             }]
         );
     }
@@ -736,17 +743,20 @@ mod tests {
                 name: "remove".to_string(),
                 version: Some("release:edge".to_string()),
                 tap_url: None,
+                desired: crate::system::packages::PackageDesiredState::Present,
             },
             PackageRequest {
                 name: "not-owned".to_string(),
                 version: None,
                 tap_url: None,
+                desired: crate::system::packages::PackageDesiredState::Present,
             },
         ];
         let configured = vec![PackageRequest {
             name: "remove".to_string(),
             version: Some("newly-declared".to_string()),
             tap_url: None,
+            desired: crate::system::packages::PackageDesiredState::Present,
         }];
 
         assert_eq!(
@@ -769,6 +779,7 @@ mod tests {
                     name: "keep".to_string(),
                     version: Some("nightly-2026.08".to_string()),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 },
                 state: PackageState::Installed {
                     version: "nightly-2026.08".to_string(),
@@ -779,6 +790,7 @@ mod tests {
                     name: "manual".to_string(),
                     version: None,
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 },
                 state: PackageState::Installed {
                     version: "release:edge".to_string(),
@@ -805,6 +817,7 @@ mod tests {
                     name: "keep".to_string(),
                     version: Some("nightly-2026.07".to_string()),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 },
                 state: PackageState::Installed {
                     version: "nightly-2026.07".to_string(),
@@ -815,6 +828,7 @@ mod tests {
                     name: "remove".to_string(),
                     version: Some("release:edge".to_string()),
                     tap_url: None,
+                    desired: crate::system::packages::PackageDesiredState::Present,
                 },
                 state: PackageState::Missing,
             },

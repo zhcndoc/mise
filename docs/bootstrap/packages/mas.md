@@ -1,10 +1,13 @@
-# mas
+---
+description: "通过 mas CLI 管理 Mac App Store 应用"
+---
+
+# Mac App Store 应用（mas）
 
 通过 [`mas`](https://github.com/mas-cli/mas) CLI 安装 Mac App Store 应用。
 
 ```toml
 [bootstrap.packages]
-"brew:mas" = "latest"
 "mas:497799835" = "latest"       # Xcode
 ```
 
@@ -12,20 +15,27 @@
 Homebrew formulae 和 cask 一样。包名就是 App Store 应用 ID：
 一个可被 `mas install` 和 `mas upgrade` 接受的数字 ADAM ID。
 
-mise 不会隐式安装 `mas`。请先自行安装——上面示例中的
-`"brew:mas"` 条目通过内置的
-[brew 管理器](/bootstrap/packages/brew.html)完成安装——或者将其作为普通
-mise 工具安装：
+mise 需要 `mas` CLI 才能检查或安装这些应用。将其作为 mise 工具安装：
 
 ```sh
 mise use -g mas
 ```
+
+或者通过内置的 [brew 管理器](/bootstrap/packages/brew.html)
+安装，并确保 Homebrew 前缀的 `bin` 目录位于 `PATH` 中：
+
+```sh
+mise bootstrap packages use brew:mas
+```
+
+仅在 `[tools]` 中声明 `mas`，并不会让全新的完整 bootstrap 在内置软件包阶段之前安装它。先安装 CLI，然后应用 App Store 声明。使用 `mise exec -- mas list` 确认 `mas` 可以查看当前用户的 App Store 状态。
 
 ## 命令
 
 ```sh
 mise bootstrap packages use mas:497799835
 mise bootstrap packages status
+mise bootstrap packages apply --manager mas --dry-run
 mise bootstrap packages apply --manager mas
 mise bootstrap packages upgrade --manager mas
 ```
@@ -44,6 +54,8 @@ mise bootstrap packages upgrade --manager mas
 包管理器的行为一致。
 
 Mac App Store 操作可能需要已登录 App Store 的 Apple 账户、macOS 身份验证、付费应用的先前购买/认领，以及有效的 Spotlight 索引。mise 会直接展示 `mas` 返回的错误，而不会尝试自行购买或认领应用。
+
+这些命令不支持 App Store 版本固定。`"latest"` 会接受已安装的应用；当你希望 mise 请求更新时，请使用 `mise bootstrap packages upgrade --manager mas`。应用安装本身不会接受 Xcode 的许可协议，也不会完成其首次启动设置。
 
 ## 查找 ID
 

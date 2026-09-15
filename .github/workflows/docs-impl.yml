@@ -6,9 +6,6 @@ on:
       trusted:
         required: true
         type: boolean
-      mbx-backend:
-        required: true
-        type: string
     secrets:
       CLOUDFLARE_ACCESS_KEY_ID:
         required: false
@@ -18,29 +15,22 @@ on:
         required: false
 
 concurrency:
-  group: docs-${{ github.head_ref }}
+  group: docs-${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease && 'deploy' || 'validation' }}-${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease && 'release' || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
+  MBX_DISABLE: "1"
   GITHUB_TOKEN: ${{ secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
 jobs:
   docs:
     if: github.repository == 'jdx/mise'
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     steps:
-      - name: Assert OIDC is unavailable to untrusted docs builds
-        if: ${{ !inputs.trusted }}
-        run: |
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # for lastUpdated
-      - uses: ./.github/actions/mbx
-        with:
-          backend: ${{ inputs.mbx-backend }}
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           install_args: bun
       # Check the API directly instead of bootstrapping the rate-limit helper,
@@ -72,4 +62,4 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_SECRET_ACCESS_KEY }}
-          DRY_RUN: ${{ !inputs.trusted || github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+          DRY_RUN: ${{ !inputs.trusted || github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'v') || github.event.release.prerelease }}

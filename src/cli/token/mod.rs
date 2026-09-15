@@ -1,4 +1,5 @@
 mod forgejo;
+pub(super) mod git_credential;
 pub(crate) mod github;
 mod gitlab;
 
@@ -12,15 +13,22 @@ pub(crate) struct Token {
 
 #[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
-    /// Forgejo token
+    /// Show the Forgejo token mise will use
     Forgejo(forgejo::Forgejo),
-    /// GitHub token
+    /// Show the GitHub token mise will use
     Github(github::Github),
-    /// GitLab token
+    /// Show the GitLab token mise will use
     Gitlab(gitlab::Gitlab),
 }
 
 impl Token {
+    pub(crate) fn run_git_credential(&self) -> Option<eyre::Result<()>> {
+        match &self.subcommand {
+            Commands::Github(cmd) => cmd.git_credential.as_deref().map(git_credential::run),
+            _ => None,
+        }
+    }
+
     pub(crate) async fn run(self) -> eyre::Result<()> {
         match self.subcommand {
             Commands::Forgejo(cmd) => cmd.run(),

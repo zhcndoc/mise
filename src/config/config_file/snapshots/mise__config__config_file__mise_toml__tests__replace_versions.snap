@@ -16,6 +16,8 @@ Toolset {
                             os: None,
                             depends: None,
                             install_env: {},
+                            lazy: None,
+                            lazy_bins: [],
                         },
                         opts: RawBackendOptions {
                             values: {},
@@ -24,6 +26,7 @@ Toolset {
                     source: MiseToml(
                         "/tmp/.mise.toml",
                     ),
+                    lockfile_scope: Default,
                 },
                 Version {
                     backend: BackendArg(node),
@@ -33,6 +36,8 @@ Toolset {
                             os: None,
                             depends: None,
                             install_env: {},
+                            lazy: None,
+                            lazy_bins: [],
                         },
                         opts: RawBackendOptions {
                             values: {},
@@ -41,6 +46,7 @@ Toolset {
                     source: MiseToml(
                         "/tmp/.mise.toml",
                     ),
+                    lockfile_scope: Default,
                 },
             ],
             source: MiseToml(

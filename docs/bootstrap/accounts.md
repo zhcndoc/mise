@@ -1,7 +1,10 @@
+---
+description: "`[bootstrap.groups]` 和 `[bootstrap.users]` 以声明方式管理本地 Linux 账户。"
+---
+
 # Linux 用户和组
 
-`[bootstrap.groups]` 和 `[bootstrap.users]` 以声明方式管理本地 Linux
-账户。Mise 会先应用组，再应用用户，并在应用特权文件之前应用账户，因此托管文件可以安全地引用在同一配置中创建的账户。
+`[bootstrap.groups]` 和 `[bootstrap.users]` 以声明方式管理本地 Linux 账户。mise 会先应用组，再应用用户，并在应用受管理的文件之前应用账户，因此受管理的文件可以安全地引用在同一配置中创建的账户。
 
 ```toml
 [bootstrap.groups.mise-cache]
@@ -30,9 +33,15 @@ create_home = true
 - `create_home` 控制新用户主目录的创建。普通用户默认为 `true`，系统用户默认为 `false`。
 - `move_home = true` 会在更改 `home` 时移动现有主目录；不设置时，只会更改 passwd 条目。
 
-名称会作为类型化的进程参数传递，绝不会通过 shell 传递。Mise 在其范围严格受限的提权辅助程序中使用标准的 shadow-utils 命令（`groupadd`、`groupmod`、`groupdel`、`useradd`、`usermod` 和 `userdel`）。此功能仅适用于 Linux。
+名称会作为经过类型处理的进程参数传递，绝不会通过 shell 传递。mise 在其范围严格受限的提权辅助程序中使用标准的 shadow-utils 命令（`groupadd`、`groupmod`、`groupdel`、`useradd`、`usermod` 和 `userdel`）。此功能仅适用于 Linux。
 
 在非 Linux 主机上，诸如 `mise bootstrap`、`mise bootstrap status` 和 `mise bootstrap plan` 之类的聚合命令会在发出警告后忽略这些声明，以便同一配置可以跨平台共享。显式执行 `mise bootstrap accounts` 命令时则会失败，而不是静默地不执行任何操作。当托管文件或目录将这些被忽略的声明之一指定为其所有者或组时，该所有权字段也会在发出警告后被忽略。其内容、模式以及任何不相关的本地所有者或组仍会正常收敛。
+
+## 预览和应用
+
+在更改现有用户之前，运行 `mise bootstrap accounts apply --dry-run`。检查任何 UID/GID 和附加组变更：即使用户的文件位于此配置之外，这些变更也会影响账户数据库。若要将新账户用作文件所有者，请应用完整的 bootstrap，或在 `--only` 中同时包含 `accounts` 和 `files`。
+
+移除账户声明会保留该账户。需要删除账户时，请使用下面的显式移除状态。
 
 ## 删除
 
@@ -47,8 +56,7 @@ remove_home = true
 state = "absent"
 ```
 
-默认情况下会保留用户主目录。仅当还应删除账户的主目录和邮件存储时，才设置
-`remove_home = true`。Mise 拒绝删除 UID 0、GID 0 或正在运行 mise 的用户。它还会保留操作系统的正常安全措施；例如，`groupdel` 会拒绝删除仍是其他用户主组的组。
+用户主目录默认会被保留。仅当还应删除账户的主目录和邮件队列时，才设置 `remove_home = true`。mise 拒绝删除 UID 0、GID 0 或运行 mise 的用户。它还会保留操作系统的正常安全保护；例如，`groupdel` 会拒绝删除仍是其他用户主组的组。
 
 ## 命令
 

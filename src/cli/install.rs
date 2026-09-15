@@ -15,6 +15,10 @@ use crate::toolset::{
     InstallOptions, ResolveOptions, ToolRequest, ToolRequestSet, ToolSource, ToolVersionOptions,
     Toolset, ensure_compatible_install_requests, tool_env_vars,
 };
+use crate::ui::install_progress::install_progress;
+use crate::ui::multi_progress_report::MultiProgressReport;
+use crate::ui::progress_report::ProgressIcon;
+use crate::ui::resolve_progress;
 use crate::{config, env, exit, hooks};
 use eyre::Result;
 use itertools::Itertools;
@@ -24,15 +28,28 @@ use std::path::PathBuf;
 
 /// Install a tool version
 ///
-/// Installs a tool version to `~/.local/share/mise/installs/<TOOL>/<VERSION>`
-/// Installing alone will not activate the tools so they won't be in PATH.
-/// To install and/or activate in one command, use `mise use` which will create a `mise.toml` file
-/// in the current directory to activate this tool when inside the directory.
-/// Alternatively, run `mise exec <TOOL>@<VERSION> -- <COMMAND>` to execute a tool without creating config files.
+/// Installs a tool version under the mise data directory, by default
+/// `~/.local/share/mise/installs/<TOOL>/<VERSION>`.
+/// Installing alone does not add the tool to your config, so a tool that is not
+/// already configured will not be on PATH.
+/// To install and activate in one command, use `mise use`, which also writes the version to
+/// the selected project config so the tool is active in that configuration scope.
+/// To run a tool once without touching any config, use `mise exec <TOOL>@<VERSION> -- <COMMAND>`.
 ///
-/// Tools will be installed in parallel. To disable, set `--jobs=1` or `MISE_JOBS=1`
+/// Tools are installed in parallel. To disable, set `--jobs=1` or `MISE_JOBS=1`.
 #[derive(Debug, Default, usage_rs::Args)]
-#[usage(visible_alias = "i", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    visible_alias = "i",
+    verbatim_doc_comment,
+    example(
+        r###"mise install node@20.0.0  # install a specific node version
+mise install node@20      # install the latest node 20.x
+mise install node         # install the version specified in mise.toml
+mise install              # install everything specified in mise.toml
+mise install --include-lazy # also install tools configured for lazy installation
+mise install --include-task-tools # also install tools required by tasks"###
+    )
+)]
 pub(crate) struct Install {
     /// Tool(s) to install
     /// e.g.: node@20
@@ -46,7 +63,7 @@ pub(crate) struct Install {
 
     /// Number of jobs to run in parallel
     /// Values below 1 are treated as 1
-    /// [default: 4]
+    /// Defaults to the `jobs` setting
     #[usage(long, short, env = "MISE_JOBS", verbatim_doc_comment)]
     jobs: Option<usize>,
 
@@ -73,6 +90,12 @@ pub(crate) struct Install {
     #[usage(long, verbatim_doc_comment)]
     include_task_tools: bool,
 
+    /// Also install tools configured with `lazy = true`
+    ///
+    /// By default, a bare `mise install` leaves lazy tools for first-command installation.
+    #[usage(long, verbatim_doc_comment)]
+    include_lazy: bool,
+
     /// Only install versions released before this date or older than this duration
     ///
     /// Supports absolute dates like "2024-06-01" and relative durations like "90d" or "1y".
@@ -86,8 +109,8 @@ pub(crate) struct Install {
     #[usage(long, env = "MISE_MONOREPO", verbatim_doc_comment)]
     monorepo: bool,
 
-    /// Connect backend install command stdin/stdout/stderr directly to the terminal
-    /// Implies --jobs=1
+    /// Connect backend install command stdin/stdout/stderr directly to the terminal.
+    /// Implies `--jobs=1`
     #[usage(long, overrides = "jobs")]
     raw: bool,
 
@@ -122,6 +145,10 @@ impl Install {
         }
     }
 
+    pub(crate) fn inherit_root_yes(&mut self, yes: bool) {
+        self.yes |= yes;
+    }
+
     pub(super) fn is_dry_run(&self) -> bool {
         self.dry_run || self.dry_run_code
     }
@@ -129,7 +156,7 @@ impl Install {
     #[async_backtrace::framed]
     pub async fn run(self) -> Result<()> {
         let config = Config::get().await?;
-        if !self.is_dry_run() {
+        if !self.is_dry_run() && !Settings::get().generate_lockfiles() {
             crate::lockfile::migrate_monorepo_lockfiles(&config, false)?;
         }
         let task_requests = self.collect_task_tool_requests(&config).await?;
@@ -217,7 +244,12 @@ impl Install {
                 Ok(statuses) => {
                     missing += statuses
                         .iter()
-                        .filter(|s| !s.state.is_installed() && !s.state.is_unavailable())
+                        .filter(|s| {
+                            s.request.desired
+                                == crate::system::packages::PackageDesiredState::Present
+                                && !s.state.is_installed()
+                                && !s.state.is_unavailable()
+                        })
                         .count();
                 }
                 // a transient query failure must not start the 24h throttle
@@ -371,8 +403,15 @@ impl Install {
                 rebuild_config.get_toolset().await?
             };
             let current_versions = ts.list_current_versions();
-            // ensure that only current versions are sent to lockfile rebuild
-            versions.retain(|tv| current_versions.iter().any(|(_, cv)| tv == cv));
+            // Match the configured package and options, not graph identity: accepting
+            // an edited sidecar deliberately changes the installed graph identity.
+            versions.retain(|tv| {
+                current_versions.iter().any(|(_, cv)| {
+                    tv.ba() == cv.ba()
+                        && tv.version == cv.version
+                        && tv.request.options() == cv.request.options()
+                })
+            });
 
             config::rebuild_shims_and_runtime_symlinks(
                 &rebuild_config,
@@ -414,7 +453,7 @@ impl Install {
 
     fn install_opts(&self) -> Result<InstallOptions> {
         let install_dir = if self.system {
-            Some(env::MISE_SYSTEM_INSTALLS_DIR.clone())
+            Some(Settings::get().system_installs_dir().to_path_buf())
         } else {
             self.shared.clone()
         }
@@ -425,6 +464,7 @@ impl Install {
             jobs: self.jobs,
             raw: self.raw,
             missing_args_only: false,
+            include_lazy: self.tool.is_some() || self.include_lazy,
             resolve_options: ResolveOptions {
                 use_locked_version: true,
                 latest_versions: true,
@@ -441,6 +481,7 @@ impl Install {
             locked: Settings::get().locked,
             install_dir,
             yes: self.yes || Settings::get().yes,
+            explicit_yes: self.yes,
             ..Default::default()
         })
     }
@@ -535,19 +576,58 @@ impl Install {
             // This will error with a proper message like "tool not found in mise tool registry"
             ba.backend()?;
         }
+        let opts = self.install_opts()?;
+        let install_candidates = install_candidates
+            .into_iter()
+            .filter(|tr| self.include_lazy || tr.options().lazy != Some(true))
+            .collect_vec();
+        let mut progress = (!opts.raw && !opts.dry_run)
+            .then(|| {
+                install_progress(
+                    &MultiProgressReport::get(),
+                    install_candidates
+                        .iter()
+                        .map(|tr| (tr.to_string(), tr.to_string())),
+                )
+            })
+            .flatten();
         let requests = measure!("fetching install runtimes", {
             if self.force {
                 install_candidates
             } else {
-                trs.missing_tools(&install_config)
-                    .await
-                    .into_iter()
-                    .cloned()
-                    .collect_vec()
+                let mut missing = vec![];
+                for tr in install_candidates {
+                    let reporter = progress
+                        .as_ref()
+                        .and_then(|p| p.start_tool(&tr.to_string()));
+                    let satisfied = resolve_progress::scope(
+                        reporter.as_ref().map(|p| p.reporter()),
+                        tr.is_install_satisfied(&install_config),
+                    )
+                    .await;
+                    if satisfied {
+                        if let Some(reporter) = reporter {
+                            reporter.finish_with_icon(
+                                "already installed".into(),
+                                ProgressIcon::Skipped,
+                            );
+                            reporter.complete(None);
+                        }
+                    } else {
+                        if let Some(progress) = &progress {
+                            progress.queue_tool(&tr.to_string());
+                        }
+                        missing.push(tr);
+                    }
+                }
+                missing
             }
         });
         let has_work = !requests.is_empty();
         let (versions, install_error) = if requests.is_empty() {
+            if let Some(mut progress) = progress.take() {
+                progress.finish(vec![]);
+            }
             measure!("run_postinstall_hook", {
                 info!("all tools are installed");
                 // Nothing was installed, but postinstall still runs (idempotent
@@ -582,8 +662,13 @@ impl Install {
             let mut ts = Toolset::from(trs.clone());
             measure!("install_all_versions", {
                 split_install_result(
-                    ts.install_all_versions(&mut install_config, requests, &self.install_opts()?)
-                        .await,
+                    ts.install_all_versions_with_progress(
+                        &mut install_config,
+                        requests,
+                        &opts,
+                        progress,
+                    )
+                    .await,
                 )
             })
         };
@@ -607,7 +692,13 @@ impl Install {
                 let current_versions = ts.list_current_versions();
                 let versions = versions
                     .iter()
-                    .filter(|tv| current_versions.iter().any(|(_, current)| *tv == current))
+                    .filter(|tv| {
+                        current_versions.iter().any(|(_, current)| {
+                            tv.ba() == current.ba()
+                                && tv.version == current.version
+                                && tv.request.options() == current.request.options()
+                        })
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 config::rebuild_shims_and_runtime_symlinks(
@@ -691,17 +782,6 @@ fn extend_toolset(toolset: &mut Toolset, additional: &[ToolRequest]) {
     }
 }
 
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise install node@20.0.0</bold>  # install specific node version
-    $ <bold>mise install node@20</bold>      # install fuzzy node version
-    $ <bold>mise install node</bold>         # install version specified in mise.toml
-    $ <bold>mise install</bold>              # installs everything specified in mise.toml
-    $ <bold>mise install --include-task-tools</bold> # also install tools required by tasks
-"#
-);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +799,16 @@ mod tests {
             source,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn root_yes_is_explicit_install_consent() {
+        let mut install = Install::default();
+        install.inherit_root_yes(true);
+
+        let options = install.install_opts().unwrap();
+        assert!(options.yes);
+        assert!(options.explicit_yes);
     }
 
     #[test]

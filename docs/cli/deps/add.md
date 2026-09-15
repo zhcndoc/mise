@@ -1,4 +1,8 @@
-<!-- @由 usage-cli 根据用法规范生成 -->
+---
+description: "添加一个依赖"
+---
+
+<!-- 由 usage-cli 根据用法规范生成 -->
 # `mise deps add`
 
 - **用法：** `mise deps add [-D --dev] <PACKAGES>…`
@@ -15,4 +19,12 @@
 
 ## 标志
 - **`-D --dev`** — 添加为开发依赖
-- **`-h --help`** — 显示帮助
+- **`-h --help`** — 打印帮助
+
+<!-- 生成的参考导航 -->
+
+## 相关文档
+
+- [项目依赖](/dev-tools/deps.html)。
+- [`mise deps [FLAGS] [PROVIDER] [SUBCOMMAND]`](/cli/deps.html)。
+- [全局标志和参数语法](/cli/#global-flags)。

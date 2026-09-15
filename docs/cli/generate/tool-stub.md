@@ -1,9 +1,13 @@
-<!-- 由 usage-cli 根据用法规范生成 -->
+---
+description: "为基于 HTTP 的工具生成工具存根"
+---
+
+<!-- 由 usage-cli 根据 usage 规范生成 -->
 # `mise generate tool-stub`
 
-- **Usage:** `mise generate tool-stub [FLAGS] <OUTPUT>`
-- **Effect:** 修改状态
-- **Source code:** [`src/cli/generate/tool_stub.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/tool_stub.rs)
+- **用法：** `mise generate tool-stub [FLAGS] <OUTPUT>`
+- **效果：** 修改状态
+- **源代码：** [`src/cli/generate/tool_stub.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/tool_stub.rs)
 
 为基于 HTTP 的工具生成工具存根
 
@@ -61,53 +65,43 @@
   **默认值：** `latest`
 - **`-h --help`** — 打印帮助
 
-示例：
+## 示例
+
+下载并检查实际归档文件，以检测其二进制文件和校验和
 
 ```
-Generate a tool stub for a single URL:
-$ mise generate tool-stub ./bin/gh --url "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
-
-生成带有平台特定 URL 的工具存根：
-$ mise generate tool-stub ./bin/rg \
-    --platform-url linux-x64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-unknown-linux-musl.tar.gz \
-    --platform-url darwin-arm64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-aarch64-apple-darwin.tar.gz
-
-向现有存根追加其他平台：
-$ mise generate tool-stub ./bin/rg \
-    --platform-url linux-x64:https://example.com/rg-linux.tar.gz
-$ mise generate tool-stub ./bin/rg \
-    --platform-url darwin-arm64:https://example.com/rg-darwin.tar.gz
-# 现在该存根包含两个平台
-
-使用 URL 自动检测平台：
-$ mise generate tool-stub ./bin/node \
-    --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz
-# 将从 URL 自动检测平台 'macos-arm64'
-
-生成带平台特定二进制路径的存根：
-$ mise generate tool-stub ./bin/tool \
-    --platform-url linux-x64:https://example.com/tool-linux.tar.gz \
-    --platform-url windows-x64:https://example.com/tool-windows.zip \
-    --platform-bin windows-x64:tool.exe
-
-生成时不下载（更快）：
-$ mise generate tool-stub ./bin/tool --url "https://example.com/tool.tar.gz" --skip-download
-
-为现有存根获取校验和：
-$ mise generate tool-stub ./bin/jq --fetch
-# 这将读取现有存根并下载文件，以填充任何缺失的校验和/大小
-
-生成一个在需要时安装 mise 的引导存根：
-$ mise generate tool-stub ./bin/tool --url "https://example.com/tool.tar.gz" --bootstrap
-# 该存根将在运行工具之前检查 mise 并自动安装它
-
-生成一个带固定 mise 版本的引导存根：
-$ mise generate tool-stub ./bin/tool --url "https://example.com/tool.tar.gz" --bootstrap --bootstrap-version 2025.1.0
-
-使用固定版本和平台 URL/校验和锁定现有工具存根：
-$ mise generate tool-stub ./bin/node --lock
-
-更新已锁定存根中的版本：
-$ mise generate tool-stub ./bin/node --lock --version 22
-# 解析最新的 node 22.x，将其固定，并更新平台 URL/校验和
+mise generate tool-stub ./bin/node --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz
 ```
+
+向同一存根添加 Linux 构件
+
+```
+mise generate tool-stub ./bin/node --platform-url linux-x64:https://nodejs.org/dist/v22.17.1/node-v22.17.1-linux-x64.tar.gz
+```
+
+为你自己的构件创建草稿，而不获取占位 URL
+
+```
+mise generate tool-stub ./bin/my-tool --url https://example.com/my-tool.tar.gz --skip-download
+# Replace the URL with a real artifact before fetching metadata or executing it
+```
+
+填充现有存根中缺失的校验和和大小
+
+```
+mise generate tool-stub ./bin/node --fetch
+```
+
+对于现有的注册表支持的存根，解析并嵌入版本／平台锁定数据
+
+```
+mise generate tool-stub ./bin/registry-node --lock --version 22
+```
+
+<!-- 生成的参考导航 -->
+
+## 相关文档
+
+- [便携式工具存根](/dev-tools/tool-stubs.html)。
+- [`mise generate <SUBCOMMAND>`](/cli/generate.html)。
+- [全局标志和参数语法](/cli/#global-flags)。

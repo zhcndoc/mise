@@ -2,12 +2,15 @@ use eyre::{Result, eyre};
 
 use crate::cli::settings::set::set;
 
-/// Adds a setting to the configuration file
+/// Append a value to an array setting
 ///
-/// Used with an array setting, this will append the value to the array.
-/// This modifies the contents of ~/.config/mise/config.toml
+/// Adds the value to an array setting such as `disable_hints`, keeping existing entries.
+/// This modifies ~/.config/mise/config.toml by default, or the local config with `--local`.
 #[derive(Debug, usage_rs::Args)]
-#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+#[usage(
+    example(r###"mise settings add disable_hints python_multi"###),
+    verbatim_doc_comment
+)]
 pub(super) struct SettingsAdd {
     /// The setting to set
     #[usage()]
@@ -34,10 +37,3 @@ impl SettingsAdd {
         }
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise settings add disable_hints python_multi</bold>
-"#
-);

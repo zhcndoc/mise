@@ -1,6 +1,12 @@
+---
+description: "使用 mise activate 为交互式 Bash、Zsh 或 Fish Shell 定义项目快捷方式。"
+---
+
 # Shell 别名
 
-mise 可以管理 shell 别名，这些别名会在你进入某个目录时动态设置，在离开时取消设置，类似于环境变量的工作方式。
+使用 [`mise activate`](/getting-started.html#activate-mise) 为交互式 Bash、Zsh 或 Fish Shell 定义项目快捷方式。mise 会在你进入目录时设置别名，并在别名不再配置时将其移除。
+
+对于还需要在脚本和 CI 中运行的命令，请定义[任务](/tasks/)。Shell 别名在任务内部或通过 `mise exec` 不可用。
 
 ## 配置
 
@@ -14,7 +20,7 @@ gs = "git status"
 gc = "git commit"
 ```
 
-当你进入具有此配置的目录时，这些别名会自动在你的 shell 中设置。当你离开该目录时（并且新目录没有相同的别名），它们将被取消设置。
+When you enter a directory with this configuration, these aliases are automatically set in your shell. When you leave the directory (and the new directory doesn't define the same aliases), they are unset.
 
 ## 支持的 Shell
 
@@ -30,9 +36,9 @@ gc = "git commit"
 
 Shell 别名的工作方式与 mise 管理的环境变量类似：
 
-1. **进入时设置**：当你 `cd` 进入一个带有 `[shell_alias]` 配置的目录时，别名会被设置
-2. **变更时更新**：如果你在配置中更改了某个别名的值，它会被更新
-3. **退出时取消设置**：当你离开该目录（或从配置中移除了该别名）时，它会被取消设置
+1. **进入时设置**：当你 `cd` 进入包含 `[shell_alias]` 配置的目录时，别名会被设置
+2. **更改时更新**：如果配置中的别名值发生变化，别名会被更新
+3. **退出时取消设置**：当你离开目录（或从配置中移除别名）时，别名会被取消设置
 
 ```bash
 $ cd ~/myproject
@@ -47,26 +53,26 @@ $ cd ~
 
 ## 层级
 
-与其他 mise 配置一样，来自父目录的 shell 别名在子目录中也可用。子目录可以覆盖父目录的别名：
+与其他 mise 配置一样，来自父目录的 Shell 别名在子目录中也可用。子目录可以覆盖父目录的别名：
 
-```toml
-# ~/projects/mise.toml
+```toml [~/projects/mise.toml]
 [shell_alias]
 build = "make build"
+```
 
-# ~/projects/myapp/mise.toml
+```toml [~/projects/myapp/mise.toml]
 [shell_alias]
 build = "npm run build"  # 覆盖父级
 ```
 
 ## 模板
 
-别名值支持 [模板](/templates)，允许动态值：
+别名值支持[模板](/templates)。此 Bash/Zsh 示例会为 Shell 引用项目路径，并在你调用别名时运行 `node --version`：
 
 ```toml
 [shell_alias]
-proj = "cd {{config_root}}"
-node_version = "echo {{exec(command='node --version')}}"
+proj = "cd {{config_root | quote}}"
+node_version = "node --version"
 ```
 
 ## 使用场景
@@ -95,25 +101,27 @@ terraform = "terraform -chdir=./infrastructure"
 
 ### 快速导航
 
+引用项目路径，以便在 Bash 和 Zsh 中使用包含空格的目录：
+
 ```toml
 [shell_alias]
-src = "cd {{config_root}}/src"
-tests = "cd {{config_root}}/tests"
-docs = "cd {{config_root}}/docs"
+src = "cd {{config_root | quote}}/src"
+tests = "cd {{config_root | quote}}/tests"
+docs = "cd {{config_root | quote}}/docs"
 ```
 
 ## 限制
 
-- **任务中不可用**：Shell 别名仅在运行 `mise activate` 的交互式 shell 中处于活动状态。它们在 TOML 任务的 `run` 块或文件任务中**不可用**，因为任务在非交互式子 shell 中运行。在任务中直接使用底层命令，或通过 [`env._.path`](/environments/#env-path) 将包装脚本添加到你的 `PATH` 中。
-- **Shell 支持**：仅支持 bash、zsh、fish 和 xonsh。详情请参阅 [Shell 功能兼容性矩阵](/getting-started.html#shell-feature-compatibility)。
+- **任务中不可用**：Shell 别名仅在运行 `mise activate` 的交互式 Shell 中处于活动状态。它们在 TOML 任务的 `run` 代码块或文件任务中**不可用**，因为任务在非交互式子 Shell 中运行。在任务中直接使用底层命令，或者通过 [`env._.path`](/environments/#env-path) 将包装脚本添加到你的 `PATH` 中。
+- **Shell 支持**：仅支持 bash、zsh 和 fish。详情请参阅 [Shell 功能兼容性矩阵](/getting-started.html#shell-feature-compatibility)。
 
 ## 与工具别名的比较
 
-mise 有两种不同的别名功能，它们用于不同的目的：
+mise 有两个用途不同的别名功能：
 
-| 功能              | 目的                                                   | 配置键          |
-| ----------------- | ------------------------------------------------------ | --------------- |
-| **Shell 别名**    | 定义 shell 命令快捷方式 (`alias ll='ls -la'`)         | `[shell_alias]` |
-| **工具别名**      | 为工具定义版本别名（`node@lts` → `20.x`）              | `[tool_alias]`  |
+| 功能              | 用途                                                        | 配置键          |
+| ----------------- | ----------------------------------------------------------- | --------------- |
+| **Shell 别名**    | 定义 Shell 命令快捷方式（`alias ll='ls -la'`）              | `[shell_alias]` |
+| **工具别名**      | 定义工具的版本别名（`node@my-version` → `24`）              | `[tool_alias]`  |
 
 请参阅 [工具别名](/dev-tools/aliases) 以获取有关工具版本别名的文档。

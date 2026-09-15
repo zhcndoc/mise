@@ -11,11 +11,15 @@ use crate::ui::multi_progress_report::MultiProgressReport;
 
 use super::{PluginTaskNames, PluginTaskResult, join_plugin_tasks, spawn_plugin_task};
 
-/// Updates a plugin to the latest version
+/// Update a plugin to the latest version
 ///
-/// note: this updates the plugin itself, not the runtime versions
+/// With no names, updates every installed plugin. This updates plugin source,
+/// not the tool versions it manages. Linked local plugins are skipped; archive
+/// installations cannot be updated with Git.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, visible_aliases = ["up", "upgrade"], after_long_help = AFTER_LONG_HELP)]
+#[usage(verbatim_doc_comment, visible_aliases = ["up", "upgrade"], example(r###"mise plugins update              # update all installed plugins
+mise plugins update my-tool      # update one Git plugin
+mise plugins update my-tool#main # select an upstream ref"###))]
 pub(super) struct Update {
     /// Plugin(s) to update
     #[usage()]
@@ -23,7 +27,7 @@ pub(super) struct Update {
 
     /// Number of jobs to run in parallel
     /// Values below 1 are treated as 1
-    /// Default: 4
+    /// Defaults to the `jobs` setting
     #[usage(long, short, verbatim_doc_comment)]
     jobs: Option<usize>,
 }
@@ -66,12 +70,3 @@ impl Update {
         join_plugin_tasks(jset, task_names, "update").await
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise plugins update</bold>              # update all plugins
-    $ <bold>mise plugins update cmake</bold>       # update only cmake
-    $ <bold>mise plugins update cmake#beta</bold>  # specify a ref
-"#
-);

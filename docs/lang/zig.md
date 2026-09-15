@@ -1,35 +1,41 @@
+---
+description: "mise 可用于在同一系统上安装和管理多个版本的 zig。"
+---
+
 # Zig
 
 `mise` 可用于在同一系统上安装和管理多个版本的 [zig](https://ziglang.org/)。
 
-> 以下是使用 zig mise 核心插件的说明。
-
-其代码位于 mise 仓库中的
-[`./src/plugins/core/zig.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/zig.rs)。
-
 ## 用法
 
-以下命令会安装 zig 并将其设为全局默认：
+为当前项目安装最新的稳定版 Zig：
 
 ```sh
-mise use -g zig@0.14           # 安装 zig 0.14.x
-mise use -g zig@latest         # 安装最新的 zig 发行版
-mise use -g zig@master         # 安装来自 master 的最新 nightly
-mise use -g zig@2024.11.0-mach # 安装 Mach 指定的 zig
-mise use -g zig@mach-latest    # 安装最新的 Mach 指定 zig
+mise use zig@latest
+mise exec -- zig version
 ```
 
-可使用 `mise ls-remote zig` 查看可用的稳定版本。
+为项目所需的发布渠道选择一个请求：
 
-请注意，[Mach](https://machengine.org/) 版本
-不会出现在 `mise ls-remote zig` 中，这是为了规避
-[版本排序 bug](https://github.com/jdx/mise/discussions/5232) 的权宜之计。
-尽管如此，你仍然可以安装
-[Mach 版本索引](https://machengine.org/zig/index.json) 中列出的 Mach 版本。以下
-命令将列出可用的 Mach 版本：
+| 请求              | 选择                              |
+| ----------------- | --------------------------------- |
+| `zig@0.14`        | 0.14 系列中的一个版本             |
+| `zig@latest`      | 最新的稳定版本                    |
+| `zig@master`      | 持续更新的 nightly 渠道            |
+| `zig@mach-latest` | 最新的 Mach 指定版本              |
+
+使用 `mise use -g <request>` 设置个人默认值。之后执行 `mise use zig@...`
+会替换项目之前的 Zig 请求。
+
+使用 `mise ls-remote zig` 查看可用的稳定版本。
+
+[Mach](https://machengine.org/) 版本不会出现在 `mise ls-remote zig` 中，这是因为
+针对[版本排序错误](https://github.com/jdx/mise/discussions/5232)的一个变通方案。
+你仍然可以安装[Mach 版本索引](https://machengine.org/zig/index.json)中列出的
+Mach 版本。以下命令会列出可用的 Mach 版本，并且需要 `curl` 和 `jq`：
 
 ```sh
-curl https://machengine.org/zig/index.json | yq 'keys'
+curl --fail --show-error --silent --location https://machengine.org/zig/index.json | jq 'keys'
 ```
 
 ### `master`（nightly 通道）
@@ -41,18 +47,22 @@ curl https://machengine.org/zig/index.json | yq 'keys'
 安装时对应的构建版本。运行 `mise upgrade zig`（或 `mise install -f zig@master`）即可切换到
 当前的 nightly。
 
+这些说明使用 mise 内置的 zig 支持。安装的同名外部
+插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅
+[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/zig.rs)。
+
 ## zig 语言服务器
 
 `zig` 语言服务器（[zls](https://github.com/zigtools/zls)）需要单独安装。
 你可以使用 `mise` 来安装它：
 
 ```sh
-mise use -g zls@0.14   # 安装 zls 0.14.x
-mise use -g zls@latest # 安装最新的 zls 版本
+mise use zig@0.14 zls@0.14
+mise exec -- zls --version
 ```
 
-请注意，标记发布版的 `zig` 应与
-相同标记发布版的 `zls` 一起使用。目前没有 `zls` 的 Mach 版本。
+选择与你的 Zig 版本兼容的 ZLS 版本；请参阅
+[ZLS 安装指南](https://zigtools.org/zls/install/)。分别安装两个 `latest` 版本并不能进行兼容性检查。目前没有专用于 Mach 的 ZLS 版本。
 
 ## 工具选项
 

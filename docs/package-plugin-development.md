@@ -1,6 +1,13 @@
+---
+description: "软件包插件是一个基于 Lua 的 vfox 插件，为 [bootstrap.packages](/bootstrap/packages/) 实现机器级全局管理器"
+---
+
 # 软件包插件开发
 
 软件包插件是一个基于 Lua 的 vfox 插件，为 [`[bootstrap.packages]`](/bootstrap/packages/) 实现机器级全局管理器。它封装由主机工具拥有的状态，而不是在 mise 的数据目录下安装带版本的工具。
+
+从一个能够在不提示或进行更改的情况下报告已安装状态的管理器开始。
+状态钩子会驱动预览和操作选择，因此不准确的回答可能导致不必要的安装，或隐藏缺失的软件包。有关用户配置，请参阅[软件包插件用法](/bootstrap/packages/plugins.html)。
 
 ## 布局
 
@@ -19,6 +26,18 @@ mise-vscode-extensions/
 才能将仓库识别为软件包插件。只包含其中一个钩子的仓库仍会被视为普通的 vfox 插件。如果同时存在
 `hooks/backend_install.lua`，mise 会将仓库视为工具后端；软件包插件和工具后端插件必须分属不同的仓库。
 
+除了软件包管理器声明外，还要提供常规的 Lua 元数据：
+
+```lua
+PLUGIN = {
+  name = "vscode-extensions",
+  version = "1.0.0",
+  description = "Manage VS Code extensions",
+}
+```
+
+在 `mise.plugin.toml` 中：
+
 ```toml
 [package-manager]
 requires = ["code"]
@@ -34,21 +53,34 @@ os = ["macos", "linux"]
 
 钩子面向批次操作，但每个钩子都会接收其自身阶段的批次：
 
-- `PackageInstalled` 接收当前调用中的每个请求。这可能是合并后的 `[bootstrap.packages]` 声明，也可能是命令行中明确指定的子集。
-- `PackageInstall` 只接收 mise 选中进行安装的请求，例如被报告为缺失的软件包，或请求版本不匹配的软件包。
-- `PackageUpgrade` 接收被报告为已存在的可操作请求，包括已经是当前版本的软件包，以便管理器可以对其执行空操作。被报告为缺失或不可用的软件包，以及不受支持的固定版本请求，都会被省略。
+- `PackageInstalled` 接收当前调用中的每个请求。这可能是合并后的 `[bootstrap.packages]` 声明，也可能是在命令行中指定的明确子集。
+- `PackageInstall` 只接收 mise 选定要安装的请求，例如被报告为缺失的软件包，或请求版本不匹配的软件包。
+- `PackageUpgrade` 接收被报告为存在的可操作请求，包括已经是最新版本的软件包，以便管理器可以对它们执行空操作。被报告为缺失或不可用的软件包，以及不受支持的固定版本，会被省略。
 
 当操作批次为空时，mise 不会调用操作钩子。
 
+例如，VS Code 管理器可以使用一个主机命令检查扩展，并只返回所请求的标识：
+
 ```lua
 function PLUGIN:PackageInstalled(ctx)
-  -- ctx.packages: {{ name = "diff", version = "1.3.4" | nil }, ...}
-  return {
-    packages = {
-      { name = "diff", state = "installed", version = "1.3.4" },
-      { name = "s3", state = "missing" },
-    },
-  }
+  local output = require("cmd").exec("code --list-extensions --show-versions")
+  local installed = {}
+  for line in output:gmatch("[^\r\n]+") do
+    local name, version = line:match("^(.+)@([^@]+)$")
+    if name then
+      installed[name:lower()] = version
+    end
+  end
+  local results = {}
+  for _, package in ipairs(ctx.packages) do
+    local version = installed[package.name:lower()]
+    table.insert(results, {
+      name = package.name,
+      state = version and "installed" or "missing",
+      version = version,
+    })
+  end
+  return {packages = results}
 end
 ```
 
@@ -94,5 +126,13 @@ end
 
 对于 VS Code 实现，`PackageInstalled` 可以解析
 `code --list-extensions --show-versions`，`PackageInstall` 可以运行
-`code --install-extension name[@version]`，而 `PackageUpgrade` 可以运行
-`code --update-extensions` 或重新安装所请求的扩展。
+`code --install-extension name[@version]`，而 `PackageUpgrade` 只能重新安装所请求的扩展。对于选定批次，避免使用
+`code --update-extensions`：它也会更新该批次之外的扩展。在状态钩子和操作钩子之间保持配置文件选择一致，并为所使用的 shell 引用软件包参数。
+
+## 测试
+
+在更改真实软件包之前，针对一次性主机配置文件或模拟主机 CLI 进行测试。
+覆盖空批次、缺失和已安装的软件包、固定版本完全不匹配、操作失败以及子集请求。
+验证状态调用永远不会改变状态，并且操作只会处理 `ctx.packages`。分别测试试运行和显式 prune 的所有权检查。
+
+有关隔离的 mise 目录和发布验证，请参阅[插件发布](/plugin-publishing.html)；有关命令执行，请参阅[Lua 模块](/plugin-lua-modules.html#command-module)。

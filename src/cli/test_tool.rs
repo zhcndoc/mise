@@ -1,6 +1,6 @@
 use crate::cli::args::ToolArg;
 use crate::cmd::cmd;
-use crate::config::Config;
+use crate::config::{Config, Settings};
 use crate::file::display_path;
 use crate::registry::{REGISTRY, RegistryTool};
 use crate::tera::{contains_template_syntax, get_tera, render_str};
@@ -13,9 +13,12 @@ use std::path::{Path, PathBuf};
 use std::{collections::BTreeSet, sync::Arc};
 use tokio::task::JoinSet;
 
-/// Test a tool installs and executes
+/// Test that a tool installs and runs
+///
+/// Includes newly published releases by disabling the global minimum release age
+/// for this command.
 #[derive(Debug, Clone, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(verbatim_doc_comment, example(r###"mise test-tool ripgrep"###))]
 pub(crate) struct TestTool {
     /// Tool(s) to test
     #[usage(required_unless = ["all", "all_config"])]
@@ -31,17 +34,20 @@ pub(crate) struct TestTool {
     /// Test all tools specified in config files
     #[usage(long, conflicts = "tools", conflicts = "all")]
     pub all_config: bool,
-    /// Also test tools not defined in registry/, guessing how to test it
+    /// Also test tools not defined in registry/, guessing how to test them
     #[usage(long)]
     pub include_non_defined: bool,
-    /// Connect backend install command stdin/stdout/stderr directly to the terminal
-    /// Implies --jobs=1
+    /// Connect backend install command stdin/stdout/stderr directly to the terminal.
+    /// Implies `--jobs=1`
     #[usage(long, overrides = "jobs")]
     pub raw: bool,
 }
 
 impl TestTool {
     pub(crate) async fn run(self) -> Result<()> {
+        // Registry validation must exercise new releases immediately, including
+        // the first release supported by a newly added backend.
+        Settings::override_with(|s| s.minimum_release_age = Some("0".to_string()));
         let mut errored = vec![];
         self.github_summary(vec![
             "Tool".to_string(),
@@ -465,7 +471,7 @@ impl TestTool {
         }
         let expected = if contains_template_syntax(expected) {
             let mut ctx = config.tera_ctx.clone();
-            ctx.insert("version", &tv.version);
+            ctx.insert("version", tv.display_version());
             let mut tera = get_tera(dirs::CWD.as_ref().map(|d| d.as_path()));
             render_str(&mut tera, expected, &ctx)?
         } else {
@@ -506,13 +512,6 @@ struct TestToolResult {
     error: Option<String>,
     status_logged: bool,
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise test-tool ripgrep</bold>
-"#
-);
 
 #[cfg(test)]
 mod tests {

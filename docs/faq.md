@@ -1,307 +1,217 @@
-# 常见问题解答
+---
+description: "关于日常命令、shell 集成和配置的快速解答。"
+outline: [2, 3]
+---
 
-## 我不想把 `mise.toml`/`.tool-versions` 文件放进我的项目里，因为 git 会把它显示为未跟踪文件
+# 常见问题
 
-使用 [`mise.local.toml`](https://mise.jdx.dev/configuration.html#mise-toml)，并将其添加到全局 gitignore 文件中。此文件不应被提交。
+关于日常命令、shell 集成和配置的快速解答。对于失败的命令，请从[故障排除](/troubleshooting.html)或[错误](/errors.html)开始。
 
-如果你真的想使用 `mise.toml` 或 `.tool-versions`，这里有 3 种方法让 git 忽略这些文件：
+## 日常命令
 
-- 将 `mise.toml` 添加到项目的 `.git/info/exclude` 中。这个文件只属于你的项目，因此
-  不需要提交它。
-- 将 `mise.toml` 添加到项目的 `.gitignore` 文件中。缺点是你需要
-  提交对忽略文件的更改。
-- 将 `mise.toml` 添加到全局 gitignore（`core.excludesFile`）中。这将使 git
-  忽略所有项目中的 `mise.toml` 文件。如果需要，你可以通过
-  `git add --force mise.toml` 明确地把它添加到某个项目中。
+### `mise install` 和 `mise use` 有什么区别？
 
-## “nodejs”和“node”（或“golang”和“go”）有什么区别？
-
-它们是别名。例如，`mise use nodejs@14.0` 与 `mise install node@14.0` 是一样的。这
-意味着不可能让它们对应不同的插件。
-
-这样做是为了方便，你不需要记住哪个才是“官方”名称。不过如果
-别名相关的功能出现了问题，请提交工单，或者直接坚持使用“node”和“go”。
-在内部，当 mise 读取配置文件或接收 CLI 输入时，它会将“nodejs”和“golang”替换掉。
-
-当 mise _写入_ `mise.toml`（`mise use`、`mise unuse`）时，它会写入规范名称——
-`nodejs` 条目会变成 `node`，同时保留其注释。`.tool-versions` 文件不受影响，仍然
-使用 asdf 的拼写方式。
-
-## `mise activate` 有什么作用？
-
-它会注册一个 shell 钩子，使得每次显示 shell 提示符时都运行 `mise hook-env`。
-`mise hook-env` 会检查当前的环境变量（最重要的是 `PATH`，但某些工具还会用到其他变量，比如
-`GOROOT` 或 `JAVA_HOME`），并对已发生变化的变量进行添加、移除或更新。
-
-例如，如果你 `cd` 到一个使用 `java 18` 而不是 `java 17`
-的不同目录中，那么在下一个提示符显示之前，shell 会执行：`eval "$(mise hook-env)"`
-，这会在当前 shell 会话中执行类似下面的内容：
+`mise install` 会安装请求的工具，但不会向配置中添加工具声明。`mise use` 会安装工具，并将其版本请求写入配置文件。
 
 ```sh
-export JAVA_HOME=$HOME/.local/share/installs/java/18
-export PATH=$HOME/.local/share/installs/java/18/bin:$PATH
+mise use node@24       # select Node 24 for the project and install it
+mise install          # install tools already declared by the project
+mise install node@24  # install Node 24 without adding a declaration
 ```
 
-实际上，更新 `PATH` 比这更复杂一些，因为它还需要移除 java-17，
-但你应该能明白这个意思。
+仅安装不会改变父 shell 的环境。使用激活、shims、`mise exec` 或 `mise run` 来运行选定的工具。要记录具体版本，请将 `--pin` 添加到 `mise use`；要复现项目的 lockfile，请使用 `mise install --locked`。
 
-你可能会觉得每次显示提示符时都运行 `mise hook-env` 太过频繁了，
-它应该只在 `cd` 时运行；不过，在很多情况下，即使目录没有变化，它也需要运行，
-例如当前 shell 中刚刚编辑了 `.tool-versions` 或
-`mise.toml` 的时候。
+`mise install node` 会在存在配置请求时使用该请求，否则使用 `latest`。不带工具参数的 `mise install` 会安装已配置的工具集。
 
-由于它是在提示符显示时运行的，如果你尝试在
-非交互式会话中使用 `mise activate`（比如 bash 脚本），它将永远不会调用 `mise hook-env`，实际上也就
-永远不会修改 `PATH`，因为它从不显示提示符。对于这种设置，你可以每次需要更新 PATH 时手动调用
-`mise hook-env`，或者改用 [垫片](/dev-tools/shims.md)
-（更推荐）。
-或者，如果你只需要在某些命令中使用 mise，只需在命令前加上
-[`mise x --`](./cli/exec)。
-例如，`mise x -- npm test` 或 `mise x -- ./my_script.sh`。
+### `mise use` 会写入哪里？
 
-如果没有发生任何更改，`mise hook-env` 会在不同情况下提前退出。这可以避免
-每次运行命令时都给你的 shell 提示符增加延迟。你也可以自己运行 `mise hook-env`
-来查看它的输出，不过如果你所在的 shell 已经激活过了，很可能什么也不会输出。
+默认情况下，mise 会选择最近适用配置目录中优先级最低的配置文件。这可能是父目录中的文件或 `.tool-versions` 文件，不一定是当前目录中的 `mise.toml`。如果该目录中同时存在 `mise.toml` 和 `mise.local.toml`，则优先使用共享配置。请参阅[写入目标选择](/configuration.html#target-file-for-write-operations)。
 
-`mise activate` 还会在大多数 shell 中创建一个名为 `mise` 的 shell 函数。
-这是一个技巧，使得 `mise shell`
-和 `mise deactivate` 可以正常工作，而无需用 `eval "$(mise shell)"` 来包裹它们。
-
-## Windows 支持？
-
-::: warning
-虽然 mise 在 WSL 中运行得非常好，但原生 Windows 也受支持，不过目前是通过 shim 来实现，直到有人添加 [powershell](https://github.com/jdx/mise/discussions/6733) 支持为止。
-
-由于你需要使用 shim，这意味着除非你通过 [`mise x`](/cli/exec) 或 [`mise run`](/cli/run) 运行 mise，否则你不会获得来自 mise.toml 的环境变量。
-:::
-
-## 如何将 mise 与 HTTP 代理一起使用？
-
-简短答案：只需设置 `http_proxy` 和 `https_proxy` 环境变量。这些变量应使用小写。
-
-如果某些插件未配置为使用这些环境变量，那么这对它们可能不起作用。  
-如果你在通过代理安装某个特定内容时遇到问题，你应该在该插件的仓库中提交一个 issue。
-
-## 简写插件名称如何映射到仓库？
-
-例如：`mise plugin install elixir` 是如何知道要获取 <https://github.com/asdf-vm/asdf-elixir> 的？
-
-我们维护着一个 [索引](https://github.com/mise-plugins/registry)，其中包含 mise 作为基础使用的简写名称。
-每当 mise 发布新版本时，这个索引都会定期更新。这个仓库会直接存储到代码库中的 [registry/](https://github.com/jdx/mise/blob/main/registry/) 里。
-
-## "node@20" 是否表示 node 的最新可用版本？
-
-这取决于具体命令。通常，对于大多数命令以及配置文件中，"node@20" 会指向 node-20.x 的最新 _已安装_ 版本。你可以通过运行
-`mise latest --installed node@20` 来找到这个版本，或者查看 `~/.local/share/mise/installs/node/20`
-这个符号链接
-指向哪里：
+位置很重要时，请使用明确的目标：
 
 ```sh
-$ ls -l ~/.local/share/mise/installs/node/20
-[...] /home/jdx/.local/share/mise/installs/node/20 -> node-v20.0.0-linux-x64
+mise use --path mise.toml node@24  # this file
+mise use --global node@24          # global configuration
+mise use --env local node@24       # personal local environment
 ```
 
-不过也有一些例外，例如以下命令：
+`mise use --dry-run node@24` 可以预览操作。`mise config` 会显示当前目录加载的文件。
 
-- `mise install node@20`
-- `mise latest node@20`
-- `mise upgrade node@20`
+### 不完整的版本会选择最新发布版本吗？ {#does-node20-mean-the-newest-available-version-of-node}
 
-这些命令会使用 node-20.x 的最新 _可用_ 版本。这样通常是合理的，因为你
-不会希望安装一个已经安装过的版本。
-
-## 如何从 asdf 迁移？
-
-- 安装 mise，并按照[入门指南](/getting-started)中的说明设置 `mise activate`
-- 从你的 shell rc 文件中移除 asdf
-- 在包含 asdf `.tool-versions` 文件的目录中运行 `mise install`，mise 就会安装这些工具
-
-::: info
-请注意，`mise` 不会像 `asdf` 那样将 `~/.tool-versions` 文件视为全局配置文件。`mise` 使用
-`~/.config/mise/config.toml` 文件进行全局配置。
-:::
-
-下面是一个示例脚本，可用于将你的全局 `.tool-versions` 文件迁移到 mise：
-
-```shell
-mv ~/.tool-versions ~/.tool-versions.bak
-cat ~/.tool-versions.bak | tr -s ' ' | tr ' ' '@' | xargs -n2 mise use -g
-```
-
-当你对 mise 感到满意后，可以删除 `.tool-versions.bak` 文件，并[卸载 `asdf`](https://asdf-vm.com/manage/core.html#uninstall)。
-
-## mise 与 asdf 的兼容性如何？
-
-mise 应该能够读取/安装 asdf 使用的任何 `.tool-versions` 文件。任何 asdf 插件都应该可以在 mise 中使用。mise 中的命令略有不同，例如 `mise install node@20.0.0` 与 `asdf install node 20.0.0`——这样做是为了可以一次指定多个工具。不过，仍然支持 asdf 风格的语法：(`mise install node 20.0.0`)。大多数命令都是如此，尽管该命令的帮助信息可能会说明支持 asdf 风格语法。拿不准时，直接试试 asdf 语法，看看是否可行——大概率是可以的。
-
-::: info
-更新（2025-01-01）：mise 的设计目标是与用 bash 编写的 asdf（<=0.15）兼容。用 go 编写的新 asdf（>=0.16）有一些 mise 不支持的命令，比如 `asdf set`。`mise set` 是一个已存在的命令，但它与 `asdf set` 完全不同——在 mise 中，它用于设置环境变量。
-
-这件事对可用性本身并不那么重要，更多是为了让那些在插件代码中调用 asdf 命令的插件能够继续正常工作。
-:::
-
-使用 `mise use` 之类的命令可能会输出与 asdf 不兼容的 `.tool-versions` 文件，例如使用模糊版本。你可以设置 `--pin` 或 `MISE_PIN=1`，让 `mise use` 在 `.tool-versions` 中输出与 asdf 兼容的版本。或者，你也可以让 `mise.toml` 和 `.tool-versions` 并排放置。`mise.toml` 中定义的工具会覆盖同一目录下 `.tool-versions` 中定义的工具。
-
-不过，总的来说，与 asdf 的兼容性已经不再是设计目标。长期以来，已经没有理由优先选择 asdf 而不是 mise，因此用户应该迁移。虽然有不少用户所在的团队同时使用两者，但这种配置带来的问题通常不会被优先处理。
-
-## 如何禁用/强制 CLI 颜色输出？
-
-mise 使用 [console.rs](https://docs.rs/console/latest/console/fn.colors_enabled.html)，它
-遵循 [clicolors 规范](https://bixense.com/clicolors/)：
-
-- `CLICOLOR != 0`：支持 ANSI 颜色，并且在程序没有通过管道输出时应当使用。
-- `CLICOLOR == 0`：不要输出 ANSI 颜色转义代码。
-- `CLICOLOR_FORCE != 0`：无论如何都应启用 ANSI 颜色。
-
-## mise 是安全的吗？
-
-提供安全的供应链极其重要。与 asdf 相比，mise 已经提供了更安全的
-使用体验。欢迎以安全为导向的评估和贡献。我们也敦促用户关注他们所使用的插件，
-并敦促插件作者关注他们所服务的用户。
-
-有关更多详情，请参阅 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md)。
-
-## 什么是 usage？
-
-usage（<https://usage.jdx.dev/>）是一个用于定义 CLI 工具的规范和 CLI。
-
-参数、标志、环境变量和配置文件都可以在 Usage 规范中定义。可以把它看作是面向 CLI 的 OpenAPI（swagger）。
-
-mise 将 usage 嵌入其中，用于任务参数解析、帮助信息和自动补全，因此不需要单独安装 `usage` CLI。请参阅[自动补全](/installing-mise.html#autocompletion)。
-
-你可以在文件任务中利用 usage 来实现自动补全，请参见 [文件任务参数](/tasks/file-tasks.html#arguments)。
-
-## 什么是 pitchfork？
-
-pitchfork（<https://pitchfork.jdx.dev/>）是一个面向开发者的进程管理器。
-
-它通过以下功能处理守护进程管理：失败时自动重启、智能就绪检查、在进入项目目录时基于 shell 的自动启动/停止，以及用于周期性任务的类似 cron 的调度。
-
-## VSCode for Windows 扩展出现 `spawn EINVAL` 错误
-
-在 VSCode 中，由于一个 [Node.js 安全修复](https://nodejs.org/en/blog/vulnerability/april-2024-security-releases-2#command-injection-via-args-parameter-of-child_processspawn-without-shell-option-enabled-on-windows-cve-2024-27980---high)，许多扩展会抛出“error spawn EINVAL”错误。
-
-默认的 `exe` shim 模式应该可以解决此问题。如果你使用的是较旧的模式，可以将 [windows_shim_mode](https://mise.jdx.dev/configuration/settings.html#windows_shim_mode) 更改为 `exe`、`hardlink` 或 `symlink`。
-
-## `mise install` 和 `mise use` 有什么区别？
-
-`mise install` 会下载并安装某个工具版本，但**不会**将其添加到任何配置文件中。
-除非该工具已经列在 `mise.toml` 或 `.tool-versions` 中，否则它不会在你的 shell 中自动激活。
-
-`mise use` 会安装该工具**并**将其添加到 `mise.toml`（或使用 `-g` 时添加到 `~/.config/mise/config.toml`），因此当你进入该目录时，它会自动激活。
-
-如果你只是想为某个项目固定一个工具版本，请使用 `mise use`。如果你想安装
-一个已经列在配置中的版本，请使用 `mise install`。
-
-::: tip
-`mise install node`（不带版本）如果 node 不在你的配置中，将安装**最新**版本。
-`mise install`（不带参数）只会安装配置文件中列出的工具。
-:::
-
-## `latest` 是否表示最新的远程版本？
-
-这取决于上下文。在配置文件和大多数命令中，`latest` 会解析为最新的**已安装**版本。这意味着，如果你已安装 node 20.0.0，而远程可用的是 node 22.0.0，`latest` 仍然会指向 20.0.0。
-
-不过，有些命令会将 `latest` 解析为最新**可用的**（远程）版本：
-
-- `mise install node@latest` — 安装最新可用版本
-- `mise x node@latest -- node -v` — 使用最新可用版本
-- `mise latest node` — 显示最新可用版本
-
-要升级到最新可用版本并更新你的配置，请运行：
+诸如 `node@20` 这样的不完整请求会限制匹配的版本。对于普通执行，mise 可以重复使用满足请求的已安装版本。安装和升级命令可以解析出更新的可用匹配版本。lockfile 可以固定解析后的结果。
 
 ```sh
-mise upgrade node
-# 或者同时更新 mise.toml：
-mise upgrade --bump node
+mise latest --installed node@20  # inspect an installed match
+mise latest node@20              # inspect an available match
+mise install node@20             # install a matching release
 ```
 
-## 我的配置文件被忽略了 / `mise trust` 问题
+使用 `mise ls --current node` 和 `mise which node` 检查此项目实际使用的内容。不要根据目录名称推断选定的版本，也不要假设每个工具都遵循 Node 的版本方案。请参阅[版本选择](/dev-tools/)和[lockfiles](/dev-tools/mise-lock.html)。
 
-mise 要求你信任不是由你创建的配置文件。安全配置文件——仅包含 `min_version`、值为纯版本字符串或字符串数组的 `[tools]` 条目，以及不包含模板的 `[tasks]`——无需信任即可加载。工具选项表和其他顶层设置需要信任。在普通模式下，`mise run`、裸任务调用（例如 `mise <TASK>`）、`mise install`、`mise exec` 和 `mise watch` 会自动信任当前活动配置，因为它们会明确执行项目定义的行为。其他不安全的配置需要信任。常见问题：
+### `latest` 是指远程端的最新版本吗？
 
-- **意外拒绝信任**：如果 mise 提示你信任某个文件而你选择了否，它会将该文件添加到忽略列表中。检查[ mise 状态目录](/directories.html)中的 `ignored-configs` 目录（默认：`~/.local/state/mise/ignored-configs/`），并删除相关符号链接以取消忽略它。
-- **符号链接配置**：如果你的配置是符号链接（例如通过 GNU Stow），mise 可能会跟踪符号链接目标路径。尝试使用指向实际文件路径的 `mise trust`。
-- **CI**：在检测到 CI 时，除非启用了 paranoid 模式，否则 mise 会假定配置已受信任。
-- **非交互模式**：在非交互式 shell 中，例如 IDE 扩展或没有 TTY 的脚本中，mise 无法提示你信任配置。在普通模式的 `mise run`、`mise <TASK>`、`mise install`、`mise exec` 和 `mise watch` 之外，直接加载不受信任的 `mise.toml` 的命令可能会因不受信任配置错误而失败。发现之前已跟踪配置的命令则可能改为跳过不受信任的条目。你可以提前运行 `mise trust`，或者在全局设置中设置 [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)，以指定你信任的配置。
-- **全局配置**（`~/.config/mise/config.toml`）应该会自动受信任。如果没有，请明确运行 `mise trust ~/.config/mise/config.toml`。
+`latest` 由工具的后端解析。对于普通执行，它可以重复使用已安装的版本，因此新发布的版本不会自动改变你的环境。lockfile 可以进一步限制选择范围。
+
+要查询可用的发布版本，请运行 `mise latest node`。诸如 `mise install node@latest` 或 `mise exec node@latest -- node --version` 这样的显式请求，会在锁定策略允许的情况下请求可用版本，而不是仅重复使用当前已安装的匹配版本。
+
+要在已配置的请求范围内升级，请使用 `mise upgrade node`。要同时更改配置中的请求，请使用 `mise upgrade --bump node`。请参阅[升级工具](/dev-tools/)和[lockfiles](/dev-tools/mise-lock.html)。不同后端对“latest”的定义不同；它并不普遍表示最大的语义版本，也不一定包含预发布版本。
+
+### `mise exec` 如何工作？
+
+`mise exec` 会读取配置，解析并按需安装缺失的请求工具，计算环境，然后运行 `--` 后的命令：
+
+```sh
+mise exec -- node --version
+mise exec node@24 -- node --version
+```
+
+第一条命令使用项目配置的 Node 版本。第二条命令为本次调用提供覆盖值。如果 `mise.toml` 中已经有 `node@24` 请求，就不需要重复输入。子进程会接收 mise 的环境；父 shell 不会改变。
+
+## Shell 和编辑器
+
+### `mise activate` 会做什么？
+
+`mise activate` 会输出 shell 脚本。在 shell 中执行该脚本会安装 mise 函数和钩子，用于刷新工具路径和环境变量。提示符钩子会注意配置变化；支持的 shell 还具有目录变更钩子。
+
+`mise hook-env` 会计算当前目录所需的赋值，包括移除上一个项目中的值。如果没有任何相关内容发生变化，它可以提前退出。它会输出 shell 代码；单独运行可执行文件不会修改其父 shell。
+
+该 shell 函数允许 `mise shell` 和 `mise deactivate` 等命令更新当前会话。将激活配置放入你的[shell 启动文件](/getting-started.html#activate-mise)中。对于脚本或 CI 作业，请使用 `mise exec -- command` 或 `mise run task`，这样执行就不会依赖提示符钩子。请参阅[shell 集成选项](#how-do-mise-activate-shims-mise-exec-and-mise-env-relate)。
+
+### `mise activate`、shims、`mise exec` 和 `mise env` 有什么关系？
+
+每种方法都会在不同边界上提供 mise 工具：
+
+| 方法                    | 环境应用于                                      | 典型用途                   |
+| ----------------------- | ----------------------------------------------- | -------------------------- |
+| `mise activate`         | 当前 shell，由钩子刷新                          | 交互式终端                 |
+| `mise activate --shims` | 向当前 shell 的 PATH 添加 shim 目录             | 编辑器和简单的 shell 设置  |
+| 工具 shim               | 启动的工具及其子进程                            | 通过 PATH 找到的命令       |
+| `mise exec` / `mise x`  | 一个命令及其子进程                              | 脚本和 CI                  |
+| `mise env`              | 输出供其他程序使用的赋值                        | 环境集成                   |
+| `mise run`              | 一个任务及其依赖                                | 命名的项目命令             |
+
+Shims 会为它们启动的工具加载 `[env]`，但不会将其导出到父 shell，也不会在那里安装提示符钩子。要使用 shell 钩子和自动 shell 变量更新，请使用常规激活。请参阅[Shims 与 PATH](/dev-tools/shims.html#shims-vs-path)。
+
+### 支持 Windows 吗？
+
+mise 支持原生 Windows，包括 PowerShell 激活。请遵循[Windows 安装说明](/installing-mise.html#windows-winget)和[shell 兼容性表](/getting-started.html#shell-feature-compatibility)。
+
+Shims、`mise exec` 和 `mise run` 同样可用。shim 会为它启动的工具加载 mise 环境；它不会更新父 PowerShell 会话。
+
+后端和工具的支持因平台而异。asdf shell 插件要求 Unix；在 Windows 上请使用兼容的 core、binary-download 或 vfox 实现。WSL 使用 Linux 工具，并且应有自己独立的 Linux mise 安装。请参阅[Windows 故障排除](/troubleshooting.html#windows-problems)。
+
+### 为什么 Windows 编辑器会报告 `spawn EINVAL`？ {#vscode-for-windows-extension-with-error-spawn-einval}
+
+如果扩展尝试直接启动 `.cmd` shim，则在 [Node.js 安全修复](https://nodejs.org/en/blog/vulnerability/april-2024-security-releases-2#command-injection-via-args-parameter-of-child_processspawn-without-shell-option-enabled-on-windows-cve-2024-27980---high)之后，可能会出现 `spawn EINVAL`。
+
+使用默认的 [`windows_shim_mode = "exe"`](/configuration/settings.html#windows_shim_mode)，运行 `mise reshim`，然后重启受影响的扩展或语言服务器。如果它仍然解析旧的 shim 路径，请参阅[IDE 集成](/ide-integration.html)。
+
+### 如何禁用或强制 CLI 颜色输出？
+
+使用 `NO_COLOR=1` 或 `MISE_COLOR=0` 禁用 ANSI 颜色，使用 `CLICOLOR_FORCE=1` 强制启用颜色，包括在管道传输输出时。`NO_COLOR=1` 和 `MISE_COLOR=0` 的优先级高于 `CLICOLOR_FORCE=1`；强制启用颜色时，请取消设置这些禁用覆盖项。
+
+```sh
+NO_COLOR=1 mise ls
+CLICOLOR_FORCE=1 mise ls
+```
+
+这些设置控制 mise 的输出。子工具可能有自己的颜色选项。
+
+## 配置和网络
+
+### 如何不将个人配置放入 Git？ {#i-don-t-want-to-put-a-mise-toml-tool-versions-file-into-my-project-since-git-shows-it-as-an-untracked-file}
+
+使用 `mise.local.toml` 保存个人项目设置。将其添加到 `.git/info/exclude`，即可只在当前检出中忽略它；或者将其添加到全局 Git 忽略文件，以便在所有项目中忽略它。将共享的工具版本和任务保存在已提交的 `mise.toml` 中。
+
+如果需要将 `mise.toml` 本身对当前检出保持私有，也可以使用相同的忽略机制。如果团队同意此策略，项目的 `.gitignore` 也是一种选择。忽略规则只会影响未跟踪文件；不会隐藏 Git 中已有文件的更改。
+
+### “nodejs”和“node”（或“golang”和“go”）有什么区别？
+
+它们是别名。例如，`mise install nodejs@24` 与 `mise install node@24` 相同。这意味着它们不能是不同的插件。
+
+这样做是为了方便，因此你不必记住哪个是“官方”名称。如果别名行为异常，请使用规范名称 `node` 和 `go`，并[报告不匹配](/contact.html)。在底层，当 mise 读取配置文件或 CLI 输入时，它会将“nodejs”和“golang”替换掉。
+
+当 mise _写入_ `mise.toml`（`mise use`、`mise unuse`）时，它会写入规范名称——`nodejs` 条目会变成 `node`，同时保留其注释。`.tool-versions` 文件不受影响，仍然使用 asdf 的拼写方式。
+
+### 我的配置文件被忽略了／遇到了 `mise trust` 问题
+
+信任取决于配置内容和命令，而不是文件作者。安全配置文件——只包含 `min_version`、值为纯版本字符串或字符串数组的 `[tools]` 条目，以及不含模板的 `[tasks]`——无需信任即可加载。工具选项表和其他顶层设置需要信任。在正常模式且不在 CI 中时，`mise run`、裸任务调用（例如 `mise <TASK>`）、`mise install`、`mise exec` 和 `mise watch` 会自动信任活动配置，因为它们会明确执行项目定义的行为。其他不安全配置需要信任。常见问题包括：
+
+- **意外拒绝信任**：如果 mise 提示你信任某个文件，而你选择了否，该文件会被加入忽略列表。检查 `mise trust --show`，然后运行 `mise trust path/to/mise.toml`，再次信任经过审查的文件。
+- **符号链接配置**：如果你的配置是符号链接（例如通过 GNU Stow），mise 可能会跟踪符号链接目标路径。尝试让 `mise trust` 指向实际文件路径。
+- **CI**：在检测到 CI 时，除非启用了 paranoid 模式，否则 mise 会假设配置已受信任。
+- **非交互模式**：在非交互式 shell 中，例如 IDE 扩展或没有 TTY 的脚本中，mise 无法提示你信任配置。在正常模式下的 `mise run`、`mise <TASK>`、`mise install`、`mise exec` 和 `mise watch` 之外，直接加载不受信任的 `mise.toml` 的命令可能会因不受信任的配置错误而失败。发现之前已跟踪的配置的命令可能会改为跳过不受信任的条目。请提前运行 `mise trust`，或在全局设置中配置你信任的配置文件路径 [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)。
+- **全局配置**由操作者管理，不需要项目级信任。如果你认为某个文件是全局配置，但它却被发现为项目配置，请检查 `mise config`。
 
 运行 `mise doctor`（`mise dr`）可以查看是否有配置文件不受信任——它会在“problems”下列出这些文件。
 
-## 习惯用法版本文件（`.python-version`、`.node-version` 等）是如何工作的？
+另外，请检查当前目录以及选定的[配置环境](/configuration/environments.html)。未选中的配置文件不是信任失败。
 
-习惯用法版本文件（`.python-version`、`.node-version`、`.ruby-version` 等）在 mise 中**默认是禁用的**。只有当你通过
-[`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools) 为每个工具显式启用时，才会读取它们：
+### 习惯用法版本文件（`.python-version`、`.node-version` 等）如何工作？
+
+习惯用法版本文件（`.python-version`、`.node-version`、`.ruby-version` 等）在 mise 中**默认是禁用的**。只有当你通过 [`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools) 为每个工具显式启用时，才会读取它们：
 
 ```sh
 # 启用读取 .node-version 文件
 mise settings add idiomatic_version_file_enable_tools node
 ```
 
-如果你之前启用了习惯用法文件，而现在希望让 mise 停止读取它们
-（例如，因为 `uv` 管理 `.python-version`），只需不要将该工具添加到列表中即可。
+如果你之前启用了习惯用法文件，现在想让 mise 停止读取它们（例如因为 `uv` 管理 `.python-version`），请从已配置列表中移除该工具。完全取消设置该选项即可恢复其空默认值。
 
-更多信息请参见 [习惯用法版本文件](/configuration.html#idiomatic-version-files)。
+更多信息请参见[习惯用法版本文件](/configuration.html#idiomatic-version-files)。
 
-## `mise activate`、shims、`mise exec` 和 `mise env` 之间有什么关系？
+### 简写插件名称如何映射到仓库？
 
-它们的核心作用都一样：设置你的环境（主要是 `PATH`），让 mise 管理的工具可用。区别在于它们作用的 _时机_ 和 _方式_：
+内置的[注册表](/registry.html)会将短名称映射到后端规范，例如 `aqua:owner/repo` 或 `vfox:owner/plugin`。它维护在仓库的[`registry/`](https://github.com/jdx/mise/tree/main/registry)目录中，并随 mise 一起发布。
 
-| 方法                              | 工作方式                                               | 最适合                                  |
-| ----------------------------------- | ------------------------------------------------------ | ------------------------------------------ |
-| `mise activate`                     | 挂钩到你的 shell 提示符，动态更新 PATH                 | 交互式终端使用                           |
-| `mise activate --shims`             | 一次性把 shims 目录添加到 PATH                         | IDE、简单配置（不支持 hooks/env）         |
-| `mise exec` / `mise x`              | 设置环境，运行单个命令，然后退出                       | 脚本、CI、一次性命令                      |
-| `mise env`                          | 打印可供 `eval` 的环境变量                             | 与其他工具集成                           |
-| `mise run`                          | 设置环境，然后运行一个任务                             | 任务执行                                 |
-| Shims (`~/.local/share/mise/shims`) | 每次调用时都会执行 mise 的包装脚本                     | 非交互式 shell、IDE                       |
+大多数工具不需要外部插件。使用 `mise tool ripgrep` 检查工具选定的后端，或使用 `mise registry ripgrep` 查看可用选项。对于由插件支持的工具，后端规范会标识插件仓库。请参阅[后端选择](/dev-tools/backend_architecture.html#how-backend-selection-works)。
 
-::: warning
-`mise activate --shims` **不**支持 hooks、来自 `[env]` 的环境变量，或 `watch_files`。
-它只会把 shims 放到 PATH 中。如果你需要这些功能，请使用 `mise activate`（不带 `--shims`）。
-:::
+### 如何通过 HTTP 代理使用 mise？
 
-## `mise exec` 是如何工作的？
-
-`mise exec`（或 `mise x`）会读取你的配置，设置 `PATH` 和环境变量，然后运行你在 `--` 之后指定的命令：
+在启动 mise 的环境中设置 `http_proxy` 和 `https_proxy`。例如，将下面的代理主机和端口替换为你所在组织的代理：
 
 ```sh
-# 使用你的 mise.toml 中的任意 node 版本
-mise x -- node script.js
-
-# 使用特定版本覆盖（当它与配置不同时很有用）
-mise x node@22 -- node script.js
+https_proxy=http://proxy.example.com:8080 mise install
 ```
 
-Discord 上一个常见的写法是：当 `mise.toml` 中已经有 `node@20` 时，使用 `mise x node@20 -- node script.js`。这样可以工作，但有些多余——如果你只是想使用配置中的版本，`mise x -- node script.js` 会更简单。
+插件脚本和包管理器可能有单独的代理或证书设置。如果只有某个后端失败，请在详细输出中确定子进程或 URL，并检查该工具的代理配置。网络和身份验证失败请参阅[错误](/errors.html)。
 
-## `mise use` 会写到哪里？
+## 迁移
 
-`mise use` 会写入你目录层级中最近的 `mise.toml`。如果父目录中有一个
-`mise.toml`（对于 `-g` 来说，包括 `~/.config/mise/config.toml`），它就会更新那个文件。
+### 如何从 asdf 迁移？
+
+1. 安装 mise 并[配置 shell 激活](/getting-started.html#activate-mise)。
+2. 从 shell 启动文件中移除 asdf 激活，然后打开一个新 shell。
+3. 在包含 `.tool-versions` 的项目中运行 `mise install`，然后使用 `mise exec -- node --version` 验证已配置的工具（替换为项目中的工具）。
+
+mise 会读取 `.tool-versions`，但其全局配置通常位于 `~/.config/mise/config.toml`。检查 `~/.tool-versions`，并使用 `mise use --global` 添加你需要的默认值。例如，在选择所需版本后：
 
 ```sh
-mise use node@22           # 写入最近的 mise.toml（可能是父目录中的文件！）
-mise use -g node@22        # 写入 ~/.config/mise/config.toml
-mise use --path mise.toml node@22  # 写入指定文件
+mise use --global node@24 python@3.14
 ```
 
-使用 `mise cfg` 查看 mise 在当前目录中正在读取哪些配置文件。
+此示例会选择新的默认值；它不是对任意 asdf 文件的无损转换。在检查每个工具之前，请保留旧文件，包括包含多个版本或别名的条目。不要在 asdf 和 mise 之间共享安装目录。确认无误后，你可以[卸载 asdf](https://asdf-vm.com/manage/core.html#uninstall)。
 
-## mise 用于开发工具，而不是应用程序或系统包
+### mise 与 asdf 的兼容性如何？
 
-mise 管理 **开发工具版本**（node、python、go、rust 等）和 CLI 实用工具。
-它不能替代像 `apt`、`brew` 或 `pacman` 这样的系统包管理器。
+mise 在 Unix 上支持 `.tool-versions` 和 asdf shell-plugin 接口。不保证与每个 asdf 命令或插件兼容。请优先使用每个命令帮助中显示的 mise 语法，例如 `mise install node@24`。
 
-mise **不**做的事情：
+asdf 的 Go 重写版引入了 `asdf set` 等命令。`mise set` 用途不同：它用于设置环境变量。请使用 `mise use` 选择工具版本。
 
-- 安装系统库（libssl、zlib 等）
-- 管理桌面应用程序
-- 处理工具编译所需的系统级依赖
+如果团队在两个工具之间共享 `.tool-versions`，请使用 asdf 接受的具体版本。`mise use --pin` 会写入解析后的版本，而不是模糊请求。你也可以将 `mise.toml` 与 `.tool-versions` 放在一起；对于同一级目录中同时声明的工具，mise 文件优先。请参阅[asdf 兼容性](/asdf-legacy-plugins.html)和[插件使用](/plugin-usage.html)。
 
-如果 mise 安装的工具需要系统库，请先使用操作系统的软件包管理器安装该库。你可以在 [`[bootstrap.packages]`](/bootstrap/packages/) 中声明这些软件包，让 `mise bootstrap` 安装它们：如果平台的软件包管理器负责管理这些软件包，就通过 apt/dnf/pacman 安装；对于 `brew:` 和 `brew-cask:` 条目，则通过 mise 内置的 Homebrew 安装程序安装，整个过程不需要安装 Homebrew。无论哪种方式，它们都是主机软件包，而不是 `[tools]` 条目。
+## 范围和相关工具
 
-## 如何安装其他用户可以在不使用 mise 的情况下运行的工具？
+### mise 可以管理系统包和桌面应用程序吗？ {#mise-is-for-dev-tools-not-applications-or-system-packages}
+
+`[tools]` 管理有版本的开发工具和运行时。主机软件包、桌面应用程序和系统库应放在[`[bootstrap.packages]`](/bootstrap/packages/)中。
+
+例如，编译器可能需要操作系统开发库软件包才能构建工具。请使用适当的管理器声明该软件包，并通过 `mise bootstrap` 应用它。大多数管理器会委托给操作系统包管理器；mise 内置的 Homebrew 安装器可以处理 `brew:` 和 `brew-cask:` 条目，而不要求安装 Homebrew 本身。
+
+主机软件包共享计算机的软件包数据库或前缀。仅仅因为它们在 `mise.toml` 中声明，并不会获得按项目切换版本的能力。
+
+### 如何安装其他用户无需 mise 即可运行的工具？
 
 有两项功能可以安装运行时无需 mise、且能在 `PATH` 上使用的二进制文件。
 
@@ -313,34 +223,45 @@ mise **不**做的事情：
 "brew:jq" = "latest"
 ```
 
-mise 会将 bottles 写入规范前缀（Linux 上为 `/home/linuxbrew/.linuxbrew`，arm64 macOS 上为 `/opt/homebrew`），并创建常规的 `<prefix>/bin` 链接，同时不要求安装 Homebrew 本身。一旦将 `<prefix>/bin` 添加到 `PATH`，这些二进制文件的行为就与其他 Homebrew 安装的程序一样。
-[Keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) formula 是例外：与 brew 一样，mise 不会将它们放入前缀目录，因此它们的二进制文件会保留在
-`<prefix>/opt/<name>/bin`。
+mise 会将 bottles 写入规范前缀（Linux 上为 `/home/linuxbrew/.linuxbrew`，arm64 macOS 上为 `/opt/homebrew`），并创建常规的 `<prefix>/bin` 链接，同时不要求安装 Homebrew 本身。一旦将 `<prefix>/bin` 添加到 `PATH`，这些二进制文件的行为就与其他 Homebrew 安装的程序一样。[Keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) formula 是例外：与 brew 一样，mise 不会将它们放入前缀目录，因此它们的二进制文件会保留在 `<prefix>/opt/<name>/bin`。
 
 在 arm64 macOS 以及运行 mise brew 管理器的 x86_64/arm64 Linux 上，`mise bootstrap packages import --manager brew` 会将现有的 Homebrew 或 Linuxbrew 设置快照保存到你的配置中——可以保存你按需安装的 formula，也可以通过 `--all` 保存所有已链接的 formula。
 
 对于 mise 支持的任何后端，请使用 [`mise install-into`](/cli/install-into.html)。它会将一个工具版本安装到你选择的目录中，以便在 mise 之外使用：
 
 ```sh
-mise install-into node@22 /opt/node
-/opt/node/bin/node -v
+mise install-into node@24 "$HOME/standalone-node"
+"$HOME/standalone-node/bin/node" --version
 ```
 
-请将其指向一个新的或空的目录：`install-into` 会删除目标位置中已有的内容；执行前会显示确认提示，默认选择否，也可以通过 `--yes` 跳过询问。它只会写入该目录，因此请像处理上面的 brew 前缀一样，手动将其 `bin` 目录添加到 `PATH`。如果工具需要 `JAVA_HOME` 之类的环境变量，或需要 mise 通常在运行时应用的其他配置，仍然需要手动设置。
+请将其指向新的或空的目录：`install-into` 会在确认提示后删除目标位置中已有的内容；确认提示默认为否，或者在 `--yes` 下不询问。工具安装会进入该目录；后端也可能使用 mise 缓存并安装依赖项。请像上面的 brew 前缀一样，自行将其 `bin` 添加到 `PATH`。对于需要环境变量（例如 `JAVA_HOME`）或其他 mise 通常在运行时应用的配置的工具，仍然需要手动设置这些内容。
 
 这两种方式都与 Homebrew 做出了相同的取舍：为所有人提供 `PATH` 上的一个版本，而不支持按项目选择版本。如果你需要按项目选择版本，请将工具保留在 `[tools]` 中，并让 [`mise bootstrap`](/bootstrap.html) 通过一条命令统一配置每个用户的激活状态、配置和工具——或者通过 [`mise bootstrap remote`](/bootstrap/remote.html) 在多台主机上完成。
 
-## mise 版本控制是如何工作的？
+### mise 安全吗？
 
-mise 使用 [Calver](https://calver.org/) 版本控制（`2024.1.0`）。
-破坏性变更会很少，但一旦发生，
-它们会尽可能提前在 CLI 中通知。
+mise 支持下载验证、配置文件信任，以及安全模式和 paranoid 模式等可选限制。它们提供的保障取决于后端和操作。请从[安全性](/security.html)开始，了解威胁模型和可用控制措施。请通过 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md) 报告漏洞。
 
-与其使用 SemVer 的大版本发布来传达大型发布中的变更，
-不如通过 `experimental = true` 之类的设置来选择启用新功能和变更。
-这样插件作者和用户就可以
-立即测试新功能，而无需等待主要版本发布。
+### usage 是什么？
 
-Calver 中的数字（YYYY.MM.RELEASE）仅表示发布日期——并不表示兼容性
-或新增了多少功能。
-每次发布都会小而渐进。
+[usage](https://usage.jdx.dev/) 是用于定义 CLI 工具的规范和 CLI。
+
+参数、标志、环境变量和配置文件都可以在 usage 规范中定义。单个定义可以驱动帮助文本、参数解析和补全。
+
+mise 将 usage 集成用于任务参数解析、帮助和自动补全，因此不需要单独的 `usage` CLI。请参阅[自动补全](/installing-mise.html#autocompletion)。
+
+你可以在文件任务中使用 usage 来实现自动补全；请参阅[文件任务参数](/tasks/file-tasks.html#arguments)。
+
+### pitchfork 是什么？
+
+[pitchfork](https://pitchfork.jdx.dev/) 是面向开发者的进程管理器。Mise 可以通过实验性的[守护进程集成](/daemons)管理自定义进程和数据库预设。
+
+它提供守护进程管理功能，例如失败时自动重启、智能就绪检查、进入项目目录时基于 shell 的自动启动或停止，以及按 cron 风格为周期性任务安排计划。
+
+对于命令和依赖排序，请使用[mise 任务](/tasks/)；当服务需要独立于任务调用持续运行时，请使用进程监管器。
+
+### mise 的版本控制如何工作？
+
+mise 使用日历版本，格式为 `YYYY.MONTH.RELEASE`，例如 `2026.9.1`。最后一个数字是当月的发布计数，不代表月份中的某一天，也不是兼容性指标。
+
+新功能可能会在 `experimental = true` 等设置后启用。弃用警告和[发行说明](https://github.com/jdx/mise/releases)会描述行为变化；不要根据类似 SemVer 的主版本推断兼容性。对于团队所需的 mise 版本，请使用 [`min_version`](/configuration.html)。

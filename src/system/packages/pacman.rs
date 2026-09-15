@@ -76,8 +76,136 @@ fn package_state(req: &PackageRequest, version: &str) -> PackageState {
     }
 }
 
-fn parse_pacman_package(output: &str) -> Option<(&str, &str)> {
-    output.lines().find_map(|line| line.split_once(' '))
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PacmanProvide {
+    name: String,
+    version: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PacmanPackageMetadata {
+    name: String,
+    version: String,
+    provides: HashSet<PacmanProvide>,
+}
+
+fn parse_pacman_info(output: &str) -> Vec<PacmanPackageMetadata> {
+    let mut packages = Vec::new();
+    let mut name = None;
+    let mut version = None;
+    let mut provides = HashSet::new();
+    let mut reading_provides = false;
+    for line in output.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            if let (Some(name), Some(version)) = (name.take(), version.take()) {
+                packages.push(PacmanPackageMetadata {
+                    name,
+                    version,
+                    provides: std::mem::take(&mut provides),
+                });
+            }
+            reading_provides = false;
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            reading_provides = false;
+            match key.trim() {
+                "Name" => name = Some(value.trim().to_string()),
+                "Version" => version = Some(value.trim().to_string()),
+                "Provides" => {
+                    reading_provides = true;
+                    provides.extend(parse_provides(value));
+                }
+                _ => {}
+            }
+        } else if reading_provides {
+            provides.extend(parse_provides(line));
+        }
+    }
+    packages
+}
+
+fn parse_provides(value: &str) -> impl Iterator<Item = PacmanProvide> + '_ {
+    value
+        .split_whitespace()
+        .filter(|provide| *provide != "None")
+        .map(|provide| {
+            let (name, version) = provide
+                .split_once('=')
+                .map(|(name, version)| (name, Some(version.to_string())))
+                .unwrap_or_else(|| (provide.split(['<', '>']).next().unwrap_or(provide), None));
+            PacmanProvide {
+                name: name.to_string(),
+                version,
+            }
+        })
+}
+
+fn find_provider<'a>(
+    packages: &'a [PacmanPackageMetadata],
+    request: &PackageRequest,
+    constraint_satisfied: bool,
+    eligible: impl Fn(&PacmanPackageMetadata) -> bool,
+) -> Option<&'a PacmanPackageMetadata> {
+    packages
+        .iter()
+        .filter(|package| eligible(package))
+        .find(|package| {
+            package.name == request.name
+                && (!constraint_satisfied
+                    || request
+                        .version
+                        .as_ref()
+                        .is_none_or(|version| pacman_version_matches(version, &package.version)))
+        })
+        .or_else(|| {
+            packages
+                .iter()
+                .filter(|package| eligible(package))
+                .find(|package| {
+                    package.provides.iter().any(|provide| {
+                        provide.name == request.name
+                            && (!constraint_satisfied
+                                || request.version.as_ref().is_none_or(|version| {
+                                    provide.version.as_ref().is_some_and(|provided| {
+                                        pacman_version_matches(version, provided)
+                                    })
+                                }))
+                    })
+                })
+        })
+}
+
+fn matching_provider_names(packages: &[PacmanPackageMetadata], requested: &str) -> Vec<String> {
+    packages
+        .iter()
+        .filter(|package| {
+            package.name == requested
+                || package
+                    .provides
+                    .iter()
+                    .any(|provide| provide.name == requested)
+        })
+        .map(|package| package.name.clone())
+        .collect()
+}
+
+fn pacman_version_matches(requested: &str, provided: &str) -> bool {
+    // vercmp ships with pacman and uses the same libalpm version ordering as
+    // dependency resolution. It intentionally considers e.g. 2.0 and
+    // 2.0-13 equal, which a textual comparison cannot model correctly.
+    match std::process::Command::new("vercmp")
+        .args([provided, requested])
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim() == "0"
+        }
+        // Unit tests and non-Arch development hosts do not necessarily have
+        // vercmp. A real pacman installation always supplies it.
+        _ => provided == requested || provided.starts_with(&format!("{requested}-")),
+    }
 }
 
 fn parse_pacman_deptest(output: &str) -> HashSet<&str> {
@@ -95,29 +223,81 @@ fn deptest_requirement(req: &PackageRequest) -> String {
     }
 }
 
+fn remove_args(names: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "-R".to_string(),
+        "--noconfirm".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(names.iter().cloned());
+    args
+}
+
+async fn concrete_remove_names(pkgs: &[PackageRequest]) -> Result<Vec<String>> {
+    let info = pacman_info().await?;
+    let packages = parse_pacman_info(&info);
+    let mut names = Vec::new();
+    for pkg in pkgs {
+        let providers = matching_provider_names(&packages, &pkg.name);
+        if providers.is_empty() {
+            return Err(eyre::eyre!(
+                "pacman -Qi returned no provider for satisfied requirement '{}'",
+                pkg.name
+            ));
+        }
+        for provider in providers {
+            if !names.contains(&provider) {
+                names.push(provider);
+            }
+        }
+    }
+    Ok(names)
+}
+
 fn apply_provider_query<'a>(
     status: &mut PackageStatus,
-    output: &'a str,
+    packages: &'a [PacmanPackageMetadata],
     constraint_satisfied: bool,
-) -> Result<&'a str> {
-    let Some((provider, version)) = parse_pacman_package(output) else {
-        bail!(
-            "pacman -Q returned no package for satisfied requirement '{}'",
-            status.request.name
-        );
-    };
+) -> Result<&'a PacmanPackageMetadata> {
+    let provider = find_provider(packages, &status.request, constraint_satisfied, |_| true)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "pacman -Qi returned no provider for satisfied requirement '{}'",
+                status.request.name
+            )
+        })?;
     // The provider's package version is display metadata; pacman -T evaluates
     // the requested version against the version declared in Provides.
     status.state = if constraint_satisfied {
         PackageState::Installed {
-            version: version.to_string(),
+            version: provider.version.clone(),
         }
     } else {
         PackageState::VersionMismatch {
-            installed: version.to_string(),
+            installed: provider.version.clone(),
         }
     };
     Ok(provider)
+}
+
+async fn pacman_info() -> Result<String> {
+    let args = ["-Qi"];
+    debug!("$ pacman {}", args.join(" "));
+    let output = tokio::process::Command::new("pacman")
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        bail!(
+            "pacman -Qi failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 async fn pacman_query(names: &[String]) -> Result<String> {
@@ -129,23 +309,38 @@ async fn pacman_query(names: &[String]) -> Result<String> {
     debug!("$ pacman {}", args.join(" "));
     let output = tokio::process::Command::new("pacman")
         .args(&args)
-        // pacman localizes its messages via gettext, so the "was not found"
-        // check below only works against the untranslated output.
+        // pacman localizes diagnostics, so matching requires untranslated output
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await?;
-    // pacman -Q exits 1 when any package is missing ("error: package 'x'
-    // was not found" on stderr); installed ones still print to stdout.
-    // Anything else on stderr (corrupt db, lock file) is a real error.
+    // pacman -Q exits 1 for missing packages while still printing installed ones to stdout
+    // It also suggests -p/--file when a missing name is a readable file or directory
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let only_missing = !stderr.is_empty()
-        && stderr
-            .lines()
-            .all(|line| line.trim().is_empty() || line.contains("was not found"));
-    if !output.status.success() && (output.status.code() != Some(1) || !only_missing) {
+    let missing = stderr
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("error: package '")?
+                .strip_suffix("' was not found")
+        })
+        .filter(|name| names.iter().any(|requested| requested == name))
+        .collect::<HashSet<_>>();
+    let only_missing = !missing.is_empty()
+        && stderr.lines().all(|line| {
+            line.trim().is_empty()
+                || missing.iter().any(|name| {
+                    line == format!("error: package '{name}' was not found")
+                        || line
+                            == format!(
+                                "warning: '{name}' is a file, you might want to use -p/--file."
+                            )
+                })
+        });
+    let valid_result = (output.status.success() && stderr.is_empty())
+        || (output.status.code() == Some(1) && only_missing);
+    if !valid_result {
         bail!("pacman -Q failed: {}", stderr.trim());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -173,6 +368,44 @@ async fn pacman_deptest(names: &[String]) -> Result<String> {
         bail!("pacman -T failed: {}", stderr.trim());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+pub(super) async fn resolve_installed_provider(
+    request: &PackageRequest,
+    eligible_names: &HashSet<String>,
+) -> Result<Option<(String, PackageState)>> {
+    let requirement = deptest_requirement(request);
+    let deptest = pacman_deptest(&[requirement]).await?;
+    let unsatisfied = parse_pacman_deptest(&deptest);
+    let constraint_satisfied = unsatisfied.is_empty();
+    if !constraint_satisfied {
+        if request.version.is_none() {
+            return Ok(None);
+        }
+        let bare_deptest = pacman_deptest(std::slice::from_ref(&request.name)).await?;
+        let bare_missing = parse_pacman_deptest(&bare_deptest);
+        if !bare_missing.is_empty() {
+            return Ok(None);
+        }
+    }
+
+    let info = pacman_info().await?;
+    let packages = parse_pacman_info(&info);
+    let Some(provider) = find_provider(&packages, request, constraint_satisfied, |package| {
+        eligible_names.contains(&package.name)
+    }) else {
+        return Ok(None);
+    };
+    let state = if constraint_satisfied {
+        PackageState::Installed {
+            version: provider.version.clone(),
+        }
+    } else {
+        PackageState::VersionMismatch {
+            installed: provider.version.clone(),
+        }
+    };
+    Ok(Some((provider.name.clone(), state)))
 }
 
 #[async_trait(?Send)]
@@ -209,10 +442,9 @@ impl SystemPackageManager for PacmanManager {
             return Ok(statuses);
         }
 
-        // A bare query may answer a virtual package target under the installed
-        // provider's real name. Deptest tells us which apparent misses are
-        // genuinely unsatisfied; query the provider-satisfied names one at a
-        // time so their returned versions can be associated positionally.
+        // Deptest tells us which apparent misses are genuinely unsatisfied.
+        // Package metadata below maps satisfied virtual names back to their
+        // concrete installed providers.
         let deptest = pacman_deptest(&apparent_missing).await?;
         let unsatisfied = parse_pacman_deptest(&deptest);
         // A failed version constraint can still have a provider for the bare
@@ -227,6 +459,8 @@ impl SystemPackageManager for PacmanManager {
             .collect::<Vec<_>>();
         let bare_deptest = pacman_deptest(&versioned_unsatisfied).await?;
         let bare_missing = parse_pacman_deptest(&bare_deptest);
+        let info = pacman_info().await?;
+        let packages = parse_pacman_info(&info);
         for status in statuses
             .iter_mut()
             .filter(|status| matches!(status.state, PackageState::Missing))
@@ -239,11 +473,10 @@ impl SystemPackageManager for PacmanManager {
             {
                 continue;
             }
-            let output = pacman_query(std::slice::from_ref(&status.request.name)).await?;
-            let provider = apply_provider_query(status, &output, constraint_satisfied)?;
+            let provider = apply_provider_query(status, &packages, constraint_satisfied)?;
             debug!(
-                "pacman: {} is satisfied by installed provider {provider}",
-                status.request.name
+                "pacman: {} is satisfied by installed provider {}",
+                status.request.name, provider.name,
             );
         }
         Ok(statuses)
@@ -274,6 +507,23 @@ impl SystemPackageManager for PacmanManager {
             "--".to_string(),
         ];
         args.extend(pkgs.iter().map(|p| p.name.clone()));
+        if opts.dry_run {
+            miseprintln!("{}", sudo::argv("pacman", &args).join(" "));
+            return Ok(());
+        }
+        sudo::run("pacman", &args, &[])
+    }
+
+    fn supports_remove(&self) -> bool {
+        true
+    }
+
+    async fn remove(&self, pkgs: &[PackageRequest], opts: &InstallOpts) -> Result<()> {
+        // A request may name a virtual capability satisfied through Provides.
+        // Resolve each target through the local database immediately before
+        // removal so pacman receives the concrete installed package identity.
+        let names = concrete_remove_names(pkgs).await?;
+        let args = remove_args(&names);
         if opts.dry_run {
             miseprintln!("{}", sudo::argv("pacman", &args).join(" "));
             return Ok(());
@@ -330,6 +580,61 @@ mod tests {
             name: name.to_string(),
             version: version.map(str::to_string),
             tap_url: None,
+            desired: crate::system::packages::PackageDesiredState::Present,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_pacman_query_file_advisory() {
+        let dir = tempfile::tempdir().unwrap();
+        let pacman = dir.path().join("pacman");
+        let mut env = crate::test::EnvVarGuard::new();
+        let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        env.set("PATH", path);
+        let missing = "error: package 'fish' was not found\n";
+        let advisory = "warning: 'fish' is a file, you might want to use -p/--file.\n";
+        let cases = [
+            (0, String::new(), true),
+            (0, advisory.to_string(), false),
+            (1, missing.to_string(), true),
+            (1, format!("{missing}{advisory}"), true),
+            (1, advisory.to_string(), false),
+            (
+                1,
+                format!("{missing}error: could not open database\n"),
+                false,
+            ),
+            (
+                1,
+                format!("{missing}warning: 'git' is a file, you might want to use -p/--file.\n"),
+                false,
+            ),
+            (2, format!("{missing}{advisory}"), false),
+        ];
+        for (code, stderr, accepted) in cases {
+            std::fs::write(
+                &pacman,
+                format!(
+                    "#!/bin/sh\n\
+                     [ \"$LC_ALL\" = C ] || exit 99\n\
+                     [ \"$*\" = '-Q -- curl fish' ] || exit 98\n\
+                     printf 'curl 8.19.0-1\\n'\n\
+                     cat >&2 <<'STDERR'\n{stderr}STDERR\n\
+                     exit {code}\n"
+                ),
+            )
+            .unwrap();
+            crate::file::make_executable(&pacman).unwrap();
+            let result = pacman_query(&["curl".to_string(), "fish".to_string()]).await;
+            if accepted {
+                assert_eq!(result.unwrap(), "curl 8.19.0-1\n");
+            } else {
+                assert!(result.is_err(), "accepted exit {code}: {stderr}");
+            }
         }
     }
 
@@ -375,15 +680,121 @@ mod tests {
 
         // pacman -T validated the version declared by Provides even though the
         // provider package has a different version of its own.
-        let provider =
-            apply_provider_query(&mut status, "percona-server-clients 9.7.1_1-1\n", true).unwrap();
+        let packages = parse_pacman_info(
+            "Name            : percona-server-clients\n\
+             Version         : 9.7.1_1-1\n\
+             Provides        : mariadb-clients=12.3.2\n\
+                               mysql-clients\n\
+             Description     : database clients\n",
+        );
+        let provider = apply_provider_query(&mut status, &packages, true).unwrap();
 
-        assert_eq!(provider, "percona-server-clients");
+        assert_eq!(provider.name, "percona-server-clients");
+        assert!(
+            provider
+                .provides
+                .iter()
+                .any(|provide| provide.name == "mariadb-clients")
+        );
+        assert!(
+            provider
+                .provides
+                .iter()
+                .any(|provide| provide.name == "mysql-clients")
+        );
         assert_eq!(
             status.state,
             PackageState::Installed {
                 version: "9.7.1_1-1".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn test_find_provider_prefers_exact_package_name() {
+        let packages = parse_pacman_info(
+            "Name            : alternate-foo\n\
+             Version         : 2.0-1\n\
+             Provides        : foo\n\
+             \n\
+             Name            : foo\n\
+             Version         : 1.0-1\n\
+             Provides        : None\n",
+        );
+
+        assert_eq!(
+            find_provider(&packages, &req("foo", None), true, |_| true)
+                .unwrap()
+                .name,
+            "foo"
+        );
+    }
+
+    #[test]
+    fn test_find_provider_matches_virtual_version() {
+        let packages = parse_pacman_info(
+            "Name            : foo-one\n\
+             Version         : 10.0-1\n\
+             Provides        : foo=1\n\
+             \n\
+             Name            : foo-two\n\
+             Version         : 20.0-1\n\
+             Provides        : foo=2.0-13\n",
+        );
+
+        assert_eq!(
+            find_provider(&packages, &req("foo", Some("2.0")), true, |_| true)
+                .unwrap()
+                .name,
+            "foo-two"
+        );
+    }
+
+    #[test]
+    fn test_find_provider_filters_ineligible_exact_match() {
+        let packages = parse_pacman_info(
+            "Name            : foo\n\
+             Version         : 1.0-1\n\
+             Provides        : None\n\
+             \n\
+             Name            : aur-foo\n\
+             Version         : 2.0-1\n\
+             Provides        : foo\n",
+        );
+
+        assert_eq!(
+            find_provider(&packages, &req("foo", None), true, |package| {
+                package.name == "aur-foo"
+            })
+            .unwrap()
+            .name,
+            "aur-foo"
+        );
+    }
+
+    #[test]
+    fn test_matching_provider_names_returns_every_provider() {
+        let packages = parse_pacman_info(
+            "Name            : foo-one\n\
+             Version         : 1.0-1\n\
+             Provides        : foo\n\
+             \n\
+             Name            : foo-two\n\
+             Version         : 2.0-1\n\
+             Provides        : foo\n",
+        );
+
+        assert_eq!(
+            matching_provider_names(&packages, "foo"),
+            ["foo-one", "foo-two"]
+        );
+    }
+
+    #[test]
+    fn test_remove_args_remove_exact_packages_without_cascading() {
+        assert_eq!(
+            remove_args(&["omarchy".to_string(), "omarchy-settings".to_string()]),
+            ["-R", "--noconfirm", "--", "omarchy", "omarchy-settings"]
         );
     }
 
@@ -394,7 +805,12 @@ mod tests {
             state: PackageState::Missing,
         };
 
-        apply_provider_query(&mut status, "provider-package 2.0-1\n", false).unwrap();
+        let packages = parse_pacman_info(
+            "Name            : provider-package\n\
+             Version         : 2.0-1\n\
+             Provides        : virtual-package=1.0\n",
+        );
+        apply_provider_query(&mut status, &packages, false).unwrap();
 
         assert_eq!(
             status.state,

@@ -11,13 +11,21 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-/// Generates shims to run mise tasks
+/// Generate shims to run mise tasks
 ///
 /// By default, this will build shims like ./bin/<task>. These can be paired with `mise generate install-script`
 /// so contributors to a project can execute mise tasks without installing mise into their system.
 /// When a parent and nested task both exist, the parent stub is written to `<parent>/_default`.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    verbatim_doc_comment,
+    example(
+        r###"mise tasks add test -- echo 'running tests'
+mise generate task-stubs
+./bin/test
+running tests"###
+    )
+)]
 pub(super) struct TaskStubs {
     /// Directory to create task stubs inside of
     #[usage(long, short, verbatim_doc_comment, default="bin", value_hint=ValueHint::DirPath)]
@@ -671,16 +679,6 @@ fn is_generated_task_stub(contents: &str) -> bool {
             .is_some_and(|line| line.contains(" run "))
         && lines.next().is_none()
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise tasks add test -- echo 'running tests'</bold>
-    $ <bold>mise generate task-stubs</bold>
-    $ <bold>./bin/test</bold>
-    running tests
-"#
-);
 
 #[cfg(test)]
 mod tests {

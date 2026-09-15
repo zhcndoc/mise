@@ -1,0 +1,33 @@
+---
+description: "连接设置仓库"
+---
+
+<!-- 由 usage-cli 根据用法规范生成 -->
+# `mise bootstrap dotfiles origin set`
+
+- **用法：** `mise bootstrap dotfiles origin set [FLAGS] <URL>`
+- **作用：** 修改状态
+- **源代码：** [`src/cli/dotfiles/origin.rs`](https://github.com/jdx/mise/blob/main/src/cli/dotfiles/origin.rs)
+
+连接设置仓库
+
+## 参数
+- **`<URL>`** — 仓库 URL（任意 git URL；建议使用私有仓库）
+
+## 标志
+- **`--branch <BRANCH>`** — 设置分支（默认：仓库自身的默认分支）
+
+  重新连接到此计算机已跟踪的仓库时，会保留该连接的分支。完全没有分支的仓库会使用 `main`，首次发布时会创建该分支。
+- **`--sync <MODE>`** — 仓库的使用方式：同步、仅获取或手动
+
+  省略时会提示。使用 `--yes` 时，会接受已配置的模式（默认：同步），包括自动发布和传入写入。使用 `--sync manual` 可保留自动本地历史记录，同时不进行自动网络活动。
+- **`-y --yes`** — 跳过确认提示
+- **`-h --help`** — 输出帮助
+
+<!-- 生成的参考导航 -->
+
+## 相关文档
+
+- [点文件所有权和模式](/dotfiles.html)。
+- [`mise bootstrap dotfiles origin [--remove] [SUBCOMMAND]`](/cli/bootstrap/dotfiles/origin.html)。
+- [全局标志和参数语法](/cli/#global-flags)。

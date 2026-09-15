@@ -1,144 +1,111 @@
+---
+description: "插件为 mise 添加安装逻辑、环境指令或引导包管理器"
+---
+
 # 插件
 
-mise 中的插件是一种通过新增功能来扩展 `mise` 的方式，例如添加额外工具或环境变量管理。
+插件为 mise 添加安装逻辑、环境指令或引导包管理器。大多数工具都可以直接使用内置的[后端](/dev-tools/backends/)，即使它们没有[注册表](/registry.html)简写。安装插件前请先从这里开始。
 
-从历史上看，它曾是添加新工具的唯一方式（因为当时唯一的后端是 [asdf](/dev-tools/backends/asdf.html)）。
+对于发布二进制文件，如果发布者提供了签名清单，优先使用 [packslip](/dev-tools/backends/packslip.html)，然后是 [aqua](/dev-tools/backends/aqua.html)、[github](/dev-tools/backends/github.html) 或 [gitlab](/dev-tools/backends/gitlab.html)。当集成需要这些后端无法提供的自定义行为时，请使用插件。
 
-该后端的工作方式是：每个工具都有自己独立的插件，需要手动安装。不过现在有了 [core tools](/core-tools.html)
-以及 [aqua](/dev-tools/backends/aqua.html)/[github](/dev-tools/backends/github.html) 等后端，在 mise 中运行大多数工具已经不再需要插件。
+插件代码可以使用你的权限读取文件、发起请求和运行进程。Lua 的跨平台运行时并不会让插件成为操作系统沙箱。请检查源代码及其更新；新的 asdf 和 vfox 工具插件不会被接受加入 mise 注册表。
 
-出于安全原因，应避免使用工具插件。除非某个工具非常流行，并且由于某些原因无法使用 aqua/github，否则不会接受将其作为基于 asdf/plugins 构建的 mise 新工具。
+## 选择插件类型
 
-唯一的例外是：如果该工具需要设置环境变量，或者安装过程很复杂，那么插件可以提供诸如 [全局设置环境变量](/environments/#plugin-provided-env-directives) 之类的功能，而无需依赖某个工具已安装。它们还可以提供 [版本别名](/dev-tools/aliases.html#aliased-versions)。
+| 类型        | 用途                                                   | 配置                                | 作者指南                                             |
+| ----------- | ------------------------------------------------------ | ----------------------------------- | ---------------------------------------------------- |
+| 后端        | 由一个集成管理的多个版本化工具                         | `[tools]`、`my-backend:tool`        | [后端开发](/backend-plugin-development.html)         |
+| 工具        | 带有下载／安装钩子的单个版本化工具                     | `[tools]`、已安装的插件名称         | [工具开发](/tool-plugin-development.html)            |
+| 环境        | 不安装工具的变量或 PATH 条目                           | `[env]`、`_.my-plugin`              | [环境开发](/env-plugin-development.html)             |
+| 软件包      | 用于机器引导的主机管理软件包                           | `[bootstrap.packages]`              | [软件包开发](/package-plugin-development.html)       |
+| asdf        | 现有的基于 shell 的工具集成                            | `[tools]`、一个 asdf 后端            | [旧版插件](/asdf-legacy-plugins.html)                |
 
-如果你想将新工具集成到 mise 中，应尝试将其加入 [aqua 注册表](https://mise.jdx.dev/dev-tools/backends/aqua.html)，
-或者查看它是否可以通过 [github](https://mise.jdx.dev/dev-tools/backends/github.html) 安装。
-相比 github，Aqua 更受推荐，因为它具有更好的用户体验和更多功能，例如 SLSA 验证，以及能够对旧版本使用不同的逻辑。
+在 `[bootstrap.plugins]` 中注册包管理器，或将其安装为 `package:<name>`，然后再在 `[bootstrap.packages]` 中声明其请求。完整配置请参阅[软件包插件设置](/bootstrap/packages/plugins.html)。
 
-你可以在 `mise` 中通过 [`mise plugins`](/cli/plugins.html) 管理所有已安装的插件。
-
-```shell
-mise plugins ls --urls
-# 插件                          Url                                                     Ref  Sha
-# 1password                       https://github.com/mise-plugins/mise-1password-cli.git  HEAD f5d5aab
-# vfox-mise-plugins-vfox-dart     https://github.com/mise-plugins/vfox-dart               HEAD 1424253
-# ...
-```
+Lua 运行时可在 Windows、macOS 和 Linux 上使用。每个插件仍必须支持所选平台以及它调用的任何外部程序。asdf 插件使用 shell 脚本，在 Windows 上默认处于禁用状态。
 
 ## 后端插件
 
-后端插件通过现代后端方法提供增强功能。这些插件使用 `plugin:tool` 格式，并且相比传统插件具有以下优势：
+后端插件实现 `BackendListVersions`、`BackendInstall` 和 `BackendExecEnv`。前缀就是你安装插件时使用的名称：
 
-- **多个工具**：单个插件可以管理多个工具
-- **增强方法**：用于列出版本、安装以及设置环境变量的后端方法
-- **跨平台**：可在 Windows、macOS 和 Linux 上运行
-- **性能**：比基于 shell 的插件执行更快
-
-示例用法：
-
-```bash
-# 安装后端插件
-mise plugin install my-plugin https://github.com/username/my-plugin
-
-# 使用 plugin:tool 格式
-mise install my-plugin:some-tool@1.0.0
-mise use my-plugin:some-tool@latest
+```sh
+# Replace this example repository and tool with your plugin's values.
+mise plugin install my-backend https://github.com/your-org/my-backend
+mise use my-backend:some-tool@1.0.0
+mise exec -- some-tool --version
 ```
 
-有关创建后端插件，请参见 [后端插件开发](backend-plugin-development.md)。你可以使用 [mise-backend-plugin-template](https://github.com/jdx/mise-backend-plugin-template) 快速开始。
+安装、本地开发和更新请参阅[使用插件](/plugin-usage.html)。[后端模板](https://github.com/jdx/mise-backend-plugin-template)提供了一个起点。
 
 ## 工具插件
 
-工具插件使用传统的基于钩子的方式，借助 Lua 脚本实现。这些插件提供：
+工具插件通过 `Available`、`PreInstall` 和 `EnvKeys` 等钩子管理一个工具。使用其已安装的名称作为工具名称：
 
-- **基于钩子**：使用 `PreInstall`、`PostInstall`、`Available` 等钩子
-- **单工具**：每个插件管理一个工具
-- **跨平台**：可在 Windows、macOS 和 Linux 上运行
-- **灵活**：对安装和环境设置拥有完全控制权
-
-示例用法：
-
-```bash
-# 安装一个工具插件
-mise plugin install my-tool https://github.com/username/my-tool-plugin
-
-# 直接使用该工具
-mise install my-tool@1.0.0
-mise use my-tool@latest
+```sh
+mise plugin install my-tool https://github.com/your-org/my-tool-plugin
+mise use my-tool@1.0.0
+mise exec -- my-tool --version
 ```
 
-有关创建工具插件，请参见 [工具插件开发](tool-plugin-development.md)。`[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template)` 提供了一个可直接使用的起点。
+这些仓库名和可执行文件名都是占位符。编写自己的插件时，请从[工具模板](https://github.com/jdx/mise-tool-plugin-template)开始。
 
 ## 环境插件
 
-环境插件提供环境变量和 PATH 修改，而不管理工具版本。它们非常适合用于集成密钥管理器、设置动态配置，以及统一团队环境。
+环境插件实现 `MiseEnv`，并可选择实现 `MisePath`。在使用其指令前先安装它：
 
-示例用法：
-
-```bash
-# 安装一个环境插件
-mise plugin install my-env-plugin https://github.com/username/my-env-plugin
+```sh
+mise plugin install my-env-plugin https://github.com/your-org/my-env-plugin
 ```
 
 ```toml
-# 在 mise.toml 中配置
 [env]
-_.my-env-plugin = { api_url = "https://api.example.com", debug = true }
+_.my-env-plugin = {
+  api_url = "https://api.example.com",
+  debug = true,
+}
 ```
 
-与工具插件不同，环境插件：
+字段由插件定义。有关返回值、缓存行为以及[环境模板](https://github.com/jdx/mise-env-plugin-template)，请参阅[环境插件开发](/env-plugin-development.html)。
 
-- 只实现环境钩子（`MiseEnv`、`MisePath`）
-- 通过 `env._.<plugin-name>` 语法激活
-- 不管理工具版本或安装
+## 软件包插件
 
-有关创建环境插件，请参阅 [环境插件开发](env-plugin-development.md)。[mise-env-plugin-template](https://github.com/jdx/mise-env-plugin-template) 仓库提供了一个可直接使用的起始模板。
+软件包插件为[引导软件包](/bootstrap/packages/plugins.html)实现主机软件包管理器。它们以软件包请求批次为单位运行，并报告已安装状态。与存储在 mise 数据目录下的版本化工具不同，它们的安装归主机管理器所有。有关钩子契约，请参阅[软件包插件开发](/package-plugin-development.html)。
 
 ## 通用插件使用
 
-有关安装和使用后端插件和工具插件的面向最终用户文档，请参阅 [使用插件](plugin-usage.md)。
+[使用插件](/plugin-usage.html)介绍仓库 URL、归档安装、本地链接、固定插件修订版本和诊断。使用以下命令列出已安装的内容：
 
-## asdf（Legacy）插件
+```sh
+mise plugins ls --urls
+```
 
-mise 可以在底层使用 asdf 的插件生态系统以实现向后兼容。这些插件包含诸如
-`bin/install`（用于安装）和 `bin/list-all`（用于列出所有可用版本）之类的 shell 脚本。
+## asdf（旧版）插件
 
-与现代后端相比，asdf 插件存在局限性，应仅在必要时使用。它们只适用于 Linux/macOS，并且比原生后端更慢。
-
-有关使用和创建这些插件的完整文档，请参见 [asdf（Legacy）插件](asdf-legacy-plugins.md)。
+mise 可以通过 `bin/list-all`、`bin/install` 和 `bin/exec-env` 等脚本运行现有的 asdf 插件。请使用[旧版指南](/asdf-legacy-plugins.html)维护插件，或使用[钩子迁移表](/dev-tools/backends/asdf.html#hook-migration-asdf-to-vfox)将其移植到 Lua。
 
 ## 插件作者
 
-<https://github.com/mise-plugins> 是一个用于社区开发插件的 GitHub 组织。
-请参阅 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md) 了解这里的插件会如何以不同方式处理的更多细节。
-
-如果你希望你的插件托管在这里，请告诉我（GitHub discussion 或 Discord 都可以），
-我很乐意为你托管。
+[mise-plugins 组织](https://github.com/mise-plugins)托管社区插件。请通过 [GitHub 讨论](https://github.com/jdx/mise/discussions)联系维护者，讨论托管事宜。托管插件与添加注册表简写是两个独立的决定；请参阅[发布指南](/plugin-publishing.html)。
 
 ## 工具选项
 
-mise 支持“工具选项”，这是在 `mise.toml` 中指定的配置，用于更改工具的行为。其中一个例子是在 python 运行时中使用 virtualenv：
+插件在其工具配置中定义自定义选项。例如，支持 `mirror` 选项的插件可以接受：
 
 ```toml
 [tools]
-python = { version='3.11', virtualenv='.venv' }
+my-tool = {
+  version = "1.0.0",
+  mirror = "https://mirror.example.com",
+}
 ```
 
-::: warning
-python 的 `virtualenv` 工具选项已弃用，并将在未来版本中移除。
-请改用 `[env]` 部分中的 [`_.python.venv`](/lang/python.html#automatic-virtualenv-activation)。
-:::
-
-对于 asdf 插件和特定版本的 vfox 生命周期钩子，该配置会作为 `MISE_TOOL_OPTS__VIRTUALENV=.venv` 传递。这些变量仅作用于插件钩子环境；mise 不会将它们导出到用户的 shell。自定义后端选项会以该格式传递给插件；由 mise 管理的字段（如 `depends`、`install_env` 和 `os`）不会被导出。
-
-目前，这只支持简单字符串，但如果有需要，我们可以相当容易地将其兼容为更复杂的类型
-（数组、表）。
+对于 asdf 和特定版本的 vfox 生命周期钩子，该选项会公开为 `MISE_TOOL_OPTS__MIRROR`。这些变量仅限于钩子执行期间，不会导出到你的 shell 中。由 mise 管理的字段，例如 `depends`、`install_env` 和 `os`，则由 mise 处理。后端插件钩子通过 `ctx.options` 接收包括数组和嵌套表在内的类型化选项；请参阅[后端上下文](/backend-plugin-development.html#context-variables)。
 
 ## 模板
 
-插件自定义仓库值可以是模板，详情请参见 [模板](/templates)。
+`[plugins]` 中的仓库值支持[模板](/templates.html)。对于私有仓库，优先使用普通的 SSH 或 HTTPS 仓库 URL 以及你的 Git 凭据设置；将凭据嵌入 URL 可能会将其暴露在配置或日志中。
 
 ```toml
 [plugins]
-"vfox-backend:my-plugin" = "https://{{ get_env(name='GIT_USR', default='empty') }}:{{ get_env(name='GIT_PWD', default='empty') }}@github.com/foo/my-plugin.git"
+my-backend = "git@github.com:your-org/my-backend.git"
 ```

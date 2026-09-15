@@ -10,20 +10,31 @@ use crate::registry::full_to_url;
 use crate::toolset::install_state;
 use crate::ui::table;
 
-/// List installed plugins
+/// List installed external plugins
 ///
-/// Can also show remotely available plugins to install.
+/// Use `--core` for built-in runtimes or `--core --user` for both groups. `--outdated`
+/// queries Git remotes for plugin updates; it does not compare installed tool versions.
+/// Use `mise plugins ls-remote` for registry plugin sources and `mise ls` for tools.
 #[derive(Debug, usage_rs::Args)]
-#[usage(visible_alias = "list", after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+#[usage(
+    visible_alias = "list",
+    example(
+        r###"mise plugins ls
+mise plugins ls --urls
+mise plugins ls --core --user
+mise plugins ls --outdated"###
+    ),
+    verbatim_doc_comment
+)]
 pub(super) struct PluginsLs {
     /// List all available remote plugins
     /// Same as `mise plugins ls-remote`
     #[usage(short, long, hide = true, verbatim_doc_comment)]
     pub all: bool,
 
-    /// The built-in plugins only
-    /// Normally these are not shown
-    #[usage(short, long, verbatim_doc_comment, conflicts = "all", hide = true)]
+    /// Only show built-in (core) plugins
+    /// These are hidden by default
+    #[usage(short, long, verbatim_doc_comment, conflicts = "all")]
     pub core: bool,
 
     /// Show plugins with available updates
@@ -42,7 +53,10 @@ pub(super) struct PluginsLs {
     pub refs: bool,
 
     /// List installed plugins
-    #[usage(long, verbatim_doc_comment, conflicts = "all", hide = true)]
+    ///
+    /// This is the default behavior but can be used with --core
+    /// to show core and user plugins
+    #[usage(long, verbatim_doc_comment, conflicts = "all")]
     pub user: bool,
 }
 
@@ -56,8 +70,11 @@ impl PluginsLs {
         if self.core {
             for p in CORE_PLUGINS.keys() {
                 miseprintln!("{p}");
+                plugins.remove(p);
             }
-            return Ok(());
+            if !self.user {
+                return Ok(());
+            }
         }
 
         if self.all {
@@ -192,16 +209,3 @@ struct OutdatedRow {
     local: String,
     remote: String,
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise plugins ls</bold>
-    cmake
-    poetry
-
-    $ <bold>mise plugins ls --urls</bold>
-    cmake     https://github.com/mise-plugins/vfox-cmake.git
-    poetry    https://github.com/mise-plugins/vfox-poetry.git
-"#
-);

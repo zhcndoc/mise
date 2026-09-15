@@ -1,279 +1,166 @@
+---
+description: "将插件发布为 Git 仓库或发布归档，并提供经过测试的安装命令以及有关其实际接口的文档。"
+---
+
 # 插件发布
 
-本指南展示了如何发布和分发您的插件，无论它们是后端插件还是工具插件。发布使您的插件可供其他用户使用，并确保它们可以轻松安装和维护。
+将插件发布为 Git 仓库或发布归档，并提供经过测试的安装命令以及有关其实际接口的文档。用户可以直接通过 URL 安装；添加 mise registry 简写是单独的流程，并且不接受新的 asdf/vfox 工具条目。
+
+本指南适用于 Lua 工具、后端、环境和软件包插件。在调整测试或发布工作流之前，先选择[插件类型](/plugins.html)。
 
 ## 发布检查清单
 
-在发布你的插件之前，请确保你已具备：
+### 必需文件
 
-### 必备文件
+包含 `metadata.lua`、适用于你的接口的钩子文件，以及包含安装、配置、先决条件、支持平台和可用验证命令的 README。
 
-- **`metadata.lua`** - 包含名称、版本、描述和作者的插件元数据
-- **插件实现** - 后端方法或钩子函数
-- **测试覆盖** - 用于验证功能的自动化测试
+不要将凭据和特定于机器的配置放入仓库。
 
 ### 可选但推荐
 
-- **`README.md`** - 基本使用说明和示例
-- **`test/`** 目录 - 用于验证的测试脚本
-- **版本控制** - 具有适当版本管理的 Git 仓库
+添加许可证、自动化测试、变更日志或发布说明，以及格式化／lint 任务。记录经过测试的最低 mise 版本，尤其是对于特定于 mise 的钩子和模块。
+
+插件元数据中的版本描述的是插件发布版本，而不是受管理工具的版本。
 
 ## 仓库设置
 
 ### 1. 初始化仓库
 
-最简单的开始方式是使用 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template)：
+使用与你的接口匹配的模板：
 
-```bash
-# 克隆模板
-git clone https://github.com/jdx/mise-tool-plugin-template my-plugin
-cd my-plugin
+- [工具插件模板](https://github.com/jdx/mise-tool-plugin-template)。
+- [后端插件模板](https://github.com/jdx/mise-backend-plugin-template)。
+- [环境插件模板](https://github.com/jdx/mise-env-plugin-template)。
 
-# 删除模板历史并设置你自己的仓库
-rm -rf .git
-git init
-git remote add origin https://github.com/username/my-plugin.git
+从模板创建新仓库，或初始化一个全新的目录：
 
-# 为你的插件进行自定义
-# 编辑 metadata.lua、hooks/*.lua、README.md 等
-```
-
-或者，从头创建一个仓库：
-
-```bash
-# 创建插件目录
+```sh
 mkdir my-plugin
 cd my-plugin
-
-# 初始化 git 仓库
-git init
-git remote add origin https://github.com/username/my-plugin.git
-
-# 创建初始结构
-touch metadata.lua
-mkdir -p test
-echo "# 我的插件" > README.md
+git init -b main
+mkdir hooks
 ```
+
+在测试前添加你的实现。空的元数据和钩子不是可安装的插件。
 
 ### 2. 基本目录结构
 
-按以下结构组织你的插件：
-
-```
+```text
 my-plugin/
-├── metadata.lua          # 插件元数据
-├── README.md            # 基本文档
-├── test/                # 测试脚本
-│   └── test.sh
-├── .gitignore           # Git 忽略规则
-└── [实现文件]
-```
-
-对于后端插件：
-
-```
-backend-plugin/
-├── metadata.lua          # 后端方法实现
+├── metadata.lua
 ├── README.md
+├── LICENSE
+├── hooks/
 └── test/
-    └── test.sh
 ```
 
-对于工具插件：
+`hooks/` 中的文件用于标识接口：
 
-```
-tool-plugin/
-├── metadata.lua          # 插件元数据
-├── hooks/               # Hook 实现
-│   ├── available.lua
-│   ├── pre_install.lua
-│   └── env_keys.lua
-├── lib/                 # 辅助库
-│   └── helper.lua
-├── README.md
-└── test/
-    └── test.sh
-```
+| 插件类型 | 钩子文件 |
+| --- | --- |
+| 工具 | `available.lua`、`pre_install.lua`、`env_keys.lua`；可选的生命周期钩子 |
+| 后端 | `backend_list_versions.lua`、`backend_install.lua`、`backend_exec_env.lua` |
+| 环境 | `mise_env.lua`、可选的 `mise_path.lua` |
+| 软件包 | `package_installed.lua`、`package_install.lua`；可选的升级／卸载钩子 |
+
+后端钩子实现应放在 `hooks/` 下，而不是 `metadata.lua` 中。软件包插件还使用 `mise.plugin.toml` 声明管理器功能；参见[软件包开发](/package-plugin-development.html)。
 
 ### 3. Git 忽略配置
 
-创建一个 `.gitignore` 文件：
-
-```gitignore
-# 临时文件
-*.tmp
-*.temp
-.DS_Store
-Thumbs.db
-
-# 测试产物
-test/tmp/
-test/output/
-
-# IDE 文件
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# 操作系统文件
-*.log
-```
+使用符合工作流的路径忽略测试输出和本地凭据。不要意外排除插件运行时所需的文件。使用 `git ls-tree -r --name-only HEAD` 检查发布树，并测试生成的归档或检出内容。
 
 ## 版本控制策略
 
 ### 语义化版本
 
-插件发布请使用语义化版本（SemVer）：
-
-- **主版本**（1.0.0 → 2.0.0）：破坏性变更
-- **次版本**（1.0.0 → 1.1.0）：新功能，向后兼容
-- **补丁版本**（1.0.0 → 1.0.1）：错误修复，向后兼容
+SemVer 是一种适用于**插件发布**的实用约定：对于破坏性的配置或行为变更，增加主版本号；对于兼容性新增，增加次版本号；对于修复，增加修订版本号。这并不意味着**插件管理的工具**使用 SemVer。
 
 ### 版本管理
 
-在 `metadata.lua` 中更新版本：
+同时更新 `PLUGIN.version` 和发布说明：
 
 ```lua
 PLUGIN = {
     name = "my-plugin",
-    version = "1.2.3",  -- 每次发布都更新这里
-    description = "My awesome plugin",
-    author = "Your Name"
+    version = "1.2.3",
+    description = "Manage Example Tool",
+    author = "Plugin Author",
 }
 ```
 
-为发布创建 git 标签：
-
-```bash
-# 给当前提交打标签
-git tag -a v1.2.3 -m "Release version 1.2.3"
-
-# 将标签推送到仓库
-git push origin --tags
-```
+为该发布版本使用 Git 标签。用户安装仓库时，元数据版本本身不会选择 Git 修订版本。
 
 ## 发布前测试
 
 ### 自动化测试
 
-创建全面的测试脚本：
+使用隔离的 mise 目录运行测试，这样本地插件就不会替代开发者已安装的插件，也不会修改其通常使用的全局配置。以下 POSIX 设置会创建一个一次性测试项目。在更改目录前保存插件路径：
 
-```bash
-#!/bin/bash
-# test/test.sh
-set -e
-
-echo "测试插件功能..."
-
-# 本地安装插件
-mise plugin install my-plugin .
-
-# 测试基本功能
-if [[ "$(mise ls-remote my-plugin)" == "" ]]; then
-    echo "错误：没有可用版本"
-    exit 1
-fi
-
-# 测试安装
-mise install my-plugin@latest
-
-# 测试执行
-mise exec my-plugin:tool -- --version
-
-# 清理
-mise plugin remove my-plugin
-
-echo "所有测试通过！"
+```sh
+plugin_dir="$PWD"
+test_dir="$(mktemp -d)"
+export MISE_CONFIG_DIR="$test_dir/config"
+export MISE_SYSTEM_CONFIG_DIR="$test_dir/system"
+export MISE_GLOBAL_CONFIG_FILE="$test_dir/global.toml"
+export MISE_DATA_DIR="$test_dir/data"
+export MISE_CACHE_DIR="$test_dir/cache"
+export MISE_STATE_DIR="$test_dir/state"
+export MISE_ENV_CACHE=0
+export MISE_YES=1
+mkdir -p "$test_dir/project"
+cd "$test_dir/project"
+mise plugin link test-plugin "$plugin_dir"
 ```
+
+在一次性 shell／子 shell 中运行此操作，完成后删除临时目录。清除任何会影响测试的继承 `MISE_*` 设置，尤其是安全模式、强制配置路径或禁用的后端。这些目录会隔离 mise 自身的状态；软件包插件和外部安装程序仍可能修改其宿主机管理的状态。
+
+然后测试插件所实现的接口。以下名称均为占位符：
+
+| 类型 | 验证 |
+| --- | --- |
+| 工具 | `mise ls-remote test-plugin`、`mise use test-plugin@1.0.0`、`mise exec -- example --version` |
+| 后端 | `mise ls-remote test-plugin:example`、`mise use test-plugin:example@1.0.0`、`mise exec -- example --version` |
+| 环境 | 在 `[env]` 下声明 `_.test-plugin`，然后在子进程中断言预期的环境 |
+| 软件包 | 使用一次性宿主配置文件或伪 CLI；测试状态、选定批次、试运行和感知所有权的清理 |
+
+`mise exec --` 后的命令必须包含实际的可执行文件。测试具体的工具版本，而不是 `latest`，这样无关的上游发布就不会改变测试装置。
 
 ### 手动测试
 
-手动测试你的插件：
-
-```bash
-# 开发链接
-mise plugin link my-plugin /path/to/plugin
-
-# 测试所有功能
-mise ls-remote my-plugin
-mise install my-plugin@latest
-mise use my-plugin@latest
-
-# 在不同环境中测试
-docker run --rm -it ubuntu:latest bash -c "
-    curl -fsSL https://mise.jdx.dev/install.sh | sh
-    mise plugin install my-plugin https://github.com/username/my-plugin
-    mise install my-plugin@latest
-"
-```
+除了本地符号链接外，还要在全新的测试目录中测试已发布的 Git 引用或归档。符号链接可以看到未提交和未跟踪的文件，而这些文件可能不会包含在发布版本中。验证包含空格的路径、所需的外部程序，以及 CI 中支持的每个操作系统。空的 Linux 容器需要宿主机先决条件和绝对路径的 mise 可执行文件，才能运行安装程序。
 
 ## 发布流程
 
 ### 1. 准备发布
 
-在发布之前，确保一切都已准备就绪：
-
-```bash
-# 运行测试
-./test/test.sh
-
-# 检查 git 状态
-git status
-
-# 在 metadata.lua 中更新版本
-vim metadata.lua
-
-# 提交更改
-git add .
-git commit -m "准备发布 v1.2.3"
-```
+运行插件文档中列出的检查，检查差异和发布树，更新元数据和说明，并且只提交预期的发布文件。确认安装说明使用你自己的仓库 URL 和受支持的工具版本。
 
 ### 2. 创建发布
 
-创建一个带标签的发布：
+从已检查的发布提交创建并推送一个标签：
 
-```bash
-# 创建并推送标签
-git tag -a v1.2.3 -m "Release version 1.2.3"
-git push origin v1.2.3
+```sh
+git tag -a v1.2.3 -m "Release v1.2.3"
 git push origin main
+git push origin v1.2.3
 ```
+
+如果实际包含发布内容的分支不是 `main`，则推送该分支。避免使用 `git push --tags`，因为它可能会发布无关的本地标签。
 
 ### 3. GitHub Releases（推荐）
 
-创建一个 GitHub release 以便更容易被发现：
-
-1. 前往 GitHub 上的你的仓库
-2. 点击 "Releases" → "Create a new release"
-3. 选择你的标签（v1.2.3）
-4. 编写描述更改的发布说明
-5. 发布该 release
+为现有标签创建一个发布，并附上安装说明、受支持的 mise 版本以及行为变更。测试用户将收到的确切修订版本。只有在使用者会验证已发布的签名时，签名才有用；不要暗示每次插件安装都会验证 Git 标签签名。
 
 ### 4. 发布说明模板
 
 ````markdown
-## v1.2.3 的更改
+## v1.2.3
 
-### 新增
+Describe the concrete behavior change, required mise version, and any migration steps.
+List supported platforms and changed external prerequisites.
 
-- 新功能 X
-- 支持 Y
-
-### 变更
-
-- 提升了 Z 的性能
-- 更新了依赖项
-
-### 修复
-
-- 修复了 A 的问题
-- 解决了 B 中的 bug
-
-### 安装
-
-```bash
-mise plugin install my-plugin https://github.com/username/my-plugin
+```sh
+mise plugin install my-plugin 'https://github.com/your-org/my-plugin#v1.2.3'
 ```
 ````
 
@@ -281,210 +168,91 @@ mise plugin install my-plugin https://github.com/username/my-plugin
 
 ### 1. 直接 Git 安装
 
-用户可以直接从你的仓库安装：
-
-```bash
-# 从 GitHub 安装
-mise plugin install my-plugin https://github.com/username/my-plugin
-
-# 安装特定版本
-mise plugin install my-plugin https://github.com/username/my-plugin@v1.2.3
-
-# 从其他 Git 提供商安装
-mise plugin install my-plugin https://gitlab.com/username/my-plugin
+```sh
+mise plugin install my-plugin https://github.com/your-org/my-plugin
+mise plugin install my-plugin 'https://github.com/your-org/my-plugin#v1.2.3'
 ```
+
+Git 引用使用 `#`，而不是工具请求使用的 `@version` 语法。标签或分支可能会移动；提交 ID 可以标识固定的源代码修订版本。已有安装需要显式更新或替换；分享新 URL 不会自动更新用户的安装。
 
 ### 2. 私有仓库访问
 
-对于私有仓库，用户需要访问权限：
+使用用户的 Git 身份验证设置，例如 SSH：
 
-```bash
-# SSH 访问（推荐）
-mise plugin install my-plugin git@github.com:username/private-plugin.git
-
-# 使用 token 的 HTTPS
-mise plugin install my-plugin https://username:token@github.com/username/private-plugin.git
+```sh
+mise plugin install my-plugin git@github.com:your-org/private-plugin.git
 ```
+
+HTTPS 仓库可以使用 Git 的凭据助手。不要将令牌直接放入命令 URL 中：它可能会保留在 shell 历史记录、配置、进程参数或 Git 远程仓库中。在调试插件钩子之前，使用 `git ls-remote <repository-url>` 验证访问权限。
 
 ### 3. 归档分发
 
-你也可以以归档文件的形式分发：
+从确切的发布引用创建一个带顶层目录的归档：
 
-```bash
-# 创建发布归档
-git archive --format=zip --output=my-plugin-v1.2.3.zip v1.2.3
-
-# 用户可以从归档文件安装
-mise plugin install my-plugin https://github.com/username/my-plugin/releases/download/v1.2.3/my-plugin-v1.2.3.zip
+```sh
+git archive --format=zip --prefix=my-plugin/ --output=my-plugin-v1.2.3.zip v1.2.3
 ```
+
+发布归档，然后从全新的 mise 数据目录测试其 URL：
+
+```sh
+mise plugin install my-plugin https://github.com/your-org/my-plugin/releases/download/v1.2.3/my-plugin-v1.2.3.zip
+```
+
+归档安装没有 Git 历史记录。`mise plugin update` 无法为其获取新的 Git 引用；用户必须显式安装替换归档。
 
 ## 维护和更新
 
 ### 1. 更新工作流
 
-建立定期更新流程：
+测试变更，发布新的修订版本，并记录用户更新的方法：
 
-```bash
-# 开发工作流
-git checkout -b feature/new-feature
-# ... 做出更改 ...
-git commit -m "Add new feature"
-git push origin feature/new-feature
-
-# 审核并合并后
-git checkout main
-git pull origin main
-git tag -a v1.3.0 -m "发布 v1.3.0"
-git push origin v1.3.0
+```sh
+mise plugin update my-plugin#v1.3.0
 ```
 
-### 2. 向后兼容性
+更新插件代码和升级已安装的工具版本是两个独立的操作。更改可执行文件路径或环境钩子时，要同时测试新的安装和已有的安装。
 
-在可能的情况下保持向后兼容：
+### 2. 向后兼容
 
-- 保持现有插件接口不变
-- 将新功能作为可选项添加
-- 逐步弃用旧功能
-- 清晰记录破坏性变更
+记录重命名的选项、变更的默认值、所需的外部工具以及移除的平台。在可行的情况下保持旧配置正常工作；需要迁移时，提供完整的替代示例。
 
 ### 3. 用户沟通
 
-让用户及时了解更新情况：
-
-- 使用清晰的发布说明
-- 宣布重大变更
-- 为破坏性变更提供迁移指南
-- 维护文档
+发布说明应解释可观察到的变更以及采用这些变更所需的命令。说明已知限制，以及如何在不包含机密信息的情况下报告可复现的故障。
 
 ## 安全注意事项
 
-### 1. 代码审查
+检查你所分发的代码和依赖项。在构造命令时，将工具名称、路径、版本和配置选项视为输入。确保下载内容经过验证，并在缺少必要校验和时失败。不要打印凭据或秘密响应正文。
 
-- 在发布前审查所有代码变更
-- 检查安全漏洞
-- 验证外部依赖
-- 使用不受信任的输入进行测试
-
-### 2. 依赖管理
-
-- 尽可能固定依赖版本
-- 定期更新依赖
-- 关注安全公告
-- 仅使用可信来源
-
-### 3. 访问控制
-
-- 适当限制仓库访问权限
-- 使用强身份验证
-- 定期审计访问权限
-- 对于敏感插件，考虑使用签名发布版本
+插件是以用户权限运行的代码。归档、标签、工具锁定文件和配置的信任分别涵盖不同的内容；避免声称其中某一项可以保护所有内容。参见[安全](/security.html)和[使用插件](/plugin-usage.html)。
 
 ## 最佳实践
 
-### 1. 文档
-
-- 保持 README.md 简洁但完整
-- 包含使用示例
-- 记录配置选项
-- 提供故障排查指南
-
-### 2. 测试
-
-- 在多个平台上进行测试
-- 包含边界情况
-- 测试升级场景
-- 尽可能自动化测试
-
-### 3. 社区
-
-- 及时响应问题
-- 友好地接受贡献
-- 保持一致的代码风格
-- 乐于助人并保持尊重
-
-### 4. 发布管理
-
-- 遵循语义化版本控制
-- 创建清晰的发布说明
-- 彻底测试发布版本
-- 维护稳定分支
+使 README 足以说明如何安装、配置、运行、更新和移除集成。根据发布构件进行测试，自动化受支持平台的检查，并使测试装置独立于个人设置和凭据。
 
 ## 故障排查
 
 ### 常见问题
 
-**插件未安装：**
+如果插件作为本地链接可以正常工作，但发布后失败，请将 `git ls-tree` 或归档内容与工作目录进行比较。检查钩子文件名和 Lua 语法，并确认已发布的修订版本包含辅助文件。
 
-```bash
-# 检查仓库 URL
-git clone https://github.com/username/my-plugin.git
-
-# 验证 metadata.lua 是否存在
-ls -la my-plugin/metadata.lua
-
-# 本地测试
-mise plugin link my-plugin ./my-plugin
-```
-
-**版本冲突：**
-
-```bash
-# 检查 metadata.lua 中的版本
-grep version my-plugin/metadata.lua
-
-# 验证 git 标签
-git tag -l
-```
-
-**权限问题：**
-
-```bash
-# 检查仓库权限
-git ls-remote https://github.com/username/my-plugin.git
-
-# 对于私有仓库，验证访问权限
-ssh -T git@github.com
-```
+如果版本显示不正确，请区分 `PLUGIN.version`、仓库引用和受管理工具的版本。分别检查 `mise plugins ls --urls` 和 `mise ls --current`。对于身份验证失败，首先使用 Git 本身检查仓库访问权限。
 
 ## 下一步
 
-- [后端插件开发](backend-plugin-development.md)
-- [工具插件开发](tool-plugin-development.md)
-- [插件 Lua 模块](plugin-lua-modules.md)
+- [后端插件开发](/backend-plugin-development.html)。
+- [工具插件开发](/tool-plugin-development.html)。
+- [环境插件开发](/env-plugin-development.html)。
+- [软件包插件开发](/package-plugin-development.html)。
+- [插件 Lua 模块](/plugin-lua-modules.html)。
 
 ## 示例
 
 ### 简单的后端插件发布
 
-```bash
-# 1. 准备插件
-cd my-backend-plugin
-echo "Updated backend methods" > metadata.lua
-
-# 2. 本地测试
-mise plugin link my-plugin .
-mise ls-remote my-plugin:tool
-
-# 3. 发布
-git add .
-git commit -m "v1.0.0: Initial release"
-git tag -a v1.0.0 -m "Initial release"
-git push origin v1.0.0
-```
+通过全部三个后端钩子测试 `test-plugin:example`，然后在新的数据目录中安装带标签的仓库，并重复相同的检查。这可以发现缺失的辅助文件和打包不正确的钩子目录。
 
 ### 带钩子的工具插件
 
-```bash
-# 1. 准备插件
-cd my-tool-plugin
-./test/test.sh  # 运行测试
-
-# 2. 更新版本
-sed -i 's/version = "1.0.0"/version = "1.1.0"/' metadata.lua
-
-# 3. 发布
-git add .
-git commit -m "v1.1.0: Add new hook functionality"
-git tag -a v1.1.0 -m "Add new hook functionality"
-git push origin v1.1.0
-```
+测试版本列表、构件验证、解压、`PostInstall`（如果存在）以及 `EnvKeys`。在没有竞争性 `[tools]` 条目的项目中加入版本文件测试。

@@ -3,7 +3,7 @@ use crate::direnv::DirenvDiff;
 use crate::env::{__MISE_DIFF, PATH_KEY, TERM_WIDTH};
 use crate::env::{join_paths, split_paths};
 use crate::env_diff::{EnvDiff, EnvDiffOperation, EnvMap};
-use crate::file::{canonicalize_cached, display_path, display_rel_path};
+use crate::file::{self, canonicalize_cached, display_path, display_rel_path};
 use crate::hook_env::{PREV_SESSION, WatchFilePattern};
 use crate::shell::{EXAMPLE_SHELL, ShellType, require_shell};
 use crate::toolset::{ResolveOptions, Toolset, ToolsetBuilder};
@@ -48,6 +48,8 @@ pub(crate) struct HookEnv {
     /// Show "mise: <TOOL>@<VERSION>" message when changing directories
     #[usage(long, hide = true)]
     status: bool,
+    #[usage(long, hide = true)]
+    shell_pid: Option<u32>,
 }
 
 impl HookEnv {
@@ -126,11 +128,35 @@ impl HookEnv {
             return Ok(());
         }
         time!("should_exit_early false");
-        miseprint!("{}", hook_env::clear_old_env(&*shell))?;
+        let old_patches = hook_env::clear_old_env_patches(&*shell);
+        let cleared_keys: BTreeSet<&str> = old_patches
+            .iter()
+            .filter_map(|patch| match patch {
+                EnvDiffOperation::Remove(key) => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
+        miseprint!("{}", hook_env::build_env_commands(&*shell, &old_patches))?;
 
         // Use env_with_path_and_split which handles caching internally
-        let (mut mise_env, user_paths, tool_paths, env_watch_files) =
+        let (mut mise_env, env_remove, user_paths, tool_paths, env_watch_files) =
             ts.env_with_path_and_split(&config).await?;
+        let daemon_commands = match crate::daemons::hook_env::emit(
+            &config,
+            &ts,
+            &mise_env,
+            self.shell_pid,
+            &*shell,
+            self.force,
+        )
+        .await
+        {
+            Ok(commands) => commands,
+            Err(err) => {
+                warn!("daemon auto lifecycle: {err:#}");
+                String::new()
+            }
+        };
         mise_env.remove(&*PATH_KEY);
 
         // Create config_paths from user_paths for display_status and build_session
@@ -139,17 +165,27 @@ impl HookEnv {
             .await?;
 
         let mut diff = EnvDiff::new(&env::PRISTINE_ENV, mise_env.clone());
-        let mut patches = diff.to_patches();
+        for key in env_remove {
+            if let Some(value) = env::PRISTINE_ENV.get(&key) {
+                diff.old.insert(key, value.clone());
+            }
+        }
+        let mut diff_patches = diff.to_patches();
 
         // For fish shell, filter out PATH operations from diff patches because
         // fish's PATH handling conflicts with setting PATH multiple times
         if shell.to_string() == "fish" {
-            patches.retain(|p| match p {
+            diff_patches.retain(|p| match p {
                 EnvDiffOperation::Add(k, _)
                 | EnvDiffOperation::Change(k, _)
                 | EnvDiffOperation::Remove(k) => k != &*PATH_KEY,
             });
         }
+        diff_patches.retain(|patch| match patch {
+            EnvDiffOperation::Remove(key) => !cleared_keys.contains(key.as_str()),
+            _ => true,
+        });
+        let mut patches = diff_patches;
 
         // Combine paths for __MISE_DIFF tracking (all mise-managed paths)
         let all_paths: Vec<PathBuf> = user_paths
@@ -176,7 +212,14 @@ impl HookEnv {
             .chain(env_watch_files.iter().map(|p| p.as_path().into()))
             .collect();
 
-        patches.extend(self.build_path_operations(&user_paths, &tool_paths, &__MISE_DIFF.path)?);
+        let retain_shims = Settings::get().activate_shims
+            && (Settings::get().not_found_auto_install || ts.has_lazy_declarations());
+        patches.extend(self.build_path_operations(
+            &user_paths,
+            &tool_paths,
+            &__MISE_DIFF.path,
+            retain_shims,
+        )?);
         patches.push(self.build_diff_operation(&diff)?);
         patches.push(
             self.build_session_operation(
@@ -201,11 +244,17 @@ impl HookEnv {
 
         let output = hook_env::build_env_commands(&*shell, &patches);
         miseprint!("{output}")?;
+        miseprint!("{daemon_commands}")?;
 
         // Build and output alias commands
         let alias_output =
             hook_env::build_alias_commands(&*shell, &PREV_SESSION.aliases, &new_aliases);
         miseprint!("{alias_output}")?;
+
+        miseprint!(
+            "{}",
+            crate::packslip::completions::activate(&config, &ts, &shell.to_string())
+        )?;
 
         hooks::run_all_hooks(&config, &ts, &*shell).await;
         hooks::run_enter_hooks_for_newly_loaded_configs(&config, &ts, &*shell).await;
@@ -287,13 +336,15 @@ impl HookEnv {
         user_paths: &[PathBuf],
         tool_paths: &[PathBuf],
         to_remove: &[PathBuf],
+        retain_shims: bool,
     ) -> Result<Vec<EnvDiffOperation>> {
         let full = join_paths(&*env::PATH)?.to_string_lossy().to_string();
         let current_paths: Vec<PathBuf> = split_paths(&full).collect();
 
         let (pre, post, post_user) = match &*env::__MISE_ORIG_PATH {
             Some(orig_path) if !Settings::get().activate_aggressive => {
-                let orig_paths: Vec<PathBuf> = split_paths(orig_path).collect();
+                let orig_path = crate::windows_posix::orig_path_for_windows(orig_path);
+                let orig_paths: Vec<PathBuf> = split_paths(orig_path.as_ref()).collect();
                 let orig_set: HashSet<_> = orig_paths.iter().collect();
 
                 // Get all mise-managed paths from the previous session
@@ -316,6 +367,12 @@ impl HookEnv {
                 let mut seen_in_current: HashSet<&PathBuf> = HashSet::new();
                 let mise_install_dirs = crate::path_env::mise_install_dirs();
                 for path in &current_paths {
+                    // Shim farms are a mise-managed boundary. Reinsert them below
+                    // the selected tool paths instead of preserving their temporary
+                    // activation-prelude position as a user-owned prefix.
+                    if file::is_mise_shims_dir(path) {
+                        continue;
+                    }
                     if orig_set.contains(path) {
                         seen_orig = true;
                         orig_reordered.push(path.clone());
@@ -347,14 +404,21 @@ impl HookEnv {
                 // Append any orig paths that are no longer in current PATH
                 // (to avoid losing paths that may have been temporarily removed)
                 for path in &orig_paths {
-                    if !seen_in_current.contains(path) {
+                    if !file::is_mise_shims_dir(path) && !seen_in_current.contains(path) {
                         orig_reordered.push(path.clone());
                     }
                 }
 
                 (pre, orig_reordered, post_user)
             }
-            _ => (vec![], current_paths, vec![]),
+            _ => (
+                vec![],
+                current_paths
+                    .into_iter()
+                    .filter(|path| !file::is_mise_shims_dir(path))
+                    .collect(),
+                vec![],
+            ),
         };
 
         // Filter out tool paths that are already in the original PATH (post) or
@@ -434,12 +498,20 @@ impl HookEnv {
             .cloned()
             .collect();
 
+        let shim_dirs = if retain_shims {
+            crate::shims::shim_farm_dirs()
+        } else {
+            vec![]
+        };
+
         // Combine paths in the correct order:
-        // pre (user shell prepends) -> user_paths (from config) -> tool_paths -> post (original PATH) -> post_user (user shell appends)
+        // pre (user shell prepends) -> user_paths (from config) -> tool_paths ->
+        // shim fallback boundary -> post (original PATH) -> post_user (user shell appends)
         let new_path = join_paths(
             pre.iter()
                 .chain(user_paths_filtered.iter())
                 .chain(tool_paths_filtered.iter())
+                .chain(shim_dirs.iter())
                 .chain(post.iter())
                 .chain(post_user.iter()),
         )?
@@ -559,7 +631,7 @@ fn patch_to_status(patch: EnvDiffOperation) -> String {
 }
 
 fn format_status(status: &str) -> Cow<'_, str> {
-    if Settings::get().status.truncate {
+    if Settings::get().status.truncate && crate::env::should_truncate() {
         truncate_str(status, TERM_WIDTH.max(60) - 5, "…")
     } else {
         status.into()

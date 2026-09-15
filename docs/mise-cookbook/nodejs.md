@@ -1,22 +1,27 @@
-# Mise + Node.js 食谱
+---
+description: "使用 mise 选择 Node.js 和包管理器，然后运行项目声明的脚本和依赖项"
+---
 
-以下是一些使用 mise 管理 [Node.js](/lang/node.html) 项目的技巧。
+# Node.js Cookbook
+
+使用 mise 选择 [Node.js](/lang/node.html) 和包管理器，然后运行项目声明的脚本和依赖项。
 
 ## 使用 Node.js 入门
 
-要安装 Node.js，可以在目录中使用以下命令：
+要在目录中安装 Node.js，请运行：
 
 ```shell
 mise use node
 ```
 
-这将安装最新版本的 Node.js，并创建一个包含以下内容的 `mise.toml` 文件：
+这将安装最新版本的 Node.js，并创建包含以下内容的 `mise.toml` 文件：
 
 ```toml
+[tools]
 node = "latest"
 ```
 
-如果你想改为全局安装 Node.js（例如 node v26），可以使用以下命令：
+如果要改为全局安装 Node.js（例如 node v26），请运行：
 
 ```shell
 mise use -g node@26
@@ -24,15 +29,15 @@ mise use -g node@26
 
 ## 将 node modules 二进制文件添加到 PATH
 
-在安装 `package.json` 中指定的 Node.js 包时，通常需要使用 `npx` 或二进制文件的完整路径。例如：
+安装 `package.json` 中列出的 Node.js 包时，通常需要使用 `npx` 或完整路径来运行其二进制文件。例如：
 
 ```shell
-npm install --save eslint
-eslint --version # 不起作用
-npx eslint --version # 可用
+mise exec -- npm install --save-dev eslint
+eslint --version # doesn't work
+npx eslint --version # works
 ```
 
-借助 `mise`，你可以将 node modules 二进制文件添加到 `PATH`。这样，通过 npm 安装的 CLI 就可以不使用 `npx` 直接使用了。
+使用 `mise`，你可以将 node modules 二进制文件添加到 `PATH`，这样通过 npm 安装的 CLI 无需使用 `npx` 即可用。
 
 ```toml [mise.toml]
 [env]
@@ -42,72 +47,54 @@ _.path = ['{{config_root}}/node_modules/.bin']
 示例：
 
 ```shell
-npm install --save eslint
-eslint --version # 可用
+mise exec -- npm install --save-dev eslint
+mise exec -- eslint --version # works without shell activation
 ```
+
+启用 shell 激活后，`eslint --version` 也可以直接运行。
 
 ## 示例 Node.js 项目
 
+此配方要求 `package.json` 包含 `start`、`lint`、`test` 和 `build` 脚本，并且包含一个已提交的 `package-lock.json`。将 ESLint、TypeScript 和测试运行器放在项目的 `devDependencies` 中，以便 npm 的 lockfile 与它们使用的包一起控制其版本。
+
 ```toml [mise.toml]
-min_version = "2024.9.5"
+[tools]
+node = "24"
 
 [env]
-_.path = ['{{config_root}}/node_modules/.bin']
-
-# 使用从当前目录派生的项目名称
-PROJECT_NAME = "{{ config_root | basename }}"
-
-# 设置 node 模块二进制文件的路径
-BIN_PATH = "{{ config_root }}/node_modules/.bin"
-
-NODE_ENV = "{{ env.NODE_ENV | default(value='development') }}"
-
-[tools]
-# 使用指定版本安装 Node.js
-node = "{{ env['NODE_VERSION'] | default(value='lts') }}"
-
-# 如有需要，安装一些全局 npm 包
-"npm:typescript" = "latest"
-"npm:eslint" = "latest"
-"npm:jest" = "latest"
+NODE_ENV = { default = "development" }
 
 [tasks.install]
+description = "Install the locked npm dependency tree"
 alias = "i"
-description = "安装 npm 依赖"
-run = "npm install"
+run = "npm ci"
 
 [tasks.start]
+description = "Start the development server"
 alias = "s"
-description = "启动开发服务器"
 run = "npm run start"
 
 [tasks.lint]
+description = "Run the project's lint script"
 alias = "l"
-description = "运行 ESLint"
-run = "eslint src/"
+run = "npm run lint"
 
 [tasks.test]
-description = "运行测试"
+description = "Run the project's tests"
 alias = "t"
-run = "jest"
+run = "npm test"
 
 [tasks.build]
 description = "构建项目"
 alias = "b"
 run = "npm run build"
-
-[tasks.info]
-description = "打印项目信息"
-run = '''
-echo "Project: $PROJECT_NAME"
-echo "NODE_ENV: $NODE_ENV"
-'''
 ```
 
-## `pnpm` 示例
+克隆仓库后运行 `mise run install`，然后运行 `mise run test` 或 `mise run start`。npm 脚本已经将 `node_modules/.bin` 放入 `PATH`，因此这些任务不需要单独的路径指令。对于没有 lockfile 的新项目，请运行一次 `mise exec -- npm install`，并提交生成的 lockfile。
 
-此示例使用 `pnpm` 作为包管理器。它要求在 `package.json` 中通过
-`devEngines.packageManager` 固定 pnpm 版本：
+## 使用 `pnpm` 的示例
+
+此示例使用 `pnpm` 作为包管理器。将以下字段合并到现有的 `package.json` 中，该文件还必须定义一个 `dev` 脚本：
 
 ```json [package.json]
 {
@@ -146,11 +133,13 @@ run = 'node --run dev'
 depends = ['pnpm-install']
 ```
 
-通过此设置，在 Node.js 项目中开始使用只需运行 `mise dev`：
+运行 `mise run dev`，在启动现有应用程序之前安装选定的工具并准备依赖项：
 
 - `mise` 将安装正确版本的 Node.js
 - `mise` 将安装 `package.json` 中声明的 `pnpm` 版本
-- `pnpm install` 将在 `node --run dev` 之前运行
+- 在 `node --run dev` 之前，当其源或输出过期时，`pnpm install` 会运行
+
+时间戳检查不会验证 `node_modules` 中的每个文件。如果依赖项缺失或损坏，请运行 `mise run --force pnpm-install`。
 
 ## 替代 Corepack
 

@@ -21,32 +21,49 @@ use crate::toolset::{InstallOptions, ResolveOptions, Toolset, ToolsetBuilder};
 
 /// Execute a command with tool(s) set
 ///
-/// use this to avoid modifying the shell session or running ad-hoc commands with mise tools set.
+/// Use this to run a command with mise's tools and environment without modifying the shell
+/// session, or to run ad-hoc commands with tools that are not in the config.
 ///
-/// Tools will be loaded from mise.toml, though they can be overridden with <RUNTIME> args
-/// Note that only the plugin specified will be overridden, so if a `mise.toml` file
-/// includes "node 20" but you run `mise exec python@3.11`; it will still load node@20.
+/// Tools are loaded from mise.toml and can be overridden with <TOOL@VERSION> args. Only the
+/// tools you name are overridden: if `mise.toml` includes `node = "20"` and you run
+/// `mise exec python@3.11 -- python -V`, node@20 is still loaded.
 ///
-/// The "--" separates runtimes from the commands to pass along to the subprocess.
+/// The "--" separates tools from the command to pass along to the subprocess.
 #[derive(Debug, usage_rs::Args)]
-#[usage(visible_alias = "x", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    visible_alias = "x",
+    verbatim_doc_comment,
+    example(
+        r###"mise exec node@20 -- node ./app.js
+mise x node@20 -- node ./app.js"###,
+        help = "Launch app.js using node-20.x, with the full command or its shorter alias."
+    ),
+    example(
+        r###"mise exec node@20 python@3.11 --command "node -v && python -V""###,
+        help = r###"Specify command as a string:"###
+    ),
+    example(
+        r###"mise x -C /path/to/project node@20 -- node ./app.js"###,
+        help = r###"Run a command in a different directory:"###
+    )
+)]
 pub(crate) struct Exec {
-    /// Tool(s) to start
+    /// Tool(s) to load
     /// e.g.: node@20 python@3.10
     #[usage(value_name = "TOOL@VERSION")]
     pub tool: Vec<ToolArg>,
 
-    /// Command string to execute (same as --command)
+    /// Executable and arguments to run directly, after `--`
     #[usage(conflicts = "c", required_unless = "c", double_dash = "required")]
     pub command: Option<Vec<String>>,
 
-    /// Command string to execute
+    /// Command string to execute through a shell (supports pipes and redirection)
     #[usage(short, long = "command", value_hint = usage_rs::ValueHint::CommandString, conflicts = "command")]
     pub c: Option<String>,
 
     /// Number of jobs to run in parallel
     /// Values below 1 are treated as 1
-    /// [default: 4]
+    /// Defaults to the `jobs` setting
     #[usage(long, short, env = "MISE_JOBS", verbatim_doc_comment)]
     pub jobs: Option<usize>,
 
@@ -56,7 +73,9 @@ pub(crate) struct Exec {
     pub allow_env: Vec<String>,
 
     /// Allow network to specific host (implies --deny-net for everything else)
-    /// macOS only in v1; on Linux falls back to allowing all network
+    /// Per-host filtering is unsupported on Linux and returns an error.
+    /// See the sandboxing guide for current macOS host-filter limitations.
+    /// On Windows, sandboxing is unavailable: mise warns and runs without host filtering.
     #[usage(long, value_name = "HOST", verbatim_doc_comment)]
     pub allow_net: Vec<String>,
 
@@ -72,7 +91,7 @@ pub(crate) struct Exec {
     #[usage(long, verbatim_doc_comment)]
     pub deny_all: bool,
 
-    /// Block env var inheritance (only PATH, HOME, USER, SHELL, TERM, LANG pass through)
+    /// Block env var inheritance except PATH, HOME, USER, SHELL, TERM, COLORTERM, LANG
     #[usage(long, verbatim_doc_comment)]
     pub deny_env: bool,
 
@@ -96,8 +115,8 @@ pub(crate) struct Exec {
     #[usage(long)]
     pub no_deps: bool,
 
-    /// Connect backend install command stdin/stdout/stderr directly to the terminal
-    /// Implies --jobs=1
+    /// Connect backend install command stdin/stdout/stderr directly to the terminal.
+    /// Implies `--jobs=1`
     #[usage(long, overrides = "jobs")]
     pub raw: bool,
 }
@@ -207,7 +226,7 @@ impl Exec {
             resolve_options,
             ..Default::default()
         };
-        let (_, missing) = measure!("install_arg_versions", {
+        let (_, mut missing) = measure!("install_arg_versions", {
             ts.install_missing_versions(&mut config, &opts).await?
         });
 
@@ -216,14 +235,51 @@ impl Exec {
             ts.resolve_with_opts(&config, &opts.resolve_options).await?;
         }
 
+        let (program, mut args) = parse_command(&env::SHELL, &self.command, &self.c);
+
+        // Running a lazy tool's command is what installs it, and `mise x -- <cmd>`
+        // names that command directly. Install its provider here: program resolution
+        // below deliberately looks past shim directories, so the bootstrap shim that
+        // would otherwise do this never gets the chance.
+        if ts.has_lazy_declarations()
+            && !program.contains(['/', '\\'])
+            && ts.has_missing_lazy_bin_provider(&config, &program).await?
+        {
+            ts.install_missing_lazy_bin(&mut config, &program).await?;
+            // The original list was computed before the command's lazy provider
+            // was installed. Refresh it so a successful install is not reported
+            // as missing below.
+            missing = ts.list_missing_versions_for_install(&config).await;
+        }
+        if ts.has_lazy_declarations()
+            && !opts.dry_run
+            && let Err(err) = crate::shims::ensure_lazy_shims(&missing)
+        {
+            // Commands started by the child (a shell, a script) reach lazy tools
+            // through their bootstrap shims, which a hand-edited declaration lacks.
+            warn!("failed to create shims for lazy tools: {err:#}");
+        }
+
         measure!("notify_if_versions_missing", {
             ts.notify_missing_versions(missing);
         });
 
-        let (program, mut args) = parse_command(&env::SHELL, &self.command, &self.c);
+        crate::shims::ensure_command_wrapper_shims(&config, &ts)?;
 
-        let mut env = measure!("env_with_path", { ts.env_with_path(&config).await? });
+        let (mut env, env_remove) = measure!("env_with_path", {
+            ts.env_with_path_and_removals(&config).await?
+        });
         env.extend(wrapper_env);
+        if !self.tool.is_empty() {
+            // A dispatched shim reloads config in a new process. Preserve both
+            // enclosing task overrides and these explicit exec overrides.
+            let mut tools = crate::shims::task_tool_args_from_env()?;
+            tools.retain(|tool| !self.tool.iter().any(|explicit| explicit.ba == tool.ba));
+            tools.extend(self.tool.iter().cloned());
+            if let Some(value) = crate::shims::task_tool_args_env(&tools)? {
+                env.insert(crate::shims::TASK_TOOL_ARGS_ENV.into(), value);
+            }
+        }
         if strip_dispatch_dirs && let Some(path) = env.get_mut(&*env::PATH_KEY) {
             *path = crate::file::strip_dispatch_dirs_from_path(path);
         }
@@ -235,6 +291,7 @@ impl Exec {
                 .run(DepsOptions {
                     auto_only: true, // Only run providers with auto=true
                     env: env.clone(),
+                    env_remove: env_remove.clone(),
                     ..Default::default()
                 })
                 .await?;
@@ -265,7 +322,12 @@ impl Exec {
             None
         };
         env.remove("__MISE_DIFF");
-        let serialized = EnvDiff::from_final_env(&env::PRISTINE_ENV, &env).serialize();
+        let mut final_env = env::PRISTINE_ENV.clone();
+        for key in &env_remove {
+            final_env.remove(key);
+        }
+        final_env.extend(env.clone());
+        let serialized = EnvDiff::from_final_env(&env::PRISTINE_ENV, &final_env).serialize();
         if let Some(mise_env) = removed_mise_env {
             env.insert("MISE_ENV".to_string(), mise_env);
         }
@@ -303,12 +365,15 @@ impl Exec {
                 deny_write: self.deny_write,
                 deny_net: self.deny_net,
                 deny_env: self.deny_env,
+                deny_process: false,
+                deny_temp_write: false,
                 allow_read: self.allow_read,
                 allow_write: self.allow_write,
                 allow_net: self.allow_net,
                 allow_env: self.allow_env,
                 pass_through_env: vec![],
                 cache_env: vec![],
+                symlinked_allow_paths: vec![],
             },
         );
         sandbox.resolve_paths();
@@ -321,7 +386,7 @@ impl Exec {
         // shell_body_mode: true only for the `-c`/`--command` path, where
         // parse_command synthesized `shell + [flags.., body]`. A positional
         // command must not be reinterpreted as a shell body.
-        exec_program(program, args, env, &sandbox, self.c.is_some()).await
+        exec_program(program, args, env, env_remove, &sandbox, self.c.is_some()).await
     }
 }
 
@@ -330,6 +395,7 @@ pub(crate) async fn exec_program<T, U>(
     program: T,
     args: U,
     env: BTreeMap<String, String>,
+    env_remove: std::collections::BTreeSet<String>,
     sandbox: &SandboxConfig,
     _shell_body_mode: bool,
 ) -> Result<()>
@@ -341,6 +407,9 @@ where
     // Capture the marker before deny-env removes variables from the process.
     // The lazy state must retain the dispatching shim for candidate filtering.
     drop(env::MISE_SHIM_PATH.read().unwrap());
+    for key in env_remove {
+        env::remove_var(key);
+    }
     if sandbox.effective_deny_env() {
         // When env is sandboxed, clear all vars and only set the filtered ones.
         //
@@ -497,6 +566,7 @@ pub(crate) async fn exec_program<T, U>(
     program: T,
     args: U,
     env: BTreeMap<String, String>,
+    env_remove: std::collections::BTreeSet<String>,
     sandbox: &SandboxConfig,
     shell_body_mode: bool,
 ) -> Result<()>
@@ -507,6 +577,9 @@ where
 {
     if sandbox.is_active() {
         warn!("sandbox is not supported on Windows, running unsandboxed");
+    }
+    for key in env_remove {
+        env::remove_var(key);
     }
     for (k, v) in env.iter() {
         env::set_var(k, v);
@@ -632,6 +705,7 @@ pub(crate) async fn exec_program<T, U>(
     program: T,
     args: U,
     env: BTreeMap<String, String>,
+    env_remove: std::collections::BTreeSet<String>,
     _sandbox: &SandboxConfig,
     _shell_body_mode: bool,
 ) -> Result<()>
@@ -643,6 +717,9 @@ where
     let mut cmd = cmd::cmd(program, args);
     for (k, v) in env.iter() {
         cmd = cmd.env(k, v);
+    }
+    for key in env_remove {
+        cmd = cmd.env_remove(key);
     }
     let res = cmd.unchecked().run()?;
     match res.status.code() {
@@ -696,17 +773,3 @@ fn parse_command(
         ),
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise exec node@20 -- node ./app.js</bold>  # launch app.js using node-20.x
-    $ <bold>mise x node@20 -- node ./app.js</bold>     # shorter alias
-
-    # Specify command as a string:
-    $ <bold>mise exec node@20 python@3.11 --command "node -v && python -V"</bold>
-
-    # Run a command in a different directory:
-    $ <bold>mise x -C /path/to/project node@20 -- node ./app.js</bold>
-"#
-);

@@ -10,11 +10,23 @@ use indexmap::IndexMap;
 use tabled::settings::Remove;
 use tabled::settings::location::ByColumnName;
 
-/// Shows outdated tool versions
+/// Show outdated tool versions
 ///
 /// See `mise upgrade` to upgrade these versions.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP,
+    example(r###"mise outdated
+Plugin  Requested  Current  Latest
+python  3.11       3.11.0   3.11.1
+node    20         20.0.0   20.1.0"###),
+    example(r###"mise outdated node
+Plugin  Requested  Current  Latest
+node    20         20.0.0   20.1.0"###),
+    example(r###"mise outdated --json
+{"python": {"requested": "3.11", "current": "3.11.0", "latest": "3.11.1"}, ...}"###),
+    example(r###"mise outdated --local
+Plugin  Requested  Current  Latest
+node    20         20.0.0   20.1.0"###))]
 pub(crate) struct Outdated {
     /// Tool(s) to show outdated versions for
     /// e.g.: node@20 python@3.10
@@ -22,12 +34,10 @@ pub(crate) struct Outdated {
     #[usage(value_name = "TOOL@VERSION", verbatim_doc_comment)]
     pub tool: Vec<ToolArg>,
 
-    /// Compares against the latest versions available, not what matches the current config
+    /// Compare against the latest versions available, not just those matching the current config
     ///
-    /// For example, if you have `node = "20"` in your config by default `mise outdated` will only
-    /// show other 20.x versions, not 21.x or 22.x versions.
-    ///
-    /// Using this flag, if there are 21.x or newer versions it will display those instead of 20.x.
+    /// For example, with `node = "20"` in your config, `mise outdated` normally only reports newer
+    /// 20.x versions. With this flag it reports the newest version overall, such as 22.x.
     #[usage(long, short = 'b', verbatim_doc_comment)]
     pub bump: bool,
 
@@ -159,27 +169,8 @@ impl Outdated {
 }
 
 static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Deprecation:</underline></bold>
+    r###"<bold><underline>Deprecation:</underline></bold>
 
 The `-l` shorthand for `--bump` is deprecated and will be removed in mise 2027.8.5.
-After removal, `-l` will become shorthand for `--local`. Use `-b` or `--bump` instead.
-
-<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise outdated</bold>
-    Plugin  Requested  Current  Latest
-    python  3.11       3.11.0   3.11.1
-    node    20         20.0.0   20.1.0
-
-    $ <bold>mise outdated node</bold>
-    Plugin  Requested  Current  Latest
-    node    20         20.0.0   20.1.0
-
-    $ <bold>mise outdated --json</bold>
-    {"python": {"requested": "3.11", "current": "3.11.0", "latest": "3.11.1"}, ...}
-
-    $ <bold>mise outdated --local</bold>
-    Plugin  Requested  Current  Latest
-    node    20         20.0.0   20.1.0
-"#
+After removal, `-l` will become shorthand for `--local`. Use `-b` or `--bump` instead."###
 );

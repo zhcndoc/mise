@@ -1,10 +1,14 @@
-# Mise + Python 食谱
+---
+description: "为现有的基于 requirements 的项目、uv 项目或独立 Python 脚本选择配方"
+---
 
-这里有一些使用 mise 管理 [Python](/lang/python.html) 项目的技巧。
+# Python Cookbook
+
+为现有的基于 requirements 的项目、uv 项目或独立 Python 脚本选择配方。有关运行时安装和 virtualenv 设置，请参阅 [Python 配置](/lang/python.html)。
 
 ## 一个使用 virtualenv 的 Python 项目
 
-这里有一个带有 `requirements.txt` 文件的 Python 项目示例。
+此配方要求存在 `requirements.txt`、`app.py` 和 `tests/` 目录。在用于开发的 requirements 中包含 `pytest`。mise 会创建 `.venv`；安装任务会将项目依赖填充到其中。
 
 ```toml [mise.toml]
 min_version = "2024.9.5"
@@ -17,7 +21,8 @@ PROJECT_NAME = "{{ config_root | basename }}"
 _.python.venv = { path = ".venv", create = true }
 
 [tools]
-python = "{{ get_env(name='PYTHON_VERSION', default='3.11') }}"
+python = "3.12"
+uv = "latest"
 ruff = "latest"
 
 [tasks.install]
@@ -30,12 +35,12 @@ description = "运行应用程序"
 run = "python app.py"
 
 [tasks.test]
-description = "运行测试"
-run = "pytest tests/"
+description = "Run tests"
+run = "python -m pytest tests/"
 
 [tasks.lint]
-description = "检查代码"
-run = "ruff src/"
+description = "Lint the code"
+run = "ruff check ."
 
 [tasks.info]
 description = "打印项目信息"
@@ -45,11 +50,13 @@ echo "虚拟环境: $VIRTUAL_ENV"
 '''
 ```
 
+运行 `mise run install`，然后运行 `mise run test`、`mise run lint` 或 `mise run run`。将 `.venv/` 添加到 `.gitignore`。
+
 ## mise + uv
 
 如果你使用的是通过 `uv init .` 初始化的 `uv` 项目，这里介绍如何将它与 mise 一起使用。
 
-下面是 `uv` 项目的结构示例：
+以下是 `uv` 项目的结构：
 
 ```shell [uv-project]
 .
@@ -63,22 +70,24 @@ cat .python-version
 # 3.12
 ```
 
-如果你在 `uv` 项目中运行 `uv run main.py`，`uv` 会使用 `.python-version` 文件中指定的 Python 版本自动为你创建一个虚拟环境。这还会创建一个 `uv.lock` 文件。
+如果你在 `uv` 项目中运行 `uv run main.py`，`uv` 会使用 `.python-version` 文件中指定的 Python 版本自动为你创建虚拟环境。它还会创建 `uv.lock` 文件。
 
-`mise` 会检测 `.python-version` 中的 Python 版本，不过默认情况下它不会使用 `uv` 创建的虚拟环境。所以，执行 `which python` 时会显示来自 `mise` 的全局 Python 安装。
+如果希望 mise 选择相同的 Python 版本，请启用 `.python-version` 发现功能。同时将 uv 声明为工具：
 
-```shell
-mise i
-which python
-# ~/.local/share/mise/installs/python/3.12.4/bin/python
+```toml [mise.toml]
+[tools]
+uv = "latest"
+
+[settings]
+idiomatic_version_file_enable_tools = ["python"]
 ```
 
-如果你希望 `mise` 使用 `uv` 创建的虚拟环境，可以在你的 `mise.toml` 文件中设置 [`python.uv_venv_auto`](/lang/python.html#python.uv_venv_auto) 配置。
-使用 `"source"` 可仅加载现有的 `.venv`，或使用 `"create|source"` 在缺失时创建它，然后再加载。
-如果你更希望由 `mise deps` 来创建虚拟环境，请保持为 `"source"`，启用 `[deps.uv]`，然后运行 `mise deps`。
+运行 `mise install`，然后运行 `mise exec -- uv sync` 来创建锁文件、虚拟环境和项目依赖。默认情况下，当你运行 `mise exec -- python` 时，mise 仍会选择其管理的 Python；`uv run` 则会选择 uv 的项目环境。
+
+要让 `mise` 使用由 `uv` 创建的虚拟环境，请在 `mise.toml` 文件中设置 [`python.uv_venv_auto`](/lang/python.html#python.uv_venv_auto) 设置。使用 `"source"` 仅加载现有的 `.venv`，或使用 `"create|source"` 在 `.venv` 缺失时创建它，然后加载它。如果你更希望由 `mise deps` 创建虚拟环境，请将其保持为 `"source"`，启用 `[deps.uv]`，然后运行 `mise deps`。
 
 ::: tip
-`mise` 会向上查找 `uv.lock` 文件来定位 uv 项目——`mise` 正是通过这个锁定文件得知项目使用 uv。因此，必须存在 `uv.lock`：如果找不到该文件（例如尚未运行 `uv sync` 的新项目），此设置将不会生效。运行 `uv sync`（或 `uv lock`）即可生成该文件。
+`mise` 会在目录树中向上查找 `uv.lock` 文件来定位 uv 项目——该锁文件是 `mise` 判断项目使用 uv 的依据。因此必须存在 `uv.lock`：如果找不到该文件（例如，在尚未执行 `uv sync` 的新项目中），此设置不会生效。运行 `uv sync`（或 `uv lock`）来生成该文件。
 :::
 
 ```toml [mise.toml]
@@ -88,11 +97,11 @@ python.uv_venv_auto = "source"
 # python.uv_venv_auto = "create|source"
 ```
 
-此时执行 `which python` 将会显示来自 `uv` 创建的虚拟环境中的 Python 版本。
+激活刷新后，`python` 会解析到虚拟环境。你也可以直接通过 mise 进行检查：
 
 ```shell
-which python
-# ./uv-project/.venv/bin/python
+mise exec -- python -c 'import sys; print(sys.executable)'
+# /path/to/uv-project/.venv/bin/python
 ```
 
 另一种方法是在你的 `mise.toml` 文件中使用 `_.python.venv` 来指定 `uv` 创建的虚拟环境路径。
@@ -104,12 +113,11 @@ _.python.venv = { path = ".venv" }
 
 ### 同步由 mise 和 uv 安装的 Python 版本
 
-你可以使用 [mise sync python --uv](/cli/sync/python.html#uv) 来同步 `mise` 安装的 Python 版本与 `uv` 项目中 `.python-version` 文件指定的 Python 版本。
+使用 [`mise sync python --uv`](/cli/sync/python.html) 让现有的 Python 安装可以在 mise 和 uv 之间使用。这会共享已安装的运行时；不会更新 `.python-version`、选择项目版本或同步软件包。使用 `uv sync` 来处理项目依赖。
 
 ### uv 脚本
 
-你可以在 toml 或文件任务的 [`shebang`](/tasks/toml-tasks.html#shell-shebang) 中利用 `uv run`。
-注意：如果文件名不是以 `.py` 结尾，则需要使用 `--script`。
+你可以在 toml 或文件任务的 [`shebang`](/tasks/toml-tasks.html#shell-shebang) 中使用 `uv run`。如果文件名不以 `.py` 结尾，则必须使用 `--script` 标志。
 
 下面是一个 toml 任务示例：
 
@@ -127,7 +135,8 @@ run = '''
 import requests
 from rich.pretty import pprint
 
-resp = requests.get("https://peps.python.org/api/peps.json")
+resp = requests.get("https://peps.python.org/api/peps.json", timeout=30)
+resp.raise_for_status()
 data = resp.json()
 pprint([(k, v["title"]) for k, v in data.items()][:10])
 '''
@@ -144,12 +153,13 @@ pprint([(k, v["title"]) for k, v in data.items()][:10])
 import requests
 from rich.pretty import pprint
 
-resp = requests.get("https://peps.python.org/api/peps.json")
+resp = requests.get("https://peps.python.org/api/peps.json", timeout=30)
+resp.raise_for_status()
 data = resp.json()
 pprint([(k, v["title"]) for k, v in data.items()][:10])
 ```
 
-然后你可以通过 `mise run print_peps` 来运行它：
+对于文件任务，在 Unix 上使用 `chmod +x mise-tasks/print_peps.py` 使其可执行。按照 TOML 示例在项目中声明 uv。随后，两种形式都可以使用 `mise run print_peps` 运行：
 
 ```shell
 ❯ mise run print_peps

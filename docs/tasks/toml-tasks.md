@@ -1,3 +1,7 @@
+---
+description: "任务可以通过不同方式在 mise.toml 文件中定义。"
+---
+
 # 基于 TOML 的任务
 
 任务可以通过不同方式在 `mise.toml` 文件中定义。简单的任务可以写在 `[tasks]` 部分中，而更详细的任务则分别拥有自己的独立部分。
@@ -5,6 +9,7 @@
 ## 简单任务示例
 
 ```mise-toml [mise.toml]
+[tasks]
 build = "cargo build"
 test = "cargo test"
 lint = "cargo clippy"
@@ -71,15 +76,15 @@ run = './scripts/test-e2e.sh {{vars.e2e_args}} $VERBOSE_ARGS'
 
 ## 添加任务
 
-你可以直接编辑 `mise.toml` 文件，或者使用 [`mise tasks add`](/cli/tasks/add)
+你可以直接编辑 `mise.toml` 文件，也可以使用 [`mise tasks add`](/cli/tasks/add)。例如：
 
 ```shell
 mise tasks add pre-commit --depends "test" --depends "render" -- echo pre-commit
 ```
 
-这将把以下内容添加到 `mise.toml` 中：
+会将以下内容添加到 `mise.toml`：
 
-```shell
+```toml
 [tasks.pre-commit]
 depends = ["test", "render"]
 run = "echo pre-commit"
@@ -98,7 +103,7 @@ run = "echo pre-commit"
 run = 'cargo test'
 ```
 
-命令按顺序执行。如果某个命令失败，任务将停止，剩余命令不会运行。
+命令会依次运行。如果某个命令失败，任务会停止，剩余命令不会运行。
 
 ```mise-toml
 [tasks.test]
@@ -108,7 +113,7 @@ run = [
 ]
 ```
 
-你可以通过使用 `run_windows` 键来指定在 Windows 上运行的替代命令：
+你可以使用 `run_windows` 键指定在 Windows 上运行的备用命令：
 
 ```mise-toml
 [tasks.test]
@@ -118,7 +123,8 @@ run_windows = 'cargo test --features windows'
 
 ### 指定使用哪个目录
 
-[`dir`](/tasks/task-configuration.html#dir) 属性决定任务执行时的 `cwd`。你可以使用任务运行时所在的目录，通过 <span v-pre>`dir = "{{cwd}}"`</span>：
+[`dir`](/tasks/task-configuration.html#dir) 属性决定运行任务时使用的 `cwd`。你可以使用运行任务时所在的目录
+<span v-pre>`dir = "{{cwd}}"`</span>：
 
 ```mise-toml
 [tasks.test]
@@ -126,7 +132,7 @@ run = 'cargo test'
 dir = "{{cwd}}"
 ```
 
-此外，`MISE_ORIGINAL_CWD` 会被设置为原始工作目录，并传递给该任务。
+`MISE_ORIGINAL_CWD` 也会被设置为原始工作目录，并传递给任务。
 
 ### 添加描述和别名
 
@@ -139,8 +145,8 @@ run = "cargo build"
 alias = 'b' # `mise run b`
 ```
 
-- 该别名可用于运行此任务
-- 在不带参数运行 [`mise tasks ls`](/cli/tasks/ls.html) 或 [`mise run`](/cli/run.html) 时，会显示该描述。
+- 可以使用别名运行任务
+- 使用 [`mise tasks ls`](/cli/tasks/ls.html) 或不带参数的 [`mise run`](/cli/run.html) 时会显示描述
 
 ```shell
 ❯ mise run
@@ -152,7 +158,7 @@ Tasks
 
 ### 依赖项
 
-你可以为任务指定依赖项。依赖项会在任务本身之前运行。如果某个依赖失败，任务将不会运行。
+你可以为任务指定依赖项。依赖项会在任务本身之前运行。如果依赖项失败，任务不会运行。
 
 ```mise-toml
 [tasks.build]
@@ -162,7 +168,7 @@ run = 'cargo build'
 depends = ['build']
 ```
 
-还有其他指定依赖项的方法，参见 [wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post)
+还有其他指定依赖项的方式；请参见 [wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post)。
 
 ### 环境变量
 
@@ -181,7 +187,7 @@ cargo clippy
 
 ### 源文件 / 输出文件
 
-如果你想在某些文件没有变化时跳过执行任务（即已是最新），应指定 `sources` 和 `outputs`：
+如果某些文件没有发生变化（即任务已是最新状态），可以指定 `sources` 和 `outputs` 来跳过任务：
 
 ```mise-toml
 [tasks.build]
@@ -191,12 +197,15 @@ sources = ['Cargo.toml', 'src/**/*.rs'] # 如果这些文件没有变化，则�
 outputs = ['target/debug/mycli']
 ```
 
-如果与 [`mise watch`](/cli/watch.html) 一起使用，你也可以只使用 `sources` 来在源文件变化时运行任务。
-你可以在任务的[模板](../templates.md)中使用 [`task_source_files()`](../templates.md#task-source-files) 函数来获取其 `sources` 的解析路径。
+你可以单独使用 `sources` 配合 [`mise watch`](/cli/watch.html)，在源文件发生变化时运行任务。
+你可以使用 [`task_source_files()`](../templates.md#task-source-files) 函数，在任务的
+[模板](../templates.md)中获取任务 `sources` 的解析路径。
 
 ### 确认
 
-运行任务前显示的一条消息。任务运行前会提示用户确认。
+将 `confirm` 设置为在任务自身的命令运行前进行提示。此时，其 `depends` 任务
+已经运行。若要在开始这些工作之前进行提示，请将确认设置在这些任务上，或通过 `run` 数组调用它们。请参见
+[`confirm`](./task-configuration.html#confirm)。
 
 ```mise-toml
 [tasks.release]
@@ -207,7 +216,8 @@ file = 'scripts/release.sh'
 
 ## 指定 shell 或解释器 {#shell-shebang}
 
-如果 shell 是 `sh`、`bash` 或 `zsh`，任务会使用 `set -e`（`set -o erropt`）执行。这意味着只要有任何命令失败，脚本就会退出。你可以在脚本中运行 `set +e` 来禁用这一行为。
+如果 shell 是 `sh`、`bash` 或 `zsh`，任务会使用 `set -e`（`set -o errexit`）执行。这意味着脚本
+会在任意命令失败时退出。你可以在脚本中运行 `set +e` 来禁用此行为。
 
 ```mise-toml
 [tasks.echo]
@@ -251,7 +261,7 @@ $ mise run greet world
 hello world
 ```
 
-通过使用 `shebang`（或 `shell`），你可以使用不同的语言运行任务（例如 Python、Node.js、Ruby 等）：
+通过使用 `shebang`（或 `shell`），你可以使用其他语言运行任务（例如 Python、Node.js 或 Ruby）：
 
 ::: code-group
 
@@ -360,16 +370,16 @@ puts 'Hello, ruby!'
 
 ::: details 什么是 shebang？`#!/usr/bin/env` 和 `#!/usr/bin/env -S` 有什么区别
 
-shebang 是脚本文件开头的字符序列 `#!`，它告诉系统应该使用哪个程序来解释/执行该脚本。
-[env 命令](https://manpages.ubuntu.com/manpages/jammy/man1/env.1.html) 来自 GNU Coreutils。`mise` 不使用 `env`，但行为会类似。
+Shebang 是脚本文件开头的字符序列 `#!`，用于告诉系统应该使用哪个程序解释该脚本。
+[env 命令](https://manpages.ubuntu.com/manpages/jammy/man1/env.1.html)来自 GNU Coreutils。`mise` 不使用 `env`，但行为类似。
 
 例如，`#!/usr/bin/env python` 会使用 `PATH` 中找到的 Python 解释器来运行脚本。
 
 `-S` 标志允许向解释器传递多个参数。
-它会把该行剩余部分视为一个需要拆分的参数字符串。
+它会将该行的剩余部分视为需要拆分的参数字符串。
 
 当你需要指定解释器标志或选项时，这很有用。
-例如：`#!/usr/bin/env -S python -u` 会以无缓冲输出模式运行 Python。
+例如，`#!/usr/bin/env -S python -u` 会以无缓冲输出模式运行 Python。
 
 :::
 
@@ -394,7 +404,7 @@ file = 'scripts/release.sh' # 执行外部脚本
 file = "https://example.com/build.sh"
 ```
 
-请注意，该文件将被下载并执行。请确保你信任该来源。
+文件会被下载并执行，因此请确保你信任其来源。
 
 #### Git <Badge type="warning" text="实验性" />
 
@@ -412,21 +422,21 @@ file = "git::https://github.com/myorg/example.git//myfile?ref=v1.0.0"
 
 :::
 
-URL 格式必须遵循以下模式 `git::<protocol>://<url>//<path>?<ref>`
+URL 必须遵循 `git::<protocol>://<url>//<path>?ref=<ref>` 格式。
 
 必填字段：
 
-- `protocol`：Git 仓库 URL。
-- `url`：Git 仓库 URL。
-- `path`：仓库中文件的路径。
+- `protocol`：Git 协议，例如 `ssh` 或 `https`
+- `url`：Git 仓库 URL
+- `path`：仓库中文件的路径
 
 可选字段：
 
-- `ref`：Git 引用（分支、标签、提交）。
+- `ref`：Git 引用（分支、标签、提交）
 
 #### 缓存
 
-每个任务文件都会缓存在 `MISE_CACHE_DIR` 目录中。如果文件已更新，除非清除缓存，否则不会重新下载。
+每个任务文件都会缓存在 `MISE_CACHE_DIR` 目录中。如果远程文件已更新，在清除缓存之前不会重新下载。
 
 :::tip
 你可以通过运行 `mise cache clear` 来重置缓存。
@@ -440,14 +450,14 @@ URL 格式必须遵循以下模式 `git::<protocol>://<url>//<path>?<ref>`
 有关任务参数的完整信息，请参阅专门的[任务参数](/tasks/task-arguments)页面。
 :::
 
-默认情况下，参数会传递给 `run` 数组中的最后一个脚本。因此，如果一个任务定义为：
+默认情况下，参数会传递给 `run` 数组中的最后一个脚本。因此，如果任务定义如下：
 
 ```mise-toml
 [tasks.test]
 run = ['cargo test', './scripts/test-e2e.sh']
 ```
 
-那么运行 `mise run test foo bar` 会把 `foo bar` 传递给 `./scripts/test-e2e.sh`，但不会传递给
+那么运行 `mise run test foo bar` 时，`foo bar` 会传递给 `./scripts/test-e2e.sh`，但不会传递给
 `cargo test`。
 
 ### 推荐：使用 Usage 字段
@@ -461,7 +471,7 @@ arg "<file>" help="要运行的测试文件" default="all"
 flag "--format <format>" help="输出格式" default="text"
 flag "-v --verbose" help="启用详细输出"
 '''
-run = 'cargo test ${usage_file?} --format ${usage_format?}'
+run = 'echo "Testing ${usage_file?} with format ${usage_format?}"'
 ```
 
 在 usage 字段中定义的参数可作为以 `usage_` 为前缀的环境变量使用。
@@ -475,11 +485,11 @@ run = 'cargo test ${usage_file?} --format ${usage_format?}'
 
 **移除原因：**
 
-- 在规格收集期间模板函数会返回空字符串（两遍解析问题）
+- 模板函数在规范收集期间返回空字符串（两阶段解析问题）
 - Shell 转义规则复杂且不可预测
-- 在 TOML/文件任务之间无法稳定一致地工作
+- TOML 任务和文件任务之间的行为不一致
 
-**请迁移到改用 `usage` 字段。** 参见[迁移指南](/tasks/task-arguments#tera-templates)。
+**请改用 `usage` 字段。** 请参阅[迁移指南](/tasks/task-arguments#tera-templates)。
 :::
 
 <details>
@@ -495,8 +505,8 @@ run = [
 ]
 ```
 
-那么运行 `mise run test foo bar` 会把 `foo bar` 传递给 `cargo test`。
-`mise run test --e2e-args baz` 会把 `baz` 传递给 `./scripts/test-e2e.sh`。
+然后运行 `mise run test foo bar` 会将 `foo bar` 传递给 `cargo test`。
+`mise run test --e2e-args baz` 会将 `baz` 传递给 `./scripts/test-e2e.sh`。
 
 #### 位置参数
 
@@ -560,6 +570,6 @@ fi
 
 - `name`：标志的名称。用于帮助/错误消息。
 
-如果传递了该标志，则值为 `true`，否则为 `false`。
+如果传递了标志，其值为 `true`；否则为 `false`。
 
 </details>

@@ -1,58 +1,68 @@
-# 提示与技巧
+---
+description: "常见工作流的简短配方。"
+---
 
-使用 `mise` 的一些实用技巧汇总。
+# 技巧与窍门
+
+常见工作流的简短配方。每个部分都链接到完整指南，以便在设置或平台细节重要时查阅。如果你
+还没有配置项目，请从[入门指南](/getting-started.html)开始。
 
 ## macOS Rosetta
 
-如果你需要在 Apple Silicon 上以 x86_64 运行工具，可以使用 mise 来实现，但目前你需要使用 x86_64 版本的 mise 本身。这样做的一个常见原因是为了支持编译 node <=14。
-
-你可以通过 [`MISE_ARCH`](https://mise.jdx.dev/configuration/settings.html#arch) 设置来实现，也可以按照下面的说明使用专用的 Rosetta mise 二进制文件：
-
-首先，你需要一个为 x86_64 构建的 mise 版本：
+对于 Apple Silicon 上的预编译 Intel 工具，将 [`MISE_ARCH`](/configuration/settings.html#arch)
+设置为 `x64`。将这些安装与原生 arm64 工具分开，并对安装和执行使用相同的目录和架构覆盖：
 
 ```sh
-$ curl https://mise.run | MISE_INSTALL_PATH=~/.local/bin/mise-x64 MISE_INSTALL_ARCH=x64 sh
-$ ~/.local/bin/mise-x64 --version
-mise 2024.x.x
+export MISE_DATA_DIR="$HOME/.local/share/mise-x64"
+export MISE_ARCH=x64
+mise install node@24
+mise exec node@24 -- node --version
 ```
 
-::: warning
-如果 `~/.local/bin` 不在 PATH 中，你需要在所有命令前加上 `~/.local/bin/mise-x64`。
-:::
+请在专用 shell 会话中运行此命令。这些覆盖设置会一直有效，直到你取消设置或
+关闭该 shell。必须安装 Rosetta 才能在 Apple Silicon 上执行 Intel 二进制文件；
+源代码构建可能还需要 Intel 工具链和依赖项。
 
-现在你可以使用 `mise-x64` 来安装工具：
+如果某个后端需要 mise 进程本身以 Intel 模式运行，请安装单独的二进制文件：
 
 ```sh
-mise-x64 use -g node@20
+curl -fsSL https://mise.run -o /tmp/install-mise.sh
+MISE_INSTALL_PATH="$HOME/.local/bin/mise-x64" MISE_INSTALL_ARCH=x64 sh /tmp/install-mise.sh
+"$HOME/.local/bin/mise-x64" --version
 ```
+
+使用该可执行文件时，也请保留单独的 `MISE_DATA_DIR`。有关编译要求，请参阅相关的
+[语言指南](/core-tools.html)。
 
 ## Shebang
 
-你可以在 shebang 中指定一个工具及其版本，而无需先
-设置 `mise.toml`/`.tool-versions` 配置：
+你可以在 shebang 中指定工具及其版本，而无需先设置
+`mise.toml`/`.tool-versions` 配置：
 
-```typescript
-#!/usr/bin/env -S mise x node@20 -- node
-// “env -S” 允许在 shebang 中使用多个参数
-console.log(`运行 node：${process.version}`);
+```javascript [script.js]
+#!/usr/bin/env -S mise x node@24 -- node
+// "env -S" allows multiple arguments in a shebang
+console.log(`Running node: ${process.version}`);
 ```
 
-这在 mise 未被激活的环境中也很有用
-（例如非交互式会话）。
+将其保存为 `script.js`，运行 `chmod +x script.js`，然后执行 `./script.js`。
+这要求 mise 位于 `PATH` 中，并且 `env` 实现支持 `-S`；原生 Windows
+不会执行 Unix shebang。无需激活 shell。对于带有其他安装选项、可提交到仓库的包装器，请参阅
+[工具存根](/dev-tools/tool-stubs.html)。
 
 ## 引导脚本
 
-你可以下载 <https://mise.run> 脚本，用于项目引导脚本中：
+生成并提交一个首次使用时下载 mise 的包装器：
 
 ```sh
-curl https://mise.run > setup-mise.sh
-chmod +x setup-mise.sh
-./setup-mise.sh
+mise generate install-script --localize --write bin/mise
+./bin/mise install
 ```
 
-::: tip
-这个文件包含校验和，因此将其提交到你的项目中比动态调用 `curl https://mise.run` 更安全——不过当然，这也意味着它只会获取脚本创建时最新版本的 mise。
-:::
+提交 `bin/mise`，并忽略 `.mise/`；本地化包装器会将其二进制文件、工具和
+缓存存储在那里。生成的包装器会记录默认的 mise 版本；重新生成它即可更新
+该默认版本。有关版本覆盖、缓存布局和示例流水线，请参阅
+[CI 引导](/continuous-integration.html#bootstrapping)。
 
 ## 项目本地任务入口点
 
@@ -60,140 +70,84 @@ chmod +x setup-mise.sh
 
 ```sh
 mkdir -p bin
-mise generate install-script --localize --write bin/mise
+mise generate install-script --localize --write bin/mise --windows
 mise generate task-stubs --mise-bin ./bin/mise
 ./bin/test
 ```
 
-生成的任务存根会像小型项目命令一样运行，而 `bin/mise`
-会下载并运行该项目固定版本的 mise 二进制文件。
+在运行示例前定义一个 `test` 任务。提交生成的入口点并忽略
+`.mise/`。任务存根的行为类似于小型项目命令，而 `bin/mise`
+会为项目下载并运行固定版本的 mise 二进制文件。
 
-如果贡献者在 Windows 上工作，请添加 `--windows`。Windows 无法执行 shebang 脚本，因此
-`mise generate install-script --write ./bin/mise --windows` 会在旁边写入 `bin/mise.cmd`，他们可以
-运行 `.\bin\mise.cmd`。启动器会下载该版本的独立 `mise.exe`，并将其与脚本生成时嵌入的校验和进行比对，因此除了 Windows
-本身已提供的内容外，不需要任何其他依赖。
+示例包含面向 Windows 贡献者的 `--windows`。Windows 无法执行 shebang 脚本，因此
+`mise generate install-script --write ./bin/mise --windows` 会在其旁边写入
+`bin/mise.cmd`，Windows 贡献者则运行 `.\bin\mise.cmd`。启动器会为该版本下载独立的
+`mise.exe`，并将其与生成脚本时嵌入的校验和进行比对，因此除 Windows
+本身已提供的内容外不需要其他依赖。
 
-出于同样的原因，每个任务存根旁边都会生成一个 `.cmd` 启动器，因此上面示例的 Windows 形式是
-`.\bin\test.cmd`。这两部分会在每个平台上生成，因此在 Linux 或 macOS 上提交的 `bin/`
-目录对于在 Windows 上克隆仓库的用户仍然有效。
+出于同样的原因，每个任务存根旁边都会有一个 `.cmd` 启动器，因此上述示例在
+Windows 中的形式是 `.\bin\test.cmd`。默认的 `.cmd` 任务启动器可以在任何平台上生成，但 `cmd.exe` 可能会改变
+参数中的 shell 元字符。当需要精确转发参数时，请在 Windows 上生成
+`--windows-launcher exe`；请参阅[任务存根](/cli/generate/task-stubs.html)。
 
 ## 机器引导
 
-除了 `[tools]` 之外，mise 还可以声明项目或工作站所需的其余机器设置，并且 [`mise bootstrap`](/cli/bootstrap.html)
-会通过一条命令将其收敛到目标状态——先是系统包，然后是仓库，然后是 dotfiles，然后
-shell 激活，然后是 macOS 默认设置，然后是 LaunchAgents，然后是 systemd 用户
-服务，然后是登录 shell，然后是工具，最后如果你定义了一个 `bootstrap` 任务，还会执行它：
-
-```toml
-[bootstrap.packages]                      # 操作系统包 (apk/apt/dnf/pacman/brew)
-"apk:build-base" = "latest"
-"apt:build-essential" = "latest"
-"brew:postgresql@17" = "latest"
-
-[bootstrap.repos]                         # 在 dotfiles 之前克隆的 git 仓库
-"~/src/dotfiles" = { url = "git@github.com:jdx/dotfiles.git", ref = "main" }
-
-[dotfiles]                             # dotfiles：符号链接/复制/模板
-"~/.gitconfig" = { mode = "symlink" }
-"~/.config/nvim" = { mode = "symlink" }
-
-[bootstrap.mise_shell_activate]       # shell 启动文件中的 mise 激活
-zprofile = "shims"
-zshrc = "activate"
-fish = "activate"
-
-[bootstrap.macos.dock]                 # 友好的 macOS 默认设置
-autohide = true
-orientation = "left"
-
-[bootstrap.macos.finder]
-show_pathbar = true
-
-[bootstrap.macos.launchd.agents.my-sync]      # macOS 用户 LaunchAgents
-program = "~/.local/bin/my-sync"
-run_at_load = true
-
-[bootstrap.linux.systemd.units.my-sync]       # Linux systemd 用户服务
-exec_start = "~/.local/bin/my-sync --watch"
-restart = "on-failure"
-
-[bootstrap.user]                       # 当前用户的登录 shell
-login_shell = "/bin/zsh"
-
-[bootstrap.hooks.post-defaults]        # 可选的阶段钩子
-run = "killall Dock || true"
-
-[tasks.bootstrap]                      # 其他任何内容，且 PATH 上可用 tools
-run = "gh auth status || gh auth login"
-```
+使用 [`mise bootstrap`](/bootstrap.html) 应用配置中声明的机器设置。
+先从预览开始：
 
 ```sh
-mise bootstrap --yes   # 新笔记本或容器 -> 可开始工作
+mise bootstrap --dry-run
+mise bootstrap
+mise bootstrap status
 ```
 
-接管一台已经安装了 Homebrew casks（或具有 nix-darwin brew 集成）的现有 Mac 时，请设置
-`[bootstrap.brew] adopt = true`，这样 mise 会记录所有权，而不会替换 `/Applications` 中的软件包——替换
-`.app` 可能会撤销 macOS Privacy & Security 授权。请参阅
-[brew casks / TCC](/bootstrap/packages/brew.html#macos-privacy-security-tcc)。
+选择机器所需的部分：[软件包](/bootstrap/packages/)、
+[代码仓库](/bootstrap/repos.html)、[dotfiles](/dotfiles.html)、
+[shell 激活](/bootstrap/shell.html)、[macOS 默认设置](/bootstrap/macos-defaults.html)、
+[launchd](/bootstrap/launchd.html) 或 [systemd](/bootstrap/systemd.html)。
+完整指南解释了阶段顺序和主机选择；不要仅仅为了尝试该命令，就将不相关平台的声明复制到工作站配置中。
 
-写入 macOS 默认设置后，请重新启动 Dock/Finder（或使用 `post-defaults`
-钩子），否则偏好设置可能会在重启前看起来没有生效——请参阅
-[macOS Defaults](/bootstrap/macos-defaults.html#app-restarts)。
+钩子和 `bootstrap` 任务都是普通命令，需要各自具备幂等行为。
+采用现有 Homebrew cask 时，请在替换应用程序包之前参阅[所有权和 macOS 隐私权限](/bootstrap/packages/brew.html#macos-privacy-security-tcc)。
 
-一切都是声明式且幂等的：重新运行时会跳过任何已经处于所需状态的内容，`mise bootstrap packages status --missing`
-和 `mise bootstrap dotfiles status --missing` 可用于 CI 检查，并且不会隐式应用任何内容。例外是
-`[bootstrap.hooks]` 和 `[tasks.bootstrap]`，它们是在 `mise bootstrap` 期间运行的命令式命令，可能会产生副作用；
-除非钩子命令被编写为能够安全地收敛，否则应将其视为非幂等。请参阅
-[Bootstrap](/bootstrap.html)、[Bootstrap Packages](/bootstrap/packages/)、[Repos](/bootstrap/repos.html)、[Dotfiles](/dotfiles.html)、
-[Shell Activation](/bootstrap/shell.html)、
-[macOS Defaults](/bootstrap/macos-defaults.html)、[launchd](/bootstrap/launchd.html)、
-[systemd](/bootstrap/systemd.html) 和 [User Login Shell](/bootstrap/user.html)。
+## 使用 Zinit 的 Zsh {#installation-via-zsh-zinit}
 
-## 通过 zsh zinit 安装
+如果你使用 [Zinit](https://github.com/zdharma-continuum/zinit)，请使用受支持的
+[安装方法](/installing-mise.html)安装 mise，然后在会修改 PATH 的插件之后激活它：
 
-[Zinit](https://github.com/zdharma-continuum/zinit) 是一个用于 ZSH 的插件管理器。此代码片段会安装 mise 及其 shell 补全：
-
-```sh
-zinit as="command" lucid from="gh-r" for \
-    id-as="mise" mv="mise* -> mise" \
-    atclone="./mise* completion zsh > _mise" \
-    atpull="%atclone" \
-    atload='eval "$(mise activate zsh)"' \
-    jdx/mise
+```zsh
+# ~/.zshrc, after your Zinit setup
+eval "$(mise activate zsh)"
 ```
+
+这样可以让 mise 的更新由其安装程序或软件包管理器负责。按照
+[Zsh 补全说明](/installing-mise.html#autocompletion)添加补全，
+并避免在插件和补全设置中重复初始化 `compinit`。
 
 ## CI/CD
 
-在 CI/CD 中使用 mise 是一种很好的方式，可以同步开发/构建所使用的工具版本。
+提交项目工具配置，并在 CI 中使用 `mise exec` 或 `mise run`。
+有关提供商示例、锁定安装和缓存，请参阅[持续集成](/continuous-integration.html)。
 
 ### GitHub Actions
 
-在不使用 action 的情况下，mise 也很容易使用：
+对于在 `mise.toml` 中声明了 Node 的代码仓库：
 
 ```yaml
+name: tools
+on: [push, pull_request]
 jobs:
-  build:
-    steps:
-      - run: |
-          curl https://mise.run | sh
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          echo "$HOME/.local/share/mise/shims" >> $GITHUB_PATH
-```
-
-或者你也可以使用自定义 action [`jdx/mise-action`](https://github.com/jdx/mise-action)：
-
-```yaml
-jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
     steps:
-      - uses: jdx/mise-action@v3
-      - run: node -v # 将会是来自 `mise.toml`/`.tool-versions` 的 node 版本
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+      - run: mise exec -- node --version
 ```
 
 ## `mise set`
 
-你可以使用 [`mise set`](/cli/set.html) 来代替手动编辑 `mise.toml` 以添加环境变量：
+你可以使用 [`mise set`](/cli/set.html) 代替手动编辑 `mise.toml` 来添加环境变量：
 
 ```sh
 mise set NODE_ENV=production
@@ -207,28 +161,29 @@ mise set NODE_ENV=production
 
 ```toml
 [tools]
-hugo = "{{ read_file(path='.hvm') | trim }}"
+hugo = "{{ read_file(path=config_root ~ '/.hvm') | trim }}"
 ```
 
 HVM 也支持带有 `/extended` 后缀的版本。在 mise 中，Hugo 和 Hugo Extended 是两个独立的工具，因此需要去掉该后缀，并改用 `hugo-extended`：
 
 ```toml
 [tools]
-hugo-extended = "{{ read_file(path='.hvm') | trim | replace(from='/extended', to='') }}"
+hugo-extended = "{{ read_file(path=config_root ~ '/.hvm') | trim | replace(from='/extended', to='') }}"
 ```
 
-有关 Tera 函数和过滤器的更多细节，请参见[模板](/templates.html)。
+在评估任一示例前，先创建包含版本字符串的 `.hvm`。当你从子目录调用 mise 时，`config_root` 会让路径与配置保持关联。为项目选择一个
+Hugo 变体。有关函数和过滤器，请参阅[模板](/templates.html)。
 
 ## [`mise run`](/cli/run.html) 简写
 
-只要任务名称不与 mise 提供的命令冲突，你就可以省略 `run` 部分：
+只要任务名称不与 mise 提供的命令冲突，你就可以跳过 `run` 部分：
 
 ```sh
 mise test
 ```
 
 ::: warning
-不要在脚本中这样做，因为 mise 未来版本可能会添加一个命令，并与你的任务发生冲突。
+不要在脚本中这样做：mise 未来版本可能会添加与你的任务冲突的命令
 :::
 
 ## 编辑时监视任务
@@ -251,7 +206,7 @@ mise watch --restart dev
 
 对于包含大量任务的项目，
 [`task_config.includes`](/tasks/task-configuration.html#task_config.includes)
-可以从其他目录、`tasks.toml` 文件或远程 git 仓库中加载任务定义：
+可以从其他目录、`tasks.toml` 文件或远程 git 代码仓库中加载任务定义。请将示例 URL 替换为你信任的代码仓库和 ref：
 
 ```toml
 [task_config]
@@ -283,13 +238,13 @@ extends = "node:test"
 run = "pnpm test -- --watch=false"
 ```
 
-这在 monorepo 中尤其有用，因为其中每个包都需要类似的构建、
-测试或 lint 任务，并且只需进行少量本地覆盖。
+这假设 `pnpm test -- --watch=false` 会被项目的测试脚本接受。
+当软件包需要共享默认值时使用模板，然后在本地覆盖命令或路径。
 
 ## 从任务输出中去除敏感信息
 
-如果某个任务可能在 CI 日志中回显敏感信息，请在任务或配置中添加 `redactions`。
-列出的环境变量会在任务输出中替换为 `[redacted]`：
+如果某个任务可能在 CI 日志中回显机密信息，请将 `redactions` 添加到任务或配置中。
+所列环境变量的值会在处理后的任务输出中替换为 `[redacted]`：
 
 ```toml
 redactions = ["API_KEY", "PASSWORD"]
@@ -300,6 +255,8 @@ redactions = ["API_KEY", "PASSWORD"]
 ```toml
 redactions = ["SECRETS_*"]
 ```
+
+原始或交互式输出不会进行脱敏，子进程仍会接收原始值。有关受支持的输出和日志边界，请参阅[脱敏](/environments/#redactions)。
 
 ## 软件验证
 
@@ -312,13 +269,15 @@ redactions = ["SECRETS_*"]
 
 ## [`mise up --bump`](/cli/upgrade.html)
 
-使用 `mise up --bump` 将所有软件升级到最新版本并更新 `mise.toml` 文件。这会保持与之前相同的 semver 范围，
-因此如果你原来有 `node = "24"`，而 node 26 是最新版本，那么 `mise up --bump node` 会将 `mise.toml` 改为 `node = "26"`。
+使用 `mise up --bump` 将所有软件升级到最新版本，并更新 `mise.toml` 文件。这会保留之前的精度，
+因此如果你之前有 `node = "24"`，而 node 26 是最新版本，`mise up --bump node` 会将 `mise.toml` 更改为 `node = "26"`。
 
 ## cargo-binstall
 
-cargo-binstall 有点像 ubi，但专用于 Rust 工具。它会为 cargo 发布版本获取二进制文件。如果已安装，mise 会自动将其用于 `cargo:` 工具
-因此如果你使用 `cargo:`，你应该把它加上，这样 `mise i` 会快很多。
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 可以下载预构建的 Rust CLI
+二进制文件，而不是编译它们。启用 `cargo.binstall` 后（默认启用），mise 会在可用时将其用于
+`cargo:` 工具。并非每个 crate 都有兼容的预构建版本；
+有关回退行为，请参阅 [Cargo 后端](/dev-tools/backends/cargo.html)。
 
 ```sh
 mise use -g cargo-binstall
@@ -326,73 +285,71 @@ mise use -g cargo-binstall
 
 ## [`mise cache clear`](/cli/cache.html)
 
-mise 会出于显而易见的原因缓存一些内容，但有时你希望它使用新鲜数据（也许它没有注意到一个新发布版本）。运行 `mise cache clear` 来移除缓存，这基本上等同于运行 `rm -rf ~/.cache/mise/*`。
+在检查新版本时清除工具的缓存元数据，例如
+`mise cache clear node`。`mise cache path` 会显示当前缓存目录。完整的
+`mise cache clear` 还会影响环境和任务缓存；请参阅[缓存行为](/cache-behavior.html)。
 
 ## [`mise en`](/cli/en.html)
 
-`mise en` 是 `mise activate` 的一个很好的替代方案，如果你因为某些原因不想一直使用 mise。它会在你当前目录中设置 mise 环境，
-但之后不会持续运行并更新环境变量。
+`mise en` 会使用当前项目环境启动一个**新 shell**。退出该 shell 即可
+返回原始会话。它本身不会添加目录变更更新；新 shell 的启动文件仍可能激活 mise。如果你
+希望跳过 Bash 的 rc 文件，请使用 `mise en -s "bash --norc"`。
 
 ## 进入项目时自动安装
 
-通过将以下内容添加到 `mise.toml`，在进入项目时自动安装工具：
+在正常激活的 shell 中，进入受信任的项目时运行安装：
 
 ```toml
 [hooks]
 enter = "mise i -q"
 ```
 
+进入目录时，该钩子可以下载工具并运行安装脚本。
+如果你希望自行选择运行这些操作的时机，请改用显式的 `mise install`。
+
 ## [`mise tool [TOOL]`](/cli/tool.html)
 
-使用 `mise tool [TOOL]` 获取有关某个工具正在使用的后端以及其他信息：
+检查工具所选的后端、版本请求和安装信息：
 
 ```sh
-❯ mise tool ripgrep
-Backend:            aqua:BurntSushi/ripgrep
-Installed Versions: 14.1.1
-Active Version:     14.1.1
-Requested Version:  latest
-Config Source:      ~/src/mise/mise.toml
-Tool Options:       [none]
+mise tool ripgrep
 ```
+
+使用 `mise registry ripgrep` 检查注册表选择，并使用 `mise which rg` 查找
+当前项目所选的可执行文件。
 
 ## [`mise cfg`](/cli/config.html)
 
-使用 `mise cfg` 列出 mise 在特定目录中正在读取的配置文件：
+列出已加载的配置文件及其工具：
 
 ```sh
-❯ mise cfg
-Path                                    Tools
-~/.config/mise/config.toml              (none)
-~/.mise/config.toml                     (none)
-~/src/mise.toml                         (none)
-~/src/mise/.config/mise/conf.d/foo.toml (none)
-~/src/mise/mise.toml                    actionlint, bun, cargo-binstall, cargo:…
-~/src/mise/mise.local.toml              (none)
+mise config
 ```
 
-这有助于弄清楚配置文件的加载顺序，从而判断哪个配置文件会覆盖其他配置。
+当某个值来自意外的文件时可以使用此命令。有关优先级以及文件命令
+写入的位置，请参阅[配置](/configuration.html)。`mise cfg` 是一个别名。
 
 ## `mise.lock`
 
-当启用锁文件时，mise 会将完整版本和 tarball 校验和（如果后端支持）更新到 `mise.lock` 中。
-这些内容可以通过 [`mise up`](/cli/upgrade.html) 更新。你需要手动创建锁文件，然后 mise 会将工具添加进去：
+将已配置的请求解析到要提交的锁文件中：
 
 ```sh
-touch mise.lock
-mise i
+mise lock
+mise install --locked
 ```
 
-锁文件使用一种统一格式，采用 `[tools.name.assets]` 部分来组织每个工具下的资产信息。资产信息包括校验和、文件大小以及可选的下载 URL。旧版锁文件使用单独的 `[tools.name.checksums]` 和 `[tools.name.sizes]` 部分，会自动迁移到新格式。
+锁定会记录具体版本，并在后端支持时记录产物 URL 和校验和。`mise install --locked` 会检查锁文件能否满足配置。
+使用 `mise lock --bump --dry-run` 可以在应用版本刷新前预览结果。
 
-请注意，至少目前来说，mise 需要实际安装该工具才能获取 tarball 校验和（否则它就需要先下载 tarball，才能获取其校验和，因为通常下载后它会被删除）。因此，你可能需要先运行类似 `mise uninstall --all` 的命令，以便让它重新安装所有内容。不过，即使它不知道校验和，它仍会保存完整版本，所以它依然会锁定版本，只是不会附带校验和。
+不同后端能够锁定的元数据不同。对于自定义 HTTP 下载，请在可用时配置
+[校验和来源](/dev-tools/backends/http.html#checksum-url)。有关平台覆盖范围和严格验证，请参阅
+[锁文件](/dev-tools/mise-lock.html)；不要仅仅为了重新生成元数据而卸载所有工具。
 
 ## 锁文件 URL 跟踪（避免速率限制）
 
-当你使用锁文件（`mise.lock`）时，mise 会为每个工具资产存储确切的下载 URL。这意味着在首次安装之后，后续的 `mise install` 运行将使用锁文件中的 URL，而不是向 GitHub（或其他提供商）发起 API 调用。这带来了几个好处：
+对于记录产物 URL 的后端，锁文件可以避免后续安装时重复查找发布资源。
+它不包含产物本身，也不会消除所有网络或身份验证要求。下载、验证、私有代码仓库和
+特定后端的操作仍可能需要访问权限。
 
-- **避免 GitHub API 速率限制**：无需为每次安装重复发起 API 调用，这会很快耗尽你的速率限制，尤其是在 CI 或大型团队中。
-- **无需 GITHUB_TOKEN**：由于 URL 已经已知，对于简单安装，你不需要配置 `GITHUB_TOKEN`。有关令牌配置的更多信息，请参见 [GitHub Tokens](/dev-tools/github-tokens.html)。
-- **更快的安装**：跳过 API 查询可加快重复安装速度。
-
-这在 CI/CD 中，或在具有严格网络或身份验证要求的环境中工作时尤其有用。
+有关凭据，请参阅 [GitHub Tokens](/dev-tools/github-tokens.html)；有关每个后端的保证，请参阅
+[锁文件行为](/dev-tools/mise-lock.html)。

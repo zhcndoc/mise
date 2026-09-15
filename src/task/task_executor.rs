@@ -36,7 +36,7 @@ use indoc::formatdoc;
 use itertools::Itertools;
 #[cfg(unix)]
 use nix::errno::Errno;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -72,6 +72,7 @@ pub(crate) struct TaskRunContext<'a> {
 struct TaskExecContext<'a> {
     task: &'a Task,
     env: &'a BTreeMap<String, String>,
+    env_remove: &'a BTreeSet<String>,
     prefix: &'a str,
     output_capture: Option<&'a TaskOutputCapture>,
     allow_during_interruption: bool,
@@ -91,6 +92,7 @@ struct TaskRunEntriesContext<'a> {
 struct PreparedTaskContext {
     toolset: Toolset,
     env: BTreeMap<String, String>,
+    env_remove: BTreeSet<String>,
     task_env: Vec<(String, String)>,
     extra_vars: Option<IndexMap<String, String>>,
 }
@@ -426,6 +428,8 @@ impl TaskExecutor {
             deny_write: task.deny_all || task.deny_write || self.sandbox.deny_write,
             deny_net: task.deny_all || task.deny_net || self.sandbox.deny_net,
             deny_env: task.deny_all || task.deny_env || self.sandbox.deny_env,
+            deny_process: false,
+            deny_temp_write: false,
             allow_read: task
                 .allow_read
                 .iter()
@@ -464,6 +468,8 @@ impl TaskExecutor {
                 .chain(self.sandbox.cache_env.iter())
                 .cloned()
                 .collect(),
+            // Filled in by `resolve_paths` below.
+            symlinked_allow_paths: vec![],
         };
         sandbox.resolve_paths();
         Ok(sandbox)
@@ -524,6 +530,7 @@ impl TaskExecutor {
         let PreparedTaskContext {
             toolset: ts,
             mut env,
+            env_remove,
             task_env,
             extra_vars,
         } = self.prepare_task_context(config, task).await?;
@@ -692,6 +699,7 @@ impl TaskExecutor {
         let exec_ctx = TaskExecContext {
             task,
             env: &env,
+            env_remove: &env_remove,
             prefix: &prefix,
             output_capture: output_capture.as_ref(),
             allow_during_interruption,
@@ -1007,12 +1015,13 @@ impl TaskExecutor {
                         .map(|(k, v)| EnvDirective::Val(k.clone(), v.clone(), Default::default()))
                         .collect();
                     t = t.with_dependency_env(&env_directives);
-                    if let Some(config_root) = &t.config_root {
+                    if let Some(config_root) = t.config_root.clone() {
                         let env_map: IndexMap<String, String> = env.iter().cloned().collect();
                         t.outputs.re_render_with_env(
-                            &t.raw_outputs.clone(),
+                            &mut t.raw_outputs,
+                            &mut t.raw_path_env,
                             &env_map,
-                            config_root,
+                            &config_root,
                         )?;
                     } else {
                         trace!(
@@ -1089,7 +1098,7 @@ impl TaskExecutor {
                             any = true;
                             let task = task.derive_env(&task_env_directives);
                             trace!("inject initial leaf: {} {}", task.name, task.args.join(" "));
-                            let _ = sched_tx.send(SchedMsg::new(
+                            let _ = sched_tx.send(SchedMsg::injected(
                                 task,
                                 sub_deps_clone.clone(),
                                 allow_during_interruption,
@@ -1123,7 +1132,7 @@ impl TaskExecutor {
                                 task.args.join(" ")
                             );
                             let task = task.derive_env(&task_env_directives);
-                            let _ = sched_tx.send(SchedMsg::new(
+                            let _ = sched_tx.send(SchedMsg::injected(
                                 task,
                                 sub_deps_clone.clone(),
                                 allow_during_interruption,
@@ -1241,9 +1250,16 @@ impl TaskExecutor {
             file::make_executable(&file)?;
             self.exec_with_text_file_busy_retry(&file, args, ctx).await
         } else {
-            let (program, args, cmd_verbatim) =
+            let (program, shell_args, cmd_verbatim) =
                 self.get_cmd_program_and_args(script, ctx.task, args)?;
-            self.exec_program(&program, &args, cmd_verbatim, ctx).await
+            self.exec_program(
+                &program,
+                &shell_args,
+                cmd_verbatim,
+                Some((script, args)),
+                ctx,
+            )
+            .await
         }
     }
 
@@ -1362,6 +1378,10 @@ impl TaskExecutor {
         Ok((program.to_string(), full_args[1..].to_vec(), false))
     }
 
+    fn implicit_inline_shell(&self, task: &Task) -> bool {
+        task.shell.is_none() && self.shell.is_none() && Settings::get().implicit_inline_shell()
+    }
+
     fn clone_default_inline_shell(&self) -> Result<Vec<String>> {
         if let Some(shell) = &self.shell {
             let mut shell = crate::path::split_shell_command(shell)?;
@@ -1426,7 +1446,6 @@ impl TaskExecutor {
             #[cfg(windows)]
             let program = crate::path::resolve_posix_shell_program_path(&program, &filtered_env)
                 .unwrap_or(program);
-            let env = maybe_convert_env_for_msys_shell(Path::new(&program), &filtered_env);
             let runner = CmdLineRunner::new(program);
             #[cfg(windows)]
             let runner = if cmd_verbatim {
@@ -1439,9 +1458,10 @@ impl TaskExecutor {
             let mut runner = runner
                 .current_dir(&root)
                 .env_clear()
-                .envs(env.as_ref())
+                .envs(&filtered_env)
                 .with_timeout(timeout)
-                .with_sandbox(sandbox.clone());
+                .with_sandbox(sandbox.clone())
+                .optimize_inline(command, &[], self.implicit_inline_shell(task));
             runner.apply_sandbox().await?;
             let (stdout_hash, stderr_hash) = runner
                 .execute_hashes_async(COMMAND_INPUT_MAX_OUTPUT_BYTES)
@@ -1487,7 +1507,7 @@ impl TaskExecutor {
     async fn exec(&self, file: &Path, args: &[String], ctx: TaskExecContext<'_>) -> Result<()> {
         if runs_without_a_shell(file) {
             let program = file.display().to_string();
-            return self.exec_program(&program, args, false, ctx).await;
+            return self.exec_program(&program, args, false, None, ctx).await;
         }
         // Resolved once, from the file the user wrote, and then used for both decisions below.
         let shell = file_task_shell(file, ctx.task)?;
@@ -1496,7 +1516,7 @@ impl TaskExecutor {
         let shim = ps1_shim(file, &shell)?;
         let script = shim.as_deref().unwrap_or(file);
         let (program, args) = self.get_file_program_and_args(script, &shell, args)?;
-        self.exec_program(&program, &args, false, ctx).await
+        self.exec_program(&program, &args, false, None, ctx).await
     }
 
     async fn exec_with_text_file_busy_retry(
@@ -1534,11 +1554,13 @@ impl TaskExecutor {
         program: &str,
         args: &[String],
         cmd_verbatim: bool,
+        inline: Option<(&str, &[String])>,
         ctx: TaskExecContext<'_>,
     ) -> Result<()> {
         let TaskExecContext {
             task,
             env,
+            env_remove,
             prefix,
             output_capture,
             allow_during_interruption,
@@ -1561,14 +1583,11 @@ impl TaskExecutor {
         } else {
             env
         };
-        // On Windows, when about to spawn a POSIX shell, resolve the program to
-        // an absolute path *before* converting PATH for the child. Otherwise the
-        // converted Unix-form PATH is also what Win32 CreateProcess uses to find
-        // the program, and `bash` cannot be located in `/c/...:/c/...` entries.
+        // On Windows, resolve a POSIX shell to an absolute path before spawning it, so which
+        // `bash` runs does not depend on how Win32 searches PATH. See discussion #6513.
         #[cfg(windows)]
         let program =
             crate::path::resolve_posix_shell_program_path(&program, env).unwrap_or(program);
-        let env = maybe_convert_env_for_msys_shell(Path::new(&program), env);
         let audit = if raw || self.dry_run {
             None
         } else {
@@ -1598,16 +1617,27 @@ impl TaskExecutor {
         let inherited_usage_keys = std::env::vars_os()
             .filter(|(key, _)| {
                 let key = key.to_string_lossy();
-                crate::task::is_usage_env_key(&key)
-                    && !crate::task::env_contains_key(env.as_ref(), &key)
+                crate::task::is_usage_env_key(&key) && !crate::task::env_contains_key(env, &key)
             })
             .map(|(key, _)| key);
         let runner = inherited_usage_keys.fold(runner, |runner, key| runner.env_remove(key));
+        let runner = env_remove
+            .iter()
+            .fold(runner, |runner, key| runner.env_remove(key));
         let mut cmd = runner
-            .envs(env.as_ref())
+            .envs(env)
             .redact(redactions.deref().clone())
             .raw(raw)
             .with_sandbox(sandbox);
+        if let Some((body, forwarded)) = inline {
+            cmd = cmd
+                .current_dir(task_cwd(task, &config).await?)
+                .optimize_inline(
+                    body,
+                    forwarded,
+                    audit.is_none() && self.implicit_inline_shell(task),
+                );
+        }
         if raw && !redactions.is_empty() {
             if task.interactive && !task.raw && !Settings::get().raw {
                 hint!(
@@ -1831,7 +1861,7 @@ impl TaskExecutor {
             })
             .await;
         if let Some(audit) = audit {
-            audit.report(task);
+            audit.report(task).await;
         }
         result?;
         trace!("{prefix} exited successfully");
@@ -1900,6 +1930,11 @@ impl TaskExecutor {
             match crate::ui::prompt::confirm_with_default(&message, default_yes) {
                 Ok(Confirmation::Yes) => {}
                 Ok(Confirmation::No) => return Err(eyre!("aborted by user")),
+                Ok(Confirmation::Unanswered) => {
+                    return Err(eyre!(
+                        "task requires confirmation but stdin ended before an answer; pass --yes to accept"
+                    ));
+                }
                 Ok(Confirmation::Unavailable) => {
                     return Err(eyre!(
                         "task requires confirmation but there was nobody to ask; pass --yes to accept"
@@ -2070,6 +2105,7 @@ impl TaskExecutor {
     ) -> Result<PreparedTaskContext> {
         let mut tools = self.tool.clone();
         tools.extend(task.tool_args()?);
+        let task_tool_args_env = crate::shims::task_tool_args_env(&tools)?;
         let ts_build_start = std::time::Instant::now();
 
         // Remote tasks need tools from the full config hierarchy rather than a
@@ -2089,15 +2125,19 @@ impl TaskExecutor {
             ts_build_start.elapsed().as_millis()
         );
 
+        crate::shims::ensure_command_wrapper_shims(config, &toolset)?;
+
         let env_render_start = std::time::Instant::now();
         // extra_vars contains resolved vars from the task's config hierarchy.
-        let (mut env, task_env, extra_vars) = if let Some(task_cf) = task_cf {
-            self.context_builder
+        let (mut env, task_env, extra_vars, mut env_remove) = if let Some(task_cf) = task_cf {
+            let (env, task_env, extra_vars, env_remove) = self
+                .context_builder
                 .resolve_task_env_with_config(config, task, task_cf, &toolset)
-                .await?
+                .await?;
+            (env, task_env, extra_vars, env_remove)
         } else {
-            let (env, task_env) = task.render_env(config, &toolset).await?;
-            (env, task_env, None)
+            let (env, task_env, env_remove) = task.render_env(config, &toolset).await?;
+            (env, task_env, None, env_remove)
         };
         trace!(
             "task {} render_env took {}ms",
@@ -2198,6 +2238,17 @@ impl TaskExecutor {
                 task_env_path(config_root),
             );
         }
+        if let Some(task_tool_args) = task_tool_args_env {
+            Self::insert_env_excluded_from_nested_mise_diff(
+                &mut env,
+                &mut nested_mise_diff_exclude_keys,
+                crate::shims::TASK_TOOL_ARGS_ENV,
+                task_tool_args,
+            );
+        } else {
+            env.remove(crate::shims::TASK_TOOL_ARGS_ENV);
+            env_remove.insert(crate::shims::TASK_TOOL_ARGS_ENV.to_string());
+        }
         if Settings::get().env_cache {
             let key = CachedEnv::ensure_encryption_key();
             Self::insert_env_excluded_from_nested_mise_diff(
@@ -2218,6 +2269,7 @@ impl TaskExecutor {
         Ok(PreparedTaskContext {
             toolset,
             env,
+            env_remove,
             task_env,
             extra_vars,
         })
@@ -2436,92 +2488,6 @@ fn task_shell_parts<'a>(shell: &'a [String], shell_kind: &str) -> Result<(&'a st
         })
 }
 
-/// On Windows, when spawning a POSIX-style shell (bash/sh/zsh/...) for a task, the
-/// child needs PATH in MSYS Unix format — `/c/foo:/d/bar` rather than `C:\foo;D:\bar`.
-/// PowerShell-launched mise inherits no `MSYSTEM`, so the conversion has to happen
-/// here at the spawn boundary (driven by the target program), not in mise's own env.
-///
-/// The cfg-attribute pattern keeps the call site OS-agnostic and avoids cloning the
-/// env on the common path (Windows + non-POSIX-shell, or any non-Windows host).
-fn maybe_convert_env_for_msys_shell<'a>(
-    program: &Path,
-    env: &'a BTreeMap<String, String>,
-) -> std::borrow::Cow<'a, BTreeMap<String, String>> {
-    #[cfg(windows)]
-    {
-        if crate::path::is_posix_shell_program(program)
-            && let Some(path_val) = env.get(&*crate::env::PATH_KEY)
-            // Skip the clone+convert cycle when PATH is already in Unix form (no
-            // `;` separator, no `\` to translate). This is the common case when
-            // mise itself runs inside Git Bash and spawns another bash subshell.
-            && (path_val.contains(';') || path_val.contains('\\'))
-        {
-            let drive_prefix = msys_drive_prefix_for(program, env);
-            let converted = crate::path::windows_path_list_to_unix(path_val, &drive_prefix);
-            let mut new_env = env.clone();
-            new_env.insert((*crate::env::PATH_KEY).to_string(), converted);
-            return std::borrow::Cow::Owned(new_env);
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = program;
-    }
-    std::borrow::Cow::Borrowed(env)
-}
-
-/// The cygdrive prefix inserted before drive letters when converting PATH for a
-/// POSIX shell. `is_cygwin_shell` only selects the *default* when no override is set:
-/// empty for MSYS2 / Git Bash (`/c/...`), `/cygdrive` for Cygwin (`/cygdrive/c/...`).
-///
-/// The `cygdrive` automount mechanism is shared by Cygwin and MSYS2 / Git Bash — both
-/// let the user change the mount root in `/etc/fstab` (Cygwin's default is `/cygdrive`,
-/// MSYS2's is `/`). mise does not parse fstab, so `MISE_CYGDRIVE_PREFIX` is an explicit
-/// override honored for *both* shells. A trailing `/` is trimmed since the converter
-/// emits its own separator after the prefix, so `MISE_CYGDRIVE_PREFIX=/` collapses to
-/// the MSYS `/c/...` form. A non-empty value that is not absolute (no leading `/`, e.g.
-/// `mnt`) would produce relative PATH entries that bash silently ignores, so it is
-/// rejected with a warning and the shell's default is used instead.
-#[cfg(windows)]
-fn msys_drive_prefix_for(program: &Path, env: &BTreeMap<String, String>) -> String {
-    // Default automount root when no override is set: empty for Git Bash / MSYS2
-    // (`/c/...`), `/cygdrive` for Cygwin (`/cygdrive/c/...`).
-    let default = if crate::path::is_cygwin_shell(program) {
-        "/cygdrive"
-    } else {
-        ""
-    };
-    let raw = env
-        .get("MISE_CYGDRIVE_PREFIX")
-        .cloned()
-        .or_else(|| std::env::var("MISE_CYGDRIVE_PREFIX").ok())
-        .filter(|s| !s.is_empty());
-    let Some(mut s) = raw else {
-        return default.to_string();
-    };
-    // Trim trailing slashes in place — the converter appends its own separator.
-    s.truncate(s.trim_end_matches('/').len());
-    if s.is_empty() {
-        // `MISE_CYGDRIVE_PREFIX=/` → empty prefix → MSYS `/c/...` form.
-        String::new()
-    } else if s.starts_with('/') {
-        s
-    } else {
-        // Describe the default clearly: an empty prefix is the Git Bash `/c/...` form,
-        // otherwise the Cygwin `/cygdrive` root.
-        let default_desc = if default.is_empty() {
-            "the Git Bash `/c/...` form".to_string()
-        } else {
-            format!("the default `{default}`")
-        };
-        warn!(
-            "MISE_CYGDRIVE_PREFIX={s:?} is not absolute (must start with `/`); \
-             using {default_desc}"
-        );
-        default.to_string()
-    }
-}
-
 /// Read the shebang from a file and parse it into a shell command.
 /// e.g. `#!/usr/bin/env bash` → `["bash"]`
 /// e.g. `#!/bin/bash` → `["/bin/bash"]`
@@ -2590,13 +2556,6 @@ mod tests {
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.restored_bytes, 768);
         assert_eq!(stats.time_saved, Duration::from_millis(40));
-    }
-
-    fn env_with_path(path: &str) -> BTreeMap<String, String> {
-        let mut env = BTreeMap::new();
-        env.insert((*crate::env::PATH_KEY).to_string(), path.to_string());
-        env.insert("OTHER".to_string(), "unchanged".to_string());
-        env
     }
 
     /// Not gated on Windows: the mark reaches a shared repository from any platform, and the
@@ -2821,139 +2780,6 @@ mod tests {
             append_inline_args("Write-Output $args", &args, InlineArgsStyle::SeparateArgv),
             "Write-Output $args"
         );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_converts_for_bash() {
-        let env = env_with_path(r"C:\Users\me\.rustup\bin;D:\tools\bin");
-        let out = maybe_convert_env_for_msys_shell(Path::new("bash.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/c/Users/me/.rustup/bin:/d/tools/bin"
-        );
-        assert_eq!(out.get("OTHER").unwrap(), "unchanged");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_skips_for_cmd() {
-        let env = env_with_path(r"C:\Users\me\.rustup\bin;D:\tools\bin");
-        let out = maybe_convert_env_for_msys_shell(Path::new("cmd.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            r"C:\Users\me\.rustup\bin;D:\tools\bin"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_full_path_to_bash() {
-        let env = env_with_path(r"C:\foo;D:\bar");
-        let out =
-            maybe_convert_env_for_msys_shell(Path::new(r"C:\Program Files\Git\bin\bash.exe"), &env);
-        assert_eq!(out.get(&*crate::env::PATH_KEY).unwrap(), "/c/foo:/d/bar");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_uses_cygdrive_for_cygwin_bash() {
-        // A Cygwin bash (detected by the `cygwin64` path segment) needs the
-        // `/cygdrive/c/...` form, not Git Bash's `/c/...`.
-        let env = env_with_path(r"C:\foo;D:\bar");
-        let out = maybe_convert_env_for_msys_shell(Path::new(r"C:\cygwin64\bin\bash.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/cygdrive/c/foo:/cygdrive/d/bar"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_honors_cygdrive_prefix_override() {
-        // A non-default cygdrive mount (e.g. fstab `/mnt`) is supplied via
-        // MISE_CYGDRIVE_PREFIX in the task env rather than parsed from fstab.
-        let mut env = env_with_path(r"C:\foo;D:\bar");
-        env.insert("MISE_CYGDRIVE_PREFIX".to_string(), "/mnt".to_string());
-        let out = maybe_convert_env_for_msys_shell(Path::new(r"C:\cygwin64\bin\bash.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/mnt/c/foo:/mnt/d/bar"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_honors_cygdrive_prefix_for_git_bash() {
-        // The cygdrive automount root is configurable in MSYS2 / Git Bash too (not just
-        // Cygwin). A Git Bash user with a non-default fstab mount supplies it via
-        // MISE_CYGDRIVE_PREFIX; without it the default would (wrongly) be `/c/...`.
-        let mut env = env_with_path(r"C:\foo;D:\bar");
-        env.insert("MISE_CYGDRIVE_PREFIX".to_string(), "/mnt".to_string());
-        let out =
-            maybe_convert_env_for_msys_shell(Path::new(r"C:\Program Files\Git\bin\bash.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/mnt/c/foo:/mnt/d/bar"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_rejects_relative_cygdrive_prefix() {
-        // A prefix without a leading slash (e.g. `mnt`) would yield relative PATH
-        // entries bash ignores; fall back to the shell's default instead. For the
-        // Cygwin binary used here that default is `/cygdrive` (Git Bash would fall
-        // back to an empty prefix, i.e. the `/c/...` form).
-        let mut env = env_with_path(r"C:\foo;D:\bar");
-        env.insert("MISE_CYGDRIVE_PREFIX".to_string(), "mnt".to_string());
-        let out = maybe_convert_env_for_msys_shell(Path::new(r"C:\cygwin64\bin\bash.exe"), &env);
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/cygdrive/c/foo:/cygdrive/d/bar"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_cygdrive_prefix_slash_is_msys() {
-        // `MISE_CYGDRIVE_PREFIX=/` trims to empty → MSYS `/c/...` form.
-        let mut env = env_with_path(r"C:\foo;D:\bar");
-        env.insert("MISE_CYGDRIVE_PREFIX".to_string(), "/".to_string());
-        let out = maybe_convert_env_for_msys_shell(Path::new(r"C:\cygwin64\bin\bash.exe"), &env);
-        assert_eq!(out.get(&*crate::env::PATH_KEY).unwrap(), "/c/foo:/d/bar");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_borrows_when_path_already_unix() {
-        // PATH already in Unix form (no `;` and no `\`) — Cow stays Borrowed,
-        // env is not cloned. Common when mise runs from Git Bash itself.
-        let env = env_with_path("/c/foo:/d/bar:/usr/bin");
-        let out = maybe_convert_env_for_msys_shell(Path::new("bash.exe"), &env);
-        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
-        assert_eq!(
-            out.get(&*crate::env::PATH_KEY).unwrap(),
-            "/c/foo:/d/bar:/usr/bin"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_maybe_convert_env_for_msys_shell_borrows_when_path_missing() {
-        // No PATH at all — also no clone.
-        let mut env = BTreeMap::new();
-        env.insert("OTHER".to_string(), "unchanged".to_string());
-        let out = maybe_convert_env_for_msys_shell(Path::new("bash.exe"), &env);
-        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn test_maybe_convert_env_for_msys_shell_noop_on_unix() {
-        let env = env_with_path("/usr/bin:/bin");
-        let out = maybe_convert_env_for_msys_shell(Path::new("bash"), &env);
-        assert_eq!(out.get(&*crate::env::PATH_KEY).unwrap(), "/usr/bin:/bin");
     }
 
     #[test]

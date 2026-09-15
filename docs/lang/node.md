@@ -1,23 +1,39 @@
-# Node
+---
+description: "为每个项目安装和切换 Node.js 版本。"
+socialDescription: "为每个项目安装和切换 Node.js 版本。"
+---
 
-像 `nvm`、`volta`、`fnm` 或 `asdf`……一样，`mise` 可以在同一系统上管理多个版本的 Node.js。
+# Node.js
 
-> 以下是使用 node mise 核心插件的说明。当没有安装名为 "node" 的 git 插件时会使用它。
-> 如果你想使用 [asdf-nodejs](https://github.com/asdf-vm/asdf-nodejs)
-> 那么运行 `mise plugins install node https://github.com/asdf-vm/asdf-nodejs`
-
-这部分的代码位于 mise 仓库中的 [`./src/plugins/core/node.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/node.rs)。
+与 `nvm`（或 `volta`、`fnm`、`asdf`）一样，`mise` 可以在同一系统上管理多个 Node.js 版本。
 
 ## 用法
 
-以下命令会安装最新版本的 node-26.x 并将其设为全局
-默认值：
+为当前项目选择 Node.js，并在不依赖 shell 激活的情况下进行验证：
 
 ```sh
-mise use -g node@26
+mise use node@26
+mise exec -- node --version
 ```
 
-有关常见任务和示例，请参阅 [Node.JS Cookbook](/mise-cookbook/nodejs.html)。
+使用 `mise use -g node@26` 设置个人默认版本。在通过 shell 激活进入项目、运行任务或使用 `mise exec` 时，项目版本会覆盖该默认版本。使用 `mise upgrade node` 可在已配置的请求范围内进行更新。
+
+请参阅 [Node.js Cookbook](/mise-cookbook/nodejs.html) 了解常见任务和示例。
+
+这些说明使用 mise 内置的 node 支持。已安装的同名外部插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详情，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/node.rs)。
+
+## 用 aube 运行项目
+
+[aube](https://aube.jdx.dev/) 是一个快速的 Node.js 包管理器，默认提供强大的供应链安全保护。它会原地读取和写入现有的 `package-lock.json`、`pnpm-lock.yaml` 和 `yarn.lock` 文件，因此项目可以在无需迁移锁文件的情况下尝试使用它。它的 `aubr` 命令会在运行包脚本前自动安装过时的依赖项，并在依赖项已经是最新版本时跳过安装。
+
+使用 mise 安装它，然后运行现有的包脚本：
+
+```sh
+mise use aube
+mise exec -- aubr test
+```
+
+请参阅 [aube 的安全概览](https://aube.jdx.dev/security)，了解其发布冷却、信任策略、恶意包和生命周期脚本保护。
 
 ## 工具选项
 
@@ -51,24 +67,17 @@ npm = "11"
 mise use --pin node@lts npm@latest
 ```
 
-这会将像 `lts` 和 `latest` 这样的别名解析为 `mise.toml` 中的精确版本号，例如：
+这会将解析后的具体版本写入 `mise.toml`。版本号取决于当前发布的版本；使用 `mise ls --current` 查看结果，或直接读取配置文件。
 
-```toml [mise.toml]
-[tools]
-node = "26.1.0"
-npm = "11.12.1"
-```
-
-固定的 npm 版本优先于 Node 自带的版本，因此 `npm --version` 将
-始终返回 `mise.toml` 中指定的版本。
+在 mise 环境中，单独配置的 npm 优先于 Node 捆绑的 npm。使用 `mise exec -- npm --version` 检查它。此配置选择包管理器可执行文件；项目的依赖锁文件仍然控制其 npm 包。
 
 ## `.nvmrc`、`.node-version` 和 `package.json` 支持
 
 默认情况下，mise 使用 `mise.toml` 文件来在不同软件版本之间自动切换。
 
-它也支持使用 `.tool-versions` 文件来指定版本，以兼容 ASDF。此外，`.nvmrc`、`.node-version` 以及 `package.json` 中的 `devEngines` 字段也受到支持，但需要显式启用（见下方提示）。
+它也支持 `.tool-versions` 文件，以兼容 asdf。`.nvmrc`、`.node-version` 以及 `package.json` 中的 `devEngines` 字段也受支持，但必须显式启用（请参阅下面的提示）。
 
-这使它可以直接替代 `nvm`。有关更多信息，请参阅[惯用版本文件](/configuration.html#idiomatic-version-files)。
+有关更多信息，请参阅[惯用版本文件](/configuration.html#idiomatic-version-files)。
 
 ::: tip
 惯用版本文件（`.nvmrc`、`.node-version`、`package.json` 中的 `devEngines` 字段）默认是禁用的，必须显式启用：
@@ -116,20 +125,19 @@ node = { version = "22", postinstall = "npm install -g typescript" }
 
 :::
 
-mise-node 可以在安装完 node 版本后自动安装一组默认的 npm 包。要使用此旧功能，请提供一个 `$HOME/.default-npm-packages` 文件，每行列出一个包，例如：
+mise 可以在安装 node 版本后立即自动安装一组默认的 npm 包。要使用此旧版功能，请提供一个 `$HOME/.default-npm-packages` 文件，每行列出一个包，例如：
 
 ```text
-lodash
-request
-express
+typescript
+eslint
 ```
 
-你可以通过设置 `MISE_NODE_DEFAULT_PACKAGES_FILE` 变量来指定该文件的非默认位置。
+你可以使用 `MISE_NODE_DEFAULT_PACKAGES_FILE` 变量为此文件指定其他位置。
 
 ## "nodejs" -> "node" 别名
 
-你不能安装/使用名为 "nodejs" 的插件。如果你尝试这样做，mise 只会将其重命名为
-"node"。有关说明，请参阅 [FAQ](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go)。
+你无法安装或使用名为 "nodejs" 的插件。如果你尝试这样做，mise 会将其重命名为
+"node"。有关解释，请参阅 [FAQ](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go)。
 
 ## 从源代码构建
 
@@ -143,15 +151,15 @@ mise use node@latest
 
 ## 非官方构建
 
-Nodejs.org 提供了一组 [非官方构建](https://unofficial-builds.nodejs.org/)，它们与某些官方二进制文件不支持的平台兼容。对于这些平台来说，这些构建是从源码编译之外的一个不错替代方案。
+Nodejs.org 为官方二进制文件不支持的某些平台提供了一组[非官方构建](https://unofficial-builds.nodejs.org/)。对于这些平台，这是一个不错的替代方案，可以避免从源代码编译。
 
-要使用它们，首先将镜像 URL 设置为指向非官方构建：
+要使用它们，请先将镜像 URL 指向非官方构建：
 
 ```sh
 mise settings node.mirror_url=https://unofficial-builds.nodejs.org/download/release/
 ```
 
-如果你的目标只是支持像 linux-loong64 或 linux-armv6l 这样的替代架构/操作系统，那么这就是所需的全部配置。Node 还提供诸如 musl 或 glibc-217 之类的 flavor（glibc-217 使用的 glibc 版本比官方二进制文件所构建时使用的版本更旧）。
+如果你只需要支持 linux-loong64 或 linux-armv6l 等替代架构或操作系统，则完成此设置即可。Node 还提供 musl 或 glibc-217 等 flavor，后者使用的 glibc 版本比官方二进制文件构建时所使用的版本更旧。
 
 要使用这些，请设置 `node.flavor`：
 

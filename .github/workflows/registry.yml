@@ -11,26 +11,23 @@ permissions: {}
 
 jobs:
   trusted:
-    if: ${{ github.actor == 'jdx' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'jdx')) }}
+    if: ${{ (github.actor == 'jdx' || github.actor == 'mise-en-dev') && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.user.login == 'jdx' || github.event.pull_request.user.login == 'mise-en-dev'))) }}
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/registry-impl.yml
+    uses: $/.github/workflows/registry-impl.yml
     with:
       trusted: true
-      mbx-backend: server
     secrets:
       MISE_GH_TOKEN: ${{ secrets.MISE_GH_TOKEN }}
       MISE_VERSIONS_API_SECRET: ${{ secrets.MISE_VERSIONS_API_SECRET }}
 
   untrusted:
-    if: ${{ github.actor != 'jdx' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login != 'jdx')) }}
+    if: ${{ (github.actor != 'jdx' && github.actor != 'mise-en-dev') || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || (github.event.pull_request.user.login != 'jdx' && github.event.pull_request.user.login != 'mise-en-dev'))) }}
     permissions:
       contents: read
-    uses: ./.github/workflows/registry-impl.yml
+    uses: $/.github/workflows/registry-impl.yml
     with:
       trusted: false
-      mbx-backend: github
 
   registry-ci:
     name: registry-ci

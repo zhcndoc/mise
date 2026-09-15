@@ -1,14 +1,28 @@
+---
+description: "mise 可以在 mise activate 会话期间自动执行脚本。"
+---
+
 # 钩子
 
-你可以让 mise 在 `mise activate` 会话期间自动执行脚本。除了 `preinstall` 和 `postinstall` 钩子之外，  
-如果你的 shell 中没有安装 `mise activate` shell 钩子，就不能使用这些功能。  
-配置写入 `mise.toml`。
+mise 可以在 `mise activate` 会话期间自动执行脚本。除了 `preinstall`
+和 `postinstall` 钩子外，这些钩子都要求在 shell 中安装 `mise activate` shell 钩子。
+钩子在 `mise.toml` 中配置。
+
+| 事件                       | 运行时机                                             | 是否需要 shell 激活 |
+| -------------------------- | ----------------------------------------------------- | ------------------- |
+| `cd`                       | 工作目录发生变化                                     | 是                  |
+| `enter` / `leave`          | shell 进入或离开项目目录树                           | 是                  |
+| `preinstall` / `postinstall` | mise 安装选定的工具                                  | 否                  |
+| `watch_files`              | 激活检测到匹配文件发生变化                           | 是                  |
+
+对于想要显式调用的命令，请使用 [tasks](/tasks/)。对于持续运行的文件监视器，请使用
+[`mise watch`](/cli/watch.html)；`watch_files` 钩子由 shell 激活进行检查，而不是由后台监视器进行检查。
 
 当同一种钩子类型在多个已加载的配置文件中定义时，mise 会运行每个匹配的钩子，而不是覆盖低优先级文件中的钩子。钩子会按照优先级从最高的配置文件到最低的配置文件运行。在单个配置文件中，定义为数组的钩子会按照列出的顺序运行。例如，`conf.d/a.toml`、`conf.d/b.toml` 和 `conf.d/c.toml` 中的钩子会依次以 `c`、`b`、`a` 的顺序运行，因为字母顺序靠后的片段具有更高的优先级。需要按字母顺序运行的顺序相关钩子，请将其放在同一个数组中。
 
 ## CD 钩子
 
-只要目录发生更改，就会运行此钩子。
+此钩子会在目录发生变化时运行。
 
 ```toml
 [hooks]
@@ -17,7 +31,7 @@ cd = "echo 'I changed directories'"
 
 ## 进入钩子
 
-当进入项目时运行此钩子。在项目中更改目录不会再次触发此钩子。
+此钩子会在进入项目时运行。在项目内更改目录不会再次触发它。
 
 ```toml
 [hooks]
@@ -26,7 +40,7 @@ enter = "echo 'I entered the project'"
 
 ## 离开钩子
 
-当项目被离开时运行此钩子。在项目中切换目录不会触发此钩子。
+此钩子会在离开项目时运行。在项目内更改目录不会触发它。
 
 ```toml
 [hooks]
@@ -35,9 +49,9 @@ leave = "echo '我离开了项目'"
 
 ## 预安装/后安装钩子
 
-这些钩子分别在工具安装前后运行。与其他钩子不同，这些钩子不需要 `mise activate`。
-它们以项目根目录作为工作目录，即使从子目录调用 `mise install` 也是如此。调用目录仍可通过
-`MISE_ORIGINAL_CWD` 获取。
+这些钩子分别在工具安装前后运行。与其他钩子不同，它们不需要 `mise activate`。
+它们会以项目根目录作为工作目录，即使从子目录调用 `mise install` 也是如此。
+调用目录仍可通过 `MISE_ORIGINAL_CWD` 获取。
 
 ```toml
 [hooks]
@@ -58,7 +72,7 @@ postinstall = { run = "echo '已安装'", shell = "bash -c" }
 
 ```toml
 [hooks]
-postinstall = { run = "echo installed", run_windows = "Write-Output installed" }
+postinstall = { run = "pwd", run_windows = "cd" }
 ```
 
 对于 `preinstall` 和 `postinstall`，`script = ...` 和 `scripts = ...` 是 `run = ...` 的旧版别名。如果在 `script`/`scripts` 钩子上同时设置了 `shell`，mise 会发出警告，说明该 shell 设置会被忽略，并仍然使用默认的内联 shell 运行脚本。要选择内联 shell 命令，请使用带有 `shell = "bash -c"` 的 `run = ...`。安装钩子中的 `script` 和 `scripts` 别名已弃用。
@@ -77,12 +91,12 @@ echo "已安装：$MISE_INSTALLED_TOOLS"
 
 ## 工具级 postinstall
 
-单个工具可以使用 `postinstall` 选项定义自己的 postinstall 脚本。这些脚本会在每个工具安装后立即运行（在同一会话中的其他工具安装之前）：
+对于特定于某次安装的操作，请使用工具的 `postinstall` 选项。它会在该工具安装完成后运行；彼此独立的工具安装仍然可以并行运行。对于需要完整选定工具集的操作，请使用项目级 `postinstall` 钩子：
 
 ```toml
 [tools]
-node = { version = "20", postinstall = "npm install -g pnpm" }
-python = { version = "3.12", postinstall = "pip install pipx" }
+node = { version = "24", postinstall = "node --version" }
+python = { version = "3.12", postinstall = "python --version" }
 ```
 
 工具级 postinstall 脚本会接收以下环境变量：
@@ -100,6 +114,9 @@ python = { version = "3.12", postinstall = "pip install pipx" }
 钩子可以引用 mise 任务，而不是内联脚本。任务会通过 `mise run` 作为子进程执行，因此它会复用完整的任务系统，包括依赖、环境变量以及基于文件的任务定义。
 
 ```toml
+[tasks.install-deps]
+run = "echo 'install project dependencies here'"
+
 [tasks.setup]
 run = "echo 'setting up project'"
 depends = ["install-deps"]
@@ -121,7 +138,7 @@ enter = ["echo 'entering project'", { task = "setup" }]
 
 ## 监视文件钩子
 
-在使用 `mise activate` 时，你可以让 mise 监视文件变化，并在文件发生变化时执行脚本或任务。
+使用 `mise activate` 时，mise 可以监视文件变化，并在文件发生变化时执行脚本或任务。
 
 ```toml
 [[watch_files]]
@@ -238,11 +255,9 @@ scripts = [
 `run` 的旧版别名保留；如果在这些钩子中通过 `script`/`scripts` 设置了 `shell`，则该设置会被忽略。
 
 ::: warning
-我觉得这应该是不言自明的，但万一不是的话，这并不会像 `mise.toml` 中的 `[env]` 那样在你 _离开_ 目录时执行任何清理操作。你实际上只是
-在进入目录时执行 shell 代码，而 mise 完全没有办法跟踪这一点。
-我认为这个问题没有解决方案，这很可能也是 direnv 从未实现类似功能的原因。
-
-不过我认为在大多数情况下这可能没问题，只是值得记住这一点。
+mise 不会跟踪或撤销 shell 脚本所做的更改。例如，一个导出变量的
+`enter` 脚本需要一个对应的 `leave` 脚本来取消设置该变量。
+如果希望 mise 管理值的生命周期，请优先使用 `[env]`。
 
 :::
 

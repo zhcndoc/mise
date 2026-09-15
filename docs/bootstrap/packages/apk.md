@@ -1,4 +1,8 @@
-# apk
+---
+description: "Alpine Linux 的系统包。"
+---
+
+# Alpine 软件包（apk）
 
 Alpine Linux 的系统包。
 
@@ -7,6 +11,16 @@ Alpine Linux 的系统包。
 "apk:build-base" = "latest"
 "apk:zlib-dev" = "1.3.1-r2" # 版本固定
 ```
+
+## 预览并应用
+
+```sh
+mise bootstrap packages status
+mise bootstrap packages apply --manager apk --dry-run
+mise bootstrap packages apply --manager apk
+```
+
+这些命令使用当前启用的 `[bootstrap.packages]` 声明。若要同时添加并安装软件包，请使用 `mise bootstrap packages use apk:build-base`。主机上必须提供相应的管理器；当管理器不可用时，显式使用 `--manager apk` 会失败。
 
 ## 行为
 
@@ -18,7 +32,6 @@ Alpine Linux 的系统包。
 
 ## 版本固定
 
-当安装了不同版本时，固定条目（`"apk:zlib-dev" = "1.3.1-r2"`）会在 `mise bootstrap packages status` 中显示为 `version mismatch`，
-而 `mise bootstrap packages apply` 会将该固定版本传递给 apk 以进行修正。
-`"latest"` 条目则可由任何已安装版本满足 —— 使用
-`mise bootstrap packages upgrade` 将它们升级到最新可用版本。
+上面的固定版本仅作示例。请在目标系统上检查 `apk policy zlib-dev`，并选择其已配置的软件仓库中可用的版本。固定版本不会添加旧版 Alpine 软件仓库，也不会获取已归档的软件包。
+
+固定条目（`"apk:zlib-dev" = "1.3.1-r2"`）在已安装的是其他版本时，会在 `mise bootstrap packages status` 中显示为“版本不匹配”，而 `mise bootstrap packages apply` 会将该固定版本传递给 apk 以进行修正。`"latest"` 条目在任意版本已安装时都会被视为满足要求——使用 `mise bootstrap packages upgrade` 将其升级到最新可用版本。

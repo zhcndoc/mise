@@ -14,6 +14,7 @@ type Props = {
   type: string;
   description: string;
   default?: unknown;
+  rust_type?: string;
   deprecated?: string;
   enum?: EnumItem[];
   rc?: boolean;
@@ -28,9 +29,11 @@ type Element = {
   default: unknown;
   description: string;
   deprecated?: true;
+  minimum?: number;
   enum?: EnumValue[];
   items?: {
     type: string | string[];
+    enum?: EnumValue[];
   };
   additionalProperties?: {
     type: string;
@@ -154,17 +157,21 @@ function buildElement(key: string, props: Props): Element {
   if (props.deprecated) {
     element.deprecated = true;
   }
-  if (props.enum) {
-    element.enum = props.enum.map((e) =>
-      typeof e === "object" && e !== null && "value" in e ? e.value : e,
-    );
+  if (type === "integer" && props.rust_type?.startsWith("u")) {
+    element.minimum = 0;
   }
+  const enumValues = props.enum?.map((e) =>
+    typeof e === "object" && e !== null && "value" in e ? e.value : e,
+  );
 
   if (type === "string[]") {
     element.type = "array";
     element.items = {
       type: "string",
+      ...(enumValues ? { enum: enumValues } : {}),
     };
+  } else if (enumValues) {
+    element.enum = enumValues;
   }
 
   if (type === "object") {

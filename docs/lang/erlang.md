@@ -1,31 +1,36 @@
+---
+description: "在同一系统上安装和管理多个 Erlang 版本。"
+socialDescription: "在同一系统上安装和管理多个 Erlang 版本。"
+---
+
 # Erlang
 
 `mise` 可用于在同一系统上安装和管理 [erlang](https://www.erlang.org/) 的多个版本。
 
-> 以下是使用 erlang 核心插件的说明。
-> 当没有安装名为“erlang”的 git 插件时，会使用该插件。
-
-其代码位于 mise 仓库中的
-[`./src/plugins/core/erlang.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/erlang.rs)。
-
 ## 用法
 
-以下命令会安装 erlang 并将其设为全局默认版本：
+为项目安装 Erlang，然后检查 OTP 发布版本，而不启动交互式 Erlang shell：
 
 ```sh
-mise use -g erlang@26
+mise use erlang@latest
+mise exec -- erl -noshell -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
 ```
+
+使用 `mise use -g erlang@latest` 设置个人默认版本，或者将 `latest` 替换为应用程序所需的发布系列。
 
 使用 `mise ls-remote erlang` 查看可用版本。
 
+这些说明使用 mise 内置的 erlang 支持。已安装的同名外部插件可能会更改行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/erlang.rs)。
+
 ## kerl
 
-该插件在底层使用 [kerl](https://github.com/kerl/kerl) 来构建 erlang。  
-有关如何配置 kerl 的信息，请参阅 kerl 的文档。
+mise 默认会尝试使用兼容的预编译构建，并在需要时回退到源代码构建。源代码构建使用 [kerl](https://github.com/kerl/kerl)，并需要其平台构建依赖项。设置 `erlang.compile = true` 以请求源代码构建，或设置为 `false`，以便在预编译构建不可用时失败。
+
+有关构建依赖项和配置，请参阅 kerl 的文档。
 
 在 GitHub Actions Linux runners 上，`ImageOS=ubuntu24`、`ImageOS=ubuntu22` 和 `ImageOS=ubuntu20` 分别对应预编译 Erlang 构建目标。在默认的 `erlang.compile` 模式下，不受支持的值会将 Erlang/OTP 源代码归档记录为平台的锁定输入，以便安装过程可以复现 kerl 回退行为。
 
-[Bob](https://github.com/hexpm/bob#erlang-builds) 发布的构建版本以 Ubuntu 为目标，但也可能在其他基于 glibc 且系统库兼容的 Linux 发行版上运行。设置 `erlang.precompiled_os` 可选择使用 Bob 的某个 Ubuntu 目标：
+由 [Bob](https://github.com/hexpm/bob#erlang-builds) 发布的构建以 Ubuntu 为目标，但也可能在其他具有兼容系统库的基于 glibc 的 Linux 发行版上运行。设置 `erlang.precompiled_os` 以选择 Bob 的某个 Ubuntu 目标：
 
 ```toml
 [settings.erlang]

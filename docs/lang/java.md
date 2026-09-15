@@ -1,42 +1,45 @@
+---
+description: "像 sdkman 一样，mise 可以在同一系统上管理多个版本的 Java。"
+---
+
 # Java
 
 像 `sdkman` 一样，`mise` 可以在同一系统上管理多个版本的 Java。
 
-> 以下是使用 mise 的 java 核心插件的说明。当没有安装名为“java”的 Git 插件时，会使用它。如果你想使用 [asdf-java](https://github.com/halcyon/asdf-java)，
-> 那么请使用 `mise plugins install java GIT_URL`。
-
-这部分代码位于 mise 仓库中的
-[`./src/plugins/core/java.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/java.rs)。
-
 ## 用法
 
-以下命令会安装最新版本的 openjdk-21.x（如果尚未安装某个版本的 openjdk-21.x），并将其设为全局默认版本：
+为当前项目选择 JDK 供应商和版本：
 
 ```sh
-mise use -g java@openjdk-21
-mise use -g java@21         # openjdk 的其他简写形式
+mise use java@temurin-21
+mise exec -- java -version
+mise exec -- javac -version
 ```
 
-你也可以从其他厂商安装 jdk。要获取某个厂商的最新版本，只需使用该厂商前缀。
+使用 `mise use -g java@temurin-21` 设置个人默认版本。供应商前缀可以明确指定项目的发行版选择。
+
+你也可以从其他供应商安装 JDK。要获取某个供应商的最新版本，请使用供应商前缀。
 
 ```sh
-mise use -g java@temurin        # 来自 Temurin 的最新版本
-mise use -g java@temurin-21
-mise use -g java@zulu-21
-mise use -g java@corretto-21
+mise use java@temurin        # latest version from Temurin
+mise use java@temurin-21
+mise use java@zulu-21
+mise use java@corretto-21
 ```
 
 可使用 `mise ls-remote java` 查看可用版本。
 
-::: warning
-请注意，简写版本（如示例中的 `21`）默认使用 [`OpenJDK`](https://openjdk.org/) 作为供应商。默认供应商可以通过设置 [`java.shorthand_vendor`](../configuration/settings.md#java.shorthand_vendor) 来更改。OpenJDK 版本只会在 6 个月的周期内更新。超过这个短期后，将不再提供更新和安全补丁。这同样适用于 LTS 版本。
-
-有关如何选择 JDK 的更多信息，请参见 <https://whichjdk.com>。
+::: info 供应商选择
+未限定供应商的版本（例如 `java@21`）使用
+[`java.shorthand_vendor`](/configuration/settings.html#java.shorthand_vendor)，
+其默认值为 `openjdk`。不同供应商的发行版具有不同的更新和支持策略。当项目依赖特定发行版时，请使用带供应商限定的请求。
 :::
+
+这些说明使用 mise 内置的 java 支持。已安装的同名外部插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详情，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/java.rs)。
 
 ## JAVA_HOME
 
-mise 会自动将 `JAVA_HOME` 设置为当前激活的 Java 安装。这需要 [`mise activate`](/cli/activate)——仅使用 shim 不会设置像 `JAVA_HOME` 这样的环境变量。
+mise 会为通过 `mise exec` 运行的命令、任务以及已激活的 shell 设置 `JAVA_HOME`。[Shell 激活](/cli/activate.html)会直接更新父 shell；运行 shim 不会将 `JAVA_HOME` 导出回父 shell。
 
 如果在修改 `mise.toml` 后，`JAVA_HOME` 似乎仍停留在旧版本，请尝试：
 
@@ -45,61 +48,66 @@ cd . # 触发 mise hook-env 重新评估
 echo $JAVA_HOME
 ```
 
-如果使用在启动时读取 `JAVA_HOME` 的 IDE，在切换 Java 版本后，你可能需要重启它。对于非交互式环境（CI、脚本），请使用 `mise exec` 或 `mise run`，它们始终会设置完整的环境。
+如果你使用的 IDE 会在启动时读取 `JAVA_HOME`，切换 Java 版本后可能需要重启 IDE。对于非交互式环境（CI、脚本），请使用 `mise exec` 或 `mise run`，它们始终会设置完整环境。
 
 ## macOS JAVA_HOME 集成
 
-macOS 中的一些应用依赖 `/usr/libexec/java_home` 来查找已安装的 Java 运行时。
+macOS 上的一些应用依赖 `/usr/libexec/java_home` 来查找已安装的 Java 运行时。
 
-要将已安装的 Java 运行时与 macOS 集成，请为相应的
-版本运行以下命令（例如 openjdk-21）。
+如果所选发行版包含 macOS `Contents` bundle，请将其注册到 macOS。首先检查为此目录选择的安装：
 
 ```sh
-sudo mkdir /Library/Java/JavaVirtualMachines/openjdk-21.jdk
-sudo ln -s ~/.local/share/mise/installs/java/openjdk-21/Contents /Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents
+mise where java
 ```
 
-> 注意：并非所有 Java SDK 发行版都支持此集成（例如 liberica）。
+然后，在 POSIX shell 中：
+
+```sh
+mise_java_home="$(mise where java)"
+if test -d "$mise_java_home/Contents"; then
+  sudo mkdir -p /Library/Java/JavaVirtualMachines/mise-java.jdk
+  sudo ln -s "$mise_java_home/Contents" /Library/Java/JavaVirtualMachines/mise-java.jdk/Contents
+fi
+/usr/libexec/java_home -V
+```
+
+仅当 `Contents` 存在且目标尚未注册时，才运行链接命令。并非所有发行版都包含此 bundle。该链接指向所选安装；它不会自动跟随未来的升级。
 
 ## `.java-version` 和 `.sdkmanrc` 文件支持
 
-Java 核心插件支持惯用版本文件 `.java-version` 和 `.sdkmanrc`。参见 [惯用版本文件](/configuration.html#idiomatic-version-files)。
+显式启用对 `.java-version` 和 `.sdkmanrc` 的发现：
 
-对于 `.sdkmanrc` 文件，mise 会尝试将供应商和版本映射为相应的版本字符串。例如，版本 `20.0.2-tem` 会映射为 `temurin-20.0.2`。由于 Azul 的 Zulu 版本命名，版本 `11.0.12-zulu` 会映射为主版本 `zulu-11`。
+```sh
+mise settings add idiomatic_version_file_enable_tools java
+```
+
+`mise.toml` 中冲突的 Java 声明具有更高优先级。请参阅[惯用版本文件](/configuration.html#idiomatic-version-files)。
+
+对于 `.sdkmanrc` 文件，mise 会尝试将供应商和版本映射到适当的版本字符串。例如，版本 `20.0.2-tem` 会映射为 `temurin-20.0.2`。由于 Azul 的 Zulu 版本命名方式，版本 `11.0.12-zulu` 会映射为主版本 `zulu-11`。
 
 并非 [sdkman](https://sdkman.io/jdks) 中提供的所有供应商都受 mise 支持。
 以下供应商不受支持：`bsg`（Bisheng）、`graal`（GraalVM）、`nik`（Liberica NIK）。
 
 ### 使用不受支持的版本
 
-如果需要使用不受支持的 Java 版本，则需要一些手动操作：
+对于已由 SDKMAN 或其他来源安装的 JDK，请将 mise 指向其主目录，而不是创建内部缓存条目或修改 JDK：
 
-1. 将不受支持的版本下载到某个目录（例如 `~/.sdkman/candidates/java/21.0.1-open`）
-2. 为新版本创建符号链接：
-
-```sh
-ln -s ~/.sdkman/candidates/java/21.0.1-open ~/.local/share/mise/installs/java/21.0.1-open
+```toml [mise.toml]
+[tools]
+java = { path = "/path/to/jdk-home" }
 ```
 
-3. 如果在 Mac 上：
+该目录必须包含 `bin/java`，对于完整的 JDK，还必须包含 `bin/javac`。对于 macOS `.jdk` bundle，通常是其 `Contents/Home` 目录。使用 `mise exec -- java -version` 进行检查。
+
+或者，使用
+[`mise link`](/cli/link.html)将本地安装注册到某个名称下，然后使用 `mise use` 选择它：
 
 ```sh
-mkdir ~/.local/share/mise/installs/java/21.0.1-open/Contents
-mkdir ~/.local/share/mise/installs/java/21.0.1-open/Contents/MacOS
-
-ln -s ~/.sdkman/candidates/java/21.0.1-open ~/.local/share/mise/installs/java/21.0.1-open/Contents/Home
-cp ~/.local/share/mise/installs/java/21.0.1-open/lib/libjli.dylib ~/.local/share/mise/installs/java/21.0.1-open/Contents/MacOS/libjli.dylib
+mise link java@local /path/to/jdk-home
+mise use java@local
 ```
 
-4. 别忘了确保缓存被阻止且有效，方法是确保 [mise 缓存](https://mise.jdx.dev/directories.html#cache-mise) 中存在一个与你的版本对应的**空**目录：
-   例如：
-
-```sh
-$ ls -R $MISE_CACHE_DIR/java
-21.0.1-open
-
-mise/java/21.0.1-open:
-```
+mise 会直接使用此安装；更新仍由安装它的来源负责。
 
 ## 工具选项
 
@@ -117,7 +125,7 @@ java = { version = "latest", install_env = { JAVA_TOOL_OPTIONS = "-Djava.net.use
 
 ### `release_type`
 
-`release_type` 选项允许您指定要安装的发布类型。支持以下值：
+`release_type` 选项指定要安装的发行版类型。支持以下值：
 
 - `ga`（默认）：正式发布版
 - `ea`：早期访问版
@@ -129,15 +137,23 @@ java = { version = "latest", install_env = { JAVA_TOOL_OPTIONS = "-Djava.net.use
 
 ## Gradle 工具链检测
 
-Gradle 可以自动检测由某些工具安装的工具链（参见 [toolchain | 自动检测](https://docs.gradle.org/current/userguide/toolchains.html#sec:auto_detection)）。
+通过 mise 运行 Gradle，使其继承所选的 `JAVA_HOME`：
 
-目前，`Gradle` 不支持自动检测由 `mise` 安装的 Java（参见 [gradle/issues/29508](https://github.com/gradle/gradle/issues/29508) 和 [gradle/issues/29355](https://github.com/gradle/gradle/issues/29355)）。一种变通方法是利用 `mise` 的安装布局与 [`asdf` 使用的布局](/ide-integration.html#sdk-selection-using-asdf-layout) [相似]。
-
-```shell
-mkdir -p ~/.asdf/installs/ && ln -s ~/.local/share/mise/installs/java ~/.asdf/installs/
+```sh
+mise exec -- ./gradlew -q javaToolchains
 ```
 
-否则，你也可以始终使用 [foojay-resolver-convention](https://plugins.gradle.org/plugin/org.gradle.toolchains.foojay-resolver-convention) 插件，让 Gradle 自动安装你的项目所需的 JDK。
+这要求项目具有 Gradle wrapper 和 JVM 构建配置。报告会显示 Gradle 检测到哪些 JDK，以及它是如何找到这些 JDK 的。
+
+要将所选 JDK 作为显式工具链候选项公开，请添加：
+
+```properties [gradle.properties]
+org.gradle.java.installations.fromEnv=JAVA_HOME
+```
+
+对于多个 JDK，Gradle 还接受在 `org.gradle.java.installations.paths` 中以逗号分隔的安装目录列表。它不会递归搜索这些目录。请使用实际的 JDK 主目录，而不是 mise 的整个 `installs/java` 目录；请参阅 [Gradle 的自定义工具链位置](https://docs.gradle.org/current/userguide/toolchains.html#sec:custom_loc)。
+
+构建的工具链要求仍会决定 Gradle 使用哪个候选项。更改工具链配置后，在再次检查之前，使用 `mise exec -- ./gradlew --stop` 停止现有 daemon。
 
 ## 设置
 

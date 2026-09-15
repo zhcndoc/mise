@@ -1,34 +1,27 @@
+---
+description: "使用 Aqua 注册表配方和受支持的验证检查安装发布二进制文件"
+---
+
 # Aqua 后端
 
-[Aqua](https://aquaproj.github.io/) 工具可以在 mise 中原生使用。aqua 是新工具的理想后端，
-因为它们不需要插件，支持 Windows，并且除了校验和之外还提供安全
-功能。aqua 的安装过程还会显示更多进度条，这一点很不错。
+[Aqua](https://aquaproj.github.io/) 工具可以在 mise 中原生使用。对于没有 [packslip manifests](/dev-tools/backends/packslip.html) 的工具，aqua 是 Tier 2 后端：它不需要插件，可以在 Windows 上运行，并且提供超出校验和的安全功能。验证取决于每个软件包提供的元数据。
 
-你不需要单独安装 aqua。mise 中完全不会使用 aqua CLI。实际使用的是
-[aqua registry](https://github.com/aquaproj/aqua-registry)，它会在发布时编译进 mise 可执行文件中。
-这里有一个包条目的示例：[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml)。
-mise 内置了一个 aqua 的重新实现，它知道如何处理这些文件来安装工具。
+你不需要单独安装 aqua。mise 完全不使用 aqua CLI；它使用 [aqua registry](https://github.com/aquaproj/aqua-registry)，该注册表会在发布时编译到 mise 二进制文件中。下面是一个软件包条目示例：[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml)。mise 自己重新实现了 aqua，会读取这些文件来安装工具。
 
 默认情况下，使用内置的快照。启用
 [`registry_floating`](/configuration/settings.html#registry_floating) 设置后，会先检查当前的
 官方 aqua registry，同时保留内置快照作为备用。它还会让 mise 的简写 registry 跟随更新；
 有关其中的权衡和缓存行为，请参阅[浮动 registry](/registry.html#floating-registries)。
 
-截至目前，aqua 对 mise 来说还比较新，并且由于许多工具正在从
-asdf 转换为 aqua，aqua 工具中的一些配置可能需要进一步完善。下面列出了一些常见问题，
-如果你发现问题，强烈建议将修改贡献回 aqua registry。维护者响应非常迅速，也非常乐于合作。
+如果某个条目包含错误的平台名称、URL 或验证元数据，请向 aqua registry 报告，或贡献修正内容。mise 发布版本包含一个快照，因此上游修复可能需要更新的 mise 发布版本或自定义注册表。
 
-如果其他方法都失败了，你可以通过 [`MISE_DISABLE_BACKENDS=aqua`](/configuration/settings.html#disable_backends) 完全禁用 aqua。
+Aqua 配方主要用于下载和提取已发布的构件。需要自定义安装步骤或环境设置的工具可能需要使用其他后端。
 
-目前，aqua 工具不支持设置环境变量，也不支持除了简单下载
-二进制文件之外的更多功能（而且我也不确定这一功能将来是否会被加入），因此某些工具很可能
-始终需要像 asdf/vfox 这样的插件。
-
-这段代码位于 mise 仓库中的 [`./src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs)。
+此后端的代码位于 mise 仓库中的 [`./src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs)。
 
 ## 自定义注册表
 
-设置 [`aqua.registries`](/configuration/settings.html#aqua-registries)，即可在内置注册表之前检查自定义 aqua
+设置 [`aqua.registries`](/configuration/settings.html#aqua.registries)，以便在内置注册表之前检查自定义 aqua
 注册表源：
 
 ```toml
@@ -58,10 +51,10 @@ aqua.registries = [
 ]
 ```
 
-对于仓库和目录源，mise 会从源根目录加载 `registry.yaml`，如有需要则回退到 `registry.yml`。远程注册表源会根据
-[`aqua.registry_cache_ttl`](/configuration/settings.html#aqua-registry_cache_ttl) 缓存到
-`MISE_CACHE_DIR` 下，该设置默认为一周。本地 `file://` 源会绕过下载源缓存，因此注册表下次加载时会读取
-更改后的内容。在 `MISE_AQUA_REGISTRIES` 中，请使用逗号分隔多个注册表 URL。
+对于仓库和目录源，mise 会从源根目录加载 `registry.yaml`，必要时回退到 `registry.yml`。远程注册表源会在
+`MISE_CACHE_DIR` 下缓存，缓存时间由 [`aqua.registry_cache_ttl`](/configuration/settings.html#aqua.registry_cache_ttl) 指定，默认
+为一周。本地 `file://` 源会绕过下载源缓存，因此下次加载注册表时会读取更改。在 `MISE_AQUA_REGISTRIES` 中，使用
+逗号分隔多个注册表 URL。
 
 当刷新后的注册表源被下载后，mise 会对该源进行哈希处理，并使用该哈希作为编译后注册表缓存路径的一部分。
 当新的编译缓存成功加载或写入时，会清理同一注册表 URL 的旧编译缓存。
@@ -70,26 +63,27 @@ aqua.registries = [
 Aqua 注册表别名仅在定义它们的注册表内有效；当你希望 mise 的简写或别名指向来自其他注册表的 aqua
 包时，请使用 [`[tool_alias]`](/dev-tools/aliases)。
 
-旧版的 [`aqua.registry_url`](/configuration/settings.html#aqua-registry_url) 设置仍然支持单个注册表 URL，但当两者都设置时，`aqua.registries` 优先。
+旧版 [`aqua.registry_url`](/configuration/settings.html#aqua.registry_url) 设置仍支持单个注册表 URL，但当两者同时设置时，
+`aqua.registries` 优先。
 
 ## 使用
 
-下面的命令会安装 ripgrep 的最新版本，并将其设置为 PATH 上的活动版本：
+在项目中安装 ripgrep，并在不需要 shell 激活的情况下验证可执行文件：
 
 ```sh
-$ mise use -g aqua:BurntSushi/ripgrep
-$ rg --version
-ripgrep 14.1.1
+mise use aqua:BurntSushi/ripgrep
+mise exec -- rg --version
 ```
 
-该版本将以以下格式写入 `~/.config/mise/config.toml`：
+这会将以下内容写入 `mise.toml`。为 `mise use` 添加 `-g` 可安装全局工具。
 
 ```toml
 [tools]
 "aqua:BurntSushi/ripgrep" = "latest"
 ```
 
-如果某些工具在 [registry/](https://github.com/jdx/mise/blob/main/registry/) 中被指定为使用 aqua 后端，它们将默认使用 aqua。要查看这些工具，请运行 `mise registry | grep aqua:`。
+使用 `mise ls-remote aqua:BurntSushi/ripgrep` 查看可用版本。
+`mise registry ripgrep` 显示为其简写配置的后端。
 
 ## 工具选项
 
@@ -98,8 +92,8 @@ ripgrep 14.1.1
 有些工具会捆绑额外的可执行文件，这些文件你可能不希望暴露在 PATH 上。例如，`aws-cli` 会捆绑
 Python，这可能会与你期望使用的 Python 版本冲突。
 
-设置 `symlink_bins = true` 会创建一个经过筛选的 `.mise-bins` 目录，只暴露 mise
-打算为该 Aqua 包公开的二进制文件，而不是从安装中发现的所有可执行文件。
+设置 `symlink_bins = true` 会创建经过筛选的 `.mise-bins` 目录，并且只暴露属于该 aqua 软件包的二进制文件，
+而不是安装中发现的所有可执行文件。
 
 ```toml
 [tools]
@@ -136,7 +130,7 @@ aws-cli = { version = "latest", symlink_bins = true }
 "aqua:owner/tool" = { version = "latest", prerelease = true }
 ```
 
-设置后，预发布标签（例如 `v1.0.0-rc1`、`v0.1.2-dev.86`）会出现在 `mise ls-remote` 中，`latest` 会基于包含预发布版本的完整列表进行解析，模糊版本查询也会匹配预发布标签。当包使用 `github_tag` 版本源时无效（git 标签不携带 prerelease 标记）。草稿发布始终被排除。更多细节请参见 [github 后端文档](/dev-tools/backends/github.html#prerelease)。
+设置后，预发布标签（例如 `v1.0.0-rc1`、`v0.1.2-dev.86`）会出现在 `mise ls-remote` 中，`latest` 会根据包含预发布版本的完整列表进行解析，并且模糊版本查询会匹配预发布标签。当软件包使用 `github_tag` 版本源时，此选项不起作用（git 标签不携带预发布标志）。草稿发布始终会被排除。有关更多详细信息，请参阅 [github backend docs](/dev-tools/backends/github.html#prerelease)。
 
 ## 设置
 
@@ -147,128 +141,54 @@ import Settings from '/components/settings.vue';
 
 ## 安全验证
 
-Aqua 后端支持多种安全验证方法，以确保下载工具的完整性和真实性。mise 为所有验证方法提供了**原生 Rust 实现**，无需依赖 `cosign`、`slsa-verifier` 或 `gh` 等外部 CLI 工具。
+<span id="github-artifact-attestations"></span>
+<span id="cosign-verification"></span>
+<span id="slsa-provenance-verification"></span>
+<span id="other-security-methods"></span>
+<span id="verification-process"></span>
 
-### GitHub 制品证明
+mise 原生实现了校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign 验证。你不需要单独安装它们的 CLI 工具。**后端支持这些验证方式，并不意味着每个软件包都提供所有这些检查。**
 
-GitHub 制品证明提供加密证明，表明制品是由特定的 GitHub Actions 工作流构建的。mise 原生验证这些证明，以确保下载工具的真实性和完整性。
+| 方法                         | 所需的发布者或注册表元数据                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 校验和                       | 注册表元数据、校验和文件、发布 API 或锁定文件中的预期摘要。                |
+| GitHub 构件证明              | 用于标识预期工作流的注册表证明配置。                                    |
+| Cosign                       | 受支持的公钥或签名包配置；不会执行任意 Cosign CLI 参数。 |
+| SLSA                         | 注册表来源证明配置和发布者的来源证明构件。                               |
+| Minisign                     | 签名和预期公钥。                                                                   |
 
-**要求：**
+相应的 `aqua.*` 验证设置默认处于启用状态。某些检查还具有全局设置，例如
+`github_attestations` 或 `slsa`。完整配置请参阅[设置](#settings)。
 
-- 工具必须在 aqua 注册表中配置 `github_artifact_attestations`，才能验证证明
-- 不需要外部工具——验证由 mise 原生处理
-
-**配置：**
-
-```bash
-# 启用/禁用 GitHub 制品证明验证（默认：true）
-export MISE_AQUA_GITHUB_ATTESTATIONS=true
-```
-
-**注册表配置示例：**
-
-```yaml
-packages:
-  - type: github_release
-    repo_owner: cli
-    repo_name: cli
-    github_artifact_attestations:
-      signer_workflow: cli/cli/.github/workflows/deployment.yml
-```
-
-### Cosign 验证
-
-mise 原生验证 Cosign 签名，无需安装 `cosign` CLI 工具。
-
-**配置：**
-
-```bash
-# 启用/禁用 Cosign 验证（默认：true）
-export MISE_AQUA_COSIGN=true
-```
-
-### SLSA 溯源验证
-
-mise 原生验证 SLSA（软件制品供应链级别）溯源，无需安装 `slsa-verifier` CLI 工具。
-
-**配置：**
-
-```bash
-# 启用/禁用 SLSA 验证（默认：true）
-export MISE_AQUA_SLSA=true
-```
-
-### 其他安全方法
-
-Aqua 还支持：
-
-- **Minisign 验证**：使用 minisign 进行签名验证
-- **校验和验证**：验证 SHA256/SHA512/SHA1/MD5 校验和（始终启用）
-
-### 验证流程
-
-在安装工具期间，mise 将：
-
-1. 下载工具及其签名/证明文件
-2. 使用配置的方法进行原生验证
-3. 通过进度指示器显示验证状态
-4. 如果任何验证失败，则中止安装
-
-**安装期间的示例输出：**
-
-```
-✓ 已下载 cli/cli v2.50.0
-✓ GitHub 制品证明已验证
-✓ 工具安装成功
-```
+经过验证的[锁定文件](/dev-tools/mise-lock.html)可以在检查构件摘要时复用之前的来源证明结果。设置
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
 
 ### 故障排查
 
-如果验证失败：
+从失败的命令及其验证错误开始：
 
-1. **检查网络连接**：验证需要下载证明数据
-2. **验证工具配置**：确保 aqua 注册表具有正确的验证设置
-3. **禁用特定验证**：临时禁用有问题的验证方法
-4. **启用调试日志**：使用 `MISE_DEBUG=1` 查看详细的验证日志
-
-**常见问题：**
-
-- **未找到证明**：该工具可能未在注册表中配置证明
-- **验证超时**：网络问题或证明服务响应缓慢
-- **证书验证**：时钟偏差或证书链问题
-
-要临时禁用所有验证：
-
-```bash
-export MISE_AQUA_GITHUB_ATTESTATIONS=false
-export MISE_AQUA_COSIGN=false
-export MISE_AQUA_SLSA=false
-export MISE_AQUA_MINISIGN=false
+```sh
+MISE_DEBUG=1 mise install aqua:cli/cli
 ```
 
-## 常见的 aqua 问题
+检查发布是否提供了预期的签名或证明，注册表是否列出了正确的构件和签名者，以及你的时钟和网络是否允许进行证书和透明日志验证。对于私有资产或 API 限制，请检查 [GitHub authentication](/dev-tools/github-tokens.html)。
 
-以下是我在使用 aqua 工具时见过的一些常见问题。
+摘要不匹配需要调查构件或预期摘要。缺少或无效的签名需要检查发布者和注册表元数据。禁用验证会改变你信任的构件；它无法修复上述任一问题。报告受影响的版本、平台和验证器错误时，请删除凭据。
+
+## 常见 aqua 问题
+
+这些问题通常需要修正 aqua registry 中的软件包条目。
 
 ### 缺少受支持的环境
 
-aqua 注册表为每个工具定义了 os/arch 的支持环境。我注意到其中一些
-只是缺少实际上受支持的 os/arch 组合——这可能是因为该工具的注册表创建之后才加入的。
-
-修复很简单，只需编辑相关工具 `registry.yaml` 中的 `supported_envs` 部分即可。
+将注册表条目的 `supported_envs` 与发布者的发布资产进行比较。如果存在匹配的构件，但其平台不在注册表中，请更新该条目。仅添加平台名称无法让不兼容的二进制文件运行。
 
 ### 使用 `version_filter` 而不是 `version_prefix`
 
-这是一个很奇怪的问题，会在 mise 中引发奇怪的故障。一般来说，在 mise 里我们喜欢像
-`1.2.3` 这样的版本号，不带 `v1.2.3` 或 `cli-v1.2.3` 之类的装饰。这种一致性不仅让 `mise.toml`
-更简洁，也有助于像 `mise up` 这样的功能正常工作，因为它能够把它解析为
-semver，而不用处理一堆边缘情况。
+使用 `version_prefix` 从展示给用户的版本中移除已知的标签前缀，使用 `version_filter` 排除无关发布。保留发布者有意义的版本标识符；版本不必是三段式语义版本。
 
-实际上，如果你注意到 aqua 工具给出的版本号不是简单的三段式，那么值得修正。
+例如，某个条目可能使用类似 `Version startsWith "atlascli/"` 的 `version_filter` 表达式。
 
-我见过的一个常见情况是，注册表使用了像 `Version startsWith "Version startsWith "atlascli/""` 这样的 `version_filter` 表达式。
-
-这最终会导致版本变成 `atlascli/1.2.3`，而这不是我们想要的。修复方法是使用
-`version_prefix` 而不是 `version_filter`，并且只把前缀放到 `version_prefix` 字段里。
-在这个例子中，它应该是 `atlascli/`。mise 会自动把它去掉并在需要时再加回去，
-而这对 `version_filter` 做不到。
+这会使版本变成 `atlascli/1.2.3`，而这不是我们想要的结果。修复方法是使用
+`version_prefix` 而不是 `version_filter`，并将前缀（本例中的 `atlascli/`）放入
+`version_prefix` 字段。mise 会自动移除前缀，并在需要时将其加回；使用 `version_filter` 时无法做到这一点。

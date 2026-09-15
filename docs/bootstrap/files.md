@@ -1,3 +1,8 @@
+---
+description: "管理系统文件和目录，包括需要 root 权限的路径。"
+socialDescription: "管理系统文件和目录，包括需要 root 权限的路径。"
+---
+
 # 系统文件和目录
 
 `[bootstrap.files]` 和 `[bootstrap.directories]` 以声明方式管理可能需要 root
@@ -16,17 +21,62 @@ group = "root"
 mode = "0644"
 ```
 
-文件内容可以来自 `source` 或内联的 `content`。相对 source 路径相对于声明它们的配置文件进行解析。已存在的文件必须声明且只能声明一个内容来源。目标必须是绝对路径，mise 拒绝管理 `/` 本身。
+在应用此示例之前，请在声明配置旁创建 `files/example.conf`。源文件由 mise
+读取；`/etc/example.conf` 是其目标路径。对于包含凭据的文件模板，请使用
+`"0600"` 模式，并设置仅允许目标服务账户或 root 读取的所有权。
+
+文件内容可以来自 `source` 或内联的 `content`。相对源路径相对于声明它们的配置文件解析，以 `~/` 开头的源路径则相对于用户的主目录解析。现有文件必须准确声明一个内容源。目标必须是绝对路径，并且 mise 拒绝管理 `/` 本身。
 
 目录创建使用 `mkdir -p` 语义，因此会自动创建缺失的父目录。配置的所有权和模式应用于声明的目录；隐式创建的父目录使用操作系统默认值。当父目录需要特定的所有权或权限时，请单独声明它。
 
 默认情况下，节点类型错误的目标会被报告为 `unknown`，apply 会拒绝销毁它。为该文件或目录设置 `replace = true`，即可替换冲突的类型。将目录替换为文件时，只会删除空目录；递归销毁仍需要显式声明一个包含 `recursive = true` 的 `state = "absent"` 目录。
 
-设置 `template = true`，即可使用 mise 的模板引擎渲染文件内容。这样做是显式的，因此字面量 <span v-pre>`{{ ... }}`</span> 内容默认会保持不变。模板可以使用已声明的
-[bootstrap secret input](/bootstrap/secrets.html)，其形式为
-<span v-pre>`{{ secret(name="logical_name") }}`</span>。机密值永远不会包含在计划、试运行描述、状态输出或特权辅助程序输出中。
+设置 `template = true`，使用 mise 的模板引擎渲染文件内容。此设置是显式的，因此字面形式的 <span v-pre>`{{ ... }}`</span> 内容默认保持不变。模板可以使用已配置的 `vars`、声明配置所在的目录 <span v-pre>`{{ config_root }}`</span>，以及目标路径 <span v-pre>`{{ target }}`</span>。模板可以使用 <span v-pre>`{{ secret(name="logical_name") }}`</span> 获取已声明的 [bootstrap secret input](/bootstrap/secrets.html)。密钥值绝不会包含在计划、试运行描述、状态输出或特权辅助程序输出中。
 
-Mise 会在应用更改前比较内容、类型、模式、所有者和组。写入操作会先在目标目录中使用临时文件，然后执行原子重命名。首先会尝试以当前用户身份进行更改。如果文件系统因权限错误拒绝某项操作，mise 会重试该操作，并将剩余的有序更改放入同一个特权批处理中。这样，用户可写的目标不需要 `sudo`。如果当前用户无法检查目标或无法搜索其父目录之一，mise 会在一个特权批处理中比较其元数据和内容。计划和文件内容会通过 stdin 发送给权限范围严格受限的 mise 辅助程序，因此文件内容不会出现在进程参数或日志中。
+mise 会在应用更改之前比较内容、类型、模式、所有者和组。写入操作会先在目标目录中使用临时文件，然后执行原子重命名。系统首先尝试以当前用户身份进行更改。如果文件系统因权限错误拒绝某项操作，mise 会重试该操作，并在一次特权批处理中继续执行其余有序更改。因此，用户可写的目标不需要 `sudo`。如果当前用户无法检查目标或搜索其某个父目录，mise 会在一次特权批处理中比较其元数据和内容。计划和文件内容会通过标准输入发送给范围严格限定的 mise 辅助程序，因此文件内容不会出现在进程参数或日志中。
+
+## 软件包之前的文件
+
+在软件包管理器需要的文件和目录上设置 `phase = "pre-packages"`，例如仓库定义和签名密钥：
+
+```toml
+[bootstrap.directories."/etc/apt/keyrings"]
+mode = "0755"
+phase = "pre-packages"
+
+[bootstrap.files."/etc/apt/keyrings/vendor.asc"]
+source = "./files/vendor.asc"
+phase = "pre-packages"
+
+[bootstrap.files."/etc/apt/sources.list.d/vendor.sources"]
+source = "./files/vendor.sources"
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:vendor-tool" = "latest"
+```
+
+在源文件中提供供应商的密钥和仓库定义。应用文件后运行
+`mise bootstrap --update`，以刷新软件包元数据；更改仓库文件不会自动刷新元数据。
+
+早期文件会在账户和软件包管理器插件之后、`pre-packages` hook 之前运行。默认阶段为 `"post-packages"`，这会使文件位于内置软件包安装之后。每个文件在每次 bootstrap 运行中应用一次。两个阶段的服务通知都会为服务步骤收集。
+
+声明的父目录必须不晚于其子项创建，并且不得早于其子项移除。冲突的阶段声明会在 bootstrap 更改之前导致验证失败。当早期文件需要声明的父目录时，将其阶段设置为
+`"pre-packages"`。
+
+`mise bootstrap files apply` 仍会应用所有已声明的文件和目录。
+`mise bootstrap --only files` 会运行两个文件阶段；`--skip files` 会跳过两个阶段。
+`--only packages` 不会应用文件。计划会包含每个文件的阶段。
+
+## 预览和检查
+
+```sh
+mise bootstrap files status --json
+mise bootstrap files apply --dry-run
+```
+
+在应用之前检查源路径、所有权、模式以及任何 `unknown` 状态。
+检查可能需要提升权限才能读取受保护的目标。缺失的源必须在配置检出目录中修复；更改目标权限不会提供该源。
 
 ## 移除资源
 

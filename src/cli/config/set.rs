@@ -8,11 +8,34 @@ use crate::toml::dedup_toml_array;
 use eyre::bail;
 use std::path::PathBuf;
 
-/// Set the value of a setting in a mise.toml file
+/// Set a value in one mise TOML file
+///
+/// Edits the highest-precedence loaded TOML file by default, which may be an
+/// environment-specific override. Use `--file` to select an existing project file,
+/// or `--global`/`--system` to edit or create those config files.
+///
+/// This edits configuration without installing tools. Use `mise use` to install and
+/// select a version together. Known settings use their declared type; other values
+/// are strings or booleans unless `--type` is given. Use `--type string` when a value
+/// such as `true` should remain literal text.
 #[derive(Debug, usage_rs::Args)]
-#[usage(after_long_help = AFTER_LONG_HELP, verbatim_doc_comment)]
+#[usage(
+    example(
+        r###"mise config set tools.python 3.12
+mise config set settings.always_keep_download true
+mise config set env.TEST_ENV_VAR ABC
+mise config set settings.disable_tools node,rust
+mise config set --append env._.path ~/.local/bin
+mise config set --remove env._.path ~/.local/bin"###
+    ),
+    example(
+        r###"mise config set settings.jobs 4"###,
+        help = r###"Type for `settings` is inferred"###
+    ),
+    verbatim_doc_comment
+)]
 pub(super) struct ConfigSet {
-    /// The path of the config to display
+    /// Dotted key path to set, e.g. `tools.python`
     pub key: String,
 
     /// The value to set the key to (optional if provided as KEY=VALUE)
@@ -22,7 +45,7 @@ pub(super) struct ConfigSet {
     ///
     /// Can be a file path or directory. If a directory is provided, the config file in that directory is used.
     ///
-    /// If not provided, the nearest mise.toml file will be used
+    /// If not provided, the highest-precedence loaded TOML file is used
     #[usage(short, long, visible_alias = "path", value_hint = usage_rs::ValueHint::AnyPath)]
     pub file: Option<PathBuf>,
 
@@ -42,6 +65,7 @@ pub(super) struct ConfigSet {
     #[usage(long, conflicts = "append")]
     pub remove: bool,
 
+    /// TOML type to store the value as; inferred from the value by default
     #[usage(value_enum, short, long, default = "infer")]
     pub type_: TomlValueTypes,
 }
@@ -305,18 +329,3 @@ fn remove_value(
     }
     Ok(())
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise config set tools.python 3.12</bold>
-    $ <bold>mise config set settings.always_keep_download true</bold>
-    $ <bold>mise config set env.TEST_ENV_VAR ABC</bold>
-    $ <bold>mise config set settings.disable_tools node,rust</bold>
-    $ <bold>mise config set --append env._.path ~/.local/bin</bold>
-    $ <bold>mise config set --remove env._.path ~/.local/bin</bold>
-
-    # Type for `settings` is inferred
-    $ <bold>mise config set settings.jobs 4</bold>
-"#
-);

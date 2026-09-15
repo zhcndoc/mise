@@ -1,248 +1,162 @@
+---
+description: "后端会解析工具的版本、安装工具，并提供其可执行文件路径和环境"
+---
+
 # 后端架构
 
-了解 mise 的后端系统如何工作，可以帮助你为你的工具选择合适的后端，并在问题出现时进行排查。大多数用户并不需要显式选择后端，因为 [mise 注册表](../registry.md) 已定义了智能默认值，但在你需要特定工具或想要优化性能时，理解这个系统会很有帮助。
+后端会解析工具的版本、安装工具，并提供其可执行文件路径和环境。[注册表](/registry.html)会将`node`和`ripgrep`等短名称映射到后端。请从这些名称开始；当你需要特定发行版或注册表之外的工具时，选择显式后端。
 
 ## 什么是后端？
 
-后端是 mise 支持不同工具安装方式的机制。每个后端都知道如何：
+在`github:BurntSushi/ripgrep`中，`github`是后端，而`BurntSushi/ripgrep`用于标识上游项目。这些内容与`@`之后的版本请求相互独立：
 
-- 列出可用的工具版本
-- 下载并安装特定版本
-- 为已安装的工具设置环境
-- 管理工具生命周期（更新、卸载）
+```sh
+mise ls-remote github:BurntSushi/ripgrep
+mise use github:BurntSushi/ripgrep@latest
+mise exec -- rg --version
+```
 
-可以把后端看作“适配器”，让 mise 能够与不同的包管理器和安装系统协同工作。
+通过后端安装工具不会向 mise 的注册表添加新条目。显式后端语法可以直接在你自己的配置中使用。
 
 ## 后端特性系统
 
-所有后端都实现了一个公共接口（在 Rust 中称为“trait”），这意味着它们都提供相同的基本功能：
+内置后端实现了 Rust 的[`Backend` trait](https://github.com/jdx/mise/blob/main/src/backend/mod.rs)。安装流程使用该接口来：
 
-```rust
-pub trait Backend {
-    async fn list_remote_versions(&self) -> Result<Vec<String>>;
-    async fn install_version(&self, ctx: &InstallContext, tv: &ToolVersion) -> Result<()>;
-    async fn uninstall_version(&self, tv: &ToolVersion) -> Result<()>;
-    // ... 其他方法
-}
-```
+1. 列出版本，或解析前缀、渠道等请求
+2. 确定安装依赖项和工具选项
+3. 下载或构建请求的版本，并执行该发行版所支持的验证
+4. 记录安装信息，并公开可执行文件路径和环境变量
 
-这种设计使 mise 能够统一地对待所有后端，而每个后端则处理其安装方式的具体细节。
+版本字符串不一定是语义化版本。后端可以支持日期版本、供应商前缀、标签和滚动渠道；后端决定`latest`的含义。锁文件会记录具体的解析结果。请参阅[版本排序](/dev-tools/#version-ordering)和[mise.lock](/dev-tools/mise-lock.html)。
+
+有关扩展 API，请参阅[工具插件](/tool-plugin-development.html)和[后端插件](/backend-plugin-development.html)。它们的钩子接口与内部 Rust trait 相互独立。
 
 ## 后端类型
 
-### 核心工具
+| 分发方式                     | 示例                                                 | 检查内容                                                                    |
+| ---------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| 内置语言支持                 | Node.js、Python、Java、Rust                          | 特定于语言的选项、系统库以及所需的任何构建工具                             |
+| 已签名的发布清单             | `packslip:`                                          | 已发布的清单、受信任的签名者以及受支持的平台                               |
+| 由注册表描述的下载           | `aqua:`                                              | 软件包条目及其针对各版本的下载和验证规则                                    |
+| Forge 发布                   | `github:`、`gitlab:`、`forgejo:`                    | 与目标平台匹配的发布资源                                                     |
+| 直接构件                     | `http:`、`s3:`                                       | 构件位置、身份验证、平台映射和完整性信息                                     |
+| 语言软件包                   | `npm:`、`pipx:`、`cargo:`、`gem:`、`go:`、`dotnet:` | 所需的运行时或工具链，以及软件包管理器行为                                  |
+| 其他软件包源                 | `conda:`、`pkgx:`、`spm:`                            | 后端特定的平台支持和依赖项                                                   |
+| 外部插件                     | asdf、vfox 工具插件、后端插件                        | 插件代码、先决条件和受支持的平台                                             |
 
-直接内置于 mise 中，使用 Rust 编写，以实现高性能和可靠性：
-
-- **Node.js、Python、Ruby、Go、Java 等** - 原生实现
-- **优点**：性能最快、无外部依赖、集成最佳
-- **缺点**：需要更多维护；除非是像 Node.js、Python 或 Go 这样非常流行的工具，否则新的核心工具贡献很可能会被拒绝
-
-::: info
-像 Node.js 和 Java 这样的核心工具虽然代表的是单个工具，但也是作为后端实现的。这种一致的后端架构使 mise 能够统一处理所有工具，无论它们是复杂生态系统还是单独的工具。
-:::
-
-### 语言包管理器
-
-利用现有的语言生态系统：
-
-- **npm** - npm 包（`npm:prettier`、`npm:typescript`）
-- **pipx** - Python 包（`pipx:black`、`pipx:poetry`）
-- **cargo** - Rust crates（`cargo:ripgrep`、`cargo:fd-find`）
-- **gem** - Ruby gems（`gem:bundler`、`gem:rails`）
-- **go** - Go modules（`go:github.com/golangci/golangci-lint/cmd/golangci-lint`）
-
-### 通用安装器
-
-#### aqua - 综合包管理器
-
-基于注册表的包管理器，具有强大的安全特性：
-
-- **用法**：`aqua:golangci/golangci-lint`
-- **要求**：工具必须在 [aqua 注册表](https://github.com/aquaproj/aqua-registry) 中可用
-- **来源**：主要来自 GitHub，但通过注册表配置也支持其他来源
-- **安全性**：全面的校验和、签名和验证
-
-#### ubi - 通用二进制安装器（已弃用）
-
-::: warning
-ubi 后端已弃用。请改用 [github 后端](/dev-tools/backends/github)。
-:::
-
-无需配置的安装器，适用于任何遵循标准约定的 GitHub/GitLab 仓库：
-
-- **用法**：`ubi:BurntSushi/ripgrep` → 迁移为 `github:BurntSushi/ripgrep`
-- **要求**：仓库必须遵循标准的发布 tarball 约定
-- **来源**：主要是 GitHub releases，并支持 GitLab（在 mise 中很少使用）
-- **配置**：无需配置 - 会自动检测并下载合适的二进制文件
-
-### 插件系统
-
-支持外部插件生态系统：
-
-- **工具插件** - 基于钩子的单工具插件（`my-tool`）- 是 vfox 插件功能的超集
-- **asdf 插件** - 传统插件生态系统（`asdf:postgres`、`asdf:redis`）- 通常仅支持 Linux/macOS
-- **后端插件** - 使用 `plugin:tool` 格式（`my-plugin:some-tool`）的增强型插件 - 通过后端方法支持私有/自定义工具
+[后端参考](/dev-tools/backends/)列出了可用的后端及其选项。内置语言指南位于侧边栏的**Languages**下。
 
 ## 后端选择如何工作
 
-当你指定一个工具时，mise 会按以下优先级确定后端：
+`core:node`这样的显式标识符表示后端选择。`node`这样的短名称还取决于配置和本地状态：
 
-1. **显式后端**：`mise use aqua:golangci/golangci-lint`
-2. **环境变量覆盖**：`MISE_BACKENDS_<TOOL>`（见下文）
-3. **注册表查找**：`mise use golangci-lint` → 检查注册表中的默认后端
-4. **核心工具**：`mise use node` → 使用内置的核心后端
-5. **回退**：如果未找到，则建议可用的后端
+- `[tool_alias]`和`[plugins]`可以选择其他来源
+- 匹配的锁文件条目可以保留该解析所使用的后端
+- 已安装的外部插件可以覆盖注册表简写，包括内置语言工具。已禁用的后端和现有安装也会影响此选择
+- 否则，注册表会提供首选的可用后端，该后端可能取决于请求的版本和平台
 
-[mise registry](../registry.md) 定义了每个工具应使用哪个后端的优先级顺序，因此通常最终用户不需要知道该选择哪个后端，除非他们想使用注册表中不可用的工具，或者想覆盖默认选择。
+使用`mise tool <name>`检查实际生效的后端，而不要根据工具的短名称进行推断。[解析实现](https://github.com/jdx/mise/blob/main/src/cli/args/backend_arg.rs)包含详细的优先级规则。
 
 ### 环境变量覆盖
 
-你可以使用 `MISE_BACKENDS_<TOOL>` 环境变量模式来覆盖任意工具的后端。工具名称会转换为 SHOUTY_SNAKE_CASE（大写，并用下划线替换连字符）。
+`MISE_BACKENDS_<TOOL>`会覆盖该标识符的后端。将名称转换为大写，并将连字符替换为下划线。例如，在 POSIX shell 中：
 
-```bash
-# 为 php 使用 vfox 后端
-export MISE_BACKENDS_PHP='vfox:mise-plugins/vfox-php'
-mise install php@latest
+```sh
+MISE_BACKENDS_NODE=core:node mise tool node
 ```
+
+导出的覆盖设置会影响后续命令，并且可以覆盖配置选择。当两台机器以不同方式解析同一简写时，请检查你的环境。
 
 ### 注册表系统
 
-[mise registry](../registry.md)（`mise registry`）会将短名称映射为完整的后端规格，并按首选优先级顺序排列：
+使用`mise registry node`检查注册表映射。要提交后端选择而不更改注册表，请使用[别名](/dev-tools/aliases.html)：
 
-```toml
-# ~/.config/mise/config.toml
+```toml [mise.toml]
 [tool_alias]
-go = "core:go"                    # 使用 core 后端
-terraform = "aqua:hashicorp/terraform"  # 使用 aqua 后端
+node = "core:node"
+
+[tools]
+node = "24"
 ```
 
 ## 后端能力比较
 
-| 特性                     | Core | npm/pipx/cargo | aqua | ubi | Backend Plugins | Tool Plugins (vfox) | asdf Plugins (legacy) |
-| ------------------------- | ---- | -------------- | ---- | --- | --------------- | ------------------- | --------------------- |
-| **速度**                 | ✅   | ⚠️             | ✅   | ✅  | ⚠️              | ⚠️                  | ⚠️                    |
-| **安全性**               | ✅   | ⚠️             | ✅   | ⚠️  | ⚠️              | ⚠️                  | ⚠️                    |
-| **Windows 支持**         | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
-| **环境变量支持**         | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
-| **自定义脚本**           | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ✅                    |
-| **内置模块**             | ✅   | ❌             | ❌   | ❌  | ✅              | ✅                  | ❌                    |
-| **安全证明**             | ❌   | ❌             | ✅   | ❌  | ✅              | ✅                  | ❌                    |
-| **多工具插件**           | ❌   | ❌             | ❌   | ❌  | ✅              | ❌                  | ❌                    |
-| **进度/日志**            | ✅   | ✅             | ✅   | ✅  | ✅              | ✅                  | ❌                    |
+验证方式和平台支持取决于后端及具体工具。支持 Windows 的后端并不意味着其安装的每个软件包都有 Windows 版本。同样，下载校验和并不能证明发布者的身份，除非该校验和经过身份验证。
+
+请查阅各后端的验证选项和[安全指南](/security.html)。例如，packslip 会验证已签名的清单，而 aqua 可以应用其注册表条目中声明的验证方法。外部插件代码会在本地运行，因此必须与工具本身一样受到信任。
 
 ## 何时使用每种后端
 
-### 何时使用 **Core Tools**
+对于受支持的工具，请从注册表简写开始。对于其他来源：
 
-- 当你的工具可用时（请查看 [registry](../registry.md)）
-- 你希望获得最快的性能
-- 你正在使用主流编程语言
+- 当发布者提供已签名的发布清单时，使用`packslip:`
+- 当其注册表描述了所需的工具和发布版本时，使用`aqua:`
+- 对于发布资源，使用 Forge 后端；对于你直接分发的构件，使用`http:`或`s3:`
+- 当你需要该生态系统的软件包并且能够提供其运行时或构建依赖项时，使用语言软件包后端
+- 当安装或环境设置需要自定义逻辑时，使用插件
 
-在可用时，通常应始终使用 core tools，因为它们能与 mise 提供最佳的性能和集成。
-
-### 何时使用 **Language Package Managers**
-
-- 安装特定于该语言生态系统的工具
-- 该工具主要通过该包管理器分发
-- 你希望自动依赖管理
-
-### 何时使用 **aqua**
-
-- 安装预编译二进制文件或静态包（无需编译）
-- 你希望获得全面的安全特性（校验和、签名）
-- 你需要 Windows 支持
-- 该工具已在 [aqua registry](https://github.com/aquaproj/aqua-registry) 中提供
-- 你愿意为尚未提供的工具向 aqua registry 贡献工具
-
-### 何时使用 **github**
-
-- 从 GitHub releases 安装预编译二进制文件
-- 该仓库遵循发布 tarball 的标准约定
-- 你希望零配置 - 无需注册表设置
-- 你需要简单、快速的二进制安装
-- 该工具不需要复杂的构建流程或环境设置
-
-::: info
-`ubi` 后端仍然可用，但已被弃用，建议改用 `github`。请将 `ubi:owner/repo` 替换为 `github:owner/repo`。
+::: warning 已弃用的后端
+`ubi:`已弃用。迁移时请使用相应的`github:`或`gitlab:`后端，并检查其选项；请参阅[ubi 迁移指南](/dev-tools/backends/ubi.html)。
 :::
 
-### 何时使用 **Backend Plugins**
+## 后端依赖项
 
-- 你需要用一个插件管理多个工具
-- 希望使用增强的后端方法以获得更好的性能
-- 需要 `plugin:tool` 格式以获得灵活性
-- 使用自定义或私有工具
-- 希望采用带有后端方法的现代插件架构
+后端可能需要在安装期间使用其他工具。将所需工具与软件包一同声明，以便 mise 按顺序安装它们：
 
-### 何时使用 **Tool Plugins**
-
-- 创建传统的单工具插件
-- 需要对安装钩子进行细粒度控制
-- 希望使用 vfox 钩子系统
-- 工具需要复杂的安装逻辑或构建流程
-- 工具需要设置环境变量（如 `JAVA_HOME`、`GOROOT` 等）
-- 你需要包括 Windows 在内的跨平台支持
-
-### 何时使用 **asdf Plugins**
-
-- 工具需要从源码编译
-- 需要复杂的安装逻辑或构建流程
-- 工具需要设置环境变量（如 `JAVA_HOME`、`GOROOT` 等）
-- 没有其他后端支持该工具
-- 从现有的 asdf 配置迁移
-- 在 Linux/macOS 上工作（不支持 Windows）
-
-## 后端依赖
-
-某些后端依赖于其他后端：
-
-```mermaid
-graph TD
-    A[npm backend] --> B[Node.js]
-    C[pipx backend] --> D[pipx]
-    E[cargo backend] --> F[Rust]
-    G[gem backend] --> H[Ruby]
+```toml [mise.toml]
+[tools]
+node = "24"
+"npm:prettier" = "3"
 ```
 
-mise 会自动处理这些依赖，在安装 npm 工具之前先安装 Node.js，在安装 pipx 工具之前先安装 pipx，等等。
+依赖关系不会自动将缺失的工具添加到你的配置中。匹配的已配置工具会先安装；未配置的依赖项可能会由现有`PATH`中的合适可执行文件满足。否则安装会失败。有关显式`depends`声明，请参阅[工具依赖项](/dev-tools/#tool-dependencies)。
 
 ## 配置和覆盖
 
 ### 禁用后端
 
-```toml
-# ~/.config/mise/config.toml
+使用全局设置文件，阻止通过选定的后端进行安装：
+
+```toml [~/.config/mise/config.toml]
 [settings]
-disable_backends = ["asdf", "vfox"] # 不使用这些后端
+disable_backends = ["asdf", "vfox"]
 ```
+
+被禁用的后端会从工具解析和新安装中排除。现有安装会保留在磁盘上，重新启用后端后即可再次使用。
 
 ### 为工具强制指定后端
 
-```toml
-# mise.toml
+可以直接将显式标识符用作工具键：
+
+```toml [mise.toml]
 [tools]
-"core:node" = "20"     # 显式使用 core 后端
-"aqua:yarn" = "latest" # 使用 aqua 后端代替默认值（vfox）
+"core:node" = "24"
+"aqua:BurntSushi/ripgrep" = "latest"
 ```
 
 ### 后端特定设置
 
-一些后端支持额外配置：
+添加选项前，请阅读所选后端的参考文档。例如，以下配置会从 Python 软件包中选择一个可选额外项：
 
-```toml
-# mise.toml
+```toml [mise.toml]
 [tools]
-python = { version = "3.12", virtualenv = ".venv" }  # core 后端选项
-black = { version = "latest", python = "3.12" }      # pipx 后端选项
+python = "3.14"
+uv = "latest"
+"pipx:black" = { version = "latest", extras = ["jupyter"] }
 ```
+
+[pipx 后端](/dev-tools/backends/pipx.html)可以使用 uv 或 pipx。后端选项不能与同一工具的另一种分发方式的选项互换。
 
 ## 后端问题排查
 
 ### 调试后端选择
 
-```bash
-mise doctor                   # 检查后端配置
-mise tool python              # 查看某个工具使用的是哪个后端
-mise config get tools         # 验证工具配置
+```sh
+mise tool node       # effective backend and tool information
+mise plugins ls      # external plugins that may override defaults
+mise config ls       # configuration files contributing to this directory
+mise ls --current    # selected versions and their sources
+mise doctor          # installation and activation diagnostics
 ```
+
+如果选择正确但安装失败，请检查后端的先决条件、平台支持和身份验证要求；`MISE_DEBUG=1 mise install node`会添加诊断输出；分享日志前，请检查其中的凭据。

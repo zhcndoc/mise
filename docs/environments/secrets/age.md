@@ -1,8 +1,12 @@
-# 直接 age 加密 <Badge type="warning" text="实验性" />
+---
+description: "使用 age 加密直接在 mise.toml 中加密单个环境变量值。"
+---
 
-使用 [age](https://github.com/FiloSottile/age) 加密，在 `mise.toml` 中直接加密单个环境变量值。无需安装 age 工具——mise 已内置支持。
+# 直接 age 加密 <Badge type="warning" text="experimental" />
 
-这是一种将加密后的环境变量直接存储在 `mise.toml` 中的简单方法。你只需运行 `mise set --age-encrypt <key>=<value>` 即可使用。默认情况下，如果存在的话，mise 会使用你的 ssh 密钥（`~/.ssh/id_ed25519` 或 `~/.ssh/id_rsa`）。
+使用 [age](https://github.com/FiloSottile/age) 加密直接在 `mise.toml` 中加密单个环境变量值。加密和解密功能已内置于 mise 中。下方可选的 `age-keygen` 命令来自独立的 age CLI。
+
+这是将加密的环境变量直接存储在 `mise.toml` 中的一种简单方式。运行 `mise set --age-encrypt <key>=<value>` 即可使用。默认情况下，如果存在 SSH 密钥（`~/.ssh/id_ed25519` 或 `~/.ssh/id_rsa`），mise 会使用它。
 
 - **内联存储**：值与 `mise.toml` 中的其他环境变量并列存放
 - **多个接收者**：x25519 age 密钥和 SSH 接收者
@@ -16,12 +20,17 @@
 mise settings set experimental=true
 ```
 
-2. [可选] 生成一个 age 密钥（如果你想创建一个新的 age 密钥，并且不想使用你的 ssh 密钥）：
+2. 使用现有的 SSH 身份，或安装 age 并生成专用身份。
+   如果 `age.txt` 已包含你想保留的身份，则跳过密钥生成：
 
 ```bash
-age-keygen -o ~/.config/mise/age.txt
-# 注意输出的公钥，用于加密
+mise use -g age
+mkdir -p ~/.config/mise
+mise exec -- age-keygen -o ~/.config/mise/age.txt
+# Public key: age1...
 ```
+
+公钥是**接收者**：将其分享给需要为你加密的人。`age.txt` 包含解密所需的私有**身份**；请将其保存在仓库之外。
 
 3. 加密一个值：
 
@@ -31,7 +40,7 @@ mise set --age-encrypt --prompt DB_PASSWORD
 ```
 
 ::: warning
-建议使用 `--prompt`，以避免意外将该值暴露到你的 shell 历史记录中。不过你也可以不这样做，使用 `mise set --age-encrypt DB_PASSWORD="password123"`。
+使用 `--prompt`，这样明文就不会成为命令或 shell 历史记录的一部分
 :::
 
 4. 值会作为 age 指令加密存储在 `mise.toml` 中：
@@ -41,11 +50,14 @@ mise set --age-encrypt --prompt DB_PASSWORD
 DB_PASSWORD = { age = { value = "<base64>" } }
 ```
 
-5. 解密会自动进行：
+5. 运行需要该值的命令或任务。mise 会在启动进程之前将其解密：
 
 ```bash
-mise env  # 变量会自动解密
+# Bash example: checks availability without printing the password
+mise exec -- bash -c 'test -n "$DB_PASSWORD" && echo "DB_PASSWORD is available"'
 ```
+
+`mise env` 和 `mise set DB_PASSWORD` 会打印解密后的值。仅在确实需要输出明文时使用它们；请参阅[隐藏输出](/environments/#redactions)。
 
 ## CLI 标志
 
@@ -55,11 +67,11 @@ mise env  # 变量会自动解密
 - `--age-key-file <PATH>` — 使用从 age 身份文件派生的接收者
 - `--prompt` — 提示输入该值，以避免意外将其暴露在 shell 历史记录中
 
-如果没有显式提供接收者，mise 将尝试使用默认值（见下文）。
+如果未显式提供接收者，mise 会尝试使用默认值（见下文）。
 
 ## 存储格式
 
-加密值以 base64 形式存储，并带有一个 `format` 字段：
+存储的载荷是经过 base64 编码的密文，而不是经过编码的明文密钥。`format` 字段用于标识载荷表示形式：
 
 - `format = "raw"` — 未压缩的密文（通常用于较小的值）
 - `format = "zstd"` — 经 zstd 压缩的密文（当密文 > 1KB 时使用）
@@ -75,10 +87,7 @@ mise 按以下顺序查找身份：
 4. 如果存在，则使用默认的 `~/.config/mise/age.txt`
 5. 来自 `settings.age.ssh_identity_files` 的 SSH 身份以及常见默认值（`~/.ssh/id_ed25519`、`~/.ssh/id_rsa`）
 
-在 `settings.age.key_file`、`settings.age.identity_files` 和
-`settings.age.ssh_identity_files` 中配置的路径，是相对于声明它们的文件的配置根目录解析的。它们还支持 Tera 模板，包括
-<span v-pre>`{{ config_root }}`</span> 以及来自 `env` 的值。绝对路径和以
-`~` 开头的路径保留其现有含义。
+在 `settings.age.key_file`、`settings.age.identity_files` 和 `settings.age.ssh_identity_files` 中配置的路径，是相对于声明它们的文件的配置根目录解析的。它们还支持 Tera 模板，包括 <span v-pre>`{{ config_root }}`</span> 以及来自 `env` 的值。绝对路径和以 `~` 开头的路径保留其现有含义。
 
 解密后的值始终会标记为已隐藏。
 
@@ -110,5 +119,5 @@ import Settings from '/components/settings.vue';
 
 ## 说明
 
-- 该功能处于实验阶段；标志和行为可能会发生变化。
-- `mise set KEY` 将打印解密后的值
+- 此功能为实验性功能；标志和行为可能会发生变化
+- `mise set KEY` 会打印解密后的值

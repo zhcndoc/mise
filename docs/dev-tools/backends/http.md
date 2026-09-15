@@ -1,23 +1,30 @@
+---
+description: "从直接下载 URL 安装二进制文件、脚本和归档文件。"
+---
+
 # HTTP 后端
 
-您可以使用 `http` 后端直接从 HTTP URL 安装工具。此后端会从任何 HTTP/HTTPS URL 下载文件，非常适合通过直接下载链接分发预构建二进制文件或归档文件的工具。
+`http` 后端从直接下载 URL 安装二进制文件、脚本或归档文件。当发布者没有受支持的发布后端，或者你托管自己的制品时，可以使用它。优先使用 HTTPS URL，并记录预期校验和。
 
-这部分代码位于 mise 仓库中的 [`./src/backend/http.rs`](https://github.com/jdx/mise/blob/main/src/backend/http.rs)。
+相关代码位于 mise 仓库的 [`./src/backend/http.rs`](https://github.com/jdx/mise/blob/main/src/backend/http.rs) 中。
 
 ## 用法
 
-以下命令从直接的 HTTP URL 安装一个工具：
+将示例 URL 替换为适用于你平台的制品，然后在当前项目中安装：
 
 ```sh
-mise use -g http:my-tool[url=https://example.com/releases/my-tool-v1.0.0.tar.gz]@1.0.0
+mise use 'http:my-tool[url=https://example.com/releases/my-tool-v1.0.0.tar.gz]@1.0.0'
+mise exec -- my-tool --version
 ```
 
-版本将以以下格式设置在 `~/.config/mise/config.toml` 中：
+这会将 URL 和版本记录到 `mise.toml` 中。添加 `-g` 可安装全局工具：
 
 ```toml
 [tools]
 "http:my-tool" = { version = "1.0.0", url = "https://example.com/releases/my-tool-v1.0.0.tar.gz" }
 ```
+
+固定 URL 需要具体的版本标签。`latest` 不会从下载 URL 中发现发布版本：添加 [`version_list_url`](/dev-tools/backends/http.html#version-list-url) 以启用 `mise ls-remote` 和自动版本选择。仅更新版本不会改变静态 URL；对于带版本号的制品，请使用 URL 模板。
 
 ## 支持的 HTTP 语法
 
@@ -58,7 +65,7 @@ URL 中可用以下模板函数（使用双大括号，例如，`version` 会变
 [tools]
 # HashiCorp 工具使用 "darwin" 而不是 "macos"，使用 "amd64" 而不是 "x64"
 "http:sentinel" = {
-  version = "latest",
+  version = "0.26.3",
   url = 'https://releases.hashicorp.com/sentinel/{{version}}/sentinel_{{version}}_{{os(macos="darwin")}}_{{arch(x64="amd64")}}.zip',
 }
 ```
@@ -88,23 +95,25 @@ linux-x64 = { url = "https://example.com/releases/my-tool-v1.0.0-linux-x64.tar.g
 
 操作系统/架构值使用 mise 的约定：操作系统使用 `linux`、`macos`、`windows`，架构使用 `x64`、`arm64`。对于平台特定 URL，请使用相应的平台键（例如 `macos-x64`、`linux-arm64`），并为每个平台指定完整 URL。
 
-如果你弄错了并使用了类似 `darwin-aarch64` 这样的值，mise 会尝试推断你的意思，并照样正确处理。
+如果不小心使用了类似 `darwin-aarch64` 的值，mise 会尝试弄清楚你的意图，并照常完成正确的处理。
 :::
 
 ### `checksum`
 
-使用校验和验证下载的文件：
+从可信来源提供完整的预期摘要值。以下值是占位符，安装前必须替换：
 
 ```toml
 [tools."http:my-tool"]
 version = "1.0.0"
 url = "https://example.com/releases/my-tool-v1.0.0.tar.gz"
-checksum = "sha256:a1b2c3d4e5f6789..."
+checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST"
 ```
 
 _与其在这里指定校验和，不如使用 [mise.lock](/dev-tools/mise-lock) 来管理校验和。_
 
 ### 平台特定校验和
+
+将每个占位符替换为对应平台制品的摘要值：
 
 ```toml
 [tools."http:my-tool"]
@@ -113,15 +122,15 @@ version = "1.0.0"
 [tools."http:my-tool".platforms]
 macos-x64 = {
   url = "https://example.com/releases/my-tool-v1.0.0-macos-x64.tar.gz",
-  checksum = "sha256:a1b2c3d4e5f6789...",
+  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
 }
 macos-arm64 = {
   url = "https://example.com/releases/my-tool-v1.0.0-macos-arm64.tar.gz",
-  checksum = "sha256:b2c3d4e5f6789...",
+  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
 }
 linux-x64 = {
   url = "https://example.com/releases/my-tool-v1.0.0-linux-x64.tar.gz",
-  checksum = "sha256:c3d4e5f6789...",
+  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
 }
 ```
 
@@ -129,7 +138,7 @@ linux-x64 = {
 
 已发布的校验和源的 URL。设置后，[`mise lock`](/dev-tools/mise-lock) 会为每个目标平台解析校验和——包括你当前运行平台之外的平台——**而无需下载制品**。这使得单台机器也能生成完整的跨平台锁定文件。
 
-`checksum_url` 是一个模板（支持 <code v-pre>{{ version }}</code>、<code v-pre>{{ os() }}</code>、<code v-pre>{{ arch() }}</code>，并且可通过 `platforms.<key>.checksum_url` 针对不同平台进行设置）。它可以指向以下任意一种：
+`checksum_url` 是一个模板（支持 <code v-pre>{{ version }}</code>、<code v-pre>{{ os() }}</code> 和 <code v-pre>{{ arch() }}</code>，并且可以通过 `platforms.<key>.checksum_url` 按平台设置）。它可以指向以下任意一种内容：
 
 - 一个**单独的校验和文件**（例如 `<artifact>.sha256`），其中可以只包含哈希值，或 `<hash>  <filename>`；
 - 一个类似 **SHASUMS** 的文件，列出多个平台的 `<hash>  <filename>`（该行会根据制品的文件名进行匹配）；
@@ -175,7 +184,7 @@ macos-arm64 = { url = "https://example.com/my-tool-{{ version }}-macos-arm64.tar
 
 ### `size`
 
-验证下载文件的大小：
+检查预期的字节数。这些数字仅用于说明语法；请使用实际的制品大小。大小检查不能替代校验和：
 
 ```toml
 [tools."http:my-tool"]
@@ -219,7 +228,7 @@ strip_components = 1
 ```
 
 ::: info
-如果未显式设置 `strip_components`，mise 将自动检测何时应用 `strip_components = 1`。当解压后的归档在根级别恰好只包含一个目录且没有文件时，就会发生这种情况。这在像 ripgrep 这样的工具中很常见，它们会将二进制文件打包在一个带版本号的目录中（例如，`ripgrep-14.1.0-x86_64-unknown-linux-musl/rg`）。自动检测可确保二进制文件直接放置在 mise 预期的安装路径中。
+当 `strip_components` 和 `bin_path` 都未设置时，如果提取后的归档在根级别恰好包含一个目录且不包含文件，mise 会自动应用 `strip_components = 1`。这在 ripgrep 等工具中很常见，它们会将二进制文件打包在带版本号的目录中（例如 `ripgrep-14.1.0-x86_64-unknown-linux-musl/rg`）。自动检测可确保二进制文件直接放置在安装路径中，也就是 mise 预期的位置。
 :::
 
 ### `bin`
@@ -234,7 +243,7 @@ bin = "docker-compose"  # 将 docker-compose-linux-x86_64 重命名为 docker-co
 ```
 
 ::: info
-当下载单个二进制文件（而不是压缩包）时，mise 会自动从文件名中移除操作系统/架构后缀。例如，`docker-compose-linux-x86_64` 会自动变为 `docker-compose`。只有在你需要特定的自定义名称时才使用 `bin` 选项。
+下载单个二进制文件（而不是归档文件）时，mise 会自动从文件名中移除操作系统/架构后缀。例如，`docker-compose-linux-x86_64` 会变成 `docker-compose`。只有在需要特定的自定义名称时，才使用 `bin` 选项。
 :::
 
 ### `rename_exe`
@@ -248,7 +257,7 @@ url = "https://nexus.tremolo.io/repository/openunison-cli/openunison-cli-v{{vers
 rename_exe = "kubectl-openunison-cli"  # 重命名解压后的二进制文件，用于 kubectl 插件
 ```
 
-其工作方式是：在解压后的目录中（如果指定了 `bin_path`，则在其中）查找第一个可执行文件，并将其重命名为指定名称。
+mise 会在解压后的目录中（如果指定了 `bin_path`，则在其中）查找第一个可执行文件，并将其重命名为给定名称。
 
 要从一个归档中重命名**多个**二进制文件，请使用表格形式——每个键都是源文件名（精确文件名或 glob），每个值都是新名称：
 
@@ -303,7 +312,7 @@ windows-x64 = {
 
 ### `version_list_url`
 
-从远程 URL 获取可用版本。这使得 `mise ls-remote` 能够列出基于 HTTP 的工具可用版本：
+从远程 URL 获取可用版本。这使 `mise ls-remote` 能够列出基于 HTTP 的工具版本：
 
 ```toml
 [tools."http:my-tool"]
@@ -312,7 +321,7 @@ url = "https://example.com/releases/my-tool-v{{version}}.tar.gz"
 version_list_url = "https://example.com/releases/versions.txt"
 ```
 
-版本列表 URL 可以返回多种格式的数据：
+版本列表 URL 可以返回以下任意格式的数据：
 
 - **纯文本**：单个版本号（例如，`2.0.53`）
 - **按行分隔**：每行一个版本
@@ -377,22 +386,28 @@ version_json_path = ".[].tag_name"
 ```toml
 # GitHub releases API 格式
 version_json_path = ".[].tag_name"
+```
 
-# 嵌套的 versions 数组
+```toml
+# Nested versions array
 version_json_path = ".data.versions[]"
+```
 
-# Release 信息对象
+```toml
+# Release info objects
 version_json_path = ".releases[].info.version"
+```
 
-# 仅过滤稳定版发布（例如 Flutter）
+```toml
+# Filter for stable releases only (e.g., Flutter)
 version_json_path = ".releases[?channel=stable].version"
 ```
 
-过滤语法 `[?field=value]` 允许在提取前过滤 JSON 数组。这对于返回多个发布通道（stable、beta、dev）并且你只想要特定通道的 API 很有用。
+过滤语法 `[?field=value]` 会在提取前过滤 JSON 数组。当 API 返回多个发布渠道（stable、beta、dev），而你只需要其中一个时，这一语法非常有用。
 
 ### `version_expr`
 
-使用 [expr-lang](https://expr-lang.org/) 表达式提取版本。这为复杂的版本提取逻辑提供了最大的灵活性：
+使用 [expr-lang](https://expr-lang.org/) 表达式提取版本。这是处理复杂版本提取时最灵活的选项：
 
 ```toml
 [tools."http:my-tool"]
@@ -409,14 +424,20 @@ version_expr = 'split(body, "\n")'
 ```toml
 # 按换行符分割版本
 version_expr = 'split(body, "\n")'
+```
 
-# 分割并过滤空行
+```toml
+# Split and filter empty lines
 version_expr = 'filter(split(body, "\n"), # != "")'
+```
 
-# 解析 JSON 并提取对象键（适用于 HashiCorp 风格的 JSON）
-# 例如，{"versions": {"1.0.0": {}, "2.0.0": {}}}
+```toml
+# Parse JSON and extract object keys (useful for HashiCorp-style JSON)
+# e.g., {"versions": {"1.0.0": {}, "2.0.0": {}}}
 version_expr = 'keys(fromJSON(body).versions)'
+```
 
+```toml
 # Sort versions with mise's version-aware comparator
 version_expr = 'fromJSON(body) | map({ trimPrefix(#.tag_name, "v") }) | sortVersions()'
 ```
@@ -440,13 +461,16 @@ mise 添加了用于按版本排序的 **`sortVersions(array)`**。如果发现�
 
 ### `bin_path`
 
-指定解压后的归档中包含二进制文件的目录，或下载文件的放置位置。此项支持使用 <code v-pre>{{version}}</code> 进行模板化：
+使用相对于提取后安装根目录的路径。设置 `bin_path` 会禁用自动根目录剥离。对于形如 `my-tool-1.0.0/bin/my-tool` 的归档，可以像下面这样显式剥离外层目录，或者保留外层目录并使用 `bin_path = "my-tool-{{ version }}/bin"`。
+
+指定提取后归档中包含二进制文件的目录，或指定放置下载文件的位置。该选项支持使用 <code v-pre>{{version}}</code> 进行模板化：
 
 ```toml
 [tools."http:my-tool"]
 version = "1.0.0"
 url = "https://example.com/releases/my-tool-v1.0.0.tar.gz"
-bin_path = "my-tool-{{version}}/bin" # 展开为 my-tool-1.0.0/bin
+strip_components = 1
+bin_path = "bin"
 ```
 
 **二进制路径查找顺序：**
@@ -456,25 +480,46 @@ bin_path = "my-tool-{{version}}/bin" # 展开为 my-tool-1.0.0/bin
 3. 如果不存在 `bin/` 目录，则在子目录中搜索 `bin/` 目录
 4. 如果未找到任何 `bin/` 目录，则使用解压目录的根目录。
 
-## 缓存行为
+### `shared_extraction`
 
-HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速度：
+默认情况下，每个 HTTP 安装都包含自己独立的提取文件。设置 `shared_extraction = true` 后，具有相同制品和提取选项的普通用户安装可以共享提取内容：
+
+```toml
+[tools."http:my-tool"]
+version = "1.0.0"
+url = "https://example.com/releases/my-tool-v1.0.0.tar.gz"
+shared_extraction = true
+```
+
+当多个工具使用同一制品时，共享可以节省磁盘空间并避免重复提取。仍可能需要下载文件来识别其内容。对共享文件所做的更改（包括由 `postinstall` 钩子进行的更改）会影响使用该条目的每个安装。
+
+即使启用了此选项，显式的 `mise install --system`、`mise install --shared` 和 `mise install-into` 目标也始终包含自己的文件。
+
+## 安装和清理
+
+新的 HTTP 安装会像其他工具一样，直接在安装目录中包含其文件。`mise uninstall` 和 `mise prune` 移除版本时会删除这些文件。同一制品的多个安装各自拥有独立副本。
+
+链接到 `http-tarballs` 的现有安装会继续工作。要将其替换为独立安装，请在不使用 `shared_extraction = true` 的情况下，使用 `mise install --force <tool>` 重新安装。仅更改该选项不会替换已经安装的版本。
+
+::: warning 共享提取存储
+旧版安装以及使用 `shared_extraction = true` 的工具依赖 `$MISE_DATA_DIR/http-tarballs/` 中的文件。卸载工具后，`mise prune` 和 `mise cache prune` 都不会自动回收这些条目。重新安装也会保留现有条目，因为其他安装可能正在使用它们。只要仍有安装依赖此目录，就不要删除它。
+:::
+
+## 缓存行为
 
 ### 缓存位置
 
-对于普通用户安装，下载和解压的文件会缓存在 `$MISE_DATA_DIR/http-tarballs/` 中，而不是为每个工具安装单独存储。默认位置：
+使用 `shared_extraction = true` 时，提取后的文件会存储在 `$MISE_DATA_DIR/http-tarballs/` 中，而不是分别存储在每个安装目录中：
 
 - **Linux**：`~/.local/share/mise/http-tarballs/`
 - **macOS**：`~/.local/share/mise/http-tarballs/`
 
-显式使用 `mise install --system`、`mise install --shared` 和 `mise install-into` 的安装会直接解压到目标位置。它们不会使用此持久化解压缓存，因此生成的安装是自包含的，不会链接到安装用户的主目录。
-
 ### 缓存键生成
 
-缓存键根据文件内容生成，以确保相同的下载在各工具之间共享：
+缓存键根据文件内容派生，因此相同的下载内容可以在不同工具之间共享：
 
-1. **文件内容的 Blake3 哈希**：当未提供校验和时，mise 会计算下载文件的 Blake3 哈希
-2. **解压选项**：`strip_components` 会包含在缓存键中，因为它会影响解压后的结构
+1. **文件内容**：mise 会计算下载文件的 Blake3 哈希，该计算独立于预期的验证校验和。
+2. **提取选项**：会改变提取结果的选项也会影响缓存键，包括原始文件和压缩二进制文件的有效文件名、根目录剥离、重命名，以及相关的格式或启动器选项。
 
 示例缓存目录结构：
 
@@ -490,19 +535,13 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 
 ### 符号链接安装
 
-普通用户安装是指向缓存解压内容的符号链接：
+选择共享的安装会链接到缓存的提取内容：
 
 ```bash
 ~/.local/share/mise/installs/http-my-tool/1.0.0 → ~/.local/share/mise/http-tarballs/71f774...
 ```
 
-这种方式带来了几个好处：
-
-- **节省空间**：普通用户安装会在各工具之间共享相同的 tarball
-- **安装更快**：命中缓存后无需重新下载和解压文件
-- **一致性**：相同的文件内容始终使用相同的缓存条目
-
-系统、共享和 install-into 目标位置包含真实文件，而不是这些符号链接。这样可以避免卸载后留下隐藏的缓存条目，并使共享安装不依赖于特定用户的数据目录。
+对于设置了 `bin_path` 的原始文件，链接位于安装目录内。对于这种布局，Windows 会复制文件，而不是创建符号链接。
 
 ### 缓存元数据
 
@@ -511,7 +550,7 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 ```json
 {
   "url": "https://example.com/releases/my-tool-v1.0.0.tar.gz",
-  "checksum": "sha256:a1b2c3d4e5f6789...",
+  "checksum": "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
   "size": 1024000,
   "extracted_at": 1703001234,
   "platform": "macos-arm64"
@@ -520,6 +559,6 @@ HTTP 后端实现了一个智能缓存系统，以优化磁盘使用和安装速
 
 ### 缓存管理
 
-普通 HTTP 安装会将缓存存储在 `$MISE_DATA_DIR/http-tarballs/` 中。它有意位于 `MISE_CACHE_DIR` 之外，因此 `mise cache clear` 不会删除仍被已安装符号链接引用的内容。
+共享提取存储有意位于 `MISE_CACHE_DIR` 之外，因此 `mise cache clear` 不会删除已安装符号链接仍在引用的内容。
 
-系统、共享和 install-into 目标位置不会创建持久化的 HTTP 解压缓存。
+默认安装以及显式的 system、shared 和 install-into 目标不会创建持久的 HTTP 提取条目。

@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use eyre::Result;
 
+use crate::backend::backend_type::BackendType;
 use crate::config::env_directive::{EnvResolveOptions, EnvResults, ToolsFilter};
 use crate::config::{Config, Settings};
 use crate::env::{PATH_KEY, WARN_ON_MISSING_REQUIRED_ENV};
@@ -14,7 +15,7 @@ use crate::path_env::PathEnv;
 use crate::toolset::Toolset;
 use crate::toolset::env_cache::{CachedEnv, compute_settings_hash, get_file_mtime};
 use crate::toolset::tool_request::ToolRequest;
-use crate::{env, github, parallel, uv};
+use crate::{env, file, github, parallel, uv};
 
 /// PATH with mise-managed install dirs filtered out. mise re-adds the current
 /// toolset's bin dirs below, so a stale `installs/<tool>/<ver>/bin` left on PATH
@@ -31,10 +32,73 @@ fn pristine_path_without_install_dirs() -> Vec<PathBuf> {
 }
 
 impl Toolset {
+    /// PATH for an environment mise hands to a child process or prints (`mise x`,
+    /// `mise run`, `mise env`): the pristine PATH with the given mise-managed paths
+    /// ahead of it.
+    ///
+    /// The pristine PATH never contains a shim farm that PATH activation added on its
+    /// own, and a shell without activation may not have one at all. A `lazy = true`
+    /// tool relies on its bootstrap shim being found, so when the toolset declares one
+    /// the farms follow the tool paths, mirroring the fallback boundary hook-env retains
+    /// in the interactive shell. Installed tools still resolve to their real bin
+    /// directories first. A farm already on the pristine PATH keeps its place: `PathEnv`
+    /// already puts tool paths ahead of it, and a shared directory such as
+    /// `~/.local/bin` must not be reordered.
+    fn child_path(&self, paths: impl IntoIterator<Item = PathBuf>) -> String {
+        let mut pristine = pristine_path_without_install_dirs();
+        let mut shim_farms = Vec::new();
+        let mut shim_boundary = None;
+        if self.has_lazy_declarations() {
+            shim_farms = crate::shims::shim_farm_dirs();
+            for (index, path) in pristine.iter().enumerate() {
+                if shim_farms.iter().any(|farm| {
+                    file::paths_eq(
+                        &file::canonicalize_or_self(path),
+                        &file::canonicalize_or_self(farm),
+                    )
+                }) {
+                    shim_boundary.get_or_insert(index);
+                }
+            }
+            if let Some(boundary) = shim_boundary {
+                pristine.retain(|path| {
+                    !shim_farms.iter().any(|farm| {
+                        file::paths_eq(
+                            &file::canonicalize_or_self(path),
+                            &file::canonicalize_or_self(farm),
+                        )
+                    })
+                });
+                pristine.splice(boundary..boundary, shim_farms.iter().cloned());
+            }
+        }
+        let mut path_env = PathEnv::from_iter(pristine.iter().cloned());
+        for p in paths {
+            path_env.add(p);
+        }
+        if shim_boundary.is_none() {
+            for dir in shim_farms {
+                path_env.add(dir);
+            }
+        }
+        path_env.to_string()
+    }
+
     pub(crate) async fn full_env(&self, config: &Arc<Config>) -> Result<EnvMap> {
+        Ok(self.full_env_with_removals(config).await?.0)
+    }
+
+    pub(crate) async fn full_env_with_removals(
+        &self,
+        config: &Arc<Config>,
+    ) -> Result<(EnvMap, BTreeSet<String>)> {
+        let (mise_env, env_remove) = self.env_with_path_and_removals(config).await?;
         let mut env = env::PRISTINE_ENV.clone().into_iter().collect::<EnvMap>();
-        env.extend(self.env_with_path(config).await?.clone());
-        Ok(env)
+        for key in &env_remove {
+            env.remove(key);
+        }
+        env.extend(mise_env);
+        Ok((env, env_remove))
     }
 
     /// Like full_env but skips `tools=true` env directives (load_post_env).
@@ -43,6 +107,9 @@ impl Toolset {
     /// would trigger spurious errors from modules expecting the full PATH.
     pub(crate) async fn full_env_without_tools(&self, config: &Arc<Config>) -> Result<EnvMap> {
         let mut env = env::PRISTINE_ENV.clone().into_iter().collect::<EnvMap>();
+        for key in &config.env_results().await?.env_remove {
+            env.remove(key);
+        }
         env.extend(self.env_with_path_without_tools(config).await?);
         Ok(env)
     }
@@ -55,6 +122,9 @@ impl InstallDependencyContext {
     /// evaluate arbitrary modules.
     pub(crate) async fn base_env_for_install(&self, config: &Arc<Config>) -> Result<EnvMap> {
         let mut full_env = env::PRISTINE_ENV.clone().into_iter().collect::<EnvMap>();
+        for key in &config.env_results().await?.env_remove {
+            full_env.remove(key);
+        }
         let (mut env, add_paths) = self.toolset.env(config).await?;
         let mut path_env = PathEnv::new();
         for path in &self.paths {
@@ -98,25 +168,31 @@ impl Toolset {
 
     /// the full mise environment including all tool paths
     pub(crate) async fn env_with_path(&self, config: &Arc<Config>) -> Result<EnvMap> {
+        Ok(self.env_with_path_and_removals(config).await?.0)
+    }
+
+    pub(crate) async fn env_with_path_and_removals(
+        &self,
+        config: &Arc<Config>,
+    ) -> Result<(EnvMap, BTreeSet<String>)> {
         // Try to load from cache if enabled
         if CachedEnv::is_enabled()
-            && let Some(mut cached) = self.try_load_env_cache(config).await?
+            && let Some((mut cached, env_remove)) = self.try_load_env_cache(config).await?
         {
             trace!("env_cache: using cached environment");
             github::oauth::inject_token_env(&mut cached);
-            return Ok(cached);
+            return Ok((cached, env_remove));
         }
 
         let (mut env, env_results) = self.final_env(config).await?;
-        let mut path_env = PathEnv::from_iter(pristine_path_without_install_dirs());
         // Use split paths so we save a cache compatible with env_with_path_and_split
         let (user_paths, tool_paths) = self
             .list_final_paths_split(config, env_results.clone())
             .await?;
-        for p in user_paths.iter().chain(tool_paths.iter()) {
-            path_env.add(p.clone());
-        }
-        env.insert(PATH_KEY.to_string(), path_env.to_string());
+        env.insert(
+            PATH_KEY.to_string(),
+            self.child_path(user_paths.iter().chain(tool_paths.iter()).cloned()),
+        );
 
         // Save to cache if enabled and no uncacheable directives
         // Use save_env_cache_split to ensure cache is compatible with env_with_path_and_split
@@ -132,7 +208,7 @@ impl Toolset {
         // ephemeral token is never persisted to disk.
         github::oauth::inject_token_env(&mut env);
 
-        Ok(env)
+        Ok((env, env_results.env_remove))
     }
 
     /// Get environment with split paths (user_paths and tool_paths separate)
@@ -141,7 +217,13 @@ impl Toolset {
     pub(crate) async fn env_with_path_and_split(
         &self,
         config: &Arc<Config>,
-    ) -> Result<(EnvMap, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>)> {
+    ) -> Result<(
+        EnvMap,
+        BTreeSet<String>,
+        Vec<PathBuf>,
+        Vec<PathBuf>,
+        Vec<PathBuf>,
+    )> {
         // Try to load from cache if enabled
         if CachedEnv::is_enabled()
             && let Some(cached) = self.try_load_env_cache_full(config).await?
@@ -157,6 +239,7 @@ impl Toolset {
             github::oauth::inject_token_env(&mut env);
             return Ok((
                 env,
+                cached.env_remove,
                 cached.user_paths,
                 cached.tool_paths,
                 cached.watch_files,
@@ -189,7 +272,13 @@ impl Toolset {
         // ephemeral token is never persisted to disk.
         github::oauth::inject_token_env(&mut env);
 
-        Ok((env, user_paths, tool_paths, env_results.watch_files))
+        Ok((
+            env,
+            env_results.env_remove,
+            user_paths,
+            tool_paths,
+            env_results.watch_files,
+        ))
     }
 
     /// Try to load environment from cache (returns full CachedEnv)
@@ -203,17 +292,19 @@ impl Toolset {
     }
 
     /// Try to load environment from cache (returns reconstructed EnvMap)
-    async fn try_load_env_cache(&self, config: &Arc<Config>) -> Result<Option<EnvMap>> {
+    async fn try_load_env_cache(
+        &self,
+        config: &Arc<Config>,
+    ) -> Result<Option<(EnvMap, BTreeSet<String>)>> {
         match self.try_load_env_cache_full(config).await? {
             Some(cached) => {
                 let mut env = cached.env;
                 // Reconstruct PATH from cached paths
-                let mut path_env = PathEnv::from_iter(pristine_path_without_install_dirs());
-                for p in cached.user_paths.into_iter().chain(cached.tool_paths) {
-                    path_env.add(p);
-                }
-                env.insert(PATH_KEY.to_string(), path_env.to_string());
-                Ok(Some(env))
+                env.insert(
+                    PATH_KEY.to_string(),
+                    self.child_path(cached.user_paths.into_iter().chain(cached.tool_paths)),
+                );
+                Ok(Some((env, cached.env_remove)))
             }
             None => Ok(None),
         }
@@ -265,6 +356,7 @@ impl Toolset {
 
         let cached = CachedEnv {
             env: env_without_path,
+            env_remove: env_results.env_remove.clone(),
             user_paths: user_paths.to_vec(),
             tool_paths: tool_paths.to_vec(),
             created_at: now,
@@ -299,12 +391,18 @@ impl Toolset {
             })
             .collect();
 
-        // Collect tool versions
+        // Runtime options can change tool environments and wrapper activation without
+        // changing versions, so include them in the cache identity.
         let tool_versions: Vec<(String, String)> = self
             .list_current_versions()
             .into_iter()
-            .map(|(b, tv)| (b.id().to_string(), tv.version.clone()))
-            .collect();
+            .map(|(b, tv)| {
+                Ok((
+                    b.id().to_string(),
+                    serde_json::to_string(&(tv.version.clone(), tv.request.options()))?,
+                ))
+            })
+            .collect::<Result<_>>()?;
 
         // Get settings hash
         let settings_hash = compute_settings_hash();
@@ -334,6 +432,7 @@ impl Toolset {
             &tool_versions,
             &settings_hash,
             &base_path,
+            env::PRISTINE_ENV.get("MANPATH").map(String::as_str),
         ))
     }
 
@@ -371,6 +470,8 @@ impl Toolset {
             .collect()
     }
 
+    /// Resolve tool and non-tool environment contributions needed before the
+    /// tools-aware environment pass.
     pub(crate) async fn env(&self, config: &Arc<Config>) -> Result<(EnvMap, Vec<PathBuf>)> {
         time!("env start");
         let entries = self
@@ -400,13 +501,54 @@ impl Toolset {
                 env.insert(k, v);
             }
         }
+        self.prepend_packslip_manpaths(config, &mut env)?;
+        for key in &config.env_results().await?.env_remove {
+            env.remove(key);
+        }
         time!("env end");
         Ok((env, paths_to_add))
     }
 
+    /// Prepend normalized man roots from the active Packslip installs.
+    fn prepend_packslip_manpaths(&self, config: &Arc<Config>, env: &mut EnvMap) -> Result<()> {
+        let mut paths: Vec<PathBuf> = self
+            .list_current_installed_versions(config)
+            .into_iter()
+            .filter(|(backend, _)| backend.get_type() == BackendType::Packslip)
+            .filter_map(|(_, tv)| crate::packslip::manpath(&tv.install_path()))
+            .collect();
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let existing = env
+            .get("MANPATH")
+            .or_else(|| crate::env::PRISTINE_ENV.get("MANPATH"));
+        if let Some(existing) = existing {
+            paths.extend(std::env::split_paths(existing));
+        } else {
+            // An empty component asks `man` to retain its platform defaults.
+            // Without it, merely activating one Packslip tool would hide the
+            // operating system's own manual pages.
+            paths.push(PathBuf::new());
+        }
+        let mut seen = BTreeSet::new();
+        paths.retain(|path| seen.insert(path.clone()));
+        env.insert(
+            "MANPATH".into(),
+            std::env::join_paths(paths)?.to_string_lossy().into_owned(),
+        );
+        Ok(())
+    }
+
+    /// Resolve the complete environment, including tools-aware directives.
     pub(crate) async fn final_env(&self, config: &Arc<Config>) -> Result<(EnvMap, EnvResults)> {
         let (mut env, add_paths) = self.env(config).await?;
+        let non_tool_env = config.env_results().await?;
         let mut tera_env = env::PRISTINE_ENV.clone().into_iter().collect::<EnvMap>();
+        for key in &non_tool_env.env_remove {
+            tera_env.remove(key);
+        }
         tera_env.extend(env.clone());
         let mut path_env = PathEnv::from_iter(pristine_path_without_install_dirs());
 
@@ -446,6 +588,23 @@ impl Toolset {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.0.clone())),
         );
+        for key in &env_results.env_remove {
+            env.remove(key);
+        }
+
+        let mut effective_removals = non_tool_env.env_remove.clone();
+        for key in env_results.env.keys() {
+            effective_removals.remove(key);
+        }
+        effective_removals.extend(env_results.env_remove.clone());
+        env_results.env_remove = effective_removals;
+
+        // A tools-aware directive may replace MANPATH after env() added the
+        // Packslip roots. Compose it once more against the final value, while
+        // continuing to honor an explicit unset from either environment pass.
+        if !env_results.env_remove.contains("MANPATH") {
+            self.prepend_packslip_manpaths(config, &mut env)?;
+        }
 
         // Apply redactions from tools-only env vars (e.g. redact=true + tools=true)
         if !env_results.redactions.is_empty() {

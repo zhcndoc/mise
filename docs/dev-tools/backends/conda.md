@@ -1,34 +1,31 @@
+---
+description: "直接安装 Conda 软件包及其依赖项，无需单独安装 Conda"
+---
+
 # Conda 后端
 
-你可以直接从 [conda-forge](https://conda-forge.org/) 和其他
-Anaconda 频道安装软件包，而无需安装 conda 或 mamba。
+`conda` 后端会从 [conda-forge](https://conda-forge.org/) 或其他 Anaconda 频道直接安装命令行软件包及其传递依赖项。它会解析依赖项并直接下载软件包，因此无需安装 conda、mamba 或 micromamba。
 
-这个后端从 anaconda.org API 获取预先构建的软件包并直接解压它们，
-使其成为将 conda 软件包作为独立 CLI 工具安装的一种轻量级方式。
-
-来自所选软件包的命令会在该软件包隔离的 conda 前缀中运行。mise 会设置
-`CONDA_PREFIX`，为命令进程添加该前缀的可执行文件目录，并在启动命令前应用
-`etc/conda/activate.d` 脚本。这样，命令就可以使用其打包的运行时依赖项，而无需将依赖命令添加到交互式 shell 的 `PATH` 中。
+所选软件包中的命令会在该软件包隔离的 conda 前缀中运行。mise 会设置
+`CONDA_PREFIX`，使前缀的可执行文件目录可供命令进程使用，并在启动命令前应用
+`etc/conda/activate.d` 脚本。这使命令能够使用其打包的运行时依赖项，而无需将依赖项命令添加到交互式 shell 的 `PATH` 中。
 
 相关代码位于 mise 仓库的 [`./src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs) 中。
 
 ## 依赖项
 
-无。与其他 conda 工具不同，此后端不需要安装 conda、mamba 或 micromamba。  
-它会直接从 anaconda.org 下载并解压软件包。
+无需单独的 conda 软件包管理器。所选软件包仍必须支持你的操作系统、架构和本机运行时环境。
 
 ## 用法
 
-以下命令会安装 [ruff](https://anaconda.org/conda-forge/ruff) 的最新版本
-并将其设置为 PATH 上的活动版本：
+在当前项目中安装 ruff 并验证其可执行文件：
 
 ```sh
-$ mise use -g conda:ruff
-$ ruff --version
-ruff 0.8.0
+mise use conda:ruff
+mise exec -- ruff --version
 ```
 
-版本将以以下格式写入 `~/.config/mise/config.toml`：
+这会将以下内容写入 `mise.toml`。添加 `-g` 可进行全局配置。
 
 ```toml
 [tools]
@@ -37,24 +34,19 @@ ruff 0.8.0
 
 ### 指定版本
 
-```sh
-mise use -g conda:ruff@0.7.0
-```
+使用 `mise ls-remote conda:ruff` 列出版本，然后使用
+`mise use conda:ruff@VERSION` 选择一个版本。将 `VERSION` 替换为列出的版本。
 
 ### 使用不同的频道
 
-默认情况下，软件包会从 `conda-forge` 安装。你可以指定其他频道：
-
-```sh
-mise use -g "conda:ruff[channel=bioconda]"
-```
-
-或者在 `mise.toml` 中：
+默认频道为 `conda-forge`。对于发布在团队频道中的软件包，将以下占位符替换为其软件包名称和频道名称：
 
 ```toml
 [tools]
-"conda:ruff" = { version = "latest", channel = "bioconda" }
+"conda:my-tool" = { version = "latest", channel = "my-team" }
 ```
+
+解析器会使用所选频道来获取软件包及其依赖项。完整的依赖项集合必须在该频道中可用；这不是多频道 conda 环境规范。
 
 ## 平台支持
 
@@ -68,7 +60,7 @@ conda 后端会自动为你的平台选择合适的软件包：
 | macOS ARM64 | osx-arm64       |
 | Windows x64 | win-64          |
 
-如果没有可用的特定平台软件包，后端将回退到 `noarch` 软件包。
+解析器会同时考虑平台子目录和 `noarch`。`noarch` 软件包仍可能依赖于特定平台的软件包，因此不能保证安装在每台主机上都能正常工作。
 
 ## 设置
 
@@ -90,7 +82,7 @@ import Settings from '/components/settings.vue';
 
 ```toml
 [tools]
-"conda:bioconductor-deseq2" = { version = "latest", channel = "bioconda" }
+"conda:my-tool" = { version = "latest", channel = "my-team" }
 ```
 
 ## 常见渠道
@@ -101,6 +93,9 @@ import Settings from '/components/settings.vue';
 
 ## 限制
 
-- 只能安装单个包，不能安装带依赖项的完整 conda 环境
-- 最适合不需要复杂依赖树的独立 CLI 工具
-- 不管理 Python 环境或像完整 conda/mamba 那样的包依赖。
+- mise 会在每个工具的隔离前缀中解析并安装传递依赖项。它不会导入或维护通用的 `environment.yml`。
+- 只有属于所请求软件包的命令会暴露给你的 shell。依赖项的可执行文件仍可在该工具的启动器环境中使用。
+- 解析器为每个工具使用一个频道。来自 bioconda 等频道的软件包可能需要另一个频道中的依赖项，而此配置无法提供这些依赖项。
+- 兼容的 libc 或 GPU 驱动程序等本机要求仍由主机负责。
+
+如果找不到某个命令，请检查所请求的软件包是否确实提供 CLI。如果解析失败，请在更改版本之前检查软件包是否可用、所选频道以及错误中报告的平台。

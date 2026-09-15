@@ -1,264 +1,84 @@
-# mise.lock 锁定文件
+---
+description: "Lock resolved tool versions and artifact checksums for reproducible installations."
+socialDescription: "Lock resolved tool versions and artifact checksums for reproducible installations."
+---
 
-`mise.lock` 是一个锁定文件，用于固定工具的确切版本和校验和，以实现可复现的环境。当在 TOML 设置文件中显式配置 `lockfile = true` 时，mise 会在安装或升级工具时创建并维护项目锁定文件。当未设置该选项时，mise 会维护现有的锁定文件，但不会创建新的锁定文件；运行 `mise lock` 可显式生成一个锁定文件。`MISE_LOCKFILE=1` 为向后兼容保留现有的锁定文件行为。全局锁定文件只能通过 `mise lock --global` 创建。
+# mise.lock Lockfile
 
-## 概述
+`mise.toml` records the versions a project accepts; `mise.lock` records the
+concrete versions those requests resolved to. Supported backends also record
+artifact URLs, checksums, and verification metadata. Commit both files so other
+machines can use the same resolutions.
 
-锁文件的作用与 npm 中的 `package-lock.json` 或 Rust 中的 `Cargo.lock` 类似：
+## Quick start {#overview}
 
-- **可复现构建**：确保团队中的每个人都使用完全相同的工具版本
-- **安全性**：在后端支持时，通过校验和验证工具完整性
-- **版本固定**：将工具锁定到特定版本，同时仍允许在 `mise.toml` 中保持灵活性
-- **避免 API 速率限制**：通过存储下载 URL，未来的安装会使用锁文件，而不需要调用 GitHub（或其他提供商），从而避免速率限制，并且在大多数情况下无需 `GITHUB_TOKEN`。
+For a project with tools configured in `mise.toml`:
+
+```sh
+mise lock             # resolve configured tools without installing them
+mise install --locked # install using the recorded resolutions
+```
+
+Commit `mise.toml`, `mise.lock`, and any
+[native dependency sidecars](#native-dependency-sidecars). After pulling the
+project, teammates and CI can run `mise install --locked`.
+
+To update a tool within its configured version range:
+
+```sh
+mise lock --bump node
+mise install --locked
+```
+
+Review the lockfile diff and run the project's checks before committing.
+Keep application lockfiles such as `package-lock.json` and `uv.lock` too:
+`mise.lock` manages development tools, not the application's dependencies.
+
+The metadata recorded varies by [backend](#backend-support).
+Locked installation is not offline installation: private downloads, uncached
+artifacts, and verification checks can still need network access and
+[authentication](/dev-tools/github-tokens.html).
 
 ## 启用锁文件
 
-锁文件由 `lockfile` 设置控制：
+Run `mise lock` to create a project lockfile explicitly. To create and maintain
+one automatically as tools are installed or upgraded, configure:
 
-```sh
-# 全局启用锁文件
-mise settings lockfile=true
-
-# 或在 mise.toml 中设置
+```toml [mise.toml]
 [settings]
 lockfile = true
 ```
 
-## 工作原理
-
-1. **锁定文件的创建与更新**：设置 `lockfile = true` 后，运行 `mise install` 或 `mise use` 会使用已安装的确切版本创建或更新 `mise.lock`。未设置 `lockfile` 时，这些命令会更新现有的锁定文件，但不会创建新的锁定文件
-2. **版本解析**：如果存在 `mise.lock`，mise 将优先使用其中锁定的版本，而不是 `mise.toml` 中的版本范围
-3. **校验和验证**：对于受支持的后端，mise 会存储并验证下载工具的校验和
-
-`mise lock` 会解析配置级工具以及在单个任务中声明的工具。它会读取任务定义——包括继承的模板和包含的任务文件——但不会运行任务、任务依赖项、钩子或工具安装器。这样便可以在首次执行任务之前锁定任务专用工具。它们的条目使用相同的 `[[tools.*]]` 格式，并会写入拥有该任务的配置所对应的锁文件。
-
-## 文件格式
-
-`mise.lock` 是一个 TOML 文件，采用基于平台的格式，按平台组织资产信息：
-
-```toml
-# Example mise.lock
-lockfile_version = 1
-
-[[tools.node]]
-version = "20.11.0"
-backend = "core:node"
-specifiers = ["20"]
-
-[tools.node.platforms.linux-x64]
-checksum = "sha256:a6c213b7a2c3b8b9c0aaf8d7f5b3a5c8d4e2f4a5b6c7d8e9f0a1b2c3d4e5f6a7"
-size = 23456789
-url = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-linux-x64.tar.xz"
-
-[[tools.python]]
-version = "3.11.7"
-backend = "core:python"
-specifiers = ["3.11"]
-
-[tools.python.platforms.linux-x64]
-checksum = "sha256:def456..."
-size = 12345678
-
-# 带有特定后端选项的工具
-[[tools.ripgrep]]
-version = "14.1.1"
-backend = "aqua:BurntSushi/ripgrep"
-options = { exe = "rg" }
-
-[tools.ripgrep.platforms.linux-x64]
-checksum = "sha256:4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e"
-size = 1234567
-
-```
-
-新的锁文件使用当前的版本化格式。未版本化的锁文件会被视为版本 0，并在普通更新期间保持该格式，以避免锁文件发生意外变动。运行 `mise lock --upgrade` 可有意升级旧版锁文件。版本 1 会在具体条目中记录每个原始工具请求解析到的结果，因此像 `"1"` 和 `"1.0.0"` 这样的重叠请求可以可靠地选择不同的锁定版本。
-
-### 平台信息
-
-工具的 `[tools.name.platforms]` 部分中的每个平台都使用类似 `"os-arch"` 的键格式（例如 `"linux-x64"`、`"macos-arm64"`），并且可以包含：
-
-- **`checksum`**（可选）：用于完整性验证的 SHA256 或 Blake3 哈希
-- **`size`**（可选）：用于下载校验的文件大小（字节）
-- **`url`**（可选）：原始下载 URL，用于参考或重新下载
-
-### 工具条目字段
-
-每个工具条目（`[[tools.name]]`）可以包含：
-
-- **`version`**（必需）：工具的确切版本
-- **`backend`**（可选）：用于安装工具的后端（例如 `core:node`、`aqua:BurntSushi/ripgrep`）
-- **`specifiers`**（版本 1）：解析到此版本和选项变体的原始请求
-- **`options`**（可选）：用于标识制品的特定后端选项（例如 `{exe = "rg", matching = "musl"}`）
-- **`platforms`**（可选）：特定平台的元数据（校验和、URL、大小）
-
-当工具的制品标识不仅取决于平台键时，同一版本可以有多个条目。例如，Swift 会针对不同发行版发布不同的 Linux tarball，因此其条目会记录各自对应的发行版：
-
-```toml
-[[tools.swift]]
-version = "6.3.1"
-backend = "core:swift"
-options = { swift_platform = "ubuntu24.04" }
-
-[[tools.swift]]
-version = "6.3.1"
-backend = "core:swift"
-options = { swift_platform = "fedora39" }
-```
-
-条目会根据选项进行精确匹配，因此机器只会根据为其自身发行版编写的条目进行验证。设置 `swift.platform`，可以让每台 Linux 机器解析到相同的制品，并提交它生成的条目。如果某个平台的制品并未由工具发布——例如 `ubi9` 没有 arm64 构建版本——则该平台会被报告为已跳过，而不是被锁定。
-
-### 平台键
-
-平台键的格式通常为 `os-arch`，但可以由后端自定义：
-
-- **标准格式**：`linux-x64`、`macos-arm64`、`windows-x64`
-- **后端特定**：某些后端（如 Java）可能使用更具体的平台标识符
-- **工具特定**：像 `ubi` 这样的后端可能会在平台键中包含额外的工具特定信息。
-
-## 环境特定锁文件
-
-当使用[环境特定配置文件](/configuration/environments)（例如 `mise.test.toml`）时，每个环境都有自己的锁文件：
-
-| 配置文件               | 锁文件                  |
-| ---------------------- | ---------------------- |
-| `mise.toml`            | `mise.lock`            |
-| `mise.test.toml`       | `mise.test.lock`       |
-| `mise.staging.toml`    | `mise.staging.lock`    |
-| `mise.local.toml`      | `mise.local.lock`      |
-| `mise.test.local.toml` | `mise.test.local.lock` |
-
-例如，在 `MISE_ENV=test` 时：
+For a personal default across projects, use:
 
 ```sh
-MISE_ENV=test mise lock  # 创建 mise.lock 和 mise.test.lock
+mise settings set lockfile=true
 ```
 
-`mise.toml` 中的工具会进入 `mise.lock`，`mise.test.toml` 中的工具会进入 `mise.test.lock`。
+When the setting is unset, mise updates existing lockfiles but does not create
+new ones automatically. `MISE_LOCKFILE=1` retains that existing-file behavior for
+compatibility; it is not equivalent to explicitly configuring `lockfile = true`
+in TOML. Global lockfiles are created only with `mise lock --global`.
 
-**解析**：当 `MISE_ENV=test` 时，mise 会为在 `mise.test.toml` 中定义的工具读取 `mise.test.lock`，并为 `mise.toml` 中的工具读取 `mise.lock`。环境特定锁文件严格限定于其对应的配置——它们只包含该配置中定义的工具。
+## Updating tools {#workflow}
 
-这种设计意味着未设置 `MISE_ENV` 的 CI 环境只依赖 `mise.lock`，因此 `mise.dev.lock` 中的开发工具版本升级不会使 CI 缓存失效。
+### Initial setup
 
-`mise.lock` 和 `mise.<env>.lock` 文件都应提交到版本控制。`mise.local.lock` 和 `mise.<env>.local.lock` 应与其对应的配置文件一起加入 gitignore。
+Run `mise lock`, then `mise install --locked`, as shown in the
+[quick start](#overview).
 
-## 全局锁文件
+### Daily usage
 
-在全局配置（`~/.config/mise/config.toml`）中声明的工具永远不会由普通的 `mise lock` 锁定，普通的 `mise lock` 只会针对活动项目配置根目录。请使用 `mise lock --global`：
+Run `mise install` to install the recorded versions, or `mise install --locked`
+to require complete entries for supported backends. Use `mise upgrade` to
+install newer versions within the configured ranges and update the lockfile.
+
+### Updating versions
+
+To change a request in `mise.toml` and install it:
 
 ```sh
-mise lock --global              # update global (and system) config lockfiles
-```
-
-::: tip
-当你的全局配置是指向 dotfiles 仓库的符号链接时也同样适用，例如
-`~/.config/mise/config.toml` -> `~/dotfiles/mise.toml`。mise 会通过两条路径访问同一个文件，并将其视为全局配置，因此在仓库中运行 `mise lock` 会报告项目作用域中未配置任何内容。请改用 `mise lock --global`；锁文件会写入符号链接目标文件旁边（`~/dotfiles/mise.lock`）。
-:::
-
-## 本地锁文件
-
-在 `mise.local.toml` 中定义的工具（通常会被 gitignore）会使用单独的 `mise.local.lock` 文件。这使本地工具配置与已提交的锁文件分离开来。
-
-```sh
-# mise.local.toml 中的工具会写入 mise.local.lock
-mise use --path mise.local.toml node@22
-
-# 常规的 mise.toml 中的工具会写入 mise.lock
-mise use --path mise.toml node@20
-```
-
-使用 `mise lock --local` 来为所有平台更新本地锁文件：
-
-```sh
-mise lock --local              # 更新 mise.local.lock
-mise lock --local node python  # 更新 mise.local.lock 中的特定工具
-```
-
-## 单仓库
-
-当 `monorepo_root = true` 时，mise 可以在单仓库根目录使用单个锁文件。设置 `[monorepo] lockfile = true` 可启用根锁文件变体，例如 `mise.lock`、`mise.ci.lock` 和 `mise.local.lock`。
-
-现有的子项目锁文件会在下一次感知锁文件的命令中迁移到根锁文件中。将其取消设置（unset）会在迁移期间保留每个子项目各自的锁文件。使用 `mise*.lock` 文件的单仓库将在 mise `2026.12.0` 中开始出现警告，并且取消设置会在 mise `2027.6.0` 中默认改为根锁文件。较旧版本的 mise 无法理解子项目拥有工具的这种布局，因此需要兼容多版本的项目可以固定为旧行为：
-
-```toml
-[monorepo]
-lockfile = false
-```
-
-详情请参见 [单仓库任务](/tasks/monorepo.html#lockfiles)。
-
-## 严格锁文件模式
-
-`locked` 设置会强制要求所有工具在安装前都已在锁文件中预先解析好 URL。这可以阻止对 GitHub、aqua registry 等的 API 调用，从而确保安装过程完全可复现。
-
-```sh
-# 启用严格模式
-mise settings locked=true
-
-# 或通过环境变量
-MISE_LOCKED=1 mise install
-```
-
-::: warning
-所有 mise 设置的作用域都是全局的。在项目的 `mise.toml` 中设置 `locked = true` 会应用于**所有**工具解析，包括来自全局 `~/.config/mise/config.toml` 的工具。如果你看到有关全局工具缺少锁文件条目的警告，请运行 `mise lock -g` 来生成全局锁文件。
-:::
-
-若要仅对由某个配置根目录声明的工具强制执行严格模式，请使用
-`tool_config.locked`，而不是对整个调用生效的设置：
-
-```toml
-[tool_config]
-locked = true
-
-[tools]
-node = "24"
-```
-
-此策略归属于包含该工具的配置根目录：由 `mise.toml`、
-`mise.local.toml` 以及与该根目录共享的其他配置文件声明的工具，都必须存在于各自的锁文件中。从全局配置根目录或父级配置根目录继承的工具则保留其自身的策略。`--locked`、`MISE_LOCKED=1` 和 `[settings] locked = true`
-仍会应用于整个活动工具集。
-
-启用后，如果某个工具在锁文件中没有当前平台对应的 URL，`mise install` 将失败。要修复此问题，请先使用 URL 填充锁文件：
-
-```sh
-mise lock                    # 为所有平台生成 URL
-mise lock --platform linux-x64,macos-arm64  # 或指定平台
-```
-
-该检查只涵盖能够记录 URL 的后端。`asdf`、`cargo`、`gem`、`go`、`npm`、`pipx`、`ubi`、`core:dotnet`、`core:rust` 和 `core:swift` 通过外部工具安装，或在安装时解析其下载内容；vfox _backend_ 插件目前也无法报告 URL，因此严格模式会跳过它们而不是失败——混合使用这些后端与可锁定工具的配置仍然可以安装。vfox _tool_ 插件会记录 URL，并像其他可锁定后端一样接受检查。从[工具存根](/dev-tools/tool-stubs)解析的工具也会被跳过。有关各后端记录的内容，请参见[后端支持](#backend-support)。
-
-这对于 CI 环境很有用，可以确保可复现构建，同时不依赖任何外部 API。
-
-## 工作流
-
-### 初始设置
-
-```sh
-# 生成锁文件
-mise lock
-
-# 使用锁定的版本安装工具
-mise install
-```
-
-### 日常使用
-
-```sh
-# 从锁文件安装精确版本
-mise install
-
-# 更新工具和锁文件
-mise upgrade
-```
-
-### 更新版本
-
-当你想更新工具版本时：
-
-```sh
-# 在 mise.toml 中更新工具版本
 mise use node@26
-
-# 这将同时更新安装和 mise.lock
 ```
 
 ### 更新锁定版本
@@ -314,7 +134,8 @@ mise lock node@22.15.0      # 仅更新 mise.lock，不重新安装
 
 ## 带锁文件的命令行为
 
-下表显示了每个命令如何与 `mise.toml` 和 `mise.lock` 交互：
+These commands update an existing lockfile. Automatic creation follows the
+[`lockfile` setting](#enabling-lockfiles); `mise lock` creates one explicitly.
 
 | 命令                        | 安装   | 更新 `mise.toml`                    | 更新 `mise.lock`                         |
 | --------------------------- | ------ | ----------------------------------- | ---------------------------------------- |
@@ -330,69 +151,469 @@ mise lock node@22.15.0      # 仅更新 mise.lock，不重新安装
 | `mise lock --bump`          | 否     | 否                                  | 是（将选择器重新解析为最新版本）         |
 | `mise lock node@22.15.0`    | 否     | 仅当版本不匹配前缀时                | 是                                       |
 
-**要点：**
+## Strict Lockfile Mode
 
-- **`mise use`** 用于更改配置中所需的版本——它总是会写入 `mise.toml`
-- **`mise install`** 安装配置中的内容，但不会修改配置——`mise install node` 安装配置中的 node 版本并更新锁文件，而 `mise install node@22.15.0` 是一次性安装，不会更新锁文件
-- **`mise upgrade`** 在配置的版本范围内升级工具并更新锁文件——传入 `tool@version` 可指定目标版本
-- **`mise lock`** 重新生成锁文件条目，但不会进行安装——传入 `tool@version` 可固定特定版本，而 `--bump` 会将模糊选择器推进到最新匹配版本。
+Use `mise install --locked` in CI to catch missing lock entries instead of
+silently resolving them. For backends with URL-based locking, the entry must
+include a download URL for the current platform. For entries that record
+dependency graphs, those graphs must be present and match their recorded digest.
+Version-only lockfiles remain supported; revision-2 embedded-aube and uv installs
+require dependency graphs as described below.
+
+Locked mode does not make installation offline, and its checks depend on the
+backend. See [backend support](#backend-support).
+
+```sh
+# Enable strict mode
+mise settings set locked=true
+
+# Or via environment variable
+MISE_LOCKED=1 mise install
+```
+
+### Locking selected scopes
+
+By default, invocation-wide locked mode applies to project, user-global, and
+system config. Use `locked_scopes` to exclude config scopes that intentionally
+contain rolling or distribution-managed tools:
+
+```toml
+# In ~/.config/mise/config.toml or /etc/mise/config.toml
+[settings]
+locked = true
+locked_scopes = ["project"]
+```
+
+Valid scopes are `project`, `global`, and `system`. Explicit tool arguments and
+environment-supplied tool versions remain locked because they do not belong to
+a config scope. Excluding a scope relaxes locked mode for that scope; mise still
+uses an existing lockfile when one is present. If global tools should be locked
+and are missing from the lockfile, run `mise lock -g` to generate the global
+lockfiles. `locked_scopes` is global-only so project configuration cannot weaken
+a user's locked-mode policy.
+
+### Locking one configuration root
+
+To enforce strict mode only for tools declared by one config root, use
+`tool_config.locked` instead of the invocation-wide setting:
+
+```toml
+[tool_config]
+locked = true
+
+[tools]
+node = "24"
+```
+
+This policy belongs to the containing config root: tools declared by `mise.toml`,
+`mise.local.toml`, and other configs sharing that root must be present in their
+respective lockfiles. Tools inherited from global or parent config roots keep
+their own policy. A config-root policy remains enforced even when its scope is
+excluded from `locked_scopes`.
+
+### Preparing platform entries
+
+For URL-lockable backends, populate entries for the platforms that will install
+the tools:
+
+```sh
+mise lock                    # refresh existing platforms, or the default set for a new file
+mise lock --platform linux-x64,macos-arm64  # or specific platforms
+```
+
+URL checks skip backends that cannot record a download URL: `asdf`, `cargo`,
+`gem`, `go`, `npm`, `pypi`/`pipx`, `ubi`, `core:dotnet`, `core:rust`,
+`core:swift`, and vfox backend plugins. This exemption is specific to artifact
+URLs; npm and PyPI dependency graphs have their own locked-install checks.
+vfox tool plugins can record URLs and participate in URL locking.
+Tools resolved from a [tool stub](/dev-tools/tool-stubs) also skip URL checks.
+
+## Dependency graphs
+
+Version 2 lockfiles can lock a CLI's transitive dependencies as well as its
+top-level version. The native package-manager files live in
+[sidecar directories](#native-dependency-sidecars), referenced by path and digest
+from `mise.lock`.
+
+### npm tools
+
+mise's embedded aube installer records and replays npm dependency graphs.
+Other npm installers have different limitations; see the
+[npm backend](./backends/npm.md).
+
+For an npm tool, `mise lock --bump <tool>` refreshes the transitive graph even when
+the top-level package version does not change. Frozen installs validate and replay
+that graph. Its file-byte digest is part of the installation directory name, so two
+projects can use different transitive graphs for the same top-level version. This
+selection guarantee does not make lifecycle-script output reproducible.
+
+### Python dependency graphs
+
+With uv >= 0.12.10 installed, `mise lock` records dependencies and wheel hashes;
+`mise install --locked` replays them without resolution or source builds. Use
+`mise lock --bump pypi:black` to refresh Black's dependencies independently of its
+top-level version. See [PyPI tools](./backends/pypi.md#dependency-locking) for
+interpreter selection, supported indexes, and compatibility limitations.
+
+## Native dependency sidecars
+
+Commit the sidecar directory alongside `mise.lock`. Each graph has its own directory:
+
+```text
+mise.lock
+.mise/locks/pypi-black/24.10.0/pyproject.toml
+.mise/locks/pypi-black/24.10.0/uv.lock
+.mise/locks/npm-prettier/3.3.3/package.json
+.mise/locks/npm-prettier/3.3.3/aube-lock.yaml
+```
+
+The corresponding entry contains a relative path and a SHA-256 digest of the native
+lockfile's exact bytes:
+
+```toml
+[[tools."pypi:black"]]
+version = "24.10.0"
+backend = "pypi:black"
+uv = { path = ".mise/locks/pypi-black/24.10.0", digest = "sha256:…" }
+```
+
+### Sidecar locations
+
+The directory follows your configuration layout: `.mise/mise.lock` uses
+`.mise/locks/`, and both `.config/mise/mise.lock` and `.config/mise.lock` use
+`.config/mise/locks/`. Option variants have a hash suffix. Once recorded, a path
+stays unchanged when other variants are added. Directory names follow the tool
+spelling: `pypi:black` uses `pypi-black`, while `pipx:black` uses `pipx-black`.
+Explicit `mise lock` and generate-mode auto-lock saves remove unreferenced sidecar
+directories. Merge-mode auto-lock saves write sidecars but never delete them.
+In a monorepo, sidecars follow the root lockfile layout; a subproject's configuration
+layout does not affect their location. Successful migration removes legacy sidecars.
+
+Non-default lockfile names have separate subdirectories. For example,
+`mise.local.lock` uses `.mise/locks/mise.local/` in a root configuration layout.
+If you ignore the local lockfile in Git, also ignore that matching sidecar directory.
+Cleanup never removes another lockfile's sidecars.
+
+### Inspecting and editing sidecars
+
+Tools that recognize `pyproject.toml` and `uv.lock`, such as Renovate, can inspect
+these native Python projects. Configure their repository scope to include the
+sidecar directories. `aube-lock.yaml` is aube's native format; it is not an npm
+`package-lock.json` and scanners may not recognize its transitive dependencies.
+
+After editing a sidecar, run `mise lock` to validate it and update the recorded
+digest. Then run `mise install --locked`. Even formatting-only edits change the
+digest and installation identity.
+
+Ordinary `mise install` also accepts valid edits when an installation is needed
+and updates the digest through auto-locking. If the recorded installation already
+exists, it skips graph validation and only warns if the graph file is missing.
+`mise install --locked` rejects an inconsistent digest.
+
+Run `mise lock` to regenerate a missing or unreadable sidecar; the tool must be
+configured and its installer available. Locked installation fails when a required
+sidecar is missing.
+
+Ordinary environment resolution uses the recorded digest without opening
+sidecars. Python graphs retain all wheel targets for portability; separate files
+keep this detail out of the top-level version-pin diff.
+
+## Complete lockfile generation
+
+The default `merge` mode updates entries as tools are installed. To try the
+new generator, which rebuilds the complete lockfile from current requests and
+reuses unchanged artifacts:
+
+```toml [mise.toml]
+[settings]
+lockfile_mode = "generate"
+```
+
+Run `mise lock` first, or also set `lockfile = true` to create lockfiles
+automatically. `lockfile_mode` alone does not enable automatic creation.
+
+During installation, a `lock` progress bar tracks background metadata downloads,
+hashing, and verification. The first run can download artifacts for other
+platforms; subsequent runs reuse unchanged entries. This helps reduce
+cross-platform lockfile churn.
+
+Use `MISE_LOCKFILE_MODE=generate` to try generation for one command. Set
+`lockfile_mode = "merge"` to switch back; no format migration is needed.
+The default remains `merge` pending a maintainer review of trial feedback
+before mise 2026.12.0.
+
+## How It Works
+
+mise matches each configured request against its lock entry, including the
+backend and tool options. Supported backends also verify downloaded artifacts
+against recorded checksums.
+
+`mise lock` includes tools declared in tasks, inherited templates, and included
+task files. It reads those definitions without running tasks, hooks, or tool
+installers, so task tools can be locked before their first execution. Entries
+belong to the lockfile for the config that owns the task.
+
+### Configuration precedence {#runtime-resolution}
+
+Runtime command-line requests that read lockfiles use the lockfile belonging to
+the effective tool configuration.
+If a project defines `hk`, it overrides the global `hk` definition, including its
+lockfile pins. A missing matching project entry falls back to normal unlocked
+resolution, not an overridden pin. If the project does not define `hk`, the
+inherited definition and its lockfile remain available.
+
+In locked mode, a missing matching entry is an error even for read-only lookups
+such as `mise which hk --tool hk@latest` and even when the tool is already installed.
+Commands that intentionally bypass lockfiles, such as `mise exec hk@latest`,
+retain that behavior.
+
+Reading a configuration's pin does not make a command-line override part of that
+configuration. For example, `mise exec node@24` does not replace the pin for a
+project configured with `node = "22"`. Use `mise use` or `mise upgrade` to make an
+intentional update. Environment-variable version overrides retain their existing
+lockfile lookup behavior.
+
+`mise which --tool` warns when the effective source has no matching pin but an
+overridden configuration's lockfile does. This includes global, parent-project,
+and environment-specific definitions. An unrelated lockfile containing a match
+is not enough: that lower-precedence configuration must actually define the tool.
+A matching effective pin produces no override warning.
+
+## Environment-Specific Lockfiles
+
+When using [environment-specific configuration files](/configuration/environments) (e.g., `mise.test.toml`), each environment gets its own lockfile:
+
+| Config file            | Lockfile               |
+| ---------------------- | ---------------------- |
+| `mise.toml`            | `mise.lock`            |
+| `mise.test.toml`       | `mise.test.lock`       |
+| `mise.staging.toml`    | `mise.staging.lock`    |
+| `mise.local.toml`      | `mise.local.lock`      |
+| `mise.test.local.toml` | `mise.test.local.lock` |
+
+For example, with `MISE_ENV=test`:
+
+```sh
+MISE_ENV=test mise lock  # creates mise.lock AND mise.test.lock
+```
+
+Tools from `mise.toml` go to `mise.lock`, and tools from `mise.test.toml` go to `mise.test.lock`.
+
+**Resolution**: When `MISE_ENV=test`, mise reads `mise.test.lock` for tools defined in `mise.test.toml` and `mise.lock` for tools in `mise.toml`. Environment-specific lockfiles are strictly scoped to their corresponding config — they only contain tools defined in that config.
+
+This design means CI environments that don't set `MISE_ENV` only depend on `mise.lock`, so dev tool version bumps in `mise.dev.lock` won't invalidate CI caches.
+
+Both `mise.lock` and `mise.<env>.lock` files should be committed to version control. `mise.local.lock` and `mise.<env>.local.lock` should be gitignored alongside their corresponding config files.
+
+## Global Lockfiles
+
+Tools declared in the global config (`~/.config/mise/config.toml`) are never locked by a
+plain `mise lock`, which only targets the active project config root. Use `mise lock --global`:
+
+```sh
+mise lock --global              # update global (and system) config lockfiles
+```
+
+::: tip
+This also applies when your global config is a symlink into a dotfiles repo, for example
+`~/.config/mise/config.toml` -> `~/dotfiles/mise.toml`. mise reaches the same file through
+both paths and treats it as the global config, so `mise lock` run from the repo reports that
+nothing is configured in project scope. Run `mise lock --global` instead; the lockfile is
+written next to the symlink target (`~/dotfiles/mise.lock`).
+:::
+
+## Local Lockfiles
+
+Tools defined in `mise.local.toml` (which is typically gitignored) use a separate `mise.local.lock` file. This keeps local tool configurations separate from the committed lockfile.
+
+```sh
+# mise.local.toml tools go to mise.local.lock
+mise use --path mise.local.toml node@22
+
+# Regular mise.toml tools go to mise.lock
+mise use --path mise.toml node@20
+```
+
+Use `mise lock --local` to update the local lockfile for all platforms:
+
+```sh
+mise lock --local              # update mise.local.lock
+mise lock --local node python  # update specific tools in mise.local.lock
+```
+
+## Monorepos
+
+When `monorepo_root = true`, mise can use a single lockfile at the monorepo root. Set `[monorepo] lockfile = true` to opt into root lockfile variants such as `mise.lock`, `mise.ci.lock`, and `mise.local.lock`.
+
+Existing subproject lockfiles are migrated into the root lockfile on the next lock-aware command. Leaving the setting unset keeps per-subproject lockfiles during the rollout. Monorepos using `mise*.lock` files start warning in mise `2026.12.0`, and the unset default switches to root lockfiles in mise `2027.6.0`. Older mise versions do not understand this layout for subproject-owned tools, so projects that need mixed-version compatibility can pin the old behavior:
+
+```toml
+[monorepo]
+lockfile = false
+```
+
+See [Monorepo Tasks](/tasks/monorepo.html#lockfiles) for details.
+
+## File Format
+
+The lockfile is TOML. This abbreviated example shows how a request is bound to
+a version and how artifact metadata is stored for one platform. Generate the
+entries your project needs with `mise lock` rather than copying this excerpt.
+
+```toml [mise.lock]
+lockfile_version = 2
+
+[[tools.node]]
+version = "26.8.1"
+backend = "core:node"
+specifiers = ["26.8.1"]
+
+[tools.node."platforms.macos-arm64"]
+checksum = "sha256:6e577fd0d9db776db82306629e441a9dace416702622aebdd171c9dfaa41f4d2"
+url = "https://nodejs.org/dist/v26.8.1/node-v26.8.1-darwin-arm64.tar.gz"
+```
+
+New lockfiles use the current versioned format. Older lockfiles retain their format
+during ordinary updates to avoid making them unreadable by collaborators using an
+older mise. Run `mise lock --upgrade` to upgrade explicitly. Version 1 records each
+original tool request in the concrete entry it resolved to. Version 2 references native
+aube and uv dependency graphs in sidecar directories. Older mise versions reject version 2 lockfiles.
+
+### Platform Information
+
+A platform entry is written under a quoted key such as
+`[tools.node."platforms.macos-arm64"]`. The platform identifier is usually
+`os-arch`. Its metadata can include:
+
+- **`checksum`** (optional): SHA256 or Blake3 hash for integrity verification
+- **`size`** (legacy): File size in bytes; accepted when reading older lockfiles but omitted by the current writer
+- **`url`** (optional): Artifact download URL
+- **`url_api`** (optional): API download URL, for sources that require authenticated asset requests
+- **`provenance`**: Verification method successfully used for the artifact
+- **`signer`** and **`attested_by`**: Packslip identity commitments
+
+### Tool Entry Fields
+
+Each tool entry (`[[tools.name]]`) can contain:
+
+- **`version`** (required): The exact version of the tool
+- **`backend`** (optional): The backend used to install the tool (e.g., `core:node`, `aqua:BurntSushi/ripgrep`)
+- **`specifiers`** (version 1 and newer): Original requests that resolve to this version and option variant
+- **`options`** (optional): Backend-specific options that identify the artifact (e.g., `{exe = "rg", matching = "musl"}`)
+- **`platforms`** (optional): Platform-specific metadata (checksums, URLs, sizes)
+- **`aube`** (version 2, npm only): `{ path, digest }` reference to an embedded-aube sidecar directory
+- **`uv`** (version 2, Python tools): `{ path, digest }` reference to a uv sidecar directory
+
+A tool can have several entries for the same version when its artifact identity
+depends on more than the platform key. Swift, for example, publishes a different
+Linux tarball per distro, so its entries record which one they describe:
+
+```toml
+[[tools.swift]]
+version = "6.3.1"
+backend = "core:swift"
+options = { swift_platform = "ubuntu24.04" }
+
+[[tools.swift]]
+version = "6.3.1"
+backend = "core:swift"
+options = { swift_platform = "fedora39" }
+```
+
+Entries are matched on options exactly, so a machine only verifies against the
+entry written for its own distro. Pin `swift.platform` to make every Linux
+machine resolve the same artifact, and commit the entry it produces. A platform
+whose artifact the tool doesn't publish — `ubi9` has no arm64 build, for
+instance — is reported as skipped rather than locked.
+
+### Platform Keys
+
+The platform key format is generally `os-arch` but can be customized by backends:
+
+- **Standard format**: `linux-x64`, `macos-arm64`, `windows-x64`
+- **Backend-specific**: Some backends like Java may use more specific platform identifiers
+- **Tool-specific**: Backends like `ubi` may include additional tool-specific information in the platform key
 
 ## 后端支持
 
-锁文件功能的后端支持情况各不相同：
+Inspect the generated entry for the actual tool and platform. Support varies
+by backend, tool options, and whether a release uses a precompiled artifact or a
+source build:
 
-- ✅ **完全支持**（版本 + 校验和 + 大小 + URL）：`aqua`、`http`、`github`、`gitlab`
-  - _来源支持_：`aqua`、`github`、`core:python`（预编译二进制文件）、`core:ruby`（预编译二进制文件）、`core:zig`（安装时）
-- ⚠️ **部分支持**（版本 + URL + 来源）：`vfox`（仅工具插件）
-- ⚠️ **部分支持**（版本 + 校验和 + 大小）：`ubi`
-- 📝 **基础支持**（版本 + 校验和）：`core`（部分工具）
-- 📝 **仅版本**：`asdf`、`npm`、`cargo`、`pipx`
-- 📝 **计划中**：随着时间推移，更多后端将添加完整的资产跟踪支持。
+| Backend family                                                      | What to expect                                                                                                                |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Download backends such as aqua, GitHub/GitLab/Forgejo, HTTP, and S3 | Platform artifact metadata where the source supplies it or mise can compute it                                                |
+| Packslip                                                            | Signed artifact information and signer commitments; policy is checked at installation                                         |
+| Built-in languages                                                  | Tool-specific support; Node, Python, and Ruby have artifact-resolution paths, while external installers have different limits |
+| npm (embedded aube) and PyPI (uv)                                   | Version 2 sidecars record transitive dependencies; see [dependency graphs](#dependency-graphs)                                |
+| Other language package installers                                   | Top-level versions only; transitive dependencies and build inputs are not fully locked                                        |
+| vfox tool plugins                                                   | Download URLs from plugin hooks can participate in strict URL locking                                                         |
+| asdf and vfox backend plugins                                       | No strict URL-lock requirement; plugin execution still determines installation                                                |
+
+A `provenance` field and a cryptographically verified provenance result are
+separate states. See [provenance and security](#provenance-and-security) before
+using lockfile metadata as evidence of verification.
 
 ## 最佳实践
 
 ### 版本控制
 
+Commit the project configuration and lockfile together when changing requests:
+
 ```sh
-# 始终提交 lockfile
-git add mise.lock
-git commit -m "更新工具版本"
+git add mise.toml mise.lock
+# Also stage the dependency sidecar directory if one was generated.
+git commit -m "chore: update development tools"
 ```
 
-### 团队工作流程
+Commit environment lockfiles alongside their shared configs. Keep `.local`
+variants out of version control. Review changes to artifact URLs, backend options,
+and verification metadata as well as version numbers.
 
-1. **团队负责人**：使用新的版本范围更新 `mise.toml`
-2. **团队负责人**：运行 `mise install` 以更新 `mise.lock`
-3. **团队负责人**：提交这两个文件
-4. **团队成员**：拉取更改并运行 `mise install` 以获取精确版本
+### Team workflow
+
+After updating tools, review the configuration, lockfile, and sidecar diffs.
+Run `mise install --locked` and the project's checks before committing.
+Teammates use the same install command after pulling.
 
 ### CI/CD
 
-```yaml
-# GitHub Actions 示例
-- name: 安装工具
-  run: |
-    mise install  # 使用来自 mise.lock 的精确版本
+After checking out the repository and installing mise, use:
 
-- name: 缓存 lockfile
-  uses: actions/cache@v5
-  with:
-    key: mise-lock-${{ hashFiles('mise.lock') }}
+```yaml
+- name: Install locked tools
+  run: mise install
+  env:
+    MISE_LOCKED: "1"
 ```
 
-## 故障排查
+Prepare entries for the runner's platform before committing the lockfile. If you
+use [`jdx/mise-action`](https://github.com/jdx/mise-action), it also provides tool
+installation and caching; keep the lockfile in the checkout used by the action.
+A cache speeds up installation but does not replace the lockfile or its checks.
+
+## Troubleshooting
 
 ### 重新生成校验和
 
-如果校验和失效，或者你需要重新生成它们：
+A checksum mismatch means the downloaded bytes differ from the recorded artifact.
+First check the tool, platform, URL, and backend options in the error and lockfile.
+A vendor may have replaced an asset, a mirror may be serving different content,
+or the entry may describe another build.
+
+After verifying an intentional upstream change, refresh only the affected tool's
+metadata and review the diff:
 
 ```sh
-# 移除所有工具并重新安装
-mise uninstall --all
-mise install
+mise lock node
+git diff -- mise.lock
 ```
 
-### Ruby 预编译构建修订版发布
+Replace `node` with the affected tool. Do not delete checksums or uninstall every
+tool to bypass the failure. If the new artifact is unexpected, keep the existing
+lockfile and investigate the release source before accepting new bytes.
+
+### Ruby Precompiled Build Revision Releases
 
 同一个 Ruby 版本的预编译 Ruby 二进制文件可能会有构建修订版发布。锁文件保留 `version = "3.3.11"`，但会在平台 `url` 中固定所选的构建修订版：
 
@@ -406,9 +627,10 @@ url = "https://github.com/jdx/ruby/releases/download/3.3.11-1/ruby-3.3.11.x86_64
 
 在合并具有不同锁文件的分支时：
 
-1. 解决 `mise.lock` 中的冲突
-2. 运行 `mise install` 验证一切是否正常
-3. 提交已解决的锁文件
+1. Resolve the intended version requests in configuration first.
+2. Resolve lockfile conflicts while preserving the corresponding request bindings
+   and platform entries. Run `mise lock` to refresh metadata and inspect its diff.
+3. Run `mise install` and the relevant project checks, then commit the result.
 
 ### 为特定项目禁用
 
@@ -418,38 +640,27 @@ url = "https://github.com/jdx/ruby/releases/download/3.3.11-1/ruby-3.3.11.x86_64
 lockfile = false
 ```
 
-## 从其他工具迁移
+## Provenance and Security
 
-### 从 asdf
+For supported backends, `mise lock` records verified provenance such as SLSA,
+Cosign, Minisign, or GitHub attestations. New provenance is cryptographically
+verified against the artifact for each target platform before it is recorded.
+Existing `provenance_verified` values are preserved as inert compatibility
+metadata for unchanged artifacts; mise no longer reads or adds this flag.
 
-```sh
-# 将 .tool-versions 转换为 mise.toml
-mise config generate
-
-# 启用锁文件并生成锁文件
-mise settings lockfile=true
-mise lock
-mise install
-```
-
-### 从 package.json engines
-
-```sh
-# 根据 package.json 设置版本
-mise use node@$(jq -r '.engines.node' package.json)
-```
-
-## 溯源与安全
-
-当 `mise lock` 生成锁文件时，如果可用，它会为每个工具记录一种已验证的溯源类型（例如 `slsa`、`cosign`、`minisign`、`github-attestations`）。对于**当前平台**，mise 会下载制品，并在锁定时执行完整的加密验证——确保锁文件中的溯源条目基于实际验证，而不仅仅是注册表元数据。这同时适用于 aqua 和 github 两种后端。对于跨平台条目，溯源会从注册表元数据中检测出来，但不会进行验证（因为该制品在当前机器上可能无法运行）。
-
-默认情况下，当 `mise install` 看到一个同时包含校验和和已验证溯源条目的锁文件时，它会信任该锁文件并跳过重新验证。这样可以避免重复的 API 调用（例如 GitHub 证明查询），这些调用在 CI 中可能导致速率限制问题。由于当前平台的溯源已经在 `mise lock` 期间完成了验证，因此这是安全的。
+During installation, a checksum plus recorded provenance can
+allow mise to skip repeating that provenance check. The lockfile is therefore a
+trust input: review it and obtain it from a trusted project source. Artifact
+checksum verification still applies. A provenance field alone is not proof that
+the bytes were verified.
 
 如果启用了 GitHub Artifact Attestations，但 GitHub API 确认对于某个带校验和的制品不存在任何证明，mise 可能会记录 `github_attestations = "unavailable"`。这是一条负缓存条目，不是溯源：它只会在之后从该锁文件安装时跳过重复的 GitHub 证明探测。其他验证路径，例如 SLSA、Cosign、Minisign 和校验和验证，仍会像往常一样运行。
 
-GitHub 的文档展示了如何使用 [`actions/attest`](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations#generating-build-provenance-for-binaries) 从已有的制品路径生成二进制证明，而 REST API 则会按[主体摘要](https://docs.github.com/en/rest/orgs/attestations#list-attestations)列出证明。这意味着证明可能会在发布资产上传之后才出现。之后再运行一次 `mise lock`，或者执行 `MISE_LOCKED_VERIFY_PROVENANCE=1 mise install`，就可以发现那些在锁文件记录为不可用之后才添加的证明。
+Attestations can be published after a release asset. Run `mise lock` again or
+use `MISE_LOCKED_VERIFY_PROVENANCE=1 mise install` to discover attestations
+added after they were recorded as unavailable.
 
-为了增强安全性，你可以在每次安装时强制重新验证溯源：
+For additional security, you can force provenance re-verification on every install:
 
 ```toml
 [settings]
@@ -469,24 +680,68 @@ MISE_LOCKED_VERIFY_PROVENANCE=1 mise install
 paranoid = true
 ```
 
-启用后，每次 `mise install` 都会进行加密溯源验证，而不管锁文件中包含什么，从而确保该制品是由受信任的 CI 流水线构建的。
+When enabled, supported verification paths run again for artifacts being
+installed instead of trusting a previous lockfile verification result. This does
+not create provenance for releases that never published it, and an already
+installed tool may not be downloaded again. It is separate from Packslip signer
+and signed-list policy.
 
 ## 最小发布年龄
 
-除了锁定文件之外，mise 还使用 [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 设置，通过仅安装已发布达到最短时间的版本来降低供应链风险。其默认值为 `24h`：
+In addition to lockfiles, mise uses the [`minimum_release_age`](/configuration/settings.html#minimum_release_age) setting to limit supply chain risk by installing only versions that have been available for a minimum amount of time. It defaults to `24h`:
 
 ```toml
 [settings]
 minimum_release_age = "7d"  # 覆盖默认的 24h 延迟
 ```
 
-这与锁定文件配合得很好——使用 `minimum_release_age` 来避免获取全新的发布版本，并使用锁定文件来固定你已经审核过的确切版本。
+This pairs well with lockfiles — use `minimum_release_age` to avoid picking up brand-new releases,
+and lockfiles to pin the exact versions you've vetted. Once a version is selected from `mise.lock`,
+installation does not reapply the age cutoff; the committed selection remains reproducible even
+while the release is still inside the cooling window. This exemption covers the locked top-level
+version, not unpinned transitive dependencies resolved during installation.
 
 此设置会对提供发布时戳的后端的顶层模糊版本解析进行过滤。
 默认情况下，不带时戳的版本也会被包含。
 
-目前只有 `npm:` 和 `pipx:` 会在安装期间将相同的截止时间传递到传递依赖解析中。
-其他后端可能会选择较旧的顶层工具版本，但它们不会约束由工具的安装器/编译器获取的依赖项。
+Only `npm:` and `pypi:` (also available as `pipx:`) currently forward the same cutoff into transitive
+dependency resolution during install, including when the top-level version comes from a lockfile.
+For frozen dependency graphs, the cutoff applies when resolving the graph; installation replays the
+committed dependencies without resolving them again. Other
+backends may select an older top-level tool version, but they do not constrain dependencies fetched by
+the tool's installer/compiler.
+
+## Migration from Other Tools
+
+### From asdf
+
+Preview importing an existing version file, then generate the configuration:
+
+```sh
+mise generate config --tool-versions .tool-versions --dry-run
+mise generate config --tool-versions .tool-versions --yes
+mise lock
+mise install
+```
+
+Use this in a project without an existing `mise.toml`, or review and merge the
+preview into the existing file. If teammates still use asdf, keep the shared
+`.tool-versions` consistent; see [asdf migration](/dev-tools/comparison-to-asdf.html).
+
+### From package.json engines
+
+`engines.node` commonly describes a compatibility range such as `>=22`, not an
+exact version request. Choose a supported Node.js release for the project, then
+lock it explicitly:
+
+```sh
+mise use node@24
+mise lock node
+```
+
+For automatic project discovery, mise reads the supported `devEngines` fields
+after [idiomatic version files](/lang/node.html#nvmrc-node-version-and-package-json-support)
+are enabled. Do not pass arbitrary npm range syntax directly to `mise use`.
 
 ## 另请参阅
 

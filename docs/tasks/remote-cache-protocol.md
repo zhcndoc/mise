@@ -1,10 +1,15 @@
+---
+description: "实现用于共享 mise 任务构建产物的远程缓存服务。"
+---
+
 # 远程构建缓存协议
 
 > [!WARNING]
-> Remote build caching is experimental. This document defines protocol version 1 for mise task
-> artifact caching.
+> 远程构建缓存仍处于实验阶段。本文档定义了 mise 任务构建产物缓存的协议版本 1。
 
-该协议是一种用于任务执行及其输出的安全、内容寻址缓存协议。它不会暴露 mise 的本地缓存目录、清单或归档格式。本地存储属于实现细节，可以使用归档或数据包，而无需改变远程协议。
+本页面面向远程缓存客户端或服务器的实现者。要为项目配置缓存，请从[任务缓存](./caching.html)开始。
+
+该协议定义了一个面向内容寻址的任务执行及其输出缓存。它不会公开 mise 的本地缓存目录、清单或归档格式。本地存储属于实现细节，可以使用归档或数据包，而无需更改远程协议。
 
 版本 1 存储不可变的构建数据：
 
@@ -36,9 +41,9 @@
 
 URL 前缀 `/v1` 是协议的主版本。兼容性新增功能会作为能力进行声明，无需新的 URL 前缀。不兼容的线路或完整性变更需要使用新的主协议；版本 1 不得作为不兼容实现的别名。
 
-服务器必须忽略未知的 JSON 响应字段。除非协商的能力允许，否则客户端不得发送未知的请求字段。
+服务器不得发送未知的 JSON 响应字段，客户端不得发送未知的请求字段，除非协商的能力允许这样做。
 
-GitHub Actions protected-branch `push` jobs and GitLab protected-branch push pipelines may use the configured write mode. Pull requests, tags/releases, unprotected branches, unknown CI systems, and local runs are restricted to reads; a configured write-only client disables its remote rather than silently broadening to read access.
+GitHub Actions 受保护分支的 `push` 作业和 GitLab 受保护分支的 push 流水线可以使用配置的写入模式。拉取请求、标签/发布版本、未受保护的分支、未知 CI 系统以及本地运行仅限读取；配置为仅写入的客户端会禁用其远程端，而不会静默扩展为读取权限。
 
 ## 摘要
 
@@ -195,7 +200,7 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 
 ## CAS 操作
 
-### 查找缺失的 blob
+### 查找缺失的 Blob
 
 `POST /v1/blobs:missing` 接受 `application/vnd.mise.cache-digests.v1+json`：
 
@@ -211,7 +216,7 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 
 服务器不得披露请求者可读命名空间或 CAS 可见性域之外是否存在对象。
 
-### 读取 blob
+### 读取 Blob
 
 `GET /v1/blobs/{algorithm}/{hash}/{size}` 在调用方可以读取对象时返回 `200 OK`，否则返回
 `404 Not Found`。响应包含 `Digest` 和 `Content-Length` 元数据。服务器可以支持
@@ -236,18 +241,18 @@ URL。重定向只能授予对所请求不可变对象的访问权限。客户�
 成功响应使用 `application/vnd.mise.cache-blob-pack.v1`，并以八字节 ASCII 魔数
 `MISEPK01` 开始。其余部分是按请求顺序排列的帧流：
 
-| Field     | Encoding                                    |
+| 字段      | 编码                                        |
 | --------- | ------------------------------------------- |
-| Algorithm | one byte: `1` for BLAKE3 or `2` for SHA-256 |
-| Hash      | raw 32-byte digest                          |
-| Size      | unsigned big-endian 64-bit byte length      |
-| Content   | exactly `size` bytes                        |
+| 算法      | 一个字节：`1` 表示 BLAKE3，`2` 表示 SHA-256 |
+| 哈希值    | 原始的 32 字节摘要                          |
+| 大小      | 无符号大端序 64 位字节长度                  |
+| 内容      | 恰好为 `size` 个字节                        |
 
-服务器会省略缺失和未经授权的 Blob，并且每个重复请求只输出一次。客户端会拒绝未请求或重复的帧，将每个帧流式传输到有界临时存储中，验证其完整摘要，然后才将其纳入本地 CAS。当能力不可用、摘要超过公布的数据包限制，或预期 Blob 被省略时，客户端会回退到普通的单 Blob 读取。数据包仅是传输优化；其帧格式不会改变 CAS 标识或操作语义。
+服务器会省略缺失和未授权的 Blob，并且每个重复请求只发送一次。客户端会拒绝未请求或重复的帧，将每个帧流式传输到有界临时存储中，验证其完整摘要，然后才将其加入本地 CAS。当不具备该能力、摘要超出公布的数据包限制，或预期 Blob 被省略时，客户端会回退到普通的单 Blob 读取。数据包仅是传输优化；其帧格式不会改变 CAS 标识或操作语义。
 
-### 上传 blob
+### 上传 Blob
 
-较小的 blob 可以直接通过
+较小的 Blob 可以直接通过
 `PUT /v1/blobs/{algorithm}/{hash}/{size}` 和 `If-None-Match: *` 发送。服务器返回：
 
 - 验证并发布新内容后返回 `201 Created`；

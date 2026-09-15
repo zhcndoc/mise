@@ -1,9 +1,20 @@
+---
+description: "声明和管理长期运行的 Docker Compose 项目"
+socialDescription: "声明和管理长期运行的 Docker Compose 项目"
+---
+
 # Docker Compose 项目
 
 `[bootstrap.compose]` 以声明方式管理长期运行的 Docker Compose
 项目，此过程发生在软件包、特权文件、目录和系统服务完成收敛之后。因此，它适用于自托管服务：其 Compose 文件、环境文件、Docker 安装以及守护进程生命周期均由同一份 bootstrap 配置管理。
 
+下面的示例针对 Debian/Ubuntu 主机，其软件仓库提供所列出的 Docker 软件包。使用服务的 Compose 模型创建 `infra/mise-cache/compose.yaml`，并在应用前提供两个已声明的机密输入。环境文件模板假设使用符合 Compose `.env` 格式的单行值；其他值请按该格式进行编码。
+
 ```toml
+[bootstrap.secrets]
+s3_access_key = "EXAMPLE_S3_ACCESS_KEY"
+s3_secret_key = "EXAMPLE_S3_SECRET_KEY"
+
 [bootstrap.packages]
 "apt:docker.io" = "latest"
 "apt:docker-compose-v2" = "latest"
@@ -24,6 +35,9 @@ content = """
 S3_ACCESS_KEY={{ secret(name="s3_access_key") }}
 S3_SECRET_KEY={{ secret(name="s3_secret_key") }}
 """
+template = true
+owner = "root"
+group = "root"
 mode = "0600"
 
 [bootstrap.compose.mise-cache]
@@ -36,9 +50,18 @@ sudo = true
 depends_on = ["package:apt:docker.io", "service:docker"]
 ```
 
-`project_dir` 是必需项，且必须使用绝对路径。`files` 和 `env_files` 中的相对路径将以此目录为基准解析。如果未指定 `files`，Compose 将执行其常规的项目目录发现。Mise 会按照声明顺序传递多个文件和环境文件，因此后面的条目会保留 Compose 的覆盖语义。
+`project_dir` 是必需项，且必须是绝对路径。`files` 和 `env_files` 中的相对路径将以它为基准解析。如果没有指定 `files`，Compose 将执行其正常的项目目录发现。mise 按声明顺序传递多个文件和环境文件，因此后面的条目会保留 Compose 的覆盖语义。
 
-## 生命周期与收敛
+## 预览完整设置
+
+```sh
+mise bootstrap plan
+mise bootstrap --only packages,files,services,compose --dry-run
+```
+
+当 mise 必须先创建文件并安装 Docker 时，请使用完整 bootstrap，或像上面一样包含所需阶段。`mise bootstrap compose apply` 只会使 Compose 项目收敛；它不会应用项目所需的软件包和文件前置条件。试运行无法证明镜像将在目标主机上成功启动或通过其健康检查。
+
+## 生命周期和收敛
 
 `state` 控制项目生命周期：
 
@@ -83,10 +106,7 @@ depends_on = ["package:apt:docker.io", "service:docker"]
 
 ## 引擎和权限
 
-Mise 在可用时使用 `docker compose`，并在不可用时回退到独立的 Docker
-Compose v2 `docker-compose` 命令。不支持旧版 Compose v1，因为它缺少安全
-收敛所需的结构化检查和生命周期标志。`command` 和 `engine_command` 接受
-Podman、远程 Docker 上下文或其他兼容前端的 argv 数组，不会调用 shell：
+mise 在可用时使用 `docker compose`，并回退到独立的 Docker Compose v2 `docker-compose` 命令。不支持旧版 Compose v1，因为它缺少安全收敛所需的结构化检查和生命周期标志。`command` 和 `engine_command` 接受用于 Podman、远程 Docker 上下文或其他兼容前端的 argv 数组，且不会调用 shell：
 
 ```toml
 [bootstrap.compose.edge]
@@ -95,10 +115,7 @@ command = ["podman", "compose"]
 engine_command = ["podman"]
 ```
 
-引擎命令仅用于检查容器配置哈希标签。当项目属于系统 Docker 守护进程且
-bootstrap 用户无权访问套接字时，请设置 `sudo = true`。Mise 会在捕获
-状态输出前进行身份验证，绝不会隐藏交互式 sudo 提示，并遵循现有的
-`system_packages.sudo` 策略。
+引擎命令会在收敛已停止且 `remove_orphans = true` 的项目时检查容器配置哈希标签，并移除孤立容器。当项目属于系统 Docker 守护进程且 bootstrap 用户没有套接字访问权限时，请设置 `sudo = true`。mise 会在捕获状态输出前进行身份验证，从不隐藏交互式 sudo 提示，并遵循现有的 `system_packages.sudo` 策略。
 
 ```sh
 mise bootstrap compose status

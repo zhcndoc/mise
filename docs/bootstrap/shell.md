@@ -1,3 +1,8 @@
+---
+description: "将 Bash、Zsh 和 Fish shell 激活配置为机器设置的一部分。"
+socialDescription: "将 Bash、Zsh 和 Fish shell 激活配置为机器设置的一部分。"
+---
+
 # Shell 激活
 
 mise 可以通过 `[bootstrap.mise_shell_activate]` 声明式地为 bash、zsh 和 fish 添加 [Shell 激活](/getting-started.html#activate-mise)
@@ -13,7 +18,9 @@ bashrc = "activate"
 fish = "activate"
 ```
 
-当你想要一种能够接受未来选项的紧凑表形式时，请使用：
+只配置你使用的 shell 和启动文件。`"activate"` 会启用交互式环境更新；`"shims"` 会让已安装的工具命令可用，而无需提示钩子。有关该模式的限制，请参阅 [shims](/dev-tools/shims.html)。`mise` 可执行文件必须已经位于启动文件的 `PATH` 中。
+
+内联表形式可以明确启用状态和模式：
 
 ```toml
 [bootstrap.mise_shell_activate]
@@ -62,7 +69,7 @@ eval "$(mise activate zsh)"
 - **显式 dotfiles 优先** — 如果 `[dotfiles]` 已经将同一个 rc 文件作为完整文件进行管理，或者为同一目标/id 定义了编辑操作，例如
   `"~/.zshrc/activate"`，mise 会跳过为该 shell 生成的激活条目。
 
-对于完全由其管理的 rc 文件或自定义激活块，请直接改用 `[dotfiles]`。
+对于完全由 mise 管理的 rc 文件或自定义激活代码块，请直接使用 `[dotfiles]`。检查现有的未标记激活行，以避免重复运行钩子。应用后，打开一个新的 shell 并检查 `mise doctor`；编辑启动文件不会改变已经运行的 shell 进程。
 
 ## 命令
 

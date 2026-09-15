@@ -1,81 +1,121 @@
+---
+description: "查找并运行项目任务、传递参数以及控制执行"
+---
+
 # 运行任务
 
-使用 `mise tasks` 查看可用任务。要显示带有 `hide=true` 属性隐藏的任务，请使用选项 `--hidden`。
+## 查找并运行任务
 
-使用 `mise tasks deps [tasks]...` 列出任务声明的依赖项。该依赖关系图基于 [`depends`](/tasks/task-configuration.html#depends)、[`wait_for`](/tasks/task-configuration.html#wait-for) 和 [`depends_post`](/tasks/task-configuration.html#depends-post) 构建。`run` 数组中的任务引用（`{ task = "..." }` / `{ tasks = [...] }`）是执行步骤，因此不会显示在其中。
+使用 `mise tasks` 列出可用任务。要包含使用 `hide=true` 隐藏的任务，请传递
+`--hidden`。
 
-使用 `mise tasks run <task>`、`mise run <task>`、`mise r <task>`，或者直接使用 `mise <task>` 来运行任务——不过
-最后这种方式你绝不要放进脚本或文档中，因为如果 mise 将来在某个版本中添加了同名命令，那么该任务就会被遮蔽，必须使用其他几种形式之一来运行。
+### `mise run` 简写形式 {#mise-run-shorthand}
 
-大多数 mise 用户会为 `mise run` 设置一个别名，例如 `alias mr='mise run'`。
+使用 `mise tasks run <task>`、`mise run <task>`、`mise r <task>` 或
+`mise <task>` 运行命名任务。在脚本和文档中使用 `mise run <task>`。未来的
+mise 命令可能会遮蔽直接形式。
 
-默认情况下，任务最多会并行执行 4 个作业。可使用 `--jobs` 选项、
-`jobs` 设置或 `MISE_JOBS` 环境变量来自定义。输出通常会按行显示，并带有任务标签作为前缀。
-通过逐行输出，我们可以避免并行执行时输出交错。不过，如果
---jobs == 1，输出将设置为 `interleave`。
+对于交互式使用，可以使用类似 `alias mr='mise run'` 的别名来减少输入。
 
-要直接输出 stdout/stderr，请使用 `--output interleave`、`task.output` 设置或 `MISE_TASK_OUTPUT=interleave`。
+## 传递参数和选择任务
 
-输出的 _样式_（`prefix`、`interleave`、`keep-order` 等）独立于输出的 _详细程度_
-（`--quiet`/`--silent`、`quiet`/`silent` 设置，或每个任务的 `quiet`/`silent` 字段）。
-两者可以组合使用：例如，`MISE_TASK_OUTPUT=prefix` 配合 `--quiet` 会保留任务名称前缀，同时
-抑制 mise 自身的消息。`--quiet` 不再强制使用无前缀输出——如果你想要旧版的无前缀行为，请使用
-`--output quiet`（或 `-o interleave`）。
-
-默认不会读取 stdin。要启用此功能，请在需要它的任务上设置 `raw = true`。这会阻止
-它与任何其他任务并行运行——在这种情况下会使用 RWMutex 的写锁。这也会阻止对输出应用脱敏处理。
-
-额外参数会传递给任务，例如，如果我们想以发布模式运行：
+在任务名称后传递参数：
 
 ```bash
 mise run build --release
 ```
 
-如需一个精确且经过验证的任务接口，请使用
-[`usage` 字段](/tasks/task-arguments#usage-field)定义参数和标志。如果没有 `usage` 规范，
-额外参数将根据任务的执行方式进行传递：
+如需精确且经过验证的任务接口，请使用
+[`usage` 字段](/tasks/task-arguments#usage-field)定义参数和标志。如果没有
+`usage` 规范，mise 会根据任务的形式转发额外参数：
 
-- 如果 `run` 是数组，参数只会传递给数组中的最后一项。
-- 对于常规的内联 shell 命令，参数会追加到命令文本末尾。
-- [shebang 任务](/tasks/toml-tasks#shell-shebang)会作为脚本文件执行，因此其解释器会像通常一样
-  提供这些参数——例如，在 Bash 中可以使用 `$1` 和 `$@`。
+- 如果 `run` 是数组，参数只会传递给其最后一个条目
+- 对于常规内联命令，参数会作为字面参数追加（使用 shell 时会进行 shell 引号处理）
+- [shebang 任务](/tasks/toml-tasks#shell-shebang)作为脚本文件运行，因此其解释器会像通常一样提供参数——例如，在 Bash 中使用 `$1` 和 `$@`
 
-由于任务名称之后的所有内容都属于任务，mise 自身的标志必须放在任务名称
-_之前_——应使用 `mise run --silent build`，而不是 `mise run build --silent`；后者会将
-`--silent` 传递给任务，除非任务定义了该标志，否则会因 `unexpected word: --silent` 而失败。
-这也意味着任务可以自由定义与 mise 标志同名的标志，例如，任务可以拥有自己的 `--env`。
+将 mise 标志放在任务名称之前：`mise run --silent build`。任务名称后的标志属于任务，因此 `mise run build --silent` 会因
+`unexpected word: --silent` 而失败，除非任务定义了该标志。任务可以定义与 mise 标志同名的标志，例如 `--env`。
 
-:::tip
-你可以为任务定义参数/标志，这将提供验证、解析、自动补全和文档。
+::: tip
+任务参数和标志提供验证、解析、自动补全和文档。
 
 - [文件任务中的参数](/tasks/file-tasks#arguments)
 - [TOML 任务中的参数](/tasks/toml-tasks#arguments)
 
-当安装并启用 mise 的 shell 自动补全功能后，任务会自动支持自动补全。
-
-可以使用 [`mise generate task-docs`](/cli/generate/task-docs) 生成 Markdown 文档。
+当 mise 的 shell 补全已安装并启用时，自动补全即可使用。
+使用 [`mise generate task-docs`](/cli/generate/task-docs) 生成 Markdown 文档。
 :::
 
-多个任务/参数可以使用这个 `:::` 分隔符分开：
+### 运行多个任务
+
+使用 `:::` 分隔任务及其参数：
 
 ```bash
 mise run build arg1 arg2 ::: test arg3 arg4
 ```
 
-如果未指定任务，mise 将运行名为 "default" 的任务——前提是你已经创建了一个名为 "default" 的任务。你也可以将其他任务别名为 "default"。
+### 运行默认任务
+
+未指定任务时，如果定义了 `default` 任务，mise 会运行该任务。
+否则，会打开交互式终端中的任务选择器。你也可以将其他任务别名为
+`default`：
 
 ```bash
 mise run
 ```
 
+## 控制执行
+
+### 并行度和输出
+
+默认情况下，任务最多并行运行四个作业。设置 `--jobs`、`jobs` 设置项或
+`MISE_JOBS` 来选择其他限制。输出通常会逐行打印，并带有任务标签，从而使
+并行输出更易读。使用 `--jobs 1` 时，mise 会使用 `interleave` 输出。
+
+要直接打印 stdout 和 stderr，请使用 `--output interleave`、`task.output`
+设置项或 `MISE_TASK_OUTPUT=interleave`。
+
+输出 _样式_（`prefix`、`interleave`、`keep-order` 等）与
+_详细程度_（`--quiet`／`--silent`、`quiet`／`silent` 设置项或每个任务的
+`quiet`／`silent` 字段）是分开的。例如，`MISE_TASK_OUTPUT=prefix` 配合
+`--quiet` 会保留任务名称前缀并隐藏 mise 的消息。使用
+`--output interleave --quiet` 可获得无前缀的安静输出。要让每个任务都保持安静，
+而不改变其他 mise 命令，请在 `[settings]` 下设置
+`task.output = "interleave"` 和 `task.quiet = true`。
+
+::: warning 已弃用
+`quiet` 输出值已弃用。mise `2026.9.3` 开始发出警告，并将在
+`2027.9.3` 中移除支持。请将 `interleave` 与任务范围或命令行的 quiet 选项结合使用
+:::
+
+### 交互式输入
+
+默认情况下不会连接 stdin。对于需要终端的任务，请设置 `interactive = true`；
+在任务持续期间，该任务会独占终端。`raw = true` 则改为让每个命令独占终端。
+两者都会绕过输出脱敏和构建产物缓存。请参阅[终端 I/O 选项](./task-configuration.html#interactive)。
+
+### Shell 执行
+
+在 Unix 上，mise 可以直接执行诸如 `node build.js` 这样的简单内联命令，而无需启动默认的 `sh`。
+Shell 语法、引号、展开、内置命令、含糊的可执行文件查找，以及包含 `ENV` 或 `BASH_ENV`
+的环境仍会使用 shell。沙盒化和经过审计的任务也会保留其 shell。
+Windows 的执行方式不变。
+
+:::warning 自定义 shell 包装器
+显式任务 `shell`、`mise run --shell` 或 `unix_default_inline_shell_args`
+设置始终会强制使用 shell 执行，即使它指定的是默认 shell。
+名为 `sh` 且位于 `PATH` 中的包装器可能会被绕过；如果必须运行它，请显式配置。
+:::
+
+相同的优化也适用于 mise 管理的内联钩子、模板、依赖项命令、安装命令、凭据和任务缓存输入。
+
 ## 任务分组
 
-可以通过使用用 `:` 分隔的名称前缀，对任务进行语义分组。
-例如，所有与测试相关的任务都可能以 `test:` 开头。也可以使用嵌套分组
-来进一步细化分组并简化模式匹配。
-例如，运行 `mise run test:**:local` 将匹配`test:units:local`，
+可以使用由 `:` 分隔的名称前缀对任务进行语义分组。
+例如，所有与测试相关的任务都可以以 `test:` 开头。嵌套组可以进一步细化分组并简化模式匹配。
+例如，`mise run test:**:local` 会匹配 `test:units:local`、
 `test:integration:local` 和 `test:e2e:happy:local`
-（更多信息请参见 [通配符](#wildcards)）。
+（更多信息请参阅[通配符](#wildcards)）。
 
 ::: tip
 由于 TOML 键在不加引号的情况下不能包含冒号，因此在 `mise.toml` 中使用带引号的键：
@@ -89,7 +129,7 @@ run = 'cargo test --lib'
 
 ## 通配符
 
-在运行任务或指定任务依赖项时，支持使用 Glob 风格的通配符。
+运行任务或指定任务依赖项时支持 Glob 风格的通配符。
 
 可用的通配符模式：
 
@@ -102,7 +142,7 @@ run = 'cargo test --lib'
 
 ### 示例
 
-`mise run generate:{completions,docs:*}`
+`mise run 'generate:{completions,docs:*}'`
 
 对于分组任务，当只有一个组可能发生变化时使用 `*`，当匹配可能跨越多个组时使用 `**`：
 
@@ -130,7 +170,8 @@ wait_for = ["render"] # 不会添加为依赖项，但如果它已经在运行�
 
 ## 在文件变更时运行
 
-通常只在其所使用的文件发生变化时才执行某个任务会很方便。例如，我们可能只想在某个 “.rs” 文件发生变化时运行 `cargo build`。这可以通过以下配置实现：
+通常，只有任务所使用的文件发生变化时才执行任务会很方便。例如，你可能只希望在 `.rs` 文件发生变化时运行
+`cargo build`。可以使用以下配置实现：
 
 ```toml
 [tasks.build]
@@ -140,28 +181,29 @@ sources = ['Cargo.toml', 'src/**/*.rs'] # 如果这些文件没有变化则跳�
 outputs = ['target/debug/mycli']
 ```
 
-现在，如果 `target/debug/mycli` 比 `Cargo.toml` 或任何 “.rs” 文件更新，那么该任务将被跳过。这使用的是最后修改时间戳。
-添加校验和支持也不会太难。
+现在，如果 `target/debug/mycli` 存在且比 `Cargo.toml` 以及每个匹配的 `.rs` 文件更新，则会跳过该任务。这使用最后修改时间戳。
+任务定义本身也是一个输入。缺失已声明的输出会导致任务再次运行。有关可以恢复已删除输出的基于内容的复用，请参阅
+[任务缓存](./caching.html)。
 
 ## 监视文件
 
-当源文件发生变化时运行任务，使用 [`mise watch`](/cli/watch.html)
+使用 [`mise watch`](/cli/watch.html) 在源文件发生变化时运行任务：
 
 ```bash
 mise watch build
 ```
 
-目前，这只是调用 `watchexec`（你可以通过任意方式安装它，包括使用 mise：`mise use -g watchexec@latest`。
-这在未来可能会改变。）
-
-## `mise run` 简写
-
-任务可以通过 `mise run <TASK>` 或 `mise <TASK>` 运行——前提是名称不会与 mise 命令冲突。
-由于 mise 之后可能会添加一个同名冲突命令，因此建议在脚本和文档中使用 `mise run <TASK>`。
+`mise watch` 使用 `watchexec`。使用 `mise use watchexec` 将其添加到项目中，
+或单独将其安装到 `PATH` 中。声明任务的 `sources` 以限制监视的文件。
+不指定任务名称时，mise 会监视 `default` 任务。
 
 ## 执行顺序
 
 你可以使用 [depends](/tasks/task-configuration.html#depends)、[wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post) 来控制执行顺序。
+
+使用 `mise tasks deps [tasks]...` 列出已声明的图。它包含
+`depends`、`wait_for` 和 `depends_post`。`run` 数组中的任务引用
+（`{ task = "..." }`／`{ tasks = [...] }`）是执行步骤，因此不会出现在图中。
 
 ```toml
 [tasks.build]
@@ -172,7 +214,7 @@ run = "echo 'test'"
 depends = ["build"]
 ```
 
-这将确保 `build` 任务在 `test` 任务之前运行。
+这可以确保 `build` 任务在 `test` 任务之前运行。
 
 你也可以定义一个 mise 任务，以并行或串行方式运行其他任务：
 
@@ -181,7 +223,7 @@ depends = ["build"]
 run = "echo 'example1'"
 
 [tasks.example2]
-run = "mise example2"
+run = "echo 'example2'"
 
 [tasks.example3]
 run = "echo 'example3'"
@@ -193,4 +235,7 @@ run = [
 ]
 ```
 
-`mise run one_by_one` 会运行该流水线，但 `mise tasks deps one_by_one` 仍会显示一个叶节点。这些 `{ task }` / `{ tasks }` 条目是该任务自身的 `run` 步骤，而不是图中的边。嵌套任务仍会运行，包括它们自己的 `depends`。将它们重写为 `depends = ["example1", "example2", "example3"]` 会把它们放入依赖关系图中，但也会丢失上述串行/并行顺序：`depends` 只要求这些任务先完成，而不规定它们之间的顺序。
+`mise run one_by_one` 会运行该流水线，但 `mise tasks deps one_by_one` 仍会将其显示为叶节点。这些
+`{ task }`／`{ tasks }` 条目是此任务自身的 `run` 步骤，而不是图边。嵌套任务仍会运行，包括它们自己的
+`depends`。如果将它们重写为 `depends = ["example1", "example2", "example3"]`，就会把它们放入图中，但也会丢失上述串行／并行顺序：
+`depends` 只要求这些任务先完成，而不规定它们之间的顺序。

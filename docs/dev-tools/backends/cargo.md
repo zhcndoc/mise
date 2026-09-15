@@ -1,60 +1,58 @@
+---
+description: "从 crates.io 或 Git 安装 Rust 命令行工具，可使用二进制文件或 Cargo 构建。"
+---
+
 # Cargo 后端
 
-即使没有对应的 asdf 插件，你也可以直接从 [Cargo Crates](https://crates.io/) 安装包。
+`cargo` 后端从 [crates.io](https://crates.io/)
+或 Git 仓库安装 Rust 命令行应用。它可以通过 cargo-binstall 使用已发布的二进制文件，也可以使用 Cargo 构建
+crate。应用依赖项应写入你的 `Cargo.toml`。
 
 这部分代码位于 mise 仓库中的 [`./src/backend/cargo.rs`](https://github.com/jdx/mise/blob/main/src/backend/cargo.rs)。
 
 ## 依赖项
 
-这依赖于已安装 `cargo`。你可以通过 [rustup](https://rustup.rs/) 将其安装到你的
-系统中：
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-或者你也可以通过 mise 安装它：
-
-```sh
-mise use -g rust
-```
+为源码构建安装 Rust/Cargo。同时还必须提供可用的链接器以及 crate
+所需的任何原生库。预构建安装可以避免编译步骤；有关 cargo-binstall 的选择和回退，请参阅[设置](#设置)。
 
 ## 用法
 
-以下命令会安装 [eza](https://crates.io/crates/eza) 的最新版本，并将其设为 PATH 上的当前版本：
+在当前项目中同时声明 Rust 和 eza：
 
 ```sh
-$ mise use -g cargo:eza
-$ eza --version
-eza - 现代、持续维护的 ls 替代品
-v0.17.1 [+git]
-https://github.com/eza-community/eza
+mise use rust@stable cargo:eza
+mise exec -- eza --version
 ```
 
-版本将以以下格式写入 `~/.config/mise/config.toml`：
+这会在 `mise.toml` 中记录这两个工具：
 
 ```toml
 [tools]
+rust = "stable"
 "cargo:eza" = "latest"
 ```
 
+为 `mise use` 添加 `-g` 以进行全局配置。运行
+`mise ls-remote cargo:eza` 来选择一个发行版，或使用
+`mise use cargo:eza@VERSION` 固定版本，将 `VERSION` 替换为列出的发行版。
+
 ### 使用 Git
 
-你可以使用 `mise` 命令从 Git 仓库安装任意包。这允许你
-安装特定的标签、分支或提交修订版：
+你也可以从 Git 仓库安装软件包。这使你可以
+安装特定的标签、分支或提交修订。替换下面的仓库和大写占位符；为完整的工具参数加上引号：
 
 ```sh
 # 安装特定标签
-mise use cargo:https://github.com/username/demo@tag:<release_tag>
+mise use 'cargo:https://github.com/username/demo@tag:TAG'
 
 # 安装分支中的最新版本
-mise use cargo:https://github.com/username/demo@branch:<branch_name>
+mise use 'cargo:https://github.com/username/demo@branch:BRANCH'
 
-# 安装特定提交修订版
-mise use cargo:https://github.com/username/demo@rev:<commit_hash>
+# 安装特定提交修订
+mise use 'cargo:https://github.com/username/demo@rev:COMMIT'
 ```
 
-这将执行一个带有相应 Git 选项的 `cargo install` 命令。
+这会使用相应的 Git 选项运行 `cargo install`。
 
 ## 设置
 
@@ -97,9 +95,10 @@ import Settings from '/components/settings.vue';
 对于不会跳过 `cargo-binstall` 的选项，mise 会禁用 cargo-binstall 的编译策略，并且仅当
 cargo-binstall 以代码 94 退出、报告没有可用的预构建构件时，才自行运行 `cargo install`。
 
-Mise 会为每个已安装的 Cargo 版本记录生效的 `features`、`default-features`、`bin`、`crate` 和 `locked` 值。
-更改其中任何选项都会重新安装相同版本，而不是重新使用使用不同选项构建或选择的二进制文件。
-特性名称会被规范化，因此更改其顺序，或在字符串与数组之间切换，不会触发不必要的重新安装。
+mise 会将生效的 `features`、`default-features`、`bin`、`crate` 和 `locked` 值与
+每个已安装的 Cargo 版本一起记录。更改其中任何选项都会重新安装相同版本，而不是
+重复使用使用不同选项构建或选择的二进制文件。特性名称会被标准化，因此更改其顺序
+或在字符串与数组之间切换不会触发不必要的重新安装。
 
 | 选项                       | `cargo-binstall` 行为                                                                        |
 | -------------------------- | ---------------------------------------------------------------------------------------- |
@@ -120,11 +119,10 @@ Mise 会为每个已安装的 Cargo 版本记录生效的 `features`、`default-
 
 ### `features`
 
-安装额外组件（作为 `cargo install --features` 传入）：
+启用 crate 特性（作为 `cargo install --features` 传入）：
 
 ```toml
 [tools]
-"cargo:cargo-edit" = { version = "latest", features = "add" }
 "cargo:sqlx-cli" = { version = "latest", features = ["postgres", "rustls"] }
 ```
 
@@ -167,13 +165,22 @@ Mise 会为每个已安装的 Cargo 版本记录生效的 `features`、`default-
 
 ### `locked`
 
-在构建 CLI 时使用 Cargo.lock（传入 `cargo install --locked`）。这是默认行为，
-传入 `false` 可禁用：
+构建 CLI 时使用 Cargo.lock（传入 `cargo install --locked`）。这是默认设置；
+传入 `false` 可将其禁用：
 
 ```toml
 [tools]
-"cargo:https://github.com/username/demo" = { version = "latest", locked = false }
+"cargo:https://github.com/username/demo" = { version = "tag:v1.0.0", locked = false }
 ```
 
-此选项不会导致 mise 跳过 `cargo-binstall`；当 cargo-binstall 报告没有可用的预构建构件时，
-它会影响 mise 的 `cargo install` 回退流程。
+此选项不会导致 mise 跳过 `cargo-binstall`；当 cargo-binstall 报告没有可用的预构建工件时，
+它会影响 mise 的 `cargo install` 回退行为。
+
+## 故障排除
+
+- **编译或链接器失败：**检查第一个 Cargo 错误以及 crate 的原生构建要求。选择特性会强制进行源码构建。
+- **找不到可执行文件：**软件包必须发布一个二进制目标；从工作区中选择时使用 `bin` 或 `crate`。
+- **意外的预构建二进制文件：**检查 binstall 设置。当你需要使用 Cargo 的配置进行本地构建时，设置 `cargo.binstall = false`。
+
+`locked` 工具选项在构建时使用 crate 的 `Cargo.lock`。它与
+[mise.lock](/dev-tools/mise-lock.html) 分开，后者记录由 mise 安装的 CLI 版本。

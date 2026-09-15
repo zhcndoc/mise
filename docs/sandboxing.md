@@ -1,24 +1,36 @@
-# 沙箱化
+---
+description: "mise 可以限制由 mise exec 和 mise run 启动的命令对文件系统、网络和环境的访问"
+---
 
-Mise 支持用于 `mise exec` 和 `mise run` 的轻量级进程沙箱化，灵感来自 [zerobox](https://github.com/afshinm/zerobox)。沙箱化可通过细粒度控制限制文件系统、网络和环境变量访问。无需 Docker，开销极小。
+# 沙箱
+
+mise 可以限制由
+`mise exec` 和 `mise run` 启动的命令对文件系统、网络和环境的访问。限制使用主机操作系统，
+但 Linux 和 macOS 上的支持不同。在依赖策略之前，请先阅读[平台支持](#platform-support)；
+Windows 不会强制执行文件系统或网络限制。
+
+沙箱应用于子命令。mise 会在该命令的沙箱之外进行配置评估、工具安装和其他准备工作。对于不受信任的配置，
+请参阅[安全模式](/security.html#safe-mode)。
 
 ## 快速开始
 
-任何 `--deny-*` 或 `--allow-*` 标志都会隐式启用沙箱：
+任何 `--deny-*` 或 `--allow-*` 标志都会启用相应的限制。在已安装 Node 的项目中：
 
-```bash
-# 完全锁定 — 不允许写入、不允许网络、不允许环境变量
-mise x --deny-all -- node script.js
+```sh
+# Block network access for a local build
+mise exec --deny-net -- npm run build
 
-# 仅阻止网络
-mise x --deny-net -- npm run build
+# Restrict writes to an existing output directory, plus implicit system exceptions
+mkdir -p dist
+mise exec --allow-write=./dist -- npm run build
 
-# 阻止写入，但 ./dist 除外
-mise x --allow-write=./dist -- npm run build
-
-# 阻止一切，仅允许特定例外
-mise x --deny-all --allow-read=. --allow-write=./dist --allow-net=registry.npmjs.org -- npm install
+# Deny reads, writes, network, and nonessential environment variables,
+# then allow reading this project and writing its output
+mise exec --deny-all --allow-read=. --allow-write=./dist -- node build.js
 ```
+
+npm 命令要求存在 `build` 脚本；最后一个命令要求存在 `build.js`。请根据构建实际使用的文件和缓存调整
+允许的路径。`--deny-all` 会保留下文所述的[隐式访问](#implicit-access)；它不是一个具有空文件系统的容器。
 
 ## CLI 标志
 
@@ -26,13 +38,13 @@ mise x --deny-all --allow-read=. --allow-write=./dist --allow-net=registry.npmjs
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--deny-all`           | 阻止读取、写入、网络和环境变量                                                                             |
 | `--deny-read`          | 阻止文件系统读取（系统库和工具目录仍可访问）                                                    |
-| `--deny-write`         | 阻止所有文件系统写入（`/tmp` 除外）                                                                            |
+| `--deny-write`         | 阻止写入，但隐式临时路径和设备路径除外                                                                    |
 | `--deny-net`           | 阻止所有网络访问                                                                                               |
-| `--deny-env`           | 阻止环境变量继承（仅 `PATH`、`HOME`、`USER`、`SHELL`、`TERM`、`LANG` 透传）                          |
-| `--allow-read=<path>`  | 允许从特定路径读取（对其他所有内容隐含 `--deny-read`）                                             |
-| `--allow-write=<path>` | 允许向特定路径写入（对其他所有内容隐含 `--deny-write`）                                              |
-| `--allow-net=<host>`   | 允许连接到特定主机（对其他所有内容隐含 `--deny-net`）                                              |
-| `--allow-env=<var>`    | 允许特定环境变量透传（对其他所有内容隐含 `--deny-env`）。支持通配符：`--allow-env='MYAPP_*'` |
+| `--deny-env`           | 阻止继承环境变量（必要变量和显式例外仍会传递）                             |
+| `--allow-read=<path>`  | 允许从特定路径读取（对其他所有路径隐式启用 `--deny-read`）                                             |
+| `--allow-write=<path>` | 允许写入特定路径（对其他所有路径隐式启用 `--deny-write`） |
+| `--allow-net=<host>`   | 在 macOS 上请求主机例外（请参阅平台限制）；在 Linux 上会被拒绝                                         |
+| `--allow-env=<var>`    | 允许传递特定环境变量（对其他所有变量隐式启用 `--deny-env`）。支持通配符：`--allow-env='MYAPP_*'` |
 
 这些标志可同时用于 `mise exec`（`mise x`）和 `mise run`。
 
@@ -51,7 +63,8 @@ deny_all = true
 
 ## 任务沙箱
 
-在 `mise.toml` 中定义的任务可以声明沙箱权限：
+Tasks can declare restrictions next to the command. This example assumes Node is configured,
+`npm run build` exists, and the output directory has been created:
 
 ```toml
 [tasks.build]
@@ -60,27 +73,26 @@ deny_net = true
 allow_write = ["./dist"]
 
 [tasks.lint]
-run = "eslint ."
-deny_all = true
-allow_read = ["."]
-
-[tasks.install]
-run = "npm install"
-deny_all = true
-allow_read = ["."]
-allow_write = ["./node_modules"]
-allow_net = ["registry.npmjs.org"]
+run = "npm run lint"
+deny_write = true
 ```
 
-`mise run` 上的 CLI 标志会覆盖任务级配置：
-
-```bash
-# 使用任务声明的沙箱运行
+```sh
+mkdir -p dist
 mise run build
+```
 
-# 覆盖：还允许访问特定主机的网络
+全局设置、任务拒绝规则和 CLI 拒绝标志会合并。任务和 CLI 允许列表也会合并；CLI 标志会添加例外，而不是替换任务策略。任务路径相对于任务的工作目录，CLI 路径相对于调用 mise 的目录。
+
+主机例外标志适用于需要网络访问的 macOS 任务：
+
+```sh
 mise run --allow-net=registry.npmjs.org build
 ```
+
+包管理器可能会联系其他主机，并在输出目录之外写入缓存或锁定文件。只允许实际命令所需的资源。Linux 会拒绝
+`--allow-net`；macOS 也可能拒绝下文所述的生成配置文件。对于不需要互联网套接字的命令，请使用
+`--deny-net`。
 
 ## 隐式访问
 
@@ -89,8 +101,8 @@ mise run --allow-net=registry.npmjs.org build
 ### 始终可读
 
 - **系统路径**（Linux）：`/usr`、`/lib`、`/lib64`、`/bin`、`/sbin`、`/etc`、`/dev`、`/proc`、`/sys`、`/tmp`、`/nix`、`/snap`、`/home/linuxbrew`
-- **系统路径**（macOS）：`/System`、`/Library`、`/usr`、`/bin`、`/sbin`、`/dev`、`/etc`、`/var/run`、`/tmp`、`/private`、`/opt/homebrew`、`/nix`
-- **Mise 工具目录**：`~/.local/share/mise/installs/...`
+- **系统路径**（macOS）：`/System`、`/Library`、`/usr`、`/bin`、`/sbin`、`/dev`、`/etc`、`/var/run`、`/tmp`、`/private/tmp`、`/private/etc`、`/private/var/run`、`/opt/homebrew`、`/nix`
+- **Mise 数据目录**：已配置的 `MISE_DATA_DIR`，而不仅是单个工具二进制文件
 
 ### 始终可写
 
@@ -102,16 +114,20 @@ mise run --allow-net=registry.npmjs.org build
 - `--allow-write` 路径会被隐式视为可读
 - `--allow-read` 路径包含上面的系统必需路径。
 
+当环境过滤处于活动状态时，`PATH`、`HOME`、`USER`、`SHELL`、`TERM`、`COLORTERM`
+和 `LANG` 仍然可用，此外还有显式允许的变量以及任务专用的传递／缓存环境输入。即使使用
+`--deny-net`，Unix 套接字仍然可用。
+
 ## 平台支持
 
-| 功能                                    | Linux              | macOS    |
-| --------------------------------------- | ------------------ | -------- |
-| 拒绝/允许读取                          | Landlock           | Seatbelt |
-| 拒绝/允许写入                          | Landlock           | Seatbelt |
-| 拒绝所有网络                            | seccomp            | Seatbelt |
-| 按主机网络（`--allow-net=<host>`）     | 不支持（v1）        | Seatbelt |
-| 环境变量过滤                            | 内置               | 内置     |
-| Docker 支持                             | 是                 | N/A      |
+| 功能                                 | Linux    | macOS    |
+| --------------------------------------- | -------- | -------- |
+| 拒绝／允许读取                        | Landlock | Seatbelt |
+| 拒绝／允许写入                       | Landlock | Seatbelt |
+| 拒绝所有网络                        | seccomp  | Seatbelt |
+| 按主机允许网络（`--allow-net=<host>`） | 已拒绝 | Seatbelt |
+| 环境过滤                           | 内置 | 内置 |
+| Docker 支持                          | 是      | 不适用      |
 
 ### Linux
 
@@ -119,7 +135,9 @@ mise run --allow-net=registry.npmjs.org build
 
 如果 Landlock 不可用，或无法应用文件系统限制，则命令会失败。
 
-**限制**：在 v1 中，Linux 不支持按主机网络过滤（`--allow-net=<host>`）。在 Linux 上，`--allow-net` 会回退为允许所有网络访问。这在 macOS 上可通过 Seatbelt 实现。
+**限制**：Linux 不支持按主机进行网络过滤（`--allow-net=<host>`）。
+mise 会在执行命令前返回错误；不会静默地允许所有网络访问。使用 `--deny-net` 阻止互联网套接字，
+或者在需要时省略网络限制。
 
 **限制**：构建沙箱时必须存在允许列表条目。Landlock 会将每条规则绑定到一个打开的描述符，因此尚未创建的路径无法由规则指定，mise 会警告该规则已被丢弃。如果其他规则涵盖了该路径，例如允许访问其祖先目录，则任务仍然可以访问该路径，但被丢弃的规则不会以任何方式授予额外访问权限。若要让任务创建某个内容，请允许一个已经存在且包含该内容的目录。
 
@@ -135,20 +153,24 @@ Landlock 无法将创建限制为单个名称，因此允许访问包含目录�
 
 ### macOS
 
-使用 Apple 的 `sandbox-exec`（Seatbelt）和生成的配置文件。支持包括按主机网络过滤在内的所有功能。
+沙箱使用 Apple 的 `sandbox-exec`（Seatbelt）和生成的配置文件。构建配置文件时，网络主机例外会将主机名解析为 IP 地址。预期策略允许访问这些 IP，而不是特定的 HTTP 主机名或 URL 路径；共享同一 IP 的服务也可能可以访问。
 
-当读取受到限制时，Seatbelt 要求进程启动时能够访问根目录。沙箱进程可以直接枚举 `/` 下的名称，但无法读取未获允许的条目或其后代。
+**限制**：`sandbox-exec` 可能会拒绝生成的主机例外配置文件，并显示
+`host must be * or localhost in network address`。这会阻止子命令启动；不会回退到不受限制的网络访问。如果需要访问选定的主机，请在你的 macOS 版本上验证该策略，并在
+`--allow-net` 无法表达所需策略时使用外部网络控制。
+
+当读取受到限制时，Seatbelt 要求进程启动时能够访问根目录。沙箱进程可以直接枚举 `/` 下的名称，但无法读取未允许的条目或其后代。Mise 还允许访问通向上述每个可读路径的目录的元数据，包括系统路径、`MISE_DATA_DIR` 以及由 `--allow-read` 或 `--allow-write` 指定的任何路径。`realpath` 会逐个组件解析路径，因此如果没有此权限，即使位于完全可读的目录中，可移植的可执行文件也无法解析自身的位置。该权限仅限元数据：可以对这些目录执行 stat，但不能列出目录内容，其中的其他条目仍然不可读。
 
 ### Windows
 
-目前 Windows 不支持沙箱。系统会打印警告，命令将在不受沙箱保护的情况下运行。
+Windows 不支持文件系统和网络沙箱。mise 会发出警告，并在没有这些操作系统限制的情况下运行命令。不要将带有沙箱标志的 Windows 调用成功执行视为文件系统或网络策略已强制执行的证据。
 
 ## 示例
 
-### 运行不允许文件系统写入的不受信任脚本
+### 限制脚本写入 {#run-untrusted-script-with-no-filesystem-writes}
 
 ```bash
-mise x --deny-write -- bash untrusted-script.sh
+mise x --deny-write -- bash script.sh
 ```
 
 ### 在网络隔离下构建
@@ -160,13 +182,14 @@ mise x --deny-net -- make build
 ### 使用最小权限运行工具
 
 ```bash
-mise x --deny-all --allow-read=./src --allow-write=./dist node@20 -- node build.js
+mkdir -p dist
+mise exec --deny-all --allow-read=. --allow-write=./dist -- node build.js
 ```
 
 ### 将环境变量限制在某个命名空间
 
 ```bash
-# 仅传递以 MYAPP_ 开头的环境变量
+# Pass MYAPP_* in addition to the essential variables
 mise x --allow-env='MYAPP_*' -- node app.js
 
 # 允许多个模式
@@ -174,6 +197,9 @@ mise x --allow-env='MYAPP_*' --allow-env='NODE_*' -- node app.js
 ```
 
 ### 沙箱化任务定义
+
+在 Linux 上运行此任务之前创建 `coverage/` 和 `node_modules/.cache/`，并根据测试运行器调整路径。允许
+`NODE_*` 和 `npm_*` 也会暴露任何匹配的凭据或运行时选项；如果需要更严格的策略，请列出确切的变量名。
 
 ```toml
 [tasks.test]

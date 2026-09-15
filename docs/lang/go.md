@@ -1,32 +1,41 @@
+---
+description: "mise 可用于在同一系统上安装和管理 go 的多个版本"
+---
+
 # Go
 
 `mise` 可用于在同一系统上安装和管理 [go](https://golang.org/) 的多个版本。
 
-> 以下是使用 go mise 核心插件的说明。当没有安装名为 "go" 的 git 插件时，会使用此插件。若你想使用 [asdf-golang](https://github.com/kennyp/asdf-golang)，请使用 `mise plugins install go GIT_URL`。
-
-这部分的代码位于 mise 仓库中的
-[`./src/plugins/core/go.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/go.rs)。
-
 ## 用法
 
-以下命令会安装最新版本的 go-1.21.x（如果尚未安装 1.21.x 的某个版本），并将其设为全局默认：
+为当前项目选择一个 Go 发布系列：
 
 ```sh
-mise use -g go@1.21
+mise use go@1.25
+mise exec -- go version
 ```
 
-1.20 及更低的 go 次版本需要在版本号前指定 `prefix`，因为每个系列的第一个版本发布时没有 `.0` 后缀，这使得 1.20 会成为精确版本匹配：
+使用 `mise use -g go@1.25` 设置个人默认版本。`mise ls-remote go` 列出可用版本；`mise upgrade go` 会在已配置的请求范围内更新。
+
+1.20 及以下的次要 go 版本需要在版本号前指定 `prefix`，因为每个系列的第一个版本发布时都没有 `.0` 后缀，这使得 1.20 成为了精确的版本匹配：
 
 ```sh
-mise use -g go@prefix:1.20
+mise use go@prefix:1.20
 ```
+
+这些说明使用 mise 内置的 go 支持。已安装的同名外部插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/go.rs)。
 
 ## `.go-version` 文件支持
 
-mise 使用 `mise.toml` 或 `.tool-versions` 文件在不同软件版本之间自动切换。
-不过，它也可以读取名为 `.go-version` 的 Go 特定版本文件。
+显式启用 Go 的惯用文件：
 
-参见 [惯用版本文件](/configuration.html#idiomatic-version-files)
+```sh
+mise settings add idiomatic_version_file_enable_tools go
+```
+
+mise 可以读取 `.go-version` 或 `go.mod` 中的 `toolchain goX.Y.Z` 声明。`go` 指令是最低兼容性要求；将其读取为版本请求已被[弃用](/configuration.html#which-fields-mise-reads)。
+
+Go 还有自己的[工具链选择](https://go.dev/doc/toolchain)机制，该机制由 `GOTOOLCHAIN` 以及模块／工作区声明控制。mise 启动 Go 后，它可能会使用不同的工具链。调查意外版本时，请比较 `mise exec -- go version` 和 `mise exec -- go env GOTOOLCHAIN`。
 
 ## 默认包
 
@@ -61,7 +70,7 @@ github.com/jesseduffield/lazygit
 
 ## 工具选项
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `go` 后端。
+以下[工具选项](/dev-tools/#tool-options)适用于 `go` 后端。
 这些选项位于 `mise.toml` 中的 `[tools]` 部分。
 
 ### `install_env`

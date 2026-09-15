@@ -1,46 +1,43 @@
+---
+description: "从 RubyGems 将 Ruby 命令行应用安装到独立的工具目录中。"
+---
+
 # gem 后端
 
-mise 可用于从 RubyGems 安装 CLI。其代码位于 mise 仓库中的 [`./src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs)。
+`gem` 后端从 RubyGems 将 Ruby 命令行应用安装到独立的工具目录中。将应用 gem 保留在项目的 `Gemfile` 中，并使用 Bundler 安装它们。相关代码位于 mise 仓库中的 [`./src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs)。
 
 ## 依赖
 
-这依赖于已安装 `gem`（由 ruby 提供）。你可以使用 mise 安装，也可以不使用 mise 安装。
-以下是使用 mise 安装 `ruby` 的方法：
-
-```sh
-mise use -g ruby
-```
+此后端需要 Ruby 及其 `gem` 命令。带有原生扩展的 Gems 还需要该 gem 所需的编译器和库。
 
 ## 用法
 
-以下命令会安装 [rubocop](https://rubygems.org/gems/rubocop) 的最新版本，并将其设为 PATH 中的当前激活版本：
+在同一个项目中声明 Ruby 和 RuboCop：
 
 ```sh
-mise use -g gem:rubocop
-rubocop --version
+mise use ruby@3.4 gem:rubocop
+mise exec -- rubocop --version
 ```
 
-该版本将以如下格式写入 `~/.config/mise/config.toml`：
+这会将两个条目写入 `mise.toml`。添加 `-g` 以进行全局配置。
 
 ```toml
 [tools]
+ruby = "3.4"
 "gem:rubocop" = "latest"
 ```
 
+mise 的包装器会为所选工具设置 `GEM_HOME`。对于使用项目专属插件的 RuboCop 配置，最好在声明这些插件的 Gemfile 中使用 `bundle exec rubocop` 运行。
+
 ## Ruby 升级
 
-如果某个 gem 包使用的 ruby 版本发生变化（由 mise 或系统 ruby 提供），你可能需要
-重新安装该 gem。可以使用以下命令：
+如果 gem 软件包使用的 Ruby 版本发生变化（无论该版本由 mise 还是系统管理），你可能需要重新安装该 gem。可以使用以下命令完成：
 
 ```sh
 mise install -f gem:rubocop
 ```
 
-或者你也可以重新安装所有 gem：
-
-```sh
-mise install -f "gem:*"
-```
+在你打算使用的 Ruby 版本下重新安装。在 Unix 上，mise 管理的 Ruby shebang 会遵循次版本路径，因此补丁版本升级可以继续工作；切换到另一个次版本或更改原生扩展兼容性仍可能需要重新安装。
 
 ## 设置
 
@@ -57,9 +54,9 @@ import Settings from '/components/settings.vue';
 
 ### `install_env`
 
-为 `gem install` 命令设置环境变量：
+为 `gem install` 命令设置环境变量。对于构建原生扩展的 gem，`MAKEFLAGS` 控制并行 make 任务数：
 
 ```toml
 [tools]
-"gem:rubocop" = { version = "latest", install_env = { GEM_HOST_API_KEY = "..." } }
+"gem:rubocop" = { version = "latest", install_env = { MAKEFLAGS = "-j4" } }
 ```

@@ -12,6 +12,8 @@ expression: "replace_path(&format!(\"{:#?}\", cf.to_tool_request_set().unwrap().
                     os: None,
                     depends: None,
                     install_env: {},
+                    lazy: None,
+                    lazy_bins: [],
                 },
                 opts: RawBackendOptions {
                     values: {},
@@ -20,6 +22,7 @@ expression: "replace_path(&format!(\"{:#?}\", cf.to_tool_request_set().unwrap().
             source: MiseToml(
                 "~/cwd/.test.mise.toml",
             ),
+            lockfile_scope: Default,
         },
     ],
     BackendArg(jq): [
@@ -31,6 +34,8 @@ expression: "replace_path(&format!(\"{:#?}\", cf.to_tool_request_set().unwrap().
                     os: None,
                     depends: None,
                     install_env: {},
+                    lazy: None,
+                    lazy_bins: [],
                 },
                 opts: RawBackendOptions {
                     values: {},
@@ -39,6 +44,7 @@ expression: "replace_path(&format!(\"{:#?}\", cf.to_tool_request_set().unwrap().
             source: MiseToml(
                 "~/cwd/.test.mise.toml",
             ),
+            lockfile_scope: Default,
         },
     ],
 }

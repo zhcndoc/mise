@@ -584,7 +584,7 @@ pub(crate) fn atomic_write_target(path: &Path) -> Result<PathBuf> {
     )
 }
 
-fn persist_atomic(mut temporary: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+pub(crate) fn persist_atomic(mut temporary: tempfile::NamedTempFile, path: &Path) -> Result<()> {
     const RETRIES: u32 = 20;
 
     for attempt in 0..=RETRIES {
@@ -857,6 +857,14 @@ pub(crate) fn paths_eq(a: &Path, b: &Path) -> bool {
     {
         a == b
     }
+}
+
+/// Compare configured storage paths by both platform-aware spelling and
+/// resolved filesystem identity. The latter matters when distributions
+/// deliberately point user and system storage at the same directory through
+/// different symlinks.
+pub(crate) fn storage_paths_eq(a: &Path, b: &Path) -> bool {
+    paths_eq(a, b) || same_file(a, b)
 }
 
 pub(crate) fn touch_file(file: &Path) -> Result<()> {
@@ -1715,8 +1723,12 @@ pub(crate) fn which<P: AsRef<Path>>(name: P) -> Option<PathBuf> {
 /// Returns the first directly spawnable executable in PATH, expanding configured
 /// executable extensions on Windows when `name` has no extension.
 pub(crate) fn which_spawnable(name: &str) -> Option<PathBuf> {
+    _which_spawnable(name, &env::PATH)
+}
+
+fn _which_spawnable(name: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     let names = executable_names(name);
-    env::PATH.iter().find_map(|dir| {
+    paths.iter().find_map(|dir| {
         names
             .iter()
             .map(|name| dir.join(name))
@@ -1760,8 +1772,7 @@ pub(crate) fn canonicalize_or_self(path: &Path) -> PathBuf {
 
 /// Returns true if `path` is one of mise's shim directories.
 ///
-/// The configured user shims dir (`dirs::SHIMS`) and system shims dir
-/// (`$MISE_SYSTEM_DATA_DIR/shims`) qualify. An active shim outside these
+/// The configured user and system shim directories qualify. An active shim outside these
 /// configured directories is rejected per candidate instead of treating its
 /// entire parent directory as shims, since that directory may also contain
 /// legitimate executables.
@@ -1772,12 +1783,13 @@ pub(crate) fn canonicalize_or_self(path: &Path) -> PathBuf {
 /// macOS) still match — the cached helper keeps this off the filesystem hot path.
 pub(crate) fn is_mise_shims_dir(path: &Path) -> bool {
     let resolved = replace_path(path);
-    let sys_shims = env::MISE_SYSTEM_DATA_DIR.join("shims");
-    if paths_eq(&resolved, &dirs::SHIMS) || paths_eq(&resolved, &sys_shims) {
+    let user_shims = dirs::shims();
+    let sys_shims = dirs::system_shims();
+    if paths_eq(&resolved, &user_shims) || paths_eq(&resolved, &sys_shims) {
         return true;
     }
     let canon_input = canonicalize_or_self(&resolved);
-    let canon_user = canonicalize_or_self(&dirs::SHIMS);
+    let canon_user = canonicalize_or_self(&user_shims);
     let canon_sys = canonicalize_or_self(&sys_shims);
     paths_eq(&canon_input, &canon_user) || paths_eq(&canon_input, &canon_sys)
 }
@@ -1937,7 +1949,7 @@ pub(crate) fn un_bz2(input: &Path, dest: &Path) -> Result<()> {
 /// concurrent tasks (progress bars, downloads, other installs) keep running. Outside a runtime, or
 /// on a current-thread runtime (e.g. `#[tokio::test]`), `block_in_place` would panic, so fall back
 /// to running the closure inline.
-fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+pub(crate) fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
     match tokio::runtime::Handle::try_current() {
         Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
             tokio::task::block_in_place(f)
@@ -4344,10 +4356,7 @@ mod tests {
             &ExtractOptions::default(),
         )
         .unwrap_err();
-        assert!(
-            format!("{err:#}").contains("escapes extraction directory"),
-            "{err:#}"
-        );
+        assert!(format!("{err:#}").contains("escapes"), "{err:#}");
         assert!(!traversal_target_path.exists());
 
         let mut absolute_archive =
@@ -4367,10 +4376,7 @@ mod tests {
             &ExtractOptions::default(),
         )
         .unwrap_err();
-        assert!(
-            format!("{err:#}").contains("escapes extraction directory"),
-            "{err:#}"
-        );
+        assert!(format!("{err:#}").contains("escapes"), "{err:#}");
         assert!(!absolute_target_path.exists());
     }
 
@@ -4885,6 +4891,22 @@ mod tests {
         for name in ["tool.ps1", "tool.PS1", "tool.vbs", "tool", r"C:\x\tool"] {
             assert!(!can_execute_directly(Path::new(name)), "{name}");
         }
+    }
+
+    /// `which` joins the bare name, so on Windows it never finds `ssh.exe`; host tools that
+    /// mise spawns by resolved path must go through `which_spawnable`.
+    #[cfg(windows)]
+    #[test]
+    fn which_spawnable_finds_the_exe_that_which_misses() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [dir.path().to_path_buf()];
+        fs::write(dir.path().join("ssh.exe"), "").unwrap();
+
+        assert_eq!(_which("ssh", &paths), None);
+        assert_eq!(
+            _which_spawnable("ssh", &paths),
+            Some(dir.path().join("ssh.exe"))
+        );
     }
 
     fn io(raw: i32) -> std::io::Error {

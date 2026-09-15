@@ -617,7 +617,7 @@ fn get_mise_env_vars_hashed() -> String {
     hash_to_str(&env_vars)
 }
 
-pub(crate) fn clear_old_env(shell: &dyn Shell) -> String {
+pub(crate) fn clear_old_env_patches(shell: &dyn Shell) -> EnvDiffPatches {
     let mut patches = env::__MISE_DIFF.reverse().to_patches();
 
     // For fish shell, filter out PATH operations from the reversed diff because
@@ -636,7 +636,11 @@ pub(crate) fn clear_old_env(shell: &dyn Shell) -> String {
         let new_path = compute_deactivated_path();
         patches.push(EnvDiffOperation::Change(PATH_KEY.to_string(), new_path));
     }
-    build_env_commands(shell, &patches)
+    patches
+}
+
+pub(crate) fn clear_old_env(shell: &dyn Shell) -> String {
+    build_env_commands(shell, &clear_old_env_patches(shell))
 }
 
 /// Clear all aliases from the previous session. Called only during deactivation.
@@ -656,12 +660,17 @@ fn compute_deactivated_path() -> String {
     // Get the PATH that mise set during the last hook-env
     let mise_paths = &env::__MISE_DIFF.path;
 
-    // Get pristine PATH (from before mise activation)
-    let pristine_path = env::PRISTINE_ENV
-        .deref()
-        .get(&*PATH_KEY)
-        .map(|s| s.to_string())
-        .unwrap_or_default();
+    // The activation prelude may establish a mise-managed shim boundary before
+    // the first hook runs. Prefer the shell's explicit pre-activation snapshot
+    // so deactivation does not preserve that boundary as a user-owned path.
+    let pristine_path = env::__MISE_ORIG_PATH.clone().unwrap_or_else(|| {
+        env::PRISTINE_ENV
+            .deref()
+            .get(&*PATH_KEY)
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    });
+    let pristine_path = crate::windows_posix::orig_path_for_windows(&pristine_path).into_owned();
 
     if current_path.is_empty() || mise_paths.is_empty() {
         // If no current PATH or no mise PATH, just return pristine
@@ -700,9 +709,15 @@ fn compute_deactivated_path() -> String {
     for (path, current_count) in current_counts.iter() {
         let removal_count = *mise_counts.get(path).unwrap_or(&0);
         let pristine_count = *pristine_counts.get(path).unwrap_or(&0);
-        let user_and_pristine = current_count
-            .saturating_sub(removal_count)
-            .max(pristine_count);
+        let user_and_pristine = if file::is_mise_shims_dir(path) {
+            // Activation owns the shim boundary even though it is not part of
+            // EnvDiff::path. Preserve only copies that existed before activation.
+            pristine_count
+        } else {
+            current_count
+                .saturating_sub(removal_count)
+                .max(pristine_count)
+        };
         target_counts.insert(path.clone(), user_and_pristine);
     }
 

@@ -1,260 +1,204 @@
+---
+description: "环境插件返回变量和 PATH 条目，而不安装版本化工具。"
+---
+
 # 环境插件开发
 
-环境插件是一种特殊类型的 mise 插件，它提供环境变量和 PATH 修改，而不管理工具版本。它们非常适合用于集成外部服务、管理密钥以及在团队之间标准化环境配置。
+环境插件返回变量和 PATH 条目，而不安装版本化工具。将它们用于外部配置服务、密钥管理器或团队环境。它们会在 mise 构建环境时运行，因此应保持其钩子快速且非交互式。它们的执行频率取决于环境缓存和所运行的命令。
 
-与[工具插件](tool-plugin-development.md)和[后端插件](backend-plugin-development.md)不同，环境插件：
-
-- 不实现版本管理（`Available`、`PreInstall`、`PostInstall` 钩子）
-- 只实现环境钩子（`MiseEnv`、`MisePath`）
-- 通过 `env._.<plugin-name>` 语法进行配置
-- 可以接受作为 TOML 值的配置选项
-- 在每次环境激活时执行
+对于安装生命周期，请改用 [工具](/tool-plugin-development.html) 或 [后端](/backend-plugin-development.html) 插件。
 
 ## 快速开始
 
-创建环境插件最快的方法是使用 [mise-env-plugin-template](https://github.com/jdx/mise-env-plugin-template)。
+从[环境插件模板](https://github.com/jdx/mise-env-plugin-template)开始，或创建以下文件。在引用指令前链接该目录：
 
-::: tip
-[mise-env-plugin-template](https://github.com/jdx/mise-env-plugin-template) 提供了一个可直接使用的起点，预先配置了 LuaCATS 类型定义、stylua 格式化以及 hk 代码检查。
-:::
-
-开始使用：
-
-```bash
-# 克隆模板
-git clone https://github.com/jdx/mise-env-plugin-template my-env-plugin
-cd my-env-plugin
-
-# 根据你的使用场景进行自定义
-# 编辑 metadata.lua、hooks/mise_env.lua、hooks/mise_path.lua
+```sh
+mise plugin link my-env-plugin /path/to/my-env-plugin
 ```
+
+```toml
+[env]
+_.my-env-plugin = {
+  api_url = "https://api.example.com",
+  debug = false,
+}
+```
+
+使用 `mise env --json` 检查结果，或通过 `mise exec` 运行命令。环境输出可能包含密钥，因此请在本地检查，并避免将其粘贴到日志或 issue 中。
 
 ## 插件结构
 
-环境插件使用 Lua（目前版本 5.1）实现。一个最小的环境插件具有以下结构：
-
-```
+```text
 my-env-plugin/
-├── metadata.lua           # 插件元数据
+├── metadata.lua
 └── hooks/
-    ├── mise_env.lua      # 返回环境变量（必需）
-    └── mise_path.lua     # 返回 PATH 条目（可选）
+    ├── mise_env.lua   # variables
+    └── mise_path.lua  # optional PATH entries
 ```
+
+插件使用 mise 内置的 Lua 5.1 运行时。环境钩子是 mise 扩展；不要假设上游 vfox 安装会调用它们。
 
 ### metadata.lua
 
-`metadata.lua` 文件定义插件的基本信息：
-
 ```lua
-PLUGIN = {}
-
---- 插件名称（必需）
-PLUGIN.name = "my-env-plugin"
-
---- 插件版本（必需）
-PLUGIN.version = "1.0.0"
-
---- 插件描述（必需）
-PLUGIN.description = "为我的服务提供环境变量"
-
---- 插件主页（可选）
-PLUGIN.homepage = "https://github.com/username/my-env-plugin"
-
---- 插件许可证（可选）
-PLUGIN.license = "MIT"
-
---- 所需的 mise/vfox 最低版本（可选）
-PLUGIN.minRuntimeVersion = "0.3.0"
+PLUGIN = {
+    name = "my-env-plugin",
+    version = "1.0.0",
+    description = "Provide service configuration",
+    author = "Plugin Author",
+}
 ```
+
+保持元数据为声明式。请在 README 和 CI 中记录并测试所需的 mise 版本；`minRuntimeVersion` 字段不是 mise 版本兼容性检查。
 
 ### hooks/mise_env.lua
 
-`MiseEnv` 钩子返回要设置的环境变量：
+一个最小可用的钩子会返回一个键值条目数组：
 
 ```lua
 function PLUGIN:MiseEnv(ctx)
-    -- 通过 ctx.options 从 mise.toml 访问配置
-    local api_url = ctx.options.api_url or "https://api.example.com"
-    local debug = ctx.options.debug or false
-
-    -- 返回环境变量数组
     return {
-        {
-            key = "API_URL",
-            value = api_url
-        },
-        {
-            key = "DEBUG",
-            value = tostring(debug)
-        },
-        {
-            key = "SERVICE_TOKEN",
-            value = get_token_from_somewhere()  -- 你的自定义逻辑
-        }
+        {key = "API_URL", value = ctx.options.api_url or "https://api.example.com"},
+        {key = "DEBUG", value = tostring(ctx.options.debug or false)},
     }
 end
 ```
 
-::: tip
-当从 `MiseEnv` 或 `MisePath` 钩子中调用 `cmd.exec()` 时，它会继承 mise 构造的环境——包括 `_.path` 条目以及来自前序指令的环境变量。如果模块指令配置了 `tools = true`（例如 `_.my-plugin = { tools = true }`），工具安装的 bin 路径也会被包含在内，因此可直接调用由 mise 管理的工具（例如 `cmd.exec("node --version")`）。
-:::
-
-**返回值**：可以是一个简单的 env 键数组，或者一个带缓存元数据的表。
-
-简单格式 - 表数组，每个表包含：
-
-- `key`（字符串，必需）：环境变量名
-- `value`（字符串，必需）：环境变量值
-
-扩展格式 - 表，包含：
-
-- `env`（数组，必需）：`{key, value}` 表的数组（与简单格式相同）
-- `cacheable`（布尔值，可选）：如果为 `true`，mise 可以缓存此插件的输出。默认值：`false`
-- `watch_files`（字符串数组，可选）：需要监视变化的文件路径。如果任一文件的 mtime 发生变化，缓存将失效。
-
-使用带缓存的扩展格式示例：
+键和值必须是字符串。要提供缓存和脱敏元数据，请返回一个表：
 
 ```lua
 function PLUGIN:MiseEnv(ctx)
-    local config_path = ctx.options.config_file or "config.json"
-    local config = load_config(config_path)
-
+    local file = require("file")
+    local json = require("json")
+    local path = file.join_path(ctx.config_root, ctx.options.config_file or "service.json")
+    local config = json.decode(file.read(path))
+    assert(type(config.api_url) == "string", "service.json must contain a string api_url")
     return {
         cacheable = true,
-        watch_files = {config_path},
-        env = {
-            {key = "API_URL", value = config.api_url},
-            {key = "API_KEY", value = config.api_key}
-        }
+        watch_files = {path},
+        env = {{key = "API_URL", value = config.api_url}},
     }
 end
 ```
 
-当 `cacheable = true` 时，mise 将缓存环境变量，并且只会在以下情况下重新执行插件：
+此示例将 `config_file` 视为相对于配置根目录的路径。如果插件也接受绝对路径，请定义并记录单独的策略。
 
-- `watch_files` 中的任何文件发生变化
-- mise 配置发生变化
-- 缓存 TTL 过期（通过 `env_cache_ttl` 设置配置）
+| 字段          | 含义                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| `env`         | `{key, value}` 条目数组；省略表示不设置变量                                                                   |
+| `cacheable`   | mise 是否可以缓存此输出；默认为 `false`                                                                      |
+| `watch_files` | 修改时间参与缓存验证的文件；相对条目将从配置根目录解析                                                       |
+| `redact`      | 请求对 mise 处理后输出中的返回值进行脱敏；默认为 `false`                                                     |
 
-::: tip
-要使缓存生效，用户必须启用 `env_cache` 设置：
+用户明确指定的指令级 `redact` 选项会覆盖插件的偏好。脱敏不会从环境中移除值，原始任务输出也不会经过脱敏。请参阅[脱敏](/environments/#redactions)。
 
-```toml
-# ~/.config/mise/config.toml
-[settings]
-env_cache = true
-```
-
-:::
+缓存需要全局 `env_cache` 设置。缓存按会话标识，并具有 TTL；文件监视无法检测远程服务中的值是否发生变化。当缓存的环境被嵌套的 mise 调用继承时，也存在一些限制。不要仅仅因为存在 `cacheable = false` 或 `watch_files` 就承诺密钥会立即刷新。需要当前值时请使用 `MISE_ENV_CACHE=0`；请参阅[缓存行为](/cache-behavior.html)。
 
 ### hooks/mise_path.lua
 
-`MisePath` 钩子返回要添加到 PATH 的目录（可选）：
+返回目录路径数组。对于项目相对配置，请根据 `ctx.config_root` 解析路径，而不是根据进程当前工作目录解析：
 
 ```lua
 function PLUGIN:MisePath(ctx)
-    -- 返回要前置到 PATH 的路径数组
-    local paths = {
-        "/opt/my-service/bin"
-    }
-
-    -- 可选地添加用户配置的路径
-    if ctx.options.custom_bin_path then
-        table.insert(paths, ctx.options.custom_bin_path)
+    local file = require("file")
+    if not ctx.options.bin_dir then
+        return {}
     end
-
-    return paths
+    local path = file.join_path(ctx.config_root, ctx.options.bin_dir)
+    local metadata = file.stat(path)
+    if not metadata or not metadata.is_dir then
+        return {}
+    end
+    return {path}
 end
 ```
 
-**返回值**：字符串数组（目录路径）
+此示例接受相对的 `bin_dir`。钩子返回要添加到 PATH 的目录，而不是完整的 PATH 字符串。仅返回集成所需且实际存在的目录。
 
 ## 上下文对象
 
-两个钩子都会接收一个 `ctx` 参数，其中包含：
+两个钩子都会接收 `ctx.options`，其中包含类型化的 TOML 指令配置，以及 `ctx.config_root`，即与声明配置文件关联的根目录。从该根目录解析本地输入文件，以便从子目录调用 mise 时产生相同的结果。
 
-- **`ctx.options`**：来自 `mise.toml` 的用户配置 TOML 表
+`os.getenv` 和 `cmd.exec` 会看到 mise 构建的环境，包括前置指令和 `_.path` 条目。要公开已配置工具的二进制文件，请使用 `tools = true`：
 
-对于环境插件，`ctx.options` 是接受用户配置的主要方式。
+```toml
+[tools]
+node = "24"
+
+[env]
+_.my-env-plugin = { tools = true }
+```
+
+这会在工具感知阶段运行该指令。它不会声明插件需要哪些外部程序；请为用户记录这些前置条件。
 
 ## mise.toml 中的配置
 
-用户使用 `env._` 指令来配置环境插件：
-
-无需选项的简单激活：
+空表会在不使用自定义选项的情况下调用插件：
 
 ```toml
 [env]
 _.my-env-plugin = {}
 ```
 
-带配置选项：
+使用 TOML 表传递选项。mise 支持 TOML 1.1 多行内联表、注释和尾随逗号：
 
 ```toml
 [env]
 _.my-env-plugin = {
-  api_url = "https://prod.api.example.com",
-  debug = false,
-  custom_bin_path = "/custom/path/bin",
+  # Relative to the file's configuration root.
+  config_file = "service.json",
+  bin_dir = "bin",
 }
 ```
 
-TOML 表中的所有字段都会作为 `ctx.options` 传递给你的钩子。
+请保留 mise 的指令控制项（例如 `tools` 和 `redact`）的文档定义含义。不要将它们重新用作无关的插件选项。
 
 ## 完整示例：Secret Manager 插件
 
-下面是一个从外部服务获取密钥的插件完整示例：
+此钩子从 [HashiCorp Vault KV v2](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2#read-secret-version) 响应中读取字符串类型的密钥。它需要一个已有的 `VAULT_TOKEN`，并且该令牌有权限读取指定路径。它不实现令牌登录／续期、命名空间或其他 Vault 密钥引擎。
 
-**metadata.lua**:
+**metadata.lua**：
 
 ```lua
-PLUGIN = {}
-PLUGIN.name = "vault-secrets"
-PLUGIN.version = "1.0.0"
-PLUGIN.description = "从 HashiCorp Vault 获取密钥"
-PLUGIN.minRuntimeVersion = "0.3.0"
+PLUGIN = {
+    name = "vault-secrets",
+    version = "1.0.0",
+    description = "Read Vault KV v2 secrets",
+}
 ```
 
-**hooks/mise_env.lua**:
+**hooks/mise_env.lua**：
 
 ```lua
 local http = require("http")
 local json = require("json")
 
 function PLUGIN:MiseEnv(ctx)
-    local vault_url = ctx.options.vault_url or error("vault_url required")
-    local secrets_path = ctx.options.secrets_path or error("secrets_path required")
-    local vault_token = os.getenv("VAULT_TOKEN") or error("VAULT_TOKEN not set")
-
-    -- 从 Vault 获取密钥
-    local url = vault_url .. "/v1/" .. secrets_path
+    local vault_url = ctx.options.vault_url or error("vault_url is required")
+    assert(vault_url:match("^https://"), "vault_url must use HTTPS")
+    local secrets_path = ctx.options.secrets_path or error("secrets_path is required")
+    local token = os.getenv("VAULT_TOKEN") or error("VAULT_TOKEN is not set")
     local response = http.get({
-        url = url,
-        headers = {
-            ["X-Vault-Token"] = vault_token
-        }
+        url = vault_url:gsub("/+$", "") .. "/v1/" .. secrets_path,
+        headers = {["X-Vault-Token"] = token},
     })
-
     if response.status_code ~= 200 then
-        error("获取密钥失败: " .. response.status_code)
+        error("Vault request failed with HTTP " .. response.status_code)
     end
-
-    local data = json.decode(response.body)
-    local env_vars = {}
-
-    -- 将 Vault 密钥转换为环境变量
-    for key, value in pairs(data.data.data) do
-        table.insert(env_vars, {
-            key = key,
-            value = value
-        })
+    local payload = json.decode(response.body)
+    local data = payload.data and payload.data.data
+    assert(type(data) == "table", "Expected a Vault KV v2 data response")
+    local variables = {}
+    for key, value in pairs(data) do
+        assert(key:match("^[%a_][%w_]*$"), "Secret key is not an environment variable name")
+        assert(type(value) == "string", "Secret values must be strings")
+        table.insert(variables, {key = key, value = value})
     end
-
-    return env_vars
+    return {env = variables, cacheable = false, redact = true}
 end
 ```
 
-**在 mise.toml 中的用法**:
+将此插件安装或链接为 `vault-secrets`，然后配置端点和 KV v2 API 路径。请使用你信任且能够接收令牌的 HTTPS 端点：
 
 ```toml
 [env]
@@ -264,204 +208,56 @@ _.vault-secrets = {
 }
 ```
 
+该钩子会向子进程返回未掩码的值。脱敏只会影响受支持的 mise 输出处理。定义密钥新鲜度时，请考虑上述缓存限制。
+
 ## 可用的 Lua 模块
 
-环境插件可以访问 mise 内置的 Lua 模块：
-
-- **`http`**：发起 HTTP 请求
-- **`json`**：编码/解码 JSON
-- **`file`**：读写文件
-- **`cmd`**：执行 shell 命令
-- **`strings`**：字符串处理工具
-- **`env`**：访问环境变量
-
-有关完整文档，请参见 [插件 Lua 模块](/plugin-lua-modules.html)。
+使用 [Lua 模块参考](/plugin-lua-modules.html)了解 HTTP、JSON、文件、命令、字符串和日志记录。`cmd.exec` 会调用 shell；在可能的情况下优先使用直接的文件／HTTP 操作，并且绝不要将不受信任的选项插值到命令字符串中。
 
 ## 最佳实践
 
-### 1. 提供合理的默认值
+在发起请求前验证必需选项，并使用有用的错误信息拒绝格式错误的响应，同时省略凭据和密钥值。仅在默认值具有明确含义时提供默认值。避免在 shell 激活期间进行交互式登录；在插件 README 中说明身份验证设置。
 
-```lua
-function PLUGIN:MiseEnv(ctx)
-    local api_url = ctx.options.api_url or "https://api.example.com"
-    local timeout = ctx.options.timeout or 30
-
-    -- ...
-end
-```
-
-### 2. 验证必需的选项
-
-```lua
-function PLUGIN:MiseEnv(ctx)
-    if not ctx.options.api_key then
-        error("api_key 在 mise.toml 配置中是必需的")
-    end
-
-    -- ...
-end
-```
-
-### 3. 优雅地处理错误
-
-```lua
-function PLUGIN:MiseEnv(ctx)
-    local response = http.get({url = ctx.options.api_url})
-
-    if response.status_code ~= 200 then
-        error("API 请求失败: " .. response.status_code .. " - " .. response.body)
-    end
-
-    -- ...
-end
-```
+通过钩子返回环境值。`env.setenv` 会修改 mise 进程自身；它不是向用户 shell 返回变量的机制。
 
 ### 4. 对于耗时操作使用内置缓存
 
-对于从外部服务获取数据的插件，请通过返回带有 `cacheable = true` 的扩展格式来使用 mise 的内置缓存：
-
-```lua
-function PLUGIN:MiseEnv(ctx)
-    local config_file = ctx.options.config_file or "secrets.json"
-
-    -- 获取密钥（mise 将缓存结果）
-    local secrets = fetch_secrets(ctx.options)
-
-    return {
-        cacheable = true,
-        watch_files = {config_file},  -- 如果配置发生变化则重新获取
-        env = secrets
-    }
-end
-```
-
-相比手动缓存，更推荐这种方式，因为：
-
-- mise 会自动处理缓存失效
-- 缓存使用会话范围的密钥进行加密
-- 可与 `mise cache clear` 和 `mise cache prune` 集成
-- 遵循 `env_cache_ttl` 设置
-
-注意：用户必须在其设置中启用 `env_cache = true`，缓存才能生效。
-
-### 5. 支持多个环境
-
-```lua
-function PLUGIN:MiseEnv(ctx)
-    local env_name = ctx.options.environment or "development"
-
-    -- 根据环境加载不同的配置
-    local config = load_config(env_name)
-
-    return {
-        {key = "ENV", value = env_name},
-        {key = "API_URL", value = config.api_url},
-        -- ...
-    }
-end
-```
+仅当在配置的 TTL 内允许结果过时时才启用缓存。在 `watch_files` 中列出本地输入，并在继承的 shell 会话和全新进程中测试刷新。本地 Lua 表不会跨 mise 调用持久化缓存。
 
 ## 测试你的插件
 
 ### 本地测试
 
-1. 为开发链接你的插件：
+从隔离的配置／数据目录进行测试，使用[插件发布](/plugin-publishing.html#testing-before-publication)中的工作流程。至少涵盖：
 
-```bash
-mise plugin link my-env-plugin /path/to/my-env-plugin
-```
-
-2. 在 `mise.toml` 中配置它：
-
-```toml
-[env]
-_.my-env-plugin = { test_option = "value" }
-```
-
-3. 测试环境：
-
-```bash
-# 查看环境变量
-mise env | grep MY_
-
-# 使用该环境运行命令
-mise exec -- env | grep MY_
-
-# 使用 MISE_DEBUG 调试
-MISE_DEBUG=1 mise env
-```
+- 最小指令和每个受支持的选项
+- 从子目录调用，包括文件和 PATH 解析
+- 缺少凭据、非 200 HTTP 响应和格式错误的负载
+- 如果插件调用已配置的工具，测试 `tools = true` 阶段
+- 返回缓存元数据时的新鲜环境和缓存环境
 
 ### 常见问题
 
-**未找到插件**：确保你已经安装/链接了该插件：
+使用 `mise plugins ls` 确认插件名称与指令匹配。检查 TOML 结构：`_.my-plugin = { key = "value" }` 是一个表；字符串值不是相同的接口。在本地使用 `MISE_DEBUG=1 mise env` 检查钩子失败，同时注意其中可能包含密钥的输出。
 
-```bash
-mise plugin ls
-```
-
-**Hook 未执行**：启用调试日志：
-
-```bash
-MISE_DEBUG=1 mise env
-```
-
-**选项未传递**：检查 `mise.toml` 中的 TOML 语法：
-
-```toml
-[env]
-# 正确：TOML 表
-_.my-plugin = { key = "value" }
-
-# 错误：字符串值
-_.my-plugin = "value"  # 这不会起作用
-```
+如果钩子没有运行，请检查安全模式或缓存的环境。如果缺少命令，请确认其前置条件，以及该指令是否需要 `tools = true`。
 
 ## 发布你的插件
 
-当你的环境插件准备就绪后：
-
-1. **为你的插件创建一个 GitHub 仓库**
-2. **添加一个 README**，包含使用说明
-3. **按照语义化版本控制** 标记发布版本
-4. （可选）分享仓库 URL，以便其他人可以直接使用 `mise plugin install` 安装它
-
-有关详细说明，请参阅 [插件发布](/plugin-publishing.html)。
+记录配置字段、所需凭据、API 范围、支持的平台以及缓存／脱敏行为。发布一个 Git 仓库并分享其 URL；不要求使用注册表简写。请参阅[插件发布](/plugin-publishing.html)。
 
 ## 示例
 
-- [mise-env-sample](https://github.com/jdx/mise-env-plugin-template) - 展示基本用法的简单示例
-- [mise-plugins](https://github.com/mise-plugins) 组织目前仅托管工具插件——请将你的环境插件添加到那里（或与社区分享），这样其他人就可以从更多示例中学习
+从[环境模板](https://github.com/jdx/mise-env-plugin-template)开始，并根据上面的可用钩子进行调整。将第三方示例视为需要审查的代码，而不是其服务或身份验证行为与你的环境相匹配的保证。
 
 ## 从工具插件迁移
 
-如果你有一个现有的仅设置环境变量的工具插件，你可以将其简化为仅环境插件：
-
-**之前**（带有未使用钩子的工具插件）：
-
-```
-my-plugin/
-├── metadata.lua
-└── hooks/
-    ├── available.lua        # 返回空列表
-    ├── pre_install.lua      # 未使用
-    ├── post_install.lua     # 未使用
-    └── env_keys.lua         # 实际设置环境变量
-```
-
-**之后**（环境插件）：
-
-```
-my-plugin/
-├── metadata.lua
-└── hooks/
-    └── mise_env.lua         # 干净且聚焦
-```
+将仅限环境的行为从 `EnvKeys` 移动到 `MiseEnv`，在 `[env]` 下添加指令，并移除人为设置的工具版本／安装钩子。使用 `MisePath` 处理 PATH 条目。这会将激活方式从选定的工具版本改为显式的环境指令；请为现有用户记录配置迁移方式。
 
 ## 相关文档
 
-- [插件概述](/plugins.html) - 所有插件类型的概述
-- [工具插件开发](/tool-plugin-development.html) - 用于管理工具版本的插件
-- [后端插件开发](/backend-plugin-development.html) - 用于多工具后端
-- [插件 Lua 模块](/plugin-lua-modules.html) - 可用的 Lua API
-- [插件发布](/plugin-publishing.html) - 发布你的插件
-- [环境变量](/environments/) - mise 如何管理环境
+- [插件概览](/plugins.html)。
+- [工具插件开发](/tool-plugin-development.html)。
+- [后端插件开发](/backend-plugin-development.html)。
+- [插件 Lua 模块](/plugin-lua-modules.html)。
+- [环境变量](/environments/)。

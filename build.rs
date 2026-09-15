@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use serde::Serialize as _;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{env, fs};
 
 use aqua_registry::encode_package_rkyv;
@@ -13,10 +14,18 @@ use aqua_registry::types::{AquaPackage, AquaPackageType, RegistryPackageRow, Reg
 use eyre::{Result, eyre};
 use serde_yaml::Value;
 
+#[path = "build/lockfile_rollout.rs"]
+mod lockfile_rollout;
+
 // cfg_aliases 0.2.1 emits semicolon-terminated helper macros in expression
 // position, which the latest nightly compiler rejects as future-incompatible.
 #[allow(semicolon_in_expressions_from_macros)]
 fn main() -> Result<()> {
+    let release = (
+        env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>()?,
+        env!("CARGO_PKG_VERSION_MINOR").parse::<u32>()?,
+    );
+    lockfile_rollout::check_release(release.0, release.1);
     cfg_aliases::cfg_aliases! {
         asdf: { any(feature = "asdf", not(target_os = "windows")) },
         macos: { target_os = "macos" },
@@ -24,10 +33,88 @@ fn main() -> Result<()> {
         vfox: { any(feature = "vfox", target_os = "windows") },
     }
     built::write_built_file()?;
+    build_notification_helper()?;
 
+    let aqua_registry = load_aqua_registry()?;
+    codegen_daemon_presets()?;
     codegen_settings();
-    codegen_registry();
-    codegen_aqua_standard_registry()?;
+    codegen_registry(&aqua_registry.packages);
+    codegen_aqua_standard_registry(&aqua_registry)?;
+    Ok(())
+}
+
+fn build_notification_helper() -> Result<()> {
+    let source = "src/system/history/notify/macos.m";
+    let info = "src/system/history/notify/macos.plist";
+    let icon = "docs/public/android-chrome-512x512.png";
+    println!("cargo:rerun-if-changed={source}");
+    println!("cargo:rerun-if-changed={info}");
+    println!("cargo:rerun-if-changed={icon}");
+    println!("cargo:rerun-if-env-changed=MISE_NOTIFICATION_SIGN_IDENTITY");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return Ok(());
+    }
+    let app = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("mise-notify.app");
+    let contents = app.join("Contents");
+    let output = contents.join("MacOS/mise-notify");
+    fs::create_dir_all(contents.join("MacOS"))?;
+    fs::create_dir_all(contents.join("Resources"))?;
+    let status = cc::Build::new()
+        .get_compiler()
+        .to_command()
+        .args(["-fobjc-arc", "-O2", "-mmacosx-version-min=10.14"])
+        .args([
+            "-framework",
+            "AppKit",
+            "-framework",
+            "UserNotifications",
+            "-framework",
+            "CoreServices",
+        ])
+        .arg(source)
+        .arg("-o")
+        .arg(&output)
+        .status()?;
+    if !status.success() {
+        return Err(eyre!("failed to build the macOS notification helper"));
+    }
+    // The compiler may place a debug-symbol bundle beside the executable.
+    // It is not needed at runtime and must not become part of the app's seal,
+    // because only the runtime bundle is embedded in mise.
+    let debug_symbols = output.with_extension("dSYM");
+    if debug_symbols.exists() {
+        fs::remove_dir_all(debug_symbols)?;
+    }
+    fs::copy(info, contents.join("Info.plist"))?;
+    let png = fs::read(icon)?;
+    let mut icns = Vec::with_capacity(png.len() + 16);
+    icns.extend_from_slice(b"icns");
+    icns.extend_from_slice(&u32::try_from(png.len() + 16)?.to_be_bytes());
+    icns.extend_from_slice(b"ic09");
+    icns.extend_from_slice(&u32::try_from(png.len() + 8)?.to_be_bytes());
+    icns.extend_from_slice(&png);
+    fs::write(contents.join("Resources/mise.icns"), icns)?;
+
+    let identity = env::var("MISE_NOTIFICATION_SIGN_IDENTITY").unwrap_or_else(|_| "-".into());
+    println!(
+        "cargo:rustc-env=MISE_NOTIFICATION_RELEASE_SIGNED={}",
+        if identity == "-" { "0" } else { "1" }
+    );
+    let mut codesign = Command::new("/usr/bin/codesign");
+    codesign
+        .args(["--force", "--sign"])
+        .arg(&identity)
+        .args(["--identifier", "dev.jdx.mise.notifications"]);
+    if identity != "-" {
+        codesign.args(["--options", "runtime", "--timestamp"]);
+    }
+    let signed = codesign.arg(&app).output()?;
+    if !signed.status.success() {
+        return Err(eyre!(
+            "failed to sign the macOS notification helper: {}",
+            String::from_utf8_lossy(&signed.stderr).trim()
+        ));
+    }
     Ok(())
 }
 
@@ -129,12 +216,13 @@ fn load_registry_tools() -> toml::map::Map<String, toml::Value> {
     tools
 }
 
-fn codegen_registry() {
+fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("registry.rs");
     let mut generated_entries = BTreeMap::new();
 
     let tools = load_registry_tools();
+    let aqua_bins = aqua_package_bin_names(aqua_packages);
     for (short, info) in &tools {
         let info = info.as_table().unwrap();
         let version_order = match info.get("version_order").and_then(|v| v.as_str()) {
@@ -193,16 +281,25 @@ fn codegen_registry() {
         for backend in info.get("backends").unwrap().as_array().unwrap() {
             match backend {
                 toml::Value::String(backend) => {
+                    let backend = backend
+                        .strip_prefix("pipx:")
+                        .map(|name| format!("pypi:{name}"))
+                        .unwrap_or_else(|| backend.clone());
                     backends.push(format!(
                         r##"RegistryBackend{{
                             full: r#"{backend}"#,
                             platforms: &[],
+                            min_version: None,
                             options: &[],
                         }}"##
                     ));
                 }
                 toml::Value::Table(backend) => {
                     let full = backend.get("full").unwrap().as_str().unwrap();
+                    let full = full
+                        .strip_prefix("pipx:")
+                        .map(|name| format!("pypi:{name}"))
+                        .unwrap_or_else(|| full.to_owned());
                     let platforms = backend
                         .get("platforms")
                         .map(|p| {
@@ -213,11 +310,27 @@ fn codegen_registry() {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
+                    let min_version = backend
+                        .get("min_version")
+                        .map(|value| {
+                            let value = value
+                                .as_str()
+                                .expect("backend min_version must be a string");
+                            assert_eq!(
+                                version_order, "VersionOrder::Semver",
+                                "[{short}] backend min_version requires version_order = semver"
+                            );
+                            semver::Version::parse(value)
+                                .expect("backend min_version must be a semantic version");
+                            format!("Some({})", raw_string_literal(value))
+                        })
+                        .unwrap_or_else(|| "None".to_string());
                     let backend_options = parse_options(backend.get("options"));
                     backends.push(format!(
                         r##"RegistryBackend{{
                             full: r#"{full}"#,
                             platforms: &[{platforms}],
+                            min_version: {min_version},
                             options: &[{options}],
                         }}"##,
                         platforms = platforms
@@ -267,7 +380,25 @@ fn codegen_registry() {
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                let preferred_aqua_package = info
+                    .get("backends")
+                    .and_then(toml::Value::as_array)
+                    .and_then(|backends| backends.first())
+                    .and_then(registry_backend_full)
+                    .and_then(|backend| backend.strip_prefix("aqua:"));
+                let Some(package) = preferred_aqua_package else {
+                    return vec![];
+                };
+                let bins = aqua_bins.get(package).unwrap_or_else(|| {
+                    panic!("[{short}] preferred Aqua package {package:?} was not found")
+                });
+                assert!(
+                    !bins.is_empty(),
+                    "[{short}] preferred Aqua package {package:?} has no inferred bins"
+                );
+                bins.clone()
+            });
         let idiomatic_files = info
             .get("idiomatic_files")
             .map(|idiomatic_files| {
@@ -435,7 +566,38 @@ fn phf_usize_map_code(entries: Vec<(String, String)>) -> String {
     map.build().to_string()
 }
 
-fn codegen_aqua_standard_registry() -> Result<()> {
+fn load_aqua_registry() -> Result<RegistryYaml> {
+    let registry_file = Path::new("vendor/aqua-registry/registry.yml");
+    println!("cargo:rerun-if-changed={}", registry_file.display());
+    Ok(serde_yaml::from_str::<RegistryYaml>(&fs::read_to_string(
+        registry_file,
+    )?)?)
+}
+
+fn registry_backend_full(backend: &toml::Value) -> Option<&str> {
+    match backend {
+        toml::Value::String(backend) => Some(backend),
+        toml::Value::Table(backend) => backend.get("full")?.as_str(),
+        _ => None,
+    }
+}
+
+fn aqua_package_bin_names(rows: &[RegistryPackageRow]) -> HashMap<String, Vec<String>> {
+    let mut bins = HashMap::new();
+    for row in rows {
+        let Some(id) = aqua_canonical_package_id(&row.package) else {
+            continue;
+        };
+        let package_bins = row.package.possible_bin_names();
+        bins.insert(id, package_bins.clone());
+        for alias in &row.aliases {
+            bins.insert(alias.clone(), package_bins.clone());
+        }
+    }
+    bins
+}
+
+fn codegen_aqua_standard_registry(registry_yaml: &RegistryYaml) -> Result<()> {
     let out_dir = env::var("OUT_DIR")?;
     let files_dest_path = Path::new(&out_dir).join("aqua_standard_registry_files.rs");
     let aliases_dest_path = Path::new(&out_dir).join("aqua_standard_registry_aliases.rs");
@@ -443,19 +605,15 @@ fn codegen_aqua_standard_registry() -> Result<()> {
     let metadata_dest_path = Path::new(&out_dir).join("aqua_standard_registry_metadata.rs");
     let packages_dir = Path::new(&out_dir).join("aqua_standard_registry_packages");
 
-    let registry_file = Path::new("vendor/aqua-registry/registry.yml");
     let metadata_file = Path::new("vendor/aqua-registry/metadata.json");
 
-    println!("cargo:rerun-if-changed={}", registry_file.display());
     println!("cargo:rerun-if-changed={}", metadata_file.display());
-
-    let registry_yaml = serde_yaml::from_str::<RegistryYaml>(&fs::read_to_string(registry_file)?)?;
 
     let registries = aqua_package_registries(&registry_yaml.packages)?;
     if registries.is_empty() {
         return Err(eyre!(
             "Aqua registry file {} contains no packages",
-            registry_file.display()
+            "vendor/aqua-registry/registry.yml"
         ));
     }
 
@@ -875,6 +1033,61 @@ pub(crate) struct {name} {{"#,
 
     lines.push(
         r#"
+/// Validate collection values constrained by `enum` in settings.toml.
+pub(crate) fn validate_settings_enum_values(settings: &Settings) -> Result<()> {"#
+            .to_string(),
+    );
+    /// Emit runtime validators for constrained string collections.
+    fn emit_collection_enum_validators(
+        lines: &mut Vec<String>,
+        table: &toml::Table,
+        path: &[&str],
+    ) {
+        for (key, value) in table {
+            let props = value.as_table().unwrap();
+            let mut field_path = path.to_vec();
+            field_path.push(key);
+            let Some(type_) = props.get("type").and_then(toml::Value::as_str) else {
+                emit_collection_enum_validators(lines, props, &field_path);
+                continue;
+            };
+            if !matches!(type_, "ListString" | "SetString") {
+                continue;
+            }
+            let Some(allowed) = props.get("enum").and_then(toml::Value::as_array) else {
+                continue;
+            };
+            let allowed = allowed
+                .iter()
+                .map(|value| {
+                    value.as_str().unwrap_or_else(|| {
+                        panic!("enum values for {} must be strings", field_path.join("."))
+                    })
+                })
+                .collect::<Vec<_>>();
+            let allowed_code = allowed
+                .iter()
+                .map(|value| format!("{value:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = field_path.join(".");
+            let field = format!("settings.{name}");
+            let values = if props.get("optional").is_some_and(|v| v.as_bool().unwrap()) {
+                format!("{field}.as_ref().into_iter().flatten().map(String::as_str)")
+            } else {
+                format!("{field}.iter().map(String::as_str)")
+            };
+            lines.push(format!(
+                "    validate_setting_enum_values({name:?}, {values}, &[{allowed_code}])?;"
+            ));
+        }
+    }
+    emit_collection_enum_validators(&mut lines, &settings, &[]);
+    lines.push("    Ok(())".to_string());
+    lines.push("}".to_string());
+
+    lines.push(
+        r#"
 /// Apply the merge strategies declared in settings.toml to config-file layers.
 pub(crate) fn merge_settings_file_layers(layers: &mut [SettingsPartial]) {"#
             .to_string(),
@@ -1055,4 +1268,67 @@ pub(crate) struct MisercSettings {"#
     lines.push("}".to_string());
 
     fs::write(&dest_path, lines.join("\n")).unwrap();
+}
+
+fn codegen_daemon_presets() -> Result<()> {
+    let dir = Path::new("registry/daemon-presets");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut paths = fs::read_dir(dir)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+    let mut code = String::from("&[\n");
+    for path in paths {
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", path.display());
+        let content = fs::read_to_string(&path)?;
+        let value: toml::Value = toml::from_str(&content)?;
+        for key in ["tool", "binary", "description"] {
+            if value.get(key).and_then(toml::Value::as_str).is_none() {
+                return Err(eyre!("{}: missing {key}", path.display()));
+            }
+        }
+        if value
+            .get("port")
+            .and_then(toml::Value::as_integer)
+            .is_none()
+            || value
+                .get("daemon")
+                .and_then(|v| v.get("run"))
+                .and_then(toml::Value::as_str)
+                .is_none()
+        {
+            return Err(eyre!("{}: missing port or daemon.run", path.display()));
+        }
+        // Match the runtime Preset shape: a successful registry build must not
+        // embed a preset that fails deserialization when first selected.
+        let valid_port = value
+            .get("port")
+            .and_then(toml::Value::as_integer)
+            .is_some_and(|port| (1..=65535).contains(&port));
+        let valid_options = value.get("options").is_some_and(toml::Value::is_table);
+        let valid_exports = value
+            .get("exports")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|exports| exports.values().all(toml::Value::is_str));
+        if !valid_port || !valid_options || !valid_exports {
+            return Err(eyre!(
+                "{}: invalid preset port, options, or exports",
+                path.display()
+            ));
+        }
+        code.push_str(&format!(
+            "({:?}, {}),\n",
+            path.file_stem().unwrap().to_string_lossy(),
+            raw_string_literal(&content)
+        ));
+    }
+    code.push(']');
+    fs::write(
+        PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("daemon_presets.rs"),
+        code,
+    )?;
+    Ok(())
 }

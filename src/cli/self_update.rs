@@ -4,9 +4,10 @@ use console::style;
 #[cfg(windows)]
 use indoc::formatdoc;
 use self_update::backends::github::Update;
-use self_update::{Status, cargo_crate_version};
+use self_update::update::ReleaseAsset;
+use self_update::{VersionStatus, cargo_crate_version};
 
-use crate::cli::version::{ARCH, OS};
+use crate::cli::version::{ARCH, OS, SelfUpdateSource};
 use crate::config::Settings;
 use crate::env;
 #[cfg(windows)]
@@ -21,6 +22,33 @@ use std::process::Command;
 use std::time::Duration;
 
 const AUTO_UPDATE_REEXEC_ENV: &str = "__MISE_AUTO_UPDATE_REEXEC";
+
+fn release_archive_name(version: &str, os: &str, arch: &str, build_target: &str) -> String {
+    // Rust reports every 32-bit ARM target as `arm`, but our releases use `armv7`.
+    // Preserve the build's ARM variant rather than upgrading an unsupported ARM CPU to v7.
+    let arch = if arch == "arm" {
+        build_target.split('-').next().unwrap_or(arch)
+    } else {
+        arch
+    };
+    let libc = if build_target.contains("-musl") {
+        "-musl"
+    } else {
+        ""
+    };
+    let extension = if os == "windows" { "zip" } else { "tar.gz" };
+    format!("mise-{version}-{os}-{arch}{libc}.{extension}")
+}
+
+fn release_archive_asset(assets: &[ReleaseAsset], archive_name: &str) -> Option<ReleaseAsset> {
+    // The default matcher falls back to architecture/OS substrings when the requested
+    // archive is missing, which can select a raw binary or another architecture.
+    assets
+        .iter()
+        .find(|asset| asset.name() == archive_name)
+        .cloned()
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 struct InstructionsToml {
     message: Option<String>,
@@ -220,7 +248,7 @@ fn reexec(args: &[String], original_cwd: Option<&std::path::Path>) -> Result<()>
     Err(crate::request_exit(status.code().unwrap_or(1)))
 }
 
-/// Updates mise itself.
+/// Update mise itself
 ///
 /// Uses the GitHub Releases API to find the latest release and binary.
 /// By default, this will also update any installed plugins.
@@ -405,7 +433,7 @@ impl SelfUpdate {
         Self::ensure_temp_dir_can_replace_binary()?;
         let status = self.do_update()?;
 
-        if status.updated() {
+        if status.is_updated() {
             let version = status.version().to_string();
             let styled_version = style(&version).bright().yellow();
             miseprintln!("Updated mise to {styled_version}");
@@ -416,7 +444,7 @@ impl SelfUpdate {
             // in the `.version` marker, masking the staleness from future
             // (non-forced) reshims. Best-effort. See discussion #10022.
             #[cfg(windows)]
-            match Self::update_mise_shim(&version).await {
+            match Self::update_mise_shim(&SelfUpdateSource::current(), &version).await {
                 Ok(()) => {
                     if let Err(e) = Self::reshim_after_update().await {
                         warn!("Failed to reshim after self-update: {e}");
@@ -467,15 +495,23 @@ impl SelfUpdate {
         bail!("{msg}");
     }
 
-    fn do_update(&self) -> Result<Status> {
+    fn do_update(&self) -> Result<VersionStatus> {
         // Use block_in_place to allow self_update's blocking HTTP calls
         // to work within mise's async runtime
         tokio::task::block_in_place(|| self.do_update_blocking())
     }
 
-    fn do_update_blocking(&self) -> Result<Status> {
+    fn do_update_blocking(&self) -> Result<VersionStatus> {
+        let settings = Settings::try_get();
+        let source = settings
+            .as_ref()
+            .map(|settings| SelfUpdateSource::from_settings(settings))
+            .unwrap_or_default();
+        source.validate()?;
+        let (repo_owner, repo_name) = source.repository_parts()?;
         let mut update = Update::configure();
-        if let Some((token, _)) = crate::github::resolve_token("github.com") {
+        update.reqwest_client(Self::http_client()?);
+        if let Some(token) = crate::github::resolve_token_for_api_url(&source.api_url) {
             update.auth_token(&token);
         }
         #[cfg(windows)]
@@ -483,18 +519,28 @@ impl SelfUpdate {
         #[cfg(not(windows))]
         let bin_path_in_archive = "mise/bin/mise";
         update
-            .repo_owner("jdx")
-            .repo_name("mise")
+            .repo_owner(repo_owner)
+            .repo_name(repo_name)
+            .api_base_url(&source.api_url)
             .bin_name("mise")
             .current_version(cargo_crate_version!())
             .bin_path_in_archive(bin_path_in_archive);
 
-        let settings = Settings::try_get();
         let v = self
             .version
             .clone()
             .map_or_else(
-                || -> Result<String> { Ok(update.build()?.get_latest_release()?.version) },
+                || -> Result<String> {
+                    Ok(update
+                        .build()?
+                        .get_latest_release()?
+                        .latest()
+                        .ok_or_else(|| {
+                            eyre::eyre!("no GitHub releases found for {}", source.repository)
+                        })?
+                        .version()
+                        .to_string())
+                },
                 Ok,
             )
             .map(|v| format!("v{v}"))?;
@@ -502,34 +548,50 @@ impl SelfUpdate {
         // Check if already up to date (unless --force is specified)
         let current_version = format!("v{}", cargo_crate_version!());
         if !self.force && v == current_version {
-            return Ok(Status::UpToDate(current_version));
+            return Ok(VersionStatus::UpToDate(current_version));
         }
 
-        let target = format!("{}-{}", *OS, *ARCH);
-        #[cfg(target_env = "musl")]
-        let target = format!("{target}-musl");
-        // Always set target_version_tag to ensure we download the correct release
+        let target = release_archive_name(&v, &OS, &ARCH, crate::build_time::TARGET);
+        // Always set release_tag to ensure we download the correct release
         // (fixes semver mismatch across year boundaries, e.g. 2025.x -> 2026.x)
-        update.target_version_tag(&v);
-        #[cfg(windows)]
-        let target = format!("mise-{v}-{target}.zip");
-        #[cfg(not(windows))]
-        let target = format!("mise-{v}-{target}.tar.gz");
+        update.release_tag(&v);
         let status = update
             .verifying_keys([*include_bytes!("../../zipsign.pub")])
             .show_download_progress(true)
             .target(&target)
+            .asset_matcher(move |assets| release_archive_asset(assets, &target))
             .no_confirm(settings.is_ok_and(|s| s.yes) || self.yes)
             .build()?
             .update()?;
 
         // Verify macOS binary signature after update
         #[cfg(target_os = "macos")]
-        if status.updated() {
+        if status.is_updated() {
             Self::verify_macos_signature(&env::MISE_BIN)?;
         }
 
         Ok(status)
+    }
+
+    fn http_client() -> Result<self_update::reqwest::blocking::Client> {
+        Ok(self_update::reqwest::blocking::Client::builder()
+            .https_only(true)
+            .redirect(Self::redirect_policy())
+            .build()?)
+    }
+
+    fn redirect_policy() -> reqwest::redirect::Policy {
+        use reqwest::redirect::Policy;
+
+        Policy::custom(|attempt| {
+            if crate::http::is_https_downgrade(attempt.previous(), attempt.url()) {
+                attempt.error(std::io::Error::other(
+                    "refusing to redirect a self-update request from HTTPS to an insecure URL",
+                ))
+            } else {
+                Policy::default().redirect(attempt)
+            }
+        })
     }
 
     // Rebuild the Windows shim copies in-process instead of shelling out to
@@ -541,24 +603,66 @@ impl SelfUpdate {
 
         let config = Config::get().await?;
         let ts = ToolsetBuilder::new().build(&config).await?;
-        crate::shims::reshim(&config, &ts, true).await
+        crate::shims::reshim_for(&config, &ts, true, crate::shims::ShimScope::User).await?;
+        let user_shims = crate::dirs::shims();
+        let system_shims = crate::dirs::system_shims();
+        if system_shims.is_dir() && !crate::file::storage_paths_eq(&user_shims, &system_shims) {
+            crate::shims::reshim_for(&config, &ts, true, crate::shims::ShimScope::System).await?;
+        }
+        Ok(())
     }
 
     #[cfg(windows)]
-    async fn update_mise_shim(version: &str) -> Result<()> {
-        use crate::http::HTTP;
+    async fn update_mise_shim(source: &SelfUpdateSource, version: &str) -> Result<()> {
         use std::io::Read;
 
+        source.validate()?;
         let version = version.strip_prefix('v').unwrap_or(version);
         let archive_name = format!("mise-v{version}-{}-{}.zip", *OS, *ARCH);
-        let url =
-            format!("https://github.com/jdx/mise/releases/download/v{version}/{archive_name}",);
+        let release = crate::github::get_release_for_url_with_versions_host(
+            &source.api_url,
+            &source.repository,
+            &format!("v{version}"),
+            false,
+        )
+        .await?;
+        let asset = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == archive_name)
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "release v{version} for {} has no asset named {archive_name}",
+                    source.repository
+                )
+            })?;
+        // Use the API asset endpoint directly so every redirect is governed by
+        // the downgrade-rejecting client below. This also supports private releases.
+        let url = asset.url.clone();
         debug!("Downloading mise-shim.exe from {url}");
 
         let temp_dir = tempfile::tempdir()?;
         // Use the real archive name so zipsign context matches the release signature
         let zip_path = temp_dir.path().join(&archive_name);
-        HTTP.download_file(&url, &zip_path, None).await?;
+        let headers = crate::github::get_headers(&url)?;
+        let settings = Settings::get();
+        let request_timeout = settings.http_timeout();
+        let archive = reqwest::Client::builder()
+            .user_agent(format!("mise/{}", cargo_crate_version!()))
+            .https_only(true)
+            .redirect(Self::redirect_policy())
+            .connect_timeout(request_timeout)
+            .read_timeout(request_timeout)
+            .timeout(settings.http_download_timeout())
+            .build()?
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        fs::write(&zip_path, archive)?;
 
         // Verify the archive signature using the same key as the main update
         Self::verify_zip_signature(&zip_path)?;
@@ -662,6 +766,128 @@ impl SelfUpdate {
 
         debug!("macOS binary signature verified successfully");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod release_asset_tests {
+    use super::*;
+    use self_update::update::Release;
+
+    #[test]
+    fn archive_names_match_release_platforms() {
+        for (os, arch, build_target, platform) in [
+            (
+                "linux",
+                "arm",
+                "armv7-unknown-linux-gnueabihf",
+                "linux-armv7.tar.gz",
+            ),
+            (
+                "linux",
+                "arm",
+                "armv7-unknown-linux-musleabi",
+                "linux-armv7-musl.tar.gz",
+            ),
+            (
+                "linux",
+                "arm",
+                "arm-unknown-linux-gnueabi",
+                "linux-arm.tar.gz",
+            ),
+            (
+                "linux",
+                "arm64",
+                "aarch64-unknown-linux-gnu",
+                "linux-arm64.tar.gz",
+            ),
+            (
+                "linux",
+                "arm64",
+                "aarch64-unknown-linux-musl",
+                "linux-arm64-musl.tar.gz",
+            ),
+            (
+                "linux",
+                "x64",
+                "x86_64-unknown-linux-gnu",
+                "linux-x64.tar.gz",
+            ),
+            (
+                "linux",
+                "x64",
+                "x86_64-unknown-linux-musl",
+                "linux-x64-musl.tar.gz",
+            ),
+            (
+                "macos",
+                "arm64",
+                "aarch64-apple-darwin",
+                "macos-arm64.tar.gz",
+            ),
+            ("macos", "x64", "x86_64-apple-darwin", "macos-x64.tar.gz"),
+            (
+                "windows",
+                "arm64",
+                "aarch64-pc-windows-msvc",
+                "windows-arm64.zip",
+            ),
+            (
+                "windows",
+                "x64",
+                "x86_64-pc-windows-msvc",
+                "windows-x64.zip",
+            ),
+        ] {
+            assert_eq!(
+                release_archive_name("v2026.9.3", os, arch, build_target),
+                format!("mise-v2026.9.3-{platform}"),
+                "{build_target}",
+            );
+        }
+    }
+
+    fn release_with_assets(names: &[&str]) -> Release {
+        Release::builder()
+            .version("2026.9.3")
+            .assets(names.iter().map(|name| ReleaseAsset::new(*name, "")))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn armv7_selects_its_archive_with_arm64_and_raw_binaries_present() {
+        let release = release_with_assets(&[
+            "mise-v2026.9.3-linux-arm64",
+            "mise-v2026.9.3-linux-arm64.tar.gz",
+            "mise-v2026.9.3-linux-armv7",
+            "mise-v2026.9.3-linux-armv7-musl.tar.gz",
+            "mise-v2026.9.3-linux-armv7.tar.gz",
+        ]);
+        for build_target in [
+            "armv7-unknown-linux-gnueabihf",
+            "armv7-unknown-linux-musleabi",
+        ] {
+            let name = release_archive_name("v2026.9.3", "linux", "arm", build_target);
+            let asset = release_archive_asset(release.assets(), &name).unwrap();
+            assert_eq!(asset.name(), name);
+        }
+    }
+
+    #[test]
+    fn missing_archive_does_not_fall_back_to_other_assets() {
+        let release = release_with_assets(&[
+            "mise-v2026.9.3-linux-arm64",
+            "mise-v2026.9.3-linux-arm64.tar.gz",
+            "mise-v2026.9.3-linux-armv7",
+            "mise-v2026.9.3-linux-armv7-musl.tar.gz",
+            "mise-v2026.9.3-linux-armv7.tar.xz",
+            "mise-v2026.9.3-linux-armv7.tar.gz.sig",
+            "mise-v2026.9.2-linux-armv7.tar.gz",
+        ]);
+        let name =
+            release_archive_name("v2026.9.3", "linux", "arm", "armv7-unknown-linux-gnueabihf");
+        assert!(release_archive_asset(release.assets(), &name).is_none());
     }
 }
 

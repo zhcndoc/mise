@@ -1,16 +1,24 @@
-# launchd
+---
+description: "在 mise.toml 中声明并应用 macOS 用户 LaunchAgents。"
+socialDescription: "在 mise.toml 中声明并应用 macOS 用户 LaunchAgents。"
+---
+
+# macOS LaunchAgents
 
 mise 可以在
 `[bootstrap.macos.launchd.agents]` 中声明 macOS 用户 LaunchAgent，并通过
 `mise bootstrap macos launchd-agents apply` 或作为
 [`mise bootstrap`](/bootstrap.html) 的一部分应用：
 
+在 macOS 会话中，以拥有该 agent 的用户身份，并在具有 GUI launchd
+域的环境中运行此命令。在应用前创建可执行文件和所有日志目录。
+示例中的 `my-sync` 是你自己的程序的占位符：
+
 ```toml
 [bootstrap.macos.launchd.agents.my-sync]
 program = "~/.local/bin/my-sync"
 args = ["--watch"]
 run_at_load = true
-start_calendar_interval = { hour = 2, minute = 0 }
 environment = { PATH = "/opt/homebrew/bin:/usr/bin:/bin" }
 working_directory = "~"
 stdout_path = "~/Library/Logs/my-sync.log"
@@ -23,23 +31,29 @@ stderr_path = "~/Library/Logs/my-sync.err.log"
 数字、`.`、`_` 和 `-`。mise 仅拥有它创建的、带有
 `dev.mise.` 标签前缀的 plist 文件。
 
+该 agent 接收 launchd 的环境，而不是交互式 shell 的激活环境。使用显式的可执行文件路径，并声明所需的环境变量。`program` 和 `args` 构成参数向量；管道和重定向等 shell 表达式需要显式调用 shell 或使用包装脚本。
+
 ## 支持的键
 
-| TOML key                  | launchd key               |
-| ------------------------- | ------------------------- |
-| `program`                 | `ProgramArguments[0]`     |
-| `args`                    | `ProgramArguments[1..]`   |
-| `run_at_load`             | `RunAtLoad`               |
-| `keep_alive`              | `KeepAlive`               |
-| `start_interval`          | `StartInterval`           |
-| `throttle_interval`       | `ThrottleInterval`        |
-| `start_calendar_interval` | `StartCalendarInterval`   |
-| `queue_directories`       | `QueueDirectories`        |
-| `environment`             | `EnvironmentVariables`    |
-| `working_directory`       | `WorkingDirectory`        |
-| `stdout_path`             | `StandardOutPath`         |
-| `stderr_path`             | `StandardErrorPath`       |
-| `kickstart`               | 运行 `launchctl kickstart` |
+| TOML 键                  | launchd 键                              |
+| ------------------------- | ---------------------------------------- |
+| `program`                 | `ProgramArguments[0]`                    |
+| `args`                    | `ProgramArguments[1..]`                  |
+| `run_at_load`             | `RunAtLoad`                              |
+| `keep_alive`              | `KeepAlive`                              |
+| `keep_alive_on_failure`   | `KeepAlive = { SuccessfulExit = false }` |
+| `start_interval`          | `StartInterval`                          |
+| `throttle_interval`       | `ThrottleInterval`                       |
+| `start_calendar_interval` | `StartCalendarInterval`                  |
+| `queue_directories`       | `QueueDirectories`                       |
+| `environment`             | `EnvironmentVariables`                   |
+| `working_directory`       | `WorkingDirectory`                       |
+| `stdout_path`             | `StandardOutPath`                        |
+| `stderr_path`             | `StandardErrorPath`                      |
+
+`keep_alive` 和 `keep_alive_on_failure` 互斥。只能设置其中一个：
+前者会在进程以任何方式退出后保持进程运行，而后者仅会在进程失败后重启它
+| `kickstart` | 运行 `launchctl kickstart` |
 
 `program`、`working_directory`、`stdout_path`、`stderr_path` 以及
 `queue_directories` 中的每个条目，在写入 plist 前都会将单独的 `~` 和
@@ -49,6 +63,8 @@ stderr_path = "~/Library/Logs/my-sync.err.log"
 launchd 日历键。对于多个相互独立的日历计划，请使用内联表数组：
 
 ```toml
+[bootstrap.macos.launchd.agents.daily-sync]
+program = "~/.local/bin/my-sync"
 start_calendar_interval = [{ hour = 3 }, { hour = 12, weekday = 1 }]
 ```
 

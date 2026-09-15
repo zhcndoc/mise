@@ -1,93 +1,81 @@
+---
+description: "基于 mise 构建的一组 shell 工具。"
+---
+
 # Shell 技巧
 
-一组利用 mise 的 shell 工具。
+一组基于 mise 构建的 shell 工具。
 
 ## 提示符着色
 
-在 ZSH 中，当 mise 更新环境时设置提示符颜色（例如在切换到项目目录时，或由于修改了 .mise\*.toml）：
+在 Zsh 中，在现有的 `mise activate zsh` 设置之后添加一个提示符 hook。此示例会在 mise 的环境状态发生变化时，将提示符替换为蓝色标记，否则替换为绿色标记。它会保留 mise 的激活函数：
 
-```shell
-# 像平常一样激活 mise
-source <(command mise activate zsh)
+```zsh
+# Put this after your existing mise activation in ~/.zshrc.
+autoload -Uz add-zsh-hook
+typeset -g _mise_prompt_diff="${__MISE_DIFF-}"
 
-typeset -i _mise_updated
-
-# 替换默认的 mise hook
-function _mise_hook {
-  local diff=${__MISE_DIFF}
-  source <(command mise hook-env -s zsh)
-  [[ ${diff} == ${__MISE_DIFF} ]]
-  _mise_updated=$?
-}
-
-_PROMPT="❱ "  # 或者使用 _PROMPT=${PROMPT} 来保留默认值
-
-function _prompt {
-  if (( ${_mise_updated} )); then
-    PROMPT='%F{blue}${_PROMPT}%f'
+function _mise_prompt_colour {
+  local previous_status=$?
+  if [[ "${__MISE_DIFF-}" != "$_mise_prompt_diff" ]]; then
+    PROMPT='%F{blue}❱ %f'
   else
-    PROMPT='%(?.%F{green}${_PROMPT}%f.%F{red}${_PROMPT}%f)'
+    PROMPT='%F{green}❱ %f'
   fi
+  _mise_prompt_diff="${__MISE_DIFF-}"
+  return "$previous_status"
 }
 
-add-zsh-hook precmd _prompt
+add-zsh-hook -d precmd _mise_prompt_colour
+add-zsh-hook precmd _mise_prompt_colour
 ```
 
-现在，当 mise 对环境进行任何更新时，提示符将变为蓝色。
+`__MISE_DIFF` 是内部状态，因此请将其视为一项需要在升级 mise 时维护的自定义设置。要撤销此设置，请使用 `add-zsh-hook -d precmd _mise_prompt_colour` 移除 `_mise_prompt_colour`，并恢复你常用的 `PROMPT` 或提示符主题。
 
 ## powerline-go 提示符中的当前配置环境
 
-[powerline-go](https://github.com/justjanne/powerline-go) 的
-`shell-var` 段可用于在提示符中显示环境
-变量的值。
-当前的 mise [配置环境](/configuration/environments)、
-`MISE_ENV` 就是一个很好的候选项。
+[powerline-go](https://github.com/justjanne/powerline-go) 的 `shell-var` segment 可用于在提示符中显示环境变量的值。当前的 mise [配置环境](/configuration/environments) `MISE_ENV` 就是一个很好的选择。
 
-大体上，这和预期一致：在 `-modules` 中包含 `shell-var`，
-并在参数中添加 `-shell-var MISE_ENV -shell-var-no-warn-empty`，
-同时确保 `MISE_ENV` 已导出，这样 `powerline-go` 才能“看到”它。
+通常，它的工作方式正如你所期望的那样：在 `-modules` 中加入 `shell-var`，在参数中传入 `-shell-var MISE_ENV -shell-var-no-warn-empty`，并确保 `MISE_ENV` 已导出，以便 `powerline-go` 能够看到它。
 
-截至 2025 年 2 月，有一个需要注意的问题：`shell-var` 模块
-不接受未设置的（与空值不同）环境变量。
-为了解决这个问题，请在 shell 启动脚本的早期将 `MISE_ENV`
-设置为空值，并避免手动 `unset` 它。
-例如对于 bash，通常在 `~/.bashrc` 中：
+如果你的 powerline-go 版本会在 `MISE_ENV` 未设置时发出警告，请确保定义该变量，同时保留 shell 启动前所做的任何选择：
 
 ```bash
-export MISE_ENV=
+export MISE_ENV="${MISE_ENV-}"
 ```
 
-## 检查 mise hook 之后发生了哪些变化
+这会显示导出的 `MISE_ENV` 值。仅通过 `mise -E` 为单个命令选择的环境，或由 `auto_env` 选择的平台环境，都不会对该 shell 变量产生持久更改。
 
-使用 record-query，你可以检查 `__MISE_DIFF` 和 `__MISE_SESSION` 变量，以查看由于 mise hook 导致你的环境中有哪些变化。
+## 检查 mise hook 之后发生的变化
 
-```toml [~/.config/mise/config.toml]
-[tools]
-"cargo:record-query" = "latest"
+对于常规故障排查，请从 `mise config`、`mise doctor` 或 `MISE_DEBUG=1 mise env` 开始。如果你需要检查 shell 本身的状态记录，`__MISE_DIFF` 和 `__MISE_SESSION` 目前包含经过 base64 编码、zlib 压缩的 MessagePack 数据。
+
+以下 Bash/Zsh 辅助函数需要 Python 和 `msgpack` 包。为解码器创建一个隔离的 Python 环境：
+
+```sh
+python3 -m venv ~/.cache/mise-env-inspect
+~/.cache/mise-env-inspect/bin/python -m pip install msgpack
 ```
 
-```shell
+```bash
 function mise_parse_env {
-  rq -m < <(
-    zcat -q < <(
-      printf '\x1f\x8b\x08\x00\x00\x00\x00\x00'
-      base64 -d <<< "$1"
-    )
-  )
+  printf '%s' "$1" | "$HOME/.cache/mise-env-inspect/bin/python" -c '
+import base64, pprint, sys, zlib
+import msgpack
+value = sys.stdin.read().strip()
+if not value:
+    raise SystemExit("No mise state was supplied; activate mise first")
+payload = zlib.decompress(base64.b64decode(value + "=" * (-len(value) % 4)))
+pprint.pprint(msgpack.unpackb(payload, raw=False), sort_dicts=False)
+'
 }
 ```
 
-```shell
-$ mise_parse_env "${__MISE_DIFF}"
-{
-  "new": {
-    ...
-  },
-  "old": {
-    ...
-  },
-  "path": [
-    ...
-  ]
-}
+在已激活的 shell 中使用它：
+
+```sh
+mise_parse_env "$__MISE_DIFF"
+mise_parse_env "$__MISE_SESSION"
 ```
+
+此格式属于实现细节，而非 API。解码后的数据可能包含环境值，包括机密信息；请在本地检查，并在分享诊断输出之前对其进行删减。

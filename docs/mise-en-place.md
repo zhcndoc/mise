@@ -1,4 +1,11 @@
-# mise-en-place：这首歌
+---
+description: "使用下方播放器聆听 mise 主题曲，或下载 MP3。"
+---
+
+# mise-en-place：歌曲
+
+使用下方播放器聆听 mise 主题曲，或[下载 MP3](/mise-en-place.mp3)。
+[歌词](#lyrics)也以文本形式提供。有关设置说明，请从[入门](/getting-started.html)开始。
 
 <audio controls preload="metadata" src="/mise-en-place.mp3">
   <a href="/mise-en-place.mp3">下载 MP3</a>

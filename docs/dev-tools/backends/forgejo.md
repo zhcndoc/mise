@@ -1,22 +1,25 @@
+---
+description: "从 Codeberg 和其他兼容 Forgejo 的主机安装发布二进制文件。"
+---
+
 # Forgejo 后端
 
-您可以直接使用 `forgejo` 后端安装 Codeberg 和其他兼容 Forgejo 的发布资源。此后端会从 Forgejo 仓库下载发布资源，非常适合通过 Forgejo 发布分发预编译二进制文件的工具。
+你可以使用 `forgejo` 后端直接从 Codeberg 和其他兼容 Forgejo 的实例安装发布资源。它会从 Forgejo 仓库下载发布资源，非常适合通过 Forgejo 发布预构建二进制文件的工具。
 
-默认情况下，Forgejo 后端使用 Codeberg 的公共实例 [https://codeberg.org](https://codeberg.org)。对于其他或自托管的 Forgejo 实例，您可以使用 `api_url` 工具选项指定自定义 API URL。
+默认情况下，Forgejo 后端使用公开的 Codeberg 实例 [https://codeberg.org](https://codeberg.org)。对于其他 Forgejo 实例（包括自托管实例），请使用 `api_url` 工具选项指定自定义 API URL。
 
-相关代码位于 mise 仓库中的 [`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs)。
+此功能的代码位于 mise 仓库的 [`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs) 中。
 
 ## 用法
 
-以下命令会从 Forgejo 发行版中安装某个工具的最新版本，并将其设为 PATH 中当前可用的版本：
+在 Linux 上，从其自身的 Forgejo 实例安装 Forgejo Runner，并检查可执行文件。其发布版本提供 Linux 二进制文件；如果你要在其他操作系统上安装，请选择提供匹配资源的项目：
 
 ```sh
-$ mise use -g forgejo:forgejo/runner[api_url=https://code.forgejo.org/api/v1,bin=forgejo-runner,bin=forgejo-runner]
-$ forgejo-runner -v
-forgejo-runner version v12.4.0
+mise use 'forgejo:forgejo/runner[api_url=https://code.forgejo.org/api/v1,bin=forgejo-runner]'
+mise exec -- forgejo-runner --version
 ```
 
-该版本将按以下格式写入 `~/.config/mise/config.toml`：
+请将完整的工具参数括起来，以免 shell 通配符将方括号解释为特殊字符。这会写入以下项目配置：
 
 ```toml
 [tools]
@@ -27,7 +30,10 @@ forgejo-runner version v12.4.0
 }
 ```
 
-## 认证
+向 `mise use` 添加 `-g` 可将工具设为全局工具。这会安装 Runner 可执行文件；将其注册到服务器并作为服务运行则是单独的步骤。
+对于 Codeberg 仓库，请省略 `api_url`。
+
+## 身份验证
 
 对于私有仓库或更高的 API 限额，mise 支持多种 Forgejo 令牌来源。
 
@@ -68,7 +74,7 @@ token = "forgejo-enterprise-token"
 
 ### `credential_command`
 
-你可以提供一个将令牌打印到 stdout 的 shell 命令：
+请在你的**全局** `~/.config/mise/config.toml` 中设置此项。项目配置无法设置 `credential_command`。该命令必须仅将令牌输出到 stdout：
 
 ```toml
 [settings.forgejo]
@@ -113,9 +119,10 @@ use_git_credentials = true
 
 ```sh
 mise token forgejo
-mise token forgejo --unmask
 mise token forgejo forgejo.mycompany.com
 ```
+
+令牌诊断信息默认会被遮盖。`--unmask` 会输出实际凭据；仅在需要令牌本身时使用，并避免将其记录到共享日志中。
 
 ## 工具选项
 
@@ -123,7 +130,7 @@ mise token forgejo forgejo.mycompany.com
 
 ### 资产自动检测
 
-当未指定 `asset_pattern` 时，mise 会自动为你的平台选择最佳资产。系统会根据以下因素对资产进行评分：
+When no `asset_pattern` is specified, mise automatically selects the best asset for your platform. It scores assets on:
 
 - **操作系统兼容性**（linux、macos、windows）
 - **架构兼容性**（x64、arm64、x86、arm）
@@ -131,7 +138,7 @@ mise token forgejo forgejo.mycompany.com
 - **归档格式偏好**（tar.gz、zip 等）
 - **构建类型**（避免调试/测试构建）
 
-对于大多数工具，你只需直接安装，无需指定模式：
+For most tools, you can install without specifying a pattern:
 
 ```sh
 mise install forgejo:user/repo
@@ -152,7 +159,7 @@ mise install forgejo:user/repo
 
 ### `matching`
 
-将资产选择缩小到包含给定子串的名称，**同时保留平台自动检测**。不同于 [`asset_pattern`](#asset_pattern)（它会完全替代自动检测），`matching` 只会细化候选集合——自动检测仍会从缩小后的列表中选择正确的 OS/架构，因此同一份配置可以跨平台使用。
+Narrows asset selection to names containing the given substring, **while keeping platform autodetection**. Unlike [`asset_pattern`](/dev-tools/backends/forgejo.html#asset-pattern) (which replaces autodetection entirely), `matching` only refines the candidate set — autodetection still chooses the correct OS/arch from the narrowed list, so a single config stays portable across platforms.
 
 当某个仓库将 **多个二进制文件作为按平台分别提供的资产** 发布，而自动检测无法判断你想要哪一个时，就应使用这个选项。
 
@@ -170,9 +177,9 @@ mise install forgejo:user/repo
 mise use "forgejo:user/repo[matching=mytool-cli]"
 ```
 
-`matching` 是区分大小写的子串匹配，因此如果某个值同时也是另一个资产名称的子串（例如当同时发布了 `tool-*` 和 `tool-extras-*` 时，`matching = "tool"`），就无法唯一选中你的二进制文件。需要精确匹配时，请使用带锚点的 [`matching_regex`](#matching_regex)。
+`matching` 是区分大小写的子字符串测试，因此当某个值同时也是其他资源名称的子字符串时（例如同时发布了 `tool-*` 和 `tool-extras-*`，却设置 `matching = "tool"`），它无法唯一选择你的二进制文件。需要精确匹配时，请使用带锚点的 [`matching_regex`](/dev-tools/backends/forgejo.html#matching-regex)。
 
-如果也设置了 [`asset_pattern`](#asset_pattern)，它将优先生效，而 `matching`/`matching_regex` 会被忽略——`asset_pattern` 会完全替代自动检测，因此不再有可供它们缩小的候选集合。它们会被静默忽略：当设置了 `asset_pattern` 时，`matching_regex` 根本不会被查询，且无效值也不会被报告，因为 mise 不会对被覆盖的选项报错。
+如果同时设置了 [`asset_pattern`](/dev-tools/backends/forgejo.html#asset-pattern)，则它具有优先权，`matching`/`matching_regex` 会被忽略——`asset_pattern` 会完全替代自动检测，因此不存在可供它们进一步缩小范围的候选集。它们会被静默忽略：设置 `asset_pattern` 后，永远不会检查 `matching_regex`，即使其值无效也不会报告错误，因为 mise 不会针对被取代的选项报错。
 
 ### `matching_regex`
 
@@ -206,10 +213,10 @@ mise use "forgejo:user/repo[matching=mytool-cli]"
 
 **示例：**
 
-- 当 `version_prefix = "release-"` 时：
+- 使用 `version_prefix = "release-"`：
   - 用户指定 `1.0.0` → mise 搜索 `release-1.0.0` 标签
   - 可用版本显示为 `1.0.0`（已去除前缀）
-- 当 `version_prefix = ""`（空字符串）时：
+- 使用 `version_prefix = ""`（空字符串）：
   - 用户指定 `1.0.0` → mise 搜索 `1.0.0` 标签（无前缀）
   - 适用于不使用任何前缀的仓库
 
@@ -245,41 +252,43 @@ macos-arm64 = { asset_pattern = "tool_*_macOS_arm64.tar.gz" }
 
 ### `checksum`
 
-使用校验和验证已下载的文件：
+为**特定版本和制品**设置预期摘要。将下面的占位符替换为从可信来源获取的完整 SHA-256 摘要：
 
 ```toml
 [tools."forgejo:owner/repo"]
 version = "1.0.0"
 asset_pattern = "tool-1.0.0-x64.tar.gz"
-checksum = "sha256:a1b2c3d4e5f6789..."
+checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST"
 ```
 
 _你也可以使用 [mise.lock](/dev-tools/mise-lock) 来管理校验和，而不是在这里指定校验和。_
 
 ### 特定平台校验和
 
+每个平台都需要自己的摘要。这些值是占位符；请在安装前从发布者处获取它们，或生成 [mise.lock](/dev-tools/mise-lock.html)。
+
 ```toml
 [tools."forgejo:user/repo"]
-version = "latest"
+version = "1.0.0"
 
 [tools."forgejo:user/repo".platforms]
 linux-x64 = {
   asset_pattern = "tool_*_linux_x64.tar.gz",
-  checksum = "sha256:a1b2c3d4e5f6789...",
+  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
 }
 macos-arm64 = {
   asset_pattern = "tool_*_macOS_arm64.tar.gz",
-  checksum = "sha256:b2c3d4e5f6789...",
+  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
 }
 ```
 
 ### `size`
 
-验证下载的资源大小：
+可以选择检查预期的字节数。下面的数字仅用于示例；请使用所选制品的实际大小，并固定其版本。大小检查无法验证发布者身份，也不能替代校验和：
 
 ```toml
 [tools]
-"forgejo:user/repo" = { version = "latest", size = "12345678" }
+"forgejo:user/repo" = { version = "1.0.0", size = "12345678" }
 ```
 
 ### `strip_components`
@@ -292,7 +301,7 @@ macos-arm64 = {
 ```
 
 ::: info
-如果未显式设置 `strip_components`，mise 会自动检测何时应用 `strip_components = 1`。当解压后的归档在根级别恰好只包含一个目录且没有文件时，就会发生这种情况。这在像 ripgrep 这类工具中很常见，它们会将二进制文件打包在一个带版本号的目录中（例如，`mytool-14.1.0-x86_64-unknown-linux-musl/mytool`）。这种自动检测可确保二进制文件被直接放置到 mise 预期的安装路径中。
+当 `strip_components` 和 `bin_path` 均未设置时，如果解压后的归档根目录中恰好包含一个目录且没有文件，mise 会自动应用 `strip_components = 1`。这在 ripgrep 等工具中很常见，它们会将二进制文件打包在带版本号的目录中（例如 `mytool-14.1.0-x86_64-unknown-linux-musl/mytool`）。自动检测可确保二进制文件直接放置在 mise 所预期的安装路径中。
 :::
 
 ### `bin`
@@ -311,7 +320,7 @@ bin = "my-tool"  # 将下载的二进制文件重命名为 my-tool
 
 ### `rename_exe`
 
-在从压缩包中解压后重命名可执行文件。当压缩包中包含一个带有平台特定名称的二进制文件，而你希望将其重命名时，这很有用：
+解压归档后重命名可执行文件。当归档中包含平台特定名称的二进制文件时，这很有用：
 
 ```toml
 [tools."forgejo:user/repo"]
@@ -321,12 +330,12 @@ rename_exe = "tool"  # 将解压出的二进制文件重命名为 tool
 ```
 
 ::: tip
-对于压缩包中二进制文件的名称与期望名称不同的情况，请使用 `rename_exe`。对于单个二进制文件下载（非压缩包），请使用 `bin`。
+对于二进制文件名称与你所需名称不同的归档，请使用 `rename_exe`。对于单二进制文件下载（非归档），请使用 `bin`。
 :::
 
 ### `no_app`
 
-在自动检测期间跳过 macOS .app 捆绑包资源，改为优先选择独立的 CLI 二进制文件。当一个仓库同时提供 macOS .app 捆绑包（通常是 Xcode 扩展或图形界面应用）和独立的命令行工具时，这会很有用：
+在自动检测期间跳过 macOS `.app` 捆绑包资源，并优先选择独立的 CLI 二进制文件。当仓库同时提供 macOS `.app` 捆绑包（通常是 Xcode 扩展或 GUI 应用程序）和独立的命令行工具时，这很有用：
 
 ```toml
 [tools."forgejo:user/repo"]
@@ -336,12 +345,14 @@ no_app = true
 
 当 `no_app = true` 时：
 
-- 包含 `.app.` 的资源（例如 `Tool.app.zip`、`Tool.for.Xcode.app.zip`）在自动检测期间会被降权
-- 会优先选择独立压缩包
-- 这主要适用于 macOS 资源的选择；非 macOS 的 `.app.` 资源已经会因平台匹配而被降权
-- 仅影响自动检测；显式的 `asset_pattern` 值会按原样使用
+- 包含 `.app.` 的资源（例如 `Tool.app.zip`、`Tool.for.Xcode.app.zip`）在自动检测期间会被降低优先级
+- 独立归档会被优先选择
+- 此选项主要用于 macOS 资源选择；非 macOS 的 `.app.` 资源已经会因平台匹配而被降低优先级
+- 只会影响自动检测；显式设置的 `asset_pattern` 值会按原样使用
 
 ### `bin_path`
+
+路径相对于应用 `strip_components` 后的安装目录。设置 `bin_path` 会禁用自动根目录剥离。对于形如 `tool-VERSION/bin/tool` 的归档，可以保留外层目录并使用 `bin_path = "tool-{{ version }}/bin"`，或者同时设置 `strip_components = 1` 和 `bin_path = "bin"`。
 
 ::: v-pre
 指定已解压归档中包含二进制文件的目录，或指定下载文件的存放位置。此选项支持使用 `{{ version }}` 以及 `{{ os() }}` / `{{ arch() }}` 函数进行 Tera 模板化：
@@ -350,15 +361,17 @@ no_app = true
 ```toml
 [tools."forgejo:user/repo"]
 version = "latest"
-bin_path = "tool-{{ version }}/bin" # 展开为 tool-1.0.0/bin
+strip_components = 0
+bin_path = "tool-{{ version }}/bin" # retain the outer tool-1.0.0 directory
 ```
 
-两者都接受用于重新映射 mise 将输出的值的关键字参数（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），以便处理上游项目使用不同目录名称的情况：
+这两个函数都接受关键字参数，用于重新映射 mise 将输出的值（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），适用于上游使用不同目录名称的情况：
 
 ```toml
 [tools."forgejo:user/repo"]
 version = "latest"
-# 展开为 tool-1.0.0-linux-x86_64/bin
+# expands to tool-1.0.0-linux-x86_64/bin
+strip_components = 0
 bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/bin'
 ```
 
@@ -375,9 +388,9 @@ bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64")
 1. 如果指定了 `bin_path`，则使用该目录
 2. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
 3. 如果安装路径根目录包含可执行文件，则使用安装路径根目录
-4. 如果不存在 `bin/` 目录，则搜索子目录中的 `bin/` 目录
-5. 如果未找到任何 `bin/` 目录，则搜索直接子目录中是否有可执行文件。如果在子目录中直接找到可执行文件，则将该整个子目录视为二进制路径。
-6. 如果未找到可执行文件，则使用解压目录的根目录
+4. 如果不存在 `bin/` 目录，则在子目录中搜索 `bin/` 目录
+5. 如果找不到 `bin/` 目录，则在直接子目录中搜索可执行文件。如果在某个子目录中直接找到可执行文件，则将该子目录视为二进制路径
+6. 如果找不到可执行文件，则使用解压目录的根目录
 
 ### `filter_bins`
 
@@ -396,7 +409,7 @@ bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64")
 
 ### `api_url`
 
-对于其他 Forgejo 兼容实例或自托管实例，请指定 API URL。mise 会使用此 URL 进行发布列表和发布资产查找，并且在浏览器下载 URL 无法访问或使用自定义/私有实例时，也可能用它来下载资产：
+对于其他兼容 Forgejo 的实例或自托管实例，请指定 API URL。mise 使用它来列出发布版本并查找发布资源；当浏览器下载 URL 无法访问，或使用自定义/私有实例时，也可能使用它来下载资源：
 
 ```toml
 [tools]

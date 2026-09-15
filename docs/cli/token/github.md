@@ -1,4 +1,8 @@
-<!-- 由 usage-cli 根据 usage 规范生成 -->
+---
+description: "显示 mise 将使用的 GitHub token"
+---
+
+<!-- 由 usage-cli 根据 usage spec 生成 -->
 # `mise token github`
 
 - **Usage：** `mise token github [FLAGS] [HOST]`
@@ -21,18 +25,32 @@
 - **`--unmask`** — 显示完整的未遮盖 token
 - **`-h --help`** — 打印帮助
 
-示例：
+## Examples
 
 ```
-$ mise token github
+mise token github
 github.com: ghp_…xxxx (source: GITHUB_TOKEN)
+```
 
-$ mise token github --unmask
+```
+mise token github --unmask
 github.com: ghp_xxxxxxxxxxxx (source: GITHUB_TOKEN)
+```
 
-$ mise token github github.mycompany.com
+```
+mise token github github.mycompany.com
 github.mycompany.com: (none)
+```
 
-$ mise token github --oauth --refresh
+```
+mise token github --oauth --refresh
 github.com: gho_…xxxx (source: GitHub OAuth)
 ```
+
+<!-- 生成的参考导航 -->
+
+## 相关文档
+
+- [Git provider authentication](/dev-tools/github-tokens.html)。
+- [`mise token <SUBCOMMAND>`](/cli/token.html)。
+- [Global flags and argument syntax](/cli/#global-flags)。

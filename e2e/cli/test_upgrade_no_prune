@@ -30,7 +30,8 @@ assert "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
 # The default schedules the old version but leaves its path intact.
 mise uninstall dummy --all
 mise install dummy@1.0.0
-mise upgrade dummy
+mise upgrade dummy >upgrade.log 2>&1
+assert_not_contains "cat upgrade.log" "will be pruned after"
 assert_contains "mise ls --installed dummy" "1.1.0"
 assert_contains "mise ls --installed dummy" "1.0.0 (pruned in"
 assert "mise ls --installed dummy -J | jq -r '.[] | select(.version == \"1.0.0\") | .scheduled_for_pruning'" "true"
@@ -104,13 +105,13 @@ mise --version >/dev/null
 assert "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
 
 # A due receipt remains pending while a config reselects the old version.
-sed -i 's/dummy = "1"/dummy = "1.0.0"/' mise.toml
+sed -i.bak 's/dummy = "1"/dummy = "1.0.0"/' mise.toml
 mise current >/dev/null
 assert "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
 assert "test -f '$MISE_STATE_DIR/tool-purgatory.json'"
 
 # Once the reference goes away, the next invocation can remove it.
-sed -i 's/dummy = "1.0.0"/dummy = "1.1.0"/' mise.toml
+sed -i.bak 's/dummy = "1.0.0"/dummy = "1.1.0"/' mise.toml
 ln -s ./1.0.0 "$MISE_DATA_DIR/installs/dummy/retired"
 touch "$MISE_DATA_DIR/shims/deferred-prune-orphan"
 chmod +x "$MISE_DATA_DIR/shims/deferred-prune-orphan"
@@ -118,6 +119,50 @@ mise current >/dev/null
 assert_fail "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
 assert_fail "test -L '$MISE_DATA_DIR/installs/dummy/retired'"
 assert_fail "test -e '$MISE_DATA_DIR/shims/deferred-prune-orphan'"
+assert_fail "test -f '$MISE_STATE_DIR/tool-purgatory.json'"
+
+# Recreate a due receipt and verify that prompt-critical shell integration
+# leaves it for an ordinary command. Loading every tracked project from a
+# prompt hook can otherwise freeze every newly opened terminal.
+cat <<'EOF' >mise.toml
+[tools]
+dummy = "1"
+
+[settings]
+upgrade.prune_after = "0s"
+EOF
+mise uninstall dummy --all
+mise install dummy@1.0.0
+mise upgrade dummy
+mise hook-env >/dev/null
+assert "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
+assert "test -f '$MISE_STATE_DIR/tool-purgatory.json'"
+
+# Tracked config resolution may execute a template that invokes mise. The
+# nested process must skip the cleanup already in progress instead of starting
+# the same tracked-config scan recursively.
+cat <<'EOF' >nested-mise-version
+#!/usr/bin/env bash
+echo invocation >>"$MISE_STATE_DIR/deferred-prune-invocations"
+mise completion bash >/dev/null
+echo 1.1.0
+EOF
+cat <<'EOF' >mise.toml
+[tools]
+dummy = "{{ exec(command='bash nested-mise-version') }}"
+
+[settings]
+upgrade.prune_after = "0s"
+EOF
+
+# --no-config must not make automatic cleanup load this tracked config.
+mise --no-config config ls >/dev/null
+assert_fail "test -f '$MISE_STATE_DIR/deferred-prune-invocations'"
+assert "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
+
+timeout 15 mise config ls >/dev/null
+assert "awk 'END { print (NR < 10) }' '$MISE_STATE_DIR/deferred-prune-invocations'" "1"
+assert_fail "ls $MISE_DATA_DIR/installs/dummy/1.0.0"
 assert_fail "test -f '$MISE_STATE_DIR/tool-purgatory.json'"
 
 rm -f mise.toml

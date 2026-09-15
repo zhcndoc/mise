@@ -1,337 +1,216 @@
+---
+description: "一个工具插件使用 Lua 生命周期 Hook 管理一个版本化工具。"
+---
+
 # 工具插件开发
 
-::: tip
-[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 提供了一个可直接使用的起点，已预配置 LuaCATS 类型定义、stylua 格式化和 hk lint 检查。
-:::
+工具插件使用 Lua 生命周期 Hook 管理一个版本化工具。对于管理多个工具的集成，请使用
+[后端插件](/backend-plugin-development.html)；对于不涉及安装的变量，请使用
+[环境插件](/env-plugin-development.html)。在编写安装器之前，请先查看内置的
+[后端](/dev-tools/backends/)。
 
-工具插件使用基于 hook 的架构来管理单个工具。它们与标准的 vfox 生态系统兼容，非常适合需要复杂安装逻辑、环境配置或旧版文件解析的工具。
+[工具插件模板](https://github.com/jdx/mise-tool-plugin-template)提供了一个起始布局和开发工具。mise 嵌入了
+Lua 5.1；其支持的 vfox Hook 和扩展在此处说明。与上游 vfox 共享插件时，还需要在那里进行测试，尤其是在使用 mise 专用模块或元数据时。
 
 ## 什么是工具插件？
 
-工具插件使用传统的钩子函数来管理单个工具。它们提供：
+工具插件可以下载归档文件、编译源代码、返回环境条目，并解析惯用的版本文件。Lua 运行时可在 Windows、macOS 和 Linux 上运行；每个插件都必须实现这些目标平台所需的构件选择和外部命令。
 
-- **标准 vfox 兼容性**：同时适用于 mise 和 vfox
-- **复杂安装逻辑**：处理源码编译、自定义构建和复杂的设置
-- **环境配置**：设置除 PATH 之外的复杂环境变量
-- **旧版文件支持**：解析其他工具的版本文件（`.nvmrc`、`.tool-version` 等）
-- **跨平台支持**：可在 Windows、macOS 和 Linux 上运行。
+插件以用户权限运行。保持元数据不包含主机探测，并避免在安装 Hook 中更改全局包管理器配置。
 
 ## 插件架构
 
-工具插件使用 Lua（当前版本为 5.1）实现。它们采用基于钩子的架构，并为不同的生命周期事件提供特定函数：
-
 ```mermaid
-graph TD
-    A[用户请求] --> B[mise CLI]
-    B --> C[工具插件]
-
-    C --> D[可用钩子<br/>列出版本]
-    C --> E[预安装钩子<br/>下载]
-    C --> F[后安装钩子<br/>设置]
-    C --> G[环境键钩子<br/>配置]
-
-    subgraph "插件文件"
-        H[metadata.lua]
-        I[hooks/available.lua]
-        J[hooks/pre_install.lua]
-        K[hooks/env_keys.lua]
-        L[hooks/post_install.lua]
-    end
-
-    style C fill:#e1f5fe
-    style D fill:#e8f5e8
-    style E fill:#e8f5e8
-    style F fill:#e8f5e8
-    style G fill:#e8f5e8
+flowchart LR
+    A[Available: list versions] --> B[Resolve a version]
+    B --> C[PreInstall: describe artifact]
+    C --> D[mise: download, verify, extract]
+    D --> E[PostInstall: optional setup]
+    E --> F[EnvKeys: return environment]
 ```
+
+固定版本或已安装的版本可以跳过此流程中的某些部分。环境构建可能会在后续调用中再次发生；它不是一次性的安装回调。
 
 ## Hook 函数
 
 ### 必需的 Hook
 
-功能性插件必须实现这些 Hook：
+#### Available Hook
 
-#### 可用 Hook
-
-列出工具的所有可用版本：
+返回一个按发布者发布策略排序的数组，**最新版本在前**。mise 会反转此列表，以用于其内部按最旧版本优先的版本列表。这与已经按最旧版本优先返回的
+`BackendListVersions` 不同。
 
 ```lua
 -- hooks/available.lua
 function PLUGIN:Available(ctx)
-    local args = ctx.args  -- 用户参数
-
-    -- 返回可用版本数组
     return {
-        {
-            version = "20.0.0",
-            note = "最新"
-        },
-        {
-            version = "18.18.0",
-            note = "LTS",
-            addition = {
-                {
-                    name = "npm",
-                    version = "9.8.1"
-                }
-            }
-        }
-    end
+        {version = "1.10.0", note = "Current stable release"},
+        {version = "1.2.0"},
+    }
 end
 ```
 
+不要丢弃预发布后缀，也不要使用共享的 SemVer 解析器对任意版本进行排序。这里可以使用
+`ctx.args`，但 mise 不会在此处提供交互式 vfox 参数。
+
 ##### 滚动发布
 
-对于具有“nightly”或“stable”这类滚动发布的工具，版本字符串保持不变但内容会变化，你可以将版本标记为滚动版本，并提供校验和用于更新检测：
+对于内容会发生变化但名称不变的频道，返回 `rolling = true`，以及一个会随频道构件变化而变化的构件校验和：
 
 ```lua
 function PLUGIN:Available(ctx)
     return {
         {
             version = "nightly",
-            note = "最新开发构建",
-            rolling = true,  -- 标记为滚动发布
-            checksum = "abc123..."  -- 发布资源的 SHA256
-        },
-        {
-            version = "stable",
-            note = "最新稳定版",
             rolling = true,
-            checksum = "def456..."
+            checksum = "REPLACE_WITH_CURRENT_PLATFORM_ASSET_SHA256",
         },
-        {
-            version = "1.0.0",
-            note = "固定发布"
-            -- 固定版本不需要 rolling 或 checksum
-        }
-    end
-end
-```
-
-当设置 `rolling = true` 时：
-
-- `mise upgrade` 会检查校验和是否发生变化以检测更新
-- `mise upgrade --bump` 会保留版本名称（例如 "nightly"），而不是将其转换为 semver
-
-校验和应为用户平台对应发布资源的 SHA256 哈希。完整示例请参见 [vfox-neovim 插件](https://github.com/mise-plugins/vfox-neovim)。
-
-#### PreInstall Hook
-
-处理预安装逻辑并返回下载信息：
-
-```lua
--- hooks/pre_install.lua
-function PLUGIN:PreInstall(ctx)
-    local version = ctx.version
-    local runtimeVersion = ctx.runtimeVersion
-
-    -- 确定下载 URL 和校验和
-    local url = "https://nodejs.org/dist/v" .. version .. "/node-v" .. version .. "-linux-x64.tar.gz"
-
-    return {
-        version = version,
-        url = url,
-        sha256 = "abc123...",  -- 可选校验和
-        note = "正在安装 Node.js " .. version,
-        -- 可选的证明元数据，选择一种验证类型
-        attestation = {
-            -- GitHub
-            github_owner = "ownername"
-            github_repo = "reponame"
-            -- Cosign
-            cosign_sig_or_bundle_path = "/path/to/sig/or/bundle/file"
-            -- SLSA
-            slsa_provenance_path = "/path/to/provenance/file"
-        },
-        -- 可以指定额外文件
-        addition = {
-            {
-                name = "npm",
-                url = "https://registry.npmjs.org/npm/-/npm-" .. npm_version .. ".tgz"
-            }
-        }
     }
 end
 ```
 
+上面的校验和是占位符。请获取所选平台的实际校验和。
+`mise upgrade` 会比较滚动校验和，而 `mise upgrade --bump` 会保留频道名称。此更新标记与
+`PreInstall` 返回的构件校验和是分开的。
+
+#### PreInstall Hook
+
+返回 `ctx.version` 对应的 URL 和验证元数据。mise 会下载并提取主要构件。`ctx.options` 包含类型化的工具选项；使用
+`RUNTIME` 获取平台信息，包括 mise 请求其他平台的锁文件条目时的平台信息。
+
+```lua
+-- hooks/pre_install.lua: 一个示例性的 Linux x64 发布布局
+function PLUGIN:PreInstall(ctx)
+    if RUNTIME.osType ~= "linux" or RUNTIME.archType ~= "amd64" then
+        error("This example artifact supports Linux x64 only")
+    end
+    local filename = "example-" .. ctx.version .. "-linux-x64.tar.gz"
+    return {
+        version = ctx.version,
+        url = "https://downloads.example.com/" .. filename,
+        sha256 = ctx.options.sha256 or error("sha256 option is required"),
+    }
+end
+```
+
+替换发布者 URL，并提供其受信任的 SHA-256 摘要。工作中的安装器绝不能包含省略号或虚假的校验和。没有强校验和或受支持证明的 URL，无法确保构件完整性。支持 SHA-256 和 SHA-512；旧版 SHA-1/MD5 不满足强验证要求。
+
+对于受支持的证明，请返回一个 `attestation` 表。例如：
+
+```lua
+local attestation = {
+    github_owner = "your-org",
+    github_repo = "your-tool",
+    -- 可选：限制发布工作流。
+    github_signer_workflow = "your-org/your-tool/.github/workflows/release.yml",
+}
+```
+
+将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有可选
+`cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，以及带有可选 `slsa_min_level` 的
+`slsa_provenance_path`。为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
+
+mise 的生命周期会处理主要构件；不要依赖上游 vfox 的 `addition` 条目来安装第二个 SDK。需要时，请使用工具依赖，或明确实现额外工作。
+
 #### EnvKeys Hook
 
-为已安装的工具配置环境变量：
+返回 `{key, value}` 条目。`ctx.path` 是安装路径，`ctx.version` 是所选版本。`ctx.main`、`ctx.sdkInfo` 和类型化的
+`ctx.options` 也可用；`ctx.runtimeVersion` 不属于此 Hook 的上下文。
 
 ```lua
 -- hooks/env_keys.lua
 function PLUGIN:EnvKeys(ctx)
-    local mainPath = ctx.path
-    local runtimeVersion = ctx.runtimeVersion
-    local sdkInfo = ctx.sdkInfo['nodejs']
-    local path = sdkInfo.path
-    local version = sdkInfo.version
-    local name = sdkInfo.name
-
+    local file = require("file")
     return {
-        {
-            key = "NODE_HOME",
-            value = mainPath
-        },
-        {
-            key = "PATH",
-            value = mainPath .. "/bin"
-        },
-        -- 多个 PATH 条目会自动合并
-        {
-            key = "PATH",
-            value = mainPath .. "/lib/node_modules/.bin"
-        }
-    end
+        {key = "EXAMPLE_HOME", value = ctx.path},
+        {key = "PATH", value = file.join_path(ctx.path, "bin")},
+    }
 end
 ```
 
-### 可选 Hook
+多个 PATH 条目会被合并。返回目录，而不是包含完整继承 PATH 的替换值。在此 Hook 中避免网络访问或其他开销较大的工作。
 
-这些 Hook 提供额外功能：
+### 可选 Hook
 
 #### PostInstall Hook
 
-在安装后执行额外设置：
+使用 `ctx.rootPath` 作为提取后的安装目录。`ctx.sdkInfo` 描述主要 SDK，`ctx.options` 包含工具选项。兼容性字段
+`ctx.runtimeVersion` 保存请求的工具版本，而不是 mise 应用程序版本。
 
 ```lua
 -- hooks/post_install.lua
 function PLUGIN:PostInstall(ctx)
-    local rootPath = ctx.rootPath
-    local runtimeVersion = ctx.runtimeVersion
-    local sdkInfo = ctx.sdkInfo['nodejs']
-    local path = sdkInfo.path
-    local version = sdkInfo.version
-
-    -- 编译原生模块、设置权限等
-    local result = os.execute("chmod +x " .. path .. "/bin/*")
-    if result ~= 0 then
-        error("Failed to set permissions")
+    local file = require("file")
+    if not file.exists(file.join_path(ctx.rootPath, "bin", "example")) then
+        error("Expected bin/example in the extracted archive")
     end
-
-    -- 不需要返回值
 end
 ```
+
+上面的检查假设采用 Unix 可执行文件布局。归档文件通常会携带可执行权限；只有在实际发行版需要时才修改权限。
 
 #### PreUse Hook
 
-在使用前修改版本：
-
-```lua
--- hooks/pre_use.lua
-function PLUGIN:PreUse(ctx)
-    local version = ctx.version
-    local previousVersion = ctx.previousVersion
-    local installedSdks = ctx.installedSdks
-    local cwd = ctx.cwd
-    local scope = ctx.scope  -- 全局/项目/会话
-
-    -- 可选地修改版本
-    if version == "latest" then
-        version = "20.0.0"  -- 解析为具体版本
-    end
-
-    return {
-        version = version
-    }
-end
-```
+mise 不实现上游 vfox 的 `PreUse` Hook。不要依赖它来重写版本、观察 Shell 更改或执行激活工作。使用受支持的版本列表/别名解析版本请求，并通过
+`EnvKeys` 返回环境条目。
 
 #### ParseLegacyFile Hook
 
-解析来自其他工具的版本文件：
+在 `metadata.lua` 中声明文件名，实现解析器，并要求用户为插件的安装名称启用
+[`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools)。返回版本请求，但不要改变其含义：
 
 ```lua
 -- hooks/parse_legacy_file.lua
 function PLUGIN:ParseLegacyFile(ctx)
-    local filename = ctx.filename
-    local filepath = ctx.filepath
-    local versions = ctx:getInstalledVersions()
-
-    -- 读取并解析文件
     local file = require("file")
-    local content = file.read(filepath)
-    local version = content:match("v?([%d%.]+)")
-
-    return {
-        version = version
-    }
+    local contents = file.read(ctx.filepath)
+    local version = contents:match("^%s*([^\r\n]+)")
+    if version then
+        version = version:match("^%s*(.-)%s*$")
+    end
+    return {version = version}
 end
 ```
+
+此解析器支持单行版本请求，包括频道和预发布版本。请根据文件的实际格式进行调整。`ctx.filename` 是基本名称，`ctx.filepath` 是完整路径。尽管名称如此，兼容性方法
+`ctx:getInstalledVersions()` 调用的是 `Available`；它不是已安装版本的清单，并且可能会执行网络请求。
 
 ## 创建工具插件
 
 ### 使用模板仓库
 
-创建新工具插件最简单的方法，是以 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 仓库作为起点：
-
-```bash
-# 克隆模板
-git clone https://github.com/jdx/mise-tool-plugin-template my-tool-plugin
-cd my-tool-plugin
-
-# 移除模板的 git 历史并重新开始
-rm -rf .git
-git init
-
-# 为你的工具自定义插件
-# 编辑 metadata.lua、hooks/*.lua 文件等
-```
-
-该模板包含：
-
-- 预先配置好的插件结构，包含所有必需的 hooks
-- 带注释的示例实现
-- 代码检查配置（`.luacheckrc`、`stylua.toml`）
-- 使用 mise 任务的测试设置
-- 用于 CI 的 GitHub Actions 工作流
+从[工具模板](https://github.com/jdx/mise-tool-plugin-template)创建仓库，或克隆它以查看并自定义其文件。在测试期间，请选择一个不会与核心工具或现有插件冲突的插件名称。
 
 ### 1. 插件结构
 
-创建一个具有以下结构的目录（或使用上面的模板）：
-
-```
+```text
 my-tool-plugin/
-├── metadata.lua          # 插件元数据和配置
-├── hooks/               # Hook 函数目录
-│   ├── available.lua    # 列出可用版本 [required]
-│   ├── pre_install.lua  # 安装前 hook [required]
-│   ├── env_keys.lua     # 环境配置 [required]
-│   ├── post_install.lua # 安装后 hook [optional]
-│   ├── pre_use.lua      # 使用前 hook [optional]
-│   └── parse_legacy_file.lua # 旧格式文件解析器 [optional]
-├── lib/                 # 共享库代码 [optional]
-│   └── helper.lua       # 辅助函数
-└── test/               # 测试脚本 [optional]
-    └── test.sh
+├── metadata.lua
+├── hooks/
+│   ├── available.lua
+│   ├── pre_install.lua
+│   ├── env_keys.lua
+│   ├── post_install.lua       # optional
+│   └── parse_legacy_file.lua  # optional
+└── lib/
+    └── helper.lua            # optional shared code
 ```
 
 ### 2. metadata.lua
 
-配置插件元数据和旧文件支持：
-
 ```lua
--- metadata.lua
 PLUGIN = {
-    name = "nodejs",
-    version = "1.0.0",
-    description = "Node.js 运行时环境",
-    author = "插件作者",
-
-    -- 此插件可以解析的旧版本文件
-    legacyFilenames = {
-        '.nvmrc',
-        '.node-version'
-    },
-
-    -- 在安装 hooks 期间，其 bin 路径应可用的工具
-    depends = { "node" },
+    name = "my-tool",
+    version = "1.0.0", -- plugin release, separate from the tool version
+    description = "Install Example Tool",
+    author = "Plugin Author",
+    legacyFilenames = {".example-version"},
+    -- Add only real installation prerequisites, if any:
+    -- depends = {"go", "make"},
 }
 ```
 
-当安装 hooks 需要 PATH 上的其他由 mise 管理的工具时，将 `depends` 添加到 `PLUGIN` 表中。使用它们在 `mise.toml` 中出现的工具名，例如 `depends = { "go", "make" }`。如果 hooks 不需要调用其他工具，则省略它。
-
-这与 `[tools]` 中的 `depends` 是分开的，后者只会让一个已配置的工具在安装图中等待另一个已配置的工具。vfox `metadata.lua` 中的 `depends` 是插件元数据；当匹配的工具被配置时，mise 会使用它来对当前安装任务排序，并构建 hook 环境。
+`depends` 会向安装 Hook 暴露匹配的已配置工具，并对其安装任务进行排序。用户必须配置这些工具；元数据不会选择它们的版本。避免自依赖。这与工具的 `[tools]` `depends` 选项不同，后者会对已配置的安装图进行排序。
 
 #### 系统依赖
 
@@ -378,11 +257,11 @@ PLUGIN = {
 
 可选字段：
 
-- **`version`** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则会将依赖视为满足（存在即可），而不会阻止安装
-- **`optional`** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能的情况下进行构建（例如 Erlang 的 `wxWidgets` GUI）
-- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`）映射到提供相应功能的包。值可以是单个包名（`apt = "bison"`），也可以是在不同发行版版本中以不同名称打包同一功能时使用的候选列表（`apt = { "libaio1t64", "libaio1" }`）。候选项按新名称在前的顺序排列：mise 会选择包管理器实际提供的第一个包；如果无法判断，则回退到列表中的第一个包。只有可以查询包可用性的包管理器（目前为 `apt`）会进行这种选择；其他包管理器始终使用第一个候选项，因此对它们而言使用单个名称仍是正确选择
+- **`version`** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将依赖视为满足（存在即可），而不是阻止安装
+- **`optional`** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能时进行构建（例如 Erlang 的 `wxWidgets` GUI）
+- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`、`winget`）映射到提供该功能的包。值可以是单个包名称（`apt = "bison"`），也可以是候选项列表（`apt = { "libaio1t64", "libaio1" }`），用于同一功能在不同发行版版本中使用不同包名称的情况。候选项按新名称优先的顺序排列：mise 会选择包管理器实际拥有的第一个候选项；如果无法判断，则回退到列表中的第一个候选项。只有可以查询包可用性的管理器（目前为 `apt`）会执行此选择；其他管理器始终使用第一个候选项，因此对它们而言，使用单个名称仍然是正确选择
 
-**不要在 `metadata.lua` 中探测主机。** 每次 mise 加载插件元数据时都会执行其顶层代码，因此在那里执行 shell 命令（检查哪个包名存在、读取发行版版本）会增加许多 mise 调用的开销，并且其结果会与元数据一起缓存——当用户升级操作系统后，这个特定于机器的答案仍会被保留而变得过时。请声明候选项并让 mise 解析它们。mise 会延迟执行此操作：只有当某个依赖实际检查失败，并且 mise 即将安装包时，才会解析候选项。
+**绝不要从 `metadata.lua` 探测主机。** 每次 mise 加载插件元数据时都会运行其顶层代码，因此在那里执行 Shell 命令（检查哪个包名称存在、读取发行版版本）会在许多 mise 调用中产生开销，并且其结果会与元数据一同缓存——当用户升级操作系统后，这个针对特定机器的答案会过时。请声明候选项并让 mise 解析它们；mise 会延迟执行此操作：只有实际未通过检查的依赖，在即将安装包时才会进行解析。
 
 **检测结果是唯一依据。** 无论某项功能是通过 Homebrew、apt、nix、MacPorts 还是从源代码安装的，只要检查通过，就视为满足；mise 不会询问它是如何安装的。只有在**提供安装缺失项的选项**时，才会查询 `packages` 映射；它只是补救提示，并不声明该工具必须来自相应的包管理器。
 
@@ -390,507 +269,155 @@ PLUGIN = {
 
 ### 3. 辅助库
 
-在 `lib/` 目录中创建共享函数：
+使用 Lua 辅助函数处理发布者特定的平台命名。运行时对 macOS 报告 `darwin`，对 x64 报告 `amd64`；上游归档文件可能使用不同的拼写。仅映射发布者实际支持的平台，并明确拒绝其他平台。
 
 ```lua
--- lib/helper.lua
+-- lib/platform.lua
 local M = {}
-
-function M.get_arch()
-    -- 使用 vfox/mise 提供的 RUNTIME 对象
-    return (RUNTIME.archType == "amd64") and "x64" or RUNTIME.archType  -- 对其他架构保持原样返回
+function M.archive_platform()
+    local os_names = {darwin = "macos", linux = "linux", windows = "windows"}
+    local arches = {amd64 = "x64", arm64 = "arm64"}
+    local os_name = os_names[RUNTIME.osType] or error("Unsupported OS: " .. RUNTIME.osType)
+    local arch = arches[RUNTIME.archType] or error("Unsupported architecture: " .. RUNTIME.archType)
+    return os_name .. "-" .. arch
 end
-
-function M.get_os()
-    -- 使用 vfox/mise 提供的 RUNTIME 对象
-    return (RUNTIME.osType == "windows") and "win" or RUNTIME.osType
-end
-
-function M.get_platform()
-    return M.get_os() .. "-" .. M.get_arch()
-end
-
 return M
 ```
 
 ## 真实世界示例：vfox-nodejs
 
-以下是基于 vfox-nodejs 插件的完整示例，展示了所有概念：
+请研究 [vfox-nodejs](https://github.com/version-fox/vfox-nodejs) 以了解上游实现。对于常规 Node 使用，优先使用 mise 的
+[核心 Node 后端](/lang/node.html)。Node 插件必须处理以下细节，而不是复制固定的 Linux 归档 URL。
 
 ### 可用 Hook 示例
 
-```lua
--- hooks/available.lua
-function PLUGIN:Available(ctx)
-    local http = require("http")
-    local json = require("json")
-
-    -- 从 Node.js API 获取版本
-    local resp, err = http.get({
-        url = "https://nodejs.org/dist/index.json"
-    })
-
-    if err ~= nil then
-        error("获取版本失败: " .. err)
-    end
-
-    local versions = json.decode(resp.body)
-    local result = {}
-
-    for i, v in ipairs(versions) do
-        local version = v.version:gsub("^v", "")  -- 移除 'v' 前缀
-        local note = nil
-
-        if v.lts then
-            note = "LTS"
-        end
-
-        table.insert(result, {
-            version = version,
-            note = note,
-            addition = {
-                {
-                    name = "npm",
-                    version = v.npm
-                }
-            }
-        })
-    end
-
-    return result
-end
-```
+Node 的发布索引包含版本字符串和发布元数据。解码之前请检查 HTTP 状态，保留索引的发布顺序，并仅移除已知的前导
+`v`。 [HTTP 和 JSON 模块](/plugin-lua-modules.html)提供请求和解码 API。
 
 ### PreInstall Hook 示例
 
+为目标操作系统/架构选择准确的归档文件，然后在 `SHASUMS256.txt` 中精确匹配其文件名。文件名包含 `.` 和 `-` 等 Lua 模式字符，因此
+`line:match(filename)` 并不是精确的文件名检查。例如：
+
 ```lua
--- hooks/pre_install.lua
-function PLUGIN:PreInstall(ctx)
-    local version = ctx.version
-
-    -- 使用 RUNTIME 对象确定平台
-    local arch_token = (RUNTIME.archType == "amd64") and "x64" or RUNTIME.archType
-    local os_token = (RUNTIME.osType == "windows") and "win" or RUNTIME.osType
-    local platform = os_token .. "-" .. arch_token
-    local extension = (RUNTIME.osType == "windows") and "zip" or "tar.gz"
-
-    -- 构建下载 URL
-    local filename = "node-v" .. version .. "-" .. platform .. "." .. extension
-    local url = "https://nodejs.org/dist/v" .. version .. "/" .. filename
-
-    -- 获取校验和
-    local http = require("http")
-    local shasums_url = "https://nodejs.org/dist/v" .. version .. "/SHASUMS256.txt"
-    local resp, err = http.get({ url = shasums_url })
-
-    local sha256 = nil
-    if err == nil then
-        -- 为我们的文件提取 SHA256
-        for line in resp.body:gmatch("[^\n]+") do
-            if line:match(filename) then
-                sha256 = line:match("^(%w+)")
-                break
-            end
+local function find_checksum(body, filename)
+    for line in body:gmatch("[^\r\n]+") do
+        local digest, name = line:match("^(%x+)%s+%*?(.+)$")
+        if name == filename and #digest == 64 then
+            return digest
         end
     end
-
-    return {
-        version = version,
-        url = url,
-        sha256 = sha256,
-        note = "Installing Node.js " .. version .. " (" .. platform .. ")"
-    }
+    error("No SHA-256 entry for " .. filename)
 end
 ```
 
+如果缺少校验和则失败。请求失败后，不要默默地继续使用 `sha256 = nil`。从同一服务器获取校验和是一项完整性检查，但这与验证 Node 的签名校验和清单并不具有相同的保证。
+
 ### EnvKeys Hook 示例
 
+Node 归档文件在 Unix 上将可执行文件放置在 `bin` 中，在 Windows 上则放置于安装根目录。请使用正确的目录：
+
 ```lua
--- hooks/env_keys.lua
 function PLUGIN:EnvKeys(ctx)
-    local mainPath = ctx.path
-    local os_type = RUNTIME.osType
-
-    local env_vars = {
-        {
-            key = "NODE_HOME",
-            value = mainPath
-        },
-        {
-            key = "PATH",
-            value = mainPath .. "/bin"
-        }
+    local file = require("file")
+    local bin = RUNTIME.osType == "windows" and ctx.path or file.join_path(ctx.path, "bin")
+    return {
+        {key = "NODE_HOME", value = ctx.path},
+        {key = "PATH", value = bin},
     }
-
-    -- 将 npm 全局模块添加到 PATH
-    local npm_global_path = mainPath .. "/lib/node_modules/.bin"
-    if os_type == "windows" then
-        npm_global_path = mainPath .. "/node_modules/.bin"
-    end
-
-    table.insert(env_vars, {
-        key = "PATH",
-        value = npm_global_path
-    })
-
-    return env_vars
 end
 ```
 
 ### PostInstall Hook 示例
 
-```lua
--- hooks/post_install.lua
-function PLUGIN:PostInstall(ctx)
-    local sdkInfo = ctx.sdkInfo['nodejs']
-    local path = sdkInfo.path
-    -- 在 Unix 系统上设置可执行权限
-    if RUNTIME.osType ~= "windows" then
-        os.execute("chmod +x " .. path .. "/bin/*")
-    end
-
-    -- 创建 npm 缓存目录
-    local npm_cache_dir = path .. "/.npm"
-    os.execute("mkdir -p " .. npm_cache_dir)
-
-    -- 配置 npm 使用本地缓存
-    local npm_cmd = path .. "/bin/npm"
-    if RUNTIME.osType == "windows" then
-        npm_cmd = path .. "/npm.cmd"
-    end
-
-    os.execute(npm_cmd .. " config set cache " .. npm_cache_dir)
-    os.execute(npm_cmd .. " config set prefix " .. path)
-end
-```
+不要在没有明确配置范围的情况下运行 `npm config set`：它可能会更改工具安装目录之外的用户 npm 配置。如果插件需要特定的 npm 前缀或缓存，请优先返回环境条目。在添加权限更改或设置命令之前，请测试实际的归档布局。
 
 ### 旧文件支持
 
-```lua
--- hooks/parse_legacy_file.lua
-function PLUGIN:ParseLegacyFile(ctx)
-    local filename = ctx.filename
-    local filepath = ctx.filepath
-    local file = require("file")
-
-    -- 读取文件内容
-    local content = file.read(filepath)
-    if not content then
-        error("读取 " .. filepath .. " 失败")
-    end
-
-    -- 从不同文件格式中解析版本
-    local version = nil
-
-    if filename == ".nvmrc" then
-        -- .nvmrc 可能包含带或不带 'v' 前缀的版本
-        version = content:match("v?([%d%.]+)")
-    elseif filename == ".node-version" then
-        -- .node-version 通常只包含版本号
-        version = content:match("([%d%.]+)")
-    end
-
-    -- 移除所有空白字符
-    if version then
-        version = version:gsub("%s+", "")
-    end
-
-    return {
-        version = version
-    }
-end
-```
+Node 版本文件可以包含 `lts/*` 等别名、前缀和预发布版本。不要只提取数字和点号。解析器必须保留请求，插件也必须支持解析该请求；否则应报告不受支持的值，而不是选择其他发布版本。
 
 ## 测试你的插件
 
 ### 本地开发
 
-```bash
-# 为开发链接你的插件
+使用单独的测试项目和不会替换常用工具的插件名称：
+
+```sh
 mise plugin link my-tool /path/to/my-tool-plugin
-
-# 测试版本列表
 mise ls-remote my-tool
-
-# 测试安装
-mise install my-tool@1.0.0
-
-# 测试环境设置
 mise use my-tool@1.0.0
-my-tool --version
-
-# 测试旧版文件解析（如果适用）
-echo "2.0.0" > .my-tool-version
-mise use my-tool
+mise exec -- example --version
 ```
 
-如果你使用的是模板仓库，可以运行包含的测试：
+将 `1.0.0` 替换为已发布的测试版本，将 `example` 替换为它提供的可执行文件。对于版本文件测试，请使用另一个没有竞争性 `[tools]` 固定版本的空项目：
 
-```bash
-# 运行 lint 检查
-mise run lint
-
-# 运行测试
-mise run test
+```toml
+[settings]
+idiomatic_version_file_enable_tools = ["my-tool"]
 ```
+
+将受支持的请求写入 `.example-version`，运行 `mise install`，并验证
+`mise exec -- example --version`。`mise use my-tool` 会写入工具选择，因此它不能用于测试版本文件是否控制了解析。
 
 ### 调试模式
 
-使用调试模式查看详细的插件执行过程：
-
-```bash
-mise --debug install nodejs@20.0.0
+```sh
+MISE_DEBUG=1 mise install my-tool@1.0.0
+mise cache clear my-tool
 ```
+
+当缓存的元数据或版本结果掩盖了本地 Hook 编辑时，请清除工具的缓存。
 
 ### 插件测试脚本
 
-创建一个完整的测试脚本：
-
-```bash
-#!/bin/bash
-# test/test.sh
-set -e
-
-echo "正在测试 nodejs 插件..."
-
-# 安装插件
-mise plugin install nodejs .
-
-# 测试基本功能
-mise install nodejs@18.18.0
-mise use nodejs@18.18.0
-
-# 验证安装
-node --version | grep "18.18.0"
-npm --version
-
-# 测试旧版文件支持
-echo "20.0.0" > .nvmrc
-mise use nodejs
-node --version | grep "20.0.0"
-
-# 清理
-rm -f .nvmrc
-mise plugin remove nodejs
-
-echo "所有测试已通过！"
-```
+使用独立的[发布测试工作流](/plugin-publishing.html#testing-before-publication)。测试版本列表、具体安装、可执行文件查找和环境值。还要测试不受支持的平台、缺少校验和、格式错误的元数据、包含空格的路径，以及受支持时的惯用文件。在 CI 中运行每个声明支持的操作系统。
 
 ## 最佳实践
 
 ### 错误处理
 
-始终提供有意义的错误消息：
-
-```lua
-function PLUGIN:Available(ctx)
-    local http = require("http")
-    local resp, err = http.get({
-        url = "https://api.example.com/versions"
-    })
-
-    if err ~= nil then
-        error("无法从 API 获取版本： " .. err)
-    end
-
-    if resp.status_code ~= 200 then
-        error("API 返回状态 " .. resp.status_code .. "： " .. resp.body)
-    end
-
-    -- 处理响应...
-end
-```
+对于可恢复的传输失败，请使用 `http.try_get`，并在解析之前检查 HTTP 状态。`json.decode` 和
+`cmd.exec` 等同步操作会抛出可捕获的 Lua 错误。绝不要仅为了解释请求失败而记录令牌或包含密钥的响应正文。
 
 ### 平台检测
 
-使用 RUNTIME 对象正确处理不同的操作系统：
+使用注入的运行时，而不是生成 `uname`：
 
-```lua
--- lib/platform.lua
-local M = {}
-
-function M.is_windows()
-    return RUNTIME.osType == "windows"
-end
-
-function M.get_exe_extension()
-    return M.is_windows() and ".exe" or ""
-end
-
-function M.get_path_separator()
-    return M.is_windows() and "\\" or "/"
-end
-
-return M
-```
-
-**注意：** `RUNTIME` 对象会自动在所有插件钩子中可用，并提供：
-
-- `RUNTIME.osType`：操作系统类型（"windows"、"linux"、"darwin"）
-- `RUNTIME.archType`：架构（"amd64"、"arm64"、"x86" 等）
-- `RUNTIME.envType`：libc 环境类型（glibc Linux 上为 `"gnu"`，musl Linux 上为 `"musl"`，Windows/macOS 和未检测系统上为 `nil`）
-- `RUNTIME.version`：vfox 运行时版本
-- `RUNTIME.pluginDirPath`：插件目录路径
+| 字段                    | 值或含义                                                  |
+| ----------------------- | ---------------------------------------------------------- |
+| `RUNTIME.osType`        | `windows`、`linux`、`darwin`                               |
+| `RUNTIME.archType`      | `amd64`、`arm64`、`x86` 及其他受支持的架构 |
+| `RUNTIME.envType`       | 在检测到的 Linux 系统上为 `gnu` 或 `musl`；否则为 `nil` |
+| `RUNTIME.version`       | 嵌入式 vfox 运行时版本                                      |
+| `RUNTIME.pluginDirPath` | 插件源目录                                                  |
 
 ### 版本规范化
 
-始终一致地规范化版本：
-
-```lua
-local function normalize_version(version)
-    -- 如果存在，移除 'v' 前缀
-    version = version:gsub("^v", "")
-
-    -- 移除预发布后缀
-    version = version:gsub("%-.*", "")
-
-    return version
-end
-```
+仅规范化有文档说明的发布者约定，例如前导 `v`。将版本的其余部分视为不透明内容。移除
+`-beta.1` 会将预发布版本改成不同的请求。
 
 ### 缓存
 
-缓存代价高的操作：
-
-```lua
--- 缓存版本 12 小时
-local cache = {}
-local cache_ttl = 12 * 60 * 60  -- 12 小时（秒）
-
-function PLUGIN:Available(ctx)
-    local now = os.time()
-
-    -- 先检查缓存
-    if cache.versions and cache.timestamp and (now - cache.timestamp) < cache_ttl then
-        return cache.versions
-    end
-
-    -- 获取最新数据
-    local versions = fetch_versions_from_api()
-
-    -- 更新缓存
-    cache.versions = versions
-    cache.timestamp = now
-
-    return versions
-end
-```
+mise 会缓存远程版本列表和环境结果。模块级 Lua 表只在该运行时持续存在，无法提供跨独立 mise 调用共享的缓存。保持元数据为声明式，并参阅[缓存行为](/cache-behavior.html)了解刷新控制。
 
 ## 高级特性
 
 ### 条件安装
 
-根据平台或版本使用不同的安装逻辑：
-
-```lua
-function PLUGIN:PreInstall(ctx)
-    local version = ctx.version
-
-    -- 针对不同平台使用不同逻辑
-    if RUNTIME.osType == "windows" then
-        -- Windows 特定安装
-        return install_windows(version)
-    elseif RUNTIME.osType == "darwin" then
-        -- macOS 特定安装
-        return install_macos(version)
-    else
-        -- Linux 安装
-        return install_linux(version)
-    end
-end
-```
+使用 `RUNTIME` 和准确的请求版本选择归档文件。在为其他目标平台生成锁文件时也可能调用
+`PreInstall`；不要为了计算构件 URL 而探测主机或安装依赖。
 
 ### 源码编译
 
-适用于需要从源码编译的插件：
-
-```lua
--- hooks/post_install.lua
-function PLUGIN:PostInstall(ctx)
-    local sdkInfo = ctx.sdkInfo['tool-name']
-    local path = sdkInfo.path
-    local version = sdkInfo.version
-
-    -- 切换到源码目录
-    local build_dir = path .. "/src"
-
-    -- 配置构建
-    local configure_result = os.execute("cd " .. build_dir .. " && ./configure --prefix=" .. path)
-    if configure_result ~= 0 then
-        error("配置失败")
-    end
-
-    -- 编译
-    local make_result = os.execute("cd " .. build_dir .. " && make -j$(nproc)")
-    if make_result ~= 0 then
-        error("编译失败")
-    end
-
-    -- 安装
-    local install_result = os.execute("cd " .. build_dir .. " && make install")
-    if install_result ~= 0 then
-        error("安装失败")
-    end
-end
-```
+仅在安装阶段进行编译。声明前置条件，使用带有 `cwd` 选项的 `cmd.exec`，并通过正确引用的参数或环境变量传递路径。说明构建是否需要 POSIX Shell。`nproc`、`chmod` 和
+`./configure` 等命令无法构成可移植的 Windows 构建方案。
 
 ### 环境配置
 
-复杂的环境变量设置：
-
-```lua
-function PLUGIN:EnvKeys(ctx)
-    local mainPath = ctx.path
-    local version = ctx.sdkInfo['tool-name'].version
-
-    local env_vars = {
-        -- 标准环境变量
-        {
-            key = "TOOL_HOME",
-            value = mainPath
-        },
-        {
-            key = "TOOL_VERSION",
-            value = version
-        },
-
-        -- PATH 条目
-        {
-            key = "PATH",
-            value = mainPath .. "/bin"
-        },
-        {
-            key = "PATH",
-            value = mainPath .. "/scripts"
-        },
-
-        -- 库路径
-        {
-            key = "LD_LIBRARY_PATH",
-            value = mainPath .. "/lib"
-        },
-        {
-            key = "PKG_CONFIG_PATH",
-            value = mainPath .. "/lib/pkgconfig"
-        }
-    }
-
-    -- 平台特定添加项
-    if RUNTIME.osType == "darwin" then
-        table.insert(env_vars, {
-            key = "DYLD_LIBRARY_PATH",
-            value = mainPath .. "/lib"
-        })
-    end
-
-    return env_vars
-end
-```
+仅返回工具所需的变量。PATH 条目是目录；设置 `LD_LIBRARY_PATH` 等不相关变量可能会影响环境中启动的每个进程。对于与工具版本无关的变量，请使用[环境插件](/env-plugin-development.html)。
 
 ## 后续步骤
 
-- [从插件模板开始](https://github.com/jdx/mise-tool-plugin-template)
-- [了解后端插件开发](backend-plugin-development.md)
-- [探索可用的 Lua 模块](plugin-lua-modules.md)
-- [发布你的插件](plugin-publishing.md)
-- [查看 vfox-nodejs 插件源代码](https://github.com/version-fox/vfox-nodejs)。
+- [后端插件开发](/backend-plugin-development.html)
+- [插件 Lua 模块](/plugin-lua-modules.html)
+- [插件发布](/plugin-publishing.html)

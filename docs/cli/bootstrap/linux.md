@@ -1,4 +1,8 @@
-<!-- @由 usage-cli 根据用法规范生成 -->
+---
+description: "管理来自 `[bootstrap.linux]` 的 Linux 启动配置"
+---
+
+<!-- 由 usage-cli 根据 usage 规范生成 -->
 # `mise bootstrap linux`
 
 - **用法：** `mise bootstrap linux <SUBCOMMAND>`
@@ -12,4 +16,12 @@
 
 ## 子命令
 
-- [`mise bootstrap linux systemd-units <SUBCOMMAND>`](/cli/bootstrap/linux/systemd-units.md)。
+- [`mise bootstrap linux systemd-units <SUBCOMMAND>`](/cli/bootstrap/linux/systemd-units.html)
+
+<!-- 生成的参考导航 -->
+
+## 相关文档
+
+- [systemd 用户单元](/bootstrap/systemd.html)。
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
+- [全局标志和参数语法](/cli/#global-flags)。

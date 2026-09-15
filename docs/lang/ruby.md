@@ -1,23 +1,25 @@
+---
+description: "与 rvm、rbenv 或 asdf 类似，mise 可以在同一系统上管理 Ruby 的多个版本。"
+---
+
 # Ruby
 
 与 `rvm`、`rbenv` 或 `asdf` 类似，`mise` 可以在同一系统上管理 Ruby 的多个版本。
 
-> 以下是使用 ruby mise 核心插件的说明。当没有安装名为 “ruby” 的 git 插件时会使用它。
-> 如果你想使用 [asdf-ruby](https://github.com/asdf-vm/asdf-ruby)
-> ，则使用 `mise plugins install ruby GIT_URL`。
-
-这部分代码位于 mise 仓库中的
-[`./src/plugins/core/ruby.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/ruby.rs)。
-
 ## 用法
 
-下面的命令会安装 ruby-3.2.x 的最新版本（如果尚未安装 3.2.x 的某个版本），并将其设为全局默认：
+为当前项目选择 Ruby 并检查其可执行文件：
 
 ```sh
-mise use -g ruby@3.2
+mise use ruby@3.4
+mise exec -- ruby --version
 ```
 
-默认情况下，如果有预编译的 Ruby 二进制文件，mise 会安装该文件；否则会使用 [`ruby-build`](https://github.com/rbenv/ruby-build) 从源代码编译。源代码构建需要相应的[依赖项](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment)。有关其他设置和故障排除方法，请参阅 ruby-build 的[自述文件](https://github.com/rbenv/ruby-build/blob/master/README.md)。
+使用 `mise use -g ruby@3.4` 设置个人默认版本。对于现有的 Bundler 项目，运行 `mise exec -- bundle install`，然后在应用命令前加上 `mise exec -- bundle exec`。请参阅 [Ruby cookbook](/mise-cookbook/ruby.html)。
+
+默认情况下，如果有可用的预编译 Ruby 二进制文件，mise 会安装该文件；否则会使用 [`ruby-build`](https://github.com/rbenv/ruby-build) 回退到从源代码编译。源代码构建需要必要的[依赖项](https://github.com/rbenv/ruby-build/wiki#suggested-build-environment)。有关其他设置和故障排除，请参阅 ruby-build 的 [README](https://github.com/rbenv/ruby-build/blob/master/README.md)。
+
+这些说明使用 mise 内置的 ruby 支持。已安装的同名外部插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/ruby.rs)。
 
 ## 预编译二进制文件
 
@@ -26,9 +28,9 @@ mise 默认下载预编译的 Ruby 二进制文件。这会显著缩短安装时
 预编译二进制文件来源于 [jdx/ruby](https://github.com/jdx/ruby)，并适用于
 以下平台：
 
-- macOS (arm64/Apple Silicon only)
-- Linux arm64 (glibc/manylinux2014 only)
-- Linux x86_64 (glibc/manylinux2014 only)
+- macOS (仅 arm64/Apple Silicon)
+- Linux arm64 (仅 glibc/manylinux2014)
+- Linux x86_64 (仅 glibc/manylinux2014)
 
 如果你的平台或 Ruby 版本没有可用的预编译二进制文件，mise 会自动
 回退到使用 ruby-build 从源代码编译。
@@ -64,9 +66,7 @@ mise settings ruby.compile=false
 
 ### 预编译构建修订版
 
-预编译的 Ruby 二进制文件由 `jdx/ruby` 发布。有时某个 Ruby 版本的二进制文件会在不更改 Ruby 版本本身的情况下重新构建。这些重新构建会使用类似 `3.3.11-1` 或 `3.3.11-2` 的构建修订版发布标签。
-Mise 会将这些构建修订版标签用于 `jdx/ruby` 预编译二进制文件，
-而不是使用浮动的基础发布标签。
+预编译 Ruby 二进制文件从 `jdx/ruby` 发布。有时，某个 Ruby 版本的二进制文件会在不更改 Ruby 版本本身的情况下重新构建。这些重新构建会使用类似 `3.3.11-1` 或 `3.3.11-2` 的构建修订版发布标签。mise 对 `jdx/ruby` 预编译二进制文件使用这些构建修订版标签，而不是浮动的基础发布标签。
 
 重新构建是为了修复可移植二进制包的变更，而不是 Ruby
 自身版本号的变更。`jdx/ruby` 的发布历史包括以下原因导致的重新构建：
@@ -79,9 +79,8 @@ Mise 会将这些构建修订版标签用于 `jdx/ruby` 预编译二进制文件
 
 此列表并不详尽。
 
-Mise 仍然将 Ruby 版本视为 `3.3.11`。如果没有 `mise.lock`，mise
-在解析安装时会使用最新可用的预编译构建修订版。
-这意味着稍后重新安装相同的 Ruby 版本时，如果发布了更新的重新构建，可能会获取到更新的版本。
+mise 仍将 Ruby 版本视为 `3.3.11`。如果没有 `mise.lock`，mise
+在解析安装时会使用最新可用的预编译构建修订版。这意味着如果之后发布了更新的重新构建版本，稍后重新安装相同的 Ruby 版本可能会获取该新版本。
 
 使用 `mise.lock` 时，下载 URL 会记录所使用的预编译构建修订版：
 
@@ -119,8 +118,8 @@ mise settings ruby.compile=true
 你还可以通过将 `ruby.precompiled_url` 设置为 GitHub 仓库（例如 `owner/repo`）
 或完整的 URL 模板，使用自定义的预编译二进制文件来源。
 
-你还可以安装特定的 ruby 变体。要获取某个变体的最新版本，只需使用
-该变体前缀。
+你还可以安装特定的 Ruby 变体。要获取某个变体的最新版本，请使用
+变体前缀。
 
 ```sh
 mise use -g ruby@truffleruby            # truffleruby 的最新版本
@@ -175,17 +174,19 @@ ruby = { version = "latest", install_env = { RUBY_CONFIGURE_OPTS = "--disable-in
 
 ## `.ruby-version` 和 `Gemfile` 支持
 
-mise 使用 `mise.toml` 或 `.tool-versions` 文件在不同软件版本之间自动切换。
-不过，它也可以读取 Ruby 特定的版本文件 `.ruby-version` 或 `Gemfile`
-（如果其中指定了 Ruby 版本）。
+mise 使用 `mise.toml` 或 `.tool-versions` 文件在软件版本之间自动切换。
+不过，它也可以读取 Ruby 专用的版本文件 `.ruby-version` 和 `Gemfile`
+（如果其中指定了 Ruby 版本）。Gemfile 可以使用 `ruby "3.3.6"` 固定 Ruby 版本，
+也可以使用 Bundler 的 `ruby file: ".ruby-version"`（路径相对于 Gemfile 解析）。
 
 为当前版本的 Ruby 创建一个 `.ruby-version` 文件：
 
 ```sh
-ruby -v > .ruby-version
+mise exec -- ruby -e 'puts RUBY_VERSION' > .ruby-version
 ```
 
-为 Ruby 启用惯用版本文件读取：
+只写入版本号，不要写入完整的 `ruby -v` 横幅。然后启用
+惯用版本文件读取：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools ruby
@@ -195,7 +196,7 @@ mise settings add idiomatic_version_file_enable_tools ruby
 
 ## 手动更新 ruby-build
 
-ruby-build 应该会每天更新，不过如果你发现某些版本尚不存在，你可以强制进行
+ruby-build 应每天更新。不过，如果缺少你预期存在的版本，可以强制
 更新：
 
 ```bash
@@ -206,8 +207,8 @@ mise ls-remote ruby
 ## 设置
 
 `ruby-build` 已经有一些
-[设置](https://github.com/rbenv/ruby-build?tab=readme-ov-file#custom-build-configuration)，
-此外，mise 还有一些额外的设置：
+[设置](https://github.com/rbenv/ruby-build?tab=readme-ov-file#custom-build-configuration)；
+此外，mise 还有一些额外设置：
 
 要向 `ruby-build` 本身传递选项，请使用 `ruby.ruby_build_cli_opts`。例如，`--keep`
 会在安装后保留源代码树；设置 `RUBY_BUILD_BUILD_PATH` 可选择其保留位置：
@@ -220,8 +221,8 @@ ruby_build_cli_opts = "--keep"
 RUBY_BUILD_BUILD_PATH = "{{ config_root }}/.ruby-build"
 ```
 
-诸如 `--enable-yjit` 的配置参数应放在 `ruby.ruby_build_opts` 中。mise 会将这些参数传递到
-ruby-build 的 `--` 分隔符之后：
+Ruby configure 脚本的参数（例如 `--enable-yjit`）应放在 `ruby.ruby_build_opts` 中。
+mise 会将这些参数传递到 ruby-build 的 `--` 分隔符之后：
 
 ```toml
 [settings.ruby]

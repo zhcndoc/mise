@@ -1,6 +1,8 @@
 name: docs
 
 on:
+  release:
+    types: [published]
   push:
     paths: &docs-paths
       - ".github/actions/**"
@@ -26,27 +28,24 @@ permissions: {}
 
 jobs:
   trusted:
-    if: ${{ github.actor == 'jdx' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'jdx')) }}
+    if: ${{ github.event_name == 'release' || ((github.actor == 'jdx' || github.actor == 'mise-en-dev') && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.user.login == 'jdx' || github.event.pull_request.user.login == 'mise-en-dev')))) }}
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/docs-impl.yml
+    uses: $/.github/workflows/docs-impl.yml
     with:
       trusted: true
-      mbx-backend: server
     secrets:
       CLOUDFLARE_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_ACCESS_KEY_ID }}
       CLOUDFLARE_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_SECRET_ACCESS_KEY }}
       MISE_GH_TOKEN: ${{ secrets.MISE_GH_TOKEN }}
 
   untrusted:
-    if: ${{ github.actor != 'jdx' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login != 'jdx')) }}
+    if: ${{ github.event_name != 'release' && ((github.actor != 'jdx' && github.actor != 'mise-en-dev') || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || (github.event.pull_request.user.login != 'jdx' && github.event.pull_request.user.login != 'mise-en-dev')))) }}
     permissions:
       contents: read
-    uses: ./.github/workflows/docs-impl.yml
+    uses: $/.github/workflows/docs-impl.yml
     with:
       trusted: false
-      mbx-backend: github
 
   docs:
     name: docs

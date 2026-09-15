@@ -1,33 +1,45 @@
-# 插件 Lua 模块
+---
+description: "mise's embedded Lua 5.1 runtime provides modules for plugin hooks, including backend, tool, environment, and package plugins."
+---
 
-mise 插件可以访问一整套内置 Lua 模块，这些模块提供常见功能。这些模块在后端插件和工具插件中都可用，使执行 HTTP 请求、JSON 解析、文件操作等常见任务变得更加容易。
+# Plugin Lua Modules
+
+mise's embedded Lua 5.1 runtime provides modules for plugin hooks, including backend, tool,
+environment, and package plugins. This reference describes mise's implementations; upstream
+vfox may differ. Load modules with `require` and use `RUNTIME` for the target platform.
+
+Use direct HTTP and file operations when possible. `cmd.exec` runs a shell, so command
+quoting and external prerequisites still depend on the selected platform.
 
 ## 可用模块
 
 ### 核心模块
 
-- **`cmd`** - 执行 shell 命令
-- **`json`** - 解析和生成 JSON
-- **`http`** - 发起 HTTP 请求和下载
-- **`file`** - 文件系统操作
-- **`env`** - 环境变量操作
-- **`strings`** - 字符串处理工具
-- **`semver`** - 语义化版本比较和排序
-- **`html`** - HTML 解析和操作
-- **`archiver`** - 压缩包解压
-- **`log`** - 结构化日志记录。
+- **`cmd`** - Execute shell commands
+- **`json`** - Parse and generate JSON
+- **`http`** - Make HTTP requests and downloads
+- **`file`** - File system operations
+- **`env`** - Environment variable operations
+- **`strings`** - String manipulation utilities
+- **`semver`** - Numeric-component comparison and sorting (not full SemVer precedence)
+- **`html`** - HTML parsing and manipulation
+- **`archiver`** - Archive extraction
+- **`log`** - Structured logging
 
 ## HTTP 模块
 
-HTTP 模块提供用于发起网络请求和下载文件的功能。
+The HTTP module makes web requests and downloads files. `get` and `head` return a response
+or raise on a transport failure; a non-2xx HTTP response is still a response, so check
+`status_code`. `download_file` raises on transport and HTTP error status and returns no
+value on success. Use the non-raising `try_*` variants for fallback logic.
 
 ### 基本 HTTP 请求
 
 ```lua
 local http = require("http")
 
--- GET 请求
-local resp, err = http.get({
+-- GET request
+local resp = http.get({
     url = "https://api.github.com/repos/owner/repo/releases",
     headers = {
         ['User-Agent'] = "mise-plugin",
@@ -35,9 +47,6 @@ local resp, err = http.get({
     }
 })
 
-if err ~= nil then
-    error("请求失败: " .. err)
-end
 
 if resp.status_code ~= 200 then
     error("HTTP 错误: " .. resp.status_code)
@@ -51,14 +60,11 @@ local body = resp.body
 ```lua
 local http = require("http")
 
--- 用于检查文件信息的 HEAD 请求
-local resp, err = http.head({
+-- HEAD request to check file info
+local resp = http.head({
     url = "https://example.com/file.tar.gz"
 })
 
-if err ~= nil then
-    error("HEAD 请求失败: " .. err)
-end
 
 local content_length = resp.headers['content-length']
 local content_type = resp.headers['content-type']
@@ -127,7 +133,7 @@ HTTP 响应包含以下字段：
 
 ## JSON 模块
 
-JSON 模块提供编码和解码功能。
+The JSON module encodes and decodes JSON.
 
 ### 基本用法
 
@@ -168,7 +174,7 @@ end
 
 ## 字符串模块
 
-strings 模块提供了各种字符串操作工具。
+The strings module provides string manipulation utilities.
 
 ### 字符串操作
 
@@ -201,32 +207,32 @@ print(strings.has_prefix(text, "hello"))  -- true
 print(strings.has_suffix(text, "world"))  -- true
 print(strings.contains(text, "lo wo"))    -- true
 
--- 去除特定字符
+-- Remove repeated exact suffixes (not a character set)
 local trimmed = strings.trim("hello world", "world")
 print(trimmed)  -- "hello "
 ```
 
 ### 版本字符串工具
 
+Use Lua patterns to remove a known publisher prefix. The module has no `trim_prefix`
+function, and stripping a prerelease suffix would change the requested version:
+
 ```lua
-local strings = require("strings")
-
--- 常见的版本字符串操作
 local function normalize_version(version)
-    -- 如果存在，则移除 'v' 前缀
-    version = strings.trim_prefix(version, "v")
-
-    -- 移除预发布后缀
-    local parts = strings.split(version, "-")
-    return parts[1]
+    return (version:gsub("^v", ""))
 end
-
-local version = normalize_version("v1.2.3-beta.1")  -- "1.2.3"
+local version = normalize_version("v1.2.3-beta.1") -- "1.2.3-beta.1"
 ```
 
 ## Semver 模块
 
-semver 模块提供语义化版本比较和排序功能。这对于对 `Available()` 钩子返回的版本列表进行排序非常有用。
+Despite its name, this module compares **numeric components extracted from strings**, not
+full Semantic Versioning precedence. It ignores non-digit text and treats missing numeric
+components as zero. For example, `1.0.0-beta` compares equal to `1.0.0`, and `1.0.0-beta.1`
+compares greater. Do not use it to choose the newest arbitrary tool version or order channels.
+
+Use it only when a tool's documented version scheme matches this numeric comparison.
+Otherwise preserve the publisher's order or implement that tool's actual policy.
 
 ### 版本比较
 
@@ -255,7 +261,7 @@ print(parts[1])  -- 1
 print(parts[2])  -- 2
 print(parts[3])  -- 3
 
--- 支持前缀和后缀
+-- Non-digit text is discarded; this is not a SemVer parser
 local parts = semver.parse("v1.2.3-beta")  -- {1, 2, 3}
 ```
 
@@ -287,19 +293,20 @@ local sorted = semver.sort_by(releases, "version")
 
 ### 真实示例：Available 钩子
 
+This sketch applies only to releases made of three numeric components, with no prereleases
+or channels. Prefer a structured release API over scraping text when one is available.
+
 ```lua
 local http = require("http")
 local semver = require("semver")
 
 function PLUGIN:Available(ctx)
-    local resp, err = http.get({
+    local resp = http.get({
         url = "https://example.com/releases/"
     })
 
-    if err ~= nil then
-        error("获取版本失败: " .. err)
-    end
 
+    assert(resp.status_code == 200, "Release request failed")
     local result = {}
     -- 从响应中解析版本...
     for version in string.gmatch(resp.body, 'v([0-9]+%.[0-9]+%.[0-9]+)') do
@@ -335,7 +342,10 @@ end)
 
 ## HTML 模块
 
-HTML 模块提供 HTML 解析功能。
+The HTML module returns selection objects, not Lua arrays. Use `:each(function(index,
+node) ... end)` to iterate a selection, `:first()` for its first element, and `:eq(0)` for
+its zero-based first position. `:text()` reads the first selected node's inner content
+(which can include markup); `:attr(name)` reads its attribute.
 
 ### 基础 HTML 解析
 
@@ -360,11 +370,10 @@ local version = doc:find("#version"):text()  -- "1.2.3"
 
 -- 提取属性
 local links = doc:find("a")
-for _, link in ipairs(links) do
+links:each(function(index, link)
     local href = link:attr("href")
-    local text = link:text()
-    print(text .. ": " .. href)
-end
+    print(index, link:text(), href)
+end)
 ```
 
 ### CSS 选择器
@@ -389,25 +398,26 @@ local specific_links = doc:find("ul.downloads a[href$='.tar.gz']")
 
 ### 实际示例：抓取发布信息
 
+This illustrates selection traversal. Website HTML and duplicate links can change; prefer
+a release API when available and deduplicate identifiers before returning a hook result.
+
 ```lua
 local html = require("html")
 local http = require("http")
 
 function get_github_releases(owner, repo)
-    local resp, err = http.get({
+    local resp = http.get({
         url = "https://github.com/" .. owner .. "/" .. repo .. "/releases"
     })
 
-    if err ~= nil then
-        error("获取发布信息失败: " .. err)
-    end
 
+    assert(resp.status_code == 200, "Release page request failed")
     local doc = html.parse(resp.body)
     local releases = {}
 
     -- 查找所有发布标签
     local release_elements = doc:find("a[href*='/releases/tag/']")
-    for _, element in ipairs(release_elements) do
+    release_elements:each(function(index, element)
         local href = element:attr("href")
         local version = href:match("/releases/tag/(.+)")
         if version then
@@ -416,7 +426,7 @@ function get_github_releases(owner, repo)
                 url = "https://github.com" .. href
             })
         end
-    end
+    end)
 
     return releases
 end
@@ -424,7 +434,8 @@ end
 
 ## 归档模块
 
-归档模块提供了解压缩归档文件的功能。
+The archiver module extracts archives based on their filename suffix. It does not download
+or authenticate the archive; verify the artifact before extracting it.
 
 ### 支持的格式
 
@@ -441,16 +452,13 @@ local archiver = require("archiver")
 -- 将归档文件解压到目录
 archiver.decompress("archive.tar.gz", "extracted/")
 
--- 失败时会引发 Lua 错误。仅当插件需要拦截错误时才使用 pcall。
-local ok, err = pcall(archiver.decompress, "package.zip", "destination/")
-if not ok then
-    error("ZIP extraction failed: " .. err)
-end
+-- Failures raise Lua errors and stop the hook.
+archiver.decompress("package.zip", "destination/")
 ```
 
-要展平归档文件根目录下的版本目录，请传入
-`strip_components = 1`。已位于归档文件根目录中的文件会被保留，这与
-mise 内置的归档后端行为一致。
+To flatten versioned directories at the root of an archive, pass
+`strip_components = 1`. Files already at the archive root are retained, matching
+mise's built-in archive backends. Only `0` and `1` are supported; higher values raise an error.
 
 ```lua
 archiver.decompress("node-v24.18.1-linux-x64.tar.gz", "destination/", {
@@ -490,10 +498,13 @@ local file = require("file")
 
 -- 使用操作系统特定的分隔符拼接路径段
 local full_path = file.join_path("/foo", "bar", "baz.txt")
-print(full_path)  -- 在 Unix 上: /foo/bar/baz.txt，在 Windows 上: \foo\bar\baz.txt
+print(full_path)  -- On Unix: /foo/bar/baz.txt
 ```
 
-`file.join_path(...)` 函数使用当前操作系统的正确分隔符拼接任意数量的路径段。这是在跨平台插件中构造文件路径的推荐方式。
+`file.join_path` joins nonempty segments with the host path separator. It does not normalize
+existing separators, resolve `..`, expand `~`, or make an untrusted path safe. Pass relative
+segments after the base directory. For environment plugins, use `ctx.config_root` as the
+base for project-relative options.
 
 ### 读取文件内容
 
@@ -502,7 +513,9 @@ local file = require("file")
 print(file.read("/path/to/file"))
 ```
 
-### 创建符号链接
+`file.read` returns UTF-8 text or raises an error; it does not return `nil` for a missing file.
+
+### Create Symbolic Links
 
 ```lua
 local file = require("file")
@@ -544,9 +557,19 @@ file.move(
 )
 ```
 
-## 环境模块
+### File Metadata
 
-env 模块提供环境变量操作。
+`file.stat(path)` returns `nil` when the path is missing. Otherwise it returns `size`,
+`is_file`, `is_dir`, `is_symlink`, and available `modified`, `accessed`, and `created` Unix
+timestamps. It inspects the link itself. `mode` is an octal permission string on Unix and
+`nil` on other platforms.
+
+## Environment Module
+
+`env.setenv` changes the mise process environment. It does not return a variable to the
+user's shell, and it does not update an already-constructed hook environment. Prefer
+returning values from `MiseEnv`, `EnvKeys`, or `BackendExecEnv`. For one child command, use
+`cmd.exec(..., {env = {...}})` to avoid process-wide mutations.
 
 ### 设置环境变量
 
@@ -563,25 +586,20 @@ env.setenv("MY_VAR", "my_value")
 
 ### 路径操作
 
-```lua
-local env = require("env")
-
--- 获取当前 PATH
-local current_path = os.getenv("PATH")
-
--- 添加到 PATH
-local new_path = "/usr/local/bin:" .. current_path
-env.setenv("PATH", new_path)
-
--- 平台相关的 PATH 分隔符
-local separator = package.config:sub(1,1) == '\\' and ";" or ":"
-local paths = {"/usr/local/bin", "/opt/bin", current_path}
-env.setenv("PATH", table.concat(paths, separator))
-```
+Return separate PATH entries from an environment hook. Use `file.join_path` to construct
+paths and let mise merge them using the host's PATH separator. Do not prepend a Unix
+colon-separated string to PATH in code that also runs on Windows.
 
 ## 命令模块
 
-cmd 模块提供 shell 命令执行功能。
+`cmd.exec` runs a command through mise's configured default inline shell. It returns stdout
+on success and raises an error containing stderr on failure. Successful stderr is not part
+of the returned string. `pcall(cmd.exec, ...)` can intercept the error.
+
+The string is shell code, not an argument array. Use `cwd` for the working directory and
+quote external values for that shell; interpolating tool options into shell text can execute
+unintended commands. `os.execute` streams output and returns the exit status using Lua 5.1
+conventions (`0` for success), with the same mise-constructed environment.
 
 ### 基本命令执行
 
@@ -622,15 +640,15 @@ local result = cmd.exec("npm install package-name", {cwd = "/path/to/project"})
 
 选项表支持以下键：
 
-- **`cwd`**（字符串）：为命令设置工作目录
-- **`env`**（表）：为命令执行设置环境变量。这些变量会与继承的环境合并（见下文）。
-- **`timeout`**（数字）：为命令执行设置超时时间（未来特性）
+- **`cwd`** (string): Set the working directory for the command
+- **`env`** (table): Set environment variables for the command. These are merged on top of the inherited environment (see below).
+- **`timeout`**: Currently ignored. Do not rely on it to terminate a command.
 
 ### Env 模块钩子中的环境继承
 
 当从环境模块钩子（`MiseEnv`、`MisePath`）调用 `cmd.exec()` 时，命令会自动继承 mise 构造的环境，而不是进程环境。这包括前置指令设置的环境变量，以及到目前为止累积的 `_.path` 条目。
 
-当模块指令的 `tools = true` 时，继承的环境还会包含工具安装的 bin 路径。这意味着可以直接调用由 mise 管理的工具：
+When the module directive has `tools = true`, the inherited environment also includes the bin paths of installed tools, so mise-managed tools can be called directly:
 
 ```toml
 [env]
@@ -639,7 +657,8 @@ _.my-plugin = { tools = true }
 
 ```lua
 function PLUGIN:MiseEnv(ctx)
-    -- 使用 tools=true 时，mise 管理的工具会在 PATH 上
+    local cmd = require("cmd")
+    -- With tools=true, mise-managed tools are on PATH
     local version = cmd.exec("node --version")
     return {
         {key = "NODE_VERSION", value = version:gsub("%s+", "")}
@@ -677,22 +696,23 @@ print("操作系统信息：", os_info)
 
 ### 从 API 获取版本
 
+This helper collects version identifiers. An unordered JSON object does not establish
+oldest/newest order, and lexicographic sorting misorders `1.10.0` and `1.2.0`.
+
 ```lua
 local http = require("http")
 local json = require("json")
 
 function fetch_npm_versions(package_name)
-    local resp, err = http.get({
+    local resp = http.get({
         url = "https://registry.npmjs.org/" .. package_name,
         headers = {
             ['User-Agent'] = "mise-plugin"
         }
     })
 
-    if err ~= nil then
-        error("获取包信息失败: " .. err)
-    end
 
+    assert(resp.status_code == 200, "Package metadata request failed")
     local package_info = json.decode(resp.body)
     local versions = {}
 
@@ -700,42 +720,19 @@ function fetch_npm_versions(package_name)
         table.insert(versions, version)
     end
 
-    -- 对版本进行排序（简单的字符串排序）
-    table.sort(versions)
-
+    -- The JSON object has no release order. Return the collected identifiers;
+    -- callers must apply npm's actual release policy before using this as a hook.
     return versions
 end
 ```
 
-### 带进度的文件下载
+### Download and Verification {#file-download-with-progress}
 
-```lua
-local http = require("http")
-local file = require("file")
-
-function download_with_verification(url, dest_path, expected_sha256)
-    -- 下载文件
-    local err = http.download_file({
-        url = url,
-        headers = {
-            ['User-Agent'] = "mise-plugin"
-        }
-    }, dest_path)
-
-    if err ~= nil then
-        error("下载失败: " .. err)
-    end
-
-    -- 验证文件是否存在
-    if not file.exists(dest_path) then
-        error("未找到已下载的文件")
-    end
-
-    -- 注意：SHA256 验证需要额外实现
-    -- 这是一个简化示例
-    print("成功下载到: " .. dest_path)
-end
-```
+`http.download_file` downloads bytes; checking that the destination exists is not checksum
+verification. A tool plugin should return the trusted digest in `PreInstall.sha256` or
+`PreInstall.sha512` so mise verifies before extraction. A backend plugin performing its own
+download must implement verification explicitly. Do not accept an `expected_sha256` argument
+and then ignore it.
 
 ### 配置文件解析
 
@@ -750,11 +747,7 @@ function parse_config_file(config_path)
     end
 
     local content = file.read(config_path)
-    if not content then
-        error("读取配置文件失败: " .. config_path)
-    end
-
-    -- 去除空白字符
+        -- Trim whitespace
     content = strings.trim_space(content)
 
     -- 解析 JSON
@@ -775,25 +768,23 @@ local html = require("html")
 local strings = require("strings")
 
 function scrape_versions_from_releases(base_url)
-    local resp, err = http.get({
+    local resp = http.get({
         url = base_url .. "/releases"
     })
 
-    if err ~= nil then
-        error("获取发布页面失败: " .. err)
-    end
 
+    assert(resp.status_code == 200, "Release page request failed")
     local doc = html.parse(resp.body)
     local versions = {}
 
     -- 查找版本标签
     local version_elements = doc:find("h2 a[href*='/releases/tag/']")
-    for _, element in ipairs(version_elements) do
+    version_elements:each(function(index, element)
         local version_text = element:text()
         local version = strings.trim_space(version_text)
 
-        -- 如果存在，移除 'v' 前缀
-        version = strings.trim_prefix(version, "v")
+        -- Remove 'v' prefix if present
+        version = version:gsub("^v", "")
 
         if version and version ~= "" then
             table.insert(versions, {
@@ -801,7 +792,7 @@ function scrape_versions_from_releases(base_url)
                 url = base_url .. element:attr("href")
             })
         end
-    end
+    end)
 
     return versions
 end
@@ -809,7 +800,7 @@ end
 
 ## 日志模块
 
-日志模块提供结构化日志记录，通过 Rust 的 `log` crate 进行路由，并遵循 `MISE_DEBUG` 和 `MISE_TRACE` 环境变量。
+The log module provides structured logging that routes through Rust's `log` crate and respects the `MISE_DEBUG` and `MISE_TRACE` environment variables.
 
 ### 日志级别
 
@@ -874,14 +865,11 @@ local http = require("http")
 local json = require("json")
 
 function safe_api_call(url)
-    local resp, err = http.get({url = url})
+    local resp = http.get({url = url})
 
-    if err ~= nil then
-        error("HTTP request failed: " .. err)
-    end
 
     if resp.status_code ~= 200 then
-        error("API returned error: " .. resp.status_code .. " " .. resp.body)
+        error("API returned error: " .. resp.status_code)
     end
 
     local success, data = pcall(json.decode, resp.body)
@@ -895,7 +883,10 @@ end
 
 ### 缓存
 
-为耗时操作实现缓存：
+A local Lua table can avoid repeated work within one runtime. It does not persist between
+separate mise invocations. mise already caches tool version and environment results;
+environment plugins can also return [cache metadata](/env-plugin-development.html#hooks-mise-env-lua).
+The example below is only an in-memory cache:
 
 ```lua
 local cache = {}
@@ -912,13 +903,11 @@ function cached_http_get(url)
 
     -- 获取新鲜数据
     local http = require("http")
-    local resp, err = http.get({url = url})
+    local resp = http.get({url = url})
 
-    if err ~= nil then
-        error("HTTP request failed: " .. err)
-    end
 
-    -- 缓存结果
+    assert(resp.status_code == 200, "Request failed")
+    -- Cache the result
     cache[cache_key] = {
         data = resp,
         timestamp = now
@@ -930,35 +919,20 @@ end
 
 ### 平台检测
 
-处理跨平台差异：
+Use runtime metadata instead of subprocesses or ambient host variables:
 
 ```lua
-local function get_platform_info()
-    local is_windows = package.config:sub(1,1) == '\\'
-    local cmd = require("cmd")
-
-    if is_windows then
-        return {
-            os = "windows",
-            arch = os.getenv("PROCESSOR_ARCHITECTURE") or "x64",
-            path_sep = "\\",
-            env_sep = ";"
-        }
-    else
-        local uname = cmd.exec("uname -s"):lower()
-        local arch = cmd.exec("uname -m")
-
-        return {
-            os = uname,
-            arch = arch,
-            path_sep = "/",
-            env_sep = ":"
-        }
-    end
-end
+local platform = {
+    os = RUNTIME.osType,
+    arch = RUNTIME.archType,
+    libc = RUNTIME.envType,
+}
 ```
 
-## 下一步
+`RUNTIME` may describe another target during lockfile generation. Shelling out to `uname`
+would report the host and can produce the wrong artifact URL for that target.
+
+## Next Steps
 
 - [后端插件开发](backend-plugin-development.md)
 - [工具插件开发](tool-plugin-development.md)

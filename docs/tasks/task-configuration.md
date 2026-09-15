@@ -1,16 +1,25 @@
-# 任务配置
+---
+description: "Explore task options for commands, dependencies, arguments, and execution."
+socialDescription: "Explore task options for commands, dependencies, arguments, and execution."
+---
 
-这是 `mise.toml` 中或作为文件任务可用的所有任务配置选项的完整列表。
+# Task Configuration
+
+This is an exhaustive list of the configuration options available for tasks in `mise.toml` or as
+file tasks.
 
 ## 任务属性
 
-所有示例均采用 toml-task 格式而不是文件格式，不过在两者中都适用，除非另有说明。
+All examples use the toml-task format rather than file tasks, but they apply to both except where otherwise noted.
 
 ### `run`
 
 - **类型**: `string | (string | { task: string, args?: string[], env?: { [key: string]: string } } | { tasks: string[] })[]`
 
-要运行的命令。对于一个任务来说，这是唯一必需的属性。
+The commands or execution steps to run. A task may instead use [`file`](#file),
+inherit its command through `extends`, or contain only dependencies to group other
+tasks. Each `run` entry finishes before the next starts; a `{ tasks = [...] }`
+entry runs its listed tasks in parallel.
 
 你可以将脚本与任务引用混合使用，并向被引用的任务传递可选的 `args` 和 `env`：
 
@@ -45,7 +54,7 @@ run = ["echo hello"]
 
 - **类型**: `string | (string | { task: string, args?: string[], env?: { [key: string]: string } } | { tasks: string[] })[]`
 
-`run` 的 Windows 特定变体，支持相同的结构化语法：
+A Windows-specific variant of `run` that supports the same structured syntax:
 
 ```mise-toml
 [tasks.build]
@@ -96,7 +105,10 @@ run = "cargo build"
 
 - **类型**：`string | (string | string[] | { task: string, args?: string[], env?: { [key: string]: string }, optional?: bool })[]`
 
-必须在此任务之前运行的任务。这是一个任务名称或别名列表。参数可以传递给任务，例如：`depends = ["build --release"]`。如果多个任务具有相同的依赖项，该依赖项只会运行一次。mise 会通过使用 `depends` 和相关属性，尽可能并行地运行它能够运行的内容（最多到 [`--jobs`](/cli/run)）。
+Tasks that must run before this task, given as a list of task names or aliases. Arguments can be
+passed to a dependency, e.g.: `depends = ["build --release"]`. If multiple tasks share a dependency,
+that dependency runs only once. mise runs whatever it can in parallel (up to [`--jobs`](/cli/run))
+based on `depends` and related properties.
 
 [`mise tasks deps`](/cli/tasks/deps.html) 可视化此声明的图
 （`depends`、`wait_for`、`depends_post`），而不是 `run` 内部的任务引用。
@@ -139,8 +151,7 @@ run = "npm test"
 ```mise-toml
 [tasks.deploy]
 depends = [
-  { task = "build", args = ["--release"],
-    env = { RUSTFLAGS = "-C opt-level=3" } }
+  { task = "build", args = ["--release"], env = { RUSTFLAGS = "-C opt-level=3" } }
 ]
 run = "./deploy.sh"
 ```
@@ -156,11 +167,12 @@ depends = [
 run = "echo checks complete"
 ```
 
-注意：这些环境变量只会传递给指定的依赖项，不会传递给当前任务或其他依赖项。
+These environment variables are passed only to the specified dependency, not to the current task or other dependencies.
 
 #### 可选依赖项
 
-在结构化依赖项上设置 `optional = true`，即可在匹配的任务存在时运行它们；当任务名称或模式没有匹配项时，也不会导致失败。无效的任务模式仍会产生错误。
+Set `optional = true` on a structured dependency to run matching tasks when they exist, without
+failing when the task name or pattern matches nothing. Invalid task patterns still produce an error.
 
 ```mise-toml
 [tasks.test]
@@ -216,8 +228,8 @@ run = 'echo "packaging for $usage_target"'
 
 - **类型**: `string | (string | string[] | { task: string, args?: string[], env?: { [key: string]: string }, optional?: bool })[]`
 
-与 `depends` 类似，但这些任务会在此任务及其依赖完成后运行。例如，你
-可能希望有一个 `postlint` 任务，可以单独运行，而不会同时运行 `lint`：
+Like `depends`, but these tasks run _after_ this task and its dependencies complete. For example, you
+may want a `postlint` task that you can run individually without also running `lint`:
 
 ```mise-toml
 [tasks.lint]
@@ -227,17 +239,20 @@ depends_post = ["postlint"]
 run = "echo 'linting complete'"
 ```
 
-支持与 `depends` 相同的参数、环境变量和可选依赖语法。
-
-`depends_post` 任务的依赖项也会等到父任务完成后再运行，因此整个清理链都会在主要工作完成后运行。如果父任务已经启动，即使父任务失败，Mise 也会运行完整的子树；但如果常规依赖项在父任务能够启动之前失败，则会跳过该子树。同一个任务可以同时被 `depends` 和 `depends_post` 引用；在这种情况下，它会在父任务之前运行一次，并在父任务之后再次运行一次。
+Supports the same argument, environment variable, and optional dependency syntax as `depends`.
+Dependencies of a `depends_post` task also wait until the parent task finishes, so an entire cleanup
+chain runs after the main work. mise runs the full subtree if the parent started, even when the
+parent fails, but skips it when a regular dependency fails before the parent can start. The same
+task may be referenced by both `depends` and `depends_post`; in that case it runs once before the
+parent and once afterward.
 
 ### `wait_for`
 
 - **类型**：`string | (string | string[] | { task: string, args?: string[], env?: { [key: string]: string }, optional?: bool })[]`
 
-类似于 `depends`，它会在运行前等待这些任务完成。不同于 `depends`，
-`wait_for` 不会将匹配的任务添加到运行中；只有当这些任务已经被调度时，它才会等待它们。
-要允许任务名称或模式没有任何配置的匹配项，请使用 `optional = true`。
+Like `depends`, this waits for the listed tasks to complete before running. Unlike `depends`,
+`wait_for` does not add matching tasks to the run; it only waits for them when they are already
+scheduled. To allow a task name or pattern to have no configured matches, use `optional = true`.
 
 ```mise-toml
 [tasks.lint]
@@ -256,7 +271,7 @@ run = "eslint ."
 
 - **类型**: `{ [key]: string | int | bool }`
 
-特定于此任务的环境变量。这些不会传递给 `depends` 任务。
+Environment variables specific to this task. These are not passed to `depends` tasks.
 
 ```mise-toml
 [tasks.test]
@@ -282,13 +297,15 @@ vars = { mode = "headed" }
 run = "./scripts/test-e2e.sh --{{ vars.mode }}"
 ```
 
-有关支持的值生成指令、优先级和脱敏，请参阅[变量](#vars)。
+See [configuration variables](/configuration/vars.html) for supported directives,
+precedence, and redaction.
 
 ### `tools`
 
 - **类型**: `{ [key]: string }`
 
-在运行任务之前要安装并激活的工具。这适用于需要安装特定工具或使用不同版本工具的任务。它只会用于该任务，不会用于依赖项。
+Tools to install and activate before running the task. This is useful for tasks that require a specific tool
+or a different version of a tool. These tools apply only to that task, not to its dependencies.
 
 ```mise-toml
 [tasks.build]
@@ -302,10 +319,11 @@ run = "cargo build"
 
 ### `dir`
 
-- **类型**: `string`
-- **默认值**: <code v-pre>"{{ config_root }}"</code> - 包含 `mise.toml` 的目录，或者像 `~/src/myproj/.config/mise.toml` 这样的情况，它将是 `~/src/myproj`。
+- **Type**: `string`
+- **Default**: <code v-pre>"{{ config_root }}"</code> - the directory containing `mise.toml`, or for a path like `~/src/myproj/.config/mise.toml`, `~/src/myproj`.
 
-运行任务的目录。最常见的用法是当你希望任务在用户当前目录中执行时：
+The directory to run the task from. Most commonly, this is used to run the task in the user's current
+directory:
 
 ```mise-toml
 [tasks.test]
@@ -330,10 +348,11 @@ run = "echo my internal task"
 
 - **类型**: `string` | `{ message: string, default: string }`
 
-在运行任务之前显示的一条消息。这对于具有破坏性或运行时间较长的任务很有用。用户将在任务自身的 `run` 命令执行之前被提示进行确认。
+A message to show before running the task. This is useful for tasks that are destructive or take a long
+time to run. The user is prompted to confirm before the task's own `run` command executes.
 
 ::: warning
-`confirm` 只能保护任务自身的 `run` 命令。依赖项（`depends`）会在确认提示出现之前**先**执行。如果你需要在依赖项运行之前进行确认，请将 `confirm` 添加到依赖任务本身，或者使用 `run = [{ task = "..." }]` 代替 `depends`。
+`confirm` only guards the task's own `run` command. Dependencies (`depends`) execute **before** the confirmation prompt appears. If you need confirmation before dependencies run, add `confirm` to the dependency tasks themselves, or use `run = [{ task = "..." }]` instead of `depends`.
 :::
 
 ```mise-toml
@@ -362,14 +381,22 @@ run = "deploy.sh ${usage_environment}"
 
 将任务直接连接到 shell 的 stdin/stdout/stderr。这对于需要以 mise 的常规任务处理不支持的方式接受输入或输出的任务很有用。
 
-原始命令会在其运行期间持有独占锁，因此 mise 不会同时运行其他命令，你也无需自行让其他任务避开它。锁是按命令而不是按任务获取的，因此两个原始任务仍可以在各自的命令之间交替运行。如果你需要整个任务在不中断的情况下运行，请提交或查找一个类似 `single = true` 的属性工单。
+A raw command holds an exclusive lock for as long as it runs, so mise will not run another command
+alongside it and you do not have to keep other tasks out of the way yourself. The lock is taken per
+command rather than per task, so two raw tasks can still take turns between their individual
+commands. If you need a whole task to run without interruption, search for or file a ticket requesting a
+property like `single = true`.
 
 ### `raw_args`
 
 - **类型**: `bool`
 - **默认值**: `false`
 
-当 `true` 时，mise 完全不会解析传递给任务的参数——每个参数都会原样传递给底层命令，包括 `--help`/`-h`。当任务只是某个工具的薄封装，而该工具本身已经有自己的参数解析器时，请使用此选项（例如 `next build`、Django 的 `manage.py`、使用 `argparse` 的 Python 脚本）：
+When `true`, mise does not parse arguments to the task at all — every argument
+is passed through verbatim to the underlying command, including `--help`/`-h`.
+Use this for tasks that act as a thin proxy for a tool that already has its
+own argument parser (e.g. `next build`, Django `manage.py`, Python scripts
+using `argparse`):
 
 ```toml
 [tasks.manage]
@@ -382,31 +409,42 @@ mise run manage --help          # 转发给 manage.py，而不是被 mise 拦截
 mise run manage migrate --fake  # 所有标志都保持不变并传递给 manage.py
 ```
 
-如果没有 `raw_args`，mise 会拦截 `--help` 并打印它自己的任务帮助信息。作为单次调用的临时替代方案，你也可以使用
-`mise run task -- --help` ——现在 `--` 分隔符会绕过 mise 的用法解析器，专门针对 `--help`/`-h`。该分隔符之后的参数属于任务本身，因此 `mise run task -- -- --help` 会将 `-- --help` 转发给任务。
+Without `raw_args`, mise intercepts `--help` and prints its own task help. As
+an ad-hoc alternative for individual invocations, you can also use
+`mise run task -- --help` — the `--` separator bypasses mise's usage
+parser for `--help`/`-h`. Arguments after that separator belong
+to the task, so `mise run task -- -- --help` forwards `-- --help` to the task.
 
 ### `interactive`
 
 - **类型**: `bool`
 - **默认值**: `false`
 
-将任务直接连接到 shell 的 stdin/stdout/stderr。交互式任务会获得独占锁，
-确保对标准 I/O 的唯一访问权限——当交互式任务运行时，所有其他任务（包括交互式
-和非交互式）都会被阻塞。非交互式任务仍然可以彼此并行运行。这比更宽泛的 `raw` 设置更有针对性，
-后者会通过设置 `jobs = 1` 强制全局单线程执行。
+Connects the task directly to the shell's stdin/stdout/stderr. Interactive tasks acquire an exclusive lock,
+ensuring sole access to standard I/O — while an interactive task is running, all other tasks (both interactive
+and non-interactive) are blocked. Non-interactive tasks can still run in parallel with each other. This is more
+targeted than [`raw`](#raw), which takes its exclusive lock per command, and than `mise run --raw`, which goes further
+and forces single-threaded execution globally (by setting `jobs = 1`).
 
 ### `sources`
 
 - **类型**: `string | string[]`
 
-此任务用作输入的文件或目录；如果同时定义了此项和 `outputs`，mise 会跳过执行那些“最旧的输出文件”的修改时间比“最新的源文件”的修改时间更新的任务。这对于运行成本较高、只需要在输入发生变化时才执行的任务很有用。
+Files or directories that this task uses as input. If both this and `outputs` are defined, mise skips
+the task when the modification time of the oldest output file is newer than the modification time of
+the newest source file. This is useful for tasks that are expensive to run and only need to run when
+their inputs change.
 
-任务本身会被自动添加为一个源，因此如果你修改了任务定义，也会导致任务重新执行。
+The task definition itself is automatically added as a source, so editing the definition also causes
+the task to run.
 
-这也用于 `mise watch`，以确定需要监视哪些文件/目录。
+`mise watch` also uses `sources` to know which files and directories to watch.
 
-可以使用相对路径和/或 glob 模式指定，例如：`src/**/*.rs`。花括号替代项（如 `src/**/*.{js,ts}`）受新鲜度检查、`mise watch` 和 `task_source_files()` 支持。
-不过，请不要在 glob 中添加过多文件——mise 必须逐一扫描每个文件来检查时间戳。
+Entries can be relative paths and/or glob patterns, e.g.: `src/**/*.rs`. Brace
+alternatives such as `src/**/*.{js,ts}` are supported by freshness checks, `mise watch`, and
+`task_source_files()`.
+Don't go overboard with globs that match a huge number of files, though—mise has to scan each and every one
+to check its timestamp.
 
 ```mise-toml
 [tasks.build]
@@ -415,9 +453,23 @@ sources = ["Cargo.toml", "src/**/*.rs"]
 outputs = ["target/debug/mycli"]
 ```
 
-运行上述命令时，只有当 `mise.toml`、`Cargo.toml`，或者 `src` 目录中任何一个 ".rs" 文件自上次构建以来发生变化时，才会执行 `cargo build`。
+Running the above executes `cargo build` only if `mise.toml`, `Cargo.toml`, or any ".rs" file in the `src` directory
+has changed since the last build.
 
-相对条目相对于任务目录解析（任务的 `dir`，或者没有设置时的项目根目录），并且可以使用 `..` 访问其上方的文件，例如单仓库根目录共享的 `node_modules` 目录：
+Both `sources` and `outputs` can use parsed [usage](#usage) arguments and flags. mise resolves these
+templates separately for each task invocation before checking freshness or the task cache:
+
+```mise-toml
+[tasks.compile]
+usage = 'arg "<target>"'
+run = "compile {{usage.target}} --output dist/{{usage.target}}"
+sources = ["src/{{usage.target}}/**"]
+outputs = ["dist/{{usage.target}}"]
+```
+
+Relative entries are resolved from the task directory (the task's `dir`, or the project root when it
+has none) and may use `..` to reach files above it, such as a `node_modules` directory shared at the
+root of a monorepo:
 
 ```mise-toml
 [tasks.build]
@@ -427,7 +479,8 @@ sources = ["src/**/*.ts", "../../node_modules/**"]
 outputs = ["dist"]
 ```
 
-可以使用 [`task_source_files`](../templates.md#task-source-files) 函数，在任务的模板上下文中遍历其 `sources`。
+Use the [`task_source_files`](../templates.md#task-source-files) function to iterate over a task's
+`sources` within its template context.
 
 #### 排除源
 
@@ -480,7 +533,10 @@ lockfiles = ["Cargo.lock", "pnpm-lock.yaml"]
 
 #### 依赖失效
 
-当一个任务依赖于另一个也定义了 `sources` 的任务，并且该依赖任务因为其 sources 发生变化而运行时，依赖任务也会重新运行——即使依赖任务自身的 sources 没有变化。这对于单仓库（monorepo）工作流很有用，因为下游任务应当随着上游变化而失效：
+When a task depends on another task that also has `sources` defined, and the dependency runs because
+its sources changed, the dependent task also re-runs — even if the dependent's own sources haven't
+changed. This is useful for monorepo workflows where downstream tasks should be invalidated by upstream
+changes:
 
 ```mise-toml
 [tasks."core:build"]
@@ -495,16 +551,21 @@ outputs = ["packages/frontend/dist/**/*.js"]
 depends = ["core:build"]
 ```
 
-如果 `packages/core/src/` 中的某个文件发生变化，`core:build` 和 `frontend:build` 都会运行。如果没有任何变化，则两者都会被跳过。
+If a file in `packages/core/src/` changes, both `core:build` and `frontend:build` run. If nothing
+changes, both are skipped.
 
-请注意，没有 `sources` 的依赖项（它们总是运行）不会触发这种失效——否则，依赖任务上的 `sources` 实际上就会变得毫无用处。
+Dependencies **without** `sources` (which always run) do not trigger this invalidation —
+otherwise `sources` on the dependent task would be effectively useless.
 
 ### `watch`
 
 - **类型**: `{ no_vcs_ignore = bool }`
 - **默认值**: `{ no_vcs_ignore = false }`
 
-任务通过 [`mise watch`](/cli/watch.html) 运行时使用的选项。默认情况下，即使被忽略的路径列在 `sources` 中，`mise watch` 也会遵循 `.gitignore` 等 VCS 忽略文件。对于需要监视有意排除在版本控制之外的生成文件或中间文件的任务，请设置 `watch.no_vcs_ignore`：
+Options used when the task runs through [`mise watch`](/cli/watch.html). By default, `mise watch`
+respects VCS ignore files such as `.gitignore`, even when an ignored path is listed in `sources`. Set
+`watch.no_vcs_ignore` for tasks that need to watch generated or intermediary files that are
+intentionally excluded from version control:
 
 ```mise-toml
 [tasks.generate]
@@ -520,7 +581,8 @@ watch = { no_vcs_ignore = true }
 - **类型**: `string | string[] | { auto = true }`
 - **默认值**: `{ auto = true }`
 
-与 `sources` 对应，这些是任务在执行后将创建/修改的文件或目录。
+The counterpart to `sources`: the files or directories that the task creates or modifies when it
+runs.
 
 以 `!` 开头的条目会排除匹配的输出。与 `sources` 一样，条目按顺序求值，后面的条目可以重新包含某个路径，而 `\!` 则会转义字面意义上的开头感叹号。输出 glob 同样支持花括号替代项，例如
 `dist/{client,server}/**`。
@@ -534,8 +596,10 @@ outputs = ["dist", "!dist/**/*.map", "!dist/.vite/**"]
 
 被排除的文件不会参与输出新鲜度检查，也不会存储在任务缓存产物中。如果恢复缓存产物时，被排除的文件已经存在于输出目录下，mise 会保留这些文件。
 
-`auto = true` 可以替代手动指定输出文件。在这种情况下，mise 会根据任务定义的哈希值触碰一个内部跟踪文件（如果你感兴趣，该文件存储在 `~/.local/state/mise/task-outputs/<hash>` 中）。
-如果你希望在源文件发生变化时执行 `mise run`，但又不想为了让 `sources` 生效而手动执行 `touch`，这会很有用。
+`auto = true` is an alternative to specifying output files manually. In that case, mise touches
+an internally tracked file based on the hash of the task definition (stored in `~/.local/state/mise/task-outputs/<hash>` if you're curious).
+This is useful if you want `mise run` to execute when sources change but don't want to `touch` a file
+manually for `sources` to work.
 
 ```mise-toml
 [tasks.build]
@@ -549,242 +613,29 @@ outputs = { auto = true } # 当定义了 sources 时，这就是默认值
 - **类型**: `{ enabled = bool, audit = bool, env = string[], command_inputs = string[] }`
 - **默认值**: `{ enabled = false, audit = false, env = [], command_inputs = [] }`
 
-将成功的任务结果存储在基于内容寻址的本地缓存中，并在再次看到相同的任务输入时重用这些结果。声明的文件系统输出会在删除后恢复。`outputs = []` 的任务会缓存其成功结果和日志，但不会存储文件系统产物，这对于代码检查、测试和类型检查等检查很有用。
-声明 `outputs = []` 表示该任务没有缓存命中时需要重现的文件系统副作用。
+Cache a successful task result by its declared inputs. A cache hit restores
+explicit outputs and replays captured logs. Requires experimental features,
+matching sources, and explicit output paths or `outputs = []`.
 
-产物缓存要求启用 [`experimental`](/configuration/settings.html#experimental)、至少一个匹配的
-`source`，以及显式输出路径或 `outputs = []`。
-不支持 `outputs = { auto = true }`、绝对路径输出，以及逃出任务目录的输出模式（包括排除项的主体）。
-
-```mise-toml
-[settings]
-experimental = true
-
-[tasks.build]
-run = "npm run build"
-sources = ["package.json", "src/**"]
-outputs = ["dist"]
-cache = { enabled = true, env = ["NODE_ENV"] }
-```
-
-`cache.command_inputs` 中列出的命令会在缓存查找前运行。命令文本、标准输出和标准错误都会包含在缓存键中。命令使用与任务相同的内联 shell（包括 CLI 的 `--shell` 覆盖项）、解析后的环境和工具、工作目录以及沙箱策略。当编译器版本或生成的配置等输入无法仅通过源文件表示时，此功能非常有用。
-
-```mise-toml
-[tasks.build]
-run = "npm run build"
-sources = ["package.json", "src/**"]
-outputs = ["dist"]
-cache = { enabled = true, command_inputs = ["node --version", "npm config get registry"] }
-```
-
-命令输入必须非空且成功退出。其输出会经过哈希处理，不会被打印或保留。命令输入继承任务超时时间；如果任务没有超时，则使用 30 秒超时；其标准输出和标准错误合计最多可产生 16 MiB。由于每当 mise 计算任务缓存键时都会运行命令输入，因此它们应当快速、确定且无副作用。试运行或原始执行、交互式执行禁用缓存时，不会运行命令输入。
-
-在 Linux 上设置 `cache.audit = true` 可诊断不完整的缓存声明。任务执行时，mise 使用 `strace` 报告工作区根目录下与 `sources` 不匹配的读取，以及任务目录下与 `outputs` 不匹配的写入。审计仅提供建议，不会阻止任务，也不会阻止成功结果被缓存。工作区根目录和任务目录之外的访问，以及目录元数据读取会被忽略，以避免系统库、可执行文件和路径遍历出现在报告中。
-
-报告的路径始终相对于任务目录，并使用 `..` 表示读取操作可能合法访问的上级路径。报告的读取路径可以按照打印出的原样添加到 `sources` 中。
-
-审计模式要求 `PATH` 中存在 `strace`。如果跟踪功能不可用，Mise 会发出警告并正常运行任务；其他平台目前不受支持。缓存任务不会被执行，因此不会生成审计报告；检查现有缓存条目时，请使用 `mise run --force <task>`。
-
-控制台警告限制为每个任务的前 20 个路径，这不足以对读取数千个未声明文件的任务进行分类。设置
-[`task.cache.audit_report`](/configuration/settings.html#task.cache.audit_report)，还可以将每个未声明路径写入 JSON Lines，每个条目对应一个 `{"task", "kind", "path"}` 对象。截断操作每次 `mise` 调用只进行一次：每次调用中第一个经过审计的任务会截断文件，之后的经过审计的任务会追加到该文件中，因此一个文件会保存本次运行中所有经过审计任务的报告；后续运行会替换该文件，而不是追加到其中。
-
-```shell
-MISE_TASK_CACHE_AUDIT_REPORT=audit.jsonl mise run --force build
-```
-
-```mise-toml
-[tasks.build]
-run = "npm run build"
-sources = ["package.json", "src/**"]
-outputs = ["dist"]
-cache = { enabled = true, audit = true }
-```
+See [Task caching](./caching.html) for setup, input declarations, debugging,
+remote service configuration, and cache retention. `outputs = { auto = true }`
+supports freshness checks but cannot store artifacts.
 
 #### 外部依赖和锁文件
 
-将依赖清单和锁文件声明为文件系统输入，以便依赖更新使缓存失效。它们可以直接列在任务的 `sources` 中，通过输入组共享，或使用 `task_config.global_inputs` 应用于配置作用域中的每个任务。
-
-```mise-toml
-[settings]
-experimental = true
-
-[task_config]
-global_inputs = ["@group:node-dependencies"]
-
-[task_config.input_groups]
-node-dependencies = ["package.json", "pnpm-lock.yaml"]
-
-[tasks.build]
-run = "pnpm build"
-sources = ["src/**"]
-outputs = ["dist"]
-cache = { enabled = true }
-```
-
-锁文件内容表示已解析的外部依赖图，因此通常不应包含 `node_modules` 等已安装的依赖目录。已解析的 mise 工具已经参与缓存键计算。对于提交文件中未捕获的相关外部状态，例如软件包注册表选择或编译器包装器版本，请使用 `cache.command_inputs`：
-
-```mise-toml
-[tasks.build]
-run = "pnpm build"
-sources = ["package.json", "pnpm-lock.yaml", "src/**"]
-outputs = ["dist"]
-cache = { enabled = true, command_inputs = ["pnpm config get registry"] }
-```
-
-只声明可能影响任务输出的确定性外部状态。机密和凭据应改用透传环境变量，以免其值包含在缓存键中。
+See [external dependencies and lockfiles](./caching.html#external-dependencies-and-lockfiles).
 
 #### 每次运行时的缓存访问
 
-使用 `mise run --task-cache <mode>` 或 `MISE_TASK_CACHE` 控制单次运行中的任务输出缓存读取和写入：
-
-- `read-write` 使用缓存结果并发布新结果。这是默认值。
-- `read-only` 使用缓存结果，但不会发布未命中的结果。
-- `write-only` 发布结果，但始终执行任务而不是恢复结果。
-- `off` 禁用任务输出缓存，并使用普通的源文件/输出新鲜度检查。
-- `local-only` 仅读写本地缓存，绕过任何已配置的远程服务。
-
-```bash
-# 防止不受信任的拉取请求发布缓存条目
-mise run --task-cache read-only test
-
-# 不使用已有条目，为本地缓存预热
-mise run --task-cache write-only build
-
-# 不读取或写入任务输出产物，诊断任务
-mise run --task-cache off build
-```
-
-这些模式只影响任务 `cache` 属性配置的实验性任务输出缓存。现有的 `--no-cache` 选项则控制远程任务定义的获取。
+See [per-run cache access](./caching.html#per-run-cache-access).
 
 #### 远程缓存和敏感数据
 
-使用 `task.cache.remote_url` 和非空的 `task.cache.remote_namespace` 配置实验性的远程构建缓存服务。命名空间是不透明的仓库或组织标识符；服务器必须同时根据命名空间和缓存键隔离条目。它是路由元数据，不是身份验证机制或机密。对于不应相互影响缓存条目的写入者，应使用不同的命名空间。
-
-```mise-toml
-[settings]
-experimental = true
-task.cache.remote_url = "https://cache.example.com/mise/"
-task.cache.remote_namespace = "acme/widgets"
-task.cache.remote_mode = "read-write"
-```
-
-在进程环境中设置 `MISE_TASK_CACHE_REMOTE_TOKEN`，即可发送 bearer 凭据。等效的 `task.cache.remote_token` 设置仅适用于全局配置，但更推荐使用环境变量，这样就无需将令牌写入磁盘。mise 会在设置跟踪输出中隐藏令牌，并将其 HTTP 标头标记为敏感信息。对于非回环服务，它要求使用 HTTPS；仅允许本地开发服务器使用普通 HTTP。服务器仍应使用短期、最小权限的凭据，限制命名空间访问，避免记录授权标头，并根据缓存对象的敏感性和保留要求对其进行加密或采取其他保护措施。
-
-如需轮换凭据，可将 `MISE_TASK_CACHE_REMOTE_TOKEN_FILE` 设置为一个仅包含 bearer 令牌的文件。mise 会在每次请求前重新读取该文件，这支持 Kubernetes 投射的服务账户令牌，而无需重启长时间运行的进程。等效的 `task.cache.remote_token_file` 设置仅适用于全局配置。
-
-在 GitHub Actions 中，mise 可以自行获取并刷新短期 OIDC 令牌。授予工作流请求身份令牌的权限，并明确设置其受众：
-
-```yaml
-permissions:
-  contents: read
-  id-token: write
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    env:
-      MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE: https://cache.example.com
-    steps:
-      - uses: actions/checkout@v5
-      - run: mise run test
-```
-
-缓存服务必须信任 GitHub 的签发者，接受配置的受众，并根据所选命名空间授权工作流的身份声明。mise 从 GitHub 的作业 OIDC 端点获取令牌，仅将其保存在内存中，并在令牌过期前刷新。受众设置仅适用于全局配置；如果工作流缺少 `id-token: write` 权限，获取过程会明确失败。
-
-凭据优先级依次为显式令牌、令牌文件，然后是自动 OIDC。这样无需更改项目配置，即可使用紧急静态凭据覆盖工作负载身份。其他 CI 提供商可以通过 `MISE_TASK_CACHE_REMOTE_TOKEN` 直接提供其签发的 OIDC 令牌，无需协议专用的集成。
-
-任务缓存条目并非不含机密的元数据。它们包含捕获的标准输出和标准错误，以及每个声明的输出文件。mise 会在存储日志前应用已配置的输出脱敏规则，但这不是通用的机密扫描器：任务可能打印未知凭据，或将凭据写入输出产物。除非这些值适合保留并与本地和远程缓存的所有读取者共享，否则不要缓存此类任务。清除本地条目不会删除已经上传到远程服务的副本；同样请使用远程服务的保留和删除控制。
-
-产物校验和可以检测损坏，HTTPS 可以在传输过程中验证已配置服务器的身份，但校验和不是原始任务运行器签发的签名。任何获准向某个命名空间写入的主体都可以发布其读取者会信任的条目。为不受信任的拉取请求作业提供只读凭据或不提供远程凭据，使用 `--task-cache read-only` 防止发布，并将信任度较低的写入者隔离到单独的命名空间中。
+See [remote cache and sensitive data](./caching.html#remote-cache-and-sensitive-data).
 
 #### 缓存正确性和确定性任务
 
-启用 `cache` 是一种正确性声明：相同的缓存键材料必须产生等效的捕获日志和声明输出。所有可能改变结果的值都必须通过源文件或输入组、已解析的 mise 工具、`cache.env`、`cache.command_inputs` 或可缓存依赖的产物键来表示。这包括配置和锁文件、区域设置或功能标志、编译器包装器、生成的输入以及相关外部服务状态。操作系统和架构会自动包含在内；其他机器状态不会。
-
-启用缓存的任务应当是确定性的，不应依赖未声明的文件、墙上时钟时间、随机性、可变的网络响应或环境中的环境变量。如果无法可靠捕获这类输入，请为任务禁用缓存。透传环境变量会有意地排除在缓存键之外，因此不得影响缓存的日志或输出。仅使用凭据获取内容的任务，应以该内容的稳定摘要或锁文件作为缓存键，而不是凭据本身。
-
-声明的输出必须完整描述缓存命中时需要重现的文件系统状态。那些路径之外的副作用——数据库写入、部署、通知以及工作区其他位置的更改——不会被重放。只有在无需重现任何文件系统副作用时，`outputs = []` 才是正确的。在 Linux 上，`cache.audit = true` 可以发现许多未声明的工作区读取和写入，但审计仅提供建议，无法证明确定性，也无法观察每个外部依赖。
-
-如果无法确定正确性，请在诊断期间使用 `--task-cache off`，补充缺失的键输入，并在信任新条目之前强制执行一次未缓存的运行。如果任务语义或未声明的外部状态发生变化可能导致不同信任策略下生成的条目发生冲突，请使用不同的远程命名空间。
-
-```mise-toml
-[tasks.lint]
-run = "eslint ."
-sources = ["package.json", "src/**"]
-outputs = []
-cache = { enabled = true }
-```
-
-要在配置作用域中为每个符合条件的任务默认启用缓存，请设置 `task_config.cache`。只有至少包含一个源文件，并且具有显式输出路径或 `outputs = []` 的任务才会继承此默认值；其他任务仍不会缓存。任务本地的 `cache` 值会覆盖作用域默认值。
-
-```mise-toml
-[settings]
-experimental = true
-
-[task_config.cache]
-enabled = true
-env = ["NODE_ENV"]
-command_inputs = ["node --version"]
-
-[tasks.build]
-run = "npm run build"
-sources = ["package.json", "src/**"]
-outputs = ["dist"]
-
-[tasks.deploy]
-run = "./deploy.sh"
-cache = { enabled = false }
-```
-
-缓存键包含源文件内容、任务定义和参数、已解析的任务环境、`cache.env` 中列出的变量的值（或不存在状态）、命令输入输出、已解析的工具版本、依赖产物键，以及操作系统和架构。除非列在 `cache.env` 中，否则从环境中继承的变量会被忽略。
-
-使用 `mise run --task-cache-explain <task>` 打印生成缓存键的输入的确定性分解，但不会打印聚合键本身。环境变量只通过名称及其是否已设置来标识；mise 变量也只通过名称来标识，因此解释不会公开其内容或逐值摘要。其他可能源自机密的输入——包括源文件内容、依赖键、命令输出、任务定义和已解析的工具版本——只会按类别和数量报告。匹配的源路径、声明的输出模式、当前解析的输出根目录以及目标平台会直接列出。
-
-将该标志与 `--dry-run` 结合使用，可在不执行、恢复或存储任务的情况下检查键输入。由于命令输入的输出哈希是缓存键的一部分，因此显式请求解释时仍会运行缓存命令输入。
-
-使用 `mise run --dry-run --task-cache-explain-json <task>` 获取机器可读的诊断信息。该命令会向标准输出写入每个选定任务对应的一个紧凑 JSON 对象，并使用与人类可读解释相同的脱敏规则。每个对象都包含不透明的 `cache_key`，使消费者能够区分同一任务的不同调用，而不会暴露其参数或依赖环境值。这种 JSON Lines 格式在模式选择多个任务时仍可流式处理。缓存命令输入仍会运行，以便准确报告其存在，但不会包含其输出和哈希。
-
-使用 `mise run --task-cache-stats <task>` 打印运行摘要，其中包括产物缓存命中的数量和百分比、恢复的未压缩输出和日志字节数，以及每个恢复条目创建时记录的执行时间。在添加这些元数据之前写入的条目仍可读取，恢复时其字节数和时间计为零。不执行缓存查找的新鲜度跳过不会计为命中或未命中。
-
-使用 `mise cache task <task>` 检查与已配置任务关联的每个本地输出缓存条目。表格会显示每个键、它是否为当前新鲜度条目、其存储大小和可恢复大小、记录的执行时间、最后访问时间以及输出根目录。添加 `--json` 可获得结构化数组输出，即使只有一个任务匹配也是如此。在添加任务身份元数据之前创建的条目，如果是任务的当前条目，仍可进行检查；较早的历史条目会在被重写后变得可发现。
-
-使用 `mise cache clear --task <task>` 仅删除该任务的本地输出缓存条目和新鲜度指针。不会删除工作目录中的声明输出，也不会删除属于其他任务的条目。没有身份元数据的旧当前条目会被分离但保留，因为无法验证其所有权；发生这种情况时 mise 会发出警告，而 `mise cache clear` 会将其删除。
-
-`task_config.global_env` 会将环境变量名添加到配置作用域中每个启用的任务缓存，包括具有任务本地 `cache` 值的任务。与 `task_config.cache` 下的默认值不同，这些名称始终会与任务本地的 `cache.env` 组合。
-
-```mise-toml
-[task_config]
-global_env = ["CI", "NODE_ENV"]
-```
-
-对于启用缓存的任务，当环境变量继承被禁止时，`cache.env` 或 `task_config.global_env` 中列出的变量仍然可用。禁用缓存的任务和非缓存任务不会通过缓存配置继承变量。对于任务运行时需要、但不应影响缓存键的变量（例如短期凭据），请使用 `pass_through_env`。作用域级别的 `task_config.global_pass_through_env` 等效设置适用于每个任务。在 mise 默认的非沙箱环境模式下，环境中的变量已经会透传；当通过 `allow_env`、`deny_env`、`deny_all` 或相应的 CLI 选项启用环境沙箱时，这些选项才会发挥作用。
-
-```mise-toml
-[task_config]
-global_pass_through_env = ["CI_JOB_TOKEN"]
-
-[tasks.build]
-pass_through_env = ["NPM_TOKEN"]
-```
-
-透传变量可能改变任务行为，却不会使缓存结果失效。任务不应将它们用于影响生成输出的值。它们的值不会添加到缓存键中，也不会作为缓存元数据持久化，但任务仍可能通过将其写入缓存输出文件或日志来暴露这些值。
-
-默认情况下，缓存条目存储在 `MISE_CACHE_DIR/task-artifacts/v2` 下。设置实验性的
-[`task.cache_dir`](/configuration/settings.html#task.cache_dir) 或
-`MISE_TASK_CACHE_DIR`，即可选择其他父目录；mise 会将产物格式保存在其
-`v2` 子目录中。默认位置和自定义位置都会包含在 `mise cache clear` 以及手动和自动缓存清理中。只有成功的任务运行才会被缓存。缓存读取/写入失败会被视为未命中，绝不会导致成功的任务运行失败。
-
-新的缓存条目包含独立于缓存查找键的 BLAKE3 产物校验和。它覆盖归档的输出和捕获的任务结果元数据，mise 会在提取文件或重放输出前验证它。校验和引入前写入的条目仍可读取。`mise cache task <task> --json` 会包含校验和，供缓存检查工具使用。
-
-读取者、写入者、检查操作和任务范围的删除操作，会通过每个缓存键对应的跨进程锁进行协调。因此，并发进程看到的是完整的归档和清单对，不会将进行中的替换误判为损坏；不相关键的写入者仍彼此独立。写入失败时，临时归档和清单文件通常会被删除。在之后使用缓存时，mise 还会在获取关联的缓存键锁后删除被中断进程遗留的部分文件，因此绝不会删除活动写入者仍在发布的文件。
-
-将 [`task.cache_max_size`](/configuration/settings.html#task.cache_max_size) 设置为限制构件缓存总大小，或将 [`task.cache_max_age`](/configuration/settings.html#task.cache_max_age) 设置为根据条目最后访问时间使其过期。这两个限制都是可选的，并在缓存成功写入后生效。当超出大小限制时，mise 会优先删除最近最少访问的条目。
-
-当启用缓存的任务没有恢复结果而是执行时，mise 会报告原因：没有匹配条目、条目损坏、强制执行、读取已禁用，或某个依赖在没有稳定缓存键的情况下完成。原始执行和试运行的缓存绕过会保留现有的警告或预览行为，不会报告为缓存未命中。
-
-标准输出和标准错误会作为有序、经过脱敏的流存储，并使用缓存命中时选定的输出模式重放。因此，前缀、交错、保持顺序、计时、替换、安静、静默以及按流静默同样适用于重放输出，就像适用于实时输出一样。原始任务和交互式任务会保留继承的终端 I/O，并保守地绕过产物缓存。
-
-可缓存的依赖会将其产物键贡献给依赖任务的键，因此依赖任务执行、跳过或恢复后，依赖它的任务可以恢复匹配的产物。如果某个依赖在没有稳定产物键的情况下执行，其依赖任务会采取保守策略继续执行。
+See [cache correctness and deterministic tasks](./caching.html#cache-correctness-and-deterministic-tasks).
 
 ### `rust_cache` <Badge type="danger" text="deprecated" />
 
@@ -793,17 +644,24 @@ pass_through_env = ["NPM_TOKEN"]
 
 此设置不再启用 Rust 编译器操作缓存。mise 暂时接受它作为已弃用的无操作设置，以便现有任务配置继续运行。启用的值会打印迁移警告；禁用的值不会打印任何信息。
 
-请改用 [mbx](https://mr-boxington.jdx.dev/getting-started) 进行 Rust 操作缓存。使用 `mise use -g mr-boxington` 全局安装，或将其添加到项目工具中，然后将 `mbx` 放在 Cargo 子命令前面：
+Use [mbx](https://mr-boxington.jdx.dev/getting-started) for Rust action caching instead. Install it
+globally with `mise use -g mr-boxington`, or add it to the project tools. To keep existing task commands unchanged,
+configure mise's [`cargo` command wrapper](/dev-tools/shims.html#command-wrappers):
 
 ```mise-toml
 [tools]
 mr-boxington = "latest"
 
+[wrappers.cargo]
+command = "mbx"
+env = { MBX_CARGO_SHIM_MODE = "1" }
+
 [tasks.build]
-run = "mbx build"
+run = "cargo build"
 ```
 
-更改命令后移除 `rust_cache`。该兼容性字段计划在 mise 2027.8.14 中移除。
+Run `mise reshim` after adding the wrapper, then remove `rust_cache`. The compatibility field is scheduled for removal in
+mise 2027.8.14.
 
 ### `shell`
 
@@ -811,9 +669,15 @@ run = "mbx build"
 - **默认值**：如果已设置，则为 [`task_config.shell`](#task_config.shell)（配置作用域）；否则为 [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)/[`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)（仅全局）。
 - **注意**：仅适用于 toml-tasks。
 
-用于运行任务的 shell。如果你想使用与默认不同的 shell 来运行任务，这很有用，例如 `fish`、`zsh` 或 `pwsh`。不过通常更建议使用 [shebang](./toml-tasks#shell-shebang)，因为这会让支持 mise 的 IDE 显示脚本的语法高亮和 lint 提示。
+The shell used to run the task. This is useful if you want a task to use a shell other than the
+default, such as `fish`, `zsh`, or `pwsh`. Generally, though, a [shebang](./toml-tasks#shell-shebang) is recommended instead
+because it lets IDEs with mise support show syntax highlighting and linting for the script.
 
-当 shell 为 PowerShell（`pwsh` 或 `powershell`）时，mise 会传递 `-NoProfile`，因此不会加载你的 PowerShell 配置文件，这与 `sh -c`/`zsh -c` 的非交互行为一致。这样可以避免配置文件修改 `PATH`（例如 mise 激活代码片段）后覆盖任务自身安装的工具。如果你的任务依赖配置文件中的副作用，请将 [`windows_powershell_no_profile`](/configuration/settings.html#windows_powershell_no_profile) 设置为 `false`。
+When the shell is PowerShell (`pwsh` or `powershell`), mise passes `-NoProfile` so your PowerShell
+profile is not loaded, matching the non-interactive behavior of `sh -c`/`zsh -c`. This prevents profiles
+that mutate `PATH` (for example, a mise activation snippet) from shadowing a task's own installed tools. Set
+[`windows_powershell_no_profile`](/configuration/settings.html#windows_powershell_no_profile) to `false`
+if your tasks depend on side effects from your profile.
 
 ```mise-toml
 [tasks.hello]
@@ -926,16 +790,20 @@ allow_env = ["NODE_*"]
 - **类型**：`bool`
 - **默认值**：`false`
 
-抑制 mise 的任务输出，例如显示正在运行的命令，比如：`[build] $ cargo build`。设置此项后，mise 除了脚本自身输出的内容外，不会显示任何其他输出。如果你还想隐藏任务本身产生的输出，请使用 [`silent`](#silent)。
+Suppress mise's own output for the task, such as the command being run, e.g.: `[build] $ cargo build`.
+When this is set, mise shows nothing other than what the script itself outputs. To hide the task's
+own output as well, use [`silent`](#silent).
 
-`quiet` 是一个_详细程度_设置，与 [`output`](#output) _样式_相互独立：它不再强制使用无前缀输出，因此将 `output = "prefix"` 与 `quiet = true` 一起使用时，会保留任务名称前缀，同时隐藏 mise 自身的消息。
+`quiet` is a _verbosity_ setting and is independent of the [`output`](#output) _style_: it does not
+force un-prefixed output, so `output = "prefix"` together with `quiet = true` keeps the task-name
+prefixes while hiding mise's own messages.
 
 ### `silent`
 
 - **类型**：`bool | "stdout" | "stderr"`
 - **默认值**：`false`
 
-抑制任务的所有输出。如果设置为 `"stdout"` 或 `"stderr"`，则只会抑制对应的流。
+Suppress all output from the task. If set to `"stdout"` or `"stderr"`, only that stream is suppressed.
 
 ### `output`
 
@@ -943,6 +811,12 @@ allow_env = ["NODE_*"]
 - **默认值**：未设置（继承全局 [`task.output`](/configuration/settings.html#task.output) 设置）
 
 此任务的输出 _样式_：`prefix`、`interleave`、`keep-order`、`replacing`、`timed`、`quiet` 或 `silent`。这是全局 `task.output` 设置在单个任务中的等效设置，并且与 [`quiet`](#quiet)/[`silent`](#silent) 详细程度字段相互独立，因此样式和静默程度可以自由组合（例如，`output = "prefix"` + `quiet = true`）。`quiet`/`silent` _值_ 仅为向后兼容而保留，并将样式与该详细程度绑定。
+
+::: warning Deprecated
+The `quiet` output value is deprecated. Warnings begin in mise `2026.9.3`, and support will be
+removed in `2027.9.3`. Use `output = "interleave"` with `quiet = true` instead. For a global task
+default, use `task.output = "interleave"` with `task.quiet = true` under `[settings]`.
+:::
 
 ### `usage`
 
@@ -964,7 +838,7 @@ run = 'cargo test ${usage_file?}'
 
 #### 参数和标志的环境变量支持
 
-usage 规范中的参数和标志都可以指定一个环境变量作为其值的替代来源。这允许在命令行未指定时，通过环境变量提供任务参数。
+Both args and flags in usage specs can specify an environment variable as an alternative source for their value. This lets task arguments be provided through environment variables when they are not specified on the command line.
 
 优先级顺序如下：
 
@@ -1082,7 +956,10 @@ run = './scripts/test-e2e.sh {{vars.e2e_args}}'
 
 ## `[task_config]` 选项
 
-顶层 `mise.toml` `[task_config]` 部分中可用的选项。这些选项适用于由该配置文件包含的所有任务，或使用相同根目录的所有任务，例如：`~/src/myproject/mise.toml` 的 `[task_config]` 适用于文件任务，如 `~/src/myproject/mise-tasks/mytask`。设置 `cascade = true`，还可将该部分应用于由后代配置根目录拥有的任务。
+Options available in the top-level `mise.toml` `[task_config]` section. These apply to all tasks that
+are included by that config file or share the same root directory, e.g.: `~/src/myproject/mise.toml`'s `[task_config]`
+applies to file tasks like `~/src/myproject/mise-tasks/mytask`. Set `cascade = true` to also apply the
+section to tasks owned by descendant config roots.
 
 ### `task_config.cascade`
 
@@ -1131,8 +1008,11 @@ command_inputs = ["node --version"]
 
 ### `task_config.rust_cache` <Badge type="danger" text="deprecated" />
 
-此已弃用的兼容性设置不再启用 Rust 操作缓存。有效的启用值会发出一次警告，同时任务继续正常运行。请移除它，并改为通过
-[mbx](https://mr-boxington.jdx.dev/getting-started) 运行 Rust 构建命令。
+This deprecated compatibility setting no longer enables Rust action caching. An effective enabled
+value warns once while tasks continue normally. Remove it and run Rust build commands through
+[mbx](https://mr-boxington.jdx.dev/getting-started) instead. The
+[`wrappers.cargo` configuration](/lang/rust.html#share-cargo-builds-with-mr-boxington) lets existing tasks keep
+invoking `cargo` without modification.
 
 ```toml
 [task_config]
@@ -1215,7 +1095,16 @@ includes = [
 
 对于本地任务和单体仓库任务发现，mise 使用最近的、定义了 `task_config.includes` 的配置文件。当父级设置了 `task_config.cascade = true` 时，其 includes 会被继承，直到某个子级定义自己的 includes。子级配置的 `includes` 会替换该目录的默认值和所有继承的 `includes`。
 
-用户全局配置文件构成一个配置作用域，系统配置文件也构成一个配置作用域。在每个作用域内，定义了 `task_config.includes` 的最高优先级配置会替换低优先级的 includes 和默认目录。用户全局作用域和系统作用域彼此独立。用户全局任务会替换同名的系统任务，但不会继承系统任务元数据；其他名称的系统任务仍然可用。
+Entries are evaluated in order, and when more than one include defines a task with the same name the **last** entry in the list wins.
+This applies uniformly to directory, toml-file, and `git::` includes, so to override a task coming from a `git::` include with a local one, list the local directory after the `git::` entry (see the example below).
+
+```toml
+[task_config]
+includes = [
+    "git::https://github.com/myorg/shared-tasks.git//tasks", # remote task…
+    ".mise/tasks",                                           # …is overridden by the local one with the same name
+]
+```
 
 全局配置文件会被独立加载，因此每个全局配置文件使用自身的 `task_config.includes`；如果未设置 `includes`，则使用默认目录。
 
@@ -1225,15 +1114,8 @@ includes = [
 
 相同的覆盖规则也适用于分层的内联任务定义。例如，`mise.local.toml` 中仅包含元数据的任务，会覆盖 `mise.toml` 中最近的、优先级较低的带命令定义。具有自身命令的更高优先级定义仍会替换较低层级的任务。所选的、包含命令的基础定义之上的所有仅包含元数据的定义，都会按照优先级顺序贡献元数据；其下方的定义则不会贡献元数据。
 
-```toml
-[task_config]
-includes = [
-    "git::https://github.com/myorg/shared-tasks.git//tasks", # 远程任务……
-    ".mise/tasks",                                           # ……会被同名的本地任务覆盖
-]
-```
-
-如果使用包含进来的 task toml 文件，请注意它们的格式与 `mise.toml` 文件不同。它们只是一个任务列表。该文件应与 `mise.toml` 的 `[tasks]` 部分格式相同，但不包含 `[task]` 前缀：
+Included task toml files have a different format than `mise.toml`: they are simply a list of tasks.
+The file uses the same format as the `[tasks]` section of `mise.toml` but without the `[tasks]` prefix:
 
 ::: code-group
 
@@ -1249,7 +1131,7 @@ vars = { target = "linux" }
 
 :::
 
-如果你希望在包含的 toml 任务文件中使用自动补全和验证，可以使用以下 JSON schema：<https://mise.jdx.dev/schema/mise-task.json>
+For auto-completion and validation in included toml task files, use the following JSON schema: <https://mise.jdx.dev/schema/mise-task.json>
 
 #### 远程 Git Includes <Badge type="warning" text="实验性" />
 
@@ -1289,7 +1171,7 @@ URL 格式：`git::<protocol>://<url>//<path>?ref=<ref>`
 
 当 `path` 指向目录时，mise 会加载该目录中的可执行文件任务以及所有 `.toml` 任务文件。当 `path` 指向单个 `.toml` 文件时，只会加载该文件。
 
-包含的 `.toml` 文件使用[任务 toml 文件格式](#task_config.includes)（键是任务名称——不存在 `[tasks.…]` 前缀）。仓库会被克隆并缓存在 `MISE_CACHE_DIR/remote-git-tasks-cache` 中。包含内容中的任务会像本地任务一样加载。你可以通过 `MISE_TASK_REMOTE_NO_CACHE=true` 或 `--no-cache` 标志禁用缓存。
+Included `.toml` files use the [task toml file format](#task_config.includes) (the keys are task names — there is no `[tasks.…]` prefix). The repository is cloned and cached in `MISE_CACHE_DIR/remote-git-tasks-cache`. Tasks from the include are loaded as if they were local. You can disable caching with `MISE_TASK_REMOTE_NO_CACHE=true` or the `--no-cache` flag.
 
 ### `task_config.excludes` {#task_config.excludes}
 
@@ -1325,15 +1207,22 @@ mise 通过目标路径语法支持单体仓库风格的任务组织。通过在
 
 - **类型**：`string[]`
 
-Redactions 是一种从任务输出中隐藏敏感信息的方式。这对于诸如 API 密钥、密码或其他你不想意外泄露到日志或其他输出中的敏感信息很有用。
+Redactions hide sensitive information from task output. This is useful for API keys, passwords, and
+other secrets that you don't want to leak accidentally in logs or other output.
 
 要从输出中遮蔽的环境变量列表。
 
 ```toml
 redactions = ["API_KEY", "PASSWORD"]
+
+[env]
+API_KEY = "s3cr3t"
+
+[tasks.show-key]
+run = 'echo "key: $API_KEY"'
 ```
 
-运行上述任务时，输出将改为 `echo [redacted]`。
+Running `mise run show-key` will output `key: [redacted]` instead of the value of `API_KEY`.
 
 你也可以将其指定为 glob 模式，例如：`redactions = ["SECRETS_*"]`。
 
@@ -1347,6 +1236,8 @@ redactions = ["API_KEY", "PASSWORD"]
 import Settings from '/components/settings.vue';
 </script>
 
-以下设置控制任务行为。这些设置可以在全局的 `~/.config/mise/config.toml` 中设置，或在每个项目的 `mise.toml` 中设置：
+The following settings control task behavior. Set them under `[settings]` in
+`~/.config/mise/config.toml`. Settings that are not marked global-only can also be
+set per project in `mise.toml`:
 
 <Settings :level="3" prefix="task" />

@@ -13,15 +13,16 @@ use eyre::{Result, bail};
 use itertools::Itertools;
 use serde_json::json;
 
-/// List available tasks to execute
-/// These may be included from the config file or from the project's .mise/tasks directory
-/// mise will merge all tasks from all parent directories into this list.
+/// List available tasks
+///
+/// Tasks come from config files and from task directories such as `.mise/tasks`.
+/// Tasks from all parent directories are merged into this list.
 ///
 /// So if you have global tasks in `~/.config/mise/tasks/*` and project-specific tasks in
 /// ~/myproject/.mise/tasks/*, then they'll both be available but the project-specific
 /// tasks will override the global ones if they have the same name.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(verbatim_doc_comment, example(r###"mise tasks ls"###))]
 pub(crate) struct TasksLs {
     /// Only show global tasks
     #[usage(short, long, overrides = "local", verbatim_doc_comment)]
@@ -346,9 +347,3 @@ impl TasksLs {
 }
 
 // TODO: fill this out
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise tasks ls</bold>
-"#
-);

@@ -8,13 +8,20 @@ use crate::{config::Config, config::Settings};
 
 use super::reconcile;
 
-/// Symlinks all tool versions from an external tool into mise
+/// Symlink node versions installed by nvm, nodenv, or Homebrew into mise
 ///
-/// For example, use this to import all Homebrew node installs into mise
+/// Use this to make versions installed by another version manager available to mise.
 ///
 /// This won't overwrite managed installs, runtime aliases, or links from other providers.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    verbatim_doc_comment,
+    example(
+        r###"brew install node@20
+mise sync node --brew
+mise use -g node@20 # uses Homebrew-provided node"###
+    )
+)]
 pub(super) struct SyncNode {
     #[usage(flatten)]
     _type: SyncNodeType,
@@ -133,12 +140,3 @@ impl SyncNode {
         Ok(reconcile::ProviderLinks::new(ownership, links))
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>brew install node@18 node@20</bold>
-    $ <bold>mise sync node --brew</bold>
-    $ <bold>mise use -g node@18</bold> - uses Homebrew-provided node
-"#
-);

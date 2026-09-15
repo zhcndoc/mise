@@ -1,12 +1,17 @@
+---
+description: "当任务需要命名输入、验证、帮助或补全时定义参数。"
+---
+
 # 任务参数
 
-任务参数允许你向任务传递参数，使其更灵活且可复用。在 mise 中有三种定义任务参数的方式，但目前仅推荐其中两种。
+当任务需要命名输入、验证、帮助或补全时定义参数。
+如果没有 usage 规范，mise 会将额外的命令行参数转发给底层命令；请参见[参数转发](./running-tasks.html)。
 
 ## 推荐方法
 
 ### 1. usage 字段（首选） {#usage-field}
 
-**usage 字段** 是定义任务参数的推荐方式。它提供了一种简洁、声明式的语法，既适用于 TOML 任务，也适用于文件任务。
+在 TOML 任务中使用 `usage`，在文件任务中使用 `#USAGE` 注释。两者定义相同的参数规范，mise 使用该规范进行解析、帮助和补全。
 
 更多详情请参见 [完整的 Usage 规范参考](#complete-usage-specification-reference)。
 
@@ -24,9 +29,11 @@ flag "--region <region>" help="AWS 区域" default="us-east-1" env="AWS_REGION"
 '''
 
 run = '''
-echo "Deploying to ${usage_environment?} in ${usage_region?}"
-[[ "${usage_verbose:-false}" == "true" ]] && set -x
-./deploy.sh "${usage_environment?}" "${usage_region?}"
+#!/usr/bin/env bash
+if [ "${usage_verbose:-false}" = "true" ]; then
+  echo "Verbose mode enabled"
+fi
+printf 'Selected environment: %s; region: %s\n' "${usage_environment?}" "${usage_region?}"
 '''
 ```
 
@@ -73,12 +80,9 @@ echo "正在部署到 {{ usage.environment }}，位于 {{ usage.region }}"
 '''
 ```
 
-`usage` 映射使用 **snake_case 的参数/标志名称作为键**（与
-`usage_` 环境变量的方式相同）。带有 `-` 的名称会转换为 `_`，因此像
-`--dry-run` 这样的标志将可通过 <span v-pre>`{{ usage.dry_run }}`</span>
-和 `$usage_dry_run` 访问。可变参数/标志会以数组形式暴露，并可与 Tera 的
-`for` 循环以及 `length` 等过滤器一起使用。`usage` 映射与本文后面所述的已弃用 Tera
-模板函数（`arg()`、`option()`、`flag()`）是**分开的**——你不应在同一个任务中混用这两种方式。
+`usage` 映射使用 **snake_case 格式的参数/标志名称作为键**（类似
+`usage_` 环境变量）。包含 `-` 的名称会转换为 `_`，因此像 `--dry-run` 这样的标志可以通过 <span v-pre>`{{ usage.dry_run }}`</span>
+和 `$usage_dry_run` 使用。可变参数/标志会以数组形式公开，可以与 Tera 的 `for` 循环和 `length` 等过滤器一起使用。`usage` 映射**独立于**本页面后文介绍的已弃用 Tera 模板函数（`arg()`、`option()`、`flag()`）。不要在同一个任务中混用这两种方法。
 
 <span v-pre>`{{usage.*}}`</span> 模板也可用于 `depends`、`depends_post` 和
 `wait_for` 中，将参数传递给依赖任务。详情请参见
@@ -103,12 +107,12 @@ Options:
 
 ### 2. 文件任务头部 {#file-task-headers}
 
-对于文件任务，你可以使用特殊的 `#MISE` 或 `#USAGE` 注释语法直接在文件中定义参数：
+对于文件任务，请在 `#USAGE` 注释中放置参数声明。`#MISE` 注释将任务属性配置为 TOML。此示例假定使用 Bash，并且项目中已有 `scripts/deploy.sh`：
 
 ```bash [.mise/tasks/deploy]
 #!/usr/bin/env bash
-#MISE description "部署应用程序"
-#USAGE arg "<environment>" help="部署环境" {
+#MISE description="Deploy application"
+#USAGE arg "<environment>" help="Deployment environment" {
 #USAGE   choices "dev" "staging" "prod"
 #USAGE }
 #USAGE flag "--dry-run" help="预览更改而不部署"
@@ -127,7 +131,8 @@ fi
 ```
 
 ::: tip 语法选项
-在文件任务中定义参数时，请使用 `#MISE`（大写，推荐）或 `#USAGE`。作为格式化工具的兼容替代，`# [MISE]` 或 `# [USAGE]` 也被接受。
+对于任务属性，使用 `#MISE key=value`；对于 usage 规范，使用 `#USAGE`。
+作为格式化工具的兼容方案，也接受 `# [MISE]` 和 `# [USAGE]`。
 :::
 
 #### 挂载生成的规范
@@ -176,7 +181,7 @@ arg "<files>" var=#true var_min=1 var_max=3    // 1 到 3 个文件
 ```
 
 ::: tip 在 Bash 中处理带空格的可变参数
-可变参数会作为经过 shell 转义的字符串传递。为了将包含空格的参数正确处理为 bash 数组，请将变量用括号包裹：
+可变参数会作为经过 shell 转义的字符串传递。若要将包含空格的参数作为 bash 数组处理，请将变量括在括号中：
 
 ```bash
 # 转换为 bash 数组：
@@ -235,13 +240,13 @@ arg "<file>" double_dash="optional"
 // 第一个参数之后，行为等同于使用了 --
 arg "<files>" double_dash="automatic"
 
-// Keep double dashes as values in a variadic argument
+// 在可变参数中将双破折号保留为值
 arg "<args>..." double_dash="preserve"
 ```
 
 ### 标志（`flag`）
 
-标志可以定义为布尔值，也可以接受值。
+标志可以是布尔值，也可以接受值。
 
 #### 布尔标志
 
@@ -325,7 +330,7 @@ complete "plugin" run="mise plugins ls"       // 使用命令输出进行补全
 complete "plugin" run="mycli plugins list" descriptions=#true
 ```
 
-输出格式（用 `:` 分隔值和描述）：
+输出格式（使用 `:` 分隔值和描述）：
 
 ```
 nodejs:JavaScript 运行时
@@ -335,7 +340,7 @@ ruby:Ruby 语言
 
 ### 长帮助文本
 
-如需详细帮助文本，请使用多行格式：
+对于详细的帮助文本，请使用多行格式：
 
 ```mise-toml
 [tasks.complex]
@@ -379,6 +384,8 @@ flag "--internal-debug" hide=#true
 ```
 
 ### 组合功能示例
+
+这是一个特定于应用程序的示例：它假设 `npm test`、`mycli` 以及名为 `deploy_service` 和 `deploy_all` 的 shell 函数可用。较小的[快速示例](#quick-example)无需这些应用程序组件即可运行。
 
 ```mise-toml [mise.toml]
 [tasks.deploy]
@@ -448,8 +455,9 @@ fi
 
 # 部署服务
 if [[ -n "${usage_services?}" ]]; then
-  echo "正在部署服务：${usage_services?}"
-  for service in ${usage_services?}; do
+  echo "Deploying services: ${usage_services?}"
+  eval "services=(${usage_services?})"
+  for service in "${services[@]}"; do
     deploy_service "$service" "$ENVIRONMENT" "$REGION" "$DRY_RUN"
   done
 else
@@ -461,26 +469,26 @@ fi
 
 ## Bash 变量展开用于 Usage 变量 {#bash-variable-expansion}
 
-在 bash 脚本中访问由 usage 定义的变量时，请使用参数展开语法，以帮助 [shellcheck](https://www.shellcheck.net/) 理解这些变量，并为布尔标志提供默认值。
+在 bash 脚本中访问 usage 定义的变量时，请使用参数展开语法，以帮助 [shellcheck](https://www.shellcheck.net/) 理解这些变量，并为布尔标志提供默认值。
 
 ### 常见模式
 
-| 语法              | 行为                         | 使用场景                                           | 示例                          |
-| ----------------- | ---------------------------- | -------------------------------------------------- | ----------------------------- |
-| `${var?}`         | 未设置时出错                 | usage 规范中带默认值的必需参数或标志               | `${usage_profile?}`           |
-| `${var:?}`        | 未设置或为空时出错           | 当你需要确保值非空时                               | `${usage_target:?}`           |
-| `${var:-default}` | 未设置时使用默认值           | usage 规范中没有 `default=` 的布尔标志             | `${usage_clean:-false}`       |
-| `${var:=default}` | 未设置时设置并使用默认值     | 当你希望为后续使用设置变量时                       | `${usage_dir:=.}`             |
-| `${var:+value}`   | 已设置时使用该值             | 条件性传递标志                                     | `${usage_verbose:+--verbose}` |
+| 语法              | 行为                              | 使用场景                                           | 示例                          |
+| ----------------- | --------------------------------- | -------------------------------------------------- | ----------------------------- |
+| `${var?}`         | 未设置时出错                      | 必需参数或 usage 规范中带默认值的标志             | `${usage_profile?}`           |
+| `${var:?}`        | 未设置或为空时出错                | 需要确保值非空时                                   | `${usage_target:?}`           |
+| `${var:-default}` | 未设置或为空时使用默认值          | usage 规范中未设置 `default=` 的布尔标志          | `${usage_clean:-false}`       |
+| `${var:=default}` | 未设置或为空时设置并使用默认值    | 希望设置变量以供后续使用时                         | `${usage_dir:=.}`             |
+| `${var:+value}`   | 已设置且非空时使用该值            | 可选字符串值                                       | `${usage_output:+has-output}` |
 
 ### Usage 变量的指南
 
 #### 带默认值的参数和标志
 
-使用 `${usage_var?}`，因为 usage 会保证它们已被设置：
+使用 `${usage_var?}`，因为 usage 会保证它们已设置：
 
 ```bash
-# --profile 在 usage 规范中有 default="debug"
+# --profile has default="dev" in usage spec
 cargo build --profile "${usage_profile?}"
 ```
 
@@ -506,32 +514,38 @@ cargo build --target "${usage_target:?}"
 
 #### 条件性标志
 
-使用 `${usage_var:+value}` 仅在设置时传递标志：
+显式比较布尔值。非空字符串 `"false"` 仍会满足
+`${var:+value}`，因此该展开方式不能用于测试标志是否已启用：
 
 ```bash
-# 仅在提供了该标志时添加 --verbose
-mycli deploy ${usage_verbose:+--verbose}
+args=()
+if [ "${usage_verbose:-false}" = "true" ]; then
+  args+=(--verbose)
+fi
+mycli deploy "${args[@]}"
 ```
 
-这些展开方式有助于 [shellcheck](https://www.shellcheck.net/) 理解你的脚本，并在保持正确错误处理的同时，避免关于变量可能未设置的警告。
+此示例需要 Bash。`${var:+value}` 适用于可选字符串值，不适用于解释 `true` 和 `false`。
+
+这些展开方式有助于 [shellcheck](https://www.shellcheck.net/) 理解你的脚本，并避免有关变量可能未设置的警告，同时保持正确的错误处理。
 
 ## 已弃用的方法
 
 ### Tera 模板函数 <Badge type="danger" text="已弃用" /> {#tera-templates}
 
-::: danger 已弃用 - 将于 2026.11.0 移除
-用于定义任务参数的 Tera 模板方法**已弃用**，并将于 **mise 2026.11.0** 中**移除**。
+::: danger 已弃用 - 将于 2027.5.0 移除
+用于定义任务参数的 Tera 模板方法**已弃用**，并将于 mise 2027.5.0 中**移除**。
 
 **移除原因：**
 
-- **两遍解析问题**：在规范收集期间，模板函数会返回空字符串，导致将其作为普通模板值使用时出现意外行为
+- **两遍解析问题**：模板函数在规范收集期间返回空字符串，当它们被用作普通模板值时会导致意外行为
 - **复杂的转义规则**：Shell 转义规则令人困惑且容易出错
-- **行为不一致**：在 TOML 和文件任务之间的行为不相同
-- **用户体验差**：将参数定义与脚本逻辑混杂在一起
+- **行为不一致**：在 TOML 任务和文件任务中的行为不同
+- **用户体验较差**：将参数定义与脚本逻辑混在一起
 
-**需要迁移：** 请在 2026.11.0 之前迁移到 [usage 字段](#usage-field) 方法。
+**需要迁移：** 请在 2027.5.0 之前迁移到 [usage 字段](#usage-field)方法。
 
-**可关闭设置：** 如果你想立即禁用两遍解析行为（在移除之前），可以设置：
+**退出设置：** 若要在移除前立即禁用两遍解析行为，请设置：
 
 ```toml
 # ~/.config/mise/config.toml
@@ -541,7 +555,7 @@ task.disable_spec_from_run_scripts = true
 
 或者通过环境变量：`MISE_TASK_DISABLE_SPEC_FROM_RUN_SCRIPTS=1`
 
-启用后，mise 仅会使用 `usage` 字段生成规范，忽略运行脚本中的任何 `arg()`、`option()` 或 `flag()` 函数。更多详情请参见 [设置](/configuration/settings)。
+启用后，mise 仅使用 `usage` 字段生成规范，并忽略运行脚本中的任何 `arg()`、`option()` 或 `flag()` 函数。详情请参见[设置](/configuration/settings)。
 :::
 
 <details>
@@ -581,7 +595,7 @@ run = [
    run = 'cmd {{arg(name="file")}}' # 可能已正确转义，也可能没有
    ```
 
-3. **不会生成帮助信息**：不会生成正确的 `--help` 输出
+3. **无法生成帮助信息**：不会生成正确的 `--help` 输出
 
 </details>
 
@@ -591,13 +605,15 @@ run = [
 
 #### 示例 1：简单参数
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+::: code-group
 
-<div>
+```mise-toml [Usage]
+[tasks.test]
+usage = 'arg "<file>" help="Test file" default="all"'
+run = 'cargo test "${usage_file?}"'
+```
 
-**旧版（已弃用）：**
-
-```mise-toml
+```mise-toml [Deprecated]
 [tasks.test]
 run = '''
 cargo test {{arg(
@@ -608,69 +624,61 @@ cargo test {{arg(
 '''
 ```
 
-</div>
-
-<div>
-
-**新版（推荐）：**
-
-```mise-toml
-[tasks.test]
-usage = 'arg "<file>" help="测试文件" default="all"'
-run = 'cargo test ${usage_file?}'
-```
-
-</div>
-
-</div>
+:::
 
 #### 示例 2：带标志的多个参数
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+::: code-group
 
-<div>
+```mise-toml [Usage]
+[tasks.build]
+usage = '''
+arg "<profile>" default="dev"
+flag "-v --verbose"
+'''
+run = '''
+args=()
+if [ "${usage_verbose:-false}" = "true" ]; then
+  args+=(--verbose)
+fi
+cargo build --profile "${usage_profile?}"
+./package.sh "${args[@]}"
+'''
+```
 
-**旧版（已弃用）：**
-
-```mise-toml
+```mise-toml [Deprecated]
 [tasks.build]
 run = [
-  'cargo build {{arg(name="target", default="debug")}}',
+  'cargo build --profile {{arg(name="profile", default="dev")}}',
   './package.sh {{flag(name="verbose")}}'
 ]
 ```
 
-</div>
-
-<div>
-
-**新版（推荐）：**
-
-```mise-toml
-[tasks.build]
-usage = '''
-arg "<target>" default="debug"
-flag "-v --verbose"
-'''
-run = [
-  'cargo build ${usage_target?}',
-  './package.sh ${usage_verbose:-false}'
-]
-```
-
-</div>
-
-</div>
+:::
 
 #### 示例 3：带选项的选择
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+::: code-group
 
-<div>
+```mise-toml [Usage]
+[tasks.deploy]
+usage = '''
+flag "--env <env>" {
+  choices "dev" "prod"
+}
+flag "--force"
+'''
+run = '''
+#!/usr/bin/env bash
+args=(--env "${usage_env?}")
+if [ "${usage_force:-false}" = "true" ]; then
+  args+=(--force)
+fi
+deploy "${args[@]}"
+'''
+```
 
-**旧版（已弃用）：**
-
-```mise-toml
+```mise-toml [Deprecated]
 [tasks.deploy]
 run = '''
 deploy {{option(
@@ -680,55 +688,28 @@ deploy {{option(
 '''
 ```
 
-</div>
-
-<div>
-
-**新版（推荐）：**
-
-```mise-toml
-[tasks.deploy]
-usage = '''
-flag "--env <env>" {
-  choices "dev" "prod"
-}
-flag "--force"
-'''
-run = 'deploy --env ${usage_env?} ${usage_force:+--force}'
-```
-
-</div>
-
-</div>
+:::
 
 #### 示例 4：可变参数
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+::: code-group
 
-<div>
+```mise-toml [Usage]
+[tasks.lint]
+usage = 'arg "<files>" var=#true'
+run = '''
+#!/usr/bin/env bash
+eval "files=(${usage_files?})"
+eslint "${files[@]}"
+'''
+```
 
-**旧版（已弃用）：**
-
-```mise-toml
+```mise-toml [Deprecated]
 [tasks.lint]
 run = 'eslint {{arg(name="files", var=true)}}'
 ```
 
-</div>
-
-<div>
-
-**新版（推荐）：**
-
-```mise-toml
-[tasks.lint]
-usage = 'arg "<files>" var=#true'
-run = 'eslint ${usage_files?}'
-```
-
-</div>
-
-</div>
+:::
 
 ::: tip 处理包含空格的参数
 如果你的可变参数可能包含空格，请将变量转换为 bash 数组：
@@ -737,6 +718,7 @@ run = 'eslint ${usage_files?}'
 [tasks.process]
 usage = 'arg "<files>" var=#true'
 run = '''
+#!/usr/bin/env bash
 eval "files=($usage_files)"
 for f in "${files[@]}"; do
   process "$f"

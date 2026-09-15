@@ -29,19 +29,44 @@ impl<'a> TaskToolInstaller<'a> {
         config: &mut Arc<Config>,
         tasks: &Deps,
         dry_run: bool,
-        previewed_tools: &HashSet<ToolVersion>,
+        previewed_tools: &[ToolVersion],
     ) -> Result<()> {
-        let all_tasks: Vec<_> = tasks.all().collect();
-        let all_tool_requests = self.collect_tool_requests(config, all_tasks).await?;
+        self.install_task_list(
+            config,
+            tasks.all().cloned().collect(),
+            dry_run,
+            previewed_tools,
+            true,
+        )
+        .await
+    }
 
-        // Build and install toolset
+    /// Install tools for tasks that were resolved after the initial graph.
+    pub(crate) async fn install_tasks(
+        &self,
+        config: &mut Arc<Config>,
+        tasks: Vec<Task>,
+        dry_run: bool,
+        previewed_tools: &[ToolVersion],
+    ) -> Result<()> {
+        self.install_task_list(config, tasks, dry_run, previewed_tools, false)
+            .await
+    }
+
+    async fn install_task_list(
+        &self,
+        config: &mut Arc<Config>,
+        tasks: Vec<Task>,
+        dry_run: bool,
+        previewed_tools: &[ToolVersion],
+        reload_config: bool,
+    ) -> Result<()> {
+        let all_tool_requests = self.collect_tool_requests(config, &tasks).await?;
         let toolset = self
             .build_toolset(config, self.cli_tools.to_vec(), all_tool_requests)
             .await?;
-        self.install_toolset(config, toolset, dry_run, previewed_tools)
-            .await?;
-
-        Ok(())
+        self.install_toolset(config, toolset, dry_run, previewed_tools, reload_config)
+            .await
     }
 
     /// Collect every tool request needed to prepare the supplied tasks without
@@ -198,14 +223,15 @@ impl<'a> TaskToolInstaller<'a> {
         config: &mut Arc<Config>,
         mut ts: Toolset,
         dry_run: bool,
-        previewed_tools: &HashSet<ToolVersion>,
+        previewed_tools: &[ToolVersion],
+        reload_config: bool,
     ) -> Result<()> {
         if dry_run {
             for tvl in ts.versions.values_mut() {
                 tvl.versions.retain(|tv| !previewed_tools.contains(tv));
             }
         }
-        let _ = ts
+        let (_, missing) = ts
             .install_missing_versions(
                 config,
                 &InstallOptions {
@@ -213,10 +239,14 @@ impl<'a> TaskToolInstaller<'a> {
                     missing_args_only: !Settings::get().task.run_auto_install,
                     skip_auto_install: !Settings::get().task.run_auto_install
                         || !Settings::get().auto_install,
+                    reload_config,
                     ..Default::default()
                 },
             )
             .await?;
+        if !dry_run && let Err(err) = crate::shims::ensure_lazy_shims(&missing) {
+            warn!("failed to create shims for lazy tools: {err:#}");
+        }
 
         Ok(())
     }

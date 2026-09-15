@@ -5,9 +5,6 @@ on:
       trusted:
         required: true
         type: boolean
-      mbx-backend:
-        required: true
-        type: string
     secrets:
       MISE_GH_TOKEN:
         required: false
@@ -19,6 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  MBX_DISABLE: "1"
   CARGO_TERM_COLOR: always
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
   MISE_EXPERIMENTAL: 1
@@ -31,7 +29,7 @@ jobs:
   check-changes:
     permissions:
       contents: read
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 5
     outputs:
       registry-changed: ${{ steps.check.outputs.registry-changed }}
@@ -60,17 +58,12 @@ jobs:
 
   build:
     timeout-minutes: 20
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-large;overrides.cache-tag=cache' }}
     needs: check-changes
     if: needs.check-changes.outputs.registry-changed == 'true'
     env:
       GITHUB_TOKEN: ${{ secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
-      - name: Assert OIDC is unavailable to untrusted CI
-        if: ${{ !inputs.trusted }}
-        run: |
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         if: inputs.trusted
@@ -79,22 +72,21 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/.global-cache
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          backend: ${{ inputs.mbx-backend }}
-      - run: mbx build --all-features --ignore-rust-version
+          shared-key: build
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release') }}
+      - run: cargo build --all-features --ignore-rust-version
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mise
           path: target/debug/mise
-      - run: mbx cache stats
-        if: always()
 
   list-changed-tools:
     permissions:
       contents: read
     timeout-minutes: 10
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     needs: check-changes
     if: github.event_name == 'pull_request' && needs.check-changes.outputs.registry-changed == 'true'
     outputs:
@@ -150,7 +142,7 @@ jobs:
   validate-new-tools:
     permissions:
       contents: read
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 5
     needs: list-changed-tools
     if: |
@@ -181,7 +173,7 @@ jobs:
       contents: read
     name: test-tool-${{ matrix.tranche }}
     timeout-minutes: 90
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     needs:
       - build
       - list-changed-tools
@@ -367,7 +359,7 @@ jobs:
 
   registry-ci:
     permissions: {}
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 1
     needs:
       - check-changes

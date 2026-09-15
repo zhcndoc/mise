@@ -1,59 +1,39 @@
-# Dotnet 后端
+---
+description: "使用 dotnet 后端从 NuGet 安装 .NET 命令行工具"
+---
 
-此功能的代码位于 mise 仓库中的 [`./src/backend/dotnet.rs`](https://github.com/jdx/mise/blob/main/src/backend/dotnet.rs)。
+# .NET 工具后端
 
-::: tip 重要
-dotnet 后端需要已安装 .NET 运行时。你可以使用 mise 来安装它：
+`dotnet:` 后端使用 `dotnet tool install` 从 NuGet 安装命令行工具包。未加前缀的 `dotnet` 工具用于安装 SDK；有关 SDK 选择和 `global.json`，请参阅 [.NET 语言指南](/lang/dotnet.html)。
 
-```sh
-# 安装最新版本
-mise use dotnet
+## 依赖项
 
-# 或安装指定版本（8、9 等）
-mise use dotnet@8
-mise use dotnet@9
-```
-
-这将安装 .NET 运行时，这是 dotnet 工具正常工作的必需组件。
-:::
+安装 .NET SDK 以及所选工具包所需的运行时。仅使用较新的 SDK 并不能保证旧版工具可以运行：仍需遵循 .NET 的运行时选择规则。使用 `mise exec -- dotnet --list-runtimes` 检查已安装的内容。
 
 ## 用法
 
-以下命令会安装 [GitVersion.Tool](https://gitversion.net/) 的最新版本，并
-将其设为 PATH 上的活动版本：
+此示例将 .NET 8 与包含 .NET 8 工具的 GitVersion 版本配对：
 
 ```sh
-$ mise use dotnet:GitVersion.Tool@5.12.0
-$ dotnet-gitversion /version
-5.12.0+Branch.support-5.x.Sha.3f75764963eb3d7956dcd5a40488c074dd9faf9e
+mise use dotnet@8 dotnet:GitVersion.Tool@6.0.5
+mise exec -- dotnet-gitversion /version
 ```
 
-版本将以以下格式设置到 `~/.config/mise/config.toml` 中：
+两个条目都会写入**项目的** `mise.toml`：
 
 ```toml
 [tools]
-"dotnet:GitVersion.Tool" = "5.12.0"
+dotnet = "8"
+"dotnet:GitVersion.Tool" = "6.0.5"
 ```
 
-```sh
-$ mise use dotnet:GitVersion.Tool
-$ dotnet-gitversion /version
-6.1.0+Branch.main.Sha.8856e3041dbb768118a55a31ad4e465ae70c6767
-```
+为 `mise use` 添加 `-g` 可使用全局配置。要选择其他版本，请运行 `mise ls-remote dotnet:GitVersion.Tool` 并检查该版本的运行时要求。运行 `mise use dotnet:GitVersion.Tool` 会记录一个 `latest` 请求。
 
-版本将以以下格式设置到 `~/.config/mise/config.toml` 中：
+mise 使用 `--tool-path` 将每个工具安装到其自己的目录中；它不会创建或更新项目的 `.config/dotnet-tools.json` 清单。
 
-```toml
-[tools]
-"dotnet:GitVersion.Tool" = "latest"
-```
+## 私有源
 
-### 支持的 Dotnet 语法
-
-| 描述                           | 用法                           |
-| ------------------------------------- | ------------------------------- |
-| Dotnet 简写最新版本       | `dotnet:GitVersion.Tool`        |
-| Dotnet 指定版本的简写 | `dotnet:GitVersion.Tool@5.12.0` |
+`dotnet.registry_url` 选择用于版本发现的 NuGet 服务索引。`dotnet` CLI 会单独处理安装，使用其 NuGet 配置和凭据。同时在 `NuGet.Config` 中配置安装源；仅更改发现端点不会向 CLI 添加源。
 
 ## 设置
 
@@ -86,4 +66,12 @@ import Settings from '/components/settings.vue';
 "dotnet:GitVersion.Tool" = { version = "latest", prerelease = true }
 ```
 
-旧的 `dotnet.package_flags = ["prerelease"]` 设置已被弃用。请优先使用按工具配置的 `prerelease = true` 选项，或者在所有工具都应包含预发布版本时使用全局 `prereleases` 设置。由于 `dotnet.package_flags` 是全局配置，在依赖每个工具的 `prerelease = false` 排除选项之前，请先移除它。
+旧版 `dotnet.package_flags = ["prerelease"]` 设置已弃用。优先使用每个工具的 `prerelease = true` 选项，或者在所有工具都应包含预发布版本时使用全局 `prereleases` 设置。由于 `dotnet.package_flags` 是全局设置，因此在依赖每个工具的 `prerelease = false` 退出选项之前，请先移除它。
+
+## 故障排除
+
+- **未找到 SDK：** 检查 `mise exec -- dotnet --info` 以及限制 SDK 选择的任何 `global.json`
+- **缺少所需框架：** 安装兼容的运行时／SDK，或选择面向当前运行时的工具版本
+- **未找到包：** 确认该包是 .NET 工具，并且发现和安装过程都可以访问其源
+
+实现：[`src/backend/dotnet.rs`](https://github.com/jdx/mise/blob/main/src/backend/dotnet.rs)。

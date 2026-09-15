@@ -1,25 +1,29 @@
+---
+description: "mise 可用于在同一系统上安装和管理多个版本的 bun。"
+---
+
 # Bun
 
 `mise` 可用于在同一系统上安装和管理 [bun](https://bun.sh/) 的多个版本。
 
-> 以下是使用 bun mise 核心插件的说明。当没有安装名为 "bun" 的 git 插件时，会使用它。
-
-其代码位于 mise 仓库中的
-[`./src/plugins/core/bun.rs`](https://github.com/jdx/mise/blob/main/src/plugins/core/bun.rs)。
-
 ## 用法
 
-以下命令将安装 bun 并将其设为全局默认：
+为当前项目安装 Bun，并检查所选的可执行文件：
 
 ```sh
-mise use -g bun@0.7     # 安装 bun 0.7.x
-mise use -g bun@latest  # 安装最新的 bun
+mise use bun@latest
+mise exec -- bun --version
 ```
+
+在项目之外使用 `mise use -g bun@latest` 设置个人默认版本。提交项目的
+`mise.toml`，以便团队成员选择相同的版本请求。
 
 使用 `mise ls-remote bun` 查看可用版本。
 
 > [!NOTE]
-> 避免使用 `bun upgrade` 来升级 bun，因为 `mise` 将不会感知到这一更改。
+> 使用 `mise upgrade bun` 进行更新。运行 `bun upgrade` 会更改已安装的二进制文件，但不会更新 mise 记录的版本。
+
+这些说明使用 mise 内置的 bun 支持。已安装的同名外部插件可能会更改行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/bun.rs)。
 
 ## 工具选项
 

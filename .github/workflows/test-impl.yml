@@ -5,9 +5,6 @@ on:
       trusted:
         required: true
         type: boolean
-      mbx-backend:
-        required: true
-        type: string
     secrets:
       FORGEJO_TOKEN:
         required: false
@@ -21,7 +18,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
+  MBX_DISABLE: "1"
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
   MISE_EXPERIMENTAL: 1
   MISE_LOCKFILE: 1
@@ -40,8 +40,10 @@ jobs:
       full-ci: ${{ steps.classify.outputs.full-ci }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 0
+          filter: blob:none
       - name: Classify changes
         id: classify
         env:
@@ -67,31 +69,20 @@ jobs:
           fi
 
   build-ubuntu:
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-large;overrides.cache-tag=cache' }}
     timeout-minutes: 60
     steps:
-      - name: Assert OIDC is unavailable to untrusted CI
-        if: ${{ !inputs.trusted }}
-        run: |
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
-          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
-        if: inputs.trusted
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/.global-cache
-      - uses: ./.github/actions/mbx
-        with:
-          backend: ${{ inputs.mbx-backend }}
+          shared-key: build
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')) }}
       - run: |
-          mbx build --all-features --ignore-rust-version
+          cargo build --all-features --ignore-rust-version
           echo "$PWD/target/debug" >> "$GITHUB_PATH"
       - run: mise -v
-      # Downstream jobs only execute this binary, so keep full debug symbols in
-      # the build job while transferring a much smaller stripped copy.
+      # Downstream jobs only execute this binary. Compile with line tables
+      # (CARGO_PROFILE_DEV_DEBUG) and strip the uploaded copy further.
       - name: Prepare mise artifact
         run: |
           install -Dm755 target/debug/mise target/ci-artifacts/mise
@@ -100,8 +91,6 @@ jobs:
         with:
           name: mise-ubuntu-latest
           path: target/ci-artifacts/mise
-      - run: mbx cache stats
-        if: always()
 
   build-windows:
     runs-on: windows-latest
@@ -111,18 +100,17 @@ jobs:
     env:
       MISE_DATA_DIR: ~/.local/share/mise
       MISE_CACHE_DIR: ~/.cache/mise
-      # Keep Windows paths short enough for MSBuild/FileTracker and place the
-      # binaries where downstream artifact steps already expect them.
-      MBX_TARGET_VIEWS: "0"
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C link-arg=/STACK:8000000 -D warnings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          backend: ${{ inputs.mbx-backend }}
+          shared-key: build-windows
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')) }}
       - shell: pwsh
         run: |
-          mbx build --no-default-features --features rustls-native-roots,vfox/vendored-lua,self_update
-          mbx build -p mise-shim
+          cargo build --no-default-features --features rustls-native-roots,vfox/vendored-lua,self_update --all-targets
+          cargo build -p mise-shim
           Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\target\debug"
       - parallel:
           - run: mise -v
@@ -135,74 +123,66 @@ jobs:
 
   unit:
     name: unit-macos
-    runs-on: ${{ !inputs.trusted && 'macos-14' || 'namespace-profile-endev-macos-arm64' }}
+    runs-on: ${{ !inputs.trusted && 'macos-14' || 'namespace-profile-endev-macos-arm64;overrides.cache-tag=cache' }}
     timeout-minutes: 90
     needs: [classify-changes]
     if: needs.classify-changes.outputs.full-ci == 'true'
     env:
-      # The bootstrap build below uses explicit mbx before mise installs the
-      # project tools. Keep nested task builds on the same entrypoint so AWS-LC
-      # does not reconfigure an existing CMake tree with a different compiler.
-      MISE_CARGO_BUILD_COMMAND: mbx build
+      MISE_CARGO_BUILD_COMMAND: cargo build
       MISE_CARGO_BUILD_EXTRA_ARGS: --ignore-rust-version
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.head_ref }}
-      - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
-        if: inputs.trusted
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/.global-cache
-      - uses: ./.github/actions/mbx
-        with:
-          backend: ${{ inputs.mbx-backend }}
+          shared-key: unit-macos
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')) }}
       - name: Install test tools
         run: brew install fd tmux
       - run: |
-          mbx build --all-features --ignore-rust-version
+          cargo build --all-features --ignore-rust-version
           echo "$PWD/target/debug" >> "$GITHUB_PATH"
       - uses: ./.github/actions/mise-tools
-      - run: mise x -- mbx test --all-features --ignore-rust-version
-      # `cargo test` above resolves to the root package, so the workspace members are built as
-      # dependencies but never tested. Run them separately rather than adding --workspace to the
-      # line above, which would extend --all-features to members whose features are exclusive.
-      - name: cargo test (workspace members)
-        run: mbx test --workspace --exclude mise --ignore-rust-version
-      - run: mise run test:e2e e2e/cli/test_system_install_brew_macos_slow
-      - run: mise run test:e2e e2e/tasks/test_task_zsh_process_substitution_tmux_macos
-      # The e2e suite is Linux-only, and this one turns on `TIOCSCTTY` and
-      # signal-driven termios restore — both places where the two platforms have
-      # differed before. Run it here so the claim covers macOS as well.
-      - run: mise run test:e2e e2e/cli/test_watch_terminal_restore_on_signal
-      - run: mbx cache stats
-        if: always()
+      # The CI profile fails ordinary tests after one second and explicitly
+      # budgeted full-command-graph tests after two seconds.
+      - run: mise run test:unit-ci
+      # The full E2E suite runs on Linux. Tests whose filenames contain `macos`
+      # are also discovered and exercised here for platform-specific coverage.
+      - run: mise run test:e2e macos
+      # Tracked history shells out to git and needs the Xcode Command
+      # Line Tools guard exercised on a real macOS runner.
+      - run: >-
+          mise run test:e2e
+          '^test_dotfiles_history_bootstrap$' '^test_dotfiles_history$'
+          '^test_dotfiles_recovery_journey$' '^test_dotfiles_capture$'
+          '^test_dotfiles_onboarding$' '^test_dotfiles_track$'
+          '^test_dotfiles_history_policies$' '^test_dotfiles_rollback$'
+          '^test_dotfiles_rollback_types$' '^test_bootstrap_user_services$'
+          '^test_dotfiles_rollback_review$' '^test_dotfiles_sync_permissions$'
+          '^test_dotfiles_managed_manual$' '^test_bootstrap_from_git_dumb_http$'
+          '^test_dotfiles_alias_enrollment$'
+          '^test_dotfiles_watch$' '^test_dotfiles_watch_pending$'
+          '^test_dotfiles_watch_throttle$' '^test_dotfiles_sync$'
+          '^test_dotfiles_sync_files_encrypted$' '^test_dotfiles_directory_permissions$'
 
   lint:
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-large' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-large;overrides.cache-tag=cache' }}
     timeout-minutes: 80
     needs: [build-ubuntu]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          backend: ${{ inputs.mbx-backend }}
+          shared-key: lint
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')) }}
       - parallel:
           - name: Install mold
             run: sudo apt-get update && sudo apt-get install -y mold
           - uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
             with:
               tool: cargo-deny,cargo-msrv,cargo-machete
-          - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
-            if: inputs.trusted
-            with:
-              path: |
-                ~/.cargo/registry
-                ~/.cargo/git
-                ~/.cargo/.global-cache
           - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
             with:
               name: mise-ubuntu-latest
@@ -239,21 +219,20 @@ jobs:
           # rust-version than their code requires; rustc still rejects genuinely
           # incompatible syntax and APIs when the metadata check is ignored.
           - name: Verify MSRV
-            run: mbx msrv verify -- cargo check --ignore-rust-version
+            run: cargo msrv verify -- cargo check --ignore-rust-version
             env:
               CARGO_TARGET_DIR: target/msrv
       # Separate targets keep Cargo's directory lock from serializing these
-      # overlapping configurations. mbx shares the machine-wide compiler pool
-      # and deduplicates identical work in flight between them.
+      # overlapping configurations.
       - parallel:
           - name: Run Clippy with default features
             env:
               CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-default
-            run: mbx clippy --ignore-rust-version -- -D warnings
+            run: cargo clippy --ignore-rust-version -- -D warnings
           - name: Run Clippy with all features and targets
             env:
               CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-all
-            run: mbx clippy --all-features --all-targets --ignore-rust-version -- -D warnings
+            run: cargo clippy --all-features --all-targets --ignore-rust-version -- -D warnings
 
   e2e:
     name: e2e
@@ -262,129 +241,96 @@ jobs:
     # The release PR runs the full suite against the packaged release tarball.
     # Keep that stronger signal instead of also testing the debug artifact.
     if: ${{ needs.classify-changes.outputs.full-ci == 'true' && (github.event_name != 'pull_request' || github.head_ref != 'release' || github.base_ref != 'main') }}
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-large;overrides.cache-tag=cache' }}
     needs: [build-ubuntu, classify-changes]
     timeout-minutes: 125
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-      # Fetch sequentially so the pool can rotate its cursor between requests.
-      # Each token is also rejected by the action when its core budget is empty.
-      - name: Fetch token 0
-        id: token_0
+      - name: Fetch tokens
+        id: tokens
         uses: ./.github/actions/fetch-token
         with:
           api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 1
-        id: token_1
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 2
-        id: token_2
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 3
-        id: token_3
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 4
-        id: token_4
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 5
-        id: token_5
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 6
-        id: token_6
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - name: Fetch token 7
-        id: token_7
-        uses: ./.github/actions/fetch-token
-        with:
-          api-secret: ${{ secrets.MISE_VERSIONS_API_SECRET }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: mise-ubuntu-latest
-          path: target/debug
-      - run: echo "$PWD/target/debug" >> "$GITHUB_PATH" && chmod +x target/debug/mise
+          count: "8"
       - parallel:
-          - uses: ./.github/actions/mise-tools
+          - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+            with:
+              name: mise-ubuntu-latest
+              path: target/debug
           - name: Pull e2e Docker image
             run: docker pull ghcr.io/jdx/mise:e2e
-      # Each test gets isolated host directories and an ephemeral container.
-      # Run four branches on a standard runner; each branch handles two
-      # token-isolated tranches sequentially, capped at eight containers total.
+      - run: echo "$PWD/target/debug" >> "$GITHUB_PATH" && chmod +x target/debug/mise
+      - name: Test e2e runner
+        run: python3 scripts/test-e2e-runner.py
+      # Tests run in ephemeral containers and do not need host mise tools.
+      # Four branches on a large runner; each handles two token-isolated
+      # tranches sequentially, capped at eight containers total.
       - parallel:
           - name: Test tranches 0 and 4
-            uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+            timeout-minutes: 60
             env:
               E2E_JOBS: 2
+              E2E_MAX_ATTEMPTS: 2
+              E2E_RETRY_WAIT_SECONDS: 30
               MISE_E2E_DOCKER: "1"
               TEST_ALL: ${{(github.head_ref == 'release' || github.ref == 'refs/heads/release') && '1' || '0'}}
               TEST_TRANCHE_COUNT: 8
               TRANCHE_A: 0
               TRANCHE_B: 4
-              TOKEN_A: ${{ steps.token_0.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-              TOKEN_B: ${{ steps.token_4.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-            with: &e2e-retry
-              timeout_minutes: 30
-              retry_wait_seconds: 30
-              max_attempts: 2
-              command: |
-                e2e_status=0
-                MISE_GITHUB_TOKEN="$TOKEN_A" GITHUB_TOKEN="$TOKEN_A" TEST_TRANCHE="$TRANCHE_A" ./e2e/run_all_tests || e2e_status=$?
-                MISE_GITHUB_TOKEN="$TOKEN_B" GITHUB_TOKEN="$TOKEN_B" TEST_TRANCHE="$TRANCHE_B" ./e2e/run_all_tests || e2e_status=$?
-                exit "$e2e_status"
+              TOKEN_A: ${{ steps.tokens.outputs.token_0 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+              TOKEN_B: ${{ steps.tokens.outputs.token_4 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+            run: &e2e-run |
+              e2e_status=0
+              MISE_GITHUB_TOKEN="$TOKEN_A" GITHUB_TOKEN="$TOKEN_A" TEST_TRANCHE="$TRANCHE_A" ./e2e/run_all_tests || e2e_status=$?
+              MISE_GITHUB_TOKEN="$TOKEN_B" GITHUB_TOKEN="$TOKEN_B" TEST_TRANCHE="$TRANCHE_B" ./e2e/run_all_tests || e2e_status=$?
+              exit "$e2e_status"
           - name: Test tranches 1 and 5
-            uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+            timeout-minutes: 60
             env:
               E2E_JOBS: 2
+              E2E_MAX_ATTEMPTS: 2
+              E2E_RETRY_WAIT_SECONDS: 30
               MISE_E2E_DOCKER: "1"
               TEST_ALL: ${{(github.head_ref == 'release' || github.ref == 'refs/heads/release') && '1' || '0'}}
               TEST_TRANCHE_COUNT: 8
               TRANCHE_A: 1
               TRANCHE_B: 5
-              TOKEN_A: ${{ steps.token_1.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-              TOKEN_B: ${{ steps.token_5.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-            with: *e2e-retry
+              TOKEN_A: ${{ steps.tokens.outputs.token_1 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+              TOKEN_B: ${{ steps.tokens.outputs.token_5 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+            run: *e2e-run
           - name: Test tranches 2 and 6
-            uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+            timeout-minutes: 60
             env:
               E2E_JOBS: 2
+              E2E_MAX_ATTEMPTS: 2
+              E2E_RETRY_WAIT_SECONDS: 30
               MISE_E2E_DOCKER: "1"
               TEST_ALL: ${{(github.head_ref == 'release' || github.ref == 'refs/heads/release') && '1' || '0'}}
               TEST_TRANCHE_COUNT: 8
               TRANCHE_A: 2
               TRANCHE_B: 6
-              TOKEN_A: ${{ steps.token_2.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-              TOKEN_B: ${{ steps.token_6.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-            with: *e2e-retry
+              TOKEN_A: ${{ steps.tokens.outputs.token_2 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+              TOKEN_B: ${{ steps.tokens.outputs.token_6 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+            run: *e2e-run
           - name: Test tranches 3 and 7
-            uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+            timeout-minutes: 60
             env:
               E2E_JOBS: 2
+              E2E_MAX_ATTEMPTS: 2
+              E2E_RETRY_WAIT_SECONDS: 30
               MISE_E2E_DOCKER: "1"
               TEST_ALL: ${{(github.head_ref == 'release' || github.ref == 'refs/heads/release') && '1' || '0'}}
               TEST_TRANCHE_COUNT: 8
               TRANCHE_A: 3
               TRANCHE_B: 7
-              TOKEN_A: ${{ steps.token_3.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-              TOKEN_B: ${{ steps.token_7.outputs.token || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
-            with: *e2e-retry
+              TOKEN_A: ${{ steps.tokens.outputs.token_3 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+              TOKEN_B: ${{ steps.tokens.outputs.token_7 || secrets.MISE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+            run: *e2e-run
 
   bootstrap-linux-host:
     permissions:
       contents: read
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 20
     needs: [build-ubuntu, classify-changes]
     if: needs.classify-changes.outputs.full-ci == 'true'
@@ -406,29 +352,24 @@ jobs:
     env:
       MISE_DATA_DIR: ~/.local/share/mise
       MISE_CACHE_DIR: ~/.cache/mise
-      # The default content-addressed target path can exceed Windows tooling's
-      # path limits during workspace tests.
-      MBX_TARGET_VIEWS: "0"
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C link-arg=/STACK:8000000 -D warnings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 # zizmor: ignore[cache-poisoning]
         with:
-          backend: ${{ inputs.mbx-backend }}
-      - name: check unused code
-        run: mbx check -p mise --no-default-features --features rustls-native-roots,vfox/vendored-lua,self_update --all-targets
-        env:
-          RUSTFLAGS: -D unused
+          shared-key: windows-unit
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')) }}
       - name: cargo test
         uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
         with:
           timeout_minutes: 30
           retry_wait_seconds: 30
           max_attempts: 2
-          command: mbx test
+          command: cargo test
       # Windows is where the members rot fastest: their tests assume POSIX paths and shells
       # unless something runs them here.
       - name: cargo test (workspace members)
-        run: mbx test --workspace --exclude mise
+        run: cargo test --workspace --exclude mise
   windows-e2e:
     permissions:
       contents: read
@@ -458,7 +399,7 @@ jobs:
 
   test-ci:
     permissions: {}
-    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 1
     needs:
       - classify-changes

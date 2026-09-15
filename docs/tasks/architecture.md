@@ -1,14 +1,18 @@
+---
+description: "了解 mise 的任务系统工作原理，有助于你编写更高效的任务并排查依赖问题。"
+---
+
 # 任务系统架构
 
 了解 mise 的任务系统如何工作，有助于你编写更高效的任务并排查依赖问题。
 
 ## 任务依赖系统
 
-mise 使用一个复杂的依赖图系统来管理任务执行顺序和并行性。这确保了任务按正确顺序运行，同时通过并行执行最大化性能。
+mise 使用依赖图来管理任务执行顺序和并行性。这确保任务按正确顺序运行，同时最大限度地提高并行执行效率。
 
 ### 依赖图解析
 
-当你运行 `mise run build` 时，mise 会创建一个包含所有任务及其依赖关系的有向无环图（DAG）：
+当你运行任务时，mise 会构建由所选任务及其声明的依赖项组成的有向图，然后拒绝循环依赖。在此示例中，选择 `deploy` 会包含所示的所有前置条件；箭头从前置条件指向依赖项：
 
 ```mermaid
 graph TD
@@ -43,7 +47,7 @@ run = "npm test"
 
 #### `depends_post` - 清理任务
 
-在此任务完成后运行的任务（无论成功还是失败）：
+在此任务完成后运行的任务（无论此任务成功还是失败）：
 
 ```toml
 [tasks.deploy]
@@ -52,11 +56,11 @@ depends_post = ["cleanup", "notify"]
 run = "kubectl apply -f deployment.yaml"
 ```
 
-清理任务的常规依赖属于同一个后置阶段子树，并且在父任务完成之前不会启动。如果父任务已启动，即使父任务失败，Mise 也会运行该子树；但如果常规依赖在父任务启动前失败，则会跳过整个子树。同时作为常规依赖和后置依赖使用的任务，在每个阶段中都会分别执行一次。
+清理任务的常规依赖属于同一个后置阶段子树，并且在父任务完成之前不会启动。如果父任务已经启动，即使父任务失败，mise 也会运行该子树；但如果常规依赖在父任务能够启动之前失败，则会跳过整个子树。一个同时作为常规依赖和后置依赖使用的任务，会在每个阶段分别执行一次。
 
 #### `wait_for` - 软依赖
 
-如果这些任务也在当前执行中，则应先运行，但如果它们不可用也不会失败：
+如果这些任务已经被安排运行，则必须先完成它们。`wait_for` 不会安排这些任务运行。如果任务定义缺失，仍然会导致错误，除非引用设置了 `optional = true`；请参阅 [`wait_for`](./task-configuration.html#wait-for)。
 
 ```toml
 [tasks.integration-test]
@@ -117,21 +121,19 @@ run = "npm run build"
 
 ### 任务来源
 
-mise 按以下顺序从多个来源发现任务：
+mise 会从活动配置层级中加载内联 TOML 任务、包含的任务文件以及可执行文件任务。子配置可以覆盖父配置。仅包含内联元数据的定义也可以向现有命令任务或文件任务添加属性。
 
-1. **文件任务**：任务目录中的可执行文件
-2. **TOML 任务**：在 `mise.toml` 文件中定义
-3. **父目录任务**：可从父目录获取
+没有一种单一的来源类型顺序可以描述所有组合。请参阅 [`task_config.includes`](./task-configuration.html#task_config.includes)，了解包含顺序、命令替换和元数据覆盖。使用 `mise tasks info <task>` 检查选定的定义。
 
 ### 任务解析过程
 
 当你运行 `mise run build` 时，mise 会：
 
-1. **发现所有任务**，来自所有配置来源
+1. **从所有配置来源发现所有任务**
 2. **解析任务名称**（处理别名和部分匹配）
 3. **构建依赖图**，包括所有依赖项
-4. **验证图**（检查循环依赖）
-5. **按依赖顺序执行**，并支持并行
+4. **验证依赖图**（检查循环依赖）
+5. **按依赖顺序并行执行**
 
 ### 跨目录的任务解析
 
@@ -144,7 +146,7 @@ project/
     └── mise.toml          # 覆盖：test，新增：bundle
 ```
 
-在 `frontend/` 中，你可以访问：`lint`（来自父目录）、`test`（已覆盖）、`build`（来自父目录）、`bundle`（本地）。
+在 `frontend/` 中，你可以使用 `lint`（来自父目录）、`test`（已覆盖）、`build`（来自父目录）以及 `bundle`（本地任务）。
 
 ## 高级依赖特性
 
@@ -164,11 +166,11 @@ npm test
 '''
 ```
 
-shebang 可确保脚本在所有平台上都通过 bash 运行。否则，mise 会使用平台默认的内联 shell（Unix 上是 `sh -c`，Windows 上是 `cmd /c`），因此 bash 的 `[ ... ]` 测试在 Windows 主机上会解析失败。对于更丰富的参数处理，建议使用 [`usage` 字段](/tasks/task-arguments#usage-field)，而不是位置参数。
+shebang 会选择 Bash，而 Bash 必须安装在主机上。如果没有安装，mise 会使用平台默认的内联 shell（Unix 上为 `sh -c`，Windows 上为 `cmd /c`），因此 Bash 的 `[ ... ]` 测试在 Windows 主机上会解析失败。对于更丰富的参数处理，建议使用 [`usage` 字段](/tasks/task-arguments#usage-field)，而不是位置参数。
 
 ### 动态依赖
 
-任务可以在运行时指定依赖：
+脚本可以有条件地调用另一个任务。这些嵌套调用是独立的运行，不会添加到原始依赖图中，也不会显示在 `mise tasks deps` 中：
 
 ```bash
 #!/usr/bin/env bash
@@ -184,13 +186,13 @@ npm start
 
 ### 跨项目依赖
 
-引用其他目录中的任务：
+启用 [monorepo 模式](./monorepo.html#configuration)，并在引用项目任务之前声明项目根目录。对于名为 `api` 和 `frontend` 的项目：
 
 ```toml
 [tasks.deploy-all]
 depends = [
-  "../api:build",
-  "../frontend:build",
+  "//api:build",
+  "//frontend:build",
   "deploy-infrastructure"
 ]
 run = "echo '所有服务已部署'"
@@ -209,7 +211,7 @@ outputs = ["dist/**/*"]
 run = "npm run build"
 ```
 
-mise 仅在以下情况下运行该任务：
+mise 仅在以下情况下运行任务：
 
 - 源文件比输出文件更新
 - 任务从未运行过
@@ -228,8 +230,8 @@ mise run --force build     # 始终运行，忽略源文件更改
 使用 `mise watch` 进行持续开发：
 
 ```bash
-mise watch              # 监视所有任务源文件
-mise watch build test   # 监视特定任务
+mise watch              # Watch the default task
+mise watch build test   # Watch specific tasks
 ```
 
 当其源文件发生更改时，这会自动重新运行任务。
@@ -258,7 +260,7 @@ mise run --dry-run build       # 显示在不执行的情况下将会运行什�
 Error: Circular dependency detected: test → build → test
 ```
 
-解决方案：移除循环引用，或使用 `wait_for` 代替 `depends`。
+解决方案：移除循环，或将共享工作拆分为单独的前置条件。`wait_for` 也会在两个任务都被安排运行时创建顺序约束，因此它不是打破循环的一般方法。
 
 **缺少依赖**：
 
@@ -270,8 +272,6 @@ Error: Task 'build' depends on 'lint' but 'lint' was not found
 
 **并行执行缓慢**：
 
-- 检查任务是否存在不必要的依赖
+- 检查任务是否具有不必要的依赖
 - 使用 `mise tasks deps` 验证声明的依赖图（`depends`、`wait_for`、`depends_post`）
-- 如果有可用的 CPU 核心，可以考虑增加 `--jobs`
-
-该任务架构旨在从简单的单任务项目扩展到具有复杂构建依赖的复杂多服务应用程序。
+- 如果有空闲的 CPU 核心，可以考虑增加 `--jobs`

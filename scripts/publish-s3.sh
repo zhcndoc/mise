@@ -23,7 +23,6 @@ aws s3 cp "$RELEASE_DIR" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --n
 aws s3 cp "$RELEASE_DIR" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --no-progress --content-type "text/plain" --recursive --exclude "*" --include "SHASUMS*"
 
 # Upload individual files sequentially to avoid rate limiting
-aws s3 cp "$RELEASE_DIR/VERSION" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --no-progress --content-type "text/plain"
 aws s3 cp "$RELEASE_DIR/install.sh" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --no-progress --content-type "text/plain"
 aws s3 cp "$RELEASE_DIR/install.sh.sig" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --no-progress
 aws s3 cp "$RELEASE_DIR/install.sh.minisig" "s3://$AWS_S3_BUCKET/" --cache-control "$cache_day" --no-progress
@@ -32,11 +31,21 @@ aws s3 cp "./schema/mise.plugin.json" "s3://$AWS_S3_BUCKET/schema/mise.plugin.js
 aws s3 cp "./schema/mise-task.json" "s3://$AWS_S3_BUCKET/schema/mise-task.json" --cache-control "$cache_day" --no-progress --content-type "application/json"
 
 # Publish only the registry files so older mise builds can opt into the registry
-# tested by this release without downloading the entire source repository.
+# tested by this release without downloading the entire source repository. Materialize
+# Aqua-derived bins in the archive because older clients only understand explicit bins.
 registry_tmpdir="$(mktemp -d)"
 trap 'rm -rf "$registry_tmpdir"' EXIT
 registry_archive="$registry_tmpdir/registry.tar.zst"
-git archive --format=tar HEAD registry | zstd -q -10 -c >"$registry_archive"
+git archive --format=tar HEAD registry | tar -C "$registry_tmpdir" -xf -
+mise registry --json --hide-aliased |
+	jq -r '.[] | select(.bins | length > 0) | [.short, (.bins | tojson)] | @tsv' |
+	while IFS=$'\t' read -r short bins; do
+		registry_file="$registry_tmpdir/registry/$short.toml"
+		if [[ -f $registry_file ]] && ! grep -q '^bins[[:space:]]*=' "$registry_file"; then
+			printf '\nbins = %s\n' "$bins" >>"$registry_file"
+		fi
+	done
+tar -C "$registry_tmpdir" -cf - registry | zstd -q -10 -c >"$registry_archive"
 aws s3 cp "$registry_archive" "s3://$AWS_S3_BUCKET/registry/latest.tar.zst" --cache-control "$cache_hour" --no-progress --content-type "application/zstd"
 
 # Upload shell-specific mise.run scripts
@@ -56,23 +65,5 @@ aws s3 cp artifacts/deb/dists/ "s3://$AWS_S3_BUCKET/deb/dists/" --cache-control 
 # since=`date --date '-3 years' +%F 2>/dev/null`
 # aws s3api list-objects-v2 --bucket "$AWS_S3_BUCKET" --query 'Contents[?LastModified < `'"$since"'`]' | jq -r '.[].Key' | grep "^(deb|rpm)\/"
 
-export CLOUDFLARE_ACCOUNT_ID=6e243906ff257b965bcae8025c2fc344
-
-# Purge every CDN zone that fronts the release artifacts. install.sh and
-# install.sh.minisig are uploaded with `immutable` cache-control, so without
-# an explicit purge per zone the CDN keeps serving the previous release's
-# bytes while a sibling zone serves the new ones — which is how mise.en.dev
-# ended up serving v(N-1)/install.sh next to a v(N) install.sh.minisig.
-ZONES=(
-	"jdx.dev:90dfd7997bdcfa8579c52d8ee8dd4cd1"
-	"en.dev:531d003297f1f4ae2415b41f7f5da8fa"
-	"mise.run:782fc08181b7bbd26c529a00df52a277"
-)
-for entry in "${ZONES[@]}"; do
-	IFS=":" read -r HOST ZONE_ID <<<"$entry"
-	echo "Purging CDN cache for $HOST (zone=$ZONE_ID)"
-	curl --fail-with-body -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
-		-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-		-H "Content-Type: application/json" \
-		--data '{ "purge_everything": true }'
-done
+# Cache invalidation happens with VERSION after the GitHub release is public,
+# making the new latest artifacts and their discovery pointer visible together.

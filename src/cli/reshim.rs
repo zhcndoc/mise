@@ -4,35 +4,37 @@ use crate::config::Config;
 use crate::shims;
 use crate::toolset::ToolsetBuilder;
 
-/// Creates new shims based on bin paths from currently installed tools.
+/// Create shims for executables provided by installed tools
 ///
-/// This creates new shims in ~/.local/share/mise/shims for CLIs that have been added.
-/// mise will try to do this automatically for commands like `npm i -g` but there are
-/// other ways to install things (like using yarn or pnpm for node) that mise does
-/// not know about and so it will be necessary to call this explicitly.
+/// Run this when an executable was added to an existing installation outside mise,
+/// for example after a language package manager installed a CLI globally. It rebuilds
+/// the user shim directory by default; `--system` selects the shared system shim farm.
 ///
-/// If you think mise should automatically call this for a particular command, please
-/// open an issue on the mise repo. You can also set up a shell function to reshim
-/// automatically (it's really fast so you don't need to worry about overhead):
-///
-///     npm() {
-///       command npm "$@"
-///       mise reshim
-///     }
-///
-/// Note that this creates shims for _all_ installed tools, not just the ones that are
-/// currently active in mise.toml.
+/// Shims are created for all installed versions. The shim resolves which version to
+/// run from the current configuration when invoked. `--force` rebuilds mise-owned
+/// shims; it does not turn unrelated files into mise-owned shims.
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    verbatim_doc_comment,
+    example(
+        r###"mise reshim
+~/.local/share/mise/shims/node -v"###,
+        help = "Rebuild shims, then check node. Example output: `v20.0.0`."
+    )
+)]
 pub(crate) struct Reshim {
     #[usage(hide = true)]
     pub tool: Option<String>,
     #[usage(hide = true)]
     pub version: Option<String>,
 
-    /// Removes all shims before reshimming
+    /// Rebuild all mise-owned shims
     #[usage(long, short)]
     pub force: bool,
+
+    /// Rebuild the system shim farm
+    #[usage(long)]
+    pub system: bool,
 }
 
 impl Reshim {
@@ -40,15 +42,11 @@ impl Reshim {
         let config = Config::get().await?;
         let ts = ToolsetBuilder::new().build(&config).await?;
 
-        shims::reshim(&config, &ts, self.force).await
+        let scope = if self.system {
+            shims::ShimScope::System
+        } else {
+            shims::ShimScope::User
+        };
+        shims::reshim_for(&config, &ts, self.force, scope).await
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise reshim</bold>
-    $ <bold>~/.local/share/mise/shims/node -v</bold>
-    v20.0.0
-"#
-);

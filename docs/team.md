@@ -1,5 +1,9 @@
+---
+description: "mise 由 Jeff Dickey 维护，并在社区的帮助下持续发展。"
+---
+
 <script setup>
-import { VPTeamPage, VPTeamPageTitle, VPTeamPageSection, VPTeamMembers } from 'vitepress/theme'
+import { VPTeamMembers } from 'vitepress/theme'
 
 const members = [
   {
@@ -40,22 +44,20 @@ const board = [
 
 # 团队
 
-Jeff Dickey 是 mise 背后的主要开发者。他承担了这个项目的大部分
-开发工作。
+mise 由 Jeff Dickey 维护，并在社区的帮助下持续发展。如有问题、反馈和错误报告，请使用[联系](/contact.html)页面上的渠道。
 
 <VPTeamMembers :members="members" />
 
 ## 顾问委员会
 
-顾问委员会帮助就项目做出重要决策，例如：
+顾问委员会帮助对项目作出重要决策，例如：
 
-- 路线图中应该包含哪些功能
-- 何时应将功能从实验性转为稳定版
-- 功能是否、何时以及如何被弃用
+- 哪些功能应列入路线图
+- 何时应将功能从实验性转为稳定
+- 是否弃用功能、何时弃用以及如何弃用
 
 <VPTeamMembers :members="board" />
 
 ## 贡献者
 
-mise 是一个开源项目，欢迎[贡献](https://github.com/jdx/mise/graphs/contributors)。
-我们感谢那些为该项目贡献了自己劳动的人。
+mise 是一个开源项目。请查看[所有做出过贡献的人](https://github.com/jdx/mise/graphs/contributors)，并阅读[贡献指南](/contributing.html)，帮助改进代码、文档或测试。清晰的错误报告或对示例的更正也有助于改进项目。

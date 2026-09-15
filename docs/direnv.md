@@ -1,64 +1,59 @@
+---
+description: "direnv 和 mise 都会在你进入目录时更改环境。"
+---
+
 # direnv <Badge type="warning" text="已弃用" />
 
-[direnv](https://direnv.net) 和 mise 都会根据目录管理环境变量。由于它们都会在各自的“hook”命令运行前后分析当前的环境变量，因此它们有时会彼此冲突。
+[direnv](https://direnv.net) 和 mise 都会在你进入目录时更改环境。它们的 shell 钩子可能会对应该添加、恢复或删除哪些 `PATH` 条目产生分歧。
 
-::: warning
-官方立场是不应将 direnv 与 mise 一起使用。由不兼容性引起的问题不被视为 bug，也不会接受用于提升 direnv 兼容性的 PR。
-尽管这是官方立场，实际上在一些简单场景下，比如设置彼此无关的环境变量，mise 和 direnv 还是可以共存的。
-任何涉及 PATH 的内容——而这正是人们使用这两个工具时的大多数用途——都会引发问题。
+::: warning 不受支持的集成
+在 mise 中使用 direnv 不受支持。兼容性问题不被视为 mise 的错误，并且不接受针对 direnv 兼容性的 PR。`use mise` 集成已弃用。
 :::
 
-如果你遇到问题，很可能与 PATH 的顺序有关。这意味着，只有当你试图同时用 direnv 和 mise 管理同一个工具时，这才会真正成为问题。例如，
-你可能在 `.envrc` 中使用 `layout python`，但同时也在维护一个包含 python 的 `.tool-versions` 文件。
+## 你需要 direnv 吗？ {#do-you-need-direnv}
 
-direnv 更常见的用法是设置一些任意的环境变量，或者把不相关的二进制文件添加到 PATH。在这些情况下，mise 不会干扰 direnv。
+对于使用 direnv 设置变量、加载 dotenv 文件或激活 Python 环境的项目，mise 提供了相应的配置：
+
+| 现有的 `.envrc` 行为             | mise 配置                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `export NODE_ENV=development`    | 使用 `[env]` 和 `NODE_ENV = "development"`                                           |
+| 加载 dotenv 文件                 | [`env._.file`](/environments/#env-file)                                             |
+| 将 `bin` 添加到 `PATH`           | [`env._.path`](/environments/#env-path)                                             |
+| 从 Bash 脚本导出值               | [`env._.source`](/environments/#env-source)                                         |
+| 激活 Python virtualenv           | [Python virtualenv 配置](/lang/python.html#automatic-virtualenv-activation)         |
+
+例如：
+
+```toml [mise.toml]
+[env]
+NODE_ENV = "development"
+_.file = ".env"
+_.path = "bin"
+```
+
+此示例假设项目有一个 `.env` 文件。如果没有，请删除该指令。有关默认值、取消设置值和获取脚本的信息，请参阅[环境](/environments/)。
+
+将所需行为移入 `mise.toml` 后，移除项目的 direnv 集成，[激活 mise](/getting-started.html#activate-mise)，并打开一个全新的 shell 以验证环境。`mise exec -- <command>` 可以检查项目命令，而无需依赖交互式 shell 的当前状态。
 
 ## direnv 中的 mise（在 `.envrc` 中使用 `use mise`）
 
-::: warning
-`use mise` 已被弃用，不再受支持。
-:::
+以下内容介绍的是已弃用的设置，适用于维护或移除现有集成的用户。它让 direnv 控制导出的环境，并不提供 mise 的完整激活行为。
 
-如果你确实遇到 `mise activate` 的问题，或者只是想以另一种方式使用 direnv，
-这是一种更简单的设置，出问题的可能性更小——代价是功能会少一些。
-
-如果你想将 direnv 的 `layout python` 与 mise 一起使用，可能需要这样做。否则会有
-一些情况下 mise 会覆盖 direnv 的 PATH。`use mise` 可确保 direnv 始终拥有
-控制权。
-
-为此，先使用 `mise` 生成一个可在 `.envrc` 文件中使用的 `use_mise` 函数：
+该集成会生成一个 direnv 库函数：
 
 ```sh
+mkdir -p ~/.config/direnv/lib
 mise direnv activate > ~/.config/direnv/lib/use_mise.sh
 ```
 
-然后在你的 `.envrc` 文件中添加以下内容：
+`.envrc` 随后会这样调用它：
 
 ```sh
 use mise
 ```
 
-现在，direnv 会调用 mise 来导出其环境变量。你需要确保将 `use_mise`
-添加到所有使用 mise 的项目中（或者使用 direnv 的 `source_up` 从子目录加载它）。你也
-可以将 `use mise` 添加到 `~/.config/direnv/direnvrc`。
+请注意 shell 函数 `use_mise` 与 direnv 的 `use mise` 语法之间的区别。现有项目也可能通过 `source_up` 从父级 `.envrc` 中加载它，或者从 `~/.config/direnv/direnvrc` 中加载它。
 
-注意，在这种方法下，direnv 通常不会知道要刷新 `.tool-versions` 文件，
-除非它们与 `.envrc` 文件位于同一级别。出于这个原因，你大概率总是希望在
-`.tool-versions` 旁边放一个 `.envrc` 文件。为了让这件事更容易管理，我建议你
-干脆不要实际使用 `.tool-versions`，而是直接在 `.envrc` 中设置环境变量：
+如果保留此集成，请避免让两个工具管理同一个运行时或 virtualenv。一个常见的冲突是 direnv 的 `layout python` 与 mise 选择的 Python 版本同时使用。`.tool-versions` 文件位于 `.envrc` 目录之外时，其更改也可能无法触发 direnv 刷新。
 
-```sh
-export MISE_NODE_VERSION=20.0.0
-export MISE_PYTHON_VERSION=3.11
-```
-
-当然，如果你使用 `mise activate`，那么这些步骤就不是必需的，你可以像
-没有使用 direnv 一样使用 mise。
-
-如果你仍然遇到困难，也可以尝试使用 [shims 方法](dev-tools/shims.md)。
-
-### 你需要 direnv 吗？
-
-mise 能够在大多数使用场景中替代 direnv。这也是 mise 包含环境变量管理支持和
-用于 python 的 [virtualenv](lang/python.md#automatic-virtualenv-activation)
-支持的原因，这些都通过 `mise.toml` 来配置。
+[Shims](/dev-tools/shims.html) 提供了另一种运行 mise 管理的工具的方式，但它们无法复现 `mise activate` 的全部功能，也不会使混用 shell 钩子成为受支持的设置。

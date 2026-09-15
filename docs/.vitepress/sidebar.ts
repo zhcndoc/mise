@@ -11,10 +11,10 @@ export type SidebarItem = {
 
 export const sidebar: SidebarItem[] = [
   {
-    text: "指南",
+    text: "开始",
     items: [
-      { text: "演示", link: "/demo" },
       { text: "入门指南", link: "/getting-started" },
+      { text: "演示", link: "/demo" },
       { text: "使用指南", link: "/walkthrough" },
       { text: "安装 mise", link: "/installing-mise" },
       { text: "IDE 集成", link: "/ide-integration" },
@@ -26,6 +26,10 @@ export const sidebar: SidebarItem[] = [
     items: [
       { text: "mise.toml", link: "/configuration" },
       { text: "变量", link: "/configuration/vars" },
+      {
+        text: "项目诊断",
+        link: "/configuration/project-diagnostics",
+      },
       { text: "设置", link: "/configuration/settings" },
       {
         text: "配置环境",
@@ -48,6 +52,14 @@ export const sidebar: SidebarItem[] = [
       { text: "GitHub 令牌", link: "/dev-tools/github-tokens" },
       { text: "mise.lock 锁定文件", link: "/dev-tools/mise-lock" },
       { text: "安全", link: "/security" },
+      {
+        text: "Packslip 手册页、补全和技能",
+        link: "/dev-tools/packslip-resources",
+      },
+      {
+        text: "Packslip 验证与策略",
+        link: "/dev-tools/packslip-verification",
+      },
       { text: "OCI 镜像（实验性）", link: "/dev-tools/mise-oci" },
       { text: "依赖", link: "/dev-tools/deps" },
       {
@@ -90,7 +102,8 @@ export const sidebar: SidebarItem[] = [
           { text: "go", link: "/dev-tools/backends/go" },
           { text: "http", link: "/dev-tools/backends/http" },
           { text: "npm", link: "/dev-tools/backends/npm" },
-          { text: "pipx", link: "/dev-tools/backends/pipx" },
+          { text: "packslip", link: "/dev-tools/backends/packslip" },
+          { text: "pypi", link: "/dev-tools/backends/pypi" },
           { text: "pkgx", link: "/dev-tools/backends/pkgx" },
           { text: "spm", link: "/dev-tools/backends/spm" },
           { text: "ubi", link: "/dev-tools/backends/ubi" },
@@ -103,6 +116,7 @@ export const sidebar: SidebarItem[] = [
     text: "初始化",
     items: [
       { text: "概览", link: "/bootstrap" },
+      { text: "设置机器", link: "/bootstrap/setup" },
       {
         text: "远程主机",
         link: "/bootstrap/remote",
@@ -114,9 +128,11 @@ export const sidebar: SidebarItem[] = [
         items: [
           { text: "apk", link: "/bootstrap/packages/apk" },
           { text: "apt", link: "/bootstrap/packages/apt" },
+          { text: "AUR", link: "/bootstrap/packages/aur" },
           { text: "dnf", link: "/bootstrap/packages/dnf" },
           { text: "pacman", link: "/bootstrap/packages/pacman" },
           { text: "brew", link: "/bootstrap/packages/brew" },
+          { text: "nix", link: "/bootstrap/packages/nix" },
           { text: "mas", link: "/bootstrap/packages/mas" },
           {
             text: "软件包插件",
@@ -151,6 +167,10 @@ export const sidebar: SidebarItem[] = [
       {
         text: "点文件",
         link: "/dotfiles",
+      },
+      {
+        text: "点文件历史",
+        link: "/history",
       },
       {
         text: "Shell 激活",
@@ -189,6 +209,7 @@ export const sidebar: SidebarItem[] = [
         ],
       },
       { text: "钩子", link: "/hooks" },
+      { text: "守护进程", link: "/daemons" },
       { text: "direnv", link: "/direnv" },
     ],
   },
@@ -202,6 +223,7 @@ export const sidebar: SidebarItem[] = [
       { text: "文件任务", link: "/tasks/file-tasks" },
       { text: "任务参数", link: "/tasks/task-arguments" },
       { text: "任务配置", link: "/tasks/task-configuration" },
+      { text: "任务缓存", link: "/tasks/caching" },
       { text: "远程缓存协议", link: "/tasks/remote-cache-protocol" },
       { text: "任务模板", link: "/tasks/templates" },
       { text: "Monorepo 任务", link: "/tasks/monorepo" },
@@ -283,26 +305,23 @@ export const sidebar: SidebarItem[] = [
   },
 ];
 
-function cliReference(commands: { [key: string]: Command }) {
+function cliReference(
+  commands: { [key: string]: Command },
+  parent: string[] = [],
+): SidebarItem[] {
   return Object.keys(commands)
     .map((name) => [name, commands[name]] as [string, Command])
     .filter(([_name, command]) => command.hide !== true)
     .map(([name, command]) => {
-      const x: any = {
-        text: `mise ${name}`,
-        link: `/cli/${name}`,
+      const path = [...parent, name];
+      const item: SidebarItem = {
+        text: `mise ${path.join(" ")}`,
+        link: `/cli/${path.join("/")}`,
       };
       if (command.subcommands) {
-        x.collapsed = true;
-        x.items = Object.keys(command.subcommands)
-          .filter(
-            (subcommand) => command.subcommands![subcommand].hide !== true,
-          )
-          .map((subcommand) => ({
-            text: `mise ${name} ${subcommand}`,
-            link: `/cli/${name}/${subcommand}`,
-          }));
+        item.collapsed = true;
+        item.items = cliReference(command.subcommands, path);
       }
-      return x;
+      return item;
     });
 }

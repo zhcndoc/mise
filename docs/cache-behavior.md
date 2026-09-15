@@ -1,53 +1,79 @@
+---
+description: "mise 分别缓存版本元数据、计算出的环境和任务结果"
+---
+
 # 缓存行为
 
-mise 在很多地方都会使用缓存，以提高效率。关于缓存应保留多长时间的细节，最终都应该可以配置。目前的行为中可能还存在一些空缺，也就是某些内容是硬编码的，但我很乐意添加更多设置来覆盖所需的任何配置。
+mise 分别缓存版本元数据、计算出的环境和任务结果。请从与症状相关的缓存开始：清除版本列表不会重新安装工具，清除环境缓存不会更改你的配置。
 
-下面我会解释它在缓存方面使用的行为。如果你看到某些内容似乎没有更新，那么这里是一个很好的起点。
+```sh
+mise cache path                 # show the actual cache directory
+mise cache clear node           # clear Node's tool metadata
+mise cache prune --dry-run      # preview stale cache files
+```
 
 ## 工具缓存
 
-每个工具/后端都有一个缓存，存储在 `~/$MISE_CACHE_DIR/<TOOL>` 中。它保存该工具可用版本列表（`mise ls-remote <TOOL>`）、惯用文件名（见下文）、别名列表、每个工具安装中的 bin 目录，以及在工具安装后运行 `exec-env` 的结果。
+后端会将元数据存储在 [`MISE_CACHE_DIR`](/directories.html#cache-mise) 下，其中包括远程版本列表，以及在适用情况下的别名、可执行文件目录和插件 `exec-env` 结果。具体文件取决于后端。请通过 mise 的命令检查值，例如 `mise ls-remote node`，而不要依赖内部缓存格式。
 
-默认情况下，远程版本每天更新一次。该文件是 zlib messagepack，如果你想查看它，可以运行以下命令（需要 [msgpack-cli](https://github.com/msgpack/msgpack-cli)）。
+远程版本列表默认在一小时内有效，由 [`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache) 控制。若要在该时间段过期前再次检查：
 
 ```sh
-cat ~/$MISE_CACHE_DIR/node/remote_versions.msgpack.z | perl -e 'use Compress::Raw::Zlib;my $d=new Compress::Raw::Zlib::Inflate();my $o;undef $/;$d->inflate(<>,$o);print $o;' | msgpack-cli decode
+mise cache clear node
+mise ls-remote node
 ```
 
-请注意，如果脚本不仅仅是导出静态值，那么缓存 `exec-env` 可能会有问题。绝大多数 `exec-env` 脚本只导出静态值。
+部分元数据也来自[版本服务](/troubleshooting.html#new-version-of-a-tool-is-not-available)。清除本地缓存不会刷新该远程服务。即使元数据已经刷新，锁定文件或显式版本固定也可能使安装继续使用较旧版本。
 
-缓存 `exec-env` 极大提升了 mise 的性能，因为 mise 初始化时否则每次都需要调用 bash。
+asdf 插件的 `exec-env` 输出会被缓存，以避免每次计算环境时都启动 Bash。插件作者应使用它来处理与安装相关的环境值；动态项目配置应放在[环境指令](/environments/)中。
 
 ## 环境缓存
 
-对于更高级的缓存需求（包括像密钥管理器这样的动态环境提供者），mise 提供了 [`env_cache`](/configuration/settings.html#env_cache) 设置。启用后，mise 会将计算得到的环境加密后缓存到磁盘。
+实验性的 [`env_cache`](/configuration/settings.html#env_cache) 设置会将计算出的环境缓存在磁盘上。它可以帮助处理开销较大的环境提供程序和嵌套的 mise 调用：
 
 ```toml
 # ~/.config/mise/config.toml
 [settings]
 env_cache = true
-env_cache_ttl = "1h"  # 可选，默认值为 1h
+env_cache_ttl = "1h" # optional; the default is one hour
 ```
 
-缓存失效会在以下情况自动发生：
+缓存位于状态目录下的 `env-cache/` 中，而不是工具元数据缓存中。`mise activate` 和 `mise exec` 会建立一个由嵌套命令继承的加密密钥。缓存重用需要使用相同的密钥；启动无关的会话并不能保证命中缓存。缓存会在磁盘上加密，但继承会话密钥的进程可以读取它。
 
-- 任何配置文件发生变化（mise.toml、.tool-versions 等）
-- 工具版本发生变化
-- 设置发生变化
-- mise 版本发生变化
-- TTL 到期（可通过 `env_cache_ttl` 配置）
-- 任何被监视的文件发生变化（来自模块或 `_.source` 指令）
+缓存键包含配置路径及其修改时间、解析后的工具版本、相关设置、基础 `PATH` 和 mise 版本。条目还会在 `env_cache_ttl` 后过期，并且插件声明的监视文件也可以使其失效。文件监视覆盖范围取决于指令：对 dotenv 文件或 `_.source` 脚本的编辑，仍可能导致嵌套命令使用缓存的环境。如果这些编辑未生效，请清除或禁用缓存。外部服务中的更改（例如轮换密钥）并不是文件更改：请选择合适的 TTL，或禁用环境缓存。
 
-环境插件（vfox 模块）可以通过在其 `MiseEnv` 钩子中返回 `{cacheable = true, watch_files = [...]}` 来声明自己可被缓存。详情请参见 [环境插件开发](/env-plugin-development.html)。
+对于必须重新计算环境值的命令，请在启动 mise 前设置 `MISE_ENV_CACHE=0`。例如，在包含 `test` 脚本的 Node.js 项目中：
 
-通过设置 `cacheable = false`，指令可以选择不使用缓存：
-
-```toml
-[env]
-TIMESTAMP = { value = "{{ now() }}", cacheable = false }
-_.source = { path = "dynamic.sh", cacheable = false }
+```sh
+MISE_ENV_CACHE=0 mise exec -- npm test
 ```
+
+要为所有命令禁用缓存，请设置 `env_cache = false`。普通环境指令目前不支持按值设置 `cacheable = false` 的选项。因此，只要环境缓存有效，时间戳模板就可能被重复使用。
+
+环境插件会在其 `MiseEnv` 返回值中声明可缓存性和监视文件。有关 Lua 返回格式，请参阅[环境插件开发](/env-plugin-development.html)。
+
+要同时刷新缓存的环境和元数据，请运行 `mise cache clear`。无需删除已安装的工具或信任记录即可刷新环境。
+
+## 任务缓存
+
+任务可以根据源文件／输出的新旧程度跳过工作，或恢复之前缓存的输出。这些缓存与版本缓存和环境缓存分开。对于名为 `build` 的任务：
+
+```sh
+mise cache task build
+mise cache clear --task build
+```
+
+有关配置、缓存键和重新运行行为，请参阅[任务缓存](/tasks/caching.html)。`--task` 会解析当前配置中的任务名称，并删除所有权可以得到验证的条目。对于无法验证任务所有权的旧条目，该命令会跳过。完整的 `mise cache clear` 会删除缓存根目录下的所有条目，包括其他项目和那些旧条目，以及环境缓存。
 
 ## 缓存自动清理
 
-mise 将自动删除其缓存目录中的旧文件（通过 [`cache_prune_age`](https://mise.jdx.dev/configuration/settings.html#cache_prune_age) 配置）。其中的大部分内容如果超过 24 小时或几天，也会被 mise 忽略。因此，在 CI 作业中存储此目录很可能是浪费的。
+mise 会偶尔清理在 [`cache_prune_age`](/configuration/settings.html#cache_prune_age) 指定的时间内未被访问的文件，该设置默认为 30 天。这与缓存条目的有效期不同：过期的版本列表可能会在文件达到可清理的老化时间前很久就被重新获取。
+
+```sh
+mise cache prune --dry-run
+mise cache prune
+```
+
+环境条目在清理时使用自己的 TTL。将 `cache_prune_age = "0s"` 设置为禁用基于时间的自动清理。在依赖显式清理命令的效果前，请先预览该命令。
+
+对于 [CI](/continuous-integration.html)，缓存已安装的工具通常可以节省最多工作量。元数据缓存仍然可以帮助重复执行的任务；请根据运行器平台和项目配置选择缓存键，并确保即使没有恢复缓存，流水线也能正常工作。

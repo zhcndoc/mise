@@ -1,6 +1,11 @@
+---
+description: "使用 mise 元数据将项目任务定义为独立脚本"
+socialDescription: "使用 mise 元数据将项目任务定义为独立脚本"
+---
+
 # 文件任务
 
-除了通过配置来定义任务之外，它们也可以作为独立的脚本文件定义在以下目录之一中：
+除了在配置文件中定义任务外，还可以将任务定义为以下目录中的独立脚本文件：
 
 - `mise-tasks/:task_name`
 - `.mise-tasks/:task_name`
@@ -19,7 +24,7 @@ cargo build
 ```
 
 ::: tip 重要
-确保该文件是可执行的，否则 mise 将无法检测到它。
+请确保文件具有可执行权限，否则 mise 无法检测到它。
 
 ```shell
 chmod +x mise-tasks/build
@@ -28,15 +33,13 @@ chmod +x mise-tasks/build
 在 Windows 上没有可设置的权限位，`chmod` 也不是解决方案——请参阅[Windows](#windows)，了解文件任务需要满足什么条件才能被检测到
 :::
 
-将代码放在 bash 文件中而不是 TOML 中，有助于在编辑器中更好地工作，因为编辑器可以更轻松地进行语法高亮和 lint 检查。
+与 TOML 相比，将代码保存在 bash 文件中对编辑器更友好，因为编辑器可以更轻松地应用语法高亮和代码检查。
 
-它们对于非 mise 用户也同样很有用——不过
-当然，他们需要用别的方法来安装这些任务可能会用到的开发工具。
+脚本也可以在 mise 外部运行，但其中的 `#MISE` 和 `#USAGE` 注释不会生效。直接调用方必须自行提供其工具、环境以及所有解析出的 `usage_*` 变量。使用 `mise run <task>` 可以应用这些配置。
 
 ## 任务配置
 
-所有配置选项都可以在这里找到 [任务配置](/tasks/task-configuration)
-你可以通过在文件顶部添加 `#MISE` 注释来为文件任务提供额外配置。
+所有配置选项都列在[任务配置](/tasks/task-configuration)中。可以在文件顶部添加 `#MISE` 注释，为文件任务提供额外配置。
 
 ```bash
 #MISE description="构建 CLI"
@@ -52,8 +55,7 @@ chmod +x mise-tasks/build
 
 ### 多行值
 
-每个 `#MISE` 行都是 TOML。只要每一行都保留 `#MISE` 前缀，数组或内联表就可以拆分到多行，这样可以让较长的
-`depends`/`sources` 列表更易于阅读：
+每个 `#MISE` 行都是 TOML。只要每一行都保留 `#MISE` 前缀，数组或内联表就可以拆分到多行，这样可以让较长的 `depends`/`sources` 列表更易于阅读：
 
 ```bash [mise-tasks/build]
 #!/usr/bin/env bash
@@ -76,19 +78,15 @@ cargo build
 #MISE tools.python="3.11"
 ```
 
-Mise 为文件任务提供了项目上下文变量，例如
-`MISE_PROJECT_ROOT`，无论从哪个目录调用任务，它都可以标识项目根目录。完整的变量列表请参阅[任务](/tasks/#environment-variables-passed-to-tasks)。
+mise 为文件任务提供项目上下文变量，例如 `MISE_PROJECT_ROOT`，无论从哪个目录调用任务，该变量都能标识项目根目录。完整的变量列表请参阅[任务](/tasks/#environment-variables-passed-to-tasks)。
 
 :::tip
-注意格式化工具可能会将 `#MISE` 改为 `# MISE`。
-mise 会故意忽略这种写法，以避免意外配置。
-要解决这个问题，可以使用替代写法：`# [MISE]`。
+请注意格式化工具可能会将 `#MISE` 更改为 `# MISE`。mise 会有意忽略 `# MISE`，以避免意外配置。要解决此问题，请使用替代形式 `# [MISE]`。
 :::
 
 ## Shebang
 
-shebang 行是可选的，但如果存在，它将用于确定运行脚本时使用的 shell。
-你也可以用它来使用各种编程语言运行脚本。
+shebang 行是可选的，但如果存在，mise 会使用它来确定运行脚本的 shell。也可以使用它通过其他编程语言运行脚本。
 
 ::: code-group
 
@@ -143,12 +141,9 @@ cargo build
 
 ### 没有 `.ps1` 扩展名的 PowerShell 任务
 
-Windows PowerShell 拒绝打开名称不以 `.ps1` 结尾的脚本——Linux
-和 macOS 版本没有这项限制。因此，为了让 `#!/usr/bin/env pwsh` 任务在各个平台上的行为一致，
-mise 会在临时目录中从 `.ps1` 副本运行它，并在任务完成后删除该副本。
+Windows PowerShell 拒绝打开名称不以 `.ps1` 结尾的脚本——Linux 和 macOS 版本没有这项限制。因此，为了让 `#!/usr/bin/env pwsh` 任务在各个平台上的行为一致，mise 会在临时目录中从 `.ps1` 副本运行它，并在任务完成后删除该副本。
 
-只有脚本对自身位置的认知会发生变化：`$PSScriptRoot` 和 `$PSCommandPath` 指向的是
-副本，而不是任务文件。工作目录、`$args` 和环境变量都不会改变。
+只有脚本对自身位置的认知会发生变化：`$PSScriptRoot` 和 `$PSCommandPath` 指向的是副本，而不是任务文件。工作目录、`$args` 和环境变量都不会改变。
 
 需要查找自身旁边文件的任务有两种解决方法，第一种在所有平台上都适用：
 
@@ -187,21 +182,19 @@ run = "./scripts/build.sh"
 run_windows = "pwsh -File ./scripts/windows-build.ps1"
 ```
 
-这里写成完整形式，而不是 `./scripts/windows-build.ps1`，因为 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args) 的默认值是 `cmd /c`，而 cmd 不会自行启动 `.ps1` 文件。
+之所以明确写出该命令，而不是写成 `./scripts/windows-build.ps1`，是因为 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args) 默认为 `cmd /c`，而 cmd 不会自行启动 `.ps1`。
 
 如果 Windows 候选文件不止一个——例如同时存在 `build.ps1` **和** `build.cmd`——mise 无法在它们之间进行选择，因此会保持原样：三个文件都会保留，并分别列为 `build.sh`、`build.ps1` 和 `build.cmd`。
 
 ## 编辑任务
 
-可以通过运行 `mise tasks edit build`（使用 `$EDITOR`）来编辑此脚本。如果它不存在，将会被创建。  
-这对于快速编辑或创建新脚本很方便。
+运行 `mise tasks edit build` 编辑文件任务（该命令会在 `$EDITOR` 中打开它）。如果文件不存在，则会创建该文件。这对于快速编辑或创建脚本很方便。
 
 ## 任务分组
 
-位于 `mise-tasks`、`.mise/tasks`、`mise/tasks` 或 `.config/mise/tasks` 中的文件任务可以分组到
-子目录中，在加载时会自动为其名称添加前缀。
+`mise-tasks`、`.mise-tasks`、`.mise/tasks`、`mise/tasks` 或 `.config/mise/tasks` 中的文件任务可以分组到子目录中，加载时任务名称会自动添加前缀。
 
-**示例**：使用如下所示的文件夹结构：
+**示例**：给定以下文件夹结构：
 
 ```text
 mise-tasks
@@ -212,7 +205,7 @@ mise-tasks
     └── units
 ```
 
-运行 `mise tasks` 将得到如下输出：
+运行 `mise tasks` 会得到以下输出：
 
 ```shellsession
 $ mise tasks
@@ -229,13 +222,10 @@ test:units                    ./mise-tasks/test/units
 有关任务参数的全面信息，请参阅专门的 [任务参数](/tasks/task-arguments) 页面。
 :::
 
-[usage](https://usage.jdx.dev) 规范可用于这些文件中，以提供参数解析、自动补全、
-在运行 mise 时的文档，并且可以导出为 markdown。本质上，这会把任务变成
-功能完备的 CLI。
+可以在这些文件中使用 [usage](https://usage.jdx.dev) 规范，以便在运行 mise 时提供参数解析、自动补全和文档，并且可以将其导出为 markdown。这样可以将任务变成完整的 CLI。
 
 :::tip
-不需要单独安装 `usage` CLI，即可使用 usage 规范执行或补全 mise 任务。
-安装并启用 mise 的 shell 补全脚本后，任务补全即可正常工作。
+不需要单独安装 `usage` CLI，即可使用 usage 规范执行或补全 mise 任务。安装并启用 mise 的 shell 补全脚本后，任务补全即可正常工作。
 :::
 
 ### 带参数的文件任务示例
@@ -246,9 +236,9 @@ test:units                    ./mise-tasks/test/units
 #!/usr/bin/env bash
 set -e
 
-#USAGE flag "-c --clean" help="在构建前清理构建目录"
-#USAGE flag "-p --profile <profile>" help="使用指定的 profile 构建" default="debug" {
-#USAGE   choices "debug" "release"
+#USAGE flag "-c --clean" help="Clean the build directory before building"
+#USAGE flag "-p --profile <profile>" help="Build with the specified profile" default="dev" {
+#USAGE   choices "dev" "release"
 #USAGE }
 #USAGE flag "-u --user <user>" help="为其构建的用户"
 #USAGE complete "user" run="mycli users"
@@ -267,22 +257,19 @@ cargo build --profile "${usage_profile?}" --target "${usage_target?}"
 
 启用 mise 的 shell 补全后，此示例会提供以下任务补全：
 
-- `mise run -- build --profile <tab><tab>`
-  会将 `debug` 和 `release` 显示为可选项。
-- `--user` 标志也会显示由 `mycli users` 输出生成的补全结果。
-- 注意：使用 `--` 将 mise 标志与任务参数分隔开：`mise run -- build --profile release <target>`
+- `mise run -- build --profile <tab><tab>` 会显示 `dev` 和 `release` 作为选项。
+- `--user` 标志也会显示由 `mycli users` 输出生成的补全。
+- 使用 `--` 将 mise 标志与任务参数分隔开：`mise run -- build --profile release <target>`
 
-（请注意，截至本文撰写时，mise 还尚未实现任务的 cli 和 markdown 帮助，但这是计划中的功能。）
+相同的规范还会驱动 `mise run build --help`，该命令会输出任务的 CLI 帮助，以及 [`mise generate task-docs`](/cli/generate/task-docs)，该命令会为你的任务生成 markdown 文档。
 
 :::tip
-如果你没有获得任何自动补全建议，请使用 `-v`（verbose）标志查看发生了什么。
-例如，如果你使用 `mise run build -v` 且 `usage` 规范无效，你会看到类似 `DEBUG failed to parse task file with usage` 的错误消息
+如果没有得到任何自动补全建议，请使用 `-v`（详细）标志查看发生了什么。例如，如果使用无效的 `usage` 规范运行 `mise run -v build`，你会看到类似 `DEBUG failed to parse task file with usage` 的错误消息。
 :::
 
 ### 环境变量支持
 
-参数和标志可以通过 `env="..."` 使用环境变量提供值。
-优先级顺序为 CLI 参数、环境变量，然后是默认值：
+参数和标志可以通过 `env="..."` 使用环境变量提供值。优先级顺序为 CLI 参数、环境变量，然后是默认值：
 
 ```bash [.mise/tasks/deploy]
 #!/usr/bin/env bash
@@ -352,15 +339,14 @@ mise run greet <TAB>
 
 ## CWD
 
-mise 会在运行任务之前将当前工作目录设置为 `mise.toml` 所在的目录。
-可以通过在任务头部设置 <span v-pre>`dir="{{cwd}}"`</span> 来覆盖这一行为：
+mise 会在运行任务前将当前工作目录设置为 `mise.toml` 所在的目录。通过在任务标头中设置 <span v-pre>`dir="{{cwd}}"`</span> 可以覆盖此行为：
 
 ```bash
 #!/usr/bin/env bash
 #MISE dir="{{cwd}}"
 ```
 
-另外，原始工作目录也可以通过 `MISE_ORIGINAL_CWD` 环境变量获取：
+原始工作目录也可通过 `MISE_ORIGINAL_CWD` 环境变量获取：
 
 ```bash
 #!/usr/bin/env bash
@@ -369,10 +355,10 @@ cd "$MISE_ORIGINAL_CWD"
 
 ## 直接运行任务
 
-任务不需要作为配置的一部分进行配置，你可以通过传递脚本路径直接运行它们：
+任务不必属于某个配置；可以直接将脚本路径传递给命令来运行：
 
 ```bash
 mise run ./path/to/script.sh
 ```
 
-请注意，路径必须以 `/` 或 `./` 开头才会被视为文件路径。（在 Windows 上，它可以是 `C:\` 或 `.\`）。
+路径必须以 `/` 或 `./` 开头，才能被视为文件路径（在 Windows 上则为 `C:\` 或 `.\`）。

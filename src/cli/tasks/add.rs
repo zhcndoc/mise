@@ -10,12 +10,18 @@ use toml_edit::Item;
 /// Adds a task to the local mise.toml file.
 /// See https://mise.jdx.dev/configuration.html#target-file-for-write-operations
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    verbatim_doc_comment,
+    example(
+        r###"mise tasks add pre-commit --depends "test" --depends "render" -- echo pre-commit"###
+    )
+)]
 pub(super) struct TasksAdd {
-    /// Tasks name to add
+    /// Name of the task to add
     #[usage()]
     task: String,
 
+    /// Command to run, given after `--`
     #[usage(double_dash = "required")]
     run: Vec<String>,
 
@@ -43,7 +49,7 @@ pub(super) struct TasksAdd {
     /// Glob patterns of files this task uses as input
     #[usage(long, short)]
     sources: Vec<String>,
-    /// Wait for these tasks to complete if they are to run
+    /// Wait for these tasks to finish if they are also being run
     #[usage(long, short)]
     wait_for: Vec<String>,
 
@@ -53,10 +59,10 @@ pub(super) struct TasksAdd {
     /// Description of the task
     #[usage(long)]
     description: Option<String>,
-    /// Glob patterns of files this task creates, to skip if they are not modified
+    /// Glob patterns of files this task creates, used to skip it when they are up to date
     #[usage(long)]
     outputs: Vec<String>,
-    /// Command to run on windows
+    /// Command to run on Windows
     #[usage(long)]
     run_windows: Option<String>,
     /// Run the task in a specific shell
@@ -224,10 +230,3 @@ impl TasksAdd {
         Ok(())
     }
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise tasks add pre-commit --depends "test" --depends "render" -- echo pre-commit</bold>
-"#
-);

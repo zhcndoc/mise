@@ -1,4 +1,8 @@
-# 变量
+---
+description: "定义可重复使用的配置变量，并在 Tera 模板中引用它们。"
+---
+
+# Variables
 
 `[vars]` 定义了可在 mise 配置模板中重复使用的值。变量类似于环境变量，但 mise 不会将其导出到子进程。在 Tera 模板中使用 <span v-pre>`{{ vars.NAME }}`</span> 引用变量。
 
@@ -11,10 +15,12 @@ test_mode = "headless"
 node = "{{ vars.node_version }}"
 
 [tasks.test]
-run = "./scripts/test-e2e.sh --{{ vars.test_mode }}"
+run = "echo {{ vars.test_mode | quote }}"
 ```
 
-变量可用于由 Tera 渲染的配置，例如工具版本和选项、任务定义、钩子、任务包含项、监视配置和点文件模板。有关完整的模板语法和上下文，请参阅[模板](/templates)。
+运行 `mise run test` 可打印出 `headless`。`test_mode` 可通过 `vars` 模板映射使用，但不会导出为 `$test_mode`。此示例中的 `quote` 过滤器面向 POSIX shell；请参阅[模板引用](/templates.html#string-manipulation)。
+
+Vars 可用于由 Tera 渲染的配置，例如工具版本和选项、任务定义、钩子、任务包含、监视配置和点文件模板。完整的模板语法和上下文请参阅[模板](/templates)。
 
 ## 值指令
 
@@ -30,7 +36,7 @@ _.file = ".env"
 
 `default` 形式会在同名的进程环境变量已设置且非空时使用该变量；查找时不会使用 `[env]` 中的值。`required` 变量必须由进程环境或后续配置文件提供。标记为 `redact = true` 的值会在任务输出中隐藏。
 
-有关可用的文件、来源和插件提供的指令形式，请参阅 [`env._` 指令参考](/environments/#env-directives)。在 `[vars]` 下使用时，这些指令会填充 `vars`，而不是将值导出为环境变量。
+可用的文件、来源和插件提供的指令形式请参阅 [`env._` 指令参考](/environments/#env-directives)。在 `[vars]` 下使用时，这些指令会填充 `vars`，而不是将值导出为环境变量。
 
 ## 配置层级
 
@@ -60,7 +66,7 @@ test_mode = "headless"
 
 [tasks.test]
 vars = { test_mode = "headed" }
-run = "./scripts/test-e2e.sh --{{ vars.test_mode }}"
+run = "echo {{ vars.test_mode | quote }}"
 ```
 
-有关任务本地变量，请参阅[任务配置](/tasks/task-configuration.html#task-vars)。
+在此，`mise run test` 会打印 `headed`；除非其他任务定义自己的覆盖值，否则它们仍会看到 `headless`。有关任务本地 vars，请参阅[任务配置](/tasks/task-configuration.html#task-vars)。

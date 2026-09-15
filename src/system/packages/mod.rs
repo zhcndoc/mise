@@ -1,4 +1,4 @@
-//! Host package managers (apk, apt, brew, brew-cask, flatpak, flatpak-user, mas) for the `[bootstrap.packages]` config section.
+//! Host package managers (apk, apt, aur, brew, brew-cask, flatpak, flatpak-user, mas, winget) for the `[bootstrap.packages]` config section.
 //!
 //! These are host-owned, unversioned packages — deliberately separate from
 //! the `Backend` system, which manages per-project, version-pinned dev tools.
@@ -12,13 +12,16 @@ use crate::system::ManagerPackageOptions;
 
 pub(crate) mod apk;
 pub(crate) mod apt;
+pub(crate) mod aur;
 #[cfg(unix)]
 pub(crate) mod brew;
 pub(crate) mod dnf;
 pub(crate) mod flatpak;
 pub(crate) mod mas;
+pub(crate) mod nix;
 pub(crate) mod pacman;
 pub(crate) mod plugin;
+pub(crate) mod winget;
 
 /// A single package entry from `[bootstrap.packages]` — the part after the
 /// `manager:` prefix of a `"manager:package" = "version"` config entry.
@@ -35,6 +38,16 @@ pub(crate) struct PackageRequest {
     /// and casks: `[bootstrap.brew.taps]` can attach a git URL to
     /// `owner/tap/name`.
     pub tap_url: Option<String>,
+    /// Desired declarative state. Explicit CLI package requests are always
+    /// present; table-form config entries may request removal.
+    pub desired: PackageDesiredState,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(crate) enum PackageDesiredState {
+    #[default]
+    Present,
+    Absent,
 }
 
 impl std::fmt::Display for PackageRequest {
@@ -161,6 +174,15 @@ pub(crate) trait SystemPackageManager: Send + Sync {
     /// Query installed state. Must be side-effect free and never elevate.
     async fn installed(&self, pkgs: &[PackageRequest]) -> Result<Vec<PackageStatus>>;
 
+    /// Prepare for a mutating package operation before querying installed state.
+    ///
+    /// This hook is never called for status or dry-run operations. Managers may
+    /// use it for mutation prerequisites that their read-only query cannot
+    /// perform, such as accepting repository agreements.
+    async fn prepare_mutation(&self, _pkgs: &[PackageRequest]) -> Result<()> {
+        Ok(())
+    }
+
     /// Whether each name exists as an installable package, positionally.
     ///
     /// This is *availability*, not installed state — [`Self::installed`]
@@ -178,6 +200,18 @@ pub(crate) trait SystemPackageManager: Send + Sync {
 
     /// Install the given packages (already filtered to missing, mismatched, or repairable).
     async fn install(&self, pkgs: &[PackageRequest], opts: &InstallOpts) -> Result<()>;
+
+    /// Remove packages declared with `state = "absent"`.
+    async fn remove(&self, _pkgs: &[PackageRequest], _opts: &InstallOpts) -> Result<()> {
+        eyre::bail!(
+            "{} does not support declarative package removal",
+            self.name()
+        )
+    }
+
+    fn supports_remove(&self) -> bool {
+        false
+    }
 
     /// Install with manager-specific declarative options. Managers without
     /// additional package options use the ordinary install path unchanged.
@@ -218,6 +252,7 @@ pub(crate) fn builtin_managers() -> Vec<Arc<dyn SystemPackageManager>> {
     vec![
         Arc::new(apk::ApkManager::new()),
         Arc::new(apt::AptManager::new()),
+        Arc::new(aur::AurManager::new()),
         #[cfg(unix)]
         Arc::new(brew::BrewManager::new()),
         #[cfg(unix)]
@@ -226,7 +261,9 @@ pub(crate) fn builtin_managers() -> Vec<Arc<dyn SystemPackageManager>> {
         Arc::new(flatpak::FlatpakManager::new()),
         Arc::new(flatpak::FlatpakManager::new_user()),
         Arc::new(mas::MasManager::new()),
+        Arc::new(nix::NixManager),
         Arc::new(pacman::PacmanManager::new()),
+        Arc::new(winget::WingetManager::new()),
     ]
 }
 

@@ -1,4 +1,5 @@
 mod path;
+mod project;
 
 use crate::plugins::PluginEnum;
 use std::collections::HashSet;
@@ -9,7 +10,7 @@ use crate::build_time::built_info;
 use crate::cli::self_update::SelfUpdate;
 use crate::cli::version;
 use crate::cli::version::VERSION;
-use crate::config::{Config, IGNORED_CONFIG_FILES, Settings};
+use crate::config::{Config, IGNORED_CONFIG_FILES};
 use crate::env::PATH_KEY;
 use crate::file::{canonicalize_cached, canonicalize_or_self, display_path};
 use crate::git::Git;
@@ -31,7 +32,15 @@ use strum::IntoEnumIterator;
 
 /// Check mise installation for possible problems
 #[derive(Debug, usage_rs::Args)]
-#[usage(visible_alias = "dr", verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    visible_alias = "dr",
+    verbatim_doc_comment,
+    example(
+        r###"mise doctor
+mise doctor --json
+mise doctor path --full"###
+    )
+)]
 pub(crate) struct Doctor {
     #[usage(subcommand)]
     subcommand: Option<Commands>,
@@ -39,6 +48,7 @@ pub(crate) struct Doctor {
     errors: Vec<String>,
     #[usage(skip)]
     warnings: Vec<String>,
+    /// Output in JSON format
     #[usage(long, short = 'J')]
     json: bool,
 }
@@ -46,6 +56,7 @@ pub(crate) struct Doctor {
 #[derive(Debug, usage_rs::Subcommands)]
 pub(crate) enum Commands {
     Path(path::Path),
+    Project(project::Project),
 }
 
 /// outcome of the `[bootstrap.macos.defaults]` doctor check
@@ -65,6 +76,51 @@ enum SystemDefaultsDiagnosis {
 }
 
 /// outcome of the `[bootstrap.user].login_shell` doctor check
+#[derive(serde::Serialize)]
+struct DotfilesDiagnosis {
+    tracked: usize,
+    watcher: String,
+    stale: bool,
+    health_age_secs: Option<u64>,
+    unavailable: Option<String>,
+    last_error: Option<String>,
+    degraded: Vec<String>,
+    throttled: Vec<crate::system::history::health::ThrottledPath>,
+    /// Paths held by a sync conflict, with the reason.
+    sync_conflicts: Vec<(String, String)>,
+    /// The last sync error, and how long syncs have been failing when that
+    /// is longer than a few fetch intervals (a transient error is not).
+    sync_error: Option<String>,
+    sync_failing_for_secs: Option<u64>,
+    /// Failed syncs in a row, since the last success.
+    sync_failures: u32,
+}
+
+/// How long syncs have been failing: since the current run of failures
+/// began, or, for a record from before that was kept, since the last
+/// success. `None` when nothing is known.
+fn sync_failure_duration(
+    status: &crate::system::history::sync::run::SyncStatus,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<u64> {
+    let since = status
+        .failing_since
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .or_else(|| {
+            [&status.last_fetch, &status.last_publish]
+                .into_iter()
+                .flatten()
+                .filter_map(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .max()
+        })?;
+    Some(
+        (now - since.with_timezone(&chrono::Utc))
+            .num_seconds()
+            .max(0) as u64,
+    )
+}
+
 enum SystemLoginShellDiagnosis {
     Unavailable {
         reason: String,
@@ -86,6 +142,7 @@ impl Doctor {
         if let Some(cmd) = self.subcommand {
             match cmd {
                 Commands::Path(cmd) => cmd.run().await,
+                Commands::Project(cmd) => cmd.run(self.json).await,
             }
         } else if self.json {
             self.doctor_json().await
@@ -106,11 +163,6 @@ impl Doctor {
             "self_update_available".into(),
             SelfUpdate::is_available().into(),
         );
-        // Warn about shims+activate conflict, but not when not_found_auto_install is enabled
-        // since that intentionally preserves shims for auto-install functionality
-        if env::is_activated() && shims_on_path() && !Settings::get().not_found_auto_install {
-            self.errors.push("shims are on PATH and mise is also activated. You should only use one of these methods.".to_string());
-        }
         data.insert(
             "build_info".into(),
             build_info()
@@ -240,6 +292,9 @@ impl Doctor {
         if let Some(system_defaults) = self.system_defaults_json(&config).await {
             data.insert("system_defaults".into(), system_defaults);
         }
+        if let Some(dotfiles) = self.dotfiles_json().await {
+            data.insert("dotfiles".into(), dotfiles);
+        }
 
         if let Some(system_login_shell) = self.system_login_shell_json(&config).await {
             data.insert("system_login_shell".into(), system_login_shell);
@@ -277,10 +332,6 @@ impl Doctor {
         }
         // Warn about shims+activate conflict, but not when not_found_auto_install is enabled
         // since that intentionally preserves shims for auto-install functionality
-        if env::is_activated() && shims_on_path() && !Settings::get().not_found_auto_install {
-            self.errors.push("shims are on PATH and mise is also activated. You should only use one of these methods.".to_string());
-        }
-
         let build_info = build_info()
             .into_iter()
             .map(|(k, v)| format!("{k}: {v}"))
@@ -405,6 +456,10 @@ impl Doctor {
     /// The stderr notice is presentation rather than diagnosis, and `-J` is asked for by something
     /// reading the JSON: it gets the warning below instead of a message aimed at a person.
     async fn analyze_new_version(&mut self) {
+        if crate::config::Settings::try_get().is_ok_and(|settings| settings.disable_update_warning)
+        {
+            return;
+        }
         if let Some(latest) = version::check_for_new_version(duration::HOURLY).await {
             if !self.json {
                 version::show_latest().await;
@@ -472,7 +527,7 @@ impl Doctor {
         }
 
         if !env::is_activated() && !shims_on_path() {
-            let shims = style::ncyan(display_path(*dirs::SHIMS));
+            let shims = style::ncyan(display_path(dirs::shims()));
             if cfg!(windows) {
                 self.errors.push(formatdoc!(
                     r#"mise shims are not on PATH
@@ -503,6 +558,7 @@ impl Doctor {
 
         self.analyze_system_packages(config).await?;
         self.analyze_system_defaults(config).await?;
+        self.analyze_dotfiles().await?;
         self.analyze_system_login_shell(config).await?;
 
         Ok(())
@@ -538,7 +594,12 @@ impl Doctor {
                 Ok(statuses) => {
                     let missing = statuses
                         .iter()
-                        .filter(|s| !s.state.is_installed() && !s.state.is_unavailable())
+                        .filter(|s| {
+                            s.request.desired
+                                == crate::system::packages::PackageDesiredState::Present
+                                && !s.state.is_installed()
+                                && !s.state.is_unavailable()
+                        })
                         .count();
                     total_missing += missing;
                     map.insert(
@@ -649,6 +710,214 @@ impl Doctor {
             }
         };
         info::section("system_defaults", line)?;
+        Ok(())
+    }
+
+    /// Dotfiles history health: the watcher, capture failures, and throttled
+    /// files, from the health the watcher persists and the store itself.
+    /// Inspects only: never syncs, applies, or prompts. Returns `None` when
+    /// nothing is tracked and no watcher is declared.
+    async fn check_dotfiles(&mut self) -> Option<DotfilesDiagnosis> {
+        use crate::system::history::health;
+        use crate::system::history::tracked::TrackedSet;
+        if !crate::config::Settings::get().history.enabled {
+            return None;
+        }
+        let tracked = TrackedSet::effective().await.ok()?;
+        let watcher = crate::cli::dotfiles::capture_health::watcher().await.ok()?;
+        let tracks = tracked.entries.len();
+        if tracks == 0 && watcher == crate::cli::dotfiles::capture_health::Watcher::NotDeclared {
+            return None;
+        }
+        let state_dir = crate::system::history::store::state_dir();
+        let unavailable = crate::system::history::checkpoint::Store::open()
+            .map(|store| store.unavailable().map(str::to_string))
+            .unwrap_or_else(|err| Some(format!("{err:#}")));
+        let health = health::read(&state_dir);
+        let running = watcher == crate::cli::dotfiles::capture_health::Watcher::Running;
+        let age = health.as_ref().and_then(health::age_secs);
+        let reconcile = crate::duration::parse_duration(
+            &crate::config::Settings::get().history.watch.reconcile,
+        )
+        .map(|d| d.as_secs())
+        .unwrap_or(600);
+        let stale = running && age.is_some_and(|age| reconcile > 0 && age > reconcile * 2);
+        let mut diagnosis = DotfilesDiagnosis {
+            tracked: tracks,
+            watcher: watcher.as_str().to_string(),
+            stale,
+            health_age_secs: age,
+            unavailable: unavailable.clone(),
+            last_error: None,
+            degraded: vec![],
+            throttled: vec![],
+            sync_conflicts: vec![],
+            sync_error: None,
+            sync_failing_for_secs: None,
+            sync_failures: 0,
+        };
+        if let Some(reason) = unavailable {
+            self.errors.push(format!(
+                "dotfiles: checkpoints cannot be saved ({reason}).\n     Edits are not being protected.\n     Inspect with: mise dot status"
+            ));
+        }
+        match watcher {
+            crate::cli::dotfiles::capture_health::Watcher::DeclaredNotRunning => {
+                self.warnings.push(
+                    "dotfiles: the history watcher is declared but not running.\n     Edits are not saved automatically until it runs; explicit saves still work.\n     Run: mise bootstrap services apply"
+                        .to_string(),
+                );
+            }
+            crate::cli::dotfiles::capture_health::Watcher::ServiceNotWatching => {
+                self.warnings.push(
+                    "dotfiles: the history service is running but is not watching this store.\n     Its process predates this mise version, or uses a different MISE_STATE_DIR; edits are not saved automatically until it is restarted.\n     Run: mise bootstrap services apply"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        if let Some(health) = &health {
+            let w = &health.watcher;
+            if let Some(error) = &w.last_error
+                && w.consecutive_failures > 0
+            {
+                diagnosis.last_error = Some(error.clone());
+                if running {
+                    self.errors.push(format!(
+                    "dotfiles: the watcher could not save a checkpoint ({error}; {} consecutive failure(s), last at {}).\n     Edits since then are not protected.\n     Inspect with: mise dot status",
+                    w.consecutive_failures,
+                    w.last_error_at.as_deref().unwrap_or("unknown")
+                ));
+                } else {
+                    self.warnings.push(format!(
+                        "dotfiles: the stopped watcher's last capture failed ({error}).\n     This is historical health, not a current capture attempt.\n     Check or save with: mise dot save"
+                    ));
+                }
+            }
+            for degraded in w.degraded.iter().filter(|_| running) {
+                diagnosis.degraded.push(degraded.clone());
+                self.warnings.push(format!(
+                    "dotfiles: {degraded}.\n     Changes there are saved by reconciliation only.\n     Inspect with: mise dot status"
+                ));
+            }
+            diagnosis.throttled = health.throttled.clone();
+        }
+        // the setup repository, read from what the last sync persisted:
+        // nothing is fetched, applied, or asked here
+        if crate::system::history::sync::run::origin().is_ok() {
+            use crate::system::history::sync::{apply, run};
+            let status = match run::read_status(&state_dir) {
+                Ok(status) => status,
+                Err(err) => {
+                    let message = format!("dotfiles: {err:#}");
+                    diagnosis.sync_error = Some(message.clone());
+                    self.errors.push(message);
+                    run::SyncStatus::default()
+                }
+            };
+            if let Some(error) = &status.validation_error {
+                diagnosis.sync_error = Some(error.clone());
+                self.errors.push(format!("dotfiles: incoming setup is invalid: {error}. Correct the setup repository and sync again."));
+            }
+            if let Some(error) = &status.application_failure {
+                diagnosis.sync_error = Some(error.clone());
+                self.errors.push(format!("dotfiles: {error}"));
+            }
+            for (path, reason) in apply::describe_conflicts(&status.conflicts) {
+                let advice = apply::resolution_advice(&path, &reason);
+                self.warnings.push(format!(
+                    "dotfiles: {path} has a sync conflict ({reason}).\n     Sharing is paused for the entire setup; local history and fetching continue.\n     Last successful application: {}.\n     Resolve with: {advice}",
+                    status.last_apply.as_deref().unwrap_or("never")
+                ));
+                diagnosis.sync_conflicts.push((path, reason));
+            }
+            if let Some(error) = &status.last_error {
+                diagnosis.sync_error = Some(error.clone());
+                diagnosis.sync_failures = status.consecutive_failures;
+                let fetch_interval = crate::duration::parse_duration(
+                    &crate::config::Settings::get().history.fetch_interval,
+                )
+                .map(|d| d.as_secs())
+                .unwrap_or(900);
+                let failing_for = sync_failure_duration(&status, chrono::Utc::now());
+                // a single failed attempt is transient; a repository that has
+                // not answered for a few fetch intervals is a problem
+                if failing_for.is_some_and(|secs| secs > fetch_interval.saturating_mul(3)) {
+                    diagnosis.sync_failing_for_secs = failing_for;
+                    self.warnings.push(format!(
+                        "dotfiles: syncing with the setup repository keeps failing ({error}; {} attempt(s)).\n     Local checkpoints continue; nothing is published or pulled until it succeeds.\n     Inspect with: mise dot status",
+                        status.consecutive_failures
+                    ));
+                }
+            }
+        }
+        Some(diagnosis)
+    }
+
+    async fn dotfiles_json(&mut self) -> Option<serde_json::Value> {
+        let diagnosis = self.check_dotfiles().await?;
+        serde_json::to_value(diagnosis).ok()
+    }
+
+    async fn analyze_dotfiles(&mut self) -> eyre::Result<()> {
+        let Some(diagnosis) = self.check_dotfiles().await else {
+            return Ok(());
+        };
+        let mut lines = vec![format!(
+            "{} tracked entr{}, watcher {}",
+            diagnosis.tracked,
+            if diagnosis.tracked == 1 { "y" } else { "ies" },
+            diagnosis.watcher
+        )];
+        if diagnosis.stale {
+            lines.push(format!(
+                "health information is stale (last update {} ago); the watcher may be stuck",
+                crate::system::history::watch::runtime::humantime(std::time::Duration::from_secs(
+                    diagnosis.health_age_secs.unwrap_or(0)
+                ))
+            ));
+        }
+        // informational: throttling protects the history, it does not
+        // compromise it
+        for throttled in &diagnosis.throttled {
+            lines.push(format!(
+                "{} changes constantly: saved every {} ({} unsaved change(s); last saved {}). Not a failure; `mise dot exclude` if it is a log, cache, or database",
+                throttled.path,
+                crate::system::history::watch::runtime::humantime(std::time::Duration::from_secs(
+                    throttled.interval_secs
+                )),
+                throttled.pending_changes,
+                throttled.last_saved.as_deref().unwrap_or("never")
+            ));
+        }
+        if !diagnosis.sync_conflicts.is_empty() {
+            lines.push(format!(
+                "{} path(s) held by a sync conflict: {}",
+                diagnosis.sync_conflicts.len(),
+                diagnosis
+                    .sync_conflicts
+                    .iter()
+                    .map(|(path, _)| path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(error) = &diagnosis.sync_error {
+            match diagnosis.sync_failing_for_secs {
+                Some(secs) => lines.push(format!(
+                    "sync failing for {} ({} attempt(s)): {error}",
+                    crate::system::history::watch::runtime::humantime(
+                        std::time::Duration::from_secs(secs)
+                    ),
+                    diagnosis.sync_failures
+                )),
+                None if diagnosis.sync_conflicts.is_empty() => {
+                    lines.push(format!("last sync error (transient): {error}"))
+                }
+                None => {}
+            }
+        }
+        info::section("dotfiles", lines.join("\n"))?;
         Ok(())
     }
 
@@ -764,7 +1033,12 @@ impl Doctor {
                 Ok(statuses) => {
                     let missing = statuses
                         .iter()
-                        .filter(|s| !s.state.is_installed() && !s.state.is_unavailable())
+                        .filter(|s| {
+                            s.request.desired
+                                == crate::system::packages::PackageDesiredState::Present
+                                && !s.state.is_installed()
+                                && !s.state.is_unavailable()
+                        })
                         .count();
                     lines.push(format!(
                         "{name}: {} requested, {missing} missing",
@@ -825,7 +1099,15 @@ impl Doctor {
     async fn analyze_shims(&mut self, config: &Arc<Config>, toolset: &Toolset) -> HashSet<String> {
         let mise_bin = shims::mise_bin_for_shims();
 
-        if let Ok(diffs) = shims::get_shim_diffs(config, mise_bin, toolset).await {
+        let shims_dir = dirs::shims();
+        let scope = if file::storage_paths_eq(&shims_dir, &dirs::system_shims()) {
+            shims::ShimScope::Both
+        } else {
+            shims::ShimScope::User
+        };
+        if let Ok(diffs) =
+            shims::get_shim_diffs(config, mise_bin, toolset, &shims_dir, scope, false).await
+        {
             let cmd = style::nyellow("mise reshim");
 
             if !diffs.missing.is_empty() {
@@ -1018,7 +1300,8 @@ impl Doctor {
         let mut checked_commands = HashSet::new();
 
         for shim in desired_shims {
-            if !dirs::SHIMS.join(shim).exists() {
+            let shims_dir = dirs::shims();
+            if !shims_dir.join(shim).exists() {
                 continue;
             }
             let command = shim_command_name(shim);
@@ -1030,7 +1313,7 @@ impl Doctor {
             };
             let is_mise_shim = resolved
                 .parent()
-                .is_some_and(|parent| file::paths_eq(&file::replace_path(parent), &dirs::SHIMS));
+                .is_some_and(|parent| file::paths_eq(&file::replace_path(parent), &shims_dir));
             if !is_mise_shim {
                 shadowed.insert(command, resolved);
             }
@@ -1048,7 +1331,7 @@ impl Doctor {
             r#"mise shims are shadowed by executables earlier in PATH:
               {shadowed}
             Move {} earlier in PATH to use the mise-managed versions."#,
-            display_path(*dirs::SHIMS),
+            display_path(dirs::shims()),
         ));
     }
 }
@@ -1067,10 +1350,9 @@ fn shim_command_name(shim: &str) -> String {
 }
 
 fn shims_on_path() -> bool {
-    let shims = &*dirs::SHIMS;
     env::PATH
         .iter()
-        .any(|p| crate::file::paths_eq(&crate::file::replace_path(p), shims))
+        .any(|path| crate::file::is_mise_shims_dir(path))
 }
 
 fn yn(b: bool) -> String {
@@ -1081,17 +1363,15 @@ fn yn(b: bool) -> String {
     }
 }
 
-fn mise_dirs() -> Vec<(String, &'static Path)> {
-    [
-        ("cache", &*dirs::CACHE),
-        ("config", &*dirs::CONFIG),
-        ("data", &*dirs::DATA),
-        ("shims", &*dirs::SHIMS),
-        ("state", &*dirs::STATE),
+fn mise_dirs() -> Vec<(String, PathBuf)> {
+    vec![
+        ("cache".into(), dirs::CACHE.to_path_buf()),
+        ("config".into(), dirs::CONFIG.to_path_buf()),
+        ("data".into(), dirs::DATA.to_path_buf()),
+        ("shims".into(), dirs::shims()),
+        ("system_shims".into(), dirs::system_shims()),
+        ("state".into(), dirs::STATE.to_path_buf()),
     ]
-    .iter()
-    .map(|(k, v)| (k.to_string(), **v))
-    .collect()
 }
 
 fn mise_env_vars() -> Vec<(String, String)> {
@@ -1272,14 +1552,6 @@ fn aqua_registry_count_str() -> String {
     )
 }
 
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise doctor</bold>
-    [WARN] plugin node is not installed
-"#
-);
-
 /// An install directory that is there but holds nothing.
 ///
 /// `Backend::is_version_installed` decides on path existence alone, so an
@@ -1323,7 +1595,47 @@ fn install_dir_is_empty(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::install_dir_is_empty;
+    use super::{install_dir_is_empty, sync_failure_duration};
+    use crate::system::history::sync::run::SyncStatus;
+
+    fn ago(now: chrono::DateTime<chrono::Utc>, secs: i64) -> Option<String> {
+        Some((now - chrono::Duration::seconds(secs)).to_rfc3339())
+    }
+
+    #[test]
+    fn a_failure_run_is_measured_from_its_start() {
+        // the fetch is stamped before a publication can fail, so a repository
+        // whose publications keep failing still has a recent fetch
+        let now = chrono::Utc::now();
+        let status = SyncStatus {
+            failing_since: ago(now, 100),
+            last_fetch: ago(now, 10),
+            ..Default::default()
+        };
+        assert_eq!(sync_failure_duration(&status, now), Some(100));
+    }
+
+    #[test]
+    fn an_origin_that_never_worked_still_counts() {
+        let now = chrono::Utc::now();
+        let status = SyncStatus {
+            failing_since: ago(now, 30),
+            ..Default::default()
+        };
+        assert_eq!(sync_failure_duration(&status, now), Some(30));
+    }
+
+    #[test]
+    fn an_older_record_falls_back_to_the_last_success() {
+        let now = chrono::Utc::now();
+        let status = SyncStatus {
+            last_publish: ago(now, 50),
+            last_fetch: ago(now, 80),
+            ..Default::default()
+        };
+        assert_eq!(sync_failure_duration(&status, now), Some(50));
+        assert_eq!(sync_failure_duration(&SyncStatus::default(), now), None);
+    }
 
     #[test]
     fn empty_directory_is_reported() {

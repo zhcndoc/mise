@@ -102,8 +102,55 @@ mise settings add idiomatic_version_file_disable_files node:package.json
 
 :::
 
-## 默认 node 包
+### package.json
 
+启用 node 的 idiomatic version files 后，mise 会在 name 为 node 时读取 devEngines.runtime：
+
+~~~json [package.json]
+{
+  "devEngines": {
+    "runtime": { "name": "node", "version": "22.14.0" }
+  }
+}
+~~~
+
+这会选择 Node.js 22.14.0。devEngines.runtime 可以是对象或数组；数组中只读取第一项。其他运行时请参阅 [Bun](/lang/bun.html#version-files) 和 [Deno](/lang/deno.html#version-files) 指南。
+
+mise 不会读取 engines.node：它描述兼容的 Node.js 版本，而不是开发时要使用的版本。如果项目只有 engines 范围，请显式选择版本：
+
+~~~sh
+mise use node@22
+~~~
+
+### package.json 中的软件包管理器版本
+
+请为实际使用的每个软件包管理器单独启用 idiomatic version files，例如：
+
+~~~sh
+mise settings add idiomatic_version_file_enable_tools pnpm
+~~~
+
+对于 npm、pnpm 和 yarn，mise 会先读取匹配的 devEngines.packageManager 声明，然后回退到顶层 packageManager 字段：
+
+~~~json [package.json]
+{
+  "packageManager": "pnpm@9.1.0"
+}
+~~~
+
+这会选择 pnpm 9.1.0。等价的 devEngines 声明是：
+
+~~~json [package.json]
+{
+  "devEngines": {
+    "packageManager": { "name": "pnpm", "version": "9.1.0" }
+  }
+}
+~~~
+
+devEngines.packageManager 也可以是数组；mise 读取第一项。声明的 name 必须与已启用的工具匹配。有关 Bun 的运行时和软件包管理器优先级，请参阅 [Bun 版本文件](/lang/bun.html#version-files)。
+
+## 默认 node 包
 ::: warning 计划弃用
 默认包文件已弃用。目前它们仍然受支持，但 mise 将从 `2026.11.0` 开始发出警告，
 并将在 `2027.11.0` 中移除支持。

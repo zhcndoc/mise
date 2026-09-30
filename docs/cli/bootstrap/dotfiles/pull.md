@@ -31,6 +31,12 @@ description: "将传入的共享更改拉取到实际文件中"
 - **`-y --yes`** — 不提示直接拉取
 - **`--take-remote <PATH>`** — 使用仓库版本解决冲突
 - **`--keep-local <PATH>`** — 保留此机器的版本来解决冲突（下一步发布）
+- **`--take-remote-all`** — 使用仓库版本解决所有剩余冲突
+
+  由 `--keep-local` 指定的路径保留此机器的版本，其他冲突都采用仓库版本。适用于刚完成采用的机器，因为每个不同的既有文件都会单独形成冲突。
+- **`--keep-local-all`** — 保留此机器的版本解决所有剩余冲突
+
+  由 `--take-remote` 指定的路径采用仓库版本，其他冲突都保留此机器的版本。每个保留的路径必须已经保存。
 - **`-h --help`** — 打印帮助
 
 示例：
@@ -40,6 +46,8 @@ mise dot pull --dry-run
 mise dot pull --yes
 mise dot pull --take-remote ~/.zshrc
 mise dot pull --keep-local ~/.zshrc
+mise dot pull --take-remote-all
+mise dot pull --take-remote-all --keep-local ~/.zshrc
 ```
 
 <!-- generated reference navigation -->

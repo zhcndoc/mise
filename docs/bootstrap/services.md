@@ -47,6 +47,8 @@ mise 会为你的平台创建服务定义：
 | macOS    | `~/Library/LaunchAgents/dev.mise.<name>.plist`                                        | `launchctl`        |
 | Windows  | 计划任务 `mise\<name>`（定义保存在 `$MISE_STATE_DIR/user-services/` 下） | `schtasks`         |
 
+对于开发栈，用户服务可以让 Pitchfork 监管程序保持可用，同时由 Pitchfork 管理各个项目守护进程。有关命令、工具安装以及从 `pitchfork boot enable` 迁移的方法，请参阅[开发栈指南](/daemons/development-stack.html#keep-the-supervisor-available-at-login)。
+
 ### 用户服务选项
 
 - `command`：要运行的命令行。`~` 和 `~/` 会进行展开。除非设置了 `builtin`，否则为必需项。

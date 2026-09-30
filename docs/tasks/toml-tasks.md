@@ -170,6 +170,26 @@ depends = ['build']
 
 还有其他指定依赖项的方式；请参见 [wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post)。
 
+### 守护进程 <Badge type="warning" text="实验性" />
+
+当任务需要一个应在多次任务调用之间持续运行的服务时，请使用 `daemons`。mise 会通过 pitchfork 启动服务，等待其就绪后再运行任务。
+
+~~~mise-toml
+[settings]
+experimental = true
+
+[daemons]
+postgres = "18"
+
+[tasks.test]
+daemons = "postgres"
+run = "npm test"
+~~~
+
+`mise run test` 会在需要时启动 PostgreSQL，等待其就绪，然后运行测试脚本。之后的运行会复用该数据库。测试结束后它仍会运行；使用 `mise daemons stop postgres` 停止它。
+
+多个声明服务可以使用 `daemons = ["postgres", "redis"]`，也可以使用 `daemons = true` 选择任务项目配置中的所有守护进程。前置条件和服务配置请参阅[守护进程指南](/daemons.html)，名称解析和依赖标志请参阅 [`daemons` 参考](/tasks/task-configuration.html#daemons)。
+
 ### 环境变量
 
 你可以为任务指定环境变量：

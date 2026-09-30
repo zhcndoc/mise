@@ -194,7 +194,7 @@ async fn resolve_tap_source(owner: &str, tap: &str, tap_url: Option<&str>) -> Re
 }
 
 async fn usable_system_ruby() -> Option<PathBuf> {
-    let ruby = crate::file::which("ruby")?;
+    let ruby = crate::file::which_no_shims("ruby")?;
     ruby_is_compatible(&ruby).await.then_some(ruby)
 }
 
@@ -366,15 +366,64 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// a ruby that can run the brew shims (>= 3), for tests that execute them
+#[cfg(test)]
+pub(super) async fn test_ruby() -> Result<Option<PathBuf>> {
+    if let Some(ruby) = usable_system_ruby().await {
+        return Ok(Some(ruby));
+    }
+    super::source::installed_ruby_bin().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    async fn test_ruby() -> Result<Option<PathBuf>> {
-        if let Some(ruby) = usable_system_ruby().await {
-            return Ok(Some(ruby));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn ignores_mise_shim_when_selecting_system_ruby() -> Result<()> {
+        const CHILD_ENV: &str = "MISE_TEST_TAP_RUBY_SELECTION_CHILD";
+        const EXPECTED_RUBY_ENV: &str = "MISE_TEST_TAP_EXPECTED_RUBY";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let expected = PathBuf::from(std::env::var_os(EXPECTED_RUBY_ENV).unwrap());
+            assert_eq!(usable_system_ruby().await, Some(expected));
+            return Ok(());
         }
-        super::super::source::installed_ruby_bin().await
+
+        let temp = tempfile::tempdir()?;
+        let data_dir = temp.path().join("data");
+        let shims_dir = data_dir.join("shims");
+        let bin_dir = temp.path().join("bin");
+        crate::file::create_dir_all(&shims_dir)?;
+        crate::file::create_dir_all(&bin_dir)?;
+
+        let shim_ruby = shims_dir.join("ruby");
+        let system_ruby = bin_dir.join("ruby");
+        for ruby in [&shim_ruby, &system_ruby] {
+            crate::file::write(ruby, "#!/bin/sh\nexit 0\n")?;
+            crate::file::make_executable(ruby)?;
+        }
+
+        let path = std::env::join_paths([&shims_dir, &bin_dir])?;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "system::packages::brew::tap::tests::ignores_mise_shim_when_selecting_system_ruby",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(EXPECTED_RUBY_ENV, &system_ruby)
+            .env("MISE_DATA_DIR", &data_dir)
+            .env("MISE_SHIMS_DIR", &shims_dir)
+            .env("PATH", path)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "child test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
     }
 
     #[test]
@@ -625,6 +674,9 @@ class Widget < Formula
   depends_on "libfoo"
   depends_on "cmake" => :build
   depends_on(**{"ninja" => :build})
+  depends_on :macos
+  depends_on :xcode => :build
+  depends_on macos: :sequoia
   on_sequoia :or_older do
     depends_on "release-boundary"
   end
@@ -659,6 +711,9 @@ end
             formula.urls["stable"].url,
             "https://example.com/café/widget-1.2.3.tar.gz"
         );
+        // Requirement symbols (`depends_on :macos`, `:xcode`, `macos: :sequoia`) name
+        // platform constraints, not formulae. Recording them would make the resolver
+        // fetch a formula called "macos" and fail the run on a 404.
         assert_eq!(
             formula.dependencies,
             ["libfoo", "release-boundary", "system-release-boundary"]
@@ -697,9 +752,9 @@ cask "widget" do
     url "https://example.com/also-wrong-platform.zip"
   end
   app "Widget.app"
-  binary "Widget.app/Contents/MacOS/widget", target: "widget"
+  binary "#{appdir}/Widget.app/Contents/MacOS/widget", target: "widget"
   preflight_steps do
-    run "Widget.app/Contents/MacOS/widget", base: :appdir, args: ["#{version}"]
+    run "#{appdir}/Widget.app/Contents/MacOS/widget", base: :appdir, args: ["#{version}"]
     run "bin/widget", base: :staged_path
   end
   postflight_steps do
@@ -732,6 +787,10 @@ end
         assert_eq!(metadata["sha256"], "no_check");
         assert_eq!(metadata["url"], "https://example.com/café/widget-1.2.3.zip");
         assert_eq!(metadata["depends_on"]["formula"][0], "libfoo");
+        assert_eq!(
+            metadata["artifacts"][1]["binary"][0],
+            "$APPDIR/Widget.app/Contents/MacOS/widget"
+        );
         assert_eq!(metadata["artifacts"].as_array().unwrap().len(), 4);
         assert_eq!(
             metadata["artifacts"][2]["preflight_steps"][0]["steps"][0],
@@ -748,6 +807,173 @@ end
                 {"type": "run", "command": {"path": "/usr/bin/xattr"}, "args": ["-d", "com.apple.quarantine", "{{appdir}}/Widget.app"], "must_succeed": false}
             ])
         );
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn serializes_cask_pkg_choices() -> Result<()> {
+        let Some(ruby) = test_ruby().await? else {
+            return Ok(());
+        };
+        let runner = CmdLineRunner::new(ruby)
+            .with_on_stderr(|line| eprintln!("{line}"))
+            .arg("--disable-gems")
+            .arg("-e")
+            .arg(CASK_METADATA_SHIM_RB)
+            .stdin_string(
+                r##"cask "widget" do
+  version "1.2.3"
+  url "https://example.invalid/widget.pkg"
+  pkg "Widget.pkg",
+      choices: [
+        {
+          "choiceIdentifier" => "com.example.updater",
+          "choiceAttribute"  => "selected",
+          "attributeSetting" => 0,
+        },
+      ]
+  pkg "Plain.pkg"
+  uninstall pkgutil: "com.example.widget"
+end"##,
+            )
+            .env("MISE_BREW_TOKEN", "widget")
+            .env("MISE_BREW_SOURCE_PATH", "Casks/widget.rb")
+            .env("MISE_BREW_SOURCE_CHECKSUM", "fixture")
+            .env("MISE_BREW_TAP_COMMIT", "fixture")
+            .env("MISE_BREW_MACOS_VERSION", "26")
+            .env("MISE_BREW_OS", "macos")
+            .env("MISE_BREW_ARCH", "aarch64");
+        let output = runner.read().await?;
+        let _: Cask = serde_json::from_str(&output)?;
+        let metadata: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(
+            metadata["artifacts"],
+            serde_json::json!([
+                {"pkg": ["Widget.pkg", {"choices": [{
+                    "choiceIdentifier": "com.example.updater",
+                    "choiceAttribute": "selected",
+                    "attributeSetting": 0
+                }]}]},
+                {"pkg": ["Plain.pkg"]},
+                {"uninstall": {"pkgutil": "com.example.widget"}}
+            ])
+        );
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn serializes_cask_staged_paths_without_reading_host_files() -> Result<()> {
+        let Some(ruby) = test_ruby().await? else {
+            return Ok(());
+        };
+        let dir = tempfile::tempdir()?;
+        let matching_manpage = dir
+            .path()
+            .join("$HOMEBREW_PREFIX/Caskroom/widget/1.2.3/manpages/widget.1");
+        crate::file::create_dir_all(matching_manpage.parent().unwrap())?;
+        crate::file::write(&matching_manpage, "fixture")?;
+
+        let runner = CmdLineRunner::new(ruby)
+            .with_on_stderr(|line| eprintln!("{line}"))
+            .arg("--disable-gems")
+            .arg("-e")
+            .arg(CASK_METADATA_SHIM_RB)
+            .stdin_string(
+                r##"cask "widget" do
+  version "1.2.3"
+  url "https://example.invalid/widget.zip"
+  binary "#{staged_path}/bin/widget"
+  uninstall trash: staged_path.dirname/"latest"
+  preflight_steps do
+    run "#{staged_path}/bin/prepare"
+    run staged_path / "bin/prepare"
+    run "/usr/bin/xattr", args: ["#{staged_path}/bin/prepare"]
+  end
+  Dir["#{staged_path}/manpages/*"].each { |path| manpage path }
+end"##,
+            )
+            .env("MISE_BREW_TOKEN", "widget")
+            .env("MISE_BREW_SOURCE_PATH", "Casks/widget.rb")
+            .env("MISE_BREW_SOURCE_CHECKSUM", "fixture")
+            .env("MISE_BREW_TAP_COMMIT", "fixture")
+            .env("MISE_BREW_MACOS_VERSION", "26")
+            .env("MISE_BREW_OS", "macos")
+            .env("MISE_BREW_ARCH", "aarch64")
+            // Deliberately omit the sandbox: the shim must ignore matching host
+            // files even when Ruby could otherwise read its working directory.
+            .current_dir(dir.path());
+        let output = runner.read().await?;
+        let _: Cask = serde_json::from_str(&output)?;
+        let metadata: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(
+            metadata["artifacts"],
+            serde_json::json!([
+                {"binary": ["$HOMEBREW_PREFIX/Caskroom/widget/1.2.3/bin/widget"]},
+                {"uninstall": {"trash": "$HOMEBREW_PREFIX/Caskroom/widget/latest"}},
+                {"preflight_steps": [{"steps": [
+                    {
+                        "type": "run",
+                        "command": {"path": "bin/prepare", "base": "staged_path"}
+                    },
+                    {
+                        "type": "run",
+                        "command": {"path": "bin/prepare", "base": "staged_path"}
+                    },
+                    {
+                        "type": "run",
+                        "command": {"path": "/usr/bin/xattr"},
+                        "args": ["{{staged_path}}/bin/prepare"]
+                    }
+                ]}]}
+            ])
+        );
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn extracts_cask_homebrew_prefix_as_relocatable_metadata() -> Result<()> {
+        let Some(ruby) = test_ruby().await? else {
+            return Ok(());
+        };
+        for arch in ["aarch64", "x86_64"] {
+            let mut runner = CmdLineRunner::new(&ruby)
+                .with_on_stderr(|line| eprintln!("{line}"))
+                .arg("--disable-gems")
+                .arg("-e")
+                .arg(CASK_METADATA_SHIM_RB)
+                .stdin_string(
+                    r##"cask "widget" do
+  version "1.2.3"
+  url "https://example.invalid/widget-#{version}.zip"
+  binary "completions/_widget", target: "#{HOMEBREW_PREFIX}/share/zsh/site-functions/_widget"
+  binary "completions/widget.bash", target: "#{HOMEBREW_PREFIX}/etc/bash_completion.d/widget"
+  binary "completions/widget.fish", target: "#{HOMEBREW_PREFIX}/share/fish/vendor_completions.d/widget.fish"
+end"##,
+                )
+                .env("MISE_BREW_TOKEN", "widget")
+                .env("MISE_BREW_SOURCE_PATH", "Casks/widget.rb")
+                .env("MISE_BREW_SOURCE_CHECKSUM", "fixture")
+                .env("MISE_BREW_TAP_COMMIT", "fixture")
+                .env("MISE_BREW_MACOS_VERSION", "26")
+                .env("MISE_BREW_OS", "macos")
+                .env("MISE_BREW_ARCH", arch)
+                .with_sandbox(metadata_sandbox()?);
+            runner.apply_sandbox().await?;
+            let output = runner.read().await?;
+            let _: Cask = serde_json::from_str(&output)?;
+            let metadata: serde_json::Value = serde_json::from_str(&output)?;
+            assert_eq!(
+                metadata["artifacts"],
+                serde_json::json!([
+                    {"binary": ["completions/_widget", {"target": "$HOMEBREW_PREFIX/share/zsh/site-functions/_widget"}]},
+                    {"binary": ["completions/widget.bash", {"target": "$HOMEBREW_PREFIX/etc/bash_completion.d/widget"}]},
+                    {"binary": ["completions/widget.fish", {"target": "$HOMEBREW_PREFIX/share/fish/vendor_completions.d/widget.fish"}]},
+                ])
+            );
+        }
         Ok(())
     }
 
@@ -803,6 +1029,100 @@ end
         runner.apply_sandbox().await?;
         runner.execute_async().await?;
         assert!(!denied.exists());
+        Ok(())
+    }
+
+    const BUILD_SHIM_RB: &str = include_str!("shim.rb");
+
+    /// Both shims define the `Language::*` namespace, and they have to stay in
+    /// step. A mixin that resolves while extracting metadata but not during a
+    /// source build would fail late, as a NameError, after the download has
+    /// already happened.
+    #[test]
+    fn language_mixin_definitions_match_across_shims() {
+        // Track nesting depth rather than scanning for an unindented `end`, so
+        // the span cannot silently narrow if the block is ever reindented.
+        // Lines are trimmed so reindentation alone is not a difference either.
+        fn language_module(src: &str) -> Vec<&str> {
+            let mut depth = 0usize;
+            let mut out = Vec::new();
+            for line in src.lines().skip_while(|l| l.trim() != "module Language") {
+                let line = line.trim();
+                out.push(line);
+                if line.starts_with("module ") && !line.ends_with("; end") {
+                    depth += 1;
+                } else if line == "end" {
+                    depth -= 1;
+                    if depth == 0 {
+                        return out;
+                    }
+                }
+            }
+            panic!("shim has no complete `module Language` block");
+        }
+        let metadata = language_module(METADATA_SHIM_RB);
+        assert_eq!(metadata, language_module(BUILD_SHIM_RB));
+        // Two identically-truncated spans would compare equal while covering
+        // nothing, so pin the contents as well as the agreement.
+        for expected in [
+            "module Java; end",
+            "module Perl",
+            "module PHP",
+            "module Python",
+            "module Virtualenv; end",
+        ] {
+            assert!(
+                metadata.contains(&expected),
+                "Language block is missing {expected:?}: {metadata:?}"
+            );
+        }
+    }
+
+    /// A formula pulls a Language mixin in from its class body. That is a
+    /// constant reference, so it is resolved before any DSL `method_missing`
+    /// can intervene: an undefined one aborts evaluation on the `include` line
+    /// itself, and everything declared below it is never read.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn resolves_language_mixin_constants() -> Result<()> {
+        let Some(ruby) = test_ruby().await? else {
+            return Ok(());
+        };
+        let source = r#"
+class Widget < Formula
+  include Language::Python::Virtualenv
+  include Language::Python::Shebang
+  include Language::Node::Shebang
+  include Language::Perl::Shebang
+  include Language::PHP::Shebang
+  include Language::Java
+  version "1.2.3"
+  url "https://example.com/widget-1.2.3.tar.gz"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  depends_on "python"
+end
+"#;
+        let mut runner = CmdLineRunner::new(&ruby)
+            .with_on_stderr(|line| eprintln!("{line}"))
+            .arg("--disable-gems")
+            .arg("-e")
+            .arg(METADATA_SHIM_RB)
+            .stdin_string(source.to_string())
+            .env("MISE_BREW_NAME", "widget")
+            .env("MISE_BREW_TAP", "acme/tools")
+            .env("MISE_BREW_SOURCE_PATH", "Formula/widget.rb")
+            .env("MISE_BREW_SOURCE_CHECKSUM", "bbbb")
+            .env("MISE_BREW_TAP_COMMIT", "deadbeef")
+            .env("MISE_BREW_MACOS_VERSION", "15.3")
+            .env("MISE_BREW_OS", "macos")
+            .env("MISE_BREW_ARCH", std::env::consts::ARCH)
+            .with_sandbox(metadata_sandbox()?);
+        runner.apply_sandbox().await?;
+        let formula: Formula = serde_json::from_str(&runner.read().await?)?;
+        assert_eq!(formula.versions.stable.as_deref(), Some("1.2.3"));
+        // The declarations below the includes are the actual point: they are
+        // what a NameError on the first `include` would have hidden.
+        assert_eq!(formula.dependencies, ["python"]);
         Ok(())
     }
 }

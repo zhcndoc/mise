@@ -8,6 +8,9 @@ export type Command = {
   };
 };
 export const commands: { [key: string]: Command } = {
+  "__publish-system-install": {
+    hide: true,
+  },
   activate: {
     hide: false,
   },
@@ -18,6 +21,9 @@ export const commands: { [key: string]: Command } = {
     hide: false,
     subcommands: {
       ls: {
+        hide: false,
+      },
+      switch: {
         hide: false,
       },
     },
@@ -44,6 +50,9 @@ export const commands: { [key: string]: Command } = {
         hide: true,
       },
       "__inspect-system-files": {
+        hide: true,
+      },
+      "__service-exec": {
         hide: true,
       },
       accounts: {
@@ -369,6 +378,9 @@ export const commands: { [key: string]: Command } = {
           },
         },
       },
+      unapply: {
+        hide: false,
+      },
       user: {
         hide: false,
         subcommands: {
@@ -425,10 +437,39 @@ export const commands: { [key: string]: Command } = {
       __init: {
         hide: true,
       },
+      "__provider-exec": {
+        hide: true,
+      },
+      __resource: {
+        hide: true,
+      },
       logs: {
         hide: false,
       },
       ls: {
+        hide: false,
+      },
+      providers: {
+        hide: false,
+        subcommands: {
+          ls: {
+            hide: false,
+          },
+          restart: {
+            hide: false,
+          },
+          start: {
+            hide: false,
+          },
+          stop: {
+            hide: false,
+          },
+        },
+      },
+      prune: {
+        hide: false,
+      },
+      register: {
         hide: false,
       },
       restart: {
@@ -444,6 +485,9 @@ export const commands: { [key: string]: Command } = {
         hide: false,
       },
       tui: {
+        hide: false,
+      },
+      urls: {
         hide: false,
       },
     },

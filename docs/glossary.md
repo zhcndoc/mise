@@ -87,9 +87,6 @@ mise 支持多个后端，用于从不同来源安装工具：
 **pipx**
 : 默认使用 uv，或在配置后使用 pipx，在隔离环境中安装 Python CLI 工具。请参见 [pipx backend](/dev-tools/backends/pipx)。
 
-**pkgx**
-: 通过 pkgx 安装软件包。请参见 [pkgx backend](/dev-tools/backends/pkgx.html)。
-
 **s3**
 : 从 S3 或兼容存储下载工具构件。请参见 [S3 backend](/dev-tools/backends/s3.html)。
 

@@ -26,7 +26,7 @@ use crate::system::history::tracked::{TrackedSet, normalize_target};
 use crate::ui::table::MiseTable;
 
 #[derive(Clone, Debug)]
-pub(crate) struct ApplyRequest {
+pub struct ApplyRequest {
     /// Only these local paths (empty: everything pending).
     pub paths: Vec<PathBuf>,
     pub dry_run: bool,
@@ -35,6 +35,10 @@ pub(crate) struct ApplyRequest {
     pub take_remote: Vec<PathBuf>,
     /// Resolve these conflicts by publishing the local version next.
     pub keep_local: Vec<PathBuf>,
+    /// Resolve every conflict not named above with the upstream version.
+    pub take_remote_all: bool,
+    /// Resolve every conflict not named above by keeping the local version.
+    pub keep_local_all: bool,
     /// The watcher applying in the background: no prompt, no plan on
     /// stdout, and held paths are a count, not a failure.
     pub automatic: bool,
@@ -51,6 +55,8 @@ impl ApplyRequest {
             yes: true,
             take_remote: vec![],
             keep_local: vec![],
+            take_remote_all: false,
+            keep_local_all: false,
             automatic: true,
             plan_only: false,
         }
@@ -59,7 +65,7 @@ impl ApplyRequest {
 
 /// What an application did.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct ApplyOutcome {
+pub struct ApplyOutcome {
     /// Files written or removed.
     pub written: usize,
     /// Paths held for a decision (with their groups).
@@ -87,7 +93,7 @@ struct Step {
     desired_mode: Option<u32>,
 }
 
-pub(crate) async fn apply(
+pub async fn apply(
     store: &Store,
     tracked: &TrackedSet,
     req: &ApplyRequest,
@@ -114,6 +120,9 @@ pub(crate) async fn apply_locked_with_scope(
     if !req.paths.is_empty() {
         bail!("partial pulls are not supported: apply the complete setup without PATH arguments");
     }
+    // A pull deletes, and a rule it could not compile is a path it would
+    // wrongly believe is selected here.
+    tracked.refuse_unusable_exclusions()?;
     let repo = store
         .repo()
         .ok_or_else(|| eyre::eyre!("applying requires git"))?;
@@ -138,16 +147,43 @@ pub(crate) async fn apply_locked_with_scope(
         !req.automatic && console::user_attended_stderr(),
     )?;
     let roots = Roots::current();
-    let take_remote: BTreeSet<PathBuf> = req
+    let mut take_remote: BTreeSet<PathBuf> = req
         .take_remote
         .iter()
         .map(|path| normalize_target(path))
         .collect();
-    let keep_local: BTreeSet<PathBuf> = req
+    let mut keep_local: BTreeSet<PathBuf> = req
         .keep_local
         .iter()
         .map(|path| normalize_target(path))
         .collect();
+    // Which conflicts a blanket choice spoke for, and why it could not speak
+    // for the rest.
+    let mut blanket_chosen: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut blanket_held: Vec<String> = vec![];
+    // A blanket choice covers the conflicts nothing else decided, so
+    // `--take-remote-all --keep-local <path>` keeps that one exception.
+    if req.take_remote_all || req.keep_local_all {
+        let decided: BTreeSet<PathBuf> = req
+            .take_remote
+            .iter()
+            .chain(req.keep_local.iter())
+            .map(|path| normalize_target(path))
+            .collect();
+        for conflict in &status.conflicts {
+            if let Some(path) = roots.locate(&conflict.branch_path).path()
+                && !decided.contains(path)
+            {
+                blanket_chosen.insert(path.to_path_buf());
+            }
+        }
+        let blanket = if req.take_remote_all {
+            &mut take_remote
+        } else {
+            &mut keep_local
+        };
+        blanket.extend(blanket_chosen.iter().cloned());
+    }
 
     // Store choices without publishing or applying any part of the setup.
     let mut sync_state = state::load(repo)?;
@@ -165,7 +201,28 @@ pub(crate) async fn apply_locked_with_scope(
             if take_remote.contains(&local) && keep_local.contains(&local) {
                 bail!("choose only one resolution for {}", display_path(&local));
             }
-            let live = live_object(repo, &local)?;
+            // A blanket choice cannot speak for a path whose live side is not
+            // a file or symlink, and failing here would discard every other
+            // decision this pass makes. Hold that one path and keep going; a
+            // path named on the command line still reports the failure. The
+            // check belongs on this read, so a path that changed since the
+            // blanket choice was made is held too rather than aborting it.
+            // Only the path's own fault is held: a repository failure on an
+            // otherwise sound file is nobody's to fix by hand, so it stops
+            // the pass with its own error.
+            let live = match live_object(repo, &local) {
+                Ok(live) => live,
+                Err(err)
+                    if blanket_chosen.contains(&local)
+                        && err.downcast_ref::<UnusableLive>().is_some() =>
+                {
+                    blanket_held.push(err.to_string());
+                    take_remote.remove(&local);
+                    keep_local.remove(&local);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             let saved = shared.get(&conflict.branch_path).cloned();
             let saved_mode = permissions_at(
                 repo,
@@ -176,12 +233,47 @@ pub(crate) async fn apply_locked_with_scope(
             if keep_local.contains(&local)
                 && (live != saved || live_permissions(&local)? != saved_mode)
             {
-                bail!("save {} before choosing --keep-local", display_path(&local));
+                // Keeping the local side resolves the conflict by publishing
+                // this machine's *saved* version, so there must be one, and it
+                // must be the file as it stands now. A freshly adopted machine
+                // has no baseline at all; an edited file has a stale one.
+                let reason = if saved.is_none() {
+                    "has no saved version on this machine yet"
+                } else {
+                    "has unsaved changes"
+                };
+                // The refusal stands either way, but as with an unusable live
+                // side a blanket choice holds just this path rather than
+                // discarding every decision it made alongside it. A path named
+                // on the command line is the user's own instruction, so it
+                // still fails the pass.
+                if blanket_chosen.contains(&local) {
+                    blanket_held.push(format!(
+                        "{path} {reason}, so run `mise dot save {path}` first",
+                        path = display_path(&local)
+                    ));
+                    keep_local.remove(&local);
+                    continue;
+                }
+                bail!(
+                    "run `mise dot save {path}` first: --keep-local publishes this machine's saved version of {path}, and it {reason}",
+                    path = display_path(&local)
+                );
             }
             let remote = match status.upstream_commit.as_deref() {
                 Some(head) => repo
                     .object_at(head, &conflict.branch_path)?
                     .map(|object| {
+                        // a nested repository pointer names objects this
+                        // repository does not hold: it cannot be taken
+                        if take_remote.contains(&local)
+                            && super::reconcile::is_gitlink(Some(&object))
+                        {
+                            bail!(
+                                "cannot take the repository's version of {path}: it is a nested repository pointer, whose files history does not hold. Keep this machine's files with `mise dot pull --keep-local {path}`, or replace them with a clone of that repository yourself",
+                                path = display_path(&local)
+                            );
+                        }
                         if !encrypted.contains(&conflict.branch_path) {
                             return Ok(object);
                         }
@@ -252,9 +344,27 @@ pub(crate) async fn apply_locked_with_scope(
             }
             table.print()?;
         }
+        // A blanket choice promises to decide every conflict, so it has not
+        // succeeded while one is still held -- whatever it decided alongside.
+        // Those decisions are recorded above; naming the rest is what is left.
+        if !blanket_held.is_empty() {
+            if !req.dry_run && !req.automatic {
+                bail!(
+                    "sync paused: resolve all {count} conflict(s) before sharing resumes; a blanket choice cannot decide them all: {held}. Fix each of those paths, then pull again",
+                    count = status.conflicts.len(),
+                    held = blanket_held.join("; "),
+                );
+            }
+            // A preview and a background pass both carry on, so this is the
+            // only chance either gets to say why a path went undecided.
+            warn!(
+                "a blanket choice cannot decide {held}",
+                held = blanket_held.join("; "),
+            );
+        }
         if take_remote.is_empty() && keep_local.is_empty() && !req.dry_run && !req.automatic {
             bail!(
-                "sync paused: resolve all {} conflict(s) before sharing resumes",
+                "sync paused: resolve all {} conflict(s) before sharing resumes; `mise dot pull --take-remote-all` chooses the repository's version for every conflict at once, and `mise dot status` says whether any path still needs a different fix",
                 status.conflicts.len()
             );
         }
@@ -329,6 +439,18 @@ pub(crate) async fn apply_locked_with_scope(
             group,
         });
     }
+    // paths sync leaves alone are shown with every plan, so a nested
+    // repository that never arrives is not mistaken for one still pending
+    let skipped: Vec<(PathBuf, String)> = status
+        .skipped
+        .iter()
+        .filter_map(|skipped| {
+            roots
+                .locate(&skipped.branch_path)
+                .path()
+                .map(|path| (path.to_path_buf(), skipped.reason.clone()))
+        })
+        .collect();
     let fresh_adoption = planned_head.is_none() && status.upstream_commit.is_some();
     if steps.is_empty() && !fresh_adoption && inventory_tree.is_none() {
         if !req.dry_run && !req.automatic {
@@ -336,6 +458,9 @@ pub(crate) async fn apply_locked_with_scope(
             run::write_status(state_dir, &status)?;
         }
         if !req.automatic {
+            for (path, reason) in &skipped {
+                info!("history: {} skipped: {reason}", display_path(path));
+            }
             info!("history: nothing to apply");
         }
         return Ok(ApplyOutcome::default());
@@ -413,6 +538,13 @@ pub(crate) async fn apply_locked_with_scope(
         table.add_row(vec![
             display_path(&directory.path),
             "permissions".into(),
+            "setup".into(),
+        ]);
+    }
+    for (path, reason) in &skipped {
+        table.add_row(vec![
+            display_path(path),
+            format!("skipped: {reason}"),
             "setup".into(),
         ]);
     }
@@ -817,6 +949,26 @@ pub(super) fn live_permissions(path: &Path) -> Result<Option<u32>> {
     }
 }
 
+/// The live side of a path cannot stand in for a shared object. The file is
+/// the problem, not the machinery, so a blanket resolution may hold just this
+/// path; every other failure is the repository's and must stop the pass.
+#[derive(Debug)]
+pub(super) struct UnusableLive(String);
+
+impl std::fmt::Display for UnusableLive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UnusableLive {}
+
+/// Each of these names the path, because a blanket resolution repeats the
+/// reason it could not decide one and by then the path is all it still has.
+fn unusable(path: &Path, what: impl std::fmt::Display) -> eyre::Report {
+    eyre::Report::new(UnusableLive(format!("{} {what}", display_path(path))))
+}
+
 pub(super) fn live_object(
     repo: &crate::system::history::shadow::HistoryRepo,
     path: &Path,
@@ -824,16 +976,18 @@ pub(super) fn live_object(
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(unusable(path, format_args!("cannot be read: {err}"))),
     };
     if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(path)
+            .map_err(|err| unusable(path, format_args!("cannot be read: {err}")))?;
         return Ok(Some((
             "120000".into(),
-            repo.transient_blob_id(std::fs::read_link(path)?.to_string_lossy().as_bytes())?,
+            repo.transient_blob_id(crate::system::history::shadow::path_bytes(&target).as_ref())?,
         )));
     }
     if !meta.is_file() {
-        bail!("{} is not a regular file or symlink", display_path(path));
+        return Err(unusable(path, "is not a regular file or symlink"));
     }
     #[cfg(unix)]
     let executable = {
@@ -842,9 +996,11 @@ pub(super) fn live_object(
     };
     #[cfg(not(unix))]
     let executable = false;
+    let contents =
+        std::fs::read(path).map_err(|err| unusable(path, format_args!("cannot be read: {err}")))?;
     Ok(Some((
         if executable { "100755" } else { "100644" }.into(),
-        repo.transient_blob_id(&std::fs::read(path)?)?,
+        repo.transient_blob_id(&contents)?,
     )))
 }
 
@@ -933,7 +1089,7 @@ pub(super) fn has_staged_changes(staged: &BTreeSet<PathBuf>, path: &Path) -> boo
 }
 
 /// The conflicts as rows for `mise dot status`.
-pub(crate) fn describe_conflicts(conflicts: &[Conflict]) -> Vec<(String, String)> {
+pub fn describe_conflicts(conflicts: &[Conflict]) -> Vec<(String, String)> {
     let roots = Roots::current();
     conflicts
         .iter()
@@ -948,13 +1104,19 @@ pub(crate) fn describe_conflicts(conflicts: &[Conflict]) -> Vec<(String, String)
         .collect()
 }
 
-pub(crate) fn resolution_advice(path: &str, reason: &str) -> String {
+pub fn resolution_advice(path: &str, reason: &str) -> String {
     if reason == super::reconcile::ConflictKind::Repository.describe() {
         "inspect the validation error, reconcile the repository with Git, then run `mise dot sync`"
             .into()
+    } else if reason == super::reconcile::ConflictKind::UnusableLive.describe() {
+        // Neither side of the repository is in question, so neither
+        // resolution can be applied: the path itself is what has to change.
+        format!(
+            "move {path} away or make it a readable file, then run `mise dot pull`; --take-remote and --keep-local cannot decide it"
+        )
     } else {
         format!(
-            "inspect with `mise dot conflicts {path}`; resolve with `mise dot pull --take-remote|--keep-local {path}`"
+            "inspect with `mise dot conflicts {path}`; resolve with `mise dot pull --take-remote {path}` or `mise dot pull --keep-local {path}`"
         )
     }
 }

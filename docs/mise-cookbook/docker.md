@@ -13,22 +13,55 @@ description: "在镜像中安装 mise，使用它运行项目命令，或在用�
 ```Dockerfile [Dockerfile]
 FROM debian:13-slim
 
-RUN apt-get update  \
-    && apt-get -y --no-install-recommends install  \
-        # install any other dependencies you might need
-        curl git ca-certificates build-essential \
+COPY --from=ghcr.io/jdx/mise:2026.9.11 /usr/local/bin/mise /usr/local/bin/mise
+
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV MISE_DATA_DIR="/mise"
 ENV MISE_CONFIG_DIR="/mise"
 ENV MISE_CACHE_DIR="/mise/cache"
-ENV MISE_INSTALL_PATH="/usr/local/bin/mise"
 ENV PATH="/mise/shims:$PATH"
-# ENV MISE_VERSION="..."
+```
 
-RUN curl --proto '=https' --proto-redir '=https' \
-    --fail --show-error --silent --location https://mise.run | sh
+`COPY --from` copies only the binary: it does not inherit the source image's
+certificates or environment variables. The example installs certificates and
+sets the mise directories explicitly.
+
+### Use the Debian image as a base
+
+The Debian image has no `ENTRYPOINT`, so it works as a base image and lets CI
+runners supply their own shell command. This example assumes `mise.toml`
+declares Node.js and the application starts with `node server.js`:
+
+```Dockerfile [Dockerfile]
+FROM ghcr.io/jdx/mise:2026.9.11-debian
+
+WORKDIR /app
+# Also copy mise.lock if the project has one.
+COPY mise.toml ./
+RUN mise trust && mise install
+COPY . .
+CMD ["mise", "exec", "--", "node", "server.js"]
+```
+
+Add OS packages required by your tools with `apt-get`. For GitLab CI, see the
+[CI image example](/continuous-integration.html#use-the-official-image).
+
+### Pin an image by digest
+
+A version tag selects a release, but a rebuilt image can change what that tag
+points to. To select an exact image, inspect its digest:
+
+```shell
+docker buildx imagetools inspect ghcr.io/jdx/mise:2026.9.11
+```
+
+Replace `<digest>` below with the digest from that output:
+
+```Dockerfile
+COPY --from=ghcr.io/jdx/mise@sha256:<digest> /usr/local/bin/mise /usr/local/bin/mise
 ```
 
 构建前，从构建上下文中排除本地凭据：
@@ -52,7 +85,7 @@ docker run -it --rm debian-mise
 ```Dockerfile
 WORKDIR /app
 COPY mise.toml ./
-RUN mise install
+RUN mise trust && mise install
 COPY . .
 ```
 
@@ -77,9 +110,96 @@ RUN <<EOF
   extrepo enable mise
   apt-get remove -y --auto-remove extrepo # extrepo 及其依赖在启用 extrepo 后就不再需要
   apt-get update
-  apt-get install -y mise build-essential
+  apt-get install -y mise
   rm -fr /var/lib/apt/lists/*
 EOF
+```
+
+With this approach you cannot choose the mise version with `MISE_VERSION`;
+pin it with apt version constraints instead.
+
+### Verified release download
+
+Each release ships `SHASUMS256.txt` signed with minisign and GPG. This Debian
+example downloads the glibc binary for `amd64` or `arm64`, verifies the checksum
+file with minisign, and checks the binary before installing it:
+
+```Dockerfile [Dockerfile]
+FROM debian:13-slim
+
+ARG MISE_VERSION=2026.9.11
+ARG MISE_MINISIGN_KEY=RWTC3g8W3z4RZK3V3qv7fa1QY4JEWyBtqIHW+85QlJpZc5yG+uNYNBSZ
+
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install ca-certificates curl git minisign \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    base="https://github.com/jdx/mise/releases/download/v${MISE_VERSION}"; \
+    asset="mise-v${MISE_VERSION}-linux-$(dpkg --print-architecture | sed 's/amd64/x64/')"; \
+    cd /tmp; \
+    curl -fsSLO "$base/SHASUMS256.txt"; \
+    curl -fsSLO "$base/SHASUMS256.txt.minisig"; \
+    curl -fsSLO "$base/$asset"; \
+    minisign -Vm SHASUMS256.txt -P "$MISE_MINISIGN_KEY"; \
+    grep " ./$asset\$" SHASUMS256.txt | sha256sum -c --strict; \
+    install -m 755 "$asset" /usr/local/bin/mise; \
+    rm -f SHASUMS256.txt SHASUMS256.txt.minisig "$asset"
+```
+
+The public key above is the mise release key from
+[`minisign.pub`](https://github.com/jdx/mise/blob/main/minisign.pub). Use the
+`-musl` asset for Alpine and other musl bases.
+
+### Committed wrapper
+
+[`mise generate install-script -l -w`](/cli/generate/install-script.html)
+writes a `bin/mise` wrapper from a signature-verified installer with embedded
+checksums. Commit the wrapper, copy it into the image, and call `./bin/mise`
+to install and run its pinned version on first use. See
+[Continuous integration](/continuous-integration.html#bootstrapping).
+
+### Install script
+
+The `mise.run` installer selects the platform and checks the binary's checksum. Set `MISE_VERSION` to pin the release:
+
+```Dockerfile [Dockerfile]
+FROM debian:13-slim
+
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install \
+        # install any other dependencies you might need
+        curl git ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV MISE_DATA_DIR="/mise"
+ENV MISE_CONFIG_DIR="/mise"
+ENV MISE_CACHE_DIR="/mise/cache"
+ENV MISE_INSTALL_PATH="/usr/local/bin/mise"
+ENV PATH="/mise/shims:$PATH"
+ENV MISE_VERSION="2026.9.11"
+
+RUN curl --proto '=https' --proto-redir '=https' \
+    --fail --show-error --silent --location https://mise.run | sh
+```
+
+## Shared tools in multi-user containers
+
+For toolbox containers or bastion hosts where tools should be pre-installed for all users,
+use `mise install --system` to install tools into `/usr/local/share/mise/installs`.
+Each user's mise finds these system-level tools automatically without any configuration.
+
+`--system` shares the install location between users; it does not put binaries on `PATH`
+for use without mise. If you want tools other users can run with no mise involved, see
+[How do I install tools other users can run without mise?](/faq.html#how-do-i-install-tools-other-users-can-run-without-mise)
+
+```Dockerfile [Dockerfile]
+FROM ghcr.io/jdx/mise:debian
+
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 # 将工具预安装到系统范围的共享目录
 RUN mise install --system node@26 python@3.15
@@ -129,7 +249,7 @@ RUN mise install
 ```toml [mise.toml]
 [tasks.docker]
 interactive = true
-run = "docker run -it --rm debian-mise"
+run = "docker run -it --rm ghcr.io/jdx/mise:debian bash"
 ```
 
 先构建镜像（见上文），然后：

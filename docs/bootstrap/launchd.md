@@ -44,6 +44,7 @@ stderr_path = "~/Library/Logs/my-sync.err.log"
 | `keep_alive_on_failure`   | `KeepAlive = { SuccessfulExit = false }` |
 | `start_interval`          | `StartInterval`                          |
 | `throttle_interval`       | `ThrottleInterval`                       |
+| `process_type`            | `ProcessType`                            |
 | `start_calendar_interval` | `StartCalendarInterval`                  |
 | `queue_directories`       | `QueueDirectories`                       |
 | `environment`             | `EnvironmentVariables`                   |
@@ -51,8 +52,9 @@ stderr_path = "~/Library/Logs/my-sync.err.log"
 | `stdout_path`             | `StandardOutPath`                        |
 | `stderr_path`             | `StandardErrorPath`                      |
 
-`keep_alive` 和 `keep_alive_on_failure` 互斥。只能设置其中一个：
-前者会在进程以任何方式退出后保持进程运行，而后者仅会在进程失败后重启它
+`process_type` 是 launchd 为作业设置的调度级别：`Background`、`Standard`、`Adaptive` 或 `Interactive`。对于应当让出资源给用户的工作，通常选择 `Background`，因为 launchd 会限制该级别的 CPU 和磁盘 I/O。必须完全按照这里显示的拼写填写；这是 launchd 使用的拼写，也是 JSON schema 验证的值。其他写法都会报错，因为 launchd 会忽略无法识别的 `ProcessType`，作业将静默使用默认级别。即使只是大小写错误也会被拒绝，并在错误消息中给出正确拼写。
+
+`keep_alive` 和 `keep_alive_on_failure` 互斥。只能设置其中一个：前者会在进程以任何方式退出后保持进程运行，而后者仅会在进程失败后重启它。
 | `kickstart` | 运行 `launchctl kickstart` |
 
 `program`、`working_directory`、`stdout_path`、`stderr_path` 以及
@@ -74,6 +76,19 @@ start_calendar_interval = [{ hour = 3 }, { hour = 12, weekday = 1 }]
 `throttle_interval` 是 launchd 在代理两次运行之间等待的最小秒数（launchd 的默认值为 10）。
 
 `queue_directories` 会在所列目录中的任意一个非空时启动代理；launchd 希望代理清空这些目录。launchd 要求此处使用绝对路径，因此每个条目必须以 `/` 开头，或使用展开后为绝对路径的 `~` 或 `~/` 路径。
+
+## 模板
+
+在写入 plist 之前，agent 值会使用声明该 agent 的配置文件上下文，按照 [Tera 模板](/templates.html)进行渲染：
+
+```toml
+[bootstrap.macos.launchd.agents.my-sync]
+program = "{{ config_root }}/bin/sync"
+working_directory = "{{ config_root }}"
+stdout_path = "{{ config_root }}/log/sync.log"
+```
+
+所有字符串值都会渲染，包括 `args`、`environment` 和 `queue_directories` 中的条目。不包含模板语法的值会原样跳过渲染；上文所述的 `~` 展开仍会在之后应用。这里不支持 <code v-pre>{{ exec(...) }}</code>，原因与 [systemd 单元](/bootstrap/systemd.html#templates)相同。模板渲染失败的 agent 会被报告并跳过，其他 agent 仍会应用。
 
 ## 语义
 

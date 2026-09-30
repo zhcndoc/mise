@@ -23,13 +23,16 @@ description: "就地跟踪文件或目录"
 - **`--profile <PROFILE>`** — 为此 mise 环境声明变体
 - **`--no-autosave`** — 仅在执行 `mise dot save <path>` 时保存，从不自动保存
 - **`--encrypt`** — 在保存到历史记录前加密内容（需要 `[history.encryption].recipients`）
+- **`--allow-plaintext`** — 允许将明确受跟踪且名称类似凭据的文件以明文保存
 - **`-y --yes`** — 接受而不提示
+- **`-n --dry-run`** — 显示每个路径展开后的文件、大小以及被排除内容，但不跟踪它
 - **`-h --help`** — 打印帮助
 
 示例：
 
 ```
 mise dot track ~/.zshrc ~/.config/hypr
+mise dot track --dry-run ~/.codex
 mise dot track ~/.zshrc --os macos
 mise dot track ~/.config/app/credentials --encrypt
 mise dot track ~/.config/app/state.json --no-autosave

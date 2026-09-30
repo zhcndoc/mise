@@ -94,11 +94,20 @@ if [[ $os == "macos" ]]; then
 	export MISE_NOTIFICATION_SIGN_IDENTITY="Developer ID Application: Jeffrey Dickey (4993Y37DX6)"
 fi
 
-if [[ -n "${MISE_BOLT:-}" ]] && [[ -z "${MISE_PGO:-}" ]]; then
+case "$RUST_TRIPLE" in
+*-linux-gnu | *-linux-gnueabihf)
+	# Link the executable at a fixed address instead of as a PIE, so the
+	# dynamic loader has no pointers to patch at startup (see link_without_pie
+	# in build.rs). About halves the run time of short commands like hook-env.
+	export MISE_NO_PIE=1
+	;;
+esac
+
+if [[ -n ${MISE_BOLT:-} ]] && [[ -z ${MISE_PGO:-} ]]; then
 	error "MISE_BOLT requires MISE_PGO so BOLT optimizes the PGO release binary"
 fi
 
-if [[ -n "${MISE_PGO:-}" ]]; then
+if [[ -n ${MISE_PGO:-} ]]; then
 	# Profile-guided optimization: instrument, train against the hermetic
 	# offline workload in scripts/pgo.bash, rebuild with the profile.
 	# Only valid for targets whose binaries can execute on this machine.
@@ -118,7 +127,7 @@ fi
 target_dir="${CARGO_TARGET_DIR:-target}"
 binary_path="$target_dir/$RUST_TRIPLE/serious/mise"
 
-if [[ -n "${MISE_BOLT:-}" ]]; then
+if [[ -n ${MISE_BOLT:-} ]]; then
 	case "$RUST_TRIPLE" in
 	x86_64-unknown-linux-gnu)
 		bash scripts/bolt.bash "$binary_path"
@@ -129,14 +138,20 @@ if [[ -n "${MISE_BOLT:-}" ]]; then
 	esac
 fi
 
+# GNU/Linux release binaries require glibc 2.18 or newer, matching the
+# published v2026.9.10 binaries. Reject builds that require a newer version
+# so toolchain and dependency updates cannot silently reduce compatibility.
+# See docs/installing-mise.md for the policy on raising this minimum and
+# instructions for using static musl builds on systems with older glibc.
+GLIBC_FLOOR=2.18
+
 case "$RUST_TRIPLE" in
-x86_64-unknown-linux-gnu)
-	echo "Checking glibc compatibility for Amazon Linux 2..."
-	scripts/check-glibc.sh "$binary_path" "2.26" "Amazon Linux 2"
-	;;
-aarch64-unknown-linux-gnu)
-	echo "Checking glibc compatibility for Amazon Linux 2023..."
-	scripts/check-glibc.sh "$binary_path" "2.34" "Amazon Linux 2023"
+*-linux-gnu | *-linux-gnueabihf)
+	echo "Checking glibc compatibility (floor: $GLIBC_FLOOR)..."
+	scripts/check-glibc.sh "$binary_path" "$GLIBC_FLOOR" "$RUST_TRIPLE"
+	if ! readelf -h "$binary_path" | grep -q 'Type:.*EXEC'; then
+		error "$binary_path is not linked non-PIE; MISE_NO_PIE did not reach build.rs"
+	fi
 	;;
 esac
 mkdir -p dist/mise/bin

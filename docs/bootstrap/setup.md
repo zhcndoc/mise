@@ -127,7 +127,7 @@ mise dot sync
 mise dot pull
 ```
 
-当你想立即同步时，这些命令在自动模式下也适用。当共享的更改更新了工具、服务或模板源时，运行 `mise bootstrap` 以应用该配置并渲染模板。
+这些命令在你想立即同步时也适用于自动模式。拉取只会恢复文件，不会运行设置。当共享更改更新工具、服务、模板源或 `bootstrap` 任务时，请运行 `mise bootstrap` 应用该配置、渲染模板并运行任务。在完整 bootstrap 运行前，`mise dot status` 会持续提醒你。
 
 ## 设置另一台机器
 
@@ -144,8 +144,66 @@ mise bootstrap --adopt you/setup
 
 确认前请检查建议的文件。Bootstrap 会恢复已跟踪的文件，并应用已保存的 mise 配置，包括监视器服务。如果历史记录中缺少配置或必需的模板源，bootstrap 会报告你需要在第一台机器上跟踪并共享哪些文件。
 
-如果现有文件不同，请按照报告的冲突说明操作，然后才能继续设置。在此机器上启用自动共享并检查其状态：
+将文件无法覆盖的设置步骤（例如安装 shell 插件或修复权限）放在共享配置的 tasks.bootstrap 中：
 
+~~~toml
+[tasks.bootstrap]
+run = "install -d -m 700 ~/.ssh"
+~~~
+
+采用时会在文件恢复后运行一次该任务；之后每次 mise bootstrap 也会再次运行，因此请确保它可以安全重复。[history.reload] 不能替代它：mise 会在恢复文件前读取 reload 命令，因此随采用一起到达的配置表不会被执行。
+
+任何 Git 主机都可以使用。OWNER/REPO 是 GitHub 的简写，其他主机请传入完整 URL：
+
+~~~sh
+mise bootstrap --adopt git@gitea.example.com:you/setup.git
+~~~
+
+URL 不得嵌入凭据。请使用 SSH agent，或为 HTTPS 使用 Git credential helper。
+
+### 机器已经存在这些文件时
+
+第二台机器通常已经有 ~/.bashrc 或 ~/.config/mise/config.toml。mise 从不覆盖它们。与仓库匹配的文件会静默接受；每个有差异的文件都会等待决定，并暂停采用：
+
+~~~
+the setup from <url> is paused; nothing was bootstrapped.
+~~~
+
+这是采用流程的预期行为，不代表失败。请先列出等待处理的内容，然后接收仓库中的所有版本：
+
+~~~sh
+mise dot status
+mise dot pull --take-remote-all
+~~~
+
+--take-remote-all 会先保存将被替换的版本，因此 mise dot undo 可以撤销整个拉取。最后一个路径决定后，同一次 pull 会写入其余受跟踪文件。随后运行 mise bootstrap，完成点文件以外的部分，例如工具和服务。
+
+如果想逐个决定路径，请指定路径：
+
+~~~sh
+mise dot pull --take-remote ~/.bashrc
+~~~
+
+若要保留此机器的文件版本，请先保存它。--keep-local 会通过发布此机器保存的版本来解决冲突；新机器还没有可保存的版本：
+
+~~~sh
+mise dot save ~/.bashrc
+mise dot pull --keep-local ~/.bashrc
+~~~
+
+--keep-local 也可以指定整批选择中的例外。下面的命令会接收除 ~/.bashrc 外的所有仓库版本：
+
+~~~sh
+mise dot pull --take-remote-all --keep-local ~/.bashrc
+~~~
+
+::: tip
+在采用前将冲突文件移开，可以完全避免这些决定：不存在的路径会直接写入。
+:::
+
+--replace-history 是另一项功能，不能解决这里的问题：它会在采用设置仓库时丢弃无关的本地历史，而现有的差异文件仍会暂停操作。--force-dotfiles 也无关；它适用于 [dotfiles] 的 link 和 copy 目标，而不是共享历史。
+
+在此机器上启用自动共享并检查其状态：
 ```sh
 mise settings set history.sync sync
 mise dot status

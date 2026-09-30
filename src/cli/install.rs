@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::cli::args::ToolArg;
-use crate::config::Config;
+use crate::args::ToolArg;
 use crate::config::Settings;
+use crate::config::{Config, SettingsExt};
 use crate::errors::split_install_result;
 use crate::hooks::Hooks;
 use crate::install_before::resolve_cli_minimum_release_age;
@@ -124,7 +124,9 @@ pub(crate) struct Install {
     /// Install tool(s) to the system-wide shared directory
     ///
     /// Installs to /usr/local/share/mise/installs (or MISE_SYSTEM_DATA_DIR/installs).
-    /// May require elevated permissions (e.g. sudo).
+    /// On Unix, binary-download backends invoke sudo to publish into protected
+    /// system directories unless system_packages.sudo is disabled. Run mise as
+    /// your user, without sudo.
     #[usage(long, verbatim_doc_comment, conflicts = "shared")]
     system: bool,
 
@@ -160,6 +162,7 @@ impl Install {
             crate::lockfile::migrate_monorepo_lockfiles(&config, false)?;
         }
         let task_requests = self.collect_task_tool_requests(&config).await?;
+        crate::plugins::warn_plugin_drift(&config);
         match &self.tool {
             Some(runtime) => {
                 let original_tool_args = env::TOOL_ARGS.read().unwrap().clone();
@@ -198,7 +201,11 @@ impl Install {
         let Ok(config) = Config::get().await else {
             return;
         };
-        let mgrs = crate::system::packages_from_config(&config);
+        // a contradictory declaration is reported by the commands that act
+        // on packages; a passing hint stays quiet about it
+        let Ok(mgrs) = crate::system::packages_from_config(&config) else {
+            return;
+        };
         if mgrs.is_empty() {
             return;
         }
@@ -240,7 +247,11 @@ impl Install {
             if !available.contains(mp.manager.name()) {
                 continue;
             }
-            match mp.manager.installed(&mp.requests).await {
+            match mp
+                .manager
+                .installed_with_options(&mp.requests, &mp.options)
+                .await
+            {
                 Ok(statuses) => {
                     missing += statuses
                         .iter()
@@ -284,6 +295,7 @@ impl Install {
         let mut install_config = self
             .effective_config(&config, monorepo_union.as_ref())
             .await?;
+        crate::lockfile::warn_outdated_lockfiles(&install_config);
         let base_trs = match &monorepo_union {
             Some(union) => union.tool_request_set.clone(),
             None => config.get_tool_request_set().await?.clone(),
@@ -373,8 +385,11 @@ impl Install {
         // Tools that actually installed successfully. `versions` is mutated
         // below (retained to current versions for the lockfile/shim rebuild),
         // so capture the set now for the "installed but not activated" warning.
-        let installed_shorts: HashSet<String> =
-            versions.iter().map(|tv| tv.short().to_string()).collect();
+        let installed_shorts: HashSet<String> = versions
+            .iter()
+            .filter(|tv| tv.install_satisfied != Some(true))
+            .map(|tv| tv.short().to_string())
+            .collect();
         // In dry-run mode, check if any tools would be installed before filtering
         if self.is_dry_run() {
             if self.dry_run_code {
@@ -385,6 +400,8 @@ impl Install {
             }
             return install_error;
         }
+
+        versions.retain(|tv| tv.install_satisfied != Some(true));
 
         if install_error.is_ok() || !versions.is_empty() {
             // because we may be installing a tool that is not in config, we need to restore the original tool args and reset everything
@@ -400,7 +417,9 @@ impl Install {
                     Self::resolved_toolset_from_trs(&rebuild_config, base_trs.clone()).await?;
                 &ts_owned
             } else {
-                rebuild_config.get_toolset().await?
+                rebuild_config
+                    .get_toolset_with_opts(&ResolveOptions::without_lockfile_warnings())
+                    .await?
             };
             let current_versions = ts.list_current_versions();
             // Match the configured package and options, not graph identity: accepting
@@ -453,6 +472,12 @@ impl Install {
 
     fn install_opts(&self) -> Result<InstallOptions> {
         let install_dir = if self.system {
+            #[cfg(unix)]
+            if crate::system_install::under_sudo() {
+                warn!(
+                    "running mise with sudo can leave root-owned files in your home directory; run mise as your user and it will invoke sudo only to publish into the system directory"
+                );
+            }
             Some(Settings::get().system_installs_dir().to_path_buf())
         } else {
             self.shared.clone()
@@ -468,6 +493,7 @@ impl Install {
             resolve_options: ResolveOptions {
                 use_locked_version: true,
                 latest_versions: true,
+                latest_versions_for_all_requests: false,
                 resolve_rolling_channels: false,
                 prefer_exact_version: false,
                 before_date: self.get_before_date()?,
@@ -476,6 +502,7 @@ impl Install {
                 offline: false,
                 refresh_remote_versions: false,
                 inactive: false,
+                warn_not_in_lockfile: true,
             },
             dry_run: self.is_dry_run(),
             locked: Settings::get().locked,
@@ -556,6 +583,7 @@ impl Install {
         let mut install_config = self
             .effective_config(&config, monorepo_union.as_ref())
             .await?;
+        crate::lockfile::warn_outdated_lockfiles(&install_config);
 
         // Install plugins from [plugins] config section first
         // This must happen before checking for missing tools so env-only plugins get installed
@@ -605,7 +633,7 @@ impl Install {
                         tr.is_install_satisfied(&install_config),
                     )
                     .await;
-                    if satisfied {
+                    if satisfied && tr.options().postinstall().is_none_or(|(_, always)| !always) {
                         if let Some(reporter) = reporter {
                             reporter.finish_with_icon(
                                 "already installed".into(),
@@ -644,7 +672,9 @@ impl Install {
                         Self::resolved_toolset_from_trs(&install_config, trs.clone()).await?;
                     &ts_owned
                 } else {
-                    install_config.get_toolset().await?
+                    install_config
+                        .get_toolset_with_opts(&ResolveOptions::without_lockfile_warnings())
+                        .await?
                 };
                 hooks::run_one_hook_with_context(
                     &install_config,
@@ -673,11 +703,21 @@ impl Install {
             })
         };
         if self.is_dry_run() {
-            if self.dry_run_code && has_work {
+            if self.dry_run_code
+                && has_work
+                && versions.iter().any(|tv| tv.install_satisfied != Some(true))
+            {
                 return Err(exit::request(1));
             }
             return install_error;
         }
+
+        // An `always` postinstall on an existing tool is a successful request,
+        // but no installation needs a shim or lockfile rebuild.
+        let versions = versions
+            .into_iter()
+            .filter(|tv| tv.install_satisfied != Some(true))
+            .collect::<Vec<_>>();
         if install_error.is_ok() || !versions.is_empty() {
             measure!("rebuild_shims_and_runtime_symlinks", {
                 let rebuild_config = self.effective_config(&install_config, None).await?;
@@ -687,7 +727,9 @@ impl Install {
                         Self::resolved_toolset_from_trs(&rebuild_config, base_trs.clone()).await?;
                     &ts_owned
                 } else {
-                    rebuild_config.get_toolset().await?
+                    rebuild_config
+                        .get_toolset_with_opts(&ResolveOptions::without_lockfile_warnings())
+                        .await?
                 };
                 let current_versions = ts.list_current_versions();
                 let versions = versions
@@ -734,7 +776,8 @@ impl Install {
         trs: ToolRequestSet,
     ) -> Result<Toolset> {
         let mut ts: Toolset = trs.into();
-        ts.resolve(config).await?;
+        ts.resolve_with_opts(config, &ResolveOptions::without_lockfile_warnings())
+            .await?;
         Ok(ts)
     }
 }
@@ -785,7 +828,7 @@ fn extend_toolset(toolset: &mut Toolset, additional: &[ToolRequest]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::args::BackendArg;
+    use crate::args::BackendArg;
     use crate::toolset::parse_tool_options;
 
     fn request(version: &str, options: &str, source: ToolSource) -> ToolRequest {

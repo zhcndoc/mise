@@ -170,8 +170,9 @@ receipt unchanged. An external self-updater can still change the app between
 the lock check and replacement. Dry-run reports the decision without replacing
 the app.
 
-`mise bootstrap status` 会将这些条目标记为`已安装（自动更新）`。
-对于由 mise 管理的 cask，`Current` 列是 mise 收据中记录的版本；实时应用程序可能已经自行更新到不同版本。JSON 状态会保留稳定的 `"state": "installed"` 值，并添加 `"auto_updates": true`。
+从没有应用程序产物的 pkg 安装的自更新 cask（例如 `tailscale-app` 或 `karabiner-elements`）没有可供读取的 bundle。对于这些 cask，显式升级会从 cask 的 `pkgutil` 收据读取已安装的软件包版本；当某个收据早于 cask 版本，且没有当前或更新的收据时，才会执行升级。无法与 cask 版本比较的收据会被忽略；如果没有任何收据可比较，或 `pkgutil` 无法读取它们，则跳过升级。与应用程序 cask 一样，当这些收据安装的应用程序 bundle 正在运行时，也会跳过升级。
+
+`mise bootstrap status` 会将这些条目标记为`已安装（自动更新）`。对于由 mise 管理的 cask，`Current` 列是 mise 收据中记录的版本；实时应用程序可能已经自行更新到不同版本。JSON 状态会保留稳定的 `"state": "installed"` 值，并添加 `"auto_updates": true`。
 
 ### macOS 隐私与安全（TCC）
 
@@ -194,6 +195,8 @@ adopt = true
 [bootstrap.packages]
 "brew-cask:firefox" = { version = "latest", adopt = true }
 ```
+
+无论运行覆盖 `[bootstrap.packages]` 中的全部内容，还是显式指定 cask，接管都会生效。因此，使用 `mise bootstrap packages apply brew-cask:firefox` 一次迁移一个应用时，也会遵循相同的设置。
 
 每当替换现有 `.app` 时，mise 都会打印警告。当上游发布新的 cask 版本时，版本升级仍会替换应用程序包——请预期需要在这些升级后重新确认 TCC 提示，这与 Homebrew 的行为相同。
 
@@ -221,14 +224,20 @@ gains portable implementations for more cask artifact types.
 
 `brew-cask` currently supports app-bundle casks (`app` artifacts), binary and
 generated command-wrapper casks (`binary` and `command_wrapper` artifacts),
-generic prefix artifacts (`artifact`), font artifacts (`font`), simple macOS
+generic prefix artifacts (`artifact`), font artifacts (`font`), macOS
 installer packages (`pkg` artifacts), script-based cask installers, and shell completions
 (`bash_completion`, `fish_completion`, `zsh_completion`, and
 `generate_completions_from_executable`) from dmg and common archive formats.
 Binary artifacts and generated wrappers are staged in the Caskroom and linked
 into the Homebrew prefix, usually under `<prefix>/bin`. Package installers run
 through mise's normal system-package sudo path, so non-interactive runs never
-hang waiting for a password. Pkg casks must include `pkgutil` receipt IDs in
+hang waiting for a password. Pkg `choices`, such as deselecting a bundled
+updater, are passed to `installer -applyChoiceChangesXML` as Homebrew does.
+Script-based installers that declare `sudo: true`
+use the same path. mise expands `$HOMEBREW_PREFIX`, `$APPDIR`, and `$HOME` in installer
+script executables and arguments, and runs an executable declared under the
+cask's Caskroom version directory from the staged download. Installers that
+read `input` from stdin are not supported yet. Pkg casks must include `pkgutil` receipt IDs in
 their `uninstall` metadata so mise can verify installed state after the
 installer writes files outside the Caskroom. `zap` `pkgutil` IDs are treated as
 cleanup metadata, not install receipts. For casks with lifecycle hooks, mise
@@ -237,16 +246,21 @@ supported `preflight`/`postflight` hooks through its own Cask DSL shim, without
 delegating to Homebrew. mise also supports structured `preflight_steps` and
 `postflight_steps` for `move`/`remove` operations against `staged_path`,
 `set_permissions` operations that `chmod` existing `staged_path` or `appdir`
-paths with Homebrew's recursive default, `run` operations using Homebrew's
+paths with Homebrew's recursive default, `set_ownership` operations that
+`chown` existing paths through mise's sudo path (defaulting to the current user
+and the `staff` group, as Homebrew does), `run` operations using Homebrew's
 serialized command bases, arguments, environment, guards, and sudo setting, and
 `terminate_process` operations with Homebrew-compatible name/full matching,
-retries, notices, and failure policy.
+retries, notices, and failure policy. Manpage artifacts are intentionally not
+linked into the prefix. Metadata evaluation does not inspect extracted archive
+contents, so manpages dynamically enumerated from staged files declare no
+artifacts.
 Structured `copy` and `symlink` steps support Homebrew path bases, templates,
 guards, source globs, replacement, and sudo behavior. External paths created by
 lifecycle steps are recorded in the mise receipt and restored if the install
 transaction fails. A cask's formula and cask dependencies are installed first,
 and declared cask conflicts fail before anything is modified. Casks that
-require custom installer choices, services, unsupported hook DSL, unsupported
+require services, unsupported hook DSL, unsupported
 structured lifecycle steps, or other cask artifact types fail with a clear
 unsupported artifact error instead of delegating to Homebrew.
 
@@ -458,11 +472,11 @@ rather than miscompiling silently.
 
 - **Cask artifact coverage is intentionally narrow.** On macOS, `brew-cask`
   supports app bundles, binary artifacts, generated command wrappers, generic
-  prefix artifacts, font artifacts, simple pkg installers, script-based
+  prefix artifacts, font artifacts, pkg installers, script-based
   installers, and shell completions from dmg and common archive formats. On Linux, it supports
   font-only casks without lifecycle hooks or structured `preflight_steps` or
-  `postflight_steps`. Other artifact types, pkg installers without `pkgutil`
-  IDs, and pkg installers with custom choices fail explicitly.
+  `postflight_steps`. Other artifact types and pkg installers without
+  `pkgutil` IDs fail explicitly.
 - **`brew services` is not implemented.**
 - **Cask import is not implemented.** Cask prune is limited to mise-owned direct
   artifacts whose install-time receipt proves they can be removed safely. Pkg
@@ -474,7 +488,9 @@ rather than miscompiling silently.
   with a clear error naming the unsupported feature.
 - **Use canonical formula names.** `postgresql@17` is a formula name, not a
   mise version pin — the API's current stable version decides what gets
-  installed. Aliases (`postgres`) install correctly but `mise bootstrap packages status`
-  can't track them; mise warns and tells you the canonical name.
+  installed. Aliases (`postgres`) and old names of renamed formulae install
+  the canonical formula, as do dependencies declared by alias in third-party
+  taps, but `mise bootstrap packages status` can't track a requested alias;
+  mise warns and tells you the canonical name.
 - `PATH` is up to you: `<prefix>/bin` must be on `PATH` to use linked
   binaries, just like with Homebrew itself.

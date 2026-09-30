@@ -22,13 +22,14 @@ mise 中的后端插件使用专用的后端钩子，通过 `plugin:tool` 格式
 
 后端插件通常是一个 git 仓库，但也可以是一个目录（通过 `mise plugin link`）。
 
-后端插件使用 Lua 编写（当前版本为 5.1）。它们使用三个必需的后端方法，也可以选择性地公开其工具目录。每个方法都在自己的文件中实现：
+后端插件使用 Lua 编写（当前版本为 5.1）。它们使用三个必需的后端方法，也可以选择性地公开工具目录，或在卸载时执行清理。每个方法都在自己的文件中实现：
 
 - `hooks/backend_list_tools.lua` - 可选地列出可发现的工具
 - `hooks/backend_search_tools.lua` - 可选地搜索大型工具目录
 - `hooks/backend_list_versions.lua` - 列出工具的可用版本
 - `hooks/backend_install.lua` - 安装工具的特定版本
 - `hooks/backend_exec_env.lua` - 为工具设置环境变量
+- `hooks/backend_uninstall.lua` - 可选地在 mise 移除已安装版本前执行清理
 
 ## 后端方法
 
@@ -126,6 +127,45 @@ function PLUGIN:BackendExecEnv(ctx)
 end
 ```
 
+### BackendUninstall
+
+可选地执行仅删除安装目录无法完成的清理操作，例如运行供应商卸载程序，或删除安装目录之外创建的注册表项：
+
+```lua
+function PLUGIN:BackendUninstall(ctx)
+    local install_path = ctx.install_path
+
+    -- 撤销安装目录之外的更改
+    -- 安装目录仍然存在，因此可以读取其中安装的文件
+
+    return {}
+end
+```
+
+每当 mise 移除已安装的版本时都会调用此钩子，包括 `mise uninstall`、`mise upgrade`、`mise prune` 和延迟移除旧版本。使用 `--dry-run` 时不会运行它。如果钩子抛出错误，mise 会停止并保留安装目录，以便重试卸载。
+
+`ctx.options` 来自当前配置。当工具不再配置时（例如运行 `mise prune` 期间），它只包含默认值。请在 `BackendInstall` 中将卸载程序需要的内容保存到 `install_path`，不要依赖 `ctx.options`。
+
+## 创建后端插件
+### BackendUninstall
+
+可选地执行仅删除安装目录无法完成的清理操作，例如运行供应商卸载程序，或删除安装目录之外创建的注册表项：
+
+```lua
+function PLUGIN:BackendUninstall(ctx)
+    local install_path = ctx.install_path
+
+    -- 撤销安装目录之外的更改
+    -- 安装目录仍然存在，因此可以读取其中安装的文件
+
+    return {}
+end
+```
+
+每当 mise 移除已安装的版本时都会调用此钩子，包括 `mise uninstall`、`mise upgrade`、`mise prune` 和延迟移除旧版本。使用 `--dry-run` 时不会运行它。如果钩子抛出错误，mise 会停止并保留安装目录，以便重试卸载。
+
+`ctx.options` 来自当前配置。当工具不再配置时（例如运行 `mise prune` 期间），它只包含默认值。请在 `BackendInstall` 中将卸载程序需要的内容保存到 `install_path`，不要依赖 `ctx.options`。
+
 ## 创建后端插件
 
 ### 使用模板仓库
@@ -163,6 +203,7 @@ my-backend-plugin/
 │   ├── backend_list_versions.lua   # BackendListVersions hook
 │   ├── backend_install.lua         # BackendInstall hook
 │   ├── backend_exec_env.lua        # BackendExecEnv hook
+│   ├── backend_uninstall.lua       # Optional cleanup before removal
 │   ├── backend_list_tools.lua      # Optional finite tool catalog
 │   └── backend_search_tools.lua    # Optional query-driven tool search
 
@@ -304,6 +345,16 @@ mise exec -- prettier --help
 | `ctx.install_path`  | 安装目录           | `"/home/user/.local/share/mise/installs/vfox-npm-prettier/3.0.0"` |
 | `ctx.download_path` | 下载目录           | `"/home/user/.local/share/mise/downloads/vfox-npm-prettier/3.0.0"` |
 | `ctx.options`       | 来自 mise.toml 的工具选项 | `{exe = "rg"}`                                                    |
+
+### BackendUninstall 上下文
+
+| 变量               | 描述                 | 示例                                                               |
+| ------------------ | -------------------- | ------------------------------------------------------------------ |
+| `ctx.tool`          | 工具名称             | `"prettier"`                                                      |
+| `ctx.version`       | 已安装的版本         | `"3.0.0"`                                                         |
+| `ctx.install_path`  | 安装目录             | `"/home/user/.local/share/mise/installs/vfox-npm-prettier/3.0.0"`  |
+| `ctx.download_path` | 下载目录             | `"/home/user/.local/share/mise/downloads/vfox-npm-prettier/3.0.0"` |
+| `ctx.options`       | 当前配置中的工具选项 | `{exe = "rg"}`                                                     |
 
 ### BackendExecEnv 上下文
 

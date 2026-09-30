@@ -64,6 +64,22 @@ With this structure, tasks are automatically namespaced:
 - `//projects/backend:build`
 - `//projects/backend:test`
 
+### 项目路径的短名称
+
+使用 `[monorepo.path_aliases]` 为配置根设置更短的路径名称：
+
+~~~toml
+monorepo_root = true
+
+[monorepo]
+config_roots = ["foo/bar/baz/abc/123"]
+
+[monorepo.path_aliases]
+"123" = "foo/bar/baz/abc/123"
+~~~
+
+之后，`mise run //123:build` 会运行 `//foo/bar/baz/abc/123:build`。该别名适用于该根中的所有任务，包括 `//123:*` 等任务模式。完整路径仍然是任务的规范名称，也继续有效。别名必须是单个路径段，并且必须指向 `[monorepo].config_roots` 中的根。它不能包含 `...` 通配符，也不能与现有配置根路径（包括 glob 选择的路径）重叠。
+
 ## 任务路径语法
 
 Monorepo tasks use special path syntax with `//` and `:` prefixes. You can run these tasks directly with `mise` or with `mise run`. For non-monorepo tasks, the guidance is to avoid the direct syntax in scripts because a task name could conflict with a future core mise command. mise will never define commands with a `//` or `:` prefix, however, so this guidance does not apply to monorepo tasks.

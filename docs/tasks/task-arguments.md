@@ -467,8 +467,79 @@ fi
 '''
 ```
 
-## Bash 变量展开用于 Usage 变量 {#bash-variable-expansion}
+## 在任务之间共享标志 {#shared-flags}
 
+在 .usage.kdl 文件中定义一次共享标志，使任务之间的名称、帮助文本和验证保持一致。include 会加载文件，use 会将命名的 flagset 添加到任务参数中。
+
+例如，在项目根目录保存以下 flagset：
+
+~~~kdl [shared.usage.kdl]
+flagset "common" {
+  flag "--env <env>" help="Target environment" {
+    arg "<env>" {
+      choices "dev" "staging" "prod"
+    }
+  }
+  flag "--dry-run" help="Print what would happen"
+}
+~~~
+
+### 在任务中引入共享标志
+
+在文件任务中，从 #USAGE 注释引入该文件。使用 $MISE_CONFIG_ROOT 将其相对于任务配置根定位：
+
+~~~bash [mise-tasks/deploy]
+#!/usr/bin/env bash
+#USAGE include file="$MISE_CONFIG_ROOT/shared.usage.kdl"
+#USAGE use "common"
+#USAGE flag "--replicas <n>" help="How many to run"
+echo "env=$usage_env replicas=$usage_replicas"
+~~~
+
+对于 TOML 任务，请改用 <span v-pre>{{ config_root }}</span> 模板变量构造 include 路径：
+
+~~~toml [mise.toml]
+[tasks.deploy]
+usage = """
+include file="{{ config_root }}/shared.usage.kdl"
+use "common"
+flag "--replicas <n>" help="How many to run"
+"""
+run = 'echo "env=$usage_env replicas=$usage_replicas"'
+~~~
+
+两种任务定义方式都接受 --env、--dry-run 和 --replicas，并拒绝 --env 之外的值：
+
+~~~shell
+mise run deploy --env staging --replicas 3
+mise run deploy --help
+~~~
+
+共享标志会在 use 节点所在位置出现在 --help 中。引入标志定义了任务接口，任务脚本仍必须实现其行为。这些示例只会打印选中的环境和副本数量。
+
+### 文件任务中的 Include 路径
+
+相对路径相对于任务文件所在目录解析，与运行 mise 的目录无关。对于 mise-tasks/deploy，下面的写法会从项目根目录引入 shared.usage.kdl：
+
+~~~bash
+#USAGE include file="../shared.usage.kdl"
+~~~
+
+Include 路径也支持 $NAME 和 \${NAME} 形式的环境变量引用，并使用 $$ 表示字面美元符号。mise 在解析文件任务的 usage 规格时提供以下变量：
+
+- 启动 mise 时继承的变量。
+- 当对应根可用时的 MISE_CONFIG_ROOT 和 MISE_PROJECT_ROOT。
+- 任务目录和文件路径的 MISE_TASK_DIR 和 MISE_TASK_FILE。
+
+这些路径在执行、帮助、任务列表和验证中保持一致。文件任务的 #USAGE 注释不会作为 Tera 模板渲染：例如应使用 $MISE_CONFIG_ROOT，而不是 <span v-pre>{{ config_root }}</span>。
+
+::: warning Include 变量必须在任务运行前可用
+任务和项目的 env 指令会在 usage 解析后应用，因此不能为 include 路径提供变量。如果 include 引用了未定义变量，mise 会报告 usage 规格无效；任务仍可加载，但其 usage 定义的参数解析、帮助和验证不可用。
+:::
+
+要在同一项目的任务之间共享工具、环境变量或依赖项，请参阅[任务模板](/tasks/templates)。
+
+## Bash 变量展开用于 Usage 变量 {#bash-variable-expansion}
 在 bash 脚本中访问 usage 定义的变量时，请使用参数展开语法，以帮助 [shellcheck](https://www.shellcheck.net/) 理解这些变量，并为布尔标志提供默认值。
 
 ### 常见模式

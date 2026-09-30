@@ -13,12 +13,15 @@ description: "搜索可用工具"
 
 在 registry 和已安装的 backend catalogs 中搜索与 NAME 匹配的工具
 
+为 NAME 加上后端前缀，也可以搜索该后端的软件包注册表：`npm:`、`cargo:`、`gem:` 或 `dotnet:`。使用 `--all` 搜索所有后端，包括这些软件包注册表；否则，不带前缀的搜索不会查询软件包注册表。
+
 默认情况下，它将显示所有与搜索词模糊匹配的工具。对于非模糊匹配，请使用 `--match-type` 标志。
 
 ## 参数
 - **`[NAME]`** — 要搜索的工具
 
 ## Flags
+- **`-a --all`** — 搜索所有后端：注册表、aqua、已安装的后端插件，以及 npm、cargo、gem 和 dotnet 软件包注册表
 - **`-i --interactive`** — 显示交互式搜索菜单
 - **`-m --match-type <MATCH_TYPE>`** — 匹配类型：equal、contains 或 fuzzy
 
@@ -37,6 +40,12 @@ jq    Command-line JSON processor. https://github.com/jqlang/jq
 jqp   A TUI playground to experiment with jq. https://github.com/noahgorstein/jqp
 jiq   jid on jq - interactive JSON query tool using jq expressions. https://github.com/fiatjaf/jiq
 gojq  Pure Go implementation of jq. https://github.com/itchyny/gojq
+```
+
+```
+mise search --match-type equal npm:typescript-language-server
+Tool                            Description
+npm:typescript-language-server  Language Server Protocol (LSP) implementation for TypeScript using tsserver
 ```
 
 ```

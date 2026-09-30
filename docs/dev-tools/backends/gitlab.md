@@ -129,6 +129,8 @@ mise token gitlab gitlab.mycompany.com
 
 ## 工具选项
 
+特定平台的下载 URL 支持与 [GitHub 后端](/dev-tools/backends/github.html#platform-specific-urls)相同的版本模板。
+
 以下 [tool-options](/dev-tools/#tool-options) 适用于 `gitlab` 后端——这些选项应放在 `mise.toml` 中的 `[tools]` 里。
 
 ### 资产自动检测

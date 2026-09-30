@@ -1,14 +1,15 @@
 use std::path::PathBuf;
-use std::process::ExitStatus;
 
-use crate::cli::args::BackendArg;
+use crate::args::BackendArg;
 use crate::file::display_path;
 use crate::toolset::{ToolRequest, ToolSource, ToolVersion};
 use eyre::Report;
 use thiserror::Error;
 
+pub(crate) use mise_util::errors::ProcessError;
+
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     UnsupportedTarget(String),
     #[error("[{ts}] {tr}: {source:#}")]
@@ -22,14 +23,16 @@ pub(crate) enum Error {
         backend: Box<BackendArg>,
         version: String,
     },
+    #[error("{tool}@{version} is not in the lockfile\nhint: {hint}")]
+    NotInLockfile {
+        tool: String,
+        version: String,
+        hint: String,
+    },
     #[error("[{0}] plugin not installed")]
     PluginNotInstalled(String),
     #[error("{0}@{1} not installed")]
     VersionNotInstalled(Box<BackendArg>, String),
-    #[error("{} exited with non-zero status: {}", .0, render_exit_status(.1))]
-    ScriptFailed(String, Option<ExitStatus>),
-    #[error("task interrupted before process start")]
-    TaskInterrupted,
     #[error(
         "Config files in {} are not trusted.\nTrust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.",
         display_path(.0)
@@ -42,23 +45,18 @@ pub(crate) enum Error {
     },
 }
 
-fn render_exit_status(exit_status: &Option<ExitStatus>) -> String {
-    if let Some(code) = exit_status.and_then(|s| s.code()) {
-        return format!("exit code {code}");
-    }
-    // No code means the process was signalled, and the signal is right there.
-    // Reporting "no exit status" threw it away and left nothing to act on.
-    #[cfg(unix)]
-    if let Some(signal) = exit_status.and_then(|s| {
-        use std::os::unix::process::ExitStatusExt;
-        s.signal()
-    }) {
-        return match nix::sys::signal::Signal::try_from(signal) {
-            Ok(signal) => format!("killed by {signal}"),
-            Err(_) => format!("killed by signal {signal}"),
-        };
-    }
-    "no exit status".into()
+/// When the version list could not be fetched, the version being installed
+/// was never checked against it, so the install error alone can mislead.
+fn version_listing_hint(tr: &ToolRequest) -> String {
+    crate::backend::version_listing_failure(tr.ba())
+        .map(|cause| {
+            format!(
+                "\nnote: {}@{} was not checked against its version list, which could not be fetched: {cause}",
+                tr.ba().full(),
+                tr.version()
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> String {
@@ -73,10 +71,11 @@ fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> St
         // Show the underlying error with the tool context
         // Use {:#} to show full error chain (includes wrapped errors)
         return format!(
-            "Failed to install {}@{}: {:#}",
+            "Failed to install {}@{}: {:#}{}",
             tr.ba().full(),
             tr.version(),
-            error
+            error,
+            version_listing_hint(tr)
         );
     }
 
@@ -84,7 +83,12 @@ fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> St
     // Sort by tool name for deterministic output (parallel installs complete in arbitrary order)
     let mut sorted_failures: Vec<_> = failed_installations
         .iter()
-        .map(|(tr, err)| (format!("{}@{}", tr.ba().full(), tr.version()), err))
+        .map(|(tr, err)| {
+            (
+                format!("{}@{}", tr.ba().full(), tr.version()),
+                format!("{err:#}{}", version_listing_hint(tr)),
+            )
+        })
         .collect();
     sorted_failures.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -102,14 +106,14 @@ fn format_install_failures(failed_installations: &[(ToolRequest, Report)]) -> St
     // Show detailed errors for each failure (in sorted order)
     // Use {:#} to show full error chain (includes wrapped errors)
     for (name, error) in sorted_failures.iter() {
-        output.push(format!("\n{}: {:#}", name, error));
+        output.push(format!("\n{name}: {error}"));
     }
 
     output.join("\n")
 }
 
 /// Split an install result into successful versions and a result preserving any error.
-pub(crate) fn split_install_result(
+pub fn split_install_result(
     result: Result<Vec<ToolVersion>, Report>,
 ) -> (Vec<ToolVersion>, Result<(), Report>) {
     match result {
@@ -128,34 +132,21 @@ pub(crate) fn split_install_result(
 }
 
 impl Error {
-    pub(crate) fn get_exit_status(err: &Report) -> Option<i32> {
-        if let Some(Error::ScriptFailed(_, Some(status))) = err.downcast_ref::<Error>() {
-            status.code()
-        } else {
-            None
-        }
+    pub fn get_exit_status(err: &Report) -> Option<i32> {
+        ProcessError::get_exit_status(err)
     }
 
-    #[cfg(unix)]
-    pub(crate) fn is_sigint(err: &Report) -> bool {
-        use std::os::unix::process::ExitStatusExt;
-
-        err.downcast_ref::<Error>().is_some_and(|err| {
-            matches!(
-                err,
-                Error::ScriptFailed(_, Some(status))
-                    if status.signal() == Some(nix::sys::signal::SIGINT as i32)
-            )
-        })
+    /// See [`ProcessError::is_killed_by_signal`].
+    pub fn is_killed_by_signal(err: &Report) -> bool {
+        ProcessError::is_killed_by_signal(err)
     }
 
-    #[cfg(not(unix))]
-    pub(crate) fn is_sigint(_err: &Report) -> bool {
-        false
+    pub fn is_sigint(err: &Report) -> bool {
+        ProcessError::is_sigint(err)
     }
 
-    pub(crate) fn is_task_interrupted_before_start(err: &Report) -> bool {
-        matches!(err.downcast_ref::<Error>(), Some(Error::TaskInterrupted))
+    pub fn is_task_interrupted_before_start(err: &Report) -> bool {
+        ProcessError::is_task_interrupted_before_start(err)
     }
 
     pub(crate) fn is_argument_err(err: &Report) -> bool {
@@ -180,50 +171,30 @@ impl Error {
             )
         })
     }
+
+    pub(crate) fn is_not_in_lockfile(err: &Report) -> bool {
+        err.chain().any(|source| {
+            matches!(
+                source.downcast_ref::<Error>(),
+                Some(Error::NotInLockfile { .. })
+            )
+        })
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::process::ExitStatusExt;
 
     #[test]
-    fn detects_sigint_script_failure() {
-        let status = ExitStatus::from_raw(nix::sys::signal::SIGINT as i32);
-        let err = Report::new(Error::ScriptFailed("sh".into(), Some(status)));
+    fn detects_not_in_lockfile() {
+        let err = Report::new(Error::NotInLockfile {
+            tool: "usage".into(),
+            version: "latest".into(),
+            hint: "Run `mise install` without --locked to update the lockfile".into(),
+        });
 
-        assert!(Error::is_sigint(&err));
-    }
-
-    #[test]
-    fn does_not_treat_exit_code_as_sigint() {
-        let status = ExitStatus::from_raw(2 << 8);
-        let err = Report::new(Error::ScriptFailed("sh".into(), Some(status)));
-
-        assert!(!Error::is_sigint(&err));
-    }
-
-    #[test]
-    fn renders_the_signal_that_killed_the_process() {
-        // "no exit status" threw away the one fact that explains the failure.
-        let status = ExitStatus::from_raw(nix::sys::signal::SIGINT as i32);
-        assert_eq!(render_exit_status(&Some(status)), "killed by SIGINT");
-
-        let status = ExitStatus::from_raw(nix::sys::signal::SIGTERM as i32);
-        assert_eq!(render_exit_status(&Some(status)), "killed by SIGTERM");
-    }
-
-    #[test]
-    fn renders_an_exit_code_unchanged() {
-        let status = ExitStatus::from_raw(2 << 8);
-        assert_eq!(render_exit_status(&Some(status)), "exit code 2");
-        assert_eq!(render_exit_status(&None), "no exit status");
-    }
-
-    #[test]
-    fn detects_interruption_before_process_start() {
-        let err = Report::new(Error::TaskInterrupted);
-
-        assert!(Error::is_task_interrupted_before_start(&err));
+        assert!(Error::is_not_in_lockfile(&err));
+        assert!(!Error::is_required_channel_resolution_err(&err));
     }
 }

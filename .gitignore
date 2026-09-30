@@ -33,7 +33,13 @@ megalinter-reports/
 
 .vscode/
 testResults.xml
-.mise/
+.mise/*
+# mise lock writes npm dependency graphs here; mise.lock references them.
+!.mise/locks/
 comment.md
 
 .claude/settings.local.json
+
+# showreel capture runs (mise run docs:showreel-capture)
+/docs/.vitepress/showreel-capture/out/
+/docs/.vitepress/showreel-capture/__pycache__/

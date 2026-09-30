@@ -1,15 +1,16 @@
 ---
-description: "使用下方播放器聆听 mise 主题曲，或下载 MP3。"
+description: "观看 mise 主题曲视频，阅读歌词，或下载 1080p、4K 视频和 MP3。"
 ---
 
 # mise-en-place：歌曲
 
-使用下方播放器聆听 mise 主题曲，或[下载 MP3](/mise-en-place.mp3)。
-[歌词](#lyrics)也以文本形式提供。有关设置说明，请从[入门](/getting-started.html)开始。
+mise 主题曲也提供音乐视频。播放器提供字幕；你也可以下载 [1080p](https://mise.jdx.dev/mise-run.mp4) 或 [4K（HEVC）](https://mise.jdx.dev/mise-run-4k.mp4) 视频（均为 120 fps），或[下载 MP3](/mise-run.mp3)。[歌词](#lyrics)也以文本形式提供。有关设置说明，请从[入门](/getting-started.html)开始。
 
-<audio controls preload="metadata" src="/mise-en-place.mp3">
-  <a href="/mise-en-place.mp3">下载 MP3</a>
-</audio>
+<video controls preload="metadata" playsinline poster="/mise-run.jpg" width="1920" height="1080" style="width: 100%; height: auto; border-radius: 8px;">
+  <source src="https://mise.jdx.dev/mise-run.mp4" type="video/mp4">
+  <track kind="captions" src="/mise-run.en.vtt" srclang="en" label="English">
+  <a href="https://mise.jdx.dev/mise-run.mp4">下载 MP4</a>
+</video>
 
 ## 歌词
 

@@ -1,4 +1,4 @@
-use crate::config::{Config, Settings};
+use crate::config::{Config, Settings, SettingsExt};
 use crate::errors::Error::PluginNotInstalled;
 use crate::git::Git;
 use crate::http::HTTP;
@@ -41,7 +41,7 @@ pub(crate) struct MiseEnvResponse {
 use xx::regex;
 
 #[derive(Debug)]
-pub(crate) struct VfoxPlugin {
+pub struct VfoxPlugin {
     pub name: String,
     pub full: Option<String>,
     pub plugin_path: PathBuf,
@@ -148,6 +148,28 @@ impl VfoxPlugin {
         vfox.download_dir = dirs::DOWNLOADS.to_path_buf();
         vfox.install_dir = dirs::INSTALLS.to_path_buf();
         vfox.default_inline_shell = Some(settings.default_inline_shell()?);
+        // `raw` is the documented opt-in for connecting stdio to children. Without
+        // it, hook children get `/dev/null` on stdin: installs run in parallel, so
+        // an inherited stdin would be shared by racing siblings. (#13254)
+        vfox.raw_stdio = settings.raw;
+        // `cmd.stream` runs a child that owns the terminal: pause the progress
+        // renderer and take the exclusive side of the lock `--raw` uses, both for
+        // the child's whole lifetime, so nothing else writes to the terminal or
+        // reads stdin while it runs. Mirrors `crate::system::sudo`. `os.execute`
+        // takes the shared side, which keeps its streamed output from landing on
+        // top of an exclusive child. (#13254)
+        vfox.terminal_lock = Some(Arc::new(|exclusive, body| {
+            if exclusive {
+                let _progress_pause =
+                    crate::ui::multi_progress_report::MultiProgressReport::try_get()
+                        .map(|report| report.pause_progress());
+                let _write_lock = crate::cmd::raw_write_lock_blocking();
+                body()
+            } else {
+                let _read_lock = crate::cmd::raw_read_lock_blocking();
+                body()
+            }
+        }));
         // Resolve the GitHub token lazily — only when a Lua plugin actually
         // makes an HTTP request to a GitHub API URL. This avoids spawning
         // `github.credential_command` (or hitting other token sources) for

@@ -30,6 +30,9 @@ pub(super) fn execute_flight_steps_recording(
     journal: &mut CaskTransactionJournal<'_>,
     targets: &mut FlightTargetTransaction,
 ) -> Result<()> {
+    // CaskManager is Copy, so capture it by value rather than borrowing `cask`
+    // again inside the closure.
+    let manager = cask.manager;
     execute_flight_steps_with_completion(
         cask,
         steps,
@@ -37,7 +40,13 @@ pub(super) fn execute_flight_steps_recording(
         appdir,
         kind,
         targets,
-        |index, step| record_cask_action(journal, &format!("{kind}[{index}]:{}", step.kind())),
+        |index, step| {
+            record_cask_action(
+                manager,
+                journal,
+                &format!("{kind}[{index}]:{}", step.kind()),
+            )
+        },
     )
 }
 
@@ -571,20 +580,6 @@ impl Drop for FlightTargetTransaction {
     }
 }
 
-impl FlightStep {
-    pub(super) fn kind(&self) -> &'static str {
-        match self {
-            Self::Move { .. } => "move",
-            Self::Remove { .. } => "remove",
-            Self::SetPermissions { .. } => "set_permissions",
-            Self::Copy { .. } => "copy",
-            Self::Symlink { .. } => "symlink",
-            Self::Run { .. } => "run",
-            Self::TerminateProcess { .. } => "terminate_process",
-        }
-    }
-}
-
 pub(super) fn execute_flight_step(
     cask: &Cask,
     step: &FlightStep,
@@ -671,6 +666,40 @@ pub(super) fn execute_flight_step(
                 runner = runner.arg(path);
             }
             runner.raw(true).execute()?;
+        }
+        FlightStep::SetOwnership {
+            paths,
+            user,
+            group,
+            recursive,
+        } => {
+            // Like Homebrew, chown the paths that exist with sudo and skip the
+            // rest. As with Ruby's `exist?` and set_permissions, a path that
+            // cannot be inspected counts as missing. Homebrew does not reverse
+            // this on failure, so nothing is recorded for rollback.
+            let mut existing = Vec::new();
+            for path in paths {
+                for path in ownership_flight_paths(cask, path, staged_path, appdir)? {
+                    if path.exists() {
+                        existing.push(path);
+                    }
+                }
+            }
+            if existing.is_empty() {
+                return Ok(());
+            }
+            // Homebrew's default is the current user. Under `sudo mise` that is
+            // the invoking user, not root, as for the Homebrew prefix.
+            let user = match user {
+                Some(user) => user.clone(),
+                None => prefix::prefix_owner()
+                    .ok_or_else(|| eyre!("brew-cask: could not determine current user"))?,
+            };
+            sudo::run(
+                "chown",
+                &set_ownership_args(&existing, &user, group, *recursive),
+                &[],
+            )?;
         }
         FlightStep::Copy {
             source,
@@ -867,8 +896,8 @@ pub(super) fn execute_flight_step(
             };
             if let Err(err) = result {
                 let exited = matches!(
-                    err.downcast_ref::<crate::errors::Error>(),
-                    Some(crate::errors::Error::ScriptFailed(_, Some(status)))
+                    err.downcast_ref::<crate::errors::ProcessError>(),
+                    Some(crate::errors::ProcessError::ScriptFailed(_, Some(status), _))
                         if status.code().is_some()
                 );
                 if *must_succeed || !exited {
@@ -1084,6 +1113,44 @@ pub(super) fn permissions_flight_paths(
     }
 }
 
+/// `set_ownership` accepts every path shape Homebrew serializes for it:
+/// staged paths and globs, appdir and prefix paths, and absolute or `~` paths.
+pub(super) fn ownership_flight_paths(
+    cask: &Cask,
+    path: &FlightPath,
+    staged_path: &Path,
+    appdir: &Path,
+) -> Result<Vec<PathBuf>> {
+    if path.base == FlightPathBase::StagedPath {
+        return permissions_flight_paths(cask, path, staged_path, appdir);
+    }
+    let resolved = resolve_flight_path_with_context(cask, path, staged_path, appdir)?;
+    if !resolved.is_absolute() {
+        bail!(
+            "brew-cask:{}: set_ownership path '{}' is not absolute",
+            cask.token,
+            resolved.display()
+        );
+    }
+    Ok(vec![resolved])
+}
+
+pub(super) fn set_ownership_args(
+    paths: &[PathBuf],
+    user: &str,
+    group: &str,
+    recursive: bool,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if recursive {
+        args.push("-R".to_string());
+    }
+    args.push("--".to_string());
+    args.push(format!("{user}:{group}"));
+    args.extend(paths.iter().map(|path| path.display().to_string()));
+    args
+}
+
 pub(super) fn expand_staged_glob(staged_path: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     let mut matches = Vec::new();
     let escaped_root = glob::Pattern::escape(staged_path.to_string_lossy().as_ref());
@@ -1115,11 +1182,6 @@ pub(super) fn expand_staged_glob(staged_path: &Path, pattern: &str) -> Result<Ve
     matches.sort();
     matches.dedup();
     Ok(matches)
-}
-
-pub(super) fn is_flight_glob(path: &str) -> bool {
-    path.chars()
-        .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 pub(super) fn resolve_flight_path(staged_path: &Path, path: &FlightPath) -> Result<PathBuf> {
@@ -1162,7 +1224,7 @@ pub(super) fn expand_flight_template(
     staged_path: &Path,
     appdir: &Path,
 ) -> String {
-    let caskroom_path = caskroom_token_dir(&cask.token);
+    let caskroom_path = caskroom_token_dir(cask.manager, &cask.token);
     let version_major = cask
         .version
         .split(['.', ','])
@@ -1195,21 +1257,6 @@ pub(super) fn expand_cask_template(
         value = crate::dirs::HOME.join(rest).to_string_lossy().to_string();
     }
     value
-}
-
-pub(super) fn validate_flight_relative_path(path: &str) -> Result<()> {
-    let path = Path::new(path);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    {
-        bail!(
-            "brew-cask: invalid structured flight path '{}'",
-            path.display()
-        );
-    }
-    Ok(())
 }
 
 pub(super) fn expand_braces(pattern: &str) -> Vec<String> {

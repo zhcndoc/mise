@@ -25,7 +25,7 @@ mode = "0644"
 读取；`/etc/example.conf` 是其目标路径。对于包含凭据的文件模板，请使用
 `"0600"` 模式，并设置仅允许目标服务账户或 root 读取的所有权。
 
-文件内容可以来自 `source` 或内联的 `content`。相对源路径相对于声明它们的配置文件解析，以 `~/` 开头的源路径则相对于用户的主目录解析。现有文件必须准确声明一个内容源。目标必须是绝对路径，并且 mise 拒绝管理 `/` 本身。
+文件内容可以来自 `source` 或内联的 `content`。相对源路径相对于声明它们的配置文件解析，以 `~/` 开头的源路径则相对于用户的主目录解析。文件最多只能声明一个内容源；如果文件没有内容源，则只管理其[权限](#permissions-without-content)。目标必须是绝对路径或以 `~/` 开头（它会解析为用户的主目录），并且 mise 拒绝管理 `/` 本身。
 
 目录创建使用 `mkdir -p` 语义，因此会自动创建缺失的父目录。配置的所有权和模式应用于声明的目录；隐式创建的父目录使用操作系统默认值。当父目录需要特定的所有权或权限时，请单独声明它。
 
@@ -33,7 +33,48 @@ mode = "0644"
 
 设置 `template = true`，使用 mise 的模板引擎渲染文件内容。此设置是显式的，因此字面形式的 <span v-pre>`{{ ... }}`</span> 内容默认保持不变。模板可以使用已配置的 `vars`、声明配置所在的目录 <span v-pre>`{{ config_root }}`</span>，以及目标路径 <span v-pre>`{{ target }}`</span>。模板可以使用 <span v-pre>`{{ secret(name="logical_name") }}`</span> 获取已声明的 [bootstrap secret input](/bootstrap/secrets.html)。密钥值绝不会包含在计划、试运行描述、状态输出或特权辅助程序输出中。
 
+`template = true` 旁设置 `remove_empty = true`，可以在模板渲染为空或仅包含空白时移除目标。这让同一个声明可以根据 `vars` 或环境变量切换文件的启用状态：
+
+```toml
+[vars]
+proxy_host = "proxy.internal:3128"
+
+[bootstrap.files."/etc/apt/apt.conf.d/95proxy"]
+template = true
+remove_empty = true
+content = """
+{% if vars.proxy_host %}Acquire::http::Proxy "http://{{ vars.proxy_host }}";
+{% endif %}"""
+```
+
+设置 `proxy_host` 后，mise 会写入该文件。将其设为 `""` 后，下一次 apply 会移除 `/etc/apt/apt.conf.d/95proxy`；计划会将移除显示为 `absent (template rendered empty)`，并像其他移除一样触发 `notify` 服务。与 `state = "absent"` 一样，目标为目录时仍会拒绝操作。当模板所需的密钥不可用时，mise 无法判断模板是否为空，因此绝不会移除文件：status 会报告未检查，apply 则像其他模板一样失败。没有 `template = true` 的文件以及 `state = "absent"` 的文件不能使用 `remove_empty`。为便于验证，文件声明的状态仍为 present，因此其父目录必须允许创建 present 文件。
+
 mise 会在应用更改之前比较内容、类型、模式、所有者和组。写入操作会先在目标目录中使用临时文件，然后执行原子重命名。系统首先尝试以当前用户身份进行更改。如果文件系统因权限错误拒绝某项操作，mise 会重试该操作，并在一次特权批处理中继续执行其余有序更改。因此，用户可写的目标不需要 `sudo`。如果当前用户无法检查目标或搜索其某个父目录，mise 会在一次特权批处理中比较其元数据和内容。计划和文件内容会通过标准输入发送给范围严格限定的 mise 辅助程序，因此文件内容不会出现在进程参数或日志中。
+
+mise 如何解析文件路径取决于执行更改的用户。当前用户可以执行的更改会以该用户身份进行，父目录中的符号链接也会像它们打开的其他路径一样跟随，因此当 `~/.ssh` 是符号链接时，`~/.ssh/config` 仍然有效。以 root 身份执行的更改（例如声明了 `owner` 或 `group`，或写入用户无法修改的目录）会逐级解析父目录，然后相对于打开的目录检查、写入、重命名或移除文件。root 所有且其他用户不可写的目录中的符号链接会被跟随，macOS 上的 `/etc` 就是这种情况。其他符号链接父目录都会被拒绝，因为能够写入该目录的用户可能将 root 的更改重定向到 `/etc/shadow` 等文件。当 mise 自身以 root 身份运行时，每个文件都会以这种方式检查和更改。status 和 dry-run 会将此类文件报告为 `unknown`，并标出它跨越的符号链接；apply 也会因相同原因失败。请改为声明解析后的路径。
+
+## 无内容时管理权限
+
+省略 `source` 和 `content`，即可在由软件包、安装程序或用户等其他机制管理内容时，管理文件的模式、所有者或组：
+
+```toml
+[bootstrap.files."/etc/ssh/sshd_config"]
+mode = "0600"
+owner = "root"
+```
+
+至少声明 `mode`、`owner` 或 `group` 之一。只会比较和更改已声明的字段：未声明 `mode` 时保留现有模式，而不是重置为 `0644`。mise 会原地更改现有文件，因此其内容和 inode 不变，硬链接和打开的句柄仍指向它。更改所有者或组可能像 `chown` 一样清除 setuid 和 setgid 位；请声明 `mode` 以保留它们。
+
+这些条目绝不会创建、替换或移除文件：
+
+- 目标缺失时会显示警告并跳过，apply 仍然成功。
+- 符号链接、目录或其他非普通文件会报告为 `unknown`；apply 会发出警告并保持不变。更改通过不跟随符号链接打开的句柄进行，因此不会落到符号链接的目标上。在 Linux 和 macOS 上，即使无法读取文件，其所有者仍可以无需 `sudo` 更改模式；其他 Unix 系统可能会通过 `sudo` 重试。
+- `template`、`remove_empty` 和 `replace` 需要 `source` 或 `content`，在此处会被拒绝。
+- `mise bootstrap unapply` 会保留文件，因为 mise 从未管理其内容。
+
+当 mise 更改文件权限时会触发 `notify`。
+
+当前用户拥有的文件会以该用户身份更改模式；声明了 `owner` 或 `group`，或更改其他用户文件的模式时，会以 root 身份执行。父目录按照上文解析，但当 root 将跨越不受信任的符号链接时，apply 会发出警告并保持文件不变，而不是失败。
 
 ## 软件包之前的文件
 
@@ -89,6 +130,15 @@ state = "absent"
 [bootstrap.directories."/opt/obsolete"]
 state = "absent"
 ```
+
+主目录中的目标也以相同方式工作，这对于移除旧设置创建的文件很有用：
+
+```toml
+[bootstrap.files."~/.oldrc"]
+state = "absent"
+```
+
+无论内容如何，状态为 absent 的文件都会被移除；文件消失后再次应用不会产生任何更改。移除主目录中由你拥有的文件时无需 `sudo`。
 
 目录在移除前必须为空。递归删除目录需要额外设置 `recursive = true`，并会在计划中显示为破坏性操作。
 

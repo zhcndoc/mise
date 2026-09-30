@@ -12,7 +12,7 @@ description: "从 `[bootstrap.packages]` 升级已安装的引导包"
 
 从 `[bootstrap.packages]` 升级已安装的引导包
 
-刷新包管理器元数据并升级已安装的已配置包：apk/apt/aur/dnf/pacman 升级到最新可用版本（apk、apt 和 dnf 遵守配置中固定的版本），brew 倾倒 formula 的当前 bottle 并替换旧 keg，brew-cask 安装当前 cask artifact，flatpak 和 flatpak-user 更新应用程序和运行时，mas 升级 App Store 应用，winget 升级 Windows 包。尚未安装的包会被跳过——请使用 `mise bootstrap packages apply` 安装这些包。
+刷新包管理器元数据并升级已安装的已配置包：apk/apt/aur/dnf/pacman/zypper 升级到最新可用版本（apk、apt、dnf 和 zypper 遵守配置中固定的版本），brew 倾倒 formula 的当前 bottle 并替换旧 keg，brew-cask 安装当前 cask artifact，flatpak 和 flatpak-user 更新应用程序和运行时，mas 升级 App Store 应用，winget 升级 Windows 包。尚未安装的包会被跳过——请使用 `mise bootstrap packages apply` 安装这些包。
 
 包也可以显式地以 `manager:package` 形式提供。
 

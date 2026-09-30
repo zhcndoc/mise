@@ -8,6 +8,7 @@ description: "这些食谱结合了工具、环境变量和任务，用于特定
 
 | 工作流                                                         | 食谱                                                   |
 | -------------------------------------------------------------- | ------------------------------------------------------- |
+| 从项目版本文件选择 Bazel                                     | [Bazel](/mise-cookbook/bazel.html)                      |
 | 配置并构建 CMake 项目                                          | [C++](/mise-cookbook/cpp.html)                          |
 | 安装 mise 并在容器中共享工具                                  | [Docker](/mise-cookbook/docker.html)                    |
 | 运行 npm 脚本或选择包管理器                                   | [Node.js](/mise-cookbook/nodejs.html)                   |

@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::cmd::{RunningPidGuard, prepare_noninteractive_child};
-use crate::config::Config;
+use crate::config::{Config, SettingsExt};
 use rmcp::{
     RoleServer, ServiceExt,
     handler::server::{ServerHandler, tool::ToolRouter, wrapper::Parameters},
@@ -8,7 +8,7 @@ use rmcp::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
         ErrorData, Implementation, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
         ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        Resource, ResourceContents, ServerCapabilities, ServerInfo,
+        Resource, ResourceContents, ServerCapabilities, ServerConfig,
     },
     schemars::JsonSchema,
     service::RequestContext,
@@ -241,12 +241,12 @@ impl MiseServer {
 }
 
 impl ServerHandler for MiseServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
             .enable_resources()
             .enable_tools()
             .build();
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_protocol_version(ProtocolVersion::V_2025_03_26)
             .with_server_info(Implementation::new("mise", env!("CARGO_PKG_VERSION")))
             .with_instructions(
@@ -397,6 +397,7 @@ impl ServerHandler for MiseServer {
                             .map(|source| source.to_string_lossy())
                             .collect::<Vec<_>>(),
                         "depends": task.depends.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
+                        "daemons": task.daemons,
                         "depends_post": task.depends_post.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
                         "wait_for": task.wait_for.iter().map(|d| d.task.clone()).collect::<Vec<_>>(),
                         "env": json!({}), // EnvList is not directly iterable, keeping empty for now

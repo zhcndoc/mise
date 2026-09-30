@@ -156,9 +156,27 @@ Bash 登录 shell 会读取 `~/.bash_profile`、`~/.bash_login` 和 `~/.profile`
 如果你希望无法解析的 shim 直接失败，可以将 [`not_found_system_fallback`](/configuration/settings.html#not_found_system_fallback) 设置为 `false`，并同时将 `not_found_auto_install` 设置为 `false`。
 :::
 
-- 如果你愿意，也可以决定只使用 `shims`，但这会带来一些[限制](/dev-tools/shims.html#shims-vs-path)
-- [`mise activate --shims`](/cli/activate.html#flags) 的另一种选择是使用 `export PATH="$HOME/.local/share/mise/shims:$PATH"`。如果此时 `mise` 尚不可用，这种方式会很有帮助
+### 排除命令名称
 
+有些命令也由操作系统提供，机器上的其他软件依赖于系统版本。shims.exclude 会将这些名称排除在 shim 目录之外——mise 仍会安装和管理工具，只是永远不会为该名称生成 shim：
+
+~~~toml
+[settings.shims]
+exclude = ["python", "python3", "pip", "pip3"]
+~~~
+
+例如在 Arch Linux 上，/usr/bin/python 是发行版解释器，其模块位于匹配的 site-packages 目录中。没有此设置时，进入固定 python 版本的项目会改变 #!/usr/bin/env python 脚本获得的解释器，而构建期间调用 python 的 PKGBUILD 会使用固定版本而不是系统版本。
+
+下一次 mise reshim 后，被排除的名称会从 shim 目录中移除，其他 shim 生成器也会跳过它们，包括 lazy-tool bootstrap shim 和插件提供的 shim。带版本限定的 shim 不受影响，因此 python3.12 仍会解析到配置选择的版本。由于不存在 shim，mise 不再处于该命令的执行路径中，也不会在每次调用时加载配置。
+
+::: warning
+排除 python3 意味着 python3 -m venv 会使用系统解释器创建虚拟环境，而不是配置的解释器，这可能是静默的。需要 mise 管理的版本时，请使用带版本的命令（python3.12 -m venv）。
+
+此设置只影响生成的 shim。在不使用 --shims 的 mise activate 下，工具的 bin 目录会整体加入 PATH，因此被排除的名称在那里仍然可见。
+:::
+
+- 如果你愿意，也可以决定只使用 shims，但这会带来一些[限制](/dev-tools/shims.html#shims-vs-path)
+- mise activate --shims 的另一种选择是使用 export PATH="$HOME/.local/share/mise/shims:$PATH"。如果此时 mise 尚不可用，这种方式会很有帮助
 ### mise reshim
 
 要强制 `mise` 更新 `shims` 目录的内容，请运行 `mise reshim`。
@@ -186,8 +204,7 @@ command = "mbx"
 env = { MBX_CARGO_SHIM_MODE = "1" }
 ```
 
-添加或移除包装器后运行 `mise reshim`。该包装器同时适用于 `mise activate` 和 `mise activate --shims`，并且优先于同名的可执行文件。当它进行委托时，mise 会从 `PATH` 中移除其调度目录，因此在配置了由 mise 管理的 Rust 时，`mbx` 会解析到其中的 Cargo，否则会回退到 rustup 或系统安装。
-
+添加或移除包装器后运行 mise reshim。该包装器同时适用于 mise activate 和 mise activate --shims，并且优先于同名的可执行文件。当它进行委托时，mise 会从 PATH 中移除其调度目录，因此在配置了由 mise 管理的 Rust 时，mbx 会解析到其中的 Cargo，否则会回退到 rustup 或系统安装。如果提供包装器命令的配置工具尚未安装，包装器会先安装它，就像该命令自己的 shim 一样（除非工具是 lazy，否则受 not_found_auto_install 设置影响）。
 如果不需要参数或环境变量，也可以使用简写形式：
 
 ```toml

@@ -48,8 +48,9 @@ mise exec -- cargo build
 
 配置仍然是 `nightly`，而 mise 会将当前 Rust 通道清单解析为具体的 `nightly-YYYY-MM-DD` 工具链，以用于安装和锁定文件。这会使配置的通道保持滚动更新，同时让锁定安装具有可复现性。运行 `mise upgrade rust` 或 `mise lock --bump` 以推进锁定的 nightly。
 
-如果要改为保留特定的 nightly，请显式配置其日期：
+为了让 cargo +nightly 继续工作，当 rustup 的 nightly 缺失、版本较旧，或是同一个 nightly 缺少部分组件和目标时，mise 还会为 rustup 提供一个与日期版本匹配的 nightly 工具链。其文件会使用 reflink；在不支持写时复制克隆的文件系统上则使用硬链接，因此几乎不占用额外磁盘空间。通过 rustup 添加了组件或目标的 rustup nightly 不会被替换，因为替换会删除它们。之后该版本归 rustup 管理：rustup update nightly 可以推进它，而不会更改 mise 安装的日期版本。
 
+如果要改为保留特定的 nightly，请显式配置其日期：
 ```sh
 mise use rust@nightly-2026-08-13
 ```

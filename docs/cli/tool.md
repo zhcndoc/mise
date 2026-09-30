@@ -23,6 +23,7 @@ description: "显示工具信息"
 - **`--installed`** — 仅显示已安装版本
 - **`--requested`** — 仅显示请求的版本
 - **`--tool-options`** — 仅显示工具选项
+- **`--url`** — 仅显示注册表中的项目 URL
 - **`-h --help`** — 打印帮助
 
 ## 示例

@@ -5,12 +5,14 @@ socialDescription: "Explore task options for commands, dependencies, arguments, 
 
 # Task Configuration
 
-This is an exhaustive list of the configuration options available for tasks in `mise.toml` or as
-file tasks.
+Use this reference to configure task commands, dependencies, inputs, and execution settings.
+For a starting example, see [TOML tasks](/tasks/toml-tasks) or [file tasks](/tasks/file-tasks).
+To share settings across tasks, use [task templates](/tasks/templates).
 
 ## 任务属性
 
-All examples use the toml-task format rather than file tasks, but they apply to both except where otherwise noted.
+The examples use `[tasks.<name>]` in `mise.toml`. Unless noted otherwise, the same properties
+are available in file-task `#MISE` headers.
 
 ### `run`
 
@@ -100,6 +102,10 @@ run = "cargo build"
 alias = "b" # 使用 `mise run b` 运行
 run = "cargo build"
 ```
+
+If another task is actually named `b`, that task wins—a task's own name always
+takes precedence over an alias, including over an alias defined in a parent
+directory's config.
 
 ### `depends`
 
@@ -267,6 +273,49 @@ run = "eslint ."
 - `wait_for = ["setup"]` — 按名称匹配，不管 args 或 env 覆盖如何。即使另一个任务运行 `depends = ["DEBUG=1 setup"]`，这里仍然会匹配并等待它。
 - `wait_for = ["setup arg1"]` 或 `wait_for = ["DEBUG=1 setup"]` — 只匹配使用完全相同 args/env 配置运行的任务。
 
+### `daemons` <Badge type="warning" text="experimental" />
+
+- **Type**: `bool | string | string[]`
+
+[Project daemons](/daemons.html) that must be running and ready before task
+execution. Requires `experimental = true` and pitchfork 2.25.0 or later.
+
+| Value                   | Requirement                                      |
+| ----------------------- | ------------------------------------------------ |
+| `"postgres"`            | One named daemon.                                |
+| `["postgres", "redis"]` | Each named daemon.                               |
+| `true`                  | All daemons in the task's project configuration. |
+| `false` or omitted      | No daemon requirement.                           |
+
+```mise-toml
+[daemons]
+postgres = "18"
+
+[tasks.test]
+daemons = "postgres"
+run = "npm test"
+```
+
+mise starts the requested daemons through pitchfork and waits for readiness before
+any task body runs. Already-running daemons are reused and remain running after
+the task exits; use `mise daemons stop` to stop them.
+
+Names must match `[daemons]` entries in the task's own project configuration
+hierarchy, including inherited declarations. In a monorepo, a dependency task in
+another subproject resolves its names there, not in the calling project's config.
+An unknown name fails the run.
+
+`--skip-deps` and the `task.skip_depends` setting skip daemon requirements.
+`--dry-run` still validates names and the experimental setting, but starts nothing.
+Safe mode blocks task daemon startup.
+
+A subtask reached through a `run = [{ task = "..." }]` entry is resolved after the
+run has started, so its own `daemons` are not started. Declare the requirement on
+the task you invoke.
+
+For setup, readiness checks, and daemon lifecycle details, see the
+[daemon guide](/daemons.html#tasks-that-require-daemons).
+
 ### `env`
 
 - **类型**: `{ [key]: string | int | bool }`
@@ -294,11 +343,20 @@ mode = "headless"
 
 [tasks.test]
 vars = { mode = "headed" }
-run = "./scripts/test-e2e.sh --{{ vars.mode }}"
+run = "echo --mode={{ vars.mode }}"
 ```
 
-See [configuration variables](/configuration/vars.html) for supported directives,
-precedence, and redaction.
+`mise run test` prints `--mode=headed`. Other tasks still use the config value, `headless`,
+unless they define their own override.
+
+Overrides apply to references in the task's templated fields, including inherited fields.
+They do not recalculate top-level vars that were already resolved during config loading.
+See [variable resolution](/configuration/vars.html#what-a-task-local-var-can-change) for an
+example, and [task template vars](/tasks/templates.html#parameterizing-a-template-with-vars)
+for sharing a command with different values in each task.
+
+See [configuration variables](/configuration/vars.html#value-directives) for value directives
+and redaction.
 
 ### `tools`
 
@@ -1172,6 +1230,36 @@ URL 格式：`git::<protocol>://<url>//<path>?ref=<ref>`
 当 `path` 指向目录时，mise 会加载该目录中的可执行文件任务以及所有 `.toml` 任务文件。当 `path` 指向单个 `.toml` 文件时，只会加载该文件。
 
 Included `.toml` files use the [task toml file format](#task_config.includes) (the keys are task names — there is no `[tasks.…]` prefix). The repository is cloned and cached in `MISE_CACHE_DIR/remote-git-tasks-cache`. Tasks from the include are loaded as if they were local. You can disable caching with `MISE_TASK_REMOTE_NO_CACHE=true` or the `--no-cache` flag.
+
+#### Remote OCI Includes
+
+You can include a task catalog published as an OCI artifact by prefixing an image-style reference with `oci::`:
+
+```mise-toml
+[task_config]
+includes = [
+    "oci::ghcr.io/myorg/shared-tasks:1.0.0",
+    "oci::registry.example.com/platform/tasks@sha256:0f1e2d3c...",
+]
+```
+
+The reference uses the same syntax as `docker pull`: `<registry>/<repository>` followed by `:<tag>` or `@sha256:<digest>`. Pin a version tag or a digest — tags such as `latest` are mutable, and mise reuses a cached pull for the same reference.
+
+The artifact is unpacked into a directory and loaded like a local task directory: executable file tasks and `.toml` [task files](#task_config.includes) are both picked up. Files that start with a `#!` line are made executable, because artifacts do not carry file modes.
+
+mise reads the layers of the artifact like this:
+
+- A layer with an `org.opencontainers.image.title` annotation becomes a file at that relative path. This is what [`oras push`](https://oras.land/docs/commands/oras_push/) and [`podman artifact add`](https://docs.podman.io/en/stable/markdown/podman-artifact-add.1.html) produce.
+- A tar layer with that annotation and `io.deis.oras.content.unpack=true` (an `oras push` of a directory) is extracted into the directory of that name.
+- A tar, tar+gzip, or tar+zstd layer without a title is extracted at the root, with whiteouts applied, so an artifact made of tar layers (for example with `crane append`) works too. This is not a general container-image reader: an image whose layers contain symlinks or device files is rejected.
+
+```sh
+oras push ghcr.io/myorg/shared-tasks:1.0.0 build.toml scripts/deploy
+```
+
+Every blob is verified against the digest in the manifest, and symlinks or other special files in an artifact are rejected. Credentials come from the same places as `mise oci push`: `docker login` / `podman login` configuration, with anonymous access when none is found. Registries on loopback addresses are contacted over plain HTTP; add other plain-HTTP registries to [`oci.insecure_registries`](/configuration/settings.html#oci.insecure_registries).
+
+Pulls are cached per reference in `MISE_CACHE_DIR/remote-oci-tasks-cache`, so a tag that later moves to a new digest is not picked up automatically. To refresh, reference a new tag or digest, delete that directory, or set `MISE_TASK_REMOTE_NO_CACHE=true` to pull on every run.
 
 ### `task_config.excludes` {#task_config.excludes}
 

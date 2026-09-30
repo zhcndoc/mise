@@ -62,8 +62,7 @@ description: "安装工具版本"
   根据路径的不同，可能需要提升权限。
 - **`--system`** — 将工具安装到系统范围的共享目录
 
-  安装到 `/usr/local/share/mise/installs`（或 `MISE_SYSTEM_DATA_DIR/installs`）。
-  可能需要提升权限（例如 sudo）。
+  安装到 `/usr/local/share/mise/installs`（或 `MISE_SYSTEM_DATA_DIR/installs`）。在 Unix 上，除非禁用 `system_packages.sudo`，二进制下载后端会调用 sudo 将文件发布到受保护的系统目录。请以普通用户身份运行 mise，不要使用 sudo。
 - **`-h --help`** — 打印帮助
 
 ## 示例

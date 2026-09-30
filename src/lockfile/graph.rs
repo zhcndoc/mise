@@ -3,12 +3,11 @@ use super::{AubeLock, UvLock, hash_canonical_toml};
 use eyre::{Result, bail, eyre};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
-pub(crate) trait NativeGraph:
-    Clone + std::fmt::Debug + Serialize + DeserializeOwned
-{
+pub trait NativeGraph: Clone + std::fmt::Debug + Serialize + DeserializeOwned {
     const GRAPH_FILE: &'static str;
     fn graph_text(&self) -> Result<String>;
     fn files(&self) -> Result<Vec<(&'static str, String)>>;
@@ -16,7 +15,7 @@ pub(crate) trait NativeGraph:
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum GraphRef<T> {
+pub enum GraphRef<T> {
     Inline {
         graph: T,
         dir: Option<PathBuf>,
@@ -49,18 +48,36 @@ pub(crate) fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+/// Rewrite CRLF line endings to LF.
+///
+/// Every sidecar file is text that mise itself serializes (`uv.lock`,
+/// `pyproject.toml`, `aube-lock.yaml`, `package.json`), so there is no binary
+/// content to corrupt here.
+pub(crate) fn normalize_newlines(text: &str) -> Cow<'_, str> {
+    if text.contains("\r\n") {
+        Cow::Owned(text.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// Digest sidecar text with line endings normalized.
+///
+/// Git checks out with `core.autocrlf=true` by default on Windows, which
+/// rewrites LF to CRLF in the working tree. Hashing the normalized text keeps
+/// a committed sidecar verifiable on every platform while still detecting any
+/// change to the dependency graph itself.
+pub(crate) fn digest_text(text: &str) -> String {
+    digest_bytes(normalize_newlines(text).as_bytes())
+}
+
 impl<T: NativeGraph> GraphRef<T> {
     pub(crate) fn identity(&self) -> String {
         match self {
             Self::Sidecar { digest, .. } => digest.clone(),
             Self::Inline { graph, digest, .. } => digest
                 .get_or_init(|| {
-                    digest_bytes(
-                        graph
-                            .graph_text()
-                            .expect("native graph serialization")
-                            .as_bytes(),
-                    )
+                    digest_text(&graph.graph_text().expect("native graph serialization"))
                 })
                 .clone(),
         }
@@ -96,9 +113,16 @@ impl<T: NativeGraph> GraphRef<T> {
             Self::Inline { graph, .. } => Ok(graph),
             Self::Sidecar { dir, digest, cell } => cell
                 .get_or_init(|| {
-                    let text = std::fs::read_to_string(dir.join(T::GRAPH_FILE))
+                    let raw = std::fs::read_to_string(dir.join(T::GRAPH_FILE))
                         .map_err(|e| e.to_string())?;
-                    if digest_bytes(text.as_bytes()) != *digest {
+                    let text = normalize_newlines(&raw).into_owned();
+                    // Older versions hashed the bytes as they found them, so a
+                    // lockfile written from a CRLF checkout records the CRLF
+                    // digest. Keep accepting it; the next save records the
+                    // normalized one.
+                    if digest_bytes(text.as_bytes()) != *digest
+                        && digest_bytes(raw.as_bytes()) != *digest
+                    {
                         return Err(
                             "digest mismatch; run `mise lock` to accept the edited graph".into(),
                         );
@@ -121,7 +145,7 @@ impl<T: NativeGraph> GraphRef<T> {
         };
         let text = std::fs::read_to_string(dir.join(T::GRAPH_FILE))
             .map_err(|e| eyre!("dependency sidecar {}: {e}; run `mise lock`", dir.display()))?;
-        let graph = T::read(dir, text)
+        let graph = T::read(dir, normalize_newlines(&text).into_owned())
             .map_err(|e| eyre!("dependency sidecar {}: {e}; run `mise lock`", dir.display()))?;
         Ok(Self::Inline {
             graph,
@@ -214,7 +238,7 @@ pub(crate) fn absolute(path: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn sidecar_root(lockfile: &Path) -> PathBuf {
+pub fn sidecar_root(lockfile: &Path) -> PathBuf {
     let dir = lockfile.parent().unwrap_or(Path::new("."));
     let mut root = match dir.file_name().and_then(|s| s.to_str()) {
         Some(".mise") => dir.join("locks"),
@@ -264,7 +288,8 @@ impl NativeGraph for UvLock {
     }
     fn read(dir: &Path, graph_text: String) -> Result<Self> {
         Ok(Self {
-            project: std::fs::read_to_string(dir.join("pyproject.toml"))?.parse()?,
+            project: normalize_newlines(&std::fs::read_to_string(dir.join("pyproject.toml"))?)
+                .parse()?,
             graph: graph_text.parse()?,
             graph_text,
         })
@@ -307,6 +332,7 @@ impl NativeGraph for AubeLock {
     fn read(dir: &Path, graph_text: String) -> Result<Self> {
         let mut graph = Self::from_yaml(&graph_text)?;
         let project = std::fs::read_to_string(dir.join("package.json"))?;
+        let project = normalize_newlines(&project).into_owned();
         serde_json::from_str::<serde_json::Value>(&project)?;
         graph.project = Some(project);
         Ok(graph)
@@ -355,8 +381,27 @@ impl SidecarWrites {
             }
         };
         self.referenced.insert(dir.clone());
-        if matches!(graph, GraphRef::Sidecar { dir: source, .. } if *source == dir && source.is_dir())
+        if let GraphRef::Sidecar {
+            dir: source,
+            digest,
+            cell,
+        } = graph
+            && *source == dir
+            && source.is_dir()
         {
+            // A legacy CRLF digest is upgraded to the normalized one whenever
+            // the graph has already been loaded, so a lockfile written from a
+            // Windows checkout heals itself without re-reading the sidecar.
+            if let Some(Ok(loaded)) = cell.get() {
+                let identity = digest_text(&loaded.graph_text()?);
+                if identity != *digest {
+                    return Ok(GraphRef::Sidecar {
+                        dir,
+                        digest: identity,
+                        cell: cell.clone(),
+                    });
+                }
+            }
             return Ok(graph.clone());
         }
         let body = match graph.load() {
@@ -369,13 +414,21 @@ impl SidecarWrites {
         };
         for (name, contents) in body.files()? {
             let target = dir.join(name);
-            if std::fs::read(&target).ok().as_deref() != Some(contents.as_bytes()) {
+            let contents = normalize_newlines(&contents).into_owned();
+            // Compare normalized text so a CRLF working copy of an unchanged
+            // sidecar is left exactly as git checked it out.
+            let on_disk = std::fs::read_to_string(&target)
+                .ok()
+                .map(|text| normalize_newlines(&text).into_owned());
+            if on_disk.as_deref() != Some(contents.as_str()) {
                 self.files.push((target, contents));
             }
         }
+        // Digest what was just published, not what the entry used to claim: a
+        // legacy CRLF digest must not survive onto freshly written bytes.
         Ok(GraphRef::Sidecar {
             dir,
-            digest: graph.identity(),
+            digest: digest_text(&body.graph_text()?),
             cell: OnceLock::new(),
         })
     }
@@ -550,6 +603,194 @@ mod tests {
             assert_eq!(sidecar_root(Path::new(path)), PathBuf::from(expected));
         }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_lockfile_keeps_native_graphs_beside_target() {
+        use std::os::unix::fs::symlink;
+
+        for deploy_sidecars in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let repo = root.join("repo/mise");
+            let global = root.join(".config/mise");
+            std::fs::create_dir_all(&repo).unwrap();
+            std::fs::create_dir_all(&global).unwrap();
+            let target = repo.join("mise.lock");
+            let link = global.join("mise.lock");
+            let mut lock = Lockfile::default();
+            let mut py = entry("pypi:fixture");
+            py.uv = Some(uv().into());
+            let mut npm = entry("npm:fixture");
+            npm.aube = Some(
+                AubeLock::from_yaml("lockfileVersion: '9.0'\npackages: {}\n")
+                    .unwrap()
+                    .into(),
+            );
+            lock.tools.insert("pypi:fixture".into(), vec![py]);
+            lock.tools.insert("npm:fixture".into(), vec![npm]);
+            lock.save(&target).unwrap();
+            symlink("../../repo/mise/mise.lock", &link).unwrap();
+            let files = [
+                ".mise/locks/pypi-fixture/1.0.0/uv.lock",
+                ".mise/locks/pypi-fixture/1.0.0/pyproject.toml",
+                ".mise/locks/npm-fixture/1.0.0/aube-lock.yaml",
+                ".mise/locks/npm-fixture/1.0.0/package.json",
+            ];
+            if deploy_sidecars {
+                // symlink-each: all directories are real, only files are links.
+                for file in files {
+                    let deployed = global.join(file);
+                    std::fs::create_dir_all(deployed.parent().unwrap()).unwrap();
+                    symlink(repo.join(file), deployed).unwrap();
+                }
+            }
+            let before = std::fs::read_to_string(&target).unwrap();
+            let mut loaded = Lockfile::read(&link).unwrap();
+            let py = loaded.tools["pypi:fixture"][0].uv.as_ref().unwrap();
+            assert_eq!(py.load().unwrap(), &uv());
+            let npm = loaded.tools["npm:fixture"][0].aube.as_ref().unwrap();
+            assert_eq!(
+                npm.load().unwrap().to_yaml().unwrap(),
+                "lockfileVersion: '9.0'\npackages: {}\n"
+            );
+            loaded.save(&link).unwrap();
+            assert!(link.is_symlink());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), before);
+            assert!(!global.join("locks").exists());
+
+            // Newly generated graphs must also live in the repository, and a
+            // subsequent read through the lockfile link must find them without
+            // requiring another deployment of the individual sidecar files.
+            for versions in loaded.tools.values_mut() {
+                let mut next = versions[0].clone();
+                next.version = "2.0.0".into();
+                if let Some(graph) = &next.uv {
+                    next.uv = Some(graph.load().unwrap().clone().into());
+                }
+                if let Some(graph) = &next.aube {
+                    next.aube = Some(graph.load().unwrap().clone().into());
+                }
+                versions.push(next);
+            }
+            loaded.save(&link).unwrap();
+            assert!(link.is_symlink());
+            assert!(!global.join("locks").exists());
+            for path in [&link, &target] {
+                let loaded = Lockfile::read(path).unwrap();
+                let py = loaded.tools["pypi:fixture"][1].uv.as_ref().unwrap();
+                let npm = loaded.tools["npm:fixture"][1].aube.as_ref().unwrap();
+                assert_eq!(py.load().unwrap(), &uv());
+                assert!(npm.load().is_ok());
+                assert!(py.dir().unwrap().starts_with(&repo));
+                assert!(npm.dir().unwrap().starts_with(&repo));
+                assert!(loaded.prepare_write(path).unwrap().is_none());
+            }
+            if deploy_sidecars {
+                for file in files {
+                    assert!(global.join(file).is_symlink());
+                    assert!(global.join(file).is_file());
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changed_lockfile_symlink_aborts_before_publication() {
+        use std::os::unix::fs::symlink;
+
+        for replacement in [Some("b/mise.lock"), Some("missing.lock"), None] {
+            for sidecar_only in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let a = temp.path().join("a/mise.lock");
+                let b = temp.path().join("b/mise.lock");
+                let link = temp.path().join("mise.lock");
+                let mut lock = Lockfile::default();
+                let mut tool = entry("pypi:fixture");
+                tool.uv = Some(uv().into());
+                lock.tools.insert("pypi:fixture".into(), vec![tool]);
+                for path in [&a, &b] {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    lock.save(path).unwrap();
+                }
+                symlink("a/mise.lock", &link).unwrap();
+
+                if sidecar_only {
+                    // Repairing graph bytes can publish sidecars even when the
+                    // serialized lockfile is unchanged (PreparedWrite.tmp=None).
+                    std::fs::write(
+                        sidecar_root(&a).join("pypi-fixture/1.0.0/uv.lock"),
+                        "needs repair\n",
+                    )
+                    .unwrap();
+                } else {
+                    lock.tools.get_mut("pypi:fixture").unwrap()[0].version = "2.0.0".into();
+                }
+                let mut before = Vec::new();
+                for path in [&a, &b] {
+                    for file in [
+                        "mise.lock",
+                        ".mise/locks/pypi-fixture/1.0.0/uv.lock",
+                        ".mise/locks/pypi-fixture/1.0.0/pyproject.toml",
+                    ] {
+                        let path = path.parent().unwrap().join(file);
+                        before.push((path.clone(), std::fs::read(path).unwrap()));
+                    }
+                }
+                let prepared = lock.prepare_write(&link).unwrap().unwrap();
+                assert_eq!(prepared.tmp.is_none(), sidecar_only);
+                std::fs::remove_file(&link).unwrap();
+                if let Some(replacement) = replacement {
+                    symlink(replacement, &link).unwrap();
+                }
+
+                let error = prepared.publish().unwrap_err();
+                assert!(error.to_string().contains("changed during preparation"));
+                for (path, bytes) in before {
+                    assert_eq!(std::fs::read(path).unwrap(), bytes);
+                }
+                for path in [&a, &b] {
+                    assert!(!sidecar_root(path).join("pypi-fixture/2.0.0").exists());
+                }
+                assert_eq!(
+                    std::fs::read_link(&link).ok(),
+                    replacement.map(PathBuf::from)
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_still_reject_symlinked_sidecar_directories() {
+        for ancestor in [
+            ".mise/locks",
+            ".mise/locks/pypi-fixture",
+            ".mise/locks/pypi-fixture/1.0.0",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("mise.lock");
+            let outside = temp.path().join("outside");
+            std::fs::create_dir(&outside).unwrap();
+            let ancestor = temp.path().join(ancestor);
+            std::fs::create_dir_all(ancestor.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&outside, ancestor).unwrap();
+            let mut lock = Lockfile::default();
+            let mut tool = entry("pypi:fixture");
+            tool.uv = Some(uv().into());
+            lock.tools.insert("pypi:fixture".into(), vec![tool]);
+            let error = lock.save(&path).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("refusing to write dependency sidecar through symlink")
+            );
+            assert!(!path.exists());
+            assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
+        }
+    }
+
     #[test]
     fn native_round_trip_is_lazy_and_byte_stable() {
         let temp = tempfile::tempdir().unwrap();
@@ -699,6 +940,140 @@ uv = { project = {}, graph = { version = 1 } }
                 .starts_with("1.0.0~")
         );
         assert!(!std::fs::read_to_string(path).unwrap().contains("graph ="));
+    }
+
+    #[test]
+    fn crlf_checkout_of_sidecars_still_verifies() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mise.lock");
+        let mut lock = Lockfile::default();
+        let mut py = entry("pypi:fixture");
+        py.uv = Some(uv().into());
+        let mut npm = entry("npm:fixture");
+        let aube = AubeLock::from_yaml("lockfileVersion: '9.0'\npackages: {}\n").unwrap();
+        npm.aube = Some(aube.clone().into());
+        lock.tools.insert("pypi:fixture".into(), vec![py]);
+        lock.tools.insert("npm:fixture".into(), vec![npm]);
+        lock.save(&path).unwrap();
+        let recorded = std::fs::read(&path).unwrap();
+
+        // Simulate git's `core.autocrlf=true` checkout on Windows.
+        let mut crlf = BTreeMap::new();
+        for dir in ["pypi-fixture/1.0.0", "npm-fixture/1.0.0"] {
+            for file in std::fs::read_dir(sidecar_root(&path).join(dir)).unwrap() {
+                let file = file.unwrap().path();
+                let text = std::fs::read_to_string(&file).unwrap();
+                assert!(!text.contains("\r\n"), "mise writes LF: {}", file.display());
+                let converted = text.replace('\n', "\r\n");
+                std::fs::write(&file, &converted).unwrap();
+                crlf.insert(file, converted);
+            }
+        }
+
+        let loaded = Lockfile::read(&path).unwrap();
+        let py = loaded.tools["pypi:fixture"][0].uv.as_ref().unwrap();
+        assert_eq!(py.load().unwrap(), &uv());
+        let npm = loaded.tools["npm:fixture"][0].aube.as_ref().unwrap();
+        assert_eq!(
+            npm.load().unwrap().to_yaml().unwrap(),
+            "lockfileVersion: '9.0'\npackages: {}\n"
+        );
+        // Line endings do not change the recorded identity.
+        assert_eq!(npm.identity(), GraphRef::from(aube).identity());
+
+        // Re-locking keeps the lockfile stable and leaves the CRLF bytes alone.
+        let mut regenerated = loaded.clone();
+        loaded.save(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), recorded);
+
+        // Re-resolving the same graphs must not rewrite the working copy either.
+        for versions in regenerated.tools.values_mut() {
+            if let Some(graph) = &versions[0].uv {
+                versions[0].uv = Some(graph.load().unwrap().clone().into());
+            }
+            if let Some(graph) = &versions[0].aube {
+                versions[0].aube = Some(graph.load().unwrap().clone().into());
+            }
+        }
+        regenerated.save(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), recorded);
+        for (file, contents) in crlf {
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn legacy_crlf_digests_keep_verifying_and_heal_on_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mise.lock");
+        let mut lock = Lockfile::default();
+        let mut tool = entry("pypi:fixture");
+        tool.uv = Some(uv().into());
+        lock.tools.insert("pypi:fixture".into(), vec![tool]);
+        lock.save(&path).unwrap();
+
+        // An older mise on a Windows checkout accepted the CRLF working copy as
+        // an edit and recorded the digest of those raw bytes.
+        let graph_file = sidecar_root(&path).join("pypi-fixture/1.0.0/uv.lock");
+        let crlf = std::fs::read_to_string(&graph_file)
+            .unwrap()
+            .replace('\n', "\r\n");
+        std::fs::write(&graph_file, &crlf).unwrap();
+        let normalized = digest_text(&crlf);
+        let legacy = digest_bytes(crlf.as_bytes());
+        assert_ne!(legacy, normalized);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace(&normalized, &legacy)).unwrap();
+
+        // Upgrading to a mise that hashes normalized text must not invalidate it.
+        let lock = Lockfile::read(&path).unwrap();
+        let graph = lock.tools["pypi:fixture"][0].uv.as_ref().unwrap();
+        assert_eq!(graph.identity(), legacy);
+        assert_eq!(graph.load().unwrap(), &uv());
+
+        // Saving after the graph was loaded records the normalized digest, and
+        // the sidecar bytes stay as git checked them out.
+        lock.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains(&normalized), "{saved}");
+        assert!(!saved.contains(&legacy), "{saved}");
+        assert_eq!(std::fs::read_to_string(&graph_file).unwrap(), crlf);
+        let lock = Lockfile::read(&path).unwrap();
+        assert_eq!(
+            lock.tools["pypi:fixture"][0]
+                .uv
+                .as_ref()
+                .unwrap()
+                .load()
+                .unwrap(),
+            &uv()
+        );
+
+        // A graph that was never opened keeps its recorded digest untouched.
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace(&normalized, &legacy)).unwrap();
+        Lockfile::read(&path).unwrap().save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains(&legacy));
+
+        // Republishing the sidecar elsewhere writes normalized bytes, so the
+        // new entry must pin those and not the digest it came in with.
+        let moved = temp.path().join("moved/mise.lock");
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        Lockfile::read(&path).unwrap().save(&moved).unwrap();
+        let saved = std::fs::read_to_string(&moved).unwrap();
+        assert!(saved.contains(&normalized), "{saved}");
+        assert!(!saved.contains(&legacy), "{saved}");
+        let moved_graph = sidecar_root(&moved).join("pypi-fixture/1.0.0/uv.lock");
+        assert!(!std::fs::read_to_string(moved_graph).unwrap().contains('\r'));
+        assert_eq!(
+            Lockfile::read(&moved).unwrap().tools["pypi:fixture"][0]
+                .uv
+                .as_ref()
+                .unwrap()
+                .load()
+                .unwrap(),
+            &uv()
+        );
     }
 
     #[test]

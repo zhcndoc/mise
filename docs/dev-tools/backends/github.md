@@ -177,6 +177,23 @@ linux-x64 = { asset_pattern = "gh_*_linux_amd64.tar.gz" }
 macos-arm64 = { asset_pattern = "gh_*_macOS_arm64.zip" }
 ```
 
+### 特定平台的 URL
+
+::: v-pre
+设置 `platforms.<os>-<arch>.url`，可以从明确的 URL 下载，而不是选择发布资产。使用 `{{ version }}` 表示解析后的工具版本，即使请求的版本是 `latest` 也适用。
+:::
+
+~~~toml
+[tools."github:owner/repo"]
+version = "latest"
+strip_components = 1
+platforms.macos-arm64.url = "https://github.com/owner/repo/archive/refs/tags/v{{ version }}.tar.gz"
+~~~
+
+请在 URL 中明确包含发布标签前缀。顶层 url 不会被此后端使用。直接 URL 可以与 additional_asset_patterns 组合，将发布资产覆盖到下载的压缩包上。mise 会解压压缩包，但不会自动编译源代码。
+
+不同目标 URL 请使用不同的平台条目。与其他 GitHub 工具选项一样，mise 加载配置时会针对主机计算 mise.toml 中的平台函数和条件。
+
 ### 同一发布中的多个资产
 
 存在两种不同的情况：
@@ -433,6 +450,22 @@ bin_path = 'filc-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64")
 ```
 
 如果 GitHub 的证明服务或可信根数据导致安装失败，可将其作为某个特定工具的临时退出方案。其他验证路径，例如校验和和 SLSA 证明，在已配置且可用时仍会运行。如果 `mise.lock` 已经为该工具记录了 `github-attestations` 证明，在禁用此选项后请重新运行 `mise lock`，这样锁文件就不会再要求一个已被工具配置关闭的验证器。
+
+### `slsa_signer_identity` and `slsa_signer_issuer`
+
+To verify SLSA release provenance, set the expected Fulcio certificate URI subject
+and OIDC issuer for the publishing workflow:
+
+```toml
+[tools]
+"github:myorg/mytool" = { version = "latest", slsa_signer_identity = "https://github.com/myorg/mytool/.github/workflows/release.yml@refs/tags/v{{version}}", slsa_signer_issuer = "https://token.actions.githubusercontent.com" }
+```
+
+The identity must match the workflow ref in the certificate exactly. The
+<span v-pre>`{{version}}`</span> template uses the resolved tool version. Without both
+options, mise skips SLSA provenance and can use other available verification.
+If the lockfile requires SLSA, missing signer options cause an error.
+SLSA lockfile entries recheck the signer on every installation.
 
 ### `prerelease`
 

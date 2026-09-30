@@ -303,7 +303,7 @@ Raw 和交互式任务会继承终端的输入/输出。mise 无法对绕过其�
 如果没有任何反应，原因通常是以下之一：
 
 - **该工具由原始后端规范配置。**`"cargo:some-crate" = "1.0.0"` 或 `"github:owner/repo" = "1.0.0"` 不是注册表条目，因此不包含 bin 元数据，也没有任何内容可以将你输入的命令与其关联起来。
-- **该工具根本没有配置。**处理程序只会安装当前目录配置中已经请求的工具；对于从未声明过的命令，它不会自行选择工具。
+- **该工具根本没有配置。**默认情况下，处理程序只会安装当前目录配置中已经请求的工具。将 [`not_found_auto_install_registry`](/configuration/settings.html#not_found_auto_install_registry) 设为 `true`，可以安装唯一匹配的注册表工具并将其添加到全局配置。如果多个注册表工具提供该命令，mise 会跳过它。
 - **该工具关闭了此功能**——可能是 [`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 为 `false`，或者该工具被列在 [`auto_install_disable_tools`](/configuration/settings.html#auto_install_disable_tools) 中。
 
 **解决方法：**

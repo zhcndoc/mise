@@ -53,6 +53,8 @@ chmod +x mise-tasks/build
 
 假设该文件位于 `mise-tasks/build`，那么可以使用 `mise run build`（或其别名：`mise run b`）来运行。
 
+你也可以从 `mise.toml` 配置脚本。对于名为 `build.sh` 的脚本，`[tasks.build]` 或 `[tasks."build.sh"]` 都可以添加描述、环境变量或依赖项。示例和命名规则请参阅[从 TOML 配置文件任务](/tasks/task-configuration.html#configuring-file-tasks-from-toml)。
+
 ### 多行值
 
 每个 `#MISE` 行都是 TOML。只要每一行都保留 `#MISE` 前缀，数组或内联表就可以拆分到多行，这样可以让较长的 `depends`/`sources` 列表更易于阅读：
@@ -78,6 +80,25 @@ cargo build
 #MISE tools.python="3.11"
 ```
 
+### 扩展任务模板
+
+`extends` 指定一个[任务模板](/tasks/templates)，因此多个文件任务可以共享工具、环境变量和参数：
+
+~~~toml [mise.toml]
+[task_templates.rust]
+tools = { rust = "1.90" }
+env = { RUST_BACKTRACE = "1" }
+~~~
+
+~~~bash [mise-tasks/build]
+#!/usr/bin/env bash
+#MISE extends="rust"
+#MISE description="Build the CLI"
+cargo build
+~~~
+
+脚本文件就是任务命令，因此模板的 `run` 对文件任务会被忽略；其他内容都会按照[模板文档描述的规则](/tasks/templates#merge-semantics)继承。
+
 mise 为文件任务提供项目上下文变量，例如 `MISE_PROJECT_ROOT`，无论从哪个目录调用任务，该变量都能标识项目根目录。完整的变量列表请参阅[任务](/tasks/#environment-variables-passed-to-tasks)。
 
 :::tip
@@ -97,7 +118,7 @@ shebang 行是可选的，但如果存在，mise 会使用它来确定运行脚�
 console.log("Hello, World!");
 ```
 
-```python
+```python [python]
 #!/usr/bin/env python
 #MISE description="Python 中的你好，世界"
 

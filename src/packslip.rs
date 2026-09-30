@@ -5,7 +5,7 @@
 //! mise can hand a shell: a completion script for whichever version of the
 //! tool is active, from the most verifiable source the vendor offered.
 
-pub(crate) mod completions;
+pub mod completions;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -114,30 +114,37 @@ fn github_repo(statement: &Statement) -> Option<String> {
 }
 
 /// Where to fetch a repository file at the release's commit, and with what
-/// headers, for the forges mise knows how to read. GitHub goes through the
-/// contents API, so a token applies to a private repository and a missing
-/// file is an error rather than a login page; GitLab's raw URL serves
-/// public repositories.
-pub(crate) fn repo_file_request(statement: &Statement, rel: &str) -> Option<(String, HeaderMap)> {
-    let source = statement.predicate.source.as_ref()?;
-    let commit = source.commit.as_deref()?;
+/// headers, for the forges mise knows how to read. GitHub goes through its
+/// raw-content CDN rather than the contents API, whose rate limit is the
+/// first thing to fail for users without a token: a token still applies to a
+/// private repository there, and a missing file is a 404 rather than a login
+/// page. GitLab's raw URL serves public repositories.
+/// `Ok(None)` means the forge is one mise cannot read repository files from.
+/// An `Err` is a real failure — a malformed token, say — and must not be
+/// reported as an unsupported forge.
+pub(crate) fn repo_file_request(
+    statement: &Statement,
+    rel: &str,
+) -> Result<Option<(String, HeaderMap)>> {
+    let Some(source) = statement.predicate.source.as_ref() else {
+        return Ok(None);
+    };
+    let Some(commit) = source.commit.as_deref() else {
+        return Ok(None);
+    };
     let repo = source.repo.trim_end_matches('/').trim_end_matches(".git");
     let rel = url_path(rel);
     if let Some(path) = repo.strip_prefix("https://github.com/") {
-        let url = format!("https://api.github.com/repos/{path}/contents/{rel}?ref={commit}");
-        let mut headers = github::get_headers(&url).ok()?;
-        headers.insert(
-            reqwest::header::ACCEPT,
-            HeaderValue::from_static("application/vnd.github.raw+json"),
-        );
-        Some((url, headers))
+        let url = format!("https://raw.githubusercontent.com/{path}/{commit}/{rel}");
+        let headers = github::get_headers(&url)?;
+        Ok(Some((url, headers)))
     } else {
-        repo.strip_prefix("https://gitlab.com/").map(|path| {
+        Ok(repo.strip_prefix("https://gitlab.com/").map(|path| {
             (
                 format!("https://gitlab.com/{path}/-/raw/{commit}/{rel}"),
                 HeaderMap::new(),
             )
-        })
+        }))
     }
 }
 
@@ -492,7 +499,7 @@ pub(crate) async fn fetch_files(
                 if dest.exists() {
                     continue;
                 }
-                let Some((url, headers)) = repo_file_request(statement, rel) else {
+                let Some((url, headers)) = repo_file_request(statement, rel)? else {
                     warn!(
                         "{}: {rel} comes from the source repository, which mise cannot read files from",
                         tv.style()
@@ -724,11 +731,41 @@ async fn fetch_repo_dir(
 /// A skill one of the active tools declares: a directory holding
 /// `SKILL.md`, for the exact version that is active here.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct Skill {
+pub struct Skill {
     pub name: String,
     pub tool: String,
     pub version: String,
     pub path: PathBuf,
+}
+
+/// A skill a packslip declares that the install does not hold. Without
+/// this, a skill that never arrived is indistinguishable from a tool that
+/// declares none, and both look like an empty `mise skills ls`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MissingSkill {
+    pub name: String,
+    pub tool: String,
+    pub version: String,
+    /// Why it is not there.
+    pub why: String,
+}
+
+impl std::fmt::Display for MissingSkill {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}@{} declares a skill {} that is not installed: {}",
+            self.tool, self.version, self.name, self.why
+        )
+    }
+}
+
+/// What a packslip declares: the skills the install holds, and the ones it
+/// declares that are not there.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DeclaredSkills {
+    pub found: Vec<Skill>,
+    pub missing: Vec<MissingSkill>,
 }
 
 /// Where `sync_skills` records which links in a directory it made, so
@@ -774,14 +811,38 @@ fn write_sync_state(dir: &Path, state: &SyncState) -> Result<()> {
     file::write_atomic(&path, serde_json::to_string_pretty(state)?)
 }
 
-/// The skills a statement declares that are present in the install.
+/// Why a skill a packslip declares is not in the install, for a person who
+/// expected it to be. Two settings are off by default or commonly turned
+/// off, and each keeps a declared skill off disk.
+///
+/// These are settings as they are now, not a record of the install: mise
+/// keeps no history of why a skill did not arrive. So each reason states
+/// what is true today and what to do about it, and never asserts what
+/// happened at install time — the setting may have changed since.
+fn why_missing(group: &[&Resource]) -> String {
+    let settings = Settings::get();
+    if !settings.skills.fetch {
+        "skills.fetch is off; turn it on and reinstall the tool to fetch it".to_string()
+    } else if !settings.packslip.exec
+        && group
+            .iter()
+            .all(|r| matches!(r.source(), Some(ResourceSource::Exec)))
+    {
+        "it is generated by running the tool, and packslip.exec is off".to_string()
+    } else {
+        "the install does not hold it; reinstall the tool to fetch it".to_string()
+    }
+}
+
+/// The skills a statement declares that are present in the install, and
+/// the ones it declares that are not there.
 pub(crate) fn skills_of(
     statement: &Statement,
     install_path: &Path,
     tool: &str,
     version: &str,
     artifact: Option<&Artifact>,
-) -> Vec<Skill> {
+) -> DeclaredSkills {
     // A vendor may offer one skill from several sources, as completions
     // are offered; the most verifiable one that is on disk is the skill.
     let rank = |r: &Resource| match r.source() {
@@ -806,6 +867,7 @@ pub(crate) fn skills_of(
         }
     }
     let mut chosen: Vec<(usize, Skill)> = Vec::new();
+    let mut missing: Vec<MissingSkill> = Vec::new();
     for name in names {
         let mut group = applicable(
             skills
@@ -814,12 +876,18 @@ pub(crate) fn skills_of(
                 .filter(|r| skill_name(r) == Some(name)),
             artifact,
         );
+        // A skill scoped entirely to other platforms is not this install's
+        // to hold: it is absent by design, not missing.
+        if group.is_empty() {
+            continue;
+        }
         group.sort_by_key(|r| rank(r));
-        if let Some((r, path)) = group
-            .into_iter()
+        match group
+            .iter()
+            .copied()
             .find_map(|r| resource_dir(install_path, r).map(|p| (r, p)))
         {
-            chosen.push((
+            Some((r, path)) => chosen.push((
                 rank(r),
                 Skill {
                     name: name.to_string(),
@@ -827,17 +895,29 @@ pub(crate) fn skills_of(
                     version: version.to_string(),
                     path,
                 },
-            ));
+            )),
+            // Declared, and nothing on disk behind it. Silently dropping it
+            // here is what makes a skill that failed to arrive look exactly
+            // like a tool that never offered one.
+            None => missing.push(MissingSkill {
+                name: name.to_string(),
+                tool: tool.to_string(),
+                version: version.to_string(),
+                why: why_missing(&group),
+            }),
         }
     }
     chosen.sort_by_key(|(rank, _)| *rank);
-    chosen.into_iter().map(|(_, skill)| skill).collect()
+    DeclaredSkills {
+        found: chosen.into_iter().map(|(_, skill)| skill).collect(),
+        missing,
+    }
 }
 
 /// The skills of every tool active in the current directory.
-pub(crate) async fn active_skills(config: &Arc<Config>) -> Result<Vec<Skill>> {
+pub async fn active_skills(config: &Arc<Config>) -> Result<DeclaredSkills> {
     let ts = config.get_toolset().await?;
-    let mut skills = Vec::new();
+    let mut skills = DeclaredSkills::default();
     for (backend, tv) in ts.list_current_installed_versions(config) {
         let install_path = tv.install_path();
         let statement = match statement(&install_path) {
@@ -853,13 +933,15 @@ pub(crate) async fn active_skills(config: &Arc<Config>) -> Result<Vec<Skill>> {
             &install_path,
             tv.request.options().get_string("variant").as_deref(),
         );
-        skills.extend(skills_of(
+        let declared = skills_of(
             &statement,
             &install_path,
             &backend.ba().short,
             &tv.version,
             artifact.as_ref(),
-        ));
+        );
+        skills.found.extend(declared.found);
+        skills.missing.extend(declared.missing);
     }
     Ok(skills)
 }
@@ -867,7 +949,7 @@ pub(crate) async fn active_skills(config: &Arc<Config>) -> Result<Vec<Skill>> {
 /// Where skills are linked under `root`, a project root or the home
 /// directory: the `skills.dir` setting, or that setting itself when it
 /// is absolute.
-pub(crate) fn skills_dir(root: &Path) -> PathBuf {
+pub fn skills_dir(root: &Path) -> PathBuf {
     root.join(&Settings::get().skills.dir)
 }
 
@@ -875,21 +957,33 @@ pub(crate) fn skills_dir(root: &Path) -> PathBuf {
 /// project after an install or a version change. Nothing fails an install
 /// here: a problem is reported and the tools stay installed. Outside a
 /// project root there is nowhere to link into, so nothing happens.
-pub(crate) async fn auto_sync_skills(config: &Arc<Config>) {
+pub async fn auto_sync_skills(config: &Arc<Config>) {
     let settings = Settings::get();
-    if !settings.skills.auto_sync {
-        return;
-    }
     let Some(root) = &config.project_root else {
         return;
     };
+    if !settings.skills.auto_sync {
+        hint_skills(config).await;
+        return;
+    }
     let dir = skills_dir(root);
     let result = async {
         let skills = active_skills(config).await?;
-        if skills.is_empty() && !settings.skills.prune {
+        // Reported, not warned: this runs after every install, and a skill
+        // that is missing on purpose must not nag on each one. `mise skills
+        // ls` is where someone asks the question, and it warns.
+        for missing in &skills.missing {
+            debug!("{missing}");
+        }
+        if skills.found.is_empty() && !settings.skills.prune {
             return Ok(SyncReport::default());
         }
-        sync_skills(&dir, &skills, &crate::dirs::INSTALLS, settings.skills.prune)
+        sync_skills(
+            &dir,
+            &skills.found,
+            &crate::dirs::INSTALLS,
+            settings.skills.prune,
+        )
     }
     .await;
     match result {
@@ -908,9 +1002,29 @@ pub(crate) async fn auto_sync_skills(config: &Arc<Config>) {
     }
 }
 
+/// A tool may ship an agent skill that nothing links anywhere until
+/// `mise skills sync` runs, and with `skills.auto_sync` off nothing ever
+/// says so. Mention it once, and only when there is a skill to link.
+async fn hint_skills(config: &Arc<Config>) {
+    if !crate::hint::hint_would_display("skills") {
+        return;
+    }
+    let Ok(skills) = active_skills(config).await else {
+        return;
+    };
+    if skills.found.is_empty() {
+        return;
+    }
+    hint!(
+        "skills",
+        "the active tools ship agent skills; link them into this project with",
+        "mise skills sync"
+    );
+}
+
 /// What [`sync_skills`] did.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct SyncReport {
+pub struct SyncReport {
     pub linked: Vec<String>,
     pub unchanged: Vec<String>,
     pub pruned: Vec<String>,
@@ -922,7 +1036,7 @@ pub(crate) struct SyncReport {
 /// it records in [`SYNC_STATE`] beside them and which point into
 /// `installs`, are ever replaced or, with `prune`, removed; anything else
 /// at a skill's name is left alone.
-pub(crate) fn sync_skills(
+pub fn sync_skills(
     dir: &Path,
     skills: &[Skill],
     installs: &Path,
@@ -1337,11 +1451,7 @@ fn completion_cache_path(install_path: &Path, tool: &str, shell: &str) -> Result
         .join(format!("{shell}.completion")))
 }
 
-pub(crate) async fn completion_script(
-    config: &Arc<Config>,
-    tool: &str,
-    shell: &str,
-) -> Result<String> {
+pub async fn completion_script(config: &Arc<Config>, tool: &str, shell: &str) -> Result<String> {
     let ts = config.get_toolset().await?;
     let (backend, tv) = find_tool(config, ts, tool).await?;
     let install_path = tv.install_path();
@@ -1524,7 +1634,7 @@ pub(crate) fn completion_ident(tool: &str) -> String {
 /// tab. fish reads the script in a child shell of its own, and PowerShell
 /// puts this completer back after delegating, for the same reason: neither
 /// keeps the registrations of a version that is no longer the active one.
-pub(crate) fn stub(tool: &str, shell: usage_rs::complete::Shell) -> Result<String> {
+pub fn stub(tool: &str, shell: usage_rs::complete::Shell) -> Result<String> {
     use usage_rs::complete::Shell;
     let note = format!("mise completes {tool} from the packslip of whichever version is active");
     let by = format!(
@@ -1886,37 +1996,35 @@ mod tests {
     fn repo_file_requests_pin_the_commit() {
         let s = basic();
         assert_eq!(
-            repo_file_request(&s, "docs/a?b#c.md").unwrap().0,
+            repo_file_request(&s, "docs/a?b#c.md").unwrap().unwrap().0,
             format!(
-                "https://api.github.com/repos/o/r/contents/docs/a%3Fb%23c.md?ref={}",
+                "https://raw.githubusercontent.com/o/r/{}/docs/a%3Fb%23c.md",
                 "c".repeat(40)
             ),
             "a name cannot rewrite the query or fragment"
         );
-        let (url, headers) = repo_file_request(&s, "completions/t.fish").unwrap();
         assert_eq!(
-            url,
+            repo_file_request(&s, "completions/t.fish")
+                .unwrap()
+                .unwrap()
+                .0,
             format!(
-                "https://api.github.com/repos/o/r/contents/completions/t.fish?ref={}",
+                "https://raw.githubusercontent.com/o/r/{}/completions/t.fish",
                 "c".repeat(40)
             )
-        );
-        assert_eq!(
-            headers.get(reqwest::header::ACCEPT).unwrap(),
-            "application/vnd.github.raw+json"
         );
         let mut gitlab = s.clone();
         gitlab.predicate.source.as_mut().unwrap().repo = "https://gitlab.com/g/p.git".into();
         assert_eq!(
-            repo_file_request(&gitlab, "x").unwrap().0,
+            repo_file_request(&gitlab, "x").unwrap().unwrap().0,
             format!("https://gitlab.com/g/p/-/raw/{}/x", "c".repeat(40))
         );
         let mut other = s.clone();
         other.predicate.source.as_mut().unwrap().repo = "https://example.com/r".into();
-        assert!(repo_file_request(&other, "x").is_none());
+        assert!(repo_file_request(&other, "x").unwrap().is_none());
         let mut no_commit = s;
         no_commit.predicate.source.as_mut().unwrap().commit = None;
-        assert!(repo_file_request(&no_commit, "x").is_none());
+        assert!(repo_file_request(&no_commit, "x").unwrap().is_none());
     }
 
     #[test]
@@ -2087,12 +2195,22 @@ mod tests {
         std::fs::create_dir_all(root.join("empty")).unwrap();
         let fallback = root.join(RESOURCES_DIR).join("repo/skills/t");
         std::fs::create_dir_all(&fallback).unwrap();
+        let declared = skills_of(&s, root, "tool", "1", Some(&s.predicate.artifacts[0]));
         assert!(
-            skills_of(&s, root, "tool", "1", Some(&s.predicate.artifacts[0])).is_empty(),
+            declared.found.is_empty(),
             "neither directory holds a skill yet"
         );
+        assert_eq!(
+            declared
+                .missing
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["t", "other"],
+            "a declared skill with nothing on disk is reported, not dropped"
+        );
         std::fs::write(fallback.join("SKILL.md"), "# t").unwrap();
-        let skills = skills_of(&s, root, "tool", "1", Some(&s.predicate.artifacts[0]));
+        let skills = skills_of(&s, root, "tool", "1", Some(&s.predicate.artifacts[0])).found;
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].path, fallback);
     }
@@ -2221,9 +2339,18 @@ mod tests {
             .map(|r| r.asset.as_deref().or(r.archive.as_deref()))
             .collect();
         assert_eq!(selected, [Some("t-skill.tar.gz")]);
+        let declared = skills_of(&s, root, "tool", "1", Some(&linux));
         assert!(
-            skills_of(&s, root, "tool", "1", Some(&linux)).is_empty(),
+            declared.found.is_empty(),
             "the scoped skill is the skill, and it is not on disk yet"
+        );
+        assert_eq!(
+            declared
+                .missing
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["t"],
         );
         // With nothing scoped fitting, the shipped one applies as it always did.
         let mut windows = linux.clone();
@@ -2231,6 +2358,7 @@ mod tests {
         windows.libc = None;
         assert_eq!(
             skills_of(&s, root, "tool", "1", Some(&windows))
+                .found
                 .iter()
                 .map(|s| s.path.clone())
                 .collect::<Vec<_>>(),
@@ -2371,7 +2499,17 @@ mod tests {
         escape.name = Some("../escape".into());
         s.predicate.resources.push(escape);
         let host = s.predicate.artifacts[0].clone();
-        let skills = skills_of(&s, root, "tool", "1", Some(&host));
+        let declared = skills_of(&s, root, "tool", "1", Some(&host));
+        assert_eq!(
+            declared
+                .missing
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["generated", "missing"],
+            "a skill declared for this platform with nothing behind it is reported; another platform's skill is not missing, it does not apply here"
+        );
+        let skills = declared.found;
         assert_eq!(
             skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             ["t", "here", "packed", "fromrepo"],

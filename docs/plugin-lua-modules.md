@@ -592,6 +592,35 @@ colon-separated string to PATH in code that also runs on Windows.
 
 ## 命令模块
 
+Three functions run a command. **Prefer `cmd.exec`.** It is the only one that does not
+compete for the terminal, so it never holds up the tools installing alongside it.
+
+| Function     | Output                                    | Returns                               | Cost to other installs                   |
+| ------------ | ----------------------------------------- | ------------------------------------- | ---------------------------------------- |
+| `cmd.exec`   | captured                                  | stdout as a string; raises on failure | none                                     |
+| `os.execute` | streamed to the terminal                  | exit status                           | holds mise's terminal lock while it runs |
+| `cmd.stream` | streamed to the terminal, stdin connected | exit status                           | holds that lock exclusively              |
+
+Reach for `os.execute` only when the user should watch output as it happens, and for
+`cmd.stream` only when the child genuinely has to interact with the user. Because mise
+installs tools in parallel, only one child can own the terminal at a time, so both take
+mise's terminal lock.
+
+What waits on that lock is everything that writes to the terminal: any command mise runs
+itself, such as a core tool's build or an asdf plugin's script, plus `os.execute` and
+`cmd.stream` in any other plugin. `cmd.exec` does not take the lock at all — it captures
+its output, so it can never collide with a child that owns the terminal. That is why a
+hook that shells out through the streaming functions repeatedly slows the installs running
+beside it, and a long `cmd.stream` call stalls them until it exits.
+
+Preferring `cmd.exec` costs nothing in visibility. A plugin's own `print()` output is
+routed to that tool's progress line, so progress reporting belongs in `print()` rather
+than in a child's streamed output.
+
+Unless the user enables [`raw`](/configuration/settings.html#raw), `cmd.exec` and
+`os.execute` give children `/dev/null` on stdin; `cmd.stream` always connects it. See
+[Hooks and stdin](#hooks-and-stdin) below.
+
 `cmd.exec` runs a command through mise's configured default inline shell. It returns stdout
 on success and raises an error containing stderr on failure. Successful stderr is not part
 of the returned string. `pcall(cmd.exec, ...)` can intercept the error.
@@ -601,8 +630,32 @@ quote external values for that shell; interpolating tool options into shell text
 unintended commands. `os.execute` streams output and returns the exit status using Lua 5.1
 conventions (`0` for success), with the same mise-constructed environment.
 
-### 基本命令执行
+### 钩子和 stdin
 
+请优先使用非交互式钩子。mise 会并行安装工具，因此没有某个子进程独占终端：钩子写入的提示可能出现在其他安装的进度条下方，用户看不见也无法回答。请从工具选项、环境或锁文件中获取所需信息，并在子进程支持时传入非交互式标志（--yes、--non-interactive、-n）。
+
+因此，除非用户启用 raw（见下文），cmd.exec 和 os.execute 会将子进程的 stdin 连接到 /dev/null。使用这两者读取 stdin 的子进程会立即看到 EOF，而不会挂起或抢占其他安装的输入。
+
+### 使用 cmd.stream 运行交互式子进程
+
+当钩子确实必须交互（例如输入凭据或接受许可证）时，请使用 cmd.stream。它会连接 stdin，并将 stdout 和 stderr 流式传到终端，而不是捕获它们，同时返回退出状态：
+
+~~~lua
+local cmd = require("cmd")
+
+local code = cmd.stream("some-tool login")
+if code ~= 0 then
+    error("login failed with status " .. tostring(code))
+end
+~~~
+
+cmd.stream 接受与 cmd.exec 相同的 cwd 和 env 选项，并使用同样由 mise 构造的环境。
+
+子进程运行期间，mise 会暂停进度显示并持有独占锁，因此不会有其他 mise 命令同时运行。其他安装会继续，但会等待自己的命令，直到子进程退出。这正是交互式子进程需要独占终端的原因，但也意味着长时间运行的 cmd.stream 会阻塞其他操作。只有确实需要交互时才使用它；如果工具提供非交互路径，应优先使用后者。
+
+用户也可以通过 raw 为每个子进程连接 stdio（mise install --raw、MISE_RAW=1），但这会串行化安装。这是用户侧的逃生通道，不是构建插件的方式：只在 --raw 下工作的钩子，对于未设置它的用户来说仍然是坏的。请使用 cmd.stream。
+
+### 基本命令执行
 ```lua
 local cmd = require("cmd")
 
@@ -642,7 +695,34 @@ local result = cmd.exec("npm install package-name", {cwd = "/path/to/project"})
 
 - **`cwd`** (string): Set the working directory for the command
 - **`env`** (table): Set environment variables for the command. These are merged on top of the inherited environment (see below).
-- **`timeout`**: Currently ignored. Do not rely on it to terminate a command.
+- **`timeout`** (number): Seconds to allow the command to run before it is killed and an
+  error is raised. Must be greater than zero; fractions are allowed. Supported by
+  `cmd.exec` and `cmd.stream`; `os.execute` takes no options table.
+
+### Timeouts
+
+Without `timeout` a command runs as long as it likes, which is usually what an install
+step wants. Pass it when a command could hang indefinitely — reaching a network service
+that may not answer, or an interactive child nobody is there to answer:
+
+```lua
+local cmd = require("cmd")
+
+local ok, err = pcall(cmd.exec, "some-tool sync", { timeout = 30 })
+if not ok then
+    error("sync did not finish: " .. tostring(err))
+end
+```
+
+On expiry the command is killed and the call raises, so a timeout can be caught with
+`pcall` but never mistaken for a normal non-zero exit. `cmd.exec` discards whatever the
+command had produced so far.
+
+Only the shell mise spawned is killed. A command that starts its own background
+processes can leave them running after the timeout fires, so prefer a tool's own
+timeout flag when it has one. `cmd.exec` stops collecting output at the deadline in
+that case, so the call still returns on time, but output those processes had already
+written may be discarded along with the error.
 
 ### Env 模块钩子中的环境继承
 

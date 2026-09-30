@@ -142,6 +142,24 @@ mise packslip forget github.com/jdx/hk
 
 这也会重置已记住的供应商发布列表连续性。它不会更改显式签名者选项、擦除盖章者列表状态，或从 `mise.lock` 中移除签名者承诺。请先配置新的签名者策略；如果锁定文件条目发生冲突，请移除该条目并使用 `mise install` 重新生成。检查并提交生成的锁定文件变更。有关需要进行此检查的变更，请参阅[签名者连续性](/dev-tools/packslip-verification.html#signer-continuity)。
 
+### 重命名的仓库 {#renamed-repositories}
+
+GitHub 或 GitLab 项目根据 forge 的仓库 ID 固定，签名证书也会记录该 ID，而不只是仓库名称。如果 old/tool 重命名为 new/tool，下面的配置仍会继续安装，包括使用新名称签名的发布版本：
+
+~~~toml [mise.toml]
+[tools]
+"packslip:github.com/old/tool" = "latest"
+~~~
+
+mise 会警告一次项目现在是 github.com/new/tool；方便时请将配置改为新名称。签名者固定和 mise.lock 承诺会跟随仓库，因此无需运行 mise packslip forget。如果配置先改为新名称也一样：旧名称建立的固定仍然适用，并会移动到新名称。
+
+但以下两种变化会被拒绝：
+
+- **转移给另一个所有者。** 对旧所有者的信任不会延伸到新所有者。确认转移后，为旧名称运行 mise packslip forget，并使用当前仓库名称，例如 packslip:github.com/new-owner/tool。固定会根据仓库 ID 在两个名称下找到，因此单纯改名不会重置它。
+- **同名但不同的仓库。** 删除的仓库被他人占用时会出现这种情况。错误消息会说明原因；如果供应商重新创建了自己的仓库，请为该项目运行 mise packslip forget，并移除其 mise.lock 条目。
+
+没有固定且没有锁文件条目的机器会在首次安装时信任拥有该名称的仓库。详情和限制请参阅[重命名、转移和重新创建的仓库](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)。
+
 ## 工具选项
 
 这些[工具选项](/dev-tools/#tool-options)适用于 `[tools]` 中的一个条目。设置 `packslip.exec`、`packslip.stampers` 和 `skills.*` 应放在 `[settings]` 下。
@@ -258,6 +276,7 @@ MISE_DEBUG=1 mise install packslip:github.com/jdx/hk
 | 版本被盖章策略排除                           | 检查已配置的盖章者。受信任的盖章者必须批准该版本，并且供应商不得已撤回该版本。                                                                                                               |
 | 摘要或大小不匹配                             | 向发布者报告受影响的发布版本和构件；下载内容必须与签名清单匹配。                                                                                                                            |
 | 私有仓库发布版本返回 404                     | 确认 `MISE_GITHUB_TOKEN`、`GITHUB_API_TOKEN` 或 `GITHUB_TOKEN` 中的令牌可以读取该仓库。请参阅[私有 GitHub 仓库](#private-repositories)。                                                    |
+| 转移给其他所有者或变成不同的仓库               | 请参阅[重命名的仓库](#renamed-repositories)。在信任新所有者或仓库前确认项目变更。                                           |
 
 有关补全和技能错误，请参阅[资源故障排除](/dev-tools/packslip-resources.html#troubleshooting)。
 

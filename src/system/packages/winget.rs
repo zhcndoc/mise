@@ -166,6 +166,7 @@ async fn query_package(request: &PackageRequest) -> Result<PackageStatus> {
     Ok(PackageStatus {
         request: request.clone(),
         state,
+        display_name: None,
     })
 }
 
@@ -229,6 +230,12 @@ impl SystemPackageManager for WingetManager {
         } else {
             "only available on windows".to_string()
         }
+    }
+
+    /// WinGet matches `--id --exact` case-insensitively, so two spellings of
+    /// one package ID are one package.
+    fn package_identity(&self, name: &str) -> Option<String> {
+        Some(name.to_ascii_lowercase())
     }
 
     async fn installed(&self, pkgs: &[PackageRequest]) -> Result<Vec<PackageStatus>> {

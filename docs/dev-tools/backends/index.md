@@ -26,7 +26,7 @@ mise exec -- rg --version
 | 发布资产                 | [GitHub](./github.html)、[GitLab](./gitlab.html)、[Forgejo](./forgejo.html)                                                                                   | 发布内容必须包含适用于你平台的可安装资产。                                          |
 | 直接下载                 | [HTTP](./http.html)、[S3](./s3.html)                                                                                                                         | 提供下载 URL，并为版本发现提供版本源。                                              |
 | 语言包                   | [Cargo](./cargo.html)、[Go](./go.html)、[npm](./npm.html)、[pipx](./pipx.html)、[gem](./gem.html)、[.NET](./dotnet.html)、[Swift Package Manager](./spm.html) | 阅读后端的运行时和构建前置条件。                                                     |
-| 二进制包生态系统         | [Conda](./conda.html)、[pkgx](./pkgx.html)（实验性）                                                                                                         | 软件包及其运行时依赖项必须支持你的平台。                                            |
+| 二进制包生态系统         | [Conda](./conda.html)                                                                                                                                         | 软件包及其运行时依赖项必须支持你的平台。                                            |
 | 插件定义的安装           | [vfox](./vfox.html)、[asdf](./asdf.html)（遗留）                                                                                                              | 在安装前检查插件及其依赖项。                                                        |
 | 遗留发布安装程序         | [ubi](./ubi.html)（已弃用）                                                                                                                                  | 将现有配置迁移到适当的发布后端。                                                    |
 

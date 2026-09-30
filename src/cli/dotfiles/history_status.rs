@@ -12,6 +12,13 @@ pub(crate) struct HistoryReport {
     pub enabled: bool,
     pub tracked_entries: usize,
     pub tracked_files: u64,
+    /// Files under a tracked entry that every save leaves out, with why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<crate::system::history::store::PathReason>,
+    /// Nested repositories under a tracked entry, saved as a commit pointer
+    /// without their files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested: Vec<crate::system::history::store::PathReason>,
     pub checkpoints: usize,
     pub latest: Option<LatestReport>,
     pub pending_operations: usize,
@@ -41,6 +48,9 @@ pub(crate) struct SyncReport {
     pub consecutive_failures: u32,
     pub application_failure: Option<String>,
     pub validation_error: Option<String>,
+    /// Paths sync neither applies nor removes, with why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<(String, String)>,
 }
 
 pub(crate) fn sync_report(
@@ -84,6 +94,16 @@ pub(crate) fn sync_report(
         consecutive_failures: status.consecutive_failures,
         application_failure: status.application_failure.clone(),
         validation_error: status.validation_error.clone(),
+        skipped: status
+            .skipped
+            .iter()
+            .filter_map(|skipped| {
+                roots
+                    .locate(&skipped.branch_path)
+                    .path()
+                    .map(|path| (crate::file::display_path(path), skipped.reason.clone()))
+            })
+            .collect(),
     }))
 }
 
@@ -103,6 +123,8 @@ pub(crate) async fn report() -> Result<HistoryReport> {
             enabled: false,
             tracked_entries: 0,
             tracked_files: 0,
+            omitted: vec![],
+            nested: vec![],
             checkpoints: 0,
             latest: None,
             pending_operations: 0,
@@ -114,6 +136,7 @@ pub(crate) async fn report() -> Result<HistoryReport> {
     }
     let (store, tracked, entries) = super::history::open().await?;
     let walk = tracked.walk()?;
+    walk.report_warnings();
     let tracked_files = walk.roots.iter().map(|root| root.files.len() as u64).sum();
     // an operation still running, or one that crashed: its record is in
     // the index only once it is closed
@@ -129,6 +152,8 @@ pub(crate) async fn report() -> Result<HistoryReport> {
         enabled,
         tracked_entries: tracked.entries.len(),
         tracked_files,
+        omitted: walk.omitted,
+        nested: walk.nested,
         checkpoints: entries.len(),
         latest,
         pending_operations,
@@ -163,17 +188,34 @@ pub(crate) fn print(report: &HistoryReport) -> Result<()> {
         ),
         None => miseprintln!("  no checkpoint recorded yet; `mise dot save` records one."),
     }
+    if !report.omitted.is_empty() || !report.nested.is_empty() {
+        miseprintln!(
+            "  {}.",
+            crate::system::history::tracked::omission_summary(&report.omitted, &report.nested)
+        );
+    }
     if report.pending_operations > 0 {
         miseprintln!(
             "  {} operation(s) did not finish; `mise dot history --pending` lists them; `mise dot recover` retries safe recovery.",
             report.pending_operations
         );
     }
-    miseprintln!(
-        "  automatic capture: {} ({}).",
-        report.watcher.as_str(),
-        super::capture_health::advice(report.watcher)
-    );
+    let failing = report
+        .health
+        .as_ref()
+        .is_some_and(|health| health.failing_capture().is_some());
+    if failing && report.watcher == super::capture_health::Watcher::Running {
+        miseprintln!(
+            "  automatic capture: {} but failing (edits are not being saved until a capture succeeds).",
+            report.watcher.as_str()
+        );
+    } else {
+        miseprintln!(
+            "  automatic capture: {} ({}).",
+            report.watcher.as_str(),
+            super::capture_health::advice(report.watcher)
+        );
+    }
     match &report.sync {
         None => miseprintln!(
             "Setup repository: none (`mise dot origin set <url>` synchronizes committed history)."
@@ -228,6 +270,9 @@ pub(crate) fn print(report: &HistoryReport) -> Result<()> {
             if let Some(error) = &sync.validation_error {
                 miseprintln!("  incoming setup is invalid: {error}");
             }
+            for (path, reason) in &sync.skipped {
+                miseprintln!("  not shared: {path} ({reason})");
+            }
         }
     }
     if let Some(health) = &report.health {
@@ -253,7 +298,15 @@ pub(crate) fn print(report: &HistoryReport) -> Result<()> {
                 "; the watcher is not running now, so this is what it last reported"
             }
         );
-        if let Some(error) = &w.last_error {
+        let running = report.watcher == super::capture_health::Watcher::Running;
+        // a running watcher starts from its predecessor's record: an error
+        // dated before this run is not its failure
+        let error = if running {
+            health.failing_capture()
+        } else {
+            w.last_error.as_deref()
+        };
+        if let Some(error) = error {
             miseprintln!(
                 "  last capture failure: {error} ({} consecutive; at {}). Edits since then are not protected.",
                 w.consecutive_failures,
@@ -261,6 +314,12 @@ pub(crate) fn print(report: &HistoryReport) -> Result<()> {
                     .as_deref()
                     .map(local_time)
                     .unwrap_or_else(|| "unknown".into())
+            );
+        }
+        if running && w.executable_gone {
+            miseprintln!(
+                "  outdated: {}.",
+                crate::system::history::health::EXECUTABLE_GONE_ADVICE
             );
         }
         for degraded in &w.degraded {

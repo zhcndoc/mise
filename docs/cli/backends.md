@@ -18,6 +18,7 @@ description: "管理后端"
 ## 子命令
 
 - [`mise backends ls`](/cli/backends/ls.html)
+- [`mise backends switch [-n --dry-run] [-g --global] [TOOL@VERSION]…`](/cli/backends/switch.html)
 
 弃用：
 

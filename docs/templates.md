@@ -15,6 +15,8 @@ see [Task Templates](/tasks/templates.html).
 
 - Most `mise.toml` configuration values
   - The `mise.toml` file itself is not templated and must be valid TOML
+  - `[bootstrap]` is the exception: only some of it is templated — see
+    [which bootstrap values are rendered](/bootstrap.html#templates)
 - `.tool-versions` files
 - `.miserc.toml` files (limited context — see [Template Support in .miserc.toml](#miserc-template-support))
 
@@ -101,8 +103,48 @@ Tera 还支持强大的[表达式](https://keats.github.io/tera/#expressions)：
 Tera 还支持[控制结构，例如 <span v-pre>`if`</span> 和
 <span v-pre>`for`</span>](https://keats.github.io/tera/#control-structures)。
 
-### Tera v2 迁移
+### 使用组件生成带参数的代码片段
 
+当一个任务需要用不同参数多次展开同一代码片段时，请使用 [Tera 组件](https://keats.github.io/tera/#components)。组件会在任务脚本中生成文本，因此生成的命令会使用该任务的工具、环境、工作目录和 shell。
+
+在同一个 run 字符串中定义并调用组件：
+
+~~~toml
+[tasks.demo]
+vars = { opt = "from-task" }
+run = """
+{% component wrap(opt="none") %}
+echo run --opt={{ opt | quote }} --end
+{% endcomponent %}
+{% component twice(opt) %}
+{{ <wrap opt={opt} /> }}
+{{ <wrap opt={"nested-" ~ opt} /> }}
+{% endcomponent %}
+
+{{ <wrap opt={vars.opt} /> }}
+{{ <wrap opt="other" /> }}
+{{ <twice opt={vars.opt} /> }}
+{{ <wrap /> }}
+"""
+~~~
+
+mise run demo 会打印：
+
+~~~text
+run --opt=from-task --end
+run --opt=other --end
+run --opt=from-task --end
+run --opt=nested-from-task --end
+run --opt=none --end
+~~~
+
+这些调用展示了任务本地参数、重复展开、嵌套，以及省略参数时的默认值。字符串字面量使用引号；vars.opt 等表达式放在组件调用的花括号中。请将组件所需的值作为参数传入。示例使用 quote 适配 POSIX shell；生成的命令和引用方式必须适合任务使用的 shell。
+
+组件仅适用于 mise 默认的 Tera v2 引擎，不适用于 tera_v1 兼容设置。请将定义与调用放在一起：mise 不提供共享组件文件加载器，一个任务或模板字符串中的定义也不是其他任务或字符串的受支持库。在顶层 vars 中放置组件定义不会推迟到任务运行时；这些值会在配置加载时[解析](/configuration/vars.html#when-vars-are-resolved)。
+
+[任务模板](/tasks/templates.html)通过 extends 共享任务定义。它们可以共享包含组件的整个 run 字符串，但不会将片段插入任务自己的 run。要在不同脚本之间共享 shell 逻辑，请使用已 source 的 shell 文件中的函数。
+
+### Tera v2 迁移
 mise 使用 Tera v2。Tera v1 的部分语法和内置功能在 Tera v2 中发生了变化。mise
 仍然可以出于兼容性考虑渲染许多旧模板。Tera v1 兼容性辅助功能将于
 mise 2026.10.0 开始发出警告，并计划在 mise 2027.4.0 中移除。
@@ -134,12 +176,7 @@ Tera v2 还增加了有用的语法，可以替代许多旧的辅助过滤器：
 - 可选链，例如 `env?.NODE_ENV or "development"`
 - 三元表达式，例如 `"prod" if release else "dev"`
 
-并非所有 Tera v1 的行为都能实现兼容。Tera v2 中对未定义变量的访问更加严格，
-并且 mise 模板不支持 Tera v1 宏。作为临时的退出方案，在运行 mise 前设置
-`MISE_TERA_V1=1`，即可使用 Tera v1 渲染模板。在共享的 `mise.toml` 文件中，
-建议使用向后兼容的环境变量形式，因为较旧版本的 mise 会将其视为普通环境变量，
-而不会因未知设置而失败：
-
+并非所有 Tera v1 的行为都能实现兼容。Tera v2 中对未定义变量的访问更加严格，默认引擎也不支持 Tera v1 宏。带参数的片段请使用[组件](#使用组件生成带参数的代码片段)。作为临时的退出方案，在运行 mise 前设置 MISE_TERA_V1=1，即可使用 Tera v1 渲染模板。在共享的 mise.toml 文件中，建议使用向后兼容的环境变量形式，因为较旧版本的 mise 会将其视为普通环境变量，而不会因未知设置而失败：
 ```toml
 [env]
 MISE_TERA_V1 = true

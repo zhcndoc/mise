@@ -1,8 +1,8 @@
 use eyre::Result;
 
-use super::driver::{self, Action, DriverOpts};
 use crate::config::{Config, Settings};
 use crate::system;
+use crate::system::driver::{self, Action, DriverOpts};
 use crate::system::history::OperationScope;
 
 #[derive(Debug, Default)]
@@ -52,7 +52,7 @@ pub(crate) struct SystemInstall {
     #[usage(long, short)]
     yes: bool,
 
-    /// Refresh package manager metadata first (apk: `--update-cache`, apt: `apt-get update`, winget: `source update`)
+    /// Refresh package manager metadata first (apk: `--update-cache`, apt: `apt-get update`, zypper: `refresh`, winget: `source update`)
     #[usage(long)]
     update: bool,
 }
@@ -65,7 +65,7 @@ impl SystemInstall {
     async fn run_inner(self) -> Result<()> {
         let mgrs = if self.packages.is_empty() {
             let config = Config::get().await?;
-            system::packages_from_config(&config)
+            system::packages_from_config(&config)?
         } else {
             let config = Config::get().await?;
             system::packages_from_specs_with_config(&self.packages, Some(&config))?
@@ -231,7 +231,7 @@ pub(crate) fn apply_shell_activation(
         verbose: Settings::get().verbose,
         yes,
     };
-    system::edits::apply(config, &edits, &opts).map(|_| ())
+    system::edits::apply(config, &edits, &opts, &mut vec![]).map(|_| ())
 }
 
 /// Apply `[bootstrap.repos]` entries that are missing or differ.

@@ -1,7 +1,7 @@
+use crate::args::BackendArg;
 use crate::backend::Backend;
 use crate::backend::VersionInfo;
 use crate::backend::backend_type::BackendType;
-use crate::cli::args::BackendArg;
 use crate::cmd::CmdLineRunner;
 #[cfg(unix)]
 use crate::env;
@@ -11,11 +11,15 @@ use crate::install_context::InstallContext;
 use crate::toolset::ToolVersion;
 use crate::{Result, config::Config};
 use async_trait::async_trait;
+use base64::{Engine, prelude::BASE64_STANDARD};
+use eyre::{WrapErr, bail, ensure};
 use indoc::formatdoc;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use std::path::Path;
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::OnceCell as TokioOnceCell;
+use url::Url;
 
 /// Cached gem source URL, memoized globally after first successful detection
 static GEM_SOURCE: TokioOnceCell<String> = TokioOnceCell::const_new();
@@ -50,13 +54,45 @@ impl Backend for GemBackend {
         false
     }
 
-    async fn _list_remote_versions(&self, config: &Arc<Config>) -> eyre::Result<Vec<VersionInfo>> {
-        // Get the gem source URL using the mise-managed Ruby environment
-        let source_url = self.get_gem_source(config).await;
+    /// `source` selects which registry the version list comes from, so it has
+    /// to be part of that list's cache key.
+    ///
+    /// Without this, two projects naming the same gem with different `source`
+    /// values share one cache entry: a list fetched from registry A answers
+    /// `latest` for registry B, and the install then asks B for a version only A
+    /// publishes. Declared here rather than through
+    /// `remote_version_cache_context` because this is exactly what the
+    /// declarative hook is for: mise folds only locally overridden options into
+    /// the digest, so an ordinary rubygems.org tool keeps one shared entry.
+    fn remote_version_listing_tool_option_keys(&self) -> &'static [&'static str] {
+        &["source"]
+    }
 
-        // Use RubyGems-compatible API to get versions with timestamps
-        let url = format!("{}api/v1/versions/{}.json", source_url, self.tool_name());
-        let response: Vec<RubyGemsVersion> = HTTP_FETCH.json(&url).await?;
+    async fn _list_remote_versions(&self, config: &Arc<Config>) -> eyre::Result<Vec<VersionInfo>> {
+        // Resolution and installation have to agree on where the gem comes
+        // from. Listing versions from rubygems.org and then installing from a
+        // private registry would resolve `latest` against the wrong catalogue.
+        let url = match self.configured_source(config).await? {
+            // `join` rather than concatenation. The source is normalized to end
+            // in `/`, so this appends within it instead of replacing its last
+            // path segment, and it cannot smuggle the API path into a query
+            // string or a fragment the way string-building could.
+            // GitHub Packages has no JSON versions API.
+            Some(source) if source.host_str() == Some(GITHUB_PACKAGES_HOST) => bail!(
+                "GitHub Packages has no version-listing API mise can read, so `{}` \
+                 cannot resolve `latest` or a prefix there: pin an exact version",
+                self.ba()
+            ),
+            Some(source) => source.join(&format!("api/v1/versions/{}.json", self.tool_name()))?,
+            None => format!(
+                "{}api/v1/versions/{}.json",
+                self.get_gem_source(config).await,
+                self.tool_name()
+            )
+            .parse()?,
+        };
+        let (url, headers) = credentials_as_header(url)?;
+        let response: Vec<RubyGemsVersion> = HTTP_FETCH.json_with_headers(url, &headers).await?;
 
         // RubyGems API returns newest-first, mise expects oldest-first
         let mut versions: Vec<VersionInfo> = response
@@ -95,14 +131,42 @@ impl Backend for GemBackend {
         )
         .await;
 
-        CmdLineRunner::new(self.spawn_program(&ctx.config, Some(&ctx.ts), "gem").await)
-            .arg("install")
-            .arg(self.tool_name())
-            .arg("--version")
-            .arg(&tv.version)
-            .arg("--install-dir")
-            .arg(tv.install_path().join("libexec"))
-            .with_pr(ctx.pr.as_ref())
+        let source = self.configured_source(&ctx.config).await?;
+        let mut cmd = match &source {
+            // A credential in argv is visible to other users in `ps`. RubyGems
+            // only reads credentials from the source URL, so run `bin/gem`'s
+            // two lines under `ruby -e` and hand the URL over in the
+            // environment, which only the same user can read.
+            Some(source) if carries_credentials(source) => {
+                CmdLineRunner::new(self.spawn_program(&ctx.config, Some(&ctx.ts), "ruby").await)
+                    .arg("-e")
+                    .arg(GEM_WITH_ENV_SOURCE)
+                    .arg("--")
+                    .env("MISE_GEM_SOURCE", source.as_str())
+                    // Raw mode would bypass the output redaction below.
+                    .never_raw()
+            }
+            _ => CmdLineRunner::new(self.spawn_program(&ctx.config, Some(&ctx.ts), "gem").await),
+        }
+        .arg("install")
+        .arg(self.tool_name())
+        .arg("--version")
+        .arg(&tv.version)
+        .arg("--install-dir")
+        .arg(tv.install_path().join("libexec"));
+        if let Some(source) = &source {
+            // `--source` rather than `--clear-sources --source`: the latter
+            // would also cut off the registry holding this gem's dependencies,
+            // which commonly still live on rubygems.org.
+            if !carries_credentials(source) {
+                cmd = cmd.arg("--source").arg(source.as_str());
+            }
+            // gem's own fetch errors redact the source (`Gem::Uri#redacted`),
+            // but `-V`, a `~/.gemrc` verbosity setting or a wrapper can still
+            // echo it, so scrub the streamed output too.
+            cmd = cmd.redact(ctx.config.redactions().iter().cloned());
+        }
+        cmd.with_pr(ctx.pr.as_ref())
             .envs(self.dependency_env(&ctx.config).await?)
             .env_values(tv.install_env())
             .execute()?;
@@ -131,6 +195,42 @@ impl Backend for GemBackend {
 impl GemBackend {
     pub(crate) fn from_arg(ba: BackendArg) -> Self {
         Self { ba: Arc::new(ba) }
+    }
+
+    /// A `source` option, which pins one tool to one gem registry.
+    ///
+    /// Without it the only way to install from a private registry is to make it
+    /// the machine's primary `gem sources` entry, because that is what
+    /// [`Self::get_gem_source`] reads and what a bare `gem install` uses. That
+    /// redirects every unrelated `gem install` on the machine to satisfy one
+    /// tool, which is too blunt to ask of anyone.
+    ///
+    /// A private registry usually needs a credential, and RubyGems takes it as
+    /// basic-auth userinfo on the source URL: `Gem::Request` reads `uri.user`
+    /// and `uri.password`, and `~/.gem/credentials` is only consulted by the
+    /// publishing commands. So a token genuinely can appear here, and anything
+    /// it touches is registered for redaction rather than assumed harmless.
+    ///
+    /// Read through `get_tool_opts_with_overrides` rather than `ba().opts()`.
+    /// A backend built straight from a CLI argument, as `mise ls-remote
+    /// gem:foo` does, carries no options from the config at all, so reading the
+    /// arg would silently fall back to the machine's primary source while the
+    /// cache key, which mise builds from the resolved options, still filed the
+    /// answer under the configured registry. The next install would then take a
+    /// version from one registry and ask the other for it.
+    async fn configured_source(&self, config: &Arc<Config>) -> Result<Option<Url>> {
+        let opts = config.get_tool_opts_with_overrides(self.ba()).await?;
+        let Some(raw) = opts.get("source") else {
+            return Ok(None);
+        };
+        let Some(url) = parse_source(raw)? else {
+            return Ok(None);
+        };
+        let url = with_github_packages_token(url, || {
+            crate::github::resolve_token("github.com").map(|(token, _)| token)
+        });
+        config.add_redactions(source_secrets(&url));
+        Ok(Some(url))
     }
 
     /// Get the primary gem source URL using the mise-managed Ruby environment.
@@ -162,6 +262,174 @@ impl GemBackend {
     }
 }
 
+/// Parse and validate a configured `source`, returning `None` when it carries
+/// nothing.
+///
+/// Parsed rather than pasted together. The version-listing endpoint lives under
+/// this URL, and appending to a raw string gets that wrong in ways that surface
+/// as a puzzling 404 rather than as the configuration error they are: a query
+/// string swallows the API path (`…/acme?token=x` asks for `/acme` with the
+/// query `token=x/api/v1/…`), a fragment discards it entirely, and a missing
+/// trailing slash runs the host and the path together.
+///
+/// The trailing slash is added here so `Url::join` treats the source as a
+/// directory to append within rather than a file to replace.
+fn parse_source(raw: &str) -> Result<Option<Url>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let mut url: Url = raw
+        .parse()
+        .wrap_err_with(|| format!("gem `source` is not a valid URL: {}", redacted(raw)))?;
+    ensure!(
+        matches!(url.scheme(), "http" | "https"),
+        "gem `source` must be an http or https URL, got scheme `{}`",
+        url.scheme()
+    );
+    ensure!(
+        url.scheme() == "https" || !carries_credentials(&url) || is_loopback(&url),
+        "gem `source` would send its credential in clear text: use https, or a \
+         loopback host for a registry running locally"
+    );
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "gem `source` must not carry a query string or fragment: the version API path is \
+         appended to it, and both would swallow that path"
+    );
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    Ok(Some(url))
+}
+
+/// `bin/gem`, plus `--source` from `MISE_GEM_SOURCE`. The variable is deleted
+/// first so native extension builds do not inherit it.
+const GEM_WITH_ENV_SOURCE: &str = r#"require "rubygems/gem_runner"
+Gem::GemRunner.new.run(ARGV + ["--source", ENV.delete("MISE_GEM_SOURCE")])"#;
+
+/// GitHub Packages' RubyGems registry.
+const GITHUB_PACKAGES_HOST: &str = "rubygems.pkg.github.com";
+
+/// Add the resolved GitHub token to an https GitHub Packages source that has
+/// no credentials. Other hosts and explicit credentials are left alone.
+fn with_github_packages_token(mut url: Url, token: impl FnOnce() -> Option<String>) -> Url {
+    if url.scheme() != "https"
+        || url.host_str() != Some(GITHUB_PACKAGES_HOST)
+        || carries_credentials(&url)
+    {
+        return url;
+    }
+    if let Some(token) = token().filter(|t| !t.is_empty()) {
+        // GitHub Packages takes the token as the username.
+        let _ = url.set_username(&token);
+    }
+    url
+}
+
+/// Move a URL's userinfo into an `Authorization` header, since the HTTP
+/// client can print URLs unredacted (e.g. `MISE_LOG_HTTP`).
+fn credentials_as_header(mut url: Url) -> Result<(Url, HeaderMap)> {
+    let mut headers = HeaderMap::new();
+    if !carries_credentials(&url) {
+        return Ok((url, headers));
+    }
+    let user = urlencoding::decode(url.username())?.into_owned();
+    let password = urlencoding::decode(url.password().unwrap_or_default())?.into_owned();
+    let mut value = HeaderValue::from_str(&format!(
+        "Basic {}",
+        BASE64_STANDARD.encode(format!("{user}:{password}"))
+    ))?;
+    value.set_sensitive(true);
+    headers.insert(AUTHORIZATION, value);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    Ok((url, headers))
+}
+
+/// Whether this URL carries basic-auth userinfo.
+fn carries_credentials(url: &Url) -> bool {
+    !url.username().is_empty() || url.password().is_some_and(|p| !p.is_empty())
+}
+
+/// Whether this URL points at the machine it is running on.
+///
+/// A registry on loopback is the ordinary way to test one, and the credential
+/// never crosses a network, so plain HTTP is allowed there and nowhere else.
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// The shortest credential safe to register on its own.
+///
+/// Redaction is substring replacement across every later log line, so a bare
+/// one or two character value would blank out unrelated text everywhere. That
+/// is a reason to be careful about the BARE value only: the userinfo pattern
+/// below carries its own delimiters and is specific at any length, so a short
+/// credential is still covered wherever it appears as part of a URL, which is
+/// everywhere mise or gem renders it.
+const MIN_REDACTABLE_SECRET: usize = 8;
+
+/// The parts of a source URL that must never be printed.
+///
+/// A registry that authenticates with a token takes it as userinfo. GitHub
+/// Packages puts the token in the user position with no password at all, so
+/// both halves are candidates; the password is always a secret, and the
+/// username is treated as one only when it stands alone, since otherwise it is
+/// a name like `x-access-token` and redacting it everywhere is just noise.
+fn source_secrets(url: &Url) -> Vec<String> {
+    let user = url.username();
+    let password = url.password().unwrap_or_default();
+    if user.is_empty() && password.is_empty() {
+        return vec![];
+    }
+
+    // The userinfo exactly as a URL spells it, trailing `@` included. That
+    // delimiter is what makes it specific: it cannot collide with ordinary text
+    // the way a bare `ab` would, so it is registered whatever its length, and a
+    // short credential is protected rather than skipped.
+    let mut secrets = vec![if password.is_empty() {
+        format!("{user}@")
+    } else {
+        format!("{user}:{password}@")
+    }];
+
+    // The bare secret as well, in case something prints it outside a URL, but
+    // only when it is long enough for substring replacement to be safe.
+    let bare = if password.is_empty() { user } else { password };
+    if bare.len() >= MIN_REDACTABLE_SECRET {
+        secrets.push(bare.to_string());
+    }
+    secrets
+}
+
+/// Strip userinfo so an unparseable value can still be named in an error.
+///
+/// This runs before the value has been registered for redaction, precisely
+/// because it failed to parse, so it cannot lean on the global redactor.
+///
+/// Splits on the LAST `@` and does not require a scheme. Omitting the scheme is
+/// exactly the typo this has to survive: the documented example puts the token
+/// in the user position, so `{{ env.GEM_TOKEN }}@gems.example.com` is an easy
+/// thing to write, it fails to parse, and everything before the `@` is the
+/// secret.
+fn redacted(raw: &str) -> String {
+    let (scheme, rest) = match raw.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => (String::new(), raw),
+    };
+    match rest.rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}[redacted]@{host}"),
+        None => raw.to_string(),
+    }
+}
+
 /// RubyGems API response for version info
 #[derive(Debug, Deserialize)]
 struct RubyGemsVersion {
@@ -171,7 +439,7 @@ struct RubyGemsVersion {
 
 /// Parse gem sources output to extract the primary source URL.
 /// Output format:
-/// ```
+/// ```text
 /// *** CURRENT SOURCES ***
 ///
 /// https://rubygems.org/
@@ -479,6 +747,30 @@ fn extract_minor_version(version: &str) -> Option<String> {
     }
 }
 
+/// Search rubygems.org for gems matching `query`. The endpoint has a fixed
+/// page size, so results are truncated to `limit`.
+pub(crate) async fn search_tools(query: &str, limit: usize) -> Result<Vec<vfox::BackendTool>> {
+    #[derive(Deserialize)]
+    struct SearchGem {
+        name: String,
+        info: Option<String>,
+    }
+
+    let url = url::Url::parse_with_params(
+        "https://rubygems.org/api/v1/search.json",
+        &[("query", query)],
+    )?;
+    let res: Vec<SearchGem> = HTTP_FETCH.json(url).await?;
+    Ok(res
+        .into_iter()
+        .take(limit)
+        .map(|g| vfox::BackendTool {
+            name: g.name,
+            description: g.info,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +807,304 @@ mod tests {
                 "{version} should use remote discovery"
             );
         }
+    }
+
+    /// The version API path is appended to the source, so a source that does
+    /// not end in `/` would otherwise run the host and the path together.
+    #[test]
+    fn a_source_is_normalized_to_end_with_a_slash() {
+        for input in [
+            "https://gems.example.com",
+            "https://gems.example.com/",
+            "  https://gems.example.com  ",
+        ] {
+            assert_eq!(
+                parse_source(input).unwrap().map(|u| u.to_string()),
+                Some("https://gems.example.com/".to_string()),
+                "{input:?}"
+            );
+        }
+    }
+
+    fn github_packages(raw: &str, token: Option<&str>) -> String {
+        let url = parse_source(raw).unwrap().unwrap();
+        with_github_packages_token(url, || token.map(str::to_string)).to_string()
+    }
+
+    /// A bare GitHub Packages source borrows the resolved GitHub token.
+    #[test]
+    fn a_github_packages_source_gets_the_github_token() {
+        assert_eq!(
+            github_packages("https://rubygems.pkg.github.com/acme", Some("ghp_secret")),
+            "https://ghp_secret@rubygems.pkg.github.com/acme/"
+        );
+    }
+
+    /// Credentials already in the URL win over the resolved token.
+    #[test]
+    fn a_github_packages_source_keeps_its_own_credentials() {
+        assert_eq!(
+            github_packages(
+                "https://me:mine@rubygems.pkg.github.com/acme",
+                Some("ghp_secret")
+            ),
+            "https://me:mine@rubygems.pkg.github.com/acme/"
+        );
+    }
+
+    /// The GitHub token never goes to any other registry.
+    #[test]
+    fn other_sources_never_get_the_github_token() {
+        assert_eq!(
+            github_packages("https://gems.example.com/acme", Some("ghp_secret")),
+            "https://gems.example.com/acme/"
+        );
+    }
+
+    /// An http source never gets the token.
+    #[test]
+    fn an_http_github_packages_source_never_gets_the_github_token() {
+        assert_eq!(
+            github_packages("http://rubygems.pkg.github.com/acme", Some("ghp_secret")),
+            "http://rubygems.pkg.github.com/acme/"
+        );
+    }
+
+    /// Credentials move from the URL to a Basic header.
+    #[test]
+    fn source_credentials_travel_as_a_header() {
+        let url: Url = "https://ghp_secret@rubygems.pkg.github.com/acme/api/v1/versions/x.json"
+            .parse()
+            .unwrap();
+        let (url, headers) = credentials_as_header(url).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rubygems.pkg.github.com/acme/api/v1/versions/x.json"
+        );
+        let value = &headers[AUTHORIZATION];
+        assert!(value.is_sensitive());
+        assert_eq!(
+            value.to_str().unwrap(),
+            format!("Basic {}", BASE64_STANDARD.encode("ghp_secret:"))
+        );
+
+        // Percent-decoded; `+` stays literal.
+        let url: Url = "https://me:p%40s+s@gems.example.com/".parse().unwrap();
+        let (_, headers) = credentials_as_header(url).unwrap();
+        assert_eq!(
+            headers[AUTHORIZATION].to_str().unwrap(),
+            format!("Basic {}", BASE64_STANDARD.encode("me:p@s+s"))
+        );
+
+        let url: Url = "https://rubygems.org/".parse().unwrap();
+        let (url, headers) = credentials_as_header(url).unwrap();
+        assert_eq!(url.as_str(), "https://rubygems.org/");
+        assert!(headers.is_empty());
+    }
+
+    /// No token resolved, or an empty one, leaves the source anonymous.
+    #[test]
+    fn a_github_packages_source_without_a_token_stays_anonymous() {
+        for token in [None, Some("")] {
+            assert_eq!(
+                github_packages("https://rubygems.pkg.github.com/acme", token),
+                "https://rubygems.pkg.github.com/acme/",
+                "{token:?}"
+            );
+        }
+    }
+
+    /// An empty or whitespace-only value means "not configured" rather than
+    /// "install from the empty string", which would build a nonsense URL.
+    #[test]
+    fn an_empty_source_is_treated_as_unset() {
+        for input in ["", "   ", "\t"] {
+            assert!(parse_source(input).unwrap().is_none(), "{input:?}");
+        }
+    }
+
+    /// A path under the host is kept: registries commonly scope gems per owner,
+    /// as in `https://gems.example.com/acme`.
+    #[test]
+    fn a_source_path_is_preserved() {
+        assert_eq!(
+            parse_source("https://gems.example.com/acme")
+                .unwrap()
+                .map(|u| u.to_string()),
+            Some("https://gems.example.com/acme/".to_string())
+        );
+    }
+
+    /// This is the assertion that matters: the endpoint has to land *under* the
+    /// source. Built by concatenation, `…/acme?token=x` asked for `/acme` with
+    /// the query `token=x/api/v1/…`, and a fragment dropped the path entirely.
+    #[test]
+    fn the_versions_endpoint_lands_under_the_source() {
+        let source = parse_source("https://gems.example.com/acme")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            source
+                .join("api/v1/versions/internal-cli.json")
+                .unwrap()
+                .as_str(),
+            "https://gems.example.com/acme/api/v1/versions/internal-cli.json"
+        );
+    }
+
+    /// A query or fragment cannot survive having a path appended to it, so it
+    /// is a configuration error rather than a 404 to puzzle over later.
+    #[test]
+    fn a_source_with_a_query_or_fragment_is_rejected() {
+        for input in [
+            "https://gems.example.com/acme?token=x",
+            "https://gems.example.com/acme#mirror",
+            "https://gems.example.com/acme?",
+        ] {
+            assert!(parse_source(input).is_err(), "{input:?} should be rejected");
+        }
+    }
+
+    /// Basic-auth userinfo over plain HTTP puts the token on the wire for
+    /// anything between here and the registry.
+    #[test]
+    fn a_credential_may_not_travel_over_plain_http() {
+        assert!(parse_source("http://ghp_tok3n@gems.example.com").is_err());
+        assert!(parse_source("http://user:s3cretpw@gems.example.com").is_err());
+
+        // No credential, no exposure: a plain-HTTP public mirror is still fine.
+        assert!(parse_source("http://gems.example.com").unwrap().is_some());
+        // And a registry on this machine never puts it on a network, which is
+        // how a local one is tested.
+        for host in [
+            "http://ghp_tok3n@127.0.0.1:8080",
+            "http://ghp_tok3n@localhost:8080",
+            "http://ghp_tok3n@[::1]:8080",
+        ] {
+            assert!(parse_source(host).unwrap().is_some(), "{host}");
+        }
+        assert!(
+            parse_source("https://ghp_tok3n@gems.example.com")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// Redaction is substring replacement over every later log line, so a very
+    /// short pattern would blank out unrelated text everywhere. Leaving a
+    /// two-character value unmasked is the lesser harm, and nothing a registry
+    /// issues as a token is that short.
+    #[test]
+    fn a_short_credential_is_still_redacted_through_its_userinfo() {
+        let short = parse_source("https://ab@gems.example.com")
+            .unwrap()
+            .unwrap();
+        assert_eq!(source_secrets(&short), vec!["ab@".to_string()]);
+        assert!(
+            !source_secrets(&short).contains(&"ab".to_string()),
+            "a two-character pattern would blank out unrelated text"
+        );
+    }
+
+    /// Whatever is registered has to actually mask the URL as it is rendered,
+    /// since that is how the credential reaches a log line or an argv.
+    #[test]
+    fn the_registered_patterns_mask_the_rendered_url() {
+        for raw in [
+            "https://ab@gems.example.com/acme",
+            "https://user:pw@gems.example.com/acme",
+            "https://ghp_tok3n@gems.example.com/acme",
+        ] {
+            let url = parse_source(raw).unwrap().unwrap();
+            let secret = url
+                .password()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| url.username())
+                .to_string();
+            let masked =
+                crate::redactions::Redactor::new(source_secrets(&url)).redact(url.as_str());
+            assert!(!masked.contains(&secret), "{raw} -> {masked}");
+        }
+    }
+
+    #[test]
+    fn a_source_must_be_http_or_https() {
+        assert!(parse_source("file:///tmp/gems").is_err());
+        assert!(parse_source("gems.example.com").is_err(), "no scheme");
+    }
+
+    /// RubyGems authenticates a private source with basic-auth userinfo, so a
+    /// token really does live in this URL and must never reach a log line.
+    #[test]
+    fn credentials_in_a_source_are_collected_for_redaction() {
+        let with_password = parse_source("https://user:s3cret-pw@gems.example.com")
+            .unwrap()
+            .unwrap();
+        // The userinfo pattern first, then the bare secret.
+        assert_eq!(
+            source_secrets(&with_password),
+            vec!["user:s3cret-pw@".to_string(), "s3cret-pw".to_string()]
+        );
+
+        // GitHub Packages puts the token in the user position with no password.
+        let token_only = parse_source("https://ghp_tok3n@rubygems.pkg.github.com/acme")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            source_secrets(&token_only),
+            vec!["ghp_tok3n@".to_string(), "ghp_tok3n".to_string()]
+        );
+
+        let anonymous = parse_source("https://gems.example.com").unwrap().unwrap();
+        assert!(source_secrets(&anonymous).is_empty());
+    }
+
+    /// The parse error names the source, and a value that failed to parse has
+    /// not been registered for redaction yet, so it is stripped by hand.
+    #[test]
+    fn an_unparseable_source_is_named_without_its_credential() {
+        assert_eq!(
+            redacted("https://ghp_tok3n@gems.example.com/ acme"),
+            "https://[redacted]@gems.example.com/ acme"
+        );
+        // No scheme is the typo that matters: the documented example puts the
+        // token in the user position, so this is an easy thing to write, and it
+        // fails to parse before the value is registered for redaction.
+        assert_eq!(
+            redacted("ghp_tok3n@gems.example.com"),
+            "[redacted]@gems.example.com"
+        );
+        assert_eq!(
+            redacted("https://user:ghp_tok3n@gems.example.com"),
+            "https://[redacted]@gems.example.com"
+        );
+        assert_eq!(
+            redacted("https://gems.example.com"),
+            "https://gems.example.com"
+        );
+        let err = parse_source("ghp_tok3n@gems.example.com")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("ghp_tok3n"), "{err}");
+        let err = parse_source("https://ghp_tok3n@gems.example.com:notaport")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("ghp_tok3n"), "{err}");
+    }
+
+    /// A version list is only valid for the registry it came from, so `source`
+    /// has to reach the cache key. Asserted on the declaration rather than on a
+    /// cached file, because the digest is mise's to build: what this backend
+    /// owns is naming the option.
+    #[test]
+    fn the_source_option_partitions_the_remote_version_cache() {
+        let backend = GemBackend::from_arg("gem:rubocop".into());
+        assert!(
+            backend
+                .remote_version_listing_tool_option_keys()
+                .contains(&"source"),
+            "a version list from one registry must not answer for another"
+        );
     }
 
     #[test]

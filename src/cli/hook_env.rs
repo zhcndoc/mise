@@ -18,12 +18,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::{borrow::Cow, sync::Arc};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, usage_rs::ValueEnum)]
-#[usage(rename_all = "lowercase")]
-pub(crate) enum HookReason {
-    Precmd,
-    Chpwd,
-}
+pub(crate) use crate::hook_env::HookReason;
 
 /// [internal] called by activate hook to update env vars directory change
 #[derive(Debug, usage_rs::Args)]
@@ -123,7 +118,11 @@ impl HookEnv {
             .chain(PREV_SESSION.watch_files.iter().map(|p| p.as_path().into()))
             .collect();
 
-        if !self.force && hook_env::should_exit_early(slow_path_watch_files, self.reason) {
+        if self.force {
+            // Activation forces its first run, which skips should_exit_early, but that
+            // run is still the shell's entry into the current directory.
+            hook_env::schedule_dir_change_hooks();
+        } else if hook_env::should_exit_early(slow_path_watch_files, self.reason) {
             trace!("should_exit_early true");
             return Ok(());
         }
@@ -259,6 +258,7 @@ impl HookEnv {
         hooks::run_all_hooks(&config, &ts, &*shell).await;
         hooks::run_enter_hooks_for_newly_loaded_configs(&config, &ts, &*shell).await;
         watch_files::execute_runs(&config, &ts).await;
+        hooks::take_output_error()?;
 
         Ok(())
     }

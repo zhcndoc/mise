@@ -132,6 +132,21 @@ mise lock node@22.15.0      # 仅更新 mise.lock，不重新安装
 
 如果该版本与当前配置前缀不匹配，配置会自动更新。例如，如果 `mise.toml` 中有 `node = "20"`，而你运行 `mise upgrade node@22.15.0`，配置会升级为 `node = "22"`（保留相同的精度级别），并且锁文件会设置为 `22.15.0`。
 
+### 切换到新的注册表后端 {#registry-backend-changes}
+
+注册表有时会将工具迁移到另一个后端，例如从 `github:jdx/communique` 迁移到 `packslip:github.com/jdx/communique`。使用短名称配置的工具会继续使用 `mise.lock` 中记录的后端，即使 `mise lock --bump` 或 `mise upgrade` 选择了更新版本；因此注册表更新不会改变锁定工具的安装来源。发生这种情况时，`mise install` 和 `mise lock` 会发出警告：
+
+~~~text
+mise WARN  communique is locked to github:jdx/communique, but the registry now installs it from packslip:github.com/jdx/communique. Run `mise backends switch communique` to switch.
+~~~
+
+[`mise backends switch`](/cli/backends/switch.html) 会在相同版本下将锁条目移到注册表的新后端，记录新后端的校验和与 URL，并从新后端重新安装已经安装的版本：
+
+~~~sh
+mise backends switch communique   # 切换一个工具
+mise backends switch --dry-run    # 列出有新后端的所有锁定工具
+~~~
+
 ## 带锁文件的命令行为
 
 These commands update an existing lockfile. Automatic creation follows the
@@ -226,7 +241,8 @@ URL checks skip backends that cannot record a download URL: `asdf`, `cargo`,
 `core:swift`, and vfox backend plugins. This exemption is specific to artifact
 URLs; npm and PyPI dependency graphs have their own locked-install checks.
 vfox tool plugins can record URLs and participate in URL locking.
-Tools resolved from a [tool stub](/dev-tools/tool-stubs) also skip URL checks.
+[Tool stubs](/dev-tools/tool-stubs#locked-tool-stub) follow the same rules,
+using their project's `mise.lock`.
 
 ## Dependency graphs
 
@@ -268,7 +284,8 @@ mise.lock
 ```
 
 The corresponding entry contains a relative path and a SHA-256 digest of the native
-lockfile's exact bytes:
+lockfile's contents, with CRLF line endings normalized to LF so that a Windows
+checkout (`core.autocrlf=true`) verifies against the committed file:
 
 ```toml
 [[tools."pypi:black"]]
@@ -279,9 +296,16 @@ uv = { path = ".mise/locks/pypi-black/24.10.0", digest = "sha256:…" }
 
 ### Sidecar locations
 
-The directory follows your configuration layout: `.mise/mise.lock` uses
+The directory follows the lockfile's layout: `.mise/mise.lock` uses
 `.mise/locks/`, and both `.config/mise/mise.lock` and `.config/mise.lock` use
-`.config/mise/locks/`. Option variants have a hash suffix. Once recorded, a path
+`.config/mise/locks/`.
+
+If `mise.lock` is a symlink, native dependency sidecar paths are resolved relative
+to the target lockfile, and updates keep sidecars beside that target. This also
+supports deployments that symlink each file individually: new sidecars are stored
+in the dotfiles repository and do not need separate global symlinks.
+
+Option variants have a hash suffix. Once recorded, a path
 stays unchanged when other variants are added. Directory names follow the tool
 spelling: `pypi:black` uses `pypi-black`, while `pipx:black` uses `pipx-black`.
 Explicit `mise lock` and generate-mode auto-lock saves remove unreferenced sidecar
@@ -294,6 +318,25 @@ Non-default lockfile names have separate subdirectories. For example,
 If you ignore the local lockfile in Git, also ignore that matching sidecar directory.
 Cleanup never removes another lockfile's sidecars.
 
+### Listing sidecars
+
+`mise lock --sidecars` prints each existing lockfile's sidecar directory and the
+sidecar directories it references, without resolving tools or writing files:
+
+```console
+$ mise lock --sidecars
+mise.lock (sidecars in .mise/locks)
+  npm:prettier@3.9.9 aube .mise/locks/npm-prettier/3.9.9
+```
+
+Add `--json` for scripts and automation, such as tools that must commit sidecars
+alongside `mise.lock`. Each lockfile reports its `root` and its `sidecars`, each
+with `tool`, `version`, `graph` (`aube` or `uv`), `path`, `digest`, and `exists`
+(whether the native lockfile is on disk). Paths are relative to the current
+directory when they are inside it. Sidecars of a symlinked lockfile live beside
+its target, so they can be absolute paths outside the current directory.
+Use `--local` or `--global` to choose lockfiles, as for a normal `mise lock` run.
+
 ### Inspecting and editing sidecars
 
 Tools that recognize `pyproject.toml` and `uv.lock`, such as Renovate, can inspect
@@ -302,8 +345,8 @@ sidecar directories. `aube-lock.yaml` is aube's native format; it is not an npm
 `package-lock.json` and scanners may not recognize its transitive dependencies.
 
 After editing a sidecar, run `mise lock` to validate it and update the recorded
-digest. Then run `mise install --locked`. Even formatting-only edits change the
-digest and installation identity.
+digest. Then run `mise install --locked`. Apart from line endings, even
+formatting-only edits change the digest and installation identity.
 
 Ordinary `mise install` also accepts valid edits when an installation is needed
 and updates the digest through auto-locking. If the recorded installation already
@@ -461,7 +504,7 @@ a version and how artifact metadata is stored for one platform. Generate the
 entries your project needs with `mise lock` rather than copying this excerpt.
 
 ```toml [mise.lock]
-lockfile_version = 2
+lockfile_version = 3
 
 [[tools.node]]
 version = "26.8.1"
@@ -475,9 +518,12 @@ url = "https://nodejs.org/dist/v26.8.1/node-v26.8.1-darwin-arm64.tar.gz"
 
 New lockfiles use the current versioned format. Older lockfiles retain their format
 during ordinary updates to avoid making them unreadable by collaborators using an
-older mise. Run `mise lock --upgrade` to upgrade explicitly. Version 1 records each
+older mise. Run `mise lock --upgrade` to upgrade explicitly and record forge
+repository IDs in version 3. Older revisions omit those IDs and warn when a
+Packslip release provides them. Version 1 records each
 original tool request in the concrete entry it resolved to. Version 2 references native
-aube and uv dependency graphs in sidecar directories. Older mise versions reject version 2 lockfiles.
+aube and uv dependency graphs in sidecar directories. Version 3 records forge repository
+IDs for Packslip signatures. Older mise versions reject newer lockfile versions.
 
 ### Platform Information
 
@@ -491,6 +537,7 @@ A platform entry is written under a quoted key such as
 - **`url_api`** (optional): API download URL, for sources that require authenticated asset requests
 - **`provenance`**: Verification method successfully used for the artifact
 - **`signer`** and **`attested_by`**: Packslip identity commitments
+- **`repository_ids`** (version 3): For a Packslip project on GitHub or GitLab, an inline table containing the forge's `repository` ID and, when available, `owner` ID from the signing certificate. For example, `repository_ids = { repository = "922514152", owner = "216188" }`. The commitment [follows a renamed repository](/dev-tools/backends/packslip.html#renamed-repositories) and refuses a different one under the same name
 
 ### Tool Entry Fields
 

@@ -34,6 +34,23 @@ end
 
 CASK_FILE = ENV.fetch("MISE_BREW_SOURCE_PATH")
 
+# Preserve target interpolation for resolution against mise's configured prefix.
+HOMEBREW_PREFIX = "$HOMEBREW_PREFIX".freeze
+
+# Match Homebrew's serialized Pathname-like staged_path while keeping the value
+# relocatable. Some casks use Pathname operations before declaring artifacts.
+class StagedPath < String
+  def /(other) = self.class.new(File.join(self, other.to_s))
+  def dirname = self.class.new(File.dirname(self))
+end
+
+# Metadata extraction does not have an extracted archive to inspect. Homebrew's
+# API generator likewise emits no artifacts for cask-source globs at this stage.
+class Dir
+  def self.[](*) = []
+  def self.glob(*) = []
+end
+
 module OS
   def self.mac? = ENV.fetch("MISE_BREW_OS") == "macos"
   def self.linux? = ENV.fetch("MISE_BREW_OS") == "linux"
@@ -100,6 +117,13 @@ class Version
   def token(index) = self.class.new(@value.split(".")[index].to_s)
 end
 
+# Preserve Pathname-style composition for the install-time staged-path template.
+# This intentionally omits parent traversal because the Rust flight-step format
+# only supports commands rooted at the staged path itself.
+class FlightStagedPath < String
+  def /(other) = self.class.new(File.join(self, other.to_s))
+end
+
 # Collect declarative steps only; commands run later in the Rust installer.
 class CaskFlightSteps
   attr_reader :steps
@@ -111,9 +135,20 @@ class CaskFlightSteps
 
   def version = @cask.version
   def arch = @cask.arch
+  def appdir = @cask.appdir
+  def staged_path = FlightStagedPath.new("{{staged_path}}")
 
   def run(command, base: nil, **options)
     path = { path: command.to_s }
+    # Template roots become structured bases so the installer receives a
+    # relative command path and resolves it in the correct flight context.
+    if path[:path].start_with?("{{staged_path}}/")
+      base = :staged_path if base.nil?
+      path[:path] = path[:path].delete_prefix("{{staged_path}}/") if base == :staged_path
+    elsif path[:path].start_with?("$APPDIR/")
+      base = :appdir if base.nil?
+      path[:path] = path[:path].delete_prefix("$APPDIR/") if base == :appdir
+    end
     path[:base] = base.to_s unless base.nil?
     @steps << options.merge(type: "run", command: path)
   end
@@ -162,6 +197,18 @@ class CaskMetadata
   def url(value = nil, **) = (@url = value.to_s unless value.nil?)
   def auto_updates(value = nil) = (@auto_updates = value unless value.nil?)
 
+  # Metadata extraction never knows the real install location, so interpolate
+  # the relocatable `$APPDIR` marker the Rust installer resolves against the
+  # actual appdir (honoring `MISE_BREW_CASK_OPT_APPDIR`); the install-time shim
+  # answers `appdir` with the real path directly.
+  def appdir = "$APPDIR"
+
+  # Homebrew serializes artifact and uninstall staged paths as a relocatable
+  # Caskroom path. Flight steps use a different install-time template above.
+  def staged_path
+    StagedPath.new("#{HOMEBREW_PREFIX}/Caskroom/#{@token}/#{@version}")
+  end
+
   def depends_on(values = nil, **kwargs)
     values = kwargs if values.nil?
     return unless values.is_a?(Hash)
@@ -177,7 +224,13 @@ class CaskMetadata
 
   def app(source, target: nil) = add_artifact("app", source, target)
   def binary(source, target: nil) = add_artifact("binary", source, target)
-  def pkg(source, **) = add_artifact("pkg", source, nil)
+  # Keep pkg options such as `choices` so an install applies them instead of
+  # silently installing every package component.
+  def pkg(source, **options)
+    value = [source.to_s]
+    value << options.transform_keys(&:to_s) unless options.empty?
+    @artifacts << { "pkg" => value }
+  end
   def font(source, target: nil) = add_artifact("font", source, target)
   def manpage(source, target: nil) = add_artifact("manpage", source, target)
   def bash_completion(source, target: nil) = add_artifact("bash_completion", source, target)

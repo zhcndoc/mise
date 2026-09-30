@@ -1,5 +1,6 @@
 //! Pour a bottle: extract -> relocate -> codesign -> receipt -> link.
 
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -350,7 +351,7 @@ fn commit_lock_path() -> PathBuf {
 /// disabled. Bottle download and preparation happen before acquiring this lock;
 /// source builds hold it while writing directly into the final Cellar.
 pub(super) fn commit_lock(pr: &dyn SingleReport) -> Result<fslock::LockFile> {
-    crate::lock_file::LockFile::at(&commit_lock_path()).lock_with_notice(&|| {
+    crate::lock_file::LockFile::at(&commit_lock_path()).lock_with_notice(&|_| {
         pr.set_message("waiting for another brew install".to_string());
     })
 }
@@ -493,14 +494,17 @@ pub(super) fn write_receipt(
     closure: &[ResolvedFormula],
     poured_from_bottle: bool,
 ) -> Result<()> {
+    let by_name = super::resolve::formulae_by_name(closure);
+    let declared: HashSet<&str> = rf
+        .formula
+        .dependencies_for(tag)
+        .iter()
+        .filter_map(|d| by_name.get(d.as_str()))
+        .map(|dep| dep.formula.name.as_str())
+        .collect();
     let runtime_dependencies: Vec<serde_json::Value> = closure
         .iter()
-        .filter(|other| {
-            rf.formula
-                .dependencies_for(tag)
-                .iter()
-                .any(|d| d == &other.formula.name || other.formula.aliases.contains(d))
-        })
+        .filter(|other| declared.contains(other.formula.name.as_str()))
         .filter_map(|dep| {
             let pkg_version = dep.formula.pkg_version().ok()?;
             Some(json!({

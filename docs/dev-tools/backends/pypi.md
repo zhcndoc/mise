@@ -36,15 +36,28 @@ mise 使用 uv 安装工具。启用[依赖锁定](#dependency-locking)后，它
 
 | 源                      | 示例                                             |
 | ----------------------- | ------------------------------------------------ |
-| PyPI，最新版本          | `pypi:black`                                     |
-| PyPI，特定版本          | `pypi:black@24.3.0`                              |
-| GitHub，默认分支        | `pypi:psf/black`                                 |
-| GitHub，特定发行版本    | `pypi:psf/black@24.3.0`                          |
-| Git 仓库                | `pypi:git+https://github.com/psf/black.git`      |
-| Git 分支                | `pypi:git+https://github.com/psf/black.git@main` |
+| PyPI，最新版本          | pypi:black                                      |
+| PyPI，特定版本          | pypi:black@24.3.0                               |
+| GitHub，最新发行版      | pypi:psf/black                                  |
+| GitHub，特定发行版      | pypi:psf/black@24.3.0                           |
+| Git 仓库                | pypi:git+https://github.com/psf/black.git       |
+| Git 分支                | pypi:git+https://github.com/psf/black.git@main |
+| Git 子目录              | pypi:git+https://github.com/o/repo#subdirectory=cli |
 
-对于 GitHub 源，`latest` 会从未固定的默认分支安装；它不会选择最新发布的版本。使用显式版本来选择发行版本。对于其他 Git URL，`latest` 会将默认分支 HEAD 解析为具体提交。显式版本请求也支持远程标签。
+对于 GitHub 源，latest 会选择最新的 GitHub 发布版本；只有仓库没有发布版本时才从默认分支安装。对于其他 Git URL，latest 会将默认分支 HEAD 解析为具体提交。可以显式请求任意分支、标签或提交，远程标签也可用于显式版本请求。
 
+### Monorepo 子目录 {#git-subdirectory}
+
+如果软件包位于 Git 仓库的子目录中，请添加 pip 和 uv 接受的相同 #subdirectory= 片段。git 后缀是可选的，该片段也适用于 GitHub 简写：
+
+~~~sh
+mise use 'pypi:git+https://github.com/runpantheon/ltui#subdirectory=ltui@main'
+mise use 'pypi:runpantheon/ltui#subdirectory=jtui@main'
+~~~
+
+请将参数放在引号中，以免 shell 特殊处理 #。该片段属于工具名称，因此每个子目录都是独立工具，版本仍放在 @ 后。mise 会在发送给安装程序的请求中将 ref 放在片段之前。其他片段键会原样传递，但 mise 会将 [] 读取为工具选项；需要 #egg=pkg[extra] 时请改用 extras 选项。
+
+版本来自整个仓库，因此 latest 会选择最新发布版本，即使该子目录在该标签中不存在。如果仓库的发布版本早于子目录，请固定分支或提交。使用 extras 时，mise 会根据子目录猜测发行版名称；如果名称不同，请设置 package_name。
 不支持直接使用 HTTPS 归档 URL。其他源语法可能有效，但不受支持且未经测试。
 
 ## 依赖锁定
@@ -80,14 +93,13 @@ mise lock
 
 ### 要求和限制
 
-- **依赖关系图仅支持 Wheels：** 每个依赖项都必须为目标 Python 版本和平台提供已发布的 wheel。显式的 `mise lock` 和锁定安装不会构建源分发包。普通的 `mise install` 在无法生成仅 wheel 的关系图时，会回退到仅版本的 uv 安装。
+- **依赖关系图仅支持 Wheels：** 每个依赖项都必须为目标 Python 版本和平台提供已发布的 wheel。显式的 mise lock 和锁定安装不会构建源分发包。普通的 mise install 在无法生成仅 wheel 的关系图时，会回退到仅版本的 uv 安装。
 - **使用 uv 的 PyPI 软件包：** Git 源和独立的 pipx 安装使用仅版本锁定。pipx 无法重放 uv 依赖关系图。
-- **依赖关系图不支持自由格式的安装程序参数：** `uvx_args` 和 `pipx_args` 在普通安装期间使用仅版本安装。显式依赖锁定会拒绝它们，因为 mise 无法安全地将任意安装程序参数转换为可复现的关系图。需要依赖锁定时，请直接配置 [Python](#choosing-python) 和[注册表 URL](#registry-url)。
+- **依赖关系图不支持自由格式的安装程序参数：** uvx_args 和 pipx_args 在普通安装期间使用仅版本安装。显式依赖锁定会拒绝它们，因为 mise 无法安全地将任意安装程序参数转换为可复现的关系图。需要依赖锁定时，请使用语义化选项：with 会将额外需求注入工具环境，expose 还会暴露其可执行文件，dependency_prereleases 会设置 uv 的预发布策略。这些选项会与工具一起锁定，因此关系图会覆盖注入的软件包。也请直接配置 Python 和注册表 URL。
 - **需要已安装的 Python：** 生成锁文件需要 uv 能够发现一个解释器，但该解释器不必与工具配置的 Python 版本匹配。关系图安装使用所选的 mise Python，不会下载替代版本。
-- **需要完整的锁文件：** 如果缺少依赖关系图，修订版 2 的锁定 uv 安装会失败。运行 `mise lock` 生成它。
+- **需要完整的锁文件：** 如果缺少依赖关系图，修订版 2 的锁定 uv 安装会失败。运行 mise lock 生成它。
 
-该关系图涵盖软件包支持的 Python 范围，从 Python 3.8 开始，并保留所有已发布的 wheel 目标以实现可移植性。这可能会使侧载变得很大。冻结安装会复用 uv 的构件缓存。
-
+关系图涵盖每个锁定需求支持的 Python 范围，从 Python 3.8 开始，并保留所有已发布的 wheel 目标以实现可移植性。通过 with 或 expose 注入的需求也会参与计算：固定到精确版本的需求会将范围下限提高到该版本自身的 requires-python，因为单个发布版本不像未固定需求那样能覆盖更宽范围。带有测试解释器的环境标记（例如 python_version < "3.12"）的固定需求会被排除，因为它在不符合条件的版本中不存在。这可能使 sidecar 变大。冻结安装会复用 uv 的构件缓存。
 不同的依赖关系图和配置的 Python 解释器会产生独立的安装；`mise ls` 仍会显示软件包版本。对于系统 Python，mise 会在安装期间记录解释器的实现、主／次版本、ABI 和平台，以便后续命令即使在该解释器不再位于 PATH 中时也能找到环境。
 
 ### 私有索引和发行版本年龄
@@ -222,6 +234,12 @@ mise use 'pypi:psf/black[extras=jupyter]@latest'
 [tools]
 "pypi:azure-cli" = { version = "latest", with = ["pip"] }
 ```
+
+A requirement pinned to an exact version narrows the locked Python range to the
+versions that release supports, so the tool may end up needing a newer
+interpreter than it declares on its own. Guard the pin with an interpreter
+marker, such as `"legacy==1.0.0; python_version < '3.12'"`, to keep the wider
+range when the requirement is only needed on some versions.
 
 ### `expose`
 

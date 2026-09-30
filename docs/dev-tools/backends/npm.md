@@ -217,6 +217,45 @@ mise 不会自动添加 Bun 的 [`--trust`](https://bun.sh/docs/pm/cli/add#trust
 
 这些是信誉信号，而不是包不安全的证明。在批准包之前，请验证包名称和发布者。此选项不会影响 `npm`、`pnpm` 或 `bun` 安装。
 
+### `allow_exotic_deps`
+
+Packages in the tool's dependency graph that may come from somewhere other than the npm registry —
+a `git+` URL, a `file:` path, or a direct tarball URL. aube blocks these by default with
+[`blockExoticSubdeps`](https://aube.sh/settings/#setting-blockexoticsubdeps); without the option
+the install fails, for example:
+
+```
+registry error for xlsx: uses exotic specifier "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+which is blocked by blockExoticSubdeps (declared by @gmickel/gno)
+```
+
+Name the package the error reports:
+
+```toml
+[tools]
+"npm:@gmickel/gno" = { version = "2.3.0", allow_exotic_deps = ["xlsx"] }
+```
+
+The list is written to the aube install's `.config/aube/config.toml` as `blockExoticSubdepsExclude`.
+The gate itself stays on, so every other package in the graph is still checked — including one that
+a later version of the tool introduces.
+
+These are reputation-independent signals: a tarball or git URL is fetched from a host the registry's
+own protections never see. Check where the dependency actually comes from before listing it. Where
+the upstream package can be fixed instead — by pinning the dependency to a registry release — that
+is the better outcome.
+
+To exempt the entire graph rather than named packages, use `true`. This also covers a dependency
+added by a future update, so prefer the list:
+
+```toml
+[tools]
+"npm:some-tool" = { version = "latest", allow_exotic_deps = true }
+```
+
+This option applies to `aube` and `aube_cli` installs only; `npm`, `pnpm`, and `bun` do not enforce
+this gate.
+
 ### `aube_args`
 
 当 `settings.npm.package_manager = "aube_cli"` 时，传递给 `aube add --global` 的额外参数。这些是用户原样提供的参数。

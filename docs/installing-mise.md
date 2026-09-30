@@ -234,16 +234,7 @@ sudo snap install mise --classic
 在 Docker 构建上下文中，将声明 `[tools]` 下 `node = "24"` 的 `mise.toml` 文件放置其中。此示例会复制该配置、安装其中的工具，并使用 `mise exec` 作为容器命令。根据实际项目需要，添加其他配置文件、锁定文件、钩子输入文件或应用程序文件。
 
 ```dockerfile
-FROM debian:13-slim
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV MISE_INSTALL_PATH=/usr/local/bin/mise
-RUN curl -fsSL https://mise.run -o /tmp/install-mise.sh \
-    && sh /tmp/install-mise.sh \
-    && rm /tmp/install-mise.sh
+FROM ghcr.io/jdx/mise:2026.9.11-debian
 
 WORKDIR /app
 COPY mise.toml ./mise.toml
@@ -520,7 +511,6 @@ mise completion bash > ~/.local/share/bash-completion/completions/mise
 # Generate into a directory owned by your user:
 mkdir -p ~/.zfunc
 mise completion zsh > ~/.zfunc/_mise
-```
 
 在现有的 `compinit` 调用之前，将 `fpath` 更新添加到 `.zshrc` 中（包括由 shell 框架执行的调用）：
 
@@ -530,7 +520,7 @@ fpath=(~/.zfunc $fpath)
 
 如果 `.zshrc` 尚未初始化补全功能，还需添加：
 
-```sh
+# If ~/.zshrc does not already initialize completions, also add:
 autoload -Uz compinit
 compinit
 ```

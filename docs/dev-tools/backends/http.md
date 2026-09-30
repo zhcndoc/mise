@@ -50,6 +50,17 @@ mise exec -- my-tool --version
 "http:my-tool" = { version = "1.0.0", url = "https://example.com/releases/my-tool-v1.0.0.tar.gz" }
 ```
 
+#### 本地文件
+
+`file://` URL 可以安装磁盘上已有的压缩包，例如在受限网络中手动下载的文件。mise 会复制它而不是下载，然后以相同方式解压、验证并建立链接。添加 `checksum` 后也会验证本地文件：
+
+~~~toml
+[tools]
+"http:my-tool" = { version = "1.0.0", url = "file:///opt/archives/my-tool-v1.0.0-linux-x64.tar.gz", checksum = "sha256:..." }
+~~~
+
+URL 会按原样记录在 `mise.lock` 中，因此指定本地路径的锁文件只适用于该路径上存在文件的机器。
+
 #### 模板变量
 
 URL 中可用以下模板函数（使用双大括号，例如，`version` 会变成 <code v-pre>{{version}}</code>）：

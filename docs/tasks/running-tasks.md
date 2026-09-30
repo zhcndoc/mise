@@ -68,9 +68,7 @@ mise run
 
 ### 并行度和输出
 
-默认情况下，任务最多并行运行四个作业。设置 `--jobs`、`jobs` 设置项或
-`MISE_JOBS` 来选择其他限制。输出通常会逐行打印，并带有任务标签，从而使
-并行输出更易读。使用 `--jobs 1` 时，mise 会使用 `interleave` 输出。
+默认情况下，任务最多并行运行八个作业。设置 `--jobs`、`jobs` 设置项或 `MISE_JOBS` 来选择其他限制。输出通常会逐行打印，并带有任务标签，从而使并行输出更易读。使用 `--jobs 1` 时，mise 会使用 `interleave` 输出。
 
 要直接打印 stdout 和 stderr，请使用 `--output interleave`、`task.output`
 设置项或 `MISE_TASK_OUTPUT=interleave`。

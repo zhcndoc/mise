@@ -121,6 +121,33 @@ aws-cli = { version = "latest", symlink_bins = true }
 带默认值的变量会自动填充。aqua registry 中标记为必需的变量必须设置，
 除非该 registry 也提供了默认值。
 
+A registry var named `libc` must be set as `vars.libc`, because a top-level `libc` key is the
+[`libc`](#libc) tool option.
+
+### `libc`
+
+On a glibc Linux host, mise prefers a release's glibc build even when the aqua registry names the
+musl one. It uses the musl build only when no glibc build is published. Set `libc` to choose the
+build for one tool:
+
+```toml
+[tools]
+"aqua:domcyrus/rustnet" = { version = "latest", libc = "musl" }
+```
+
+`libc` accepts `glibc` (or `gnu`) and `musl`. Like the [`libc`](/configuration/settings.html#libc)
+setting, it makes selection strict: mise never falls back to a build for the other libc. It
+overrides `libc = "glibc"` in settings. It does not override a platform that names a libc, such as
+a musl host or a `linux-x64-musl` lockfile platform, because a glibc build cannot run there. Setting
+`libc = "musl"` in settings makes the host a musl platform (for example `linux-arm64-musl`), so
+under that setting a tool's `libc = "glibc"` has no effect. The value is recorded in the lockfile,
+so changing it resolves the tool again. A version that is already installed keeps its
+build until you reinstall it with `mise install --force`, as with other install options.
+
+`libc` affects install, lock, and resolving `latest` from the release GitHub marks as latest. The
+full version list (`mise ls-remote`) is shared by every configuration of a tool, so it still uses the
+host's libc.
+
 ### `prerelease`
 
 默认情况下，GitHub 上标记为 `prerelease: true` 的发布不会被包含在 `mise ls-remote` 和 `latest` 解析中。设置 `prerelease = true` 以包含它们：
@@ -156,12 +183,14 @@ mise 原生实现了校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign
 | Cosign                       | 受支持的公钥或签名包配置；不会执行任意 Cosign CLI 参数。 |
 | SLSA                         | 注册表来源证明配置和发布者的来源证明构件。                               |
 | Minisign                     | 签名和预期公钥。                                                                   |
+| SLSA                         | 注册表来源证明配置（包含 `signer_identity` 和 `signer_issuer`），以及发布者的来源证明构件。 |
 
 相应的 `aqua.*` 验证设置默认处于启用状态。某些检查还具有全局设置，例如
 `github_attestations` 或 `slsa`。完整配置请参阅[设置](#settings)。
 
-经过验证的[锁定文件](/dev-tools/mise-lock.html)可以在检查构件摘要时复用之前的来源证明结果。设置
-[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
+签名者字段必须是 Fulcio 证书 URI subject 和 OIDC issuer 的准确值。缺少这些字段的注册表软件包会跳过 SLSA，并可能使用其他验证方式。要求 SLSA 的现有锁文件会失败，直到补充签名者元数据，或使用其他验证方式刷新锁文件。
+
+经过验证的[锁定文件](/dev-tools/mise-lock.html)可以在检查构件摘要时复用之前的非 SLSA 来源证明结果；SLSA 始终检查当前预期的签名者。设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
 
 ### 故障排查
 

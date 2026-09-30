@@ -227,32 +227,32 @@ where
     try_with_v_prefix_and_repo(version, version_prefix, None, resolver).await
 }
 
-/// Helper to try various tag formats for a resolver function
-/// Tries version_prefix (if set), v prefix, and optionally repo@version formats
-pub(crate) async fn try_with_v_prefix_and_repo<F, Fut, T, E>(
-    version: &str,
-    version_prefix: Option<&str>,
-    repo: Option<&str>,
-    resolver: F,
-) -> Result<T>
-where
-    F: Fn(String) -> Fut,
-    Fut: Future<Output = std::result::Result<T, E>>,
-    E: VerifiableError,
-{
-    let mut errors = vec![];
-
-    // Generate candidates based on version prefix configuration
+/// Builds the ordered list of tags to try for a requested version.
+///
+/// Every version mise lists has already had its tag decoration removed by
+/// `strip_version_prefix`, so the tag has to be reconstructed here. When a tag
+/// repeats the configured `version_prefix` -- tag `a-a-1.2.3` with
+/// `version_prefix = "a-"` is listed as `a-1.2.3` -- the listed version still
+/// starts with the prefix, and re-prefixing it is the only way back to the tag
+/// it came from. Prefixing is therefore tried first even in that case, so a
+/// version mise listed always round-trips to its own tag; the version is still
+/// tried unprefixed afterwards for users who spell out a tag by hand, down to
+/// the bare version with every copy of the prefix removed.
+fn tag_candidates(version: &str, version_prefix: Option<&str>, repo: Option<&str>) -> Vec<String> {
     let mut candidates = if let Some(prefix) = version_prefix {
         // If a custom prefix is configured, try both prefixed and non-prefixed versions
-        if version.starts_with(prefix) {
-            vec![
-                version.to_string(),
-                version.trim_start_matches(prefix).to_string(),
-            ]
-        } else {
-            vec![format!("{}{}", prefix, version), version.to_string()]
+        let mut candidates = vec![format!("{prefix}{version}"), version.to_string()];
+        // Strip one prefix, the inverse of how the version was listed: a
+        // `version_prefix` that appears twice in a tag is reached by stripping
+        // once, not by stripping everything.
+        if let Some(stripped) = version.strip_prefix(prefix) {
+            candidates.push(stripped.to_string());
         }
+        // Last resort: every copy of the prefix removed. Stripping once is the
+        // better guess, but a request written with the prefix repeated used to
+        // reach the bare tag this way, so keep it reachable.
+        candidates.push(version.trim_start_matches(prefix).to_string());
+        candidates
     } else if version == "latest" {
         vec![version.to_string()]
     } else if version.starts_with('v') {
@@ -273,13 +273,37 @@ where
     {
         // Try short name first (more common), e.g., "tectonic@0.15.0"
         if let Some(short_name) = full_repo.split('/').next_back() {
-            candidates.push(format!("{}@{}", short_name, version));
+            candidates.push(format!("{short_name}@{version}"));
         }
         // Also try full repo name, e.g., "tectonic-typesetting/tectonic@0.15.0"
-        candidates.push(format!("{}@{}", full_repo, version));
+        candidates.push(format!("{full_repo}@{version}"));
     }
 
-    for candidate in candidates {
+    // An empty or already-prefixed version can produce the same tag twice; don't
+    // spend a second request on a tag that was already tried.
+    candidates
+        .into_iter()
+        .collect::<IndexSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Helper to try various tag formats for a resolver function
+/// Tries version_prefix (if set), v prefix, and optionally repo@version formats
+pub(crate) async fn try_with_v_prefix_and_repo<F, Fut, T, E>(
+    version: &str,
+    version_prefix: Option<&str>,
+    repo: Option<&str>,
+    resolver: F,
+) -> Result<T>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = std::result::Result<T, E>>,
+    E: VerifiableError,
+{
+    let mut errors = vec![];
+
+    for candidate in tag_candidates(version, version_prefix, repo) {
         match resolver(candidate).await {
             Ok(res) => return Ok(res),
             Err(e) => {
@@ -593,7 +617,7 @@ fn render_template(template: &str, version: &str, mut tera: crate::tera::TeraEng
     }
 }
 
-pub(crate) fn get_filename_from_url(url_str: &str) -> String {
+pub fn get_filename_from_url(url_str: &str) -> String {
     let filename = if let Ok(url) = url::Url::parse(url_str) {
         // Use proper URL parsing to get the path and extract filename
         url.path_segments()
@@ -685,7 +709,7 @@ pub(crate) fn install_artifact(
                 bin_dir.join(decompressed_name)
             }
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
-            install_path.join(&bin_name)
+            install_path.join(bin_name_for_download(decompressed_name, &bin_name))
         } else if let Some(rename_to) = rename_exe {
             install_path.join(rename_binary_name(decompressed_name, &rename_to))
         } else {
@@ -712,7 +736,8 @@ pub(crate) fn install_artifact(
             file::make_executable(&dest)?;
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
             // If bin is specified, rename the file to this name
-            let dest = install_path.join(&bin_name);
+            let original_name = file_path.file_name().unwrap().to_string_lossy();
+            let dest = install_path.join(bin_name_for_download(&original_name, &bin_name));
             file::copy(file_path, &dest)?;
             file::make_executable(&dest)?;
         } else if let Some(rename_to) = lookup_with_fallback(opts, "rename_exe") {
@@ -1291,6 +1316,9 @@ fn rename_executable_in_app_bundle(
     Ok(false)
 }
 
+/// Extensions Windows needs in order to launch a file directly.
+const WINDOWS_REQUIRED_EXTENSIONS: &[&str] = &[".exe", ".cmd", ".bat"];
+
 fn keep_required_extensions(
     dir: &Path,
     file_name: &str,
@@ -1303,7 +1331,7 @@ fn keep_required_extensions(
             file_name,
             new_name,
             target_path,
-            &[".exe", ".cmd", ".bat"],
+            WINDOWS_REQUIRED_EXTENSIONS,
         );
     }
     target_path
@@ -1316,12 +1344,33 @@ fn keep_extensions(
     target_path: PathBuf,
     exts: &[&str],
 ) -> PathBuf {
-    for ext in exts {
-        if file_name.to_lowercase().ends_with(ext) && !new_name.to_lowercase().ends_with(ext) {
-            return dir.join(format!("{}{}", new_name, ext));
-        }
+    match name_with_kept_extension(file_name, new_name, exts) {
+        Some(name) => dir.join(name),
+        None => target_path,
     }
-    target_path
+}
+
+/// Appends the first of `exts` that `file_name` ends with, unless `new_name`
+/// already ends with it. Returns `None` when nothing needs appending.
+fn name_with_kept_extension(file_name: &str, new_name: &str, exts: &[&str]) -> Option<String> {
+    exts.iter()
+        .find(|ext| {
+            file_name.to_lowercase().ends_with(*ext) && !new_name.to_lowercase().ends_with(*ext)
+        })
+        .map(|ext| format!("{new_name}{ext}"))
+}
+
+/// The filename to install a single downloaded binary under when `bin` names it.
+/// On Windows, keeps the executable extension of the download so that
+/// `bin = "tool"` for `tool-windows.exe` installs `tool.exe`, which Windows can run.
+pub(crate) fn bin_name_for_download(source_name: &str, bin_name: &str) -> String {
+    if cfg!(windows)
+        && let Some(name) =
+            name_with_kept_extension(source_name, bin_name, WINDOWS_REQUIRED_EXTENSIONS)
+    {
+        return name;
+    }
+    bin_name.to_string()
 }
 
 pub(crate) fn rename_binary_name(original_name: &str, new_name: &str) -> String {
@@ -1930,6 +1979,28 @@ Path      : C:\\a\\deno\\deno\\target\\release\\deno-x86_64-pc-windows-msvc.zip
             assert_eq!(
                 keep_required_extensions(dir, "mytool.exe", "new_tool", initial_target.clone()),
                 initial_target
+            );
+        }
+    }
+
+    #[test]
+    fn test_bin_name_for_download() {
+        // Nested bin paths and names that already carry the extension.
+        for (source, bin, windows) in [
+            ("tool-windows-x64.exe", "tool", "tool.exe"),
+            ("tool.x64.EXE", "tool", "tool.exe"),
+            ("tool-windows.cmd", "bin/tool", "bin/tool.cmd"),
+            ("tool-windows-x64.exe", "tool.exe", "tool.exe"),
+            ("tool-windows-x64.exe", "TOOL.EXE", "TOOL.EXE"),
+            // Only the extensions Windows needs are kept.
+            ("tool.sh", "tool", "tool"),
+            ("tool-linux-x64", "tool", "tool"),
+        ] {
+            let expected = if cfg!(windows) { windows } else { bin };
+            assert_eq!(
+                bin_name_for_download(source, bin),
+                expected,
+                "{source} with bin={bin}"
             );
         }
     }
@@ -2839,5 +2910,98 @@ bin = "tool.exe"
 
         assert!(tmp.path().join("gdscript-formatter").is_file());
         assert!(!extracted.exists());
+    }
+
+    #[test]
+    fn test_tag_candidates_reconstructs_a_tag_that_repeats_the_version_prefix() {
+        // Tag `a-a-1.2.3` with `version_prefix = "a-"` is listed as `a-1.2.3`,
+        // so the listed version still starts with the prefix. Prefixing it again
+        // is the only candidate that names the tag it came from.
+        let candidates = tag_candidates("a-1.2.3", Some("a-"), Some("test/repo"));
+        assert_eq!(candidates.first().map(String::as_str), Some("a-a-1.2.3"));
+        assert!(candidates.contains(&"a-1.2.3".to_string()));
+    }
+
+    #[test]
+    fn test_tag_candidates_strips_the_version_prefix_one_copy_at_a_time() {
+        // Stripping every prefix at once would skip the tag one level up, which
+        // is the tag a repeated-prefix version was listed from. The fully
+        // stripped version stays reachable, just last: it is what a request
+        // written with the prefix repeated used to fall back to.
+        let candidates = tag_candidates("a-a-1.2.3", Some("a-"), None);
+        assert_eq!(
+            candidates,
+            vec![
+                "a-a-a-1.2.3".to_string(),
+                "a-a-1.2.3".to_string(),
+                "a-1.2.3".to_string(),
+                "1.2.3".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_tag_candidates_prefixes_an_unprefixed_version() {
+        assert_eq!(
+            tag_candidates("1.2.3", Some("release-"), Some("test/repo")),
+            vec!["release-1.2.3".to_string(), "1.2.3".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_tag_candidates_never_repeats_a_tag() {
+        // An empty version_prefix makes every branch produce the same tag.
+        assert_eq!(
+            tag_candidates("1.2.3", Some(""), None),
+            vec!["1.2.3".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_tag_candidates_without_a_version_prefix() {
+        assert_eq!(
+            tag_candidates("1.2.3", None, Some("test/repo")),
+            vec![
+                "v1.2.3".to_string(),
+                "1.2.3".to_string(),
+                "repo@1.2.3".to_string(),
+                "test/repo@1.2.3".to_string(),
+            ],
+        );
+        assert_eq!(
+            tag_candidates("latest", None, Some("test/repo")),
+            vec!["latest".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_with_v_prefix_finds_a_tag_that_repeats_the_version_prefix() {
+        // End to end through the resolver: only the real tag resolves, and the
+        // version under test is exactly what `mise ls-remote` prints for it.
+        let tried = std::sync::Mutex::new(vec![]);
+        let resolved = try_with_v_prefix_and_repo(
+            "a-1.2.3",
+            Some("a-"),
+            Some("test/repo"),
+            |candidate: String| {
+                tried.lock().unwrap().push(candidate.clone());
+                async move {
+                    if candidate == "a-a-1.2.3" {
+                        Ok(candidate)
+                    } else {
+                        Err(eyre::eyre!("404 Not Found"))
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resolved, "a-a-1.2.3");
+        assert!(
+            tried.lock().unwrap().contains(&"a-a-1.2.3".to_string()),
+            "tried: {:?}",
+            tried.lock().unwrap()
+        );
     }
 }

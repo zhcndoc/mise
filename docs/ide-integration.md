@@ -82,6 +82,7 @@ end
 
 - Emacs: [mise.el](https://github.com/eki3z/mise.el)
 - IntelliJ: [intellij-mise](https://github.com/134130/intellij-mise)
+- Neovim: [miser.nvim](https://github.com/carldaws/miser.nvim)
 - VSCode: [mise-vscode](https://github.com/hverlin/mise-vscode)
 
 ## Vim
@@ -99,6 +100,10 @@ vim.env.PATH = vim.env.HOME .. "/.local/share/mise/shims:" .. vim.env.PATH
 ```
 
 如需更好的 Treesitter 和 LSP 集成，请参阅 [neovim cookbook](./mise-cookbook/neovim.md)。
+
+Or use [miser.nvim](https://github.com/carldaws/miser.nvim), which starts LSP servers and runs
+formatters on save for the tools declared in your `mise.toml`, and launches your mise tasks —
+no separate installer needed.
 
 ## Emacs
 

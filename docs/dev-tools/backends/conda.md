@@ -6,9 +6,9 @@ description: "直接安装 Conda 软件包及其依赖项，无需单独安装 C
 
 `conda` 后端会从 [conda-forge](https://conda-forge.org/) 或其他 Anaconda 频道直接安装命令行软件包及其传递依赖项。它会解析依赖项并直接下载软件包，因此无需安装 conda、mamba 或 micromamba。
 
-所选软件包中的命令会在该软件包隔离的 conda 前缀中运行。mise 会设置
-`CONDA_PREFIX`，使前缀的可执行文件目录可供命令进程使用，并在启动命令前应用
-`etc/conda/activate.d` 脚本。这使命令能够使用其打包的运行时依赖项，而无需将依赖项命令添加到交互式 shell 的 `PATH` 中。
+每个软件包都会安装到自己的隔离 conda 前缀中。当软件包需要激活该前缀（它包含 `etc/conda/activate.d` 脚本、前缀包含其依赖项的可执行文件，或其中一个命令是脚本）时，mise 会通过启动器运行命令，设置 `CONDA_PREFIX`，让前缀的可执行文件目录可用，并应用激活脚本。这使命令能够使用其打包的运行时依赖项，而无需将依赖项命令添加到交互式 shell 的 `PATH` 中。
+
+如果软件包不满足这些条件（例如 `conda:ripgrep` 这样的单二进制工具），就没有需要激活的内容，因此在 Unix 上会直接为其命令建立符号链接。它们启动时不会多一个 shell 进程，命令及其派生进程也不会设置 `CONDA_PREFIX` 或前缀的可执行文件目录。
 
 相关代码位于 mise 仓库的 [`./src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs) 中。
 

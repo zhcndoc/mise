@@ -1,8 +1,6 @@
 #![allow(unknown_lints)]
 #![deny(dead_code_pub_in_binary, unreachable_pub)]
 
-use heck::ToUpperCamelCase;
-use indexmap::IndexMap;
 use serde::Serialize as _;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,10 +14,9 @@ use serde_yaml::Value;
 
 #[path = "build/lockfile_rollout.rs"]
 mod lockfile_rollout;
+#[path = "build/registry_url.rs"]
+mod registry_url;
 
-// cfg_aliases 0.2.1 emits semicolon-terminated helper macros in expression
-// position, which the latest nightly compiler rejects as future-incompatible.
-#[allow(semicolon_in_expressions_from_macros)]
 fn main() -> Result<()> {
     let release = (
         env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>()?,
@@ -33,14 +30,33 @@ fn main() -> Result<()> {
         vfox: { any(feature = "vfox", target_os = "windows") },
     }
     built::write_built_file()?;
+    link_without_pie();
     build_notification_helper()?;
 
     let aqua_registry = load_aqua_registry()?;
     codegen_daemon_presets()?;
-    codegen_settings();
     codegen_registry(&aqua_registry.packages);
     codegen_aqua_standard_registry(&aqua_registry)?;
     Ok(())
+}
+
+/// Release builds for Linux GNU set `MISE_NO_PIE=1` (see scripts/build-tarball.sh)
+/// to link the `mise` executable at a fixed address. As a position-independent
+/// executable, mise makes the dynamic loader patch about 300k pointers on every
+/// launch, which copies roughly 2k pages and dominates the startup of short
+/// commands such as `hook-env`. Linked non-PIE, those pointers are final in the
+/// file. Dependencies are still compiled position-independent; the flag reaches
+/// only bin targets, so no shared library is linked with it. musl is left out on
+/// purpose: its static-PIE start code crashes when linked with `-no-pie`, and
+/// the alternative, `-C relocation-model=static`, is not something a build
+/// script can set.
+fn link_without_pie() {
+    println!("cargo:rerun-if-env-changed=MISE_NO_PIE");
+    let linux_gnu = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu");
+    if linux_gnu && env::var("MISE_NO_PIE").as_deref() == Ok("1") {
+        println!("cargo:rustc-link-arg-bins=-no-pie");
+    }
 }
 
 fn build_notification_helper() -> Result<()> {
@@ -290,6 +306,8 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                             full: r#"{backend}"#,
                             platforms: &[],
                             min_version: None,
+                            max_version: None,
+                            attestations_since: None,
                             options: &[],
                         }}"##
                     ));
@@ -310,18 +328,48 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let min_version = backend
-                        .get("min_version")
+                    let version_bound = |key: &str| {
+                        backend.get(key).map(|value| {
+                            let value = value
+                                .as_str()
+                                .unwrap_or_else(|| panic!("backend {key} must be a string"));
+                            assert_eq!(
+                                version_order, "VersionOrder::Semver",
+                                "[{short}] backend {key} requires version_order = semver"
+                            );
+                            let version = semver::Version::parse(value).unwrap_or_else(|_| {
+                                panic!("[{short}] backend {key} must be a semantic version")
+                            });
+                            (value.to_string(), version)
+                        })
+                    };
+                    let min_version = version_bound("min_version");
+                    let max_version = version_bound("max_version");
+                    if let (Some((_, minimum)), Some((_, maximum))) = (&min_version, &max_version) {
+                        assert!(
+                            minimum.cmp_precedence(maximum).is_lt(),
+                            "[{short}] backend min_version must be lower than max_version"
+                        );
+                    }
+                    let bound_literal = |bound: Option<(String, semver::Version)>| {
+                        bound
+                            .map(|(value, _)| format!("Some({})", raw_string_literal(&value)))
+                            .unwrap_or_else(|| "None".to_string())
+                    };
+                    let min_version = bound_literal(min_version);
+                    let max_version = bound_literal(max_version);
+                    let attestations_since = backend
+                        .get("attestations_since")
                         .map(|value| {
                             let value = value
                                 .as_str()
-                                .expect("backend min_version must be a string");
-                            assert_eq!(
-                                version_order, "VersionOrder::Semver",
-                                "[{short}] backend min_version requires version_order = semver"
+                                .expect("backend attestations_since must be a string");
+                            assert!(
+                                full.starts_with("github:"),
+                                "[{short}] backend attestations_since is only supported for github: backends"
                             );
                             semver::Version::parse(value)
-                                .expect("backend min_version must be a semantic version");
+                                .expect("backend attestations_since must be a semantic version");
                             format!("Some({})", raw_string_literal(value))
                         })
                         .unwrap_or_else(|| "None".to_string());
@@ -331,6 +379,8 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                             full: r#"{full}"#,
                             platforms: &[{platforms}],
                             min_version: {min_version},
+                            max_version: {max_version},
+                            attestations_since: {attestations_since},
                             options: &[{options}],
                         }}"##,
                         platforms = platforms
@@ -367,6 +417,22 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
         let description = info
             .get("description")
             .map(|d| d.as_str().unwrap().to_string());
+        let url = info.get("url").map(|url| {
+            let url = url
+                .as_str()
+                .unwrap_or_else(|| panic!("[{short}] 'url' must be a string"));
+            assert!(
+                registry_url::is_project_url(url),
+                "[{short}] 'url' must be a project homepage or repository URL, not a download template"
+            );
+            url.to_string()
+        });
+        let deprecated = info.get("deprecated").map(|deprecated| {
+            deprecated
+                .as_str()
+                .unwrap_or_else(|| panic!("[{short}] 'deprecated' must be a string"))
+                .to_string()
+        });
         let bins = info
             .get("bins")
             .map(|bins| {
@@ -486,10 +552,16 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
             })
             .unwrap_or_default();
         let rt = format!(
-            r#"RegistryTool{{short: "{short}", description: {description}, version_order: {version_order}, backends: &[{backends}], bins: &[{bins}], aliases: &[{aliases}], test: &{test}, os: &[{os}], idiomatic_files: &[{idiomatic_files}], detect: &[{detect}], overrides: &[{overrides}]}}"#,
+            r#"RegistryTool{{short: "{short}", description: {description}, url: {url}, deprecated: {deprecated}, version_order: {version_order}, backends: &[{backends}], bins: &[{bins}], aliases: &[{aliases}], test: &{test}, os: &[{os}], idiomatic_files: &[{idiomatic_files}], detect: &[{detect}], overrides: &[{overrides}]}}"#,
             version_order = version_order,
             description = description
                 .map(|d| format!("Some({})", raw_string_literal(&d)))
+                .unwrap_or("None".to_string()),
+            url = url
+                .map(|url| format!("Some({})", raw_string_literal(&url)))
+                .unwrap_or("None".to_string()),
+            deprecated = deprecated
+                .map(|deprecated| format!("Some({})", raw_string_literal(&deprecated)))
                 .unwrap_or("None".to_string()),
             backends = backends.into_iter().collect::<Vec<_>>().join(", "),
             bins = bins
@@ -894,380 +966,221 @@ fn yaml_string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key)?.as_str().map(str::to_string)
 }
 
-/// Generate Rust setting types, metadata, and file-layer merge behavior from settings.toml.
-fn codegen_settings() {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-    let dest_path = Path::new(&out_dir).join("settings.rs");
-    let mut lines = vec![
-        r#"#[derive(Config, Default, Debug, Clone, Serialize)]
-#[config(layer_attr(derive(Clone, Serialize, Default)))]
-pub(crate) struct Settings {"#
-            .to_string(),
-    ];
-
-    println!("cargo:rerun-if-changed=settings.toml");
-    let settings_toml = fs::read_to_string("settings.toml").expect("Failed to read settings.toml");
-    let settings: toml::Table =
-        toml::de::from_str(&settings_toml).expect("Failed to parse settings.toml");
-    /// Build a collision-resistant generated Rust type name for a settings path.
-    fn settings_struct_name(path: &[&str]) -> String {
-        if let [part] = path {
-            return format!("Settings{}", part.to_upper_camel_case());
-        }
-
-        let mut name = "SettingsNested".to_string();
-        for part in path {
-            // Encode both component boundaries and the original bytes so distinct
-            // TOML paths cannot collapse to the same generated Rust type name.
-            name.push('P');
-            name.push_str(&part.len().to_string());
-            name.push('X');
-            for byte in part.as_bytes() {
-                name.push_str(&format!("{byte:02X}"));
-            }
-        }
-        name
+/// Validate the declarative parts of a daemon preset: named ports, version
+/// detection, typed options, and initialization steps. A preset that passes here
+/// deserializes into the runtime `Preset` struct.
+fn validate_daemon_preset(path: &Path, value: &toml::Value) -> Result<()> {
+    let bad = |msg: &str| eyre!("{}: {msg}", path.display());
+    let version = value
+        .get("version")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| bad("missing [version]"))?;
+    let pattern = version
+        .get("pattern")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| bad("missing version.pattern"))?;
+    let re =
+        regex::Regex::new(pattern).map_err(|e| bad(&format!("invalid version.pattern: {e}")))?;
+    if re.captures_len() != 2 {
+        return Err(bad("version.pattern needs exactly one capture group"));
     }
-
-    /// Render one settings.toml entry as a field in a generated settings struct.
-    fn props_to_code(key: &str, props: &toml::Value, parent_path: &[&str]) -> String {
-        let mut lines = vec![];
-        let props = props.as_table().unwrap();
-        if let Some(description) = props.get("description") {
-            lines.push(format!("    /// {}", description.as_str().unwrap()));
-        }
-        let type_ = props
-            .get("rust_type")
-            .map(|rt| rt.as_str().unwrap())
-            .or_else(|| {
-                props.get("type").map(|t| match t.as_str().unwrap() {
-                    "Bool" => "bool",
-                    "String" => "String",
-                    "Integer" => "i64",
-                    "Url" => "String",
-                    "Path" => "PathBuf",
-                    "Duration" => "String",
-                    "ListString" => "Vec<String>",
-                    "ListPath" => "Vec<PathBuf>",
-                    "SetString" => "BTreeSet<String>",
-                    "IndexMap<String, String>" => "IndexMap<String, String>",
-                    "BoolOrString" => {
-                        panic!(r#"type \"BoolOrString\" requires a `rust_type` to be specified"#)
-                    }
-                    t => panic!("Unknown type: {t}"),
-                })
-            });
-        if let Some(type_) = type_ {
-            let type_ = if props.get("optional").is_some_and(|v| v.as_bool().unwrap()) {
-                format!("Option<{type_}>")
-            } else {
-                type_.to_string()
-            };
-            let mut opts = IndexMap::new();
-            if let Some(env) = props.get("env") {
-                opts.insert("env".to_string(), env.to_string());
-            }
-            if let Some(default) = props.get("default") {
-                opts.insert("default".to_string(), default.to_string());
-            } else if type_ == "bool" {
-                opts.insert("default".to_string(), "false".to_string());
-            }
-            if let Some(parse_env) = props.get("parse_env") {
-                opts.insert(
-                    "parse_env".to_string(),
-                    parse_env.as_str().unwrap().to_string(),
-                );
-            }
-            if let Some(deserialize_with) = props.get("deserialize_with") {
-                opts.insert(
-                    "deserialize_with".to_string(),
-                    deserialize_with.as_str().unwrap().to_string(),
-                );
-            }
-            lines.push(format!(
-                "    #[config({})]",
-                opts.iter()
-                    .map(|(k, v)| format!("{k} = {v}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            lines.push(format!("    pub {key}: {type_},"));
-        } else {
-            lines.push("    #[config(nested)]".to_string());
-            let mut path = parent_path.to_vec();
-            path.push(key);
-            lines.push(format!("    pub {key}: {},", settings_struct_name(&path)));
-        }
-        lines.join("\n")
+    if !is_string_list(version.get("args").unwrap_or(&toml::Value::Array(vec![]))) {
+        return Err(bad("version.args must be a list of strings"));
     }
-    for (key, props) in &settings {
-        lines.push(props_to_code(key, props, &[]));
+    if let Some(ports) = value.get("ports") {
+        let ports = ports
+            .as_table()
+            .ok_or_else(|| bad("[ports] must be a table"))?;
+        for (name, port) in ports {
+            if RESERVED_TEMPLATE_NAMES.contains(&name.as_str()) {
+                return Err(bad(&format!(
+                    "named port {name:?} shadows a reserved template name"
+                )));
+            }
+            if !port.as_integer().is_some_and(|p| (1..=65535).contains(&p)) {
+                return Err(bad(&format!("invalid named port {name:?}")));
+            }
+        }
     }
-    lines.push("}".to_string());
-
-    /// Emit generated settings structs for every nested settings.toml table.
-    fn emit_nested_settings(lines: &mut Vec<String>, table: &toml::Table, parent_path: &[&str]) {
-        for (child, props) in table
-            .iter()
-            .filter(|(_, value)| !value.as_table().unwrap().contains_key("type"))
+    if let Some(file) = value.get("data_version_file")
+        && !file.is_str()
+    {
+        return Err(bad("data_version_file must be a string"));
+    }
+    for (name, option) in value
+        .get("options")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        // Options share one template context with the ports and the names the
+        // engine binds, and are inserted last, so a collision would silently
+        // shadow the value a template expects.
+        if RESERVED_TEMPLATE_NAMES.contains(&name.as_str())
+            || value
+                .get("ports")
+                .and_then(|p| p.get(name.as_str()))
+                .is_some()
         {
-            let mut path = parent_path.to_vec();
-            path.push(child);
-            lines.push(format!(
-                r#"
-#[derive(Config, Default, Debug, Clone, Serialize)]
-#[config(layer_attr(derive(Clone, Serialize, Default)))]
-#[config(layer_attr(serde(deny_unknown_fields)))]
-pub(crate) struct {name} {{"#,
-                name = settings_struct_name(&path)
-            ));
-
-            for (key, props) in props.as_table().unwrap() {
-                lines.push(props_to_code(key, props, &path));
-            }
-            lines.push("}".to_string());
-            emit_nested_settings(lines, props.as_table().unwrap(), &path);
+            return Err(bad(&format!(
+                "option {name:?} shadows a reserved template name"
+            )));
         }
-    }
-    emit_nested_settings(&mut lines, &settings, &[]);
-
-    lines.push(
-        r#"
-/// Validate collection values constrained by `enum` in settings.toml.
-pub(crate) fn validate_settings_enum_values(settings: &Settings) -> Result<()> {"#
-            .to_string(),
-    );
-    /// Emit runtime validators for constrained string collections.
-    fn emit_collection_enum_validators(
-        lines: &mut Vec<String>,
-        table: &toml::Table,
-        path: &[&str],
-    ) {
-        for (key, value) in table {
-            let props = value.as_table().unwrap();
-            let mut field_path = path.to_vec();
-            field_path.push(key);
-            let Some(type_) = props.get("type").and_then(toml::Value::as_str) else {
-                emit_collection_enum_validators(lines, props, &field_path);
-                continue;
-            };
-            if !matches!(type_, "ListString" | "SetString") {
-                continue;
-            }
-            let Some(allowed) = props.get("enum").and_then(toml::Value::as_array) else {
-                continue;
-            };
-            let allowed = allowed
-                .iter()
-                .map(|value| {
-                    value.as_str().unwrap_or_else(|| {
-                        panic!("enum values for {} must be strings", field_path.join("."))
-                    })
-                })
-                .collect::<Vec<_>>();
-            let allowed_code = allowed
-                .iter()
-                .map(|value| format!("{value:?}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let name = field_path.join(".");
-            let field = format!("settings.{name}");
-            let values = if props.get("optional").is_some_and(|v| v.as_bool().unwrap()) {
-                format!("{field}.as_ref().into_iter().flatten().map(String::as_str)")
-            } else {
-                format!("{field}.iter().map(String::as_str)")
-            };
-            lines.push(format!(
-                "    validate_setting_enum_values({name:?}, {values}, &[{allowed_code}])?;"
-            ));
-        }
-    }
-    emit_collection_enum_validators(&mut lines, &settings, &[]);
-    lines.push("    Ok(())".to_string());
-    lines.push("}".to_string());
-
-    lines.push(
-        r#"
-/// Apply the merge strategies declared in settings.toml to config-file layers.
-pub(crate) fn merge_settings_file_layers(layers: &mut [SettingsPartial]) {"#
-            .to_string(),
-    );
-    for (key, props) in &settings {
-        let props = props.as_table().unwrap();
-        let Some(strategy) = props.get("merge") else {
-            continue;
-        };
-        let strategy = strategy
-            .as_str()
-            .expect("setting merge strategy must be a string");
-        match (strategy, props.get("type").and_then(toml::Value::as_str)) {
-            ("append_unique", Some("ListString")) => lines.push(format!(
-                r#"    {{
-        let mut found = false;
-        let values = layers
-            .iter_mut()
-            .rev()
-            .filter_map(|layer| {{
-                let values = layer.{key}.take();
-                found |= values.is_some();
-                values
-            }})
-            .flatten()
-            .unique()
-            .collect();
-        if found {{
-            layers[0].{key} = Some(values);
-        }}
-    }}"#
-            )),
-            _ => panic!(
-                "unsupported merge strategy {strategy:?} for setting {key:?}; append_unique requires ListString"
-            ),
-        }
-    }
-    lines.push("}".to_string());
-
-    lines.push(
-        r#"
-pub(crate) static SETTINGS_META: Lazy<IndexMap<&'static str, SettingsMeta>> = Lazy::new(|| {
-    indexmap!{"#
-            .to_string(),
-    );
-    /// Emit deprecation metadata shared by each generated settings metadata entry.
-    fn push_deprecated_fields(lines: &mut Vec<String>, props: &toml::Table) {
-        let deprecated = props
-            .get("deprecated")
-            .map(|v| v.as_str().unwrap().to_string());
-        let warn_at = props
-            .get("deprecated_warn_at")
-            .map(|v| v.as_str().unwrap().to_string());
-        let remove_at = props
-            .get("deprecated_remove_at")
-            .map(|v| v.as_str().unwrap().to_string());
-        match deprecated {
-            Some(msg) => lines.push(format!(
-                "        deprecated: Some({}),",
-                raw_string_literal(&msg)
-            )),
-            None => lines.push("        deprecated: None,".to_string()),
-        }
-        match warn_at {
-            Some(v) => lines.push(format!("        deprecated_warn_at: Some({v:?}),")),
-            None => lines.push("        deprecated_warn_at: None,".to_string()),
-        }
-        match remove_at {
-            Some(v) => lines.push(format!("        deprecated_remove_at: Some({v:?}),")),
-            None => lines.push("        deprecated_remove_at: None,".to_string()),
-        }
-        lines.push(format!(
-            "        global_only: {},",
-            props
-                .get("global_only")
-                .is_some_and(|v| v.as_bool().unwrap())
-        ));
-        lines.push(format!(
-            "        env_only: {},",
-            props.get("env_only").is_some_and(|v| v.as_bool().unwrap())
-        ));
-    }
-    /// Emit flattened runtime metadata for settings and nested settings tables.
-    fn emit_settings_meta(lines: &mut Vec<String>, table: &toml::Table, prefix: &str) {
-        for (key, value) in table {
-            let name = if prefix.is_empty() {
-                key.clone()
-            } else {
-                format!("{prefix}.{key}")
-            };
-            let props = value.as_table().unwrap();
-            if let Some(type_) = props.get("type").map(|value| value.as_str().unwrap()) {
-                // We could shadow the 'type_' variable, but its a best practice to avoid shadowing.
-                // Thus, we introduce 'meta_type' here.
-                let meta_type = match type_ {
-                    "IndexMap<String, String>" => "IndexMap",
-                    other => other,
+        match option {
+            toml::Value::Table(spec) => {
+                let kind = spec
+                    .get("type")
+                    .and_then(toml::Value::as_str)
+                    .ok_or_else(|| bad(&format!("option {name:?} needs a type")))?;
+                if !["string", "path", "list", "int", "bool"].contains(&kind) {
+                    return Err(bad(&format!("option {name:?} has unknown type {kind:?}")));
+                }
+                let default = spec
+                    .get("default")
+                    .ok_or_else(|| bad(&format!("option {name:?} needs a default")))?;
+                let matches = match kind {
+                    "string" | "path" => default.is_str(),
+                    "list" => is_string_list(default),
+                    "int" => default.is_integer(),
+                    _ => default.is_bool(),
                 };
-                lines.push(format!(
-                    r#"    "{name}" => SettingsMeta {{
-        type_: SettingsType::{meta_type},"#,
+                if !matches {
+                    return Err(bad(&format!("option {name:?} default is not a {kind}")));
+                }
+                if let Some(pattern) = spec.get("pattern") {
+                    let pattern = pattern
+                        .as_str()
+                        .ok_or_else(|| bad(&format!("option {name:?} pattern must be a string")))?;
+                    regex::Regex::new(pattern).map_err(|e| {
+                        bad(&format!("option {name:?} has an invalid pattern: {e}"))
+                    })?;
+                }
+                if let Some(entry) = spec.get("entry_value_in") {
+                    let other = entry.get("option").and_then(toml::Value::as_str);
+                    let tier = entry.get("key").and_then(toml::Value::as_str);
+                    let (Some(other), Some(_)) = (other, tier) else {
+                        return Err(bad(&format!(
+                            "option {name:?} entry_value_in needs an option and a key"
+                        )));
+                    };
+                    if value.get("options").and_then(|o| o.get(other)).is_none() {
+                        return Err(bad(&format!(
+                            "option {name:?} entry_value_in names unknown option {other:?}"
+                        )));
+                    }
+                }
+                for key in ["requires", "ignored_with"] {
+                    if let Some(names) = spec.get(key) {
+                        if !is_string_list(names) {
+                            return Err(bad(&format!("option {name:?} {key} must be strings")));
+                        }
+                        for other in names.as_array().into_iter().flatten() {
+                            let other = other.as_str().unwrap_or_default();
+                            if value.get("options").and_then(|o| o.get(other)).is_none() {
+                                return Err(bad(&format!(
+                                    "option {name:?} {key} names unknown option {other:?}"
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            toml::Value::String(_) | toml::Value::Integer(_) | toml::Value::Boolean(_) => {}
+            toml::Value::Array(_) if is_string_list(option) => {}
+            _ => return Err(bad(&format!("option {name:?} has an unsupported default"))),
+        }
+    }
+    let init = match value.get("init") {
+        Some(init) => init
+            .as_table()
+            .ok_or_else(|| bad("[init] must be a table"))?,
+        None => return Ok(()),
+    };
+    if let Some(server) = init.get("server") {
+        let server = server
+            .as_table()
+            .ok_or_else(|| bad("[init.server] must be a table"))?;
+        for key in ["run", "ready"] {
+            if !server.get(key).is_some_and(is_argv) {
+                return Err(bad(&format!(
+                    "init.server.{key} must be a non-empty list of strings"
+                )));
+            }
+        }
+    }
+    let steps = match init.get("steps") {
+        Some(steps) => steps
+            .as_array()
+            .ok_or_else(|| bad("init.steps must be an array of tables"))?
+            .as_slice(),
+        None => &[],
+    };
+    for step in steps {
+        let step = step
+            .as_table()
+            .ok_or_else(|| bad("init steps must be tables"))?;
+        if !step.get("run").is_some_and(is_argv) {
+            return Err(bad("each init step needs a non-empty run list of strings"));
+        }
+        match step.get("always") {
+            None => {}
+            Some(toml::Value::Boolean(false)) => {}
+            // A repeating step runs against already-published data, where the
+            // ephemeral init server is not started and its ports do not exist.
+            Some(toml::Value::Boolean(true)) if init.contains_key("server") => {
+                return Err(bad(
+                    "an init step cannot be always when the preset declares init.server",
                 ));
-                if let Some(description) = props.get("description") {
-                    let description = description.as_str().unwrap().to_string();
-                    lines.push(format!(
-                        "        description: {},",
-                        raw_string_literal(&description)
-                    ));
-                }
-                match props.get("env").and_then(|value| value.as_str()) {
-                    Some(env) => lines.push(format!("        env: Some({env:?}),")),
-                    None => lines.push("        env: None,".to_string()),
-                }
-                push_deprecated_fields(lines, props);
-                lines.push("    },".to_string());
-            } else {
-                emit_settings_meta(lines, props, &name);
+            }
+            Some(toml::Value::Boolean(true)) => {}
+            Some(_) => return Err(bad("init step always must be a boolean")),
+        }
+        if let Some(key) = step.get("for_each") {
+            let key = key
+                .as_str()
+                .ok_or_else(|| bad("init step for_each must be a string"))?;
+            let list = value
+                .get("options")
+                .and_then(|o| o.get(key))
+                .ok_or_else(|| bad(&format!("init step for_each {key:?} is not an option")))?;
+            let kind = list
+                .get("type")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(if list.is_array() { "list" } else { "other" });
+            if kind != "list" {
+                return Err(bad(&format!(
+                    "init step for_each {key:?} is not a list option"
+                )));
             }
         }
     }
-    emit_settings_meta(&mut lines, &settings, "");
-    lines.push(
-        r#"    }
-});
-    "#
-        .to_string(),
-    );
+    Ok(())
+}
 
-    // Generate MisercSettings struct for early initialization settings
-    lines.push(
-        r#"
-/// Settings that can be set in .miserc.toml for early initialization.
-/// These settings affect config file discovery and must be loaded before
-/// the main config files are parsed.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub(crate) struct MisercSettings {"#
-            .to_string(),
-    );
+/// Names the preset engine binds in the template context itself. Ports and
+/// options are inserted after them, so either could silently shadow one.
+const RESERVED_TEMPLATE_NAMES: &[&str] = &[
+    "data",
+    "port",
+    "item",
+    "item_key",
+    "item_value",
+    "init_port",
+    "init_http_port",
+    // Set from the daemon's proxy hostname when it has one.
+    "host",
+    "url",
+];
 
-    for (key, props) in &settings {
-        let props = props.as_table().unwrap();
-        // Only include settings with rc = true
-        if props
-            .get("rc")
-            .is_some_and(|v| v.as_bool().unwrap_or(false))
-        {
-            if let Some(description) = props.get("description") {
-                lines.push(format!("    /// {}", description.as_str().unwrap()));
-            }
-            let type_ = props
-                .get("rust_type")
-                .map(|rt| rt.as_str().unwrap())
-                .or_else(|| {
-                    props.get("type").map(|t| match t.as_str().unwrap() {
-                        "Bool" => "bool",
-                        "String" => "String",
-                        "Integer" => "i64",
-                        "Url" => "String",
-                        "Path" => "PathBuf",
-                        "Duration" => "String",
-                        "ListString" => "Vec<String>",
-                        "ListPath" => "Vec<PathBuf>",
-                        "SetString" => "BTreeSet<String>",
-                        "IndexMap<String, String>" => "IndexMap<String, String>",
-                        "BoolOrString" => panic!(
-                            r#"type \"BoolOrString\" requires a `rust_type` to be specified"#
-                        ),
-                        t => panic!("Unknown type: {t}"),
-                    })
-                });
-            if let Some(type_) = type_ {
-                // All miserc settings are optional
-                let type_ = format!("Option<{type_}>");
-                lines.push(format!("    pub {key}: {type_},"));
-            }
-        }
-    }
-    lines.push("}".to_string());
+fn is_string_list(value: &toml::Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.iter().all(toml::Value::is_str))
+}
 
-    fs::write(&dest_path, lines.join("\n")).unwrap();
+/// A command the runtime will execute, so it must name a program.
+fn is_argv(value: &toml::Value) -> bool {
+    is_string_list(value) && value.as_array().is_some_and(|items| !items.is_empty())
 }
 
 fn codegen_daemon_presets() -> Result<()> {
@@ -1319,6 +1232,7 @@ fn codegen_daemon_presets() -> Result<()> {
                 path.display()
             ));
         }
+        validate_daemon_preset(&path, &value)?;
         code.push_str(&format!(
             "({:?}, {}),\n",
             path.file_stem().unwrap().to_string_lossy(),

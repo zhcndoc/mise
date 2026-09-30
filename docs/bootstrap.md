@@ -64,16 +64,19 @@ mise bootstrap status
 mise bootstrap --from git@github.com:example/dotfiles.git
 ```
 
-检出目录默认为 `$MISE_DATA_DIR/bootstrap-repo`。使用 `--from-dir`
-选择其他位置。mise 会信任你为本次调用提供的仓库，因此请在运行命令之前检查它。
+要检出分支、标签或提交而不是默认分支，请像任务包含和插件源一样在 URL 后附加 `?ref=`。`git::` 前缀是可选的：
+
+```sh
+mise bootstrap --from 'git::https://github.com/example/dotfiles.git?ref=v1'
+```
+
+检出目录默认为 `$MISE_DATA_DIR/bootstrap-repo`。使用 `--from-dir` 选择其他位置。mise 会信任你为本次调用提供的仓库，因此请在运行命令之前检查它。
 
 要选择 mise 环境，请传入 `-E`，例如
 `mise -E work bootstrap --from <url>`。然后，克隆的项目会加载匹配的
 配置，例如 `mise.work.toml`。
 
-现有检出目录的 `origin` 必须是请求的 URL。除非传入 `--update` 以先拉取
-更新的提交，否则 mise 会使用当前检出。该拉取只接受快进更新。
-使用 `--dry-run` 时，mise 会报告缺少检出目录，但不会克隆它。
+现有检出目录的 `origin` 必须是请求的 URL。除非传入 `--update` 以先拉取更新的提交，否则 mise 会使用当前检出；该拉取只接受快进更新。使用 `?ref=` 时，`--update` 会再次从远程查找 ref：分支（同名时优先于标签）会被切换并快进，标签会检出到其当前提交；远程上不存在的分支或标签会报错。使用 `--dry-run` 时，mise 会报告缺少检出目录，但不会克隆它。
 
 ### 全局 mise 配置
 
@@ -112,9 +115,9 @@ mise 会识别仓库中的 `.mise-history/format.toml` 标记，并：
 它们可以让 bootstrap 在下一台机器上重新创建工具和服务，并渲染模板。
 即使仓库不包含全局 mise 配置，也仍然可以恢复受跟踪的文件。
 
-如果现有文件不同，mise 会要求你先解决冲突，然后才会恢复文件或运行剩余的
-bootstrap 步骤。使用 `--dry-run` 预览计划。有关同步和恢复的详细信息，请参阅
-[历史](/history.html#sharing-across-machines)。
+将安装 shell 插件或修复权限等无法仅靠文件完成的机器设置，放在共享配置的 [`[tasks.bootstrap]`](#what-goes-where) 中。采用配置时会从恢复后的配置运行它。之后，`mise dot pull` 和 watcher 会恢复共享更改但不运行设置；请运行 `mise bootstrap` 应用这些更改，此时任务会再次运行。`[history.reload]` 命令会响应恢复的文件，但 mise 在恢复前读取这些命令，因此同一次更新（包括首次采用）带来的 reload 表不会触发。
+
+如果现有文件不同，mise 会要求你先解决冲突，然后才会恢复文件或运行剩余的 bootstrap 步骤。使用 `--dry-run` 预览计划。有关同步和恢复的详细信息，请参阅[历史](/history.html#sharing-across-machines)。
 
 此工作流会将 Git 历史存储在 `$MISE_CONFIG_DIR` 之外；
 如果那里已有检出目录，则会保留该检出目录。如果该目录是 Git 检出目录，
@@ -187,7 +190,7 @@ comma-separated, for example `mise bootstrap --skip tools,task`.
 
 Use `mise bootstrap --update` to refresh system package manager metadata
 before installing packages (apk: `--update-cache`, apt: `apt-get update`,
-winget: `winget source update`) and
+scoop: `scoop update`, winget: `winget source update`) and
 update declared repositories. Check the [repo update rules](/bootstrap/repos.html)
 for clean-worktree and fast-forward requirements.
 
@@ -280,7 +283,7 @@ mise dot history diff 11 12
 | [`[bootstrap.services]`](/bootstrap/services.html)                      | User services on Linux, macOS, and Windows; existing Linux system services  |
 | [`[bootstrap.compose]`](/bootstrap/compose.html)                        | Docker Compose project lifecycle                                            |
 | [`[bootstrap.plugins]`](/bootstrap/packages/plugins.html)               | Package manager plugins                                                     |
-| [`[bootstrap.packages]`](/bootstrap/packages/)                          | OS packages from apk, apt, dnf, pacman, brew, flatpak, mas, or winget       |
+| [`[bootstrap.packages]`](/bootstrap/packages/)                          | OS packages from apk, apt, dnf, pacman, brew, flatpak, mas, scoop, winget   |
 | [`[bootstrap.repos]`](/bootstrap/repos.html)                            | Git repos cloned before dotfiles are applied                                |
 | [`[dotfiles]`](/dotfiles.html)                                          | Tracking dotfiles, creating files from sources, and editing blocks or lines |
 | [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)              | mise activation snippets in shell startup files                             |
@@ -294,9 +297,125 @@ mise dot history diff 11 12
 | `[tools]`                                                               | Versioned dev tools managed by mise                                         |
 | `[tasks.bootstrap]`                                                     | Anything custom that should run after tools are installed                   |
 
-当 mise 可以检查并收敛状态时，请使用声明式部分。对于不适合这些部分的命令式设置，
-例如检查身份验证或填充本地数据，请使用 `[tasks.bootstrap]`。
-该任务会在每次 bootstrap 时再次运行，因此请保护只应执行一次的操作。
+当 mise 可以检查并收敛状态时，请使用声明式部分。对于不适合这些部分的命令式设置，例如检查身份验证或填充本地数据，请使用 [tasks.bootstrap]。该任务会在每次 bootstrap 时再次运行，因此请保护只应执行一次的操作。在共享设置仓库的机器上，采用仓库时以及共享更新后的每次 mise bootstrap 都会运行该任务。
+
+## 模块
+
+使用配置环境按应用或角色组织可选的机器设置。每个环境文件可以一起声明软件包、点文件和服务。这些文件使用 mise 现有的配置系统作为模块。
+
+### 定义模块
+
+将共享设置放在 `~/.config/mise/config.toml` 中，并将可选设置放在旁边的 `config.<name>.toml` 中。例如，下面的 SSH 模块面向使用 apt 和 systemd 用户会话的 Linux 机器。它会安装客户端，从点文件检出目录链接已有的 SSH 配置，并运行 agent：
+
+~~~toml [~/.config/mise/config.ssh.toml]
+[bootstrap.packages]
+"apt:openssh-client" = "latest"
+
+[dotfiles]
+"~/.ssh/config" = "~/src/dotfiles/ssh/config"
+
+[bootstrap.services.ssh-agent]
+scope = "user"
+command = "ssh-agent -D -a %t/ssh-agent.socket"
+~~~
+
+应用此模块前，请在 ~/src/dotfiles/ssh/config 创建源文件。要在 shell 中使用该 agent，请将 SSH_AUTH_SOCK 设置为 $XDG_RUNTIME_DIR/ssh-agent.socket。
+
+对于 bootstrap 项目，请改为在项目目录中使用 mise.toml 和 mise.ssh.toml。
+
+### 选择和预览模块
+
+在 miserc.toml 中选择机器的默认模块。例如，定义 config.ssh.toml 和 config.gpg.toml 后：
+
+~~~toml [~/.config/mise/miserc.toml]
+env = ["ssh", "gpg"]
+~~~
+
+基础 config.toml 仍会加载。先预览合并后的设置，再应用它：
+
+~~~sh
+mise bootstrap --dry-run
+mise bootstrap
+~~~
+
+要为单次调用选择模块，请使用 mise -E ssh,gpg bootstrap。对于远程 bootstrap，请在清单中设置每个主机的 mise_env 列表。这样，一个仓库就能描述具有不同模块组合的机器。
+
+### 模块如何组合
+
+不同键的声明会加入同一次运行。在同一目录中，如果多个环境声明了同一键，后列出的环境优先。例如，当 env = ["ssh", "gpg"] 时，两个文件都声明的服务会使用 config.gpg.toml 中的定义。
+
+使用 mise config 检查已加载的文件。对于每个受管理的文件和服务，mise bootstrap plan --json 都包含 origin.config 和 origin.environment，因此可以追溯资源的声明来源。
+
+如果设置应始终加载，请使用基础配置，或使用没有环境后缀的 conf.d 片段，例如 conf.d/ssh.toml。
+
+要将一组设置与其源文件放在一起，请使用 `conf.d` 文件夹。相对点文件源会在该文件夹内解析，其中的 `mise.<env>.toml` 文件只在对应环境激活时加载：
+
+~~~text
+~/.config/mise/conf.d/ssh/
+├── mise.toml          # 始终加载；"~/.ssh/config" = "ssh_config"
+├── mise.linux.toml    # linux 环境激活时加载
+└── ssh_config
+~~~
+
+### 移除模块资源
+
+从 env 移除模块会停止加载其声明，但会将资源留在机器上。使用 mise bootstrap unapply 移除其管理的文件、目录、用户服务、点文件条目和编辑。
+
+首先从 miserc.toml 的 env 中移除模块，这样下一次 bootstrap 就不会再次应用它。保留模块配置文件在磁盘上，然后预览并确认移除：
+
+~~~sh
+mise bootstrap unapply ssh --dry-run
+mise bootstrap unapply ssh
+~~~
+
+该命令会临时在剩余环境旁选择 ssh 来读取其声明。也可以一次移除多个模块：
+
+~~~sh
+mise bootstrap unapply ssh gpg --dry-run
+mise bootstrap unapply ssh gpg
+~~~
+
+Unapply 会在移除资源前请求确认。使用 --yes 可以跳过提示并批准移除；全局 --yes、MISE_YES 和 mise 的 yes 设置也适用，mise 会在 CI 中启用该设置。
+
+#### 移除计划
+
+Mise 会比较包含和不包含指定环境时的当前配置。它使用磁盘上仍然存在的声明，而不是过去 bootstrap 运行的记录。清理完成前请保留这些声明：如果先删除模块文件，mise 就没有移除其资源所需的信息。
+
+- 基础配置或其他选定模块仍声明为 present 的资源会被保留。声明 state = "absent" 不会保护资源。
+- 不再符合声明的目标会带有原因并被跳过。使用 --force 移除已更改目标前，请检查输出。
+- 目录只有在计划移除后为空时才会删除。即使使用 --force，无法读取的目录和类型异常的受管理路径也会保留。
+
+源文件和配置条目会被保留。Unapply 不会恢复先前因 state = "absent" 声明而移除的资源。
+
+#### 需要单独清理的资源
+
+Unapply 会报告软件包、仓库和 Compose 声明，并给出单独移除的建议：
+
+- **软件包：** 遵循管理器专用的清理指南。请先预览计划；清理不限于某一个模块的软件包。
+- **Compose 项目：** 设置 state = "absent"，并在选中模块时应用更改，例如使用 mise -E ssh bootstrap --only compose。
+- **仓库：** 不再需要时，移除 bootstrap.repos 中声明的检出目录。
+
+其他 bootstrap 部分（包括系统服务）不属于 unapply 的范围，请使用其资源专用的移除流程。
+
+## 模板
+
+mise.toml 的每个部分都不是 Tera 模板。在 bootstrap 中，下列内容会被渲染：
+
+| 位置                                                         | 渲染内容                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------- |
+| bootstrap.linux.systemd.units                                  | 单元中的每个字符串值                                           |
+| bootstrap.macos.launchd.agents                                 | agent 中的每个字符串值                                         |
+| bootstrap.hooks                                                  | 钩子命令                                                       |
+| bootstrap.files                                                   | 仅当 template = true 时渲染文件内容                             |
+| dotfiles                                                         | 仅当 mode = "template" 或 template = "tera" 时渲染文件内容       |
+
+其他所有内容，包括部分键、软件包规格、仓库路径、macOS 默认设置和其余 bootstrap 值，都会按原样使用。
+
+渲染使用声明该条目的配置文件上下文，因此 <code v-pre>{{ config_root }}</code> 是该配置的目录，而不是运行 mise bootstrap 的目录。受管理文件的内容模板还会获得 <code v-pre>{{ target }}</code> 和 <code v-pre>{{ secret(name="...") }}</code>。
+
+不含模板语法的值会完全跳过渲染，因此单元或 agent 中字面形式的 %h、%i 或 $HOME 会原样进入生成文件。章节所述的任何 ~ 展开仍会在之后进行。
+
+<code v-pre>{{ exec(...) }}</code> 可用于 bootstrap.hooks 和文件内容模板，但不能用于单元或 agent 值：这些值在 status、plan、--dry-run 和 apply 中以相同方式渲染，因此只读命令绝不能启动 shell。
 
 ## 钩子
 

@@ -1,6 +1,6 @@
 //! Register changed definitions and emit non-blocking pitchfork session commands.
 use super::runtime::{self, Runtime};
-use crate::config::{Config, Settings};
+use crate::config::{Config, Settings, SettingsExt};
 use crate::env_diff::EnvMap;
 use crate::shell::Shell;
 use crate::toolset::Toolset;
@@ -20,7 +20,7 @@ struct Sessions {
     roots: BTreeMap<PathBuf, PathBuf>,
 }
 
-pub(crate) async fn emit(
+pub async fn emit(
     config: &Arc<Config>,
     ts: &Toolset,
     env: &EnvMap,
@@ -57,7 +57,14 @@ pub(crate) async fn emit(
     let roots: Vec<_> = set
         .roots()
         .into_iter()
-        .filter(|root| set.for_root(root).auto())
+        .filter(|root| {
+            let scoped = set.for_root(root);
+            // Preparing a root rewrites its generated pitchfork file whole, and
+            // this project only knows the daemons it imported from another one.
+            // Registering that here would deregister the sibling's own daemons,
+            // so automatic lifecycle stops at this project's boundary.
+            scoped.auto() && !scoped.daemons.values().any(|daemon| daemon.imported)
+        })
         .collect();
     for (root, bin) in &previous.roots {
         if !roots.contains(root) {
@@ -85,7 +92,32 @@ pub(crate) async fn emit(
                 env: env.clone(),
             };
             runtime::validate_tools(&scoped_set, config, ts).await?;
-            let (_state, _lock) = runtime.prepare(&root, &scoped_set, force).await?;
+            // Task references belong to the declaring project's task list, the
+            // same scope the other two callers validate against. Loading that
+            // scope costs a config hierarchy read, so only do it when a daemon
+            // actually names a task; this runs on every prompt.
+            if scoped_set.daemons.values().any(|d| d.task.is_some()) {
+                let scoped_config = runtime::config_for_root(config, &root).await?;
+                scoped_set.validate_tasks(&scoped_config).await?;
+            }
+            // Pitchfork starts the `auto = ["start"]` daemons as soon as this
+            // session joins, so the same check the other two registration paths
+            // make belongs here: a daemon whose dependency was dropped with an
+            // unreadable import would otherwise start without what it declared.
+            let auto_starting = scoped_set.auto_starting();
+            super::ensure_not_blocked(&scoped_set, &auto_starting, Some(&root))?;
+            // The daemons this hook starts, dependencies included: pitchfork
+            // brings those up too, so their ports are about to be bound and
+            // belong in the conflict check.
+            let auto_start: Vec<String> = auto_starting
+                .daemons
+                .values()
+                .map(|daemon| daemon.name.clone())
+                .collect();
+            // Only this project's own roots reach here, so it owns the profile.
+            let (_state, _lock) = runtime
+                .prepare(&root, &scoped_set, force, true, &auto_start)
+                .await?;
             Ok::<_, eyre::Report>(runtime.bin)
         }
         .await;

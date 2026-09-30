@@ -201,8 +201,7 @@ mise env --redacted --values
 脱敏是通过逐行拦截任务输出实现的，因此它们需要非 `raw` 的输出模式。
 `raw = true` 的任务会绕过这种拦截（stdout/stderr 会直接传递到终端），因此无法应用脱敏。
 
-默认情况下，`mise run` 使用 `replacing` 输出模式，它显示进度旋转器而不是完整输出。
-在 CI 环境中，你可能希望改用 `prefix` 或 `interleave` 输出，这样你就可以在仍然应用脱敏的同时看到完整的任务日志：
+默认情况下，当任务并行运行（`jobs` > 1）时，`mise run` 使用 `prefix` 输出模式；当 `jobs` 为 1 或所有任务顺序运行时使用 `interleave`。两者都会打印完整任务输出并应用脱敏。`replacing` 和 `timed` 模式不会打印每一行，因此如果使用其中之一，请在 CI 环境中切换到 `prefix` 或 `interleave`，以便在仍然应用脱敏的同时看到完整任务日志：
 
 ```bash
 MISE_TASK_OUTPUT=prefix mise run mytask

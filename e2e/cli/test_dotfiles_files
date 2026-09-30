@@ -145,10 +145,10 @@ assert "ls ~/.local/mybin/unmanaged" "$HOME/.local/mybin/unmanaged"
 # Existing symlink-each installations without ownership state are migrated by
 # the next real apply, even when every target is already converged. Once state
 # exists, status inspects managed paths instead of recursively walking a shared
-# target such as HOME.
+# target such as HOME. Template ownership records live one level down.
 rm -rf "$MISE_STATE_DIR/dotfiles"
 assert_succeed "mise dotfiles apply --yes"
-assert "find '$MISE_STATE_DIR/dotfiles' -type f | wc -l | tr -d ' '" "1"
+assert "find '$MISE_STATE_DIR/dotfiles' -maxdepth 1 -type f | wc -l | tr -d ' '" "1"
 mkdir ~/.local/mybin/private
 chmod 000 ~/.local/mybin/private
 assert_not_contains "MISE_DEBUG=1 mise dotfiles status 2>&1" "$HOME/.local/mybin/private"
@@ -427,13 +427,17 @@ assert "cat ~/.local/exclcopy/linked" "linked"
 assert_fail "test -e $HOME/.local/exclcopy/NOTES.md"
 assert_succeed "mise dotfiles status --missing"
 
-# an invalid pattern warns and is dropped instead of failing the entry
+# an invalid pattern warns and is dropped instead of failing the entry:
+# a deployment entry keeps working with the rest of its list, and the
+# rest of the list is still in force
 cat <<EOF >mise.toml
 [dotfiles]
-"~/.local/excl" = { source = "excl", mode = "symlink-each", exclude = ["[bad"] }
+"~/.local/excl" = { source = "excl", mode = "symlink-each", exclude = ["[bad", "NOTES.md"] }
 EOF
 assert_contains "mise dotfiles status 2>&1" "invalid exclude pattern"
 assert_succeed "mise dotfiles status"
+assert_succeed "mise dotfiles apply --yes"
+assert_fail "test -e $HOME/.local/excl/NOTES.md"
 
 # a config skipped for trust reasons says so instead of reporting the
 # [dotfiles] table as empty
@@ -764,6 +768,74 @@ cat <<EOF >mise.toml
 "~/inline-edit/dev" = { line = "inline content" }
 EOF
 EDITOR="$PWD/editor-append" mise dotfiles edit ~/inline-edit
+assert_contains "cat mise.toml" "# edited config"
+
+# a tracked file stays where it is, so edit opens the target itself
+# (tracking is enrolled from the global configuration only)
+echo "tracked before edit" >~/.edit-tracked
+cat <<EOF >"$MISE_CONFIG_DIR/config.toml"
+[dotfiles]
+"~/.edit-tracked" = { mode = "track" }
+EOF
+cat <<EOF >mise.toml
+[dotfiles]
+EOF
+EDITOR="$PWD/editor-write" mise dotfiles edit ~/.edit-tracked
+assert "cat ~/.edit-tracked" "edited source"
+: >"$MISE_CONFIG_DIR/config.toml"
+
+# history captures a tracked symlink as a link, so editing through one warns
+# that the destination is not saved unless it is tracked too
+echo "link destination" >~/.edit-link-destination
+ln -sf ~/.edit-link-destination ~/.edit-link
+cat <<EOF >"$MISE_CONFIG_DIR/config.toml"
+[dotfiles]
+"~/.edit-link" = { mode = "track" }
+EOF
+assert_contains "EDITOR=\"$PWD/editor-write\" mise dotfiles edit ~/.edit-link 2>&1" "history does not capture"
+assert "cat ~/.edit-link-destination" "edited source"
+
+# no warning once the destination is tracked as well
+cat <<EOF >"$MISE_CONFIG_DIR/config.toml"
+[dotfiles]
+"~/.edit-link" = { mode = "track" }
+"~/.edit-link-destination" = { mode = "track" }
+EOF
+assert_not_contains "EDITOR=\"$PWD/editor-write\" mise dotfiles edit ~/.edit-link 2>&1" "history does not capture"
+
+# a dangling link is written through just the same, so it warns too
+ln -sf ~/.edit-link-missing ~/.edit-dangling
+cat <<EOF >"$MISE_CONFIG_DIR/config.toml"
+[dotfiles]
+"~/.edit-dangling" = { mode = "track" }
+EOF
+assert_contains "EDITOR=\"$PWD/editor-write\" mise dotfiles edit ~/.edit-dangling 2>&1" "history does not capture"
+assert "cat ~/.edit-link-missing" "edited source"
+: >"$MISE_CONFIG_DIR/config.toml"
+
+# a target that is both tracked and deployed is edited through its source, so
+# a later apply does not write the edit back out
+echo "deployed source" >edit-both-source
+cat <<EOF >"$MISE_CONFIG_DIR/config.toml"
+[dotfiles]
+"~/.edit-both" = { mode = "track" }
+EOF
+cat <<EOF >mise.toml
+[dotfiles]
+"~/.edit-both" = { source = "edit-both-source", mode = "copy" }
+EOF
+assert_succeed "mise dotfiles apply --yes"
+EDITOR="$PWD/editor-write" mise dotfiles edit --apply ~/.edit-both
+assert "cat edit-both-source" "edited source"
+assert "cat ~/.edit-both" "edited source"
+: >"$MISE_CONFIG_DIR/config.toml"
+
+# inline content lives in the config that declares it
+cat <<EOF >mise.toml
+[dotfiles]
+"~/.edit-inline-content" = { content = "inline before edit\n" }
+EOF
+EDITOR="$PWD/editor-append" mise dotfiles edit ~/.edit-inline-content
 assert_contains "cat mise.toml" "# edited config"
 
 # Dotfile templates consume the same declared bootstrap secrets as managed

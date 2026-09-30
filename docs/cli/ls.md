@@ -21,6 +21,9 @@ description: "列出已安装和已激活的工具版本"
 - **`--truncate`** — 截断过长的终端输出以适应可用宽度
 
   **默认值：** `true`
+- **`-b --backend <BACKEND>`** — 仅显示此后端中的工具，例如 aqua、cargo、core、go
+
+  注册表简写会按其解析到的后端计数，因此 `jq` 会列在 aqua 下。重复传入此标志可显示多个后端。
 - **`-c --current`** — 仅显示当前在 mise.toml 中指定的工具版本
 - **`-g --global`** — 仅显示当前在全局 mise.toml 中指定的工具版本
 - **`-i --installed`** — 仅显示已安装的工具版本（隐藏 mise.toml 中定义但未安装的工具）
@@ -29,6 +32,7 @@ description: "列出已安装和已激活的工具版本"
 - **`-m --missing`** — 显示缺失的工具版本
 - **`--all-sources`** — 显示工具的所有已跟踪配置源
 - **`--monorepo`** — 列出每个 [monorepo].config_roots 配置根中的工具
+- **`--grouped`** — 按后端分别列出工具。不能与 `--json` 组合；请使用 `--backend` 过滤 JSON 输出。
 
   使用活动的 MISE_ENV，并要求设置 monorepo_root = true，且在 monorepo 根配置中显式设置
   [monorepo].config_roots。
@@ -76,6 +80,18 @@ mise ls node --json
 
 ```
 mise ls --all-sources
+```
+
+Show only tools from the go or cargo backends
+
+```
+mise ls --backend go --backend cargo
+```
+
+List tools in a separate section for each backend
+
+```
+mise ls --grouped
 ```
 
 <!-- generated reference navigation -->

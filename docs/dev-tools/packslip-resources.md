@@ -85,6 +85,10 @@ mise skills sync --dir .agents/skills
 
 每个链接都指向已激活工具版本的安装目录。版本更改后运行 sync 以更新链接。mise 会保留用户创建的目录和无关链接，并将任何冲突的名称报告为已跳过。
 
+### 声明的 skill 未安装时
+
+`mise skills ls` 和 `mise skills sync` 会按名称报告 Packslip 声明但未安装的 skill，并说明原因：[`skills.fetch`](/configuration/settings.html#skills.fetch) 已关闭；skill 由 exec 命令生成且 [`packslip.exec`](/configuration/settings.html#packslip.exec) 已关闭；或者安装时下载失败，重新安装工具会再次获取它。
+
 ### 选择 skill 目录
 
 不使用 `--dir` 时，sync 会使用最近的 mise 项目根目录下的 `.claude/skills`。设置 [`skills.dir`](/configuration/settings.html#skills.dir) 以使用 agent 首选的目录。`--dir` 会覆盖设置，仅对一次调用生效。

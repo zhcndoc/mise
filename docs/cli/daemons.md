@@ -12,8 +12,7 @@ description: "[实验性] 使用 pitchfork 管理项目守护进程"
 
 [实验性] 使用 pitchfork 管理项目守护进程
 
-在 [daemons] 中定义命令或受管理的 Postgres/Redis 预设
-不带子命令时，列出已配置和之前管理的守护进程
+在 [daemons] 中定义命令或受管理的服务预设：cockroachdb、nats、postgres、redis、spicedb。不带子命令时，列出已配置和之前管理的守护进程。
 
 ## 标志
 - **`--json`**
@@ -23,11 +22,15 @@ description: "[实验性] 使用 pitchfork 管理项目守护进程"
 
 - [`mise daemons logs [ARGS]…`](/cli/daemons/logs.html)
 - [`mise daemons ls [--json]`](/cli/daemons/ls.html)
+- [`mise daemons providers [SUBCOMMAND]`](/cli/daemons/providers.html)
+- [`mise daemons prune [-n --dry-run]`](/cli/daemons/prune.html)
+- [`mise daemons register`](/cli/daemons/register.html)
 - [`mise daemons restart [ARGS]…`](/cli/daemons/restart.html)
 - [`mise daemons start [ARGS]…`](/cli/daemons/start.html)
 - [`mise daemons status [ARGS]…`](/cli/daemons/status.html)
 - [`mise daemons stop [ARGS]…`](/cli/daemons/stop.html)
 - [`mise daemons tui [ARGS]…`](/cli/daemons/tui.html)
+- [`mise daemons urls [--json]`](/cli/daemons/urls.html)
 
 <!-- generated reference navigation -->
 

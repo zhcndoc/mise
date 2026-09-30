@@ -79,12 +79,12 @@ mise run --jobs 8 test        # 使用 8 个并行作业
 mise run -j 1 test            # 强制顺序执行
 ```
 
-默认值为 4 个并行作业，但你可以全局配置它：
+默认值为 8 个并行作业，但你可以全局配置它：
 
 ```toml
 # ~/.config/mise/config.toml
 [settings]
-jobs = 8
+jobs = 4
 ```
 
 ### 示例执行流程

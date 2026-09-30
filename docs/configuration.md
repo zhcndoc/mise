@@ -56,6 +56,7 @@ much easier than working through mise's rules.
 
 - Paths that start with `mise` can be dotfiles, e.g. `.mise.toml` or `.mise/config.toml`.
 - This list doesn't include [Configuration Environments](/configuration/environments), which allow environment-specific config files like `mise.development.toml`—selected with `MISE_ENV=development`. Platform-specific environments like `mise.windows.toml` or `mise.macos-arm64.toml` can be enabled automatically with the [`auto_env` setting](/configuration/environments.html#platform-environments).
+- A folder inside any `conf.d` directory is also a fragment. See [conf.d folders](/configuration.html#conf-d-folders).
 - See [`LOCAL_CONFIG_FILENAMES` in `src/config/mod.rs`](https://github.com/jdx/mise/blob/main/src/config/mod.rs) for the actual code for these paths and their precedence. Some legacy paths are not listed here for brevity.
 
 ## 配置层级
@@ -480,6 +481,7 @@ in both mise and nvm. Here are some of the supported idiomatic version files:
 | 插件          | 惯用文件                                                                                                                                                                                                                                                                                             |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | atmos         | `.atmos-version`                                                                                                                                                                                                                                                                                           |
+| bazel         | `.bazelversion`                                                                                                                                                                                                                                                                                            |
 | bun           | `.bun-version`, `package.json`                                                                                                                                                                                                                                                                             |
 | chezmoi       | `.chezmoiversion`                                                                                                                                                                                                                                                                                          |
 | cmake         | `CMakeLists.txt`                                                                                                                                                                                                                                                                                           |
@@ -489,11 +491,12 @@ in both mise and nvm. Here are some of the supported idiomatic version files:
 | dotnet        | `global.json`                                                                                                                                                                                                                                                                                              |
 | earthly       | `Earthfile`                                                                                                                                                                                                                                                                                                |
 | elixir        | `.exenv-version`                                                                                                                                                                                                                                                                                           |
-| go            | `.go-version`, `go.mod`                                                                                                                                                                                                                                                                                    |
+| go            | `.go-version`, `go.mod`, `go.work`                                                                                                                                                                                                                                                                         |
 | golangci-lint | `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`                                                                                                                                                                                                                                      |
 | goreleaser    | `.config/goreleaser.yml`, `.config/goreleaser.yaml`, `.goreleaser.yml`, `.goreleaser.yaml`, `goreleaser.yml`, `goreleaser.yaml`                                                                                                                                                                            |
 | java          | `.java-version`, `.sdkmanrc`                                                                                                                                                                                                                                                                               |
 | lefthook      | `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, `.lefthook.yaml`, `lefthook.toml`, `.lefthook.toml`, `lefthook.json`, `.lefthook.json`, `lefthook.jsonc`, `.lefthook.jsonc`, `.config/lefthook.yml`, `.config/lefthook.yaml`, `.config/lefthook.toml`, `.config/lefthook.json`, `.config/lefthook.jsonc` |
+| nim           | `.nim-version`                                                                                                                                                                                                                                                                                             |
 | node          | `.nvmrc`, `.node-version`, `package.json`                                                                                                                                                                                                                                                                  |
 | npm           | `package.json`                                                                                                                                                                                                                                                                                             |
 | opentofu      | `.opentofu-version`                                                                                                                                                                                                                                                                                        |
@@ -515,6 +518,8 @@ in both mise and nvm. Here are some of the supported idiomatic version files:
 | zig           | `.zig-version`                                                                                                                                                                                                                                                                                             |
 
 <!-- mise:idiomatic-version-files:end -->
+
+For Bazel setup and supported `.bazelversion` values, see the [Bazel cookbook](/mise-cookbook/bazel.html).
 
 Registry-backed tools can also describe how mise should extract versions from structured
 idiomatic files. Registry entries may use the same `version_regex`, `version_json_path`, and
@@ -587,7 +592,52 @@ distinguish language and ecosystem conventions from mise's own configuration.
 
 ### `[daemons]`
 
-Experimental custom processes and managed Postgres/Redis presets share one section. Higher-precedence declarations replace the complete same-name daemon; explicit environment variables override preset exports. See [daemons](/daemons).
+Define background processes, managed PostgreSQL or Redis instances, and references
+to daemons in other projects. Daemon management requires `experimental = true`.
+
+```toml
+[daemons.api]
+run = "npm run dev"
+
+[daemons.worker]
+project = "../workers"
+```
+
+The `api` daemon runs in this project; `worker` uses the `worker` declaration in
+`../workers`. A reference accepts only `project` and an optional `name` to select a
+differently named daemon.
+
+A higher-precedence declaration replaces the complete same-name daemon. Explicit
+environment variables override preset exports. `proxy` sets the daemon's hostname
+label, opts it out with `false`, or re-enables it with `true`, `proxy_tls` chooses
+`"terminate"` or `"passthrough"`, and `proxy_idle_timeout` (a duration such as `"30m"`,
+or `false`) stops a proxy-started daemon after it sits idle. See [Daemons](/daemons) for presets,
+[project references](/daemons#daemons-from-another-project),
+[stable URLs](/daemons#stable-urls-per-worktree), and lifecycle commands.
+
+### `[daemons_settings]`
+
+Set the namespace used in daemon IDs such as `my-app/api`:
+
+```toml
+[daemons_settings]
+namespace = "my-app"
+namespace_per_worktree = true # default
+```
+
+Without an explicit namespace, mise derives one from the project path. Linked Git
+worktrees append a unique suffix to an explicit namespace by default.
+
+The namespace also names the project in the hostnames daemons are reachable at. See
+[Stable URLs per worktree](/daemons#stable-urls-per-worktree).
+
+These settings merge by key across project configuration files and are inherited
+by child projects. They are ignored in global and system configuration. See
+[Namespaces](/daemons#namespaces) for naming rules, inheritance, and worktree behavior.
+
+### `[daemon_groups]`
+
+Experimental named sets of project daemons. Each member is a daemon or another group declared in the same project, so a group never selects daemons outside it. Group names work wherever `mise daemons` accepts a daemon name. See [daemons](/daemons#groups).
 
 ## Environment variables
 

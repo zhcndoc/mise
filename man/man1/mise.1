@@ -157,6 +157,9 @@ List built\-in backends
 \fIAliases: \fRlist
 .RE
 .TP
+\fBbackends switch\fR
+Switch tools to the backend the registry now installs them from
+.TP
 \fBbin\-paths\fR
 List all the active runtime bin paths
 .TP
@@ -227,7 +230,7 @@ List checkpoints, newest first
 Show one checkpoint: what triggered it, what changed, and its journal
 .TP
 \fBbootstrap dotfiles include\fR
-Capture paths matching a glob again
+Stop excluding paths matching a glob
 .TP
 \fBbootstrap dotfiles origin\fR
 Connect or disconnect the setup repository
@@ -448,6 +451,9 @@ Show the aggregate bootstrap status
 \fIAliases: \fRls
 .RE
 .TP
+\fBbootstrap unapply\fR
+Remove the resources a config environment contributes
+.TP
 \fBbootstrap user\fR
 Manage current\-user bootstrap settings from `[bootstrap.user]`
 .TP
@@ -514,8 +520,26 @@ Print the script to disable mise in the current shell session
 \fIAliases: \fRdaemon
 .RE
 .TP
+\fBdaemons providers\fR
+Manage shared servers defined in global [daemon_providers].
+.TP
+\fBdaemons providers ls\fR
+List configured and previously managed shared servers.
+.TP
+\fBdaemons providers start\fR
+Start the named shared servers.
+.TP
+\fBdaemons providers stop\fR
+Stop the named shared servers without deleting their data.
+.TP
+\fBdaemons providers restart\fR
+Restart the named shared servers with their current configuration.
+.TP
 \fBdaemons start\fR
 Arguments passed to pitchfork; daemon names may be short or qualified.
+.TP
+\fBdaemons register\fR
+Prepare all project daemons for on\-demand startup without starting them.
 .TP
 \fBdaemons stop\fR
 Arguments passed to pitchfork; daemon names may be short or qualified.
@@ -529,6 +553,9 @@ List project daemons without starting a supervisor or registering configuration.
 \fIAliases: \fRlist
 .RE
 .TP
+\fBdaemons urls\fR
+Show each project daemon's port and its proxy hostname URL.
+.TP
 \fBdaemons logs\fR
 Arguments passed to pitchfork; daemon names may be short or qualified.
 .TP
@@ -537,6 +564,9 @@ Arguments passed to pitchfork; daemon names may be short or qualified.
 .TP
 \fBdaemons tui\fR
 Open pitchfork's dashboard with optional pitchfork TUI flags.
+.TP
+\fBdaemons prune\fR
+Remove daemon state left behind by deleted project directories.
 .TP
 \fBdotfiles\fR
 Manage dotfiles from `[dotfiles]`
@@ -584,7 +614,7 @@ List checkpoints, newest first
 Show one checkpoint: what triggered it, what changed, and its journal
 .TP
 \fBdotfiles include\fR
-Capture paths matching a glob again
+Stop excluding paths matching a glob
 .TP
 \fBdotfiles origin\fR
 Connect or disconnect the setup repository
@@ -1291,6 +1321,52 @@ Installed plugin availability and built\-in backends are separate lists
 mise backends ls
 mise plugins ls
 .RE
+.SH "MISE BACKENDS SWITCH"
+Switch tools to the backend the registry now installs them from
+
+When the registry moves a tool to another backend, mise keeps installing it
+from the backend recorded in mise.lock and warns that the registry has a
+newer one. This moves those lock entries to the registry's backend at the
+same versions, relocks them to record the new backend's checksums and URLs,
+and reinstalls installed versions so they come from the new backend.
+
+It covers the lockfiles `mise lock` writes: the current project's, or the
+global config's with `\-\-global`.
+.PP
+\fBUsage:\fR mise backends switch [OPTIONS] [<TOOL@VERSION>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Show what would switch without changing the lockfile or installs
+.TP
+\fB\-g, \-\-global\fR
+Switch tools in the global config's lockfile instead of the project's
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<TOOL@VERSION>\fR
+Tools to switch
+
+Defaults to every configured tool whose locked backend the registry
+has replaced. A version (`hk@1.58.1`) limits the switch to that version.
+\fBExamples:\fR
+.PP
+Move communique to the registry's current backend
+.PP
+.RS 4
+mise backends switch communique
+.RE
+.PP
+List every locked tool the registry now installs from another backend
+.PP
+.RS 4
+mise backends switch \-\-dry\-run
+.RE
 .SH "MISE BIN-PATHS"
 List all the active runtime bin paths
 .PP
@@ -1343,6 +1419,8 @@ repeated or comma\-separated parts and cannot be combined.
 .TP
 \fB\-\-from\fR \fI<GIT_URL>\fR
 Clone a git repository and bootstrap from its configuration
+
+Append `?ref=<branch|tag|commit>` to the URL to check out a ref instead of the default branch, for example `git::https://github.com/example/dotfiles.git?ref=v1`.
 .TP
 \fB\-\-adopt\fR \fI<GIT_URL|OWNER/REPO>\fR
 Adopt global configuration or shared dotfile history from a Git repository, then bootstrap
@@ -1723,10 +1801,14 @@ mise dot edit \-\-apply ~/.config/starship.toml
 .SH "MISE BOOTSTRAP DOTFILES EXCLUDE"
 Never capture paths matching a glob
 
-Adds the glob to `[history] exclude` in the global config. Use it for
-logs, caches, databases, and constantly rewritten application state; a
-file that genuinely holds configuration but changes constantly is
-better tracked with `\-\-no\-autosave` and saved explicitly.
+Adds a glob to `[history] exclude` in the global configuration. The
+rule applies to all tracked paths. Quote the glob to prevent your shell
+from expanding it.
+
+Use exclusions for logs, caches, databases, and session state. For
+configuration you want to save manually, use `\-\-no\-autosave` instead.
+To scope selection to one directory, edit that `[dotfiles]` entry's
+`exclude` or `include` list.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles exclude [OPTIONS] <GLOB>
 .PP
@@ -1887,9 +1969,17 @@ Print help
 \fB<REF>\fR
 Numeric checkpoint ID, `latest` (the default), `latest~N`, or `commit:<sha>`
 .SH "MISE BOOTSTRAP DOTFILES INCLUDE"
-Capture paths matching a glob again
+Stop excluding paths matching a glob
 
-Removes the glob from `[history] exclude` in the global config.
+Removes the specified glob from `[history] exclude` in the global
+configuration. Pass the same pattern used with `mise dot exclude`:
+
+    mise dot exclude '~/.codex/sessions/**'
+    mise dot include '~/.codex/sessions/**'
+
+Other matching exclusion rules still apply. This command does not edit
+a tracked directory's `include` list; change that field in `[dotfiles]`
+to select which files the directory saves.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles include [OPTIONS] <GLOB>
 .PP
@@ -1902,7 +1992,7 @@ Print help
 .PP
 .TP
 \fB<GLOB>\fR
-The glob as written by `exclude`
+The glob as written by `mise dot exclude`
 .SH "MISE BOOTSTRAP DOTFILES ORIGIN"
 Connect or disconnect the setup repository
 
@@ -2014,6 +2104,16 @@ Resolve a conflict with the repository's version
 .TP
 \fB\-\-keep\-local\fR \fI<PATH>\fR
 Resolve a conflict by keeping this machine's version (published next)
+.TP
+\fB\-\-take\-remote\-all\fR
+Resolve every remaining conflict with the repository's version
+
+Paths named by \-\-keep\-local keep this machine's version; every other conflict takes the repository's. Useful on a newly adopted machine, where each pre\-existing file that differs is a separate conflict.
+.TP
+\fB\-\-keep\-local\-all\fR
+Resolve every remaining conflict by keeping this machine's version
+
+Paths named by \-\-take\-remote take the repository's version; every other conflict keeps this machine's. Each kept path must already be saved.
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -2228,8 +2328,14 @@ Save only on `mise dot save <path>`, never automatically
 \fB\-\-encrypt\fR
 Encrypt contents before saving them to history (requires `[history.encryption].recipients`)
 .TP
+\fB\-\-allow\-plaintext\fR
+Save an explicitly tracked credential\-named file in plaintext
+.TP
 \fB\-y, \-\-yes\fR
 Accept without prompting
+.TP
+\fB\-n, \-\-dry\-run\fR
+Show what each path expands to (files, size, what is left out) without tracking it
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -2701,7 +2807,7 @@ Print the commands that would run without running them
 Skip the confirmation prompt
 .TP
 \fB\-\-update\fR
-Refresh package manager metadata first (apk: `\-\-update\-cache`, apt: `apt\-get update`, winget: `source update`)
+Refresh package manager metadata first (apk: `\-\-update\-cache`, apt: `apt\-get update`, zypper: `refresh`, winget: `source update`)
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -2930,8 +3036,8 @@ mise bootstrap packages status \-\-missing # exit 1 if anything is out of sync
 Upgrade installed bootstrap packages from `[bootstrap.packages]`
 
 Refreshes package manager metadata and upgrades the configured packages
-that are already installed: apk/apt/aur/dnf/pacman upgrade to the newest
-available version (apk, apt, and dnf honor a version pinned in config), brew
+that are already installed: apk/apt/aur/dnf/pacman/zypper upgrade to the newest
+available version (apk, apt, dnf, and zypper honor a version pinned in config), brew
 pours the formula's current bottle and replaces the old keg, brew\-cask
 installs the current cask artifact, flatpak and flatpak\-user update
 applications and runtimes, mas upgrades App Store apps, and winget upgrades
@@ -3450,6 +3556,58 @@ Prompt securely for missing bootstrap secret inputs
 .TP
 \fB\-h, \-\-help\fR
 Print help
+.SH "MISE BOOTSTRAP UNAPPLY"
+Remove the resources a config environment contributes
+
+Remove managed files, directories, user services, and dotfile entries and
+edits contributed by the named environments. Environments are selected for
+this command even if they are no longer in your normal selection.
+
+Removal uses the current configuration, not a history of bootstrap runs.
+Keep the environment files on disk until cleanup is complete. Resources
+still declared present elsewhere are kept, as are changed targets unless
+`\-\-force` is given. Directories must be empty after the planned removals;
+source files and configuration entries are preserved.
+
+Use `\-\-dry\-run` to preview the plan. Removal requires confirmation unless
+`\-\-yes` or mise's `yes` setting is enabled, including in CI.
+
+Packages, repositories, and Compose projects require separate cleanup;
+the output provides guidance for those declarations. Other bootstrap
+sections, including system services, are outside this command's scope.
+.PP
+\fBUsage:\fR mise bootstrap unapply [OPTIONS] <ENV> ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-f, \-\-force\fR
+Remove targets that changed since they were applied
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print what would be removed without removing anything
+.TP
+\fB\-y, \-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-\-prompt\-secrets\fR
+Prompt securely for missing bootstrap secret inputs
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<ENV>\fR
+Config environment(s) whose resources should be removed
+\fBExamples:\fR
+.PP
+.PP
+.RS 4
+mise bootstrap unapply ssh \-\-dry\-run
+mise bootstrap unapply ssh
+mise bootstrap unapply ssh gpg \-\-yes
+.RE
 .SH "MISE BOOTSTRAP USER"
 Manage current\-user bootstrap settings from `[bootstrap.user]`
 
@@ -3849,7 +4007,8 @@ command mise deactivate | source
 .SH "MISE DAEMONS"
 [experimental] Manage project daemons with pitchfork
 
-Define commands or managed Postgres/Redis presets in [daemons].
+Define commands or managed service presets in [daemons]: cockroachdb,
+nats, postgres, redis, spicedb.
 With no subcommand, list configured and previously managed daemons.
 .PP
 \fBUsage:\fR mise daemons [OPTIONS] [COMMAND]
@@ -3861,10 +4020,80 @@ With no subcommand, list configured and previously managed daemons.
 .TP
 \fB\-h, \-\-help\fR
 Print help
+.SH "MISE DAEMONS PROVIDERS"
+Manage shared servers defined in global [daemon_providers].
+.PP
+\fBUsage:\fR mise daemons providers [OPTIONS] [COMMAND]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS PROVIDERS LS"
+List configured and previously managed shared servers.
+.PP
+\fBUsage:\fR mise daemons providers ls [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-json\fR
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS PROVIDERS START"
+Start the named shared servers.
+.PP
+\fBUsage:\fR mise daemons providers start [OPTIONS] [<NAMES>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS PROVIDERS STOP"
+Stop the named shared servers without deleting their data.
+.PP
+\fBUsage:\fR mise daemons providers stop [OPTIONS] [<NAMES>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS PROVIDERS RESTART"
+Restart the named shared servers with their current configuration.
+.PP
+\fBUsage:\fR mise daemons providers restart [OPTIONS] [<NAMES>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
 .SH "MISE DAEMONS START"
 Arguments passed to pitchfork; daemon names may be short or qualified.
 .PP
 \fBUsage:\fR mise daemons start [OPTIONS] [<ARGS>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS REGISTER"
+Prepare all project daemons for on\-demand startup without starting them.
+
+Install missing tools, validate daemon definitions and dependencies, and
+register the generated configuration with Pitchfork. Includes imported
+dependencies and daemons outside the default group. Existing daemons keep
+running; this command does not start or restart them.
+
+A running Pitchfork supervisor with its proxy enabled can then start a
+registered HTTP daemon when a request reaches its hostname.
+.PP
+\fBUsage:\fR mise daemons register [OPTIONS]
 .PP
 \fBOptions:\fR
 .PP
@@ -3903,6 +4132,22 @@ List project daemons without starting a supervisor or registering configuration.
 .TP
 \fB\-h, \-\-help\fR
 Print help
+.SH "MISE DAEMONS URLS"
+Show each project daemon's port and its proxy hostname URL.
+
+Hostnames do not move between git worktrees, so an HTTP service can be
+addressed by URL while concurrent checkouts keep separate ports. A daemon
+with no port, or with proxy = false, is listed with its port alone.
+.PP
+\fBUsage:\fR mise daemons urls [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-json\fR
+.TP
+\fB\-h, \-\-help\fR
+Print help
 .SH "MISE DAEMONS LOGS"
 Arguments passed to pitchfork; daemon names may be short or qualified.
 .PP
@@ -3930,6 +4175,31 @@ Open pitchfork's dashboard with optional pitchfork TUI flags.
 .PP
 \fBOptions:\fR
 .PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE DAEMONS PRUNE"
+Remove daemon state left behind by deleted project directories.
+
+Scan `$MISE_STATE_DIR/daemons/` for state belonging to deleted projects,
+including removed Git worktrees. Stop their daemons, unregister their
+configuration, and delete their state and data. Existing projects are preserved.
+
+Use `\-\-dry\-run` to preview the paths and sizes. Removal is irreversible and
+requires confirmation. Pass the global `\-\-yes` flag for non\-interactive cleanup;
+entries that may belong to an unmounted volume or a deleted symlink are skipped
+with `\-\-yes` and require separate interactive confirmation.
+
+Pitchfork must be available. State is kept when mise cannot confirm that the
+daemons have stopped or cannot unregister their configuration.
+.PP
+\fBUsage:\fR mise daemons prune [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Show what would be removed without deleting anything
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -4161,10 +4431,14 @@ mise dot edit \-\-apply ~/.config/starship.toml
 .SH "MISE DOTFILES EXCLUDE"
 Never capture paths matching a glob
 
-Adds the glob to `[history] exclude` in the global config. Use it for
-logs, caches, databases, and constantly rewritten application state; a
-file that genuinely holds configuration but changes constantly is
-better tracked with `\-\-no\-autosave` and saved explicitly.
+Adds a glob to `[history] exclude` in the global configuration. The
+rule applies to all tracked paths. Quote the glob to prevent your shell
+from expanding it.
+
+Use exclusions for logs, caches, databases, and session state. For
+configuration you want to save manually, use `\-\-no\-autosave` instead.
+To scope selection to one directory, edit that `[dotfiles]` entry's
+`exclude` or `include` list.
 .PP
 \fBUsage:\fR mise dotfiles exclude [OPTIONS] <GLOB>
 .PP
@@ -4325,9 +4599,17 @@ Print help
 \fB<REF>\fR
 Numeric checkpoint ID, `latest` (the default), `latest~N`, or `commit:<sha>`
 .SH "MISE DOTFILES INCLUDE"
-Capture paths matching a glob again
+Stop excluding paths matching a glob
 
-Removes the glob from `[history] exclude` in the global config.
+Removes the specified glob from `[history] exclude` in the global
+configuration. Pass the same pattern used with `mise dot exclude`:
+
+    mise dot exclude '~/.codex/sessions/**'
+    mise dot include '~/.codex/sessions/**'
+
+Other matching exclusion rules still apply. This command does not edit
+a tracked directory's `include` list; change that field in `[dotfiles]`
+to select which files the directory saves.
 .PP
 \fBUsage:\fR mise dotfiles include [OPTIONS] <GLOB>
 .PP
@@ -4340,7 +4622,7 @@ Print help
 .PP
 .TP
 \fB<GLOB>\fR
-The glob as written by `exclude`
+The glob as written by `mise dot exclude`
 .SH "MISE DOTFILES ORIGIN"
 Connect or disconnect the setup repository
 
@@ -4452,6 +4734,16 @@ Resolve a conflict with the repository's version
 .TP
 \fB\-\-keep\-local\fR \fI<PATH>\fR
 Resolve a conflict by keeping this machine's version (published next)
+.TP
+\fB\-\-take\-remote\-all\fR
+Resolve every remaining conflict with the repository's version
+
+Paths named by \-\-keep\-local keep this machine's version; every other conflict takes the repository's. Useful on a newly adopted machine, where each pre\-existing file that differs is a separate conflict.
+.TP
+\fB\-\-keep\-local\-all\fR
+Resolve every remaining conflict by keeping this machine's version
+
+Paths named by \-\-take\-remote take the repository's version; every other conflict keeps this machine's. Each kept path must already be saved.
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -4666,8 +4958,14 @@ Save only on `mise dot save <path>`, never automatically
 \fB\-\-encrypt\fR
 Encrypt contents before saving them to history (requires `[history.encryption].recipients`)
 .TP
+\fB\-\-allow\-plaintext\fR
+Save an explicitly tracked credential\-named file in plaintext
+.TP
 \fB\-y, \-\-yes\fR
 Accept without prompting
+.TP
+\fB\-n, \-\-dry\-run\fR
+Show what each path expands to (files, size, what is left out) without tracking it
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -5178,6 +5476,11 @@ when you commit changes to your repository.
 
 Staged files are passed to the task as `STAGED`.
 
+Hooks that git hands a message file — `commit\-msg`, `prepare\-commit\-msg`,
+`applypatch\-msg` and `sendemail\-validate` — pass that file to the task. git's other
+arguments are not forwarded, so a `pre\-push` hook's remote name and URL are not
+appended to the task's command.
+
 For more advanced pre\-commit functionality, see mise's sister project: https://hk.jdx.dev/
 .PP
 \fBUsage:\fR mise generate git\-pre\-commit [OPTIONS] [<MISE_ARG>] ...
@@ -5485,7 +5788,11 @@ HTTP backend type to use
 .RE
 .TP
 \fB\-\-lock\fR
-Resolve and embed lockfile data (exact version + platform URLs/checksums) into an existing stub file for reproducible installs without runtime API calls
+Resolve and record lock data (exact version, platform URLs and checksums) for an existing stub
+
+The data goes into the `mise.lock` of the nearest project config above the
+stub, and the stub keeps its version request. It is an error when no project
+config is found.
 .TP
 \fB\-\-platform\-bin\fR \fI<PLATFORM_BIN>\fR
 Platform\-specific binary paths in the format platform:path
@@ -5549,7 +5856,7 @@ Fill missing checksums and sizes in an existing stub
 mise generate tool\-stub ./bin/node \-\-fetch
 .RE
 .PP
-For an existing registry\-backed stub, resolve and embed version/platform lock data
+For an existing registry\-backed stub, resolve and record version/platform lock data
 .PP
 .RS 4
 mise generate tool\-stub ./bin/registry\-node \-\-lock \-\-version 22
@@ -5687,7 +5994,9 @@ May require elevated permissions depending on the path.
 Install tool(s) to the system\-wide shared directory
 
 Installs to /usr/local/share/mise/installs (or MISE_SYSTEM_DATA_DIR/installs).
-May require elevated permissions (e.g. sudo).
+On Unix, binary\-download backends invoke sudo to publish into protected
+system directories unless system_packages.sudo is disabled. Run mise as
+your user, without sudo.
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -5870,6 +6179,8 @@ re\-resolved against the latest matching remote versions, so the lockfile
 advances without installing anything. Config files are never modified:
 exactly pinned versions resolve to themselves and stay unchanged
 (use `mise upgrade \-\-bump` to rewrite pins in mise.toml).
+If the remote versions cannot be fetched, it fails rather than keep
+the locked version.
 .TP
 \fB\-\-json\fR
 Output version changes as JSON
@@ -5903,6 +6214,17 @@ preserved to avoid unexpected lockfile drift. This flag upgrades them
 to the latest format with request\-specific version bindings.
 Format upgrades always process every configured tool and cannot be
 combined with tool arguments.
+.TP
+\fB\-\-sidecars\fR
+List native dependency sidecars instead of updating lockfiles
+
+Prints, for each existing lockfile in scope, the sidecar directory mise
+keeps its native dependency graphs in and every sidecar directory the
+lockfile references. Nothing is resolved, installed, or written.
+Paths are relative to the current directory when they are inside it,
+and absolute otherwise, such as the sidecars of a symlinked lockfile.
+Combine with `\-\-json` for machine\-readable output, or with `\-\-local`
+and `\-\-global` to choose the lockfiles.
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -5985,6 +6307,12 @@ Truncate long terminal output to fit the available width
 \fIDefault: \fRtrue
 .RE
 .TP
+\fB\-b, \-\-backend\fR \fI<BACKEND>\fR
+Only show tools from this backend, e.g. aqua, cargo, core, go
+
+Registry shorthands count as the backend they resolve to, so `jq` is listed
+under aqua. Repeat the flag to show several backends.
+.TP
 \fB\-c, \-\-current\fR
 Only show tool versions currently specified in a mise.toml
 .TP
@@ -5993,6 +6321,11 @@ Only show tool versions currently specified in the global mise.toml
 .TP
 \fB\-i, \-\-installed\fR
 Only show tool versions that are installed (Hides tools defined in mise.toml but not installed)
+.TP
+\fB\-\-grouped\fR
+List tools in a separate section for each backend
+
+Cannot be combined with \-\-json; use \-\-backend to filter JSON output.
 .TP
 \fB\-J, \-\-json\fR
 Output in JSON format
@@ -6075,6 +6408,18 @@ Include references from every tracked configuration file
 .PP
 .RS 4
 mise ls \-\-all\-sources
+.RE
+.PP
+Show only tools from the go or cargo backends
+.PP
+.RS 4
+mise ls \-\-backend go \-\-backend cargo
+.RE
+.PP
+List tools in a separate section for each backend
+.PP
+.RS 4
+mise ls \-\-grouped
 .RE
 .SH "MISE LS-REMOTE"
 List tool versions available to install
@@ -6206,7 +6551,7 @@ or `mise oci run \-\-image\-dir ./mise\-oci \-\- command` to load and run it.
 
 Build on Linux with the target architecture: this packages host tool installs
 and, by default, the running mise binary. `\-\-no\-mise` omits that binary but does
-not cross\-compile tools installed for another OS. asdf/vfox tools are unsupported.
+not cross\-compile tools installed for another OS. asdf tools are unsupported.
 
 Requires `mise settings experimental=true` (or `MISE_EXPERIMENTAL=1`).
 .PP
@@ -7385,6 +7730,11 @@ Search for available tools
 
 Searches the registry and installed backend catalogs for tools matching NAME.
 
+Prefix NAME with a backend to also search that backend's package registry:
+`npm:`, `cargo:`, `gem:`, or `dotnet:`. Use `\-\-all` to search every backend,
+including all of those package registries. Otherwise, unprefixed searches do
+not query package registries.
+
 By default, it will show all tools that fuzzy match the search term. For
 non\-fuzzy matches, use the `\-\-match\-type` flag.
 .PP
@@ -7392,6 +7742,9 @@ non\-fuzzy matches, use the `\-\-match\-type` flag.
 .PP
 \fBOptions:\fR
 .PP
+.TP
+\fB\-a, \-\-all\fR
+Search every backend: the registry, aqua, installed backend plugins, and the npm, cargo, gem, and dotnet package registries
 .TP
 \fB\-i, \-\-interactive\fR
 Show an interactive search menu
@@ -7432,6 +7785,13 @@ gojq  Pure Go implementation of jq. https://github.com/itchyny/gojq
 .PP
 .PP
 .RS 4
+mise search \-\-match\-type equal npm:typescript\-language\-server
+Tool                            Description
+npm:typescript\-language\-server  Language Server Protocol (LSP) implementation for TypeScript using tsserver
+.RE
+.PP
+.PP
+.RS 4
 mise search \-\-interactive
 Tool
 Search a tool
@@ -7445,7 +7805,8 @@ esc clear filter • enter confirm
 .SH "MISE SELF-UPDATE"
 Update mise itself
 
-Uses the GitHub Releases API to find the latest release and binary.
+Selects the newest stable release satisfying the minimum release age (24h by default).
+Explicit versions bypass the delay. Downloads binaries from GitHub Releases.
 By default, this will also update any installed plugins.
 Uses mise's GitHub token resolution chain for authenticated requests.
 
@@ -7457,6 +7818,9 @@ https://mise.jdx.dev/contributing.html#packaging\-and\-self\-update\-instruction
 .PP
 \fBOptions:\fR
 .PP
+.TP
+\fB\-\-minimum\-release\-age\fR \fI<MINIMUM_RELEASE_AGE>\fR
+Override the minimum release age for unpinned updates (default: 24h)
 .TP
 \fB\-f, \-\-force\fR
 Update even if already up to date
@@ -9086,6 +9450,9 @@ Only show requested versions
 \fB\-\-tool\-options\fR
 Only show tool options
 .TP
+\fB\-\-url\fR
+Only show the project URL from the registry
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -9401,8 +9768,11 @@ Upgrade to the latest version available, bumping the version in mise.toml
 For example, if you have `node = "20.0.0"` in your mise.toml but 22.1.0 is the latest available,
 this will install 22.1.0 and set `node = "22.1.0"` in your config.
 
-It keeps the same precision as what was there before, so if you instead had `node = "20"`, it
-would change your config to `node = "22"`.
+With a bare tool, it keeps the same precision as what was there before, so if you instead had
+`node = "20"`, it would change your config to `node = "22"`. When an explicit selector is
+provided (`node@latest`, `node@3`, or `node@prefix:3`), that selector is persisted instead.
+For version selectors, `settings.pin` persists the resolved concrete version. Requests from non\-writable
+sources are not persisted. For example, `mise upgrade node@latest \-\-bump` writes `latest`.
 .TP
 \fB\-i, \-\-interactive\fR
 Choose which tools to upgrade from a multiselect menu

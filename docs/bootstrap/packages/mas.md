@@ -45,6 +45,15 @@ mise bootstrap packages upgrade --manager mas
 这两个命令都需要数字形式的 ADAM ID；像
 `com.apple.dt.Xcode` 这样的 bundle 标识符不是有效的软件包名称。
 
+`mise bootstrap packages status` 会在每个已安装 ID 旁显示 `mas list` 报告的应用名称，`--json` 则将其作为 `name` 包含在结果中：
+
+```text
+Manager    Package               Installed    State
+mas        497799835 (Xcode)     16.2         installed
+```
+
+缺失的应用只显示其 ID，因为 `mas list` 只会报告已经安装的应用。
+
 ## 注意事项
 
 `mas` 仅适用于 macOS，且必须位于 `PATH` 中。在其他平台上，或者当

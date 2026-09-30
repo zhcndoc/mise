@@ -45,7 +45,7 @@ description: "为基于 HTTP 的工具生成工具存根"
 - **`--http <HTTP>`** — 要使用的 HTTP 后端类型
 
   **默认值：** `http`
-- **`--lock`** — 将锁文件数据（确切版本 + 平台 URL／校验和）解析并嵌入现有存根文件，以便在不调用运行时 API 的情况下进行可复现安装
+- **`--lock`** — 为现有存根解析并记录锁文件数据（确切版本、平台 URL 和校验和）。数据会写入存根上方最近项目配置的 `mise.lock`，存根仍保留其版本请求；找不到项目配置时会报错
 - **`--platform-bin <PLATFORM_BIN>`** — 平台特定的二进制路径，格式为 platform:path
 
   示例：--platform-bin windows-x64:tool.exe --platform-bin linux-x64:bin/tool
@@ -92,7 +92,7 @@ mise generate tool-stub ./bin/my-tool --url https://example.com/my-tool.tar.gz -
 mise generate tool-stub ./bin/node --fetch
 ```
 
-对于现有的注册表支持的存根，解析并嵌入版本／平台锁定数据
+对于现有的注册表支持的存根，解析并记录版本/平台锁定数据
 
 ```
 mise generate tool-stub ./bin/registry-node --lock --version 22

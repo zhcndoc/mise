@@ -23,6 +23,26 @@ pub(super) async fn fetch_cask(req: &PackageRequest, provision_ruby: bool) -> Re
             ),
         }
     }
+    // One request for every cask beats one request per cask. Only the official
+    // API is bulk-published, so a tap cask falls straight through, as does any
+    // token this snapshot does not carry.
+    // No `?`: `bulk::cask` is infallible precisely so that a cache problem
+    // cannot stop the per-cask request below from running.
+    if official_api && let Some(mut cask) = super::bulk::cask(requested_token).await {
+        cask.raw_base = Some(HOMEBREW_CASK_RAW.to_string());
+        // A cask that fails validation here is evidence the index is wrong about
+        // this token, not that the token is bad: a stale range can slice a
+        // neighbouring cask, which parses fine and then fails on identity. That
+        // is still a cache problem, so it falls back like every other one rather
+        // than failing the request the per-cask endpoint would have answered.
+        match validate_cask_identity(&cask, requested_token, official_api) {
+            Ok(()) => return Ok(cask),
+            Err(err) => debug!(
+                "brew-cask: bulk index gave a mismatched cask for '{requested_token}' ({err}); falling back to per-cask metadata"
+            ),
+        }
+    }
+
     let (url, raw_base) = match tap_name {
         Some(("homebrew", "cask", token)) => (
             format!("{API_BASE}/cask/{token}.json"),
@@ -91,8 +111,8 @@ pub(super) async fn fetch_cask_url(
     raw_base: Option<String>,
     official_api: bool,
 ) -> Result<Cask> {
-    let mut cask = HTTP_FETCH
-        .json_cached::<Cask, _>(url)
+    let json = HTTP_FETCH
+        .json_cached::<Value, _>(url)
         .await
         // Context only. What to do about it depends on which caller failed, and
         // each of them already says: the parent-tap probe logs and moves on, the
@@ -100,9 +120,41 @@ pub(super) async fn fetch_cask_url(
         // either, and an official cask has no tap story to tell. Mirrors
         // `api::formula`.
         .wrap_err_with(|| format!("failed to fetch Homebrew cask '{requested_token}'"))?;
+    let mut cask = cask_from_api_json(json, super::super::tag::cask_variation_tag().as_deref())
+        .wrap_err_with(|| format!("failed to fetch Homebrew cask '{requested_token}'"))?;
     cask.raw_base = raw_base;
     validate_cask_identity(&cask, requested_token, official_api)?;
     Ok(cask)
+}
+
+/// Build a `Cask` from API metadata as the given platform tag sees it.
+///
+/// The top-level `url`, `version`, and `sha256` describe the newest macOS
+/// only. Older releases and Linux get theirs from `variations`, keyed by
+/// bottle tag (`arm64_sequoia`, `x86_64_linux`, ...). Like Homebrew's
+/// `API.merge_variations`, the host's exact tag is merged shallowly over the
+/// top level; there is no fallback to an older tag, because the API writes an
+/// entry for every tag whose values differ. With no tag (a macOS release mise
+/// does not know yet), the top level applies.
+pub(super) fn cask_from_api_json(mut json: Value, tag: Option<&str>) -> Result<Cask> {
+    if let Some(fields) = json.as_object_mut()
+        && let Some(Value::Object(variation)) = fields
+            .remove("variations")
+            .and_then(|mut variations| Some(variations.get_mut(tag?)?.take()))
+    {
+        fields.extend(variation);
+    }
+    // A variation nulls these for platforms the cask does not support
+    if ["url", "version"]
+        .iter()
+        .any(|key| json.get(key).is_none_or(Value::is_null))
+    {
+        bail!(
+            "brew-cask: not available for this platform ({})",
+            tag.unwrap_or("unknown")
+        );
+    }
+    Ok(serde_json::from_value(json)?)
 }
 
 pub(super) fn validate_cask_identity(
@@ -142,6 +194,29 @@ pub(super) fn validate_cask_path_component(kind: &str, value: &str) -> Result<()
     Ok(())
 }
 
+/// Cache directory for a staged download, scoped to the manager that owns it.
+///
+/// Keyed on the manager as well as the token and version: `brew-cask` and
+/// `macos-app` can declare the same token at the same version from different
+/// URLs, and staging runs before `lock_app_mutations`, so a shared path lets
+/// two concurrent installs `remove_all` each other's tree and stage the wrong
+/// payload. Install records are already split per manager for this reason.
+///
+/// The downloaded archive needs no such split: its name already includes a hash
+/// of the URL, so two managers share that file only when it is the same
+/// download, and each still verifies it against its own `sha256`.
+pub(super) fn cask_staging_dir(cask: &Cask, kind: &str) -> PathBuf {
+    crate::dirs::CACHE
+        .join("system-brew")
+        .join(kind)
+        .join(format!(
+            "{}-{}-{}",
+            cask.manager.label(),
+            cask.token,
+            cask.version
+        ))
+}
+
 pub(super) async fn fetch_and_stage(cask: &Cask, pr: Option<&dyn SingleReport>) -> Result<PathBuf> {
     if cask.url.ends_with(".git") {
         return fetch_git_clone_and_stage(cask, pr).await;
@@ -154,16 +229,10 @@ pub(super) async fn fetch_git_clone_and_stage(
     cask: &Cask,
     pr: Option<&dyn SingleReport>,
 ) -> Result<PathBuf> {
-    let extract_dir = crate::dirs::CACHE
-        .join("system-brew")
-        .join("cask-extract")
-        .join(format!("{}-{}", cask.token, cask.version));
+    let extract_dir = cask_staging_dir(cask, "cask-extract");
     file::remove_all(&extract_dir)?;
     file::create_dir_all(&extract_dir)?;
-    let clone_dir = crate::dirs::CACHE
-        .join("system-brew")
-        .join("cask-git-clone")
-        .join(format!("{}-{}", cask.token, cask.version));
+    let clone_dir = cask_staging_dir(cask, "cask-git-clone");
     file::remove_all(&clone_dir)?;
     let mut clone_opts = CloneOptions::default();
     if let Some(branch) = cask.url_specs.branch.as_deref() {
@@ -230,7 +299,7 @@ pub(super) fn git_only_path_source(
 
 pub(super) async fn fetch_archive(cask: &Cask, pr: Option<&dyn SingleReport>) -> Result<PathBuf> {
     let filename = archive_filename(&cask.url)
-        .ok_or_else(|| eyre!("brew-cask:{}: URL has no file name", cask.token))?;
+        .ok_or_else(|| eyre!("{}:{}: URL has no file name", cask.label(), cask.token))?;
     let cache_dir = crate::dirs::CACHE.join("system-brew").join("casks");
     file::create_dir_all(&cache_dir)?;
     let url_hash = &hash::hash_sha256_to_str(&cask.url)[..12];
@@ -251,7 +320,11 @@ pub(super) async fn fetch_archive(cask: &Cask, pr: Option<&dyn SingleReport>) ->
     match cask.sha256.as_deref() {
         Some("no_check") => {}
         Some(sha256) => hash::ensure_checksum(&archive, sha256, pr, "sha256")?,
-        None => bail!("brew-cask:{}: cask metadata has no sha256", cask.token),
+        None => bail!(
+            "{}:{}: no sha256 to verify the download against",
+            cask.label(),
+            cask.token
+        ),
     }
     Ok(archive)
 }
@@ -261,10 +334,7 @@ pub(super) fn extract_archive(
     archive: &Path,
     pr: Option<&dyn SingleReport>,
 ) -> Result<PathBuf> {
-    let extract_dir = crate::dirs::CACHE
-        .join("system-brew")
-        .join("cask-extract")
-        .join(format!("{}-{}", cask.token, cask.version));
+    let extract_dir = cask_staging_dir(cask, "cask-extract");
     file::remove_all(&extract_dir)?;
     file::create_dir_all(&extract_dir)?;
     let filename = archive
@@ -274,7 +344,7 @@ pub(super) fn extract_archive(
     if is_dmg_archive(archive, filename)? {
         file::un_dmg(archive, &extract_dir)?;
     } else {
-        let format = cask_extraction_format(archive, filename)?;
+        let format = ExtractionFormat::detect(archive, filename)?;
         if format == ExtractionFormat::Raw {
             // A direct pkg download may have an opaque URL path while the response's
             // Content-Disposition and the cask artifact supply its real name. Stage
@@ -288,7 +358,8 @@ pub(super) fn extract_archive(
             }
         } else if !format.is_archive() {
             bail!(
-                "brew-cask:{}: unsupported archive type for {}",
+                "{}:{}: unsupported archive type for {}",
+                cask.label(),
                 cask.token,
                 filename
             );
@@ -362,7 +433,7 @@ pub(super) fn single_nested_cask_archive(root: &Path) -> Result<Option<PathBuf>>
     if is_dmg_archive(&path, filename)? {
         return Ok(Some(path));
     }
-    let format = cask_extraction_format(&path, filename)?;
+    let format = ExtractionFormat::detect(&path, filename)?;
     Ok(matches!(
         format,
         ExtractionFormat::TarGz
@@ -388,7 +459,7 @@ pub(super) fn extract_nested_cask_archive(
         file::extract_archive(
             archive,
             extract_dir,
-            cask_extraction_format(archive, filename)?,
+            ExtractionFormat::detect(archive, filename)?,
             &ExtractOptions {
                 pr,
                 ..Default::default()
@@ -508,14 +579,6 @@ pub(super) async fn fetch_cask_rb(cask: &Cask, pr: Option<&dyn SingleReport>) ->
     Ok(dest)
 }
 
-pub(super) fn cask_extraction_format(archive: &Path, filename: &str) -> Result<ExtractionFormat> {
-    let format = ExtractionFormat::from_file_name(filename);
-    if format != ExtractionFormat::Raw {
-        return Ok(format);
-    }
-    Ok(detect_extraction_format(archive)?.unwrap_or(format))
-}
-
 pub(super) fn is_dmg_archive(archive: &Path, filename: &str) -> Result<bool> {
     if filename.ends_with(".dmg") {
         return Ok(true);
@@ -537,17 +600,6 @@ pub(super) fn is_dmg_archive(archive: &Path, filename: &str) -> Result<bool> {
     Ok(&prefix == UDIF_TRAILER_PREFIX)
 }
 
-pub(super) fn detect_extraction_format(archive: &Path) -> Result<Option<ExtractionFormat>> {
-    let mut file = std::fs::File::open(archive)?;
-    let mut magic = [0; 8];
-    let len = file.read(&mut magic)?;
-    let magic = &magic[..len];
-    if magic.starts_with(b"PK\x03\x04") {
-        return Ok(Some(ExtractionFormat::Zip));
-    }
-    Ok(None)
-}
-
 pub(super) fn raw_cask_artifact_name(
     cask: &Cask,
     archive: &Path,
@@ -566,8 +618,13 @@ pub(super) fn raw_cask_artifact_name(
             }
         }
     }
+    // A URL whose path ends in a separator, or only in dot segments that
+    // normalization collapses, has no final segment to name the staged file;
+    // `extract_dir.join("")` would target the staging directory itself.
     Ok((
-        archive_filename(&cask.url).unwrap_or_else(|| fallback.to_string()),
+        archive_filename(&cask.url)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| fallback.to_string()),
         true,
     ))
 }

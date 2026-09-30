@@ -5,21 +5,22 @@ use std::process::Command;
 use std::sync::Arc;
 
 use eyre::{Result, bail};
+use futures_util::future::LocalBoxFuture;
 use heck::ToKebabCase;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::dotfiles::{Dotfiles, DotfilesApply};
+use super::dotfiles::{Dotfiles, DotfilesApply, write_and_reload};
 use super::install::Install;
 use super::plugins::install::install_plugin;
 use super::run;
-use super::system::driver::{self, Action, DriverOpts};
 use super::system::{export, import, install, prune, status, upgrade, r#use};
-use crate::config::{self, Config};
+use crate::config::{self, Config, SettingsExt};
 use crate::dirs;
 use crate::path::PathExt;
 use crate::system;
 use crate::system::defaults::DefaultsState;
+use crate::system::driver::{self, Action, DriverOpts};
 use crate::system::files::{FileMode, FileRequest, FileState};
 use crate::system::history::store::Summary;
 use crate::system::history::{OperationScope, journal};
@@ -31,6 +32,7 @@ use crate::system::repos::RepoState;
 use crate::system::resources::{ResourceAction, ResourceId};
 use crate::system::systemd::SystemdState;
 use crate::toolset::ResolveOptions;
+use crate::ui::prompt::Confirmation;
 use crate::ui::table::MiseTable;
 
 /// Set up a machine from the current configuration
@@ -80,6 +82,9 @@ pub(crate) struct Bootstrap {
     command: Option<Commands>,
 
     /// Clone a git repository and bootstrap from its configuration
+    ///
+    /// Append `?ref=<branch|tag|commit>` to the URL to check out a ref instead of the
+    /// default branch, for example `git::https://github.com/example/dotfiles.git?ref=v1`.
     #[usage(long, value_name = "GIT_URL")]
     from: Option<String>,
 
@@ -260,6 +265,30 @@ fn bootstrap_prediction_has_skipped_change(
     })
 }
 
+impl Bootstrap {
+    /// `mise bootstrap dotfiles watch`, the watcher under its other name.
+    ///
+    /// A setup source alongside a subcommand is rejected by `run`, so an
+    /// invocation carrying one is not a watcher starting, whatever it names.
+    /// `--from-git` is still its own field here: `run` folds it into `adopt`,
+    /// and this is asked before that.
+    /// The dotfile watcher, and the launcher a Windows user service's task
+    /// starts. Both are started by a service manager with nobody reading
+    /// their output, and on Windows both are handed a console whose window
+    /// has to go before anything slow happens — the window can be closed,
+    /// and closing it kills the process behind it.
+    pub(crate) fn runs_unattended(&self) -> bool {
+        self.from.is_none()
+            && self.adopt.is_none()
+            && self.from_git.is_none()
+            && match &self.command {
+                Some(Commands::Dotfiles(cmd)) => cmd.is_watch(),
+                Some(Commands::ServiceExec(_)) => true,
+                _ => false,
+            }
+    }
+}
+
 #[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     #[usage(name = "__apply-account-plan", hide = true)]
@@ -274,6 +303,8 @@ enum Commands {
     InspectSystemFiles(BootstrapInspectSystemFiles),
     #[usage(name = "__inspect-firewall-plan", hide = true)]
     InspectFirewallPlan(BootstrapInspectFirewallPlan),
+    #[usage(name = "__service-exec", hide = true)]
+    ServiceExec(BootstrapServiceExec),
     Accounts(BootstrapAccounts),
     #[usage(hide = true)]
     ConfigRoots(BootstrapConfigRoots),
@@ -299,6 +330,7 @@ enum Commands {
     Status(BootstrapStatus),
     #[usage(hide = true)]
     Systemd(BootstrapSystemd),
+    Unapply(BootstrapUnapply),
     User(BootstrapUser),
 }
 
@@ -338,6 +370,55 @@ struct BootstrapPlan {
     /// Exit 2 when the plan contains changes, 0 when unchanged, and 1 on errors
     #[usage(long, verbatim_doc_comment)]
     detailed_exitcode: bool,
+
+    /// Prompt securely for missing bootstrap secret inputs
+    #[usage(long)]
+    prompt_secrets: bool,
+}
+
+/// Remove the resources a config environment contributes
+///
+/// Remove managed files, directories, user services, and dotfile entries and
+/// edits contributed by the named environments. Environments are selected for
+/// this command even if they are no longer in your normal selection.
+///
+/// Removal uses the current configuration, not a history of bootstrap runs.
+/// Keep the environment files on disk until cleanup is complete. Resources
+/// still declared present elsewhere are kept, as are changed targets unless
+/// `--force` is given. Directories must be empty after the planned removals;
+/// source files and configuration entries are preserved.
+///
+/// Use `--dry-run` to preview the plan. Removal requires confirmation unless
+/// `--yes` or mise's `yes` setting is enabled, including in CI.
+///
+/// Packages, repositories, and Compose projects require separate cleanup;
+/// the output provides guidance for those declarations. Other bootstrap
+/// sections, including system services, are outside this command's scope.
+#[derive(Debug, usage_rs::Args)]
+#[usage(
+    verbatim_doc_comment,
+    example(
+        r###"mise bootstrap unapply ssh --dry-run
+mise bootstrap unapply ssh
+mise bootstrap unapply ssh gpg --yes"###
+    )
+)]
+struct BootstrapUnapply {
+    /// Config environment(s) whose resources should be removed
+    #[usage(value_name = "ENV", required = true)]
+    environment: Vec<String>,
+
+    /// Remove targets that changed since they were applied
+    #[usage(long, short)]
+    force: bool,
+
+    /// Print what would be removed without removing anything
+    #[usage(long, short = 'n')]
+    dry_run: bool,
+
+    /// Skip the confirmation prompt
+    #[usage(long, short)]
+    yes: bool,
 
     /// Prompt securely for missing bootstrap secret inputs
     #[usage(long)]
@@ -414,6 +495,27 @@ struct BootstrapInspectFirewallPlan {}
 
 #[derive(Debug, usage_rs::Args)]
 struct BootstrapInspectSystemFiles {}
+
+/// Run a user service that carries an environment (Windows, internal)
+///
+/// Task Scheduler's task XML has no environment block, so a service that
+/// sets `environment` registers this as its action instead of naming its
+/// program directly. It applies the stored environment, starts the service,
+/// and stays for its lifetime as the process Task Scheduler tracks.
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+struct BootstrapServiceExec {
+    /// The user service to run
+    name: String,
+
+    /// The stored launch to run it from
+    #[usage(long, value_name = "PATH")]
+    launch: String,
+
+    /// The digest of the launch the task was registered with
+    #[usage(long, value_name = "HASH")]
+    digest: String,
+}
 
 /// Manage Linux users and groups from `[bootstrap.users]` and `[bootstrap.groups]`
 ///
@@ -1244,7 +1346,21 @@ impl Bootstrap {
         (self.dry_run, self.yes)
     }
 
-    pub(crate) async fn run(mut self) -> Result<()> {
+    pub(crate) async fn run(self) -> Result<()> {
+        // Dotfiles subcommands handle their own notices; in particular,
+        // a background watcher must leave them for a foreground command.
+        let deliver_notices = self.command.is_none();
+        if deliver_notices {
+            system::history::notices::drain();
+        }
+        let result = self.run_with_notices().await;
+        if deliver_notices {
+            system::history::notices::drain();
+        }
+        result
+    }
+
+    async fn run_with_notices(mut self) -> Result<()> {
         normalize_adopt_alias(&mut self.adopt, self.from_git.take());
         if self.from.is_some() || self.adopt.is_some() {
             if self.command.is_some() {
@@ -1451,7 +1567,7 @@ impl Bootstrap {
         } else {
             self.run_hooks(&config, &hooks, BootstrapHookPhase::PrePackages)
                 .await?;
-            let all_mgrs = system::packages_from_config(&config);
+            let all_mgrs = system::packages_from_config(&config)?;
             let has_plugin_packages = all_mgrs
                 .iter()
                 .any(|mp| mp.manager.is_plugin() && !mp.disabled)
@@ -1592,36 +1708,23 @@ impl Bootstrap {
             self.run_hooks(&config, &hooks, BootstrapHookPhase::PreDotfiles)
                 .await?;
             let files = system::files::files_from_config(&config)?;
+            // loaded before any file is written: this also refuses an edit on
+            // a file an absent entry removes
+            let edits = system::edits::edits_from_config(&config)?;
             if files.is_empty() {
                 debug!("bootstrap: no whole-file [dotfiles] entries configured, skipping");
-            } else {
-                info!("bootstrap: dotfiles");
-                let opts = system::files::ApplyOpts {
-                    dry_run: self.dry_run,
-                    verbose: false,
-                    force: self.force_dotfiles,
-                    force_hint: "use --force-dotfiles or run `mise dot apply --force`",
-                    yes: self.yes,
-                };
-                if !system::files::apply(&config, &files, &opts, &secrets)? {
-                    return Ok(declined());
-                }
             }
-
-            let edits = system::edits::edits_from_config(&config)?;
             if edits.is_empty() {
                 debug!("bootstrap: no edit [dotfiles] entries configured, skipping");
-            } else {
-                info!("bootstrap: dotfile edits");
-                let opts = system::edits::ApplyOpts {
-                    part: "dotfiles",
-                    dry_run: self.dry_run,
-                    verbose: false,
-                    yes: self.yes,
-                };
-                if !system::edits::apply(&config, &edits, &opts)? {
-                    return Ok(declined());
-                }
+            }
+            // the same [history.reload] commands `mise dot apply` runs, for
+            // the targets this phase writes
+            if (!files.is_empty() || !edits.is_empty())
+                && !write_and_reload(self.dry_run, |written| {
+                    self.apply_dotfiles(&config, &files, &edits, &secrets, written)
+                })?
+            {
+                return Ok(declined());
             }
             if self.dry_run {
                 let config_files = config_files_after_dotfiles_dry_run(&config, &files, &edits)?;
@@ -1762,7 +1865,7 @@ impl Bootstrap {
         }
 
         if !skip.contains(&BootstrapPart::Packages) {
-            let mgrs = system::packages_from_config(&config)
+            let mgrs = system::packages_from_config(&config)?
                 .into_iter()
                 .filter(|mp| mp.manager.is_plugin())
                 .collect::<Vec<_>>();
@@ -1877,7 +1980,7 @@ impl Bootstrap {
             // installations are not what was asked for
             if outcome.setup_held {
                 bail!(
-                    "the setup from {url} is paused; nothing was bootstrapped. `mise dot status` lists the paths that need attention; resolve them with `mise dot pull`, then run `mise bootstrap`"
+                    "the setup from {url} is paused; nothing was bootstrapped. `mise dot status` lists the paths that need attention. Existing files that differ are kept until you decide: `mise dot pull --take-remote-all` chooses the repository's version for every conflict, or `mise dot pull --take-remote <path>` and `mise dot pull --keep-local <path>` decide one at a time. A path held for another reason, such as a directory where the repository has a file, says so in `mise dot status` and needs that fix instead. Then run `mise bootstrap`"
                 );
             }
             let config_dir = system::history::tracked::global_config_dir();
@@ -1887,7 +1990,7 @@ impl Bootstrap {
             }
             return Ok(());
         }
-        let (url, checkout) = if let Some(url) = expanded.as_deref() {
+        let (url, git_ref, checkout) = if let Some(url) = expanded.as_deref() {
             let checkout = crate::env::MISE_GLOBAL_CONFIG_FILE
                 .as_deref()
                 .map(|path| {
@@ -1897,10 +2000,14 @@ impl Bootstrap {
                 })
                 .unwrap_or(*dirs::CONFIG)
                 .to_path_buf();
-            (url, checkout)
+            (url.to_string(), None, checkout)
         } else {
-            (
+            let (url, git_ref) = mise_util::remote_source::RemoteSource::parse_git_repo(
                 self.from.as_deref().expect("--from was provided"),
+            )?;
+            (
+                url,
+                git_ref,
                 self.from_dir
                     .clone()
                     .unwrap_or_else(|| dirs::DATA.join("bootstrap-repo")),
@@ -1910,7 +2017,7 @@ impl Bootstrap {
         let checkout_is_empty = checkout.is_dir() && checkout.read_dir()?.next().is_none();
         let reuse_checkout = checkout.exists() && !checkout_is_empty;
         if reuse_checkout {
-            validate_bootstrap_checkout(&checkout, url)?;
+            validate_bootstrap_checkout(&checkout, &url)?;
         }
         // The clone or pull changes the config checkout before the child
         // process records the bootstrap itself, so it is a generation of its
@@ -1922,7 +2029,8 @@ impl Bootstrap {
             None
         };
         let checked_out = checkout_bootstrap_repository(
-            url,
+            &url,
+            git_ref.as_deref(),
             &checkout,
             reuse_checkout,
             self.update,
@@ -1995,6 +2103,45 @@ impl Bootstrap {
         Ok(())
     }
 
+    /// The dotfiles phase's whole-file entries, then its edits, appending
+    /// each written target to `written`. Returns `false` when a prompt was
+    /// declined.
+    fn apply_dotfiles(
+        &self,
+        config: &Config,
+        files: &[system::files::FileRequest],
+        edits: &[system::edits::EditRequest],
+        secrets: &system::secrets::SecretValues,
+        written: &mut Vec<PathBuf>,
+    ) -> Result<bool> {
+        if !files.is_empty() {
+            info!("bootstrap: dotfiles");
+            let opts = system::files::ApplyOpts {
+                dry_run: self.dry_run,
+                verbose: false,
+                force: self.force_dotfiles,
+                force_hint: "use --force-dotfiles or run `mise dot apply --force`",
+                yes: self.yes,
+            };
+            if !system::files::apply(config, files, &opts, secrets, written)? {
+                return Ok(false);
+            }
+        }
+        if !edits.is_empty() {
+            info!("bootstrap: dotfile edits");
+            let opts = system::edits::ApplyOpts {
+                part: "dotfiles",
+                dry_run: self.dry_run,
+                verbose: false,
+                yes: self.yes,
+            };
+            if !system::edits::apply(config, edits, &opts, written)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     async fn run_hooks(
         &self,
         config: &Config,
@@ -2047,6 +2194,7 @@ impl Bootstrap {
             output_handler: None,
             context_builder: Default::default(),
             executor: None,
+            telemetry: None,
             no_cache: Default::default(),
             task_cache: crate::task::TaskCacheMode::from_env()?,
             task_cache_explain: false,
@@ -2119,10 +2267,46 @@ fn bootstrap_from_child_args(checkout: &Path, args: &[String]) -> Vec<OsString> 
     forwarded
 }
 
+/// Re-run this invocation with `environments` selected, preserving every other
+/// argument so options such as `--cd` and `--log-level` still apply.
+fn unapply_child_args(environments: &str, args: &[String]) -> Vec<OsString> {
+    let mut forwarded = vec![OsString::from("--env"), OsString::from(environments)];
+    let mut args = args.iter().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            // The selection is replaced, and `--cd` already took effect in this
+            // process: the child inherits that directory, and a relative path
+            // would resolve a second time from it.
+            "--env" | "-E" | "--profile" | "-P" | "--cd" | "-C" => {
+                args.next();
+            }
+            _ if arg.starts_with("--env=")
+                || arg.starts_with("--profile=")
+                || arg.starts_with("--cd=")
+                || (arg.starts_with("-E") || arg.starts_with("-P") || arg.starts_with("-C"))
+                    && arg.len() > 2 => {}
+            _ => {
+                forwarded.push(arg.into());
+                if global_option_takes_value(arg)
+                    && let Some(value) = args.next()
+                {
+                    forwarded.push(value.into());
+                }
+            }
+        }
+    }
+    forwarded
+}
+
+/// Whether a global option consumes the argument after it. Both child-argument
+/// builders drop `--cd`/`-C` and the selection options before consulting this,
+/// so those are listed for correctness rather than for a current caller.
 fn global_option_takes_value(arg: &str) -> bool {
     matches!(
         arg,
-        "--env"
+        "--cd"
+            | "-C"
+            | "--env"
             | "-E"
             | "--jobs"
             | "-j"
@@ -2233,9 +2417,16 @@ fn config_files_after_dotfiles_dry_run(
     let mut bodies = indexmap::IndexMap::new();
     let mut unavailable_bodies = HashSet::new();
     for file in files {
-        if !is_mise_config_target(&file.target)
-            || (file.mode != system::files::FileMode::Content && !file.source.is_file())
-        {
+        if !is_mise_config_target(&file.target) {
+            continue;
+        }
+        if file.mode == FileMode::Absent {
+            // removed by the apply; a later edit starts from an empty file
+            config_files.shift_remove(&file.target);
+            bodies.insert(file.target.clone(), String::new());
+            continue;
+        }
+        if file.mode != FileMode::Content && !file.source.is_file() {
             continue;
         }
         if file.mode == FileMode::Template {
@@ -2370,35 +2561,39 @@ fn is_declined(summary: &Summary) -> bool {
 }
 
 impl Commands {
-    async fn run(self) -> Result<()> {
+    /// Boxed rather than `async` to keep debug builds' main stack small;
+    /// see `cli::Commands::run`.
+    fn run(self) -> LocalBoxFuture<'static, Result<()>> {
         match self {
-            Self::ApplyAccountPlan(cmd) => cmd.run(),
-            Self::ApplyServicePlan(cmd) => cmd.run(),
-            Self::ApplyFirewallPlan(cmd) => cmd.run(),
-            Self::ApplySystemPlan(cmd) => cmd.run(),
-            Self::InspectSystemFiles(cmd) => cmd.run(),
-            Self::InspectFirewallPlan(cmd) => cmd.run(),
-            Self::Accounts(cmd) => cmd.run().await,
-            Self::ConfigRoots(cmd) => cmd.run().await,
-            Self::Compose(cmd) => cmd.run().await,
-            Self::Dotfiles(cmd) => cmd.run().await,
-            Self::Files(cmd) => cmd.run().await,
-            Self::Firewall(cmd) => cmd.run().await,
-            Self::Launchd(cmd) => cmd.run().await,
-            Self::Linux(cmd) => cmd.run().await,
-            Self::Macos(cmd) => cmd.run().await,
-            Self::MacosDefaults(cmd) => cmd.run().await,
-            Self::MiseShellActivate(cmd) => cmd.run().await,
-            Self::Packages(cmd) => cmd.run().await,
-            Self::Plan(cmd) => cmd.run().await,
-            Self::Plugins(cmd) => cmd.run().await,
-            Self::Remote(cmd) => cmd.run().await,
-            Self::Repos(cmd) => cmd.run().await,
-            Self::Secrets(cmd) => cmd.run().await,
-            Self::Services(cmd) => cmd.run().await,
-            Self::Status(cmd) => cmd.run().await,
-            Self::Systemd(cmd) => cmd.run().await,
-            Self::User(cmd) => cmd.run().await,
+            Self::ApplyAccountPlan(cmd) => Box::pin(async move { cmd.run() }),
+            Self::ApplyServicePlan(cmd) => Box::pin(async move { cmd.run() }),
+            Self::ApplyFirewallPlan(cmd) => Box::pin(async move { cmd.run() }),
+            Self::ApplySystemPlan(cmd) => Box::pin(async move { cmd.run() }),
+            Self::InspectSystemFiles(cmd) => Box::pin(async move { cmd.run() }),
+            Self::InspectFirewallPlan(cmd) => Box::pin(async move { cmd.run() }),
+            Self::ServiceExec(cmd) => Box::pin(cmd.run()),
+            Self::Accounts(cmd) => Box::pin(cmd.run()),
+            Self::ConfigRoots(cmd) => Box::pin(cmd.run()),
+            Self::Compose(cmd) => Box::pin(cmd.run()),
+            Self::Dotfiles(cmd) => Box::pin(cmd.run()),
+            Self::Files(cmd) => Box::pin(cmd.run()),
+            Self::Firewall(cmd) => Box::pin(cmd.run()),
+            Self::Launchd(cmd) => Box::pin(cmd.run()),
+            Self::Linux(cmd) => Box::pin(cmd.run()),
+            Self::Macos(cmd) => Box::pin(cmd.run()),
+            Self::MacosDefaults(cmd) => Box::pin(cmd.run()),
+            Self::MiseShellActivate(cmd) => Box::pin(cmd.run()),
+            Self::Packages(cmd) => Box::pin(cmd.run()),
+            Self::Plan(cmd) => Box::pin(cmd.run()),
+            Self::Plugins(cmd) => Box::pin(cmd.run()),
+            Self::Remote(cmd) => Box::pin(cmd.run()),
+            Self::Repos(cmd) => Box::pin(cmd.run()),
+            Self::Secrets(cmd) => Box::pin(cmd.run()),
+            Self::Services(cmd) => Box::pin(cmd.run()),
+            Self::Status(cmd) => Box::pin(cmd.run()),
+            Self::Systemd(cmd) => Box::pin(cmd.run()),
+            Self::Unapply(cmd) => Box::pin(cmd.run()),
+            Self::User(cmd) => Box::pin(cmd.run()),
         }
     }
 }
@@ -2457,6 +2652,104 @@ impl BootstrapPlan {
             }
         }
         Ok(())
+    }
+}
+
+impl BootstrapUnapply {
+    async fn run(self) -> Result<()> {
+        if let Some(status) = self.run_with_environments_selected()? {
+            if !status.success() {
+                bail!("bootstrap unapply failed with {status}");
+            }
+            return Ok(());
+        }
+        OperationScope::wrap("bootstrap unapply", self.dry_run, self.run_inner()).await
+    }
+
+    /// Re-run this command with the requested environments selected.
+    ///
+    /// Their config files are only loaded when they are part of the selection,
+    /// and the rest of the selection has to stay in place so a resource another
+    /// module still declares is visible. Returns `None` once nothing is missing.
+    fn run_with_environments_selected(&self) -> Result<Option<std::process::ExitStatus>> {
+        let selected = &*crate::env::MISE_ENV;
+        if self
+            .environment
+            .iter()
+            .all(|environment| selected.contains(environment))
+        {
+            return Ok(None);
+        }
+        let mut environments = selected.clone();
+        for environment in &self.environment {
+            if !environments.contains(environment) {
+                environments.push(environment.clone());
+            }
+        }
+        let mut command = Command::new(std::env::current_exe()?);
+        command.args(unapply_child_args(
+            &environments.join(","),
+            &crate::env::ARGS.read().unwrap(),
+        ));
+        // The directory has already been entered, by `--cd` or by this variable.
+        // The child inherits it, and a relative value would be applied a second
+        // time, landing one level deeper or failing outright.
+        command.env_remove("MISE_CD");
+        Ok(Some(command.status()?))
+    }
+
+    async fn run_inner(self) -> Result<()> {
+        let config = Config::get().await?;
+        let secrets = system::secrets::resolve(&config, self.prompt_secrets)?;
+        let opts = system::unapply::UnapplyOpts {
+            dry_run: self.dry_run,
+            force: self.force,
+            verbose: config::Settings::get().verbose,
+        };
+        let unapply = system::unapply::plan(&config, &self.environment, &secrets, &opts).await?;
+        for skip in &unapply.skipped {
+            warn!("{} {}: keeping it, {}", skip.kind, skip.name, skip.reason);
+        }
+        for uncovered in &unapply.uncovered {
+            info!(
+                "{} declaration(s) in [{}] are not removed by unapply: {}",
+                uncovered.count, uncovered.section, uncovered.command
+            );
+        }
+        if unapply.is_empty() {
+            info!("nothing to remove for {}", self.environment.join(", "));
+            return Ok(());
+        }
+        let mut table = MiseTable::new(false, &["Action", "Resource"]);
+        for removal in &unapply.removals {
+            table.add_row(vec![
+                "remove".to_string(),
+                format!("{}:{}", removal.kind, removal.name),
+            ]);
+        }
+        table.print()?;
+        // The global `--yes`, `MISE_YES`, and the `yes` setting answer this
+        // question as much as the subcommand flag does.
+        if !self.dry_run && !self.yes && !config::Settings::get().yes {
+            let message = format!(
+                "bootstrap: remove {} resource(s) contributed by {}?",
+                unapply.removals.len(),
+                self.environment.join(", ")
+            );
+            // Defaults to no: this removes resources, so neither an unanswered
+            // prompt nor one nobody saw may be read as consent.
+            match crate::ui::prompt::confirm_with_default(message, false)? {
+                Confirmation::Yes => {}
+                Confirmation::No | Confirmation::Unanswered => {
+                    info!("bootstrap unapply: skipped");
+                    return Ok(());
+                }
+                Confirmation::Unavailable => bail!(
+                    "mise bootstrap unapply requires confirmation but there was nobody to ask; pass --yes to remove non-interactively"
+                ),
+            }
+        }
+        system::unapply::execute(&config, &unapply, &secrets, &opts).await
     }
 }
 
@@ -2773,6 +3066,21 @@ impl BootstrapFilesStatus {
             return Err(crate::request_exit(1));
         }
         Ok(())
+    }
+}
+
+impl BootstrapServiceExec {
+    async fn run(self) -> Result<()> {
+        // The service outlives every other thing this process has to do, so
+        // it is waited for off the runtime's workers rather than on one.
+        let code = tokio::task::spawn_blocking(move || {
+            system::service_exec::run(&self.name, std::path::Path::new(&self.launch), &self.digest)
+        })
+        .await??;
+        match code {
+            0 => Ok(()),
+            code => Err(crate::exit::request(code)),
+        }
     }
 }
 
@@ -3528,7 +3836,7 @@ impl BootstrapStatus {
         report: &mut BootstrapStatusReport,
     ) -> Result<()> {
         let mut json_out = serde_json::Map::new();
-        for mp in system::packages_from_config(config) {
+        for mp in system::packages_from_config(config)? {
             let name = mp.manager.name();
             let reason = if mp.disabled {
                 Some("excluded by the system_packages.managers setting".to_string())
@@ -3565,7 +3873,10 @@ impl BootstrapStatus {
                 );
                 continue;
             }
-            let statuses = mp.manager.installed(&mp.requests).await?;
+            let statuses = mp
+                .manager
+                .installed_with_options(&mp.requests, &mp.options)
+                .await?;
             let mut json_pkgs = vec![];
             for s in statuses {
                 let auto_updates = s.state.auto_updates();
@@ -3695,15 +4006,31 @@ impl BootstrapStatus {
         let files = system::files::files_from_config(config)?;
         system::files::validate_composed_file_footprints(&files)?;
         for req in files {
-            let state = match system::files::check(config, &req, secrets) {
-                Ok(state) => state,
-                Err(err) => system::files::FileState::Differs(format!("{err}")),
+            // an absent entry that cannot be checked (a directory at the
+            // target, say) is an error, not a pending removal
+            let (state, removable) = match system::files::check(config, &req, secrets) {
+                Ok(state) => (state, true),
+                Err(err) => (system::files::FileState::Differs(format!("{err}")), false),
             };
+            let absent = req.mode == FileMode::Absent && removable;
             let (state_str, state_json, missing) = match &state {
-                system::files::FileState::Applied => ("applied".to_string(), "applied", false),
+                system::files::FileState::Applied if absent => {
+                    ("absent".to_string(), "applied", false)
+                }
+                system::files::FileState::Applied => (
+                    match system::files::permissions_target_absent(&req) {
+                        Some(reason) => format!("applied ({reason})"),
+                        None => "applied".to_string(),
+                    },
+                    "applied",
+                    false,
+                ),
                 system::files::FileState::Missing => ("missing".to_string(), "missing", true),
                 system::files::FileState::SourceMissing => {
                     ("source missing".to_string(), "source_missing", true)
+                }
+                system::files::FileState::Differs(reason) if absent => {
+                    (format!("would remove ({reason})"), "differs", true)
                 }
                 system::files::FileState::Differs(reason) => {
                     (format!("differs ({reason})"), "differs", true)
@@ -3713,21 +4040,32 @@ impl BootstrapStatus {
             report.row(
                 "dotfiles",
                 req.target_raw.clone(),
-                if req.mode == system::files::FileMode::Content {
-                    "content inline".to_string()
-                } else {
-                    format!("{} {}", req.mode.name(), req.source.display_user())
+                match req.mode {
+                    system::files::FileMode::Content => "content inline".to_string(),
+                    system::files::FileMode::Permissions => {
+                        format!("permissions {:04o}", req.permissions.unwrap_or_default())
+                    }
+                    system::files::FileMode::Absent => "absent".to_string(),
+                    _ => format!("{} {}", req.mode.name(), req.source.display_user()),
                 },
                 state_str,
                 missing,
             );
-            json_files.push(json!({
+            let mut entry = json!({
                 "target": req.target_raw,
-                "source": (req.mode != system::files::FileMode::Content)
+                "source": req.mode.has_source()
                     .then(|| req.source.display_user()),
                 "mode": req.mode.name(),
                 "state": state_json,
-            }));
+            });
+            if let system::files::FileState::Differs(reason) = &state {
+                entry["reason"] = json!(if absent {
+                    format!("{reason}; will be removed")
+                } else {
+                    reason.clone()
+                });
+            }
+            json_files.push(entry);
         }
 
         let mut json_edits = vec![];
@@ -4167,8 +4505,102 @@ pub(crate) async fn run_dotfiles_apply(cmd: DotfilesApply) -> Result<()> {
 
 /// Updates or clones the bootstrap repository. `Ok(false)` is a dry run
 /// that stops here because there is no checkout to continue from.
+fn bootstrap_git_succeeds<const N: usize>(checkout: &Path, args: [&str; N]) -> Result<bool> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(checkout)
+        .args(args)
+        .stdout(std::process::Stdio::null());
+    crate::git::sanitize_git_command(&mut command);
+    Ok(command.status()?.success())
+}
+
+/// Switches to the local branch `git_ref`, creating it from `origin/<ref>` when
+/// it does not exist, even next to a same-named tag.
+fn switch_to_bootstrap_branch(checkout: &Path, git_ref: &str) -> Result<()> {
+    let branch = format!("refs/heads/{git_ref}");
+    if bootstrap_git_succeeds(checkout, ["show-ref", "--verify", "--quiet", &branch])? {
+        run_bootstrap_git(checkout, ["switch", git_ref])
+    } else {
+        // fully qualified so a local ref named `origin/<ref>` cannot shadow it
+        let remote_branch = format!("refs/remotes/origin/{git_ref}");
+        run_bootstrap_git(
+            checkout,
+            ["switch", "--create", git_ref, "--track", &remote_branch],
+        )
+    }
+}
+
+/// Checks out `git_ref` in a fresh clone, using the refs the clone fetched. A
+/// branch wins over a tag of the same name.
+fn checkout_bootstrap_ref(checkout: &Path, git_ref: &str) -> Result<()> {
+    let remote_branch = format!("refs/remotes/origin/{git_ref}");
+    if bootstrap_git_succeeds(
+        checkout,
+        ["show-ref", "--verify", "--quiet", &remote_branch],
+    )? {
+        switch_to_bootstrap_branch(checkout, git_ref)
+    } else {
+        run_bootstrap_git(checkout, ["checkout", git_ref, "--"])
+    }
+}
+
+/// Moves an existing checkout to `git_ref` as origin now has it.
+///
+/// The ref is looked up on origin so that a name is never resolved from a
+/// stale local copy: a branch on origin, which wins over a tag of the same
+/// name, is switched to and fast-forwarded from `origin/<ref>`, and a tag on
+/// origin is checked out as that tag. A branch or tag that only survives
+/// locally, since fetching does not prune tags, is rejected. Anything else,
+/// such as a commit, is checked out as given. Other local tags are left
+/// alone, and a failing `ls-remote` is an error, not a deletion.
+fn update_bootstrap_ref(checkout: &Path, git_ref: &str) -> Result<()> {
+    // force tags so a moved one is not resolved from the stale local copy;
+    // pruning removes only the remote-tracking branches deleted on origin
+    run_bootstrap_git(
+        checkout,
+        ["fetch", "--force", "--tags", "--prune", "origin"],
+    )?;
+    let tag = format!("refs/tags/{git_ref}");
+    let branch = format!("refs/heads/{git_ref}");
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(checkout)
+        .args(["ls-remote", "origin", &tag, &branch]);
+    crate::git::sanitize_git_command(&mut command);
+    let output = command.output()?;
+    if !output.status.success() {
+        bail!(
+            "could not look up {git_ref:?} on origin: git ls-remote failed with {}",
+            output.status
+        );
+    }
+    let listed = String::from_utf8_lossy(&output.stdout);
+    let on_origin = |name: &str| listed.lines().any(|l| l.split('\t').nth(1) == Some(name));
+    if on_origin(&branch) {
+        switch_to_bootstrap_branch(checkout, git_ref)?;
+        // from origin itself, whatever upstream the local branch tracks
+        // fully qualified so a local ref named `origin/<ref>` cannot shadow it
+        let remote_branch = format!("refs/remotes/origin/{git_ref}");
+        run_bootstrap_git(checkout, ["merge", "--ff-only", &remote_branch])
+    } else if on_origin(&tag) {
+        run_bootstrap_git(checkout, ["checkout", &tag, "--"])
+    } else if bootstrap_git_succeeds(checkout, ["show-ref", "--verify", "--quiet", &branch])?
+        || bootstrap_git_succeeds(checkout, ["show-ref", "--verify", "--quiet", &tag])?
+    {
+        // a branch or tag that only survives locally would run stale
+        // configuration, so it must not be picked up as a commit
+        bail!("{git_ref:?} no longer exists on origin")
+    } else {
+        run_bootstrap_git(checkout, ["checkout", git_ref, "--"])
+    }
+}
+
 fn checkout_bootstrap_repository(
     url: &str,
+    git_ref: Option<&str>,
     checkout: &Path,
     reuse: bool,
     update: bool,
@@ -4177,12 +4609,31 @@ fn checkout_bootstrap_repository(
     if reuse {
         if update {
             if dry_run {
-                miseprintln!(
-                    "Would run: git -C {} pull --ff-only",
-                    checkout.display_user()
-                );
+                if let Some(git_ref) = git_ref {
+                    miseprintln!(
+                        "Would run: git -C {} fetch --force --tags --prune origin",
+                        checkout.display_user()
+                    );
+                    miseprintln!(
+                        "Would run: git -C {} checkout {git_ref} -- (or switch {git_ref} if it is a branch on origin)",
+                        checkout.display_user()
+                    );
+                    miseprintln!(
+                        "Would run: git -C {} merge --ff-only origin/{git_ref} (if it is a branch)",
+                        checkout.display_user()
+                    );
+                } else {
+                    miseprintln!(
+                        "Would run: git -C {} pull --ff-only",
+                        checkout.display_user()
+                    );
+                }
             } else {
-                run_bootstrap_git(checkout, ["pull", "--ff-only"])?;
+                if let Some(git_ref) = git_ref {
+                    update_bootstrap_ref(checkout, git_ref)?;
+                } else {
+                    run_bootstrap_git(checkout, ["pull", "--ff-only"])?;
+                }
                 journal::note(format!(
                     "updated the checkout of {url} in {}",
                     checkout.display_user()
@@ -4193,6 +4644,12 @@ fn checkout_bootstrap_repository(
     }
     if dry_run {
         miseprintln!("Would run: git clone {} {}", url, checkout.display_user());
+        if let Some(git_ref) = git_ref {
+            miseprintln!(
+                "Would run: git -C {} checkout {git_ref} --",
+                checkout.display_user()
+            );
+        }
         return Ok(false);
     }
     if let Some(parent) = checkout
@@ -4208,7 +4665,18 @@ fn checkout_bootstrap_repository(
     if !status.success() {
         bail!("git clone failed with {status}");
     }
-    journal::note(format!("cloned {url} into {}", checkout.display_user()));
+    if let Some(git_ref) = git_ref
+        && let Err(err) = checkout_bootstrap_ref(checkout, git_ref)
+    {
+        // a clone left on the default branch would be reused as if it were
+        // the requested ref by the next run
+        let _ = std::fs::remove_dir_all(checkout);
+        return Err(err.wrap_err(format!("could not check out {git_ref:?} from {url}")));
+    }
+    journal::note(match git_ref {
+        Some(git_ref) => format!("cloned {url} at {git_ref} into {}", checkout.display_user()),
+        None => format!("cloned {url} into {}", checkout.display_user()),
+    });
     Ok(true)
 }
 
@@ -5041,7 +5509,7 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::path::Path;
 
-    use super::{bootstrap_from_child_args, select_remote_inventory};
+    use super::{bootstrap_from_child_args, select_remote_inventory, unapply_child_args};
     use crate::cli::{Cli, Commands};
     use crate::system::remote;
 
@@ -5152,6 +5620,78 @@ mod tests {
                     assert_eq!(adopt.as_deref(), Some("jdx/dotfiles"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn unapply_reexec_replaces_the_selection_and_keeps_other_arguments() {
+        let args = [
+            "mise",
+            "--log-level",
+            "debug",
+            "-E",
+            "gpg",
+            "bootstrap",
+            "unapply",
+            "ssh",
+            "--yes",
+        ]
+        .map(String::from);
+        assert_eq!(
+            unapply_child_args("gpg,ssh", &args),
+            [
+                "--env",
+                "gpg,ssh",
+                "--log-level",
+                "debug",
+                "bootstrap",
+                "unapply",
+                "ssh",
+                "--yes"
+            ]
+            .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn unapply_reexec_drops_a_directory_this_process_already_entered() {
+        // `--cd` took effect before the re-invocation, so the child inherits
+        // that directory; forwarding a relative path would resolve it again.
+        for directory in [
+            vec!["--cd", "sub"],
+            vec!["--cd=sub"],
+            vec!["-C", "sub"],
+            vec!["-Csub"],
+        ] {
+            let mut args = vec!["mise".to_string()];
+            args.extend(directory.iter().map(|arg| arg.to_string()));
+            args.extend(["bootstrap", "unapply", "ssh"].map(String::from));
+            assert_eq!(
+                unapply_child_args("ssh", &args),
+                ["--env", "ssh", "bootstrap", "unapply", "ssh"].map(OsString::from)
+            );
+        }
+    }
+
+    #[test]
+    fn unapply_reexec_removes_every_selection_spelling() {
+        for selection in [
+            vec!["--env", "work"],
+            vec!["--env=work"],
+            vec!["-E", "work"],
+            vec!["-Ework"],
+            vec!["--profile", "work"],
+            vec!["--profile=work"],
+            vec!["-P", "work"],
+            vec!["-Pwork"],
+        ] {
+            let mut args = vec!["mise".to_string()];
+            args.extend(selection.iter().map(|arg| arg.to_string()));
+            args.extend(["bootstrap", "unapply", "ssh"].map(String::from));
+            assert_eq!(
+                unapply_child_args("work,ssh", &args),
+                ["--env", "work,ssh", "bootstrap", "unapply", "ssh"].map(OsString::from)
+            );
         }
     }
 

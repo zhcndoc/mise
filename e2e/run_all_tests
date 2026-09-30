@@ -5,50 +5,43 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source-path=SCRIPTDIR
 source "$SCRIPT_DIR/style.sh"
-# shellcheck source-path=SCRIPTDIR
-source "$SCRIPT_DIR/helpers.sh"
 
-mise_wait_for_gh_rate_limit() {
-  local mise_bin="$1"
-  # Allow explicit opt-out for local/dev runs.
-  if [[ ${E2E_WAIT_FOR_GH_RATE_LIMIT:-1} != 1 ]]; then
-    return 0
+# Tests named as arguments (paths relative to e2e/) run in the given order,
+# including slow ones; `mise run test:e2e` passes them when E2E_JOBS is set.
+# Without arguments, every test is discovered.
+EXPLICIT_FILES=0
+if (($# > 0)); then
+  EXPLICIT_FILES=1
+  FILES=("$@")
+else
+  # Check for .release-skip-e2e and skip all tests if version matches
+  RELEASE_SKIP_FILE="$ROOT/.release-skip-e2e"
+  VERSION="$(. "$ROOT/scripts/get-version.sh" | tr -d '\n')"
+  if [[ -f $RELEASE_SKIP_FILE ]]; then
+    if grep -Fxq "$VERSION" "$RELEASE_SKIP_FILE"; then
+      echo "[e2e] Skipping all e2e tests: .release-skip-e2e contains $VERSION" >&2
+      exit 0
+    fi
   fi
-  if "$mise_bin" which wait-for-gh-rate-limit >/dev/null 2>&1; then
-    "$mise_bin" x -- wait-for-gh-rate-limit
-  else
-    warn "wait-for-gh-rate-limit not available; skipping rate-limit wait"
-  fi
-}
 
-# Check for .release-skip-e2e and skip all tests if version matches
-RELEASE_SKIP_FILE="$ROOT/.release-skip-e2e"
-VERSION="$(. "$ROOT/scripts/get-version.sh" | tr -d '\n')"
-if [[ -f $RELEASE_SKIP_FILE ]]; then
-  if grep -Fxq "$VERSION" "$RELEASE_SKIP_FILE"; then
-    echo "[e2e] Skipping all e2e tests: .release-skip-e2e contains $VERSION" >&2
-    exit 0
-  fi
+  pushd e2e >/dev/null
+  list_test_files() {
+    local pattern="$1"
+    find . -type f -name "$pattern" | sed 's#^\./##' | sort
+  }
+
+  # Avoid mapfile that is not available on bash 3.2 for compatibility with macOS
+  SLOW_FILES=()
+  while IFS= read -r line; do
+    SLOW_FILES+=("$line")
+  done < <(list_test_files "test_*_slow")
+  FAST_FILES=()
+  while IFS= read -r line; do
+    FAST_FILES+=("$line")
+  done < <(list_test_files "test_*" | grep -v "_slow$")
+  popd >/dev/null
+  FILES=("${FAST_FILES[@]}" "${SLOW_FILES[@]}")
 fi
-
-pushd e2e >/dev/null
-list_test_files() {
-  local pattern="$1"
-  find . -type f -name "$pattern" | sed 's#^\./##' | sort
-}
-
-# Avoid mapfile that is not available on bash 3.2 for compatibility with macOS
-SLOW_FILES=()
-while IFS= read -r line; do
-  SLOW_FILES+=("$line")
-done < <(list_test_files "test_*_slow")
-FAST_FILES=()
-while IFS= read -r line; do
-  FAST_FILES+=("$line")
-done < <(list_test_files "test_*" | grep -v "_slow$")
-popd >/dev/null
-FILES=("${FAST_FILES[@]}" "${SLOW_FILES[@]}")
-MISE_BIN="$(resolve_mise_bin)"
 test_count=0
 skipped_count=0
 status=0
@@ -69,8 +62,8 @@ for index in "${!FILES[@]}"; do
     fi
   fi
 
-  # Skip slow tests unless TEST_ALL == 1
-  if [[ ${TEST_ALL:-0} != 1 && $TEST_NAME == *_slow ]]; then
+  # Skip discovered slow tests unless TEST_ALL == 1
+  if [[ $EXPLICIT_FILES == 0 && ${TEST_ALL:-0} != 1 && $TEST_NAME == *_slow ]]; then
     #    title="E2E test $TEST_NAME skipped" file="e2e/$TEST_NAME" warn "slow tests are disabled"
     skipped_count=$((skipped_count + 1))
     SUMMARY_ENTRY_TYPES+=("skip")
@@ -175,10 +168,7 @@ start_test() {
         : >"$GITHUB_STEP_SUMMARY"
       fi
       test_status=0
-      mise_wait_for_gh_rate_limit "$MISE_BIN" || test_status=$?
-      if [[ $test_status == 0 ]]; then
-        "$ROOT/e2e/run_test" "$test_name" || test_status=$?
-      fi
+      "$ROOT/e2e/run_test" "$test_name" || test_status=$?
       # Setup failures and Docker runs may not produce their own summary row.
       if [[ -n ${GITHUB_STEP_SUMMARY:-} && ! -s $GITHUB_STEP_SUMMARY ]]; then
         if [[ $test_status == 0 ]]; then

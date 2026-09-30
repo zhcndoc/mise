@@ -1,4 +1,4 @@
-import { Command, commands } from "./cli_commands";
+import { type Command, commands } from "./cli_commands.ts";
 
 // Shared between the VitePress config and the llms.txt generator
 // (docs/.vitepress/llms.ts), so both describe the same set of pages.
@@ -104,7 +104,6 @@ export const sidebar: SidebarItem[] = [
           { text: "npm", link: "/dev-tools/backends/npm" },
           { text: "packslip", link: "/dev-tools/backends/packslip" },
           { text: "pypi", link: "/dev-tools/backends/pypi" },
-          { text: "pkgx", link: "/dev-tools/backends/pkgx" },
           { text: "spm", link: "/dev-tools/backends/spm" },
           { text: "ubi", link: "/dev-tools/backends/ubi" },
           { text: "vfox", link: "/dev-tools/backends/vfox" },
@@ -130,10 +129,12 @@ export const sidebar: SidebarItem[] = [
           { text: "apt", link: "/bootstrap/packages/apt" },
           { text: "AUR", link: "/bootstrap/packages/aur" },
           { text: "dnf", link: "/bootstrap/packages/dnf" },
+          { text: "zypper", link: "/bootstrap/packages/zypper" },
           { text: "pacman", link: "/bootstrap/packages/pacman" },
           { text: "brew", link: "/bootstrap/packages/brew" },
           { text: "nix", link: "/bootstrap/packages/nix" },
           { text: "mas", link: "/bootstrap/packages/mas" },
+          { text: "Scoop", link: "/bootstrap/packages/scoop" },
           {
             text: "软件包插件",
             link: "/bootstrap/packages/plugins",
@@ -209,7 +210,16 @@ export const sidebar: SidebarItem[] = [
         ],
       },
       { text: "钩子", link: "/hooks" },
-      { text: "守护进程", link: "/daemons" },
+      {
+        text: "守护进程",
+        link: "/daemons",
+        items: [
+          {
+            text: "设置开发栈",
+            link: "/daemons/development-stack",
+          },
+        ],
+      },
       { text: "direnv", link: "/direnv" },
     ],
   },
@@ -227,6 +237,7 @@ export const sidebar: SidebarItem[] = [
       { text: "远程缓存协议", link: "/tasks/remote-cache-protocol" },
       { text: "任务模板", link: "/tasks/templates" },
       { text: "Monorepo 任务", link: "/tasks/monorepo" },
+      { text: "OpenTelemetry", link: "/tasks/opentelemetry" },
       { text: "沙箱", link: "/sandboxing" },
     ],
   },
@@ -271,6 +282,7 @@ export const sidebar: SidebarItem[] = [
         link: "/mise-cookbook/",
         collapsed: true,
         items: [
+          { text: "Bazel", link: "/mise-cookbook/bazel" },
           { text: "C++", link: "/mise-cookbook/cpp" },
           { text: "Docker", link: "/mise-cookbook/docker" },
           { text: "Node", link: "/mise-cookbook/nodejs" },

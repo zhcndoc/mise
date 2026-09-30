@@ -11,7 +11,7 @@ description: "永不捕获与 glob 匹配的路径"
 
 永不捕获与 glob 匹配的路径
 
-将 glob 添加到全局配置中的 `[history] exclude`。将其用于日志、缓存、数据库以及不断重写的应用程序状态；对于确实存储配置但经常发生变化的文件，使用 `--no-autosave` 并显式保存会更合适。
+将 glob 添加到全局配置中的 `[history] exclude`。该规则适用于所有受跟踪路径。请将 glob 放在引号中，以防 shell 展开它。将其用于日志、缓存、数据库以及不断重写的应用程序状态；对于确实存储配置但经常发生变化的文件，使用 `--no-autosave` 并显式保存会更合适。若要将选择范围限定在一个目录，请编辑该 `[dotfiles]` 条目的 `exclude` 或 `include` 列表。
 
 ## 参数
 - **`<GLOB>`** — 类似 `~/.config/hypr/plugins/**` 的 glob

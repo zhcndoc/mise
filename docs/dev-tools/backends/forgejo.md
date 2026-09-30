@@ -126,6 +126,8 @@ mise token forgejo forgejo.mycompany.com
 
 ## 工具选项
 
+特定平台的下载 URL 支持与 [GitHub 后端](/dev-tools/backends/github.html#platform-specific-urls)相同的版本模板。
+
 以下 [tool-options](/dev-tools/#tool-options) 适用于 `forgejo` 后端——这些内容应放在 `mise.toml` 的 `[tools]` 中。
 
 ### 资产自动检测

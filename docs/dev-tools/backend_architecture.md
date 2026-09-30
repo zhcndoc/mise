@@ -55,7 +55,7 @@ mise exec -- rg --version
 - 已安装的外部插件可以覆盖注册表简写，包括内置语言工具。已禁用的后端和现有安装也会影响此选择
 - 否则，注册表会提供首选的可用后端，该后端可能取决于请求的版本和平台
 
-使用`mise tool <name>`检查实际生效的后端，而不要根据工具的短名称进行推断。[解析实现](https://github.com/jdx/mise/blob/main/src/cli/args/backend_arg.rs)包含详细的优先级规则。
+使用 `mise tool <name>` 检查实际生效的后端，而不要根据工具的短名称进行推断。[解析实现](https://github.com/jdx/mise/blob/main/src/args/backend_arg.rs)包含详细的优先级规则。
 
 ### 环境变量覆盖
 

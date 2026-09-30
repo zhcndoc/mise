@@ -16,6 +16,13 @@
       "enabled": false
     },
     {
+      "description": "fedora major bumps only take effect when the rpm/copr images are rebuilt at release time, so a broken base image surfaces mid-release rather than in PR CI (see the fedora 40 rollback in 8184bc9). Bump manually against the release path; digest updates stay enabled.",
+      "matchPackageNames": ["fedora"],
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "matchPackageNames": ["taiki-e/install-action"],
       "matchManagers": ["github-actions"],
       "enabled": false
@@ -28,20 +35,20 @@
       "separateMajorMinor": false
     },
     {
-      "description": "aube crates and the standalone development tool must stay on the same release.",
+      "description": "aube and aube-registry are released together, so they update together.",
       "matchPackageNames": ["aube", "aube-registry"],
       "matchManagers": ["cargo"],
       "groupName": "aube",
-      "separateMajorMinor": false,
-      "postUpgradeTasks": {
-        "commands": ["mise lock --bump --minimum-release-age 0s aube"],
-        "executionMode": "branch",
-        "fileFilters": ["mise.lock"],
-        "installTools": {
-          "mise": {}
-        },
-        "workingDirTemplate": "{{{packageFileDir}}}"
-      }
+      "separateMajorMinor": false
+    },
+    {
+      "description": "usage crates are released together and depend on each other's internals (usage-rs 6.11.0 broke against usage-argv 6.11.1); bump them together, without the release-age delay the shared preset only waives for usage-cli and usage-lib.",
+      "matchPackageNames": ["/^usage-/"],
+      "matchManagers": ["cargo"],
+      "groupName": "jdx crates",
+      "groupSlug": "jdx-crates",
+      "minimumReleaseAge": null,
+      "schedule": ["at any time"]
     },
     {
       "description": "Sigstore crates are versioned together; bump together.",

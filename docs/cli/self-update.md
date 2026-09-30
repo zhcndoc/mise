@@ -11,9 +11,7 @@ description: "更新 mise 本身"
 
 更新 mise 本身
 
-使用 GitHub Releases API 查找最新发布版本和二进制文件。
-默认情况下，这也会更新任何已安装的插件。
-对经过身份验证的请求使用 mise 的 GitHub 令牌解析链。
+选择满足最短发布等待时间（默认 24 小时）的最新稳定版本。明确指定的版本会跳过该等待时间。二进制文件从 GitHub Releases 下载。默认情况下，这也会更新任何已安装的插件。对经过身份验证的请求使用 mise 的 GitHub 令牌解析链。
 
 打包维护者可以禁用此命令，以便通过包管理器更新 mise。请参阅
 <https://mise.jdx.dev/contributing.html#packaging-and-self-update-instructions>。
@@ -22,6 +20,7 @@ description: "更新 mise 本身"
 - **`[VERSION]`** — 更新到特定版本
 
 ## 标志
+- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 覆盖未固定版本更新的最短发布等待时间（默认：24h）
 - **`-f --force`** — 即使已是最新版本也更新
 - **`-y --yes`** — 跳过确认提示
 - **`--no-plugins`** — 禁用自动更新插件

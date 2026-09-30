@@ -28,10 +28,8 @@ Vars 可用于由 Tera 渲染的配置，例如工具版本和选项、任务定
 
 ```mise-toml
 [vars]
-test_mode = { default = "headless" }
-api_token = { required = "Set api_token in mise.local.toml" }
-secret_arg = { value = "--token=abc123", redact = true }
-_.file = ".env"
+mode = "headless"
+args = "--mode={{ vars.mode }}"
 ```
 
 `default` 形式会在同名的进程环境变量已设置且非空时使用该变量；查找时不会使用 `[env]` 中的值。`required` 变量必须由进程环境或后续配置文件提供。标记为 `redact = true` 的值会在任务输出中隐藏。

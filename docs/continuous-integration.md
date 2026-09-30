@@ -79,6 +79,8 @@ jobs:
 
 ## GitLab CI
 
+### 使用已提交的包装器
+
 此 `.gitlab-ci.yml` 使用 Debian 镜像和[已提交的包装器](#bootstrapping)。它假定与上方通用示例相同的 Node.js 项目。将工具所需的任何操作系统软件包添加到 `before_script` 中，或者构建一个已经安装这些软件包的 CI 镜像。
 
 ```yaml
@@ -101,6 +103,38 @@ build-job:
 ```
 
 此示例的缓存前缀假定运行器使用 amd64 架构；对于其他架构，请选择不同的前缀。如果项目没有 `mise.lock`，请从键中移除 `mise.lock`；如果有该文件，则将安装命令切换为 `mise install --locked`。此示例还要求 `package.json` 中包含 `build` 脚本。本地化包装器会设置缓存使用的 mise 目录。
+
+### Use the official image
+
+The [official `-debian` image](/mise-cookbook/docker.html#official-images)
+already contains mise, `curl`, `git`, and CA certificates, so a job can use it
+directly, without a bootstrap wrapper or an `ENTRYPOINT` override. Set the mise
+data and cache directories inside the project so GitLab can cache them:
+
+```yaml
+build-job:
+  stage: build
+  image: ghcr.io/jdx/mise:2026.9.11-debian
+  variables:
+    MISE_DATA_DIR: $CI_PROJECT_DIR/.mise
+    MISE_CACHE_DIR: $CI_PROJECT_DIR/.mise/cache
+  cache:
+    key:
+      prefix: mise-image-amd64
+      files: [mise.toml, mise.lock]
+    paths:
+      - .mise/installs/
+      - .mise/cache/
+  script:
+    - mise install
+    - mise exec -- npm ci
+    - mise exec -- npm run build
+```
+
+This example also assumes an amd64 runner and a Node.js project with a `build`
+script. Adjust the cache prefix for other architectures. Remove `mise.lock`
+from the cache key if absent; if present, use `mise install --locked` to enforce
+it. Add any OS packages your tools require in `before_script` or a custom image.
 
 ## Xcode Cloud
 

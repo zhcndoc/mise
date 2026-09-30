@@ -20,6 +20,8 @@ mise settings set paranoid true
 
 偏执模式要求对非全局配置文件进行明确的信任，包括通常不需要信任的格式。直接文件批准会对内容进行哈希，因此编辑文件后需要重新获得信任。执行命令的自动信任和通常的 CI 信任豁免都会被禁用。在此模式下，Git worktree 之间不会共享信任。
 
+在偏执模式下，`--yes`、`MISE_YES=1` 和 CI 自动确认不会批准配置的信任。对于无人值守运行，请先审核配置，再明确运行 `mise trust`，然后加载它。
+
 在接受文件之前检查它：
 
 ```sh
@@ -51,6 +53,12 @@ mise plugin install example https://github.com/example/asdf-example
 
 此行为也可以通过
 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 设置单独启用。
+
+## 来自 mise-versions 的证明
+
+mise 会询问 [mise-versions](/configuration/settings.html#use_versions_host) 公共 GitHub 发布构件是否有 GitHub 证明，从而避免安装过程消耗 GitHub API 配额。它返回的证明会经过加密验证，并且必须标明构件所属仓库，因此 mise-versions 不能单独为构件背书；但它可以回答构件没有证明。普通模式会信任这一回答，之后写入的锁文件不会记录来源证明。
+
+在 paranoid 模式下，mise 会在跳过验证前向 GitHub 确认该回答。每个没有证明的构件会额外消耗一次 GitHub API 请求。
 
 ## 另请参阅
 

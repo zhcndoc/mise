@@ -1,3 +1,4 @@
+use crate::config::SettingsExt;
 use crate::config::config_file::trust_check;
 use crate::dirs;
 use crate::env;
@@ -14,9 +15,11 @@ use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cmp::PartialEq, sync::Arc};
 
 use super::{Config, Settings};
+pub(crate) use mise_util::env_value::EnvValue;
 
 mod file;
 mod module;
@@ -106,93 +109,19 @@ impl serde::Serialize for RequiredValue {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct EnvDirectiveOptions {
+pub struct EnvDirectiveOptions {
     #[serde(default)]
     pub(crate) tools: bool,
     #[serde(default)]
-    pub(crate) redact: Option<bool>,
+    pub redact: Option<bool>,
     #[serde(default)]
     pub(crate) required: RequiredValue,
     #[serde(default)]
     pub(crate) expand: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub(crate) enum EnvValue {
-    String(String),
-    Integer(i64),
-    Boolean(bool),
-}
-
-impl EnvValue {
-    pub(crate) fn into_string(self) -> Option<String> {
-        match self {
-            Self::String(value) => Some(value),
-            Self::Integer(value) => Some(value.to_string()),
-            Self::Boolean(true) => Some("true".to_string()),
-            Self::Boolean(false) => None,
-        }
-    }
-
-    pub(crate) fn into_default_string(self) -> Option<String> {
-        match self {
-            Self::String(value) => Some(value),
-            Self::Integer(value) => Some(value.to_string()),
-            Self::Boolean(_) => None,
-        }
-    }
-}
-
-impl TryFrom<&toml::Value> for EnvValue {
-    type Error = String;
-
-    fn try_from(value: &toml::Value) -> Result<Self, Self::Error> {
-        match value {
-            toml::Value::String(value) => Ok(Self::String(value.clone())),
-            toml::Value::Integer(value) => Ok(Self::Integer(*value)),
-            toml::Value::Boolean(value) => Ok(Self::Boolean(*value)),
-            _ => Err("environment values must be strings, integers, or booleans".to_string()),
-        }
-    }
-}
-
-impl From<String> for EnvValue {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
-
-impl From<&str> for EnvValue {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
-    }
-}
-
-impl From<i64> for EnvValue {
-    fn from(value: i64) -> Self {
-        Self::Integer(value)
-    }
-}
-
-impl From<bool> for EnvValue {
-    fn from(value: bool) -> Self {
-        Self::Boolean(value)
-    }
-}
-
-impl From<EnvValue> for toml_edit::Value {
-    fn from(value: EnvValue) -> Self {
-        match value {
-            EnvValue::String(value) => Self::from(value),
-            EnvValue::Integer(value) => Self::from(value),
-            EnvValue::Boolean(value) => Self::from(value),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum EnvDirective {
+pub enum EnvDirective {
     /// simple key/value pair
     Val(String, String, EnvDirectiveOptions),
     /// use a fallback value if the key is not already set
@@ -304,7 +233,7 @@ impl Display for EnvDirective {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-pub(crate) enum AgeFormat {
+pub enum AgeFormat {
     #[serde(rename = "zstd")]
     Zstd,
     #[serde(rename = "raw")]
@@ -313,7 +242,7 @@ pub(crate) enum AgeFormat {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct EnvResults {
+pub struct EnvResults {
     pub env: IndexMap<String, (String, PathBuf)>,
     pub vars: IndexMap<String, (String, PathBuf)>,
     pub env_remove: BTreeSet<String>,
@@ -380,6 +309,38 @@ pub(crate) enum ToolsFilter {
     /// Used by `dependency_env` so a dependent tool's install sees `tools = true`
     /// value vars like `CLOUDSDK_PYTHON = "{{ tools.python.path }}/..."`. (#10282)
     ToolsOnlyVals,
+}
+
+static OCI_ENV_SATISFIES_REQUIRED: AtomicBool = AtomicBool::new(false);
+
+/// Let `[oci.env]` satisfy `required` env vars for the rest of this process.
+///
+/// `mise oci` bakes `[oci.env]` into the image, so a `required` var it defines
+/// has a value in the image and needn't exist on the build host. Set before the
+/// config loads: `[env]` is validated as part of loading it.
+pub fn oci_env_satisfies_required() {
+    OCI_ENV_SATISFIES_REQUIRED.store(true, Ordering::Relaxed);
+}
+
+/// Whether [`oci_env_satisfies_required`] was called. Env resolved this way
+/// isn't valid for a command that enforces `required`, so it must not be cached.
+pub(crate) fn is_oci_env_satisfying_required() -> bool {
+    OCI_ENV_SATISFIES_REQUIRED.load(Ordering::Relaxed)
+}
+
+/// Keys the project's `[oci.env]` sections define. Global and system configs
+/// are left out: `mise oci` doesn't bake their `[oci]` unless asked to.
+fn oci_env_keys(config: &Config) -> BTreeSet<String> {
+    if !is_oci_env_satisfying_required() {
+        return BTreeSet::new();
+    }
+    config
+        .config_files
+        .values()
+        .filter(|cf| cf.project_root().is_some())
+        .filter_map(|cf| cf.oci_config())
+        .flat_map(|oci| oci.env.into_keys())
+        .collect()
 }
 
 pub(crate) struct EnvResolveOptions {
@@ -908,6 +869,11 @@ impl EnvResults {
         }
 
         let context_vars_for_validation = Self::context_vars(&ctx);
+        let oci_env_keys = if resolve_opts.vars {
+            BTreeSet::new()
+        } else {
+            oci_env_keys(config)
+        };
 
         // Validate required variables
         Self::validate_required_vars(
@@ -915,6 +881,7 @@ impl EnvResults {
             required_env,
             &r,
             &context_vars_for_validation,
+            &oci_env_keys,
             resolve_opts.warn_on_missing_required,
             resolve_opts.vars,
         )?;
@@ -927,6 +894,7 @@ impl EnvResults {
         initial: &EnvMap,
         env_results: &EnvResults,
         context_vars: &EnvMap,
+        oci_env_keys: &BTreeSet<String>,
         warn_mode: bool,
         vars_mode: bool,
     ) -> eyre::Result<()> {
@@ -962,7 +930,8 @@ impl EnvResults {
 
             // Variable must be defined either:
             // 1. In the initial environment (before mise runs), OR
-            // 2. In a config file processed later than the one declaring it as required
+            // 2. In a config file processed later than the one declaring it as required, OR
+            // 3. In `[oci.env]`, when `mise oci` is building the image
             let is_predefined = initial.contains_key(&lookup);
 
             let resolved_values = if vars_mode {
@@ -979,7 +948,13 @@ impl EnvResults {
             let is_defined_in_context =
                 vars_mode && context_vars.get(&lookup).is_some_and(|v| !v.is_empty());
 
-            if !is_predefined && !is_defined_later && !is_defined_in_context {
+            let is_defined_by_oci_env = oci_env_keys.contains(&lookup);
+
+            if !is_predefined
+                && !is_defined_later
+                && !is_defined_in_context
+                && !is_defined_by_oci_env
+            {
                 let variable_kind = if vars_mode {
                     "variable"
                 } else {

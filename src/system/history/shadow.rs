@@ -46,7 +46,7 @@ pub(crate) fn read_meta_calls() -> usize {
 /// One top-level root of a snapshot tree and the files to add under it,
 /// relative to `path`.
 #[derive(Clone, Debug)]
-pub(crate) struct CaptureRoot {
+pub struct CaptureRoot {
     pub label: String,
     pub path: PathBuf,
     pub files: Vec<PathBuf>,
@@ -64,7 +64,7 @@ pub(crate) struct CaptureResult {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct TreeEntry {
+pub struct TreeEntry {
     pub mode: String,
     pub oid: String,
     pub size: Option<u64>,
@@ -72,7 +72,7 @@ pub(crate) struct TreeEntry {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct DiffOpts {
+pub struct DiffOpts {
     /// Full patch instead of a per-file summary.
     pub patch: bool,
     /// Write the diff to the terminal as git produces it instead of
@@ -84,7 +84,7 @@ pub(crate) struct DiffOpts {
 }
 
 #[derive(Debug)]
-pub(crate) struct DiffResult {
+pub struct DiffResult {
     pub output: Vec<u8>,
     pub changed: bool,
 }
@@ -108,7 +108,7 @@ pub(crate) struct Change {
 }
 
 #[derive(Debug)]
-pub(crate) struct HistoryRepo {
+pub struct HistoryRepo {
     git: GitPlumbing,
     /// Comparison and decrypted bytes live only for this process. They must
     /// never become objects merely because a preflight or diff read them.
@@ -141,6 +141,140 @@ struct EncryptionCacheEntry {
     oid: String,
 }
 
+/// A scratch git index belonging to one call, removed when that call ends.
+///
+/// Compositions run concurrently inside a single process: the dotfiles
+/// watcher saves a checkpoint on its own thread while the synchronization
+/// it started plans on another. Naming the scratch index after the process
+/// alone let those share one file, and a composition that reset the index
+/// under another discarded every entry the other had inserted so far. The
+/// tree written from what was left dropped a sorted prefix of its paths,
+/// which a checkpoint then recorded as deliberate deletions and published
+/// to every other machine.
+struct ScratchIndex {
+    path: PathBuf,
+    owner: PathBuf,
+    /// Held for as long as this composition runs, so another process can
+    /// tell it apart from one whose process is gone. Taken before the
+    /// index is used and released in [`Drop`].
+    lock: Option<fslock::LockFile>,
+}
+
+/// Distinguishes this process's scratch indexes from every other
+/// process's, for as long as this process runs. A process id would not:
+/// the system reuses them, so a name built from one can collide with a
+/// name an earlier process is still using.
+fn scratch_nonce() -> &'static str {
+    static NONCE: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("{:032x}", rand::random::<u128>()));
+    &NONCE
+}
+
+impl ScratchIndex {
+    /// A scratch index in `dir`, distinct from every other live one.
+    fn new(dir: &Path, purpose: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        sweep_scratch_indexes(dir);
+        let path = dir.join(format!(
+            "mise-index-{}-{purpose}-{}",
+            scratch_nonce(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut owner = path.clone().into_os_string();
+        owner.push(".owner");
+        let owner = PathBuf::from(owner);
+        let _ = std::fs::remove_file(&path);
+        let lock = crate::lock_file::LockFile::at(&owner)
+            .try_lock()
+            .ok()
+            .flatten();
+        if lock.is_none() {
+            // never leave behind an owner file this composition does not
+            // hold: a sweep would lock it, read the composition as ended,
+            // and remove the index out from under it. Without one the
+            // index cannot be judged, so it is kept instead.
+            let _ = std::fs::remove_file(&owner);
+        }
+        Self { path, owner, lock }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        // release before removing: Windows refuses to remove a file whose
+        // lock handle is still open
+        drop(self.lock.take());
+        let _ = std::fs::remove_file(&self.owner);
+    }
+}
+
+/// Removes scratch indexes, and the `.owner` and git `.lock` files beside
+/// them, that were left behind by a process killed mid-composition.
+///
+/// Runs once per directory, before that directory has handed out a scratch
+/// index of this process's own.
+///
+/// The owner file decides. A composition takes its lock before git writes
+/// the index and holds it until the composition ends; the kernel releases
+/// it when the process dies, and keeps holding it while the process is
+/// merely stopped or its machine suspended. So a lock this process can
+/// take means the owner is gone. Anything that cannot be judged is left
+/// alone: no owner file, an owner still locked, or no index written yet.
+/// Guessing from age instead would eventually delete the index of a
+/// composition suspended midway and truncate the very snapshot this all
+/// exists to protect.
+fn sweep_scratch_indexes(dir: &Path) {
+    use std::sync::{LazyLock, Mutex};
+
+    static SWEPT: LazyLock<Mutex<BTreeSet<PathBuf>>> =
+        LazyLock::new(|| Mutex::new(BTreeSet::new()));
+
+    let Ok(mut swept) = SWEPT.lock() else { return };
+    if !swept.insert(dir.to_path_buf()) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut indexes: BTreeSet<String> = BTreeSet::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("mise-index-") {
+            continue;
+        }
+        // an index and its adjuncts belong to one composition
+        let index = name
+            .strip_suffix(".owner")
+            .or_else(|| name.strip_suffix(".lock"))
+            .unwrap_or(&name);
+        indexes.insert(index.to_string());
+    }
+    for index in indexes {
+        let path = dir.join(&index);
+        let owner = dir.join(format!("{index}.owner"));
+        if !path.exists() || !owner.exists() {
+            continue;
+        }
+        let Ok(Some(reclaimed)) = crate::lock_file::LockFile::at(&owner).try_lock() else {
+            continue;
+        };
+        // removed while the owner file stays locked, so nothing can take
+        // this index back in between and lose the composition its own
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(dir.join(format!("{index}.lock")));
+        // released first: Windows refuses to remove a file whose lock
+        // handle is still open, and an owner file left with no index
+        // beside it is one no later sweep looks at again
+        drop(reclaimed);
+        let _ = std::fs::remove_file(&owner);
+    }
+}
+
 /// Keep content fingerprints useful for cache lookup without publishing a
 /// dictionary-testable hash of a secret in the disposable cache.
 fn encryption_cache_key(dir: &Path) -> Result<[u8; 32]> {
@@ -171,8 +305,9 @@ fn encryption_cache_key(dir: &Path) -> Result<[u8; 32]> {
 
 impl HistoryRepo {
     pub(crate) const HISTORY_REF: &'static str = "refs/heads/main";
+    const MATCHER_TRAILER: &'static str = "Mise-History-Matcher: ";
     const RECORD_TRAILER: &'static str = "Mise-History: ";
-    pub(crate) fn path_in(state_dir: &Path) -> PathBuf {
+    pub fn path_in(state_dir: &Path) -> PathBuf {
         repo_dir_in(state_dir)
     }
 
@@ -201,7 +336,7 @@ impl HistoryRepo {
         Ok(Some(repo))
     }
 
-    pub(crate) fn dir(&self) -> &Path {
+    pub fn dir(&self) -> &Path {
         self.git.git_dir()
     }
 
@@ -482,30 +617,25 @@ impl HistoryRepo {
         if entries.is_empty() {
             return self.empty_object("tree");
         }
-        let index = self
-            .dir()
-            .join(format!("mise-index-{}-write-tree", std::process::id()));
-        let _ = std::fs::remove_file(&index);
+        let scratch = ScratchIndex::new(self.dir(), "write-tree");
+        let index = scratch.path();
         let mut info: Vec<u8> = vec![];
         for (mode, oid, path) in entries {
             info.extend_from_slice(format!("{mode} {oid}\t{path}").as_bytes());
             info.push(0);
         }
-        let result = (|| -> Result<String> {
-            // index-only operations; git still insists on a work tree
-            self.git.run(
-                PlumbingCall::new(["update-index", "-z", "--index-info"])
-                    .work_tree(self.dir())
-                    .index_file(&index)
-                    .stdin(&info),
-            )?;
-            self.output_str(PlumbingCall::new(["write-tree"]).index_file(&index))
-        })();
-        let _ = std::fs::remove_file(&index);
-        result
+        // index-only operations; git still insists on a work tree
+        self.git.run(
+            PlumbingCall::new(["update-index", "-z", "--index-info"])
+                .work_tree(self.dir())
+                .index_file(index)
+                .stdin(&info),
+        )?;
+        self.output_str(PlumbingCall::new(["write-tree"]).index_file(index))
     }
 
     /// Commit the tracked-file tree and minimal metadata to ordinary history.
+    #[cfg(test)]
     pub(crate) fn write_checkpoint(
         &self,
         snapshot_tree: Option<&str>,
@@ -531,16 +661,22 @@ impl HistoryRepo {
             },
         };
         let record = checkpoint.for_commit();
-        let message = format!(
+        let mut message = format!(
             "{}\n\n{}{}",
             checkpoint.description,
             Self::RECORD_TRAILER,
             serde_json::to_string(&record)?
         );
+        // A separate trailer preserves compatibility with older clients,
+        // whose Mise-History JSON record rejects unknown fields.
+        if let Some(matcher) = checkpoint.tree.coverage.matcher {
+            message.push_str(&format!("\n{}{matcher}", Self::MATCHER_TRAILER));
+        }
         let parent = self.ref_oid(Self::HISTORY_REF)?;
         self.commit_tree(&tree, parent.as_deref().into_iter().collect(), &message)
     }
 
+    #[cfg(test)]
     fn advance_head(&self, commit: &str) -> Result<()> {
         // The commit's parent is the head observed when it was prepared.
         // A concurrent writer must never have its commit overwritten.
@@ -594,14 +730,14 @@ impl HistoryRepo {
         let commits = gix::traverse::commit::topo::Builder::new(&repo)
             .with_tips([head])
             .sorting(gix::traverse::commit::topo::Sorting::TopoOrder)
-            .build()?;
+            .build()
+            .map_err(gix::Exn::into_error)?;
         let mut messages = vec![];
         for commit in commits {
-            let commit = commit?;
+            let commit = commit.map_err(gix::Exn::into_error)?;
             let object = repo.find_commit(commit.id)?;
-            let message = String::from_utf8_lossy(object.message_raw()?.as_ref())
-                .trim()
-                .to_string();
+            let message = object.message_raw().map_err(gix::Exn::into_error)?;
+            let message = String::from_utf8_lossy(message.as_ref()).trim().to_string();
             messages.push((commit.id.to_string(), message));
         }
         Ok(messages)
@@ -612,13 +748,12 @@ impl HistoryRepo {
         READ_META_CALLS.with(|count| count.set(count.get() + 1));
         let repo = gix::open_opts(self.dir(), gix::open::Options::isolated())
             .wrap_err_with(|| format!("opening {} with gix", display_path(self.dir())))?;
-        let id = gix::ObjectId::from_hex(commit.as_bytes())?;
+        let id = gix::ObjectId::from_hex(commit.as_bytes()).map_err(gix::Exn::into_error)?;
         let commit_object = repo.find_commit(id)?;
         let tree = commit_object.tree()?;
         let manifest = super::manifest::Manifest::read_gix(&tree)?;
-        let message = String::from_utf8_lossy(commit_object.message_raw()?.as_ref())
-            .trim()
-            .to_string();
+        let message = commit_object.message_raw().map_err(gix::Exn::into_error)?;
+        let message = String::from_utf8_lossy(message.as_ref()).trim().to_string();
         let own_record = message
             .lines()
             .rev()
@@ -649,6 +784,13 @@ impl HistoryRepo {
             changes: Default::default(),
             operation: None,
         };
+        record.tree.coverage.matcher = message
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix(Self::MATCHER_TRAILER))
+            .map(str::parse)
+            .transpose()
+            .wrap_err_with(|| format!("reading history matcher version for {commit}"))?;
         record.created_at = commit_object
             .time()?
             .format(gix::date::time::format::ISO8601_STRICT)?;
@@ -720,14 +862,14 @@ impl HistoryRepo {
             let tracked = manifest.tracking()?;
             record.tree.modes.clear();
             let layout = super::sync::layout::Roots::current();
+            // only the record under the key that governs the path on this
+            // machine counts, the same key the pull planner applies: another
+            // stream's record for a directory whose governing stream has
+            // none (the default) is not this checkpoint's mode
             for (portable, bits) in &manifest.permissions {
                 if let Some(path) = layout.locate(portable).path()
-                    && tracked.entries.iter().any(|entry| {
-                        path.starts_with(&entry.path)
-                            && entry
-                                .tree_path(path)
-                                .is_ok_and(|mapped| mapped == *portable)
-                    })
+                    && super::tracked::governing_key(&layout, &tracked.entries, path).as_deref()
+                        == Some(portable)
                 {
                     record
                         .tree
@@ -739,6 +881,9 @@ impl HistoryRepo {
                 entries: tracked.entries.clone(),
                 ..Default::default()
             });
+            // The writer's matcher determines known absences; rebuilding
+            // metadata must not reinterpret an old snapshot as current.
+            coverage.matcher = record.tree.coverage.matcher;
             for entry in &mut coverage.entries {
                 entry.state = record
                     .tree
@@ -752,12 +897,25 @@ impl HistoryRepo {
             coverage
                 .incomplete
                 .append(&mut record.tree.coverage.incomplete);
+            // the nested list is the only record of a skipped repository —
+            // nothing is written to the tree for it — so it has to be
+            // carried forward like the other two
+            coverage.nested.append(&mut record.tree.coverage.nested);
             record.tree.coverage = coverage;
             let mut roots: BTreeMap<String, RootRecord> = BTreeMap::new();
             let layout = super::sync::layout::Roots::current();
             for file in Self::gix_tree_entries(&repo, &tree)? {
-                if layout.locate(&file.path).path().is_none() {
+                let located = layout.locate(&file.path);
+                let Some(path) = located.path() else {
                     continue;
+                };
+                // a gitlink is derivable from the tree, so the record needs
+                // no trailer field an older client would refuse to parse
+                if file.mode == "160000" {
+                    record.tree.coverage.nested.push(super::store::PathReason {
+                        path: crate::file::display_path(path),
+                        reason: super::tracked::NESTED_REPOSITORY_REASON.into(),
+                    });
                 }
                 let label = file.path.split('/').next().unwrap_or_default().to_string();
                 let root = roots.entry(label.clone()).or_insert_with(|| RootRecord {
@@ -844,7 +1002,7 @@ impl HistoryRepo {
     }
 
     /// Recursive listing of a tree (or a path inside it).
-    pub(crate) fn ls_tree(&self, spec: &str) -> Result<Vec<TreeEntry>> {
+    pub fn ls_tree(&self, spec: &str) -> Result<Vec<TreeEntry>> {
         let out = self
             .git
             .output(PlumbingCall::new(["ls-tree", "-r", "-l", "-z", spec]))?;
@@ -891,14 +1049,14 @@ impl HistoryRepo {
 
     /// An empty object of `kind` (`tree` or `blob`), written so it can stand
     /// in for a side of a diff where a path does not exist.
-    pub(crate) fn empty_object(&self, kind: &str) -> Result<String> {
+    pub fn empty_object(&self, kind: &str) -> Result<String> {
         match kind {
             "tree" => self.mktree(""),
             _ => self.hash_blob(b""),
         }
     }
 
-    pub(crate) fn cat_object(&self, oid: &str) -> Result<Vec<u8>> {
+    pub fn cat_object(&self, oid: &str) -> Result<Vec<u8>> {
         if let Some(bytes) = self.transient_blob(oid) {
             return Ok(bytes);
         }
@@ -976,7 +1134,7 @@ impl HistoryRepo {
     /// Compares two trees, from `a` to `b`. With `paths`, a path that exists
     /// on only one side is compared against an empty tree or blob so an
     /// added or removed path shows up as its whole contents.
-    pub(crate) fn diff(&self, a: &str, b: &str, opts: &DiffOpts) -> Result<DiffResult> {
+    pub fn diff(&self, a: &str, b: &str, opts: &DiffOpts) -> Result<DiffResult> {
         if !super::sync::files::encrypted_paths(self, Some(a))?.is_empty()
             || !super::sync::files::encrypted_paths(self, Some(b))?.is_empty()
         {
@@ -1193,7 +1351,7 @@ impl HistoryRepo {
     }
 
     /// The object at `path` inside `tree_ish`: its mode and oid.
-    pub(crate) fn object_at(&self, tree_ish: &str, path: &str) -> Result<Option<(String, String)>> {
+    pub fn object_at(&self, tree_ish: &str, path: &str) -> Result<Option<(String, String)>> {
         let output = self
             .git
             .output_unchecked(PlumbingCall::new(["ls-tree", "-z", tree_ish, "--", path]))?;
@@ -1254,56 +1412,50 @@ impl HistoryRepo {
         if overlays.is_empty() {
             return Ok(base.to_string());
         }
-        let index = self
-            .dir()
-            .join(format!("mise-index-{}-compose", std::process::id()));
-        let _ = std::fs::remove_file(&index);
-        let result = (|| -> Result<String> {
-            self.git
-                .run(PlumbingCall::new(["read-tree", base]).index_file(&index))?;
-            for overlay in overlays {
-                let listed = self.git.output(
-                    PlumbingCall::new(["ls-files", "-z", "--", &overlay.path]).index_file(&index),
-                )?;
-                let mut removals: Vec<u8> = vec![];
-                for entry in listed.split(|byte| *byte == 0) {
-                    if entry.is_empty() {
-                        continue;
-                    }
-                    removals.extend_from_slice(entry);
-                    removals.push(0);
+        let scratch = ScratchIndex::new(self.dir(), "compose");
+        let index = scratch.path();
+        self.git
+            .run(PlumbingCall::new(["read-tree", base]).index_file(index))?;
+        for overlay in overlays {
+            let listed = self.git.output(
+                PlumbingCall::new(["ls-files", "-z", "--", &overlay.path]).index_file(index),
+            )?;
+            let mut removals: Vec<u8> = vec![];
+            for entry in listed.split(|byte| *byte == 0) {
+                if entry.is_empty() {
+                    continue;
                 }
-                // index-only operations; git still insists on a work tree
-                if !removals.is_empty() {
+                removals.extend_from_slice(entry);
+                removals.push(0);
+            }
+            // index-only operations; git still insists on a work tree
+            if !removals.is_empty() {
+                self.git.run(
+                    PlumbingCall::new(["update-index", "--force-remove", "-z", "--stdin"])
+                        .work_tree(self.dir())
+                        .index_file(index)
+                        .stdin(&removals),
+                )?;
+            }
+            if let Some((mode, oid)) = &overlay.object {
+                if mode == "040000" {
+                    let prefix = format!("--prefix={}/", overlay.path);
                     self.git.run(
-                        PlumbingCall::new(["update-index", "--force-remove", "-z", "--stdin"])
+                        PlumbingCall::new(["read-tree", &prefix, oid])
                             .work_tree(self.dir())
-                            .index_file(&index)
-                            .stdin(&removals),
+                            .index_file(index),
+                    )?;
+                } else {
+                    let info = format!("{mode},{oid},{}", overlay.path);
+                    self.git.run(
+                        PlumbingCall::new(["update-index", "--add", "--cacheinfo", &info])
+                            .work_tree(self.dir())
+                            .index_file(index),
                     )?;
                 }
-                if let Some((mode, oid)) = &overlay.object {
-                    if mode == "040000" {
-                        let prefix = format!("--prefix={}/", overlay.path);
-                        self.git.run(
-                            PlumbingCall::new(["read-tree", &prefix, oid])
-                                .work_tree(self.dir())
-                                .index_file(&index),
-                        )?;
-                    } else {
-                        let info = format!("{mode},{oid},{}", overlay.path);
-                        self.git.run(
-                            PlumbingCall::new(["update-index", "--add", "--cacheinfo", &info])
-                                .work_tree(self.dir())
-                                .index_file(&index),
-                        )?;
-                    }
-                }
             }
-            self.output_str(PlumbingCall::new(["write-tree"]).index_file(&index))
-        })();
-        let _ = std::fs::remove_file(&index);
-        result
+        }
+        self.output_str(PlumbingCall::new(["write-tree"]).index_file(index))
     }
 
     /// The commit a ref points at, if the ref exists.
@@ -1351,7 +1503,12 @@ impl HistoryRepo {
         }
         args.push("-m".to_string());
         args.push(message.to_string());
-        self.output_str(PlumbingCall::new(args))
+        let email = super::config::git_email()?;
+        self.output_str(
+            PlumbingCall::new(args)
+                .env("GIT_AUTHOR_EMAIL", email.as_str())
+                .env("GIT_COMMITTER_EMAIL", email),
+        )
     }
 
     /// Moves `name` to `commit` only if it still points at `expected`
@@ -1724,6 +1881,48 @@ mod tests {
     }
 
     #[test]
+    fn rebuilding_preserves_the_writers_matcher_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = repo(tmp.path());
+        let manifest = super::super::manifest::Manifest {
+            enrollment: vec![super::super::manifest::Enrollment {
+                path: "home/.native".into(),
+                autosave: true,
+                encrypt: false,
+                allow_plaintext: None,
+                variants: vec![],
+                exclude: Some(vec!["sessions/**".into()]),
+                include: None,
+            }],
+            ..Default::default()
+        };
+        let tree = manifest
+            .write(&repo, &repo.empty_object("tree").unwrap())
+            .unwrap();
+        let current = super::super::tracked::MATCHER_VERSION;
+        for matcher in [None, Some(current), Some(current + 1)] {
+            let mut checkpoint =
+                crate::system::history::checkpoint::test_checkpoint("matcher", Some(&tree));
+            checkpoint.tree.coverage.matcher = matcher;
+            let commit = repo.write_checkpoint(Some(&tree), &checkpoint).unwrap();
+            let rebuilt = repo.read_meta(&commit).unwrap();
+            assert_eq!(rebuilt.tree.coverage.matcher, matcher);
+            let state = super::super::replay::classify_coverage(
+                &rebuilt.tree.coverage,
+                "~/.native/new.txt",
+            );
+            if matcher == Some(current) {
+                assert!(matches!(state, super::super::replay::PathState::Absent));
+            } else {
+                assert!(matches!(
+                    state,
+                    super::super::replay::PathState::Unevaluable(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn omitted_capture_paths_survive_rebuilding_from_git() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = repo(tmp.path());
@@ -1732,7 +1931,10 @@ mod tests {
                 path: "home/.native".into(),
                 autosave: true,
                 encrypt: false,
+                allow_plaintext: None,
                 variants: vec![],
+                exclude: None,
+                include: None,
             }],
             ..Default::default()
         };
@@ -1762,9 +1964,37 @@ mod tests {
                 path: crate::file::display_path(crate::dirs::HOME.join(".native/unreadable")),
                 reason: "scan limit".into(),
             });
+        // a repository the capture skipped: the trailer is frozen for
+        // released clients, so it cannot have a field of its own, and it
+        // travels as the omission it is. A machine that rebuilds from Git
+        // has to know about the skip — otherwise, once that directory
+        // loses its `.git`, its files look like ones this checkpoint held
+        // and did not have, and a rollback deletes them.
+        checkpoint
+            .tree
+            .coverage
+            .nested
+            .push(super::super::store::PathReason {
+                path: crate::file::display_path(crate::dirs::HOME.join(".native/plugin")),
+                reason: super::super::tracked::NESTED_REPOSITORY_REASON.into(),
+            });
         let commit = repo.write_checkpoint(Some(&tree), &checkpoint).unwrap();
         let rebuilt = repo.read_meta(&commit).unwrap();
-        assert_eq!(rebuilt.tree.coverage.omitted[0].path, "~/.native/large");
+        let omitted: Vec<_> = rebuilt
+            .tree
+            .coverage
+            .omitted
+            .iter()
+            .map(|item| item.path.as_str())
+            .collect();
+        assert!(
+            omitted.contains(&"~/.native/large"),
+            "omissions lost: {omitted:?}"
+        );
+        assert!(
+            omitted.contains(&"~/.native/plugin"),
+            "the skipped repository did not survive the round trip: {omitted:?}"
+        );
         assert_eq!(
             rebuilt.tree.coverage.incomplete[0].path,
             "~/.native/unreadable"
@@ -1864,6 +2094,96 @@ mod tests {
                 path: "home/large".into(),
             }]
         );
+    }
+
+    /// A checkpoint records a directory's mode only under the key that
+    /// governs it on this machine: another platform's containing record for
+    /// a directory whose own stream has no record (the default) is not this
+    /// checkpoint's mode, so a rollback does not recreate it private.
+    #[cfg(unix)]
+    #[test]
+    fn read_meta_takes_a_directory_mode_from_its_governing_stream_only() -> eyre::Result<()> {
+        use crate::system::files::{FileMode, FilePolicy};
+        use crate::system::history::checkpoint::test_checkpoint;
+        use crate::system::history::manifest::{Enrollment, Manifest};
+        use crate::system::history::sync::layout::Roots;
+        use crate::system::history::tracked::{TrackedEntry, normalize};
+
+        let state = tempfile::tempdir()?;
+        let Some(repo) = HistoryRepo::open_or_init_in(state.path())? else {
+            return Ok(());
+        };
+        let roots = Roots::current();
+        let scratch = tempfile::Builder::new()
+            .prefix(".history-read-meta-")
+            .tempdir_in(&roots.home)?;
+        let configs = normalize(scratch.path()).join("configs");
+        let private = configs.join("private");
+        std::fs::create_dir_all(&private)?;
+        let policy = FilePolicy::for_mode(FileMode::Track);
+        let outer = TrackedEntry::new(configs.clone(), "track", policy);
+        let mut inner = TrackedEntry::new(private.clone(), "track", policy);
+        inner.variant = Some("linux".into());
+        let blob = repo.hash_blob(b"{}")?;
+        let files = repo.compose(
+            &repo.empty_object("tree")?,
+            &[
+                Overlay {
+                    path: outer.tree_path(&private.join("settings.json"))?,
+                    object: Some(("100644".into(), blob.clone())),
+                },
+                Overlay {
+                    path: inner.tree_path(&private.join("notes"))?,
+                    object: Some(("100644".into(), blob)),
+                },
+            ],
+        )?;
+        let variant = |os: &str| crate::system::history::select::Variant {
+            os: vec![os.into()],
+            ..Default::default()
+        };
+        let enrollment = |path: String, variants| Enrollment {
+            path,
+            autosave: true,
+            encrypt: false,
+            allow_plaintext: None,
+            variants,
+            exclude: None,
+            include: None,
+        };
+        let containing = outer.tree_path(&private)?;
+        let permissions = std::collections::BTreeMap::from([(containing.clone(), 0o700)]);
+        // the directory is enrolled per platform with no record of its own;
+        // the retained record is another platform's, captured through the
+        // outer enrollment where the nested one is not selected
+        let nested = Manifest {
+            enrollment: vec![
+                enrollment(outer.tree_path(&configs)?, vec![]),
+                enrollment(containing.clone(), vec![variant("linux"), variant("macos")]),
+            ],
+            permissions: permissions.clone(),
+            ..Default::default()
+        };
+        let tree = nested.write(&repo, &files)?;
+        let commit = repo.write_checkpoint(Some(&tree), &test_checkpoint("nested", Some(&tree)))?;
+        let record = repo.read_meta(&commit)?;
+        assert!(
+            !record.tree.modes.contains_key(&display_path(&private)),
+            "{:?}",
+            record.tree.modes
+        );
+        // without the nested enrollment the outer stream governs the
+        // directory, and its record is this checkpoint's mode
+        let outer_only = Manifest {
+            enrollment: vec![enrollment(outer.tree_path(&configs)?, vec![])],
+            permissions,
+            ..Default::default()
+        };
+        let tree = outer_only.write(&repo, &files)?;
+        let commit = repo.write_checkpoint(Some(&tree), &test_checkpoint("outer", Some(&tree)))?;
+        let record = repo.read_meta(&commit)?;
+        assert_eq!(record.tree.modes.get(&display_path(&private)), Some(&0o700));
+        Ok(())
     }
 
     #[test]
@@ -2171,6 +2491,138 @@ mod tests {
                 .is_none()
         );
         assert!(repo.object_at(&without, "home/.zshrc").unwrap().is_some());
+    }
+
+    #[test]
+    fn concurrent_composition_keeps_every_overlay() {
+        if crate::git::plumbing_binary().is_none() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = repo(tmp.path());
+        let empty = repo.empty_object("tree").unwrap();
+        let blob = repo.hash_blob(b"held\n").unwrap();
+        // Each thread composes a snapshot of its own. A scratch index shared
+        // between them loses whatever one thread inserted before another
+        // reset it -- a sorted prefix of the paths, which a checkpoint then
+        // records as deliberate deletions and publishes to every machine.
+        const THREADS: usize = 3;
+        // every round starts composing at once, so the calls really do
+        // overlap instead of happening to be scheduled one after another
+        let start = std::sync::Barrier::new(THREADS);
+        let lost: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|thread| {
+                    let (repo, empty, blob) = (&repo, empty.as_str(), blob.as_str());
+                    let start = &start;
+                    scope.spawn(move || {
+                        let overlays: Vec<Overlay> = (0..8)
+                            .map(|n| Overlay {
+                                path: format!("home/{thread}/file-{n}"),
+                                object: Some(("100644".into(), blob.to_string())),
+                            })
+                            .collect();
+                        let mut lost = vec![];
+                        for _ in 0..3 {
+                            start.wait();
+                            let tree = match repo.compose(empty, &overlays) {
+                                Ok(tree) => tree,
+                                Err(err) => {
+                                    lost.push(format!("compose failed: {err:#}"));
+                                    continue;
+                                }
+                            };
+                            // never panic past the barrier: the other
+                            // threads would block on it and the failure
+                            // would surface as a hang instead
+                            let present: BTreeSet<String> = match repo.ls_tree(&tree) {
+                                Ok(entries) => {
+                                    entries.into_iter().map(|entry| entry.path).collect()
+                                }
+                                Err(err) => {
+                                    lost.push(format!("listing the tree failed: {err:#}"));
+                                    continue;
+                                }
+                            };
+                            lost.extend(
+                                overlays
+                                    .iter()
+                                    .map(|overlay| &overlay.path)
+                                    .filter(|path| !present.contains(*path))
+                                    .cloned(),
+                            );
+                        }
+                        lost
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        assert!(
+            lost.is_empty(),
+            "{} composed paths were lost, first: {}",
+            lost.len(),
+            lost[0]
+        );
+        let left: Vec<_> = std::fs::read_dir(repo.dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("mise-index-"))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "scratch indexes were left behind: {left:?}"
+        );
+    }
+
+    #[test]
+    fn abandoned_scratch_indexes_are_swept_and_live_ones_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = "00000000000000000000000000000001";
+        let live = format!("mise-index-{other}-compose-0");
+        let dead = format!("mise-index-{other}-compose-1");
+        let unowned = format!("mise-index-{other}-compose-2");
+        let starting = format!("mise-index-{other}-compose-3");
+        let unrelated = "packed-refs".to_string();
+        for name in [&live, &dead, &unowned, &unrelated] {
+            std::fs::write(dir.path().join(name), b"index").unwrap();
+        }
+        // git's own lock, left when it was killed writing the dead index
+        std::fs::write(dir.path().join(format!("{dead}.lock")), b"lock").unwrap();
+        // a composition whose process is gone released its owner file; one
+        // that is still running -- or suspended -- has not
+        for name in [&live, &dead] {
+            std::fs::write(dir.path().join(format!("{name}.owner")), b"").unwrap();
+        }
+        // a composition that has created its owner file but has not taken
+        // the lock yet, so git has not written its index either
+        std::fs::write(dir.path().join(format!("{starting}.owner")), b"").unwrap();
+        let _held = crate::lock_file::LockFile::at(&dir.path().join(format!("{live}.owner")))
+            .try_lock()
+            .unwrap()
+            .expect("the owner file starts unlocked");
+
+        sweep_scratch_indexes(dir.path());
+
+        let gone = |name: &str| !dir.path().join(name).exists();
+        assert!(gone(&dead), "an abandoned index was kept");
+        assert!(gone(&format!("{dead}.owner")), "its owner file was kept");
+        assert!(gone(&format!("{dead}.lock")), "its git lock was kept");
+        assert!(!gone(&live), "a running composition's index was swept");
+        assert!(
+            !gone(&format!("{live}.owner")),
+            "a running composition's owner file was swept"
+        );
+        assert!(!gone(&unowned), "an index with no owner file was swept");
+        assert!(
+            !gone(&format!("{starting}.owner")),
+            "the owner file of a composition still starting up was swept"
+        );
+        assert!(!gone(&unrelated), "an unrelated file was swept");
     }
 
     #[test]

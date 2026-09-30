@@ -31,9 +31,7 @@ use crate::ui::progress_report::{ProgressIcon, SingleReport};
 
 mod api;
 mod cask;
-mod elf;
 mod fetch;
-mod macho;
 mod maintenance;
 mod pour;
 mod prefix;
@@ -43,15 +41,17 @@ mod source;
 mod tag;
 mod tap;
 
-pub(crate) struct BrewManager {}
-pub(crate) use cask::{
+#[derive(Default)]
+pub struct BrewManager {}
+pub use api::failed_formula_name;
+pub use cask::{
     BrewCaskManager, apply_cask_prune_plan, cask_formula_dependencies, cask_prune_plan,
 };
-pub(crate) use maintenance::{apply_prune_plan, default_tap_url, linked_formulae, prune_plan};
+pub use maintenance::{apply_prune_plan, default_tap_url, linked_formulae, prune_plan};
 
 /// Resolve a canonical formula name or owner/tap/name to its installed opt path using local records.
 /// Qualified names identify the rack by their final component; aliases and tap provenance are not resolved.
-pub(crate) fn package_root(name: &str) -> Result<PathBuf> {
+pub fn package_root(name: &str) -> Result<PathBuf> {
     let parts = name.split('/').collect::<Vec<_>>();
     if !matches!(parts.len(), 1 | 3)
         || parts.iter().any(|part| {
@@ -85,7 +85,7 @@ fn is_normal_formula_component(name: &str) -> bool {
 }
 
 impl BrewManager {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {}
     }
 
@@ -131,10 +131,12 @@ impl BrewManager {
         for rf in &closure {
             if rf.on_request
                 && !roots.contains(&rf.formula.name)
-                && let Some(alias) = roots.iter().find(|r| rf.formula.aliases.contains(r))
+                && let Some(alias) = roots
+                    .iter()
+                    .find(|r| rf.formula.names().any(|n| n == r.as_str()))
             {
                 warn!(
-                    "'{alias}' is an alias of '{}' — use the canonical name in [bootstrap.packages] \
+                    "'{alias}' resolves to '{}' — use the canonical name in [bootstrap.packages] \
                      so `mise bootstrap packages status` can track it",
                     rf.formula.name
                 );
@@ -431,6 +433,7 @@ impl SystemPackageManager for BrewManager {
             statuses.push(PackageStatus {
                 request: req.clone(),
                 state,
+                display_name: None,
             });
         }
         Ok(statuses)

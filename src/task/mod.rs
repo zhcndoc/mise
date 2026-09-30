@@ -1,8 +1,8 @@
-use crate::cli::args::{BackendArg, ToolArg};
+use crate::args::{BackendArg, ToolArg};
 use crate::config::config_file::mise_toml::{EnvList, ParsedToolMap, deserialize_vars};
 use crate::config::config_file::toml::{TrackingTomlParser, deserialize_arr};
 use crate::config::env_directive::{EnvDirective, EnvResolveOptions, EnvResults, ToolsFilter};
-use crate::config::{self, Config};
+use crate::config::{self, Config, SettingsExt};
 use crate::path_env::PathEnv;
 use crate::task::task_script_parser::TaskScriptParser;
 use crate::tera::{TeraEngine, contains_template_syntax, get_tera, render_str};
@@ -17,7 +17,7 @@ use petgraph::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::iter::once;
@@ -42,48 +42,46 @@ pub(crate) fn reset() {
 pub(crate) type FailedTasks = Arc<std::sync::Mutex<Vec<(Task, Option<i32>)>>>;
 
 mod deps;
-pub(crate) mod task_cache;
+pub mod task_cache;
 mod task_cache_audit;
 mod task_cache_store;
 pub(crate) mod task_confirm;
-pub(crate) mod task_context_builder;
+pub mod task_context_builder;
 mod task_dep;
-pub(crate) mod task_executor;
-pub(crate) mod task_fetcher;
+pub mod task_executor;
+pub mod task_fetcher;
 pub(crate) mod task_file_providers;
-pub(crate) mod task_helpers;
-pub(crate) mod task_list;
+pub mod task_helpers;
+pub mod task_list;
 mod task_load_context;
-pub(crate) mod task_output;
-pub(crate) mod task_output_handler;
-pub(crate) mod task_results_display;
-pub(crate) mod task_scheduler;
+pub mod task_output;
+pub mod task_output_handler;
+pub mod task_results_display;
+pub mod task_scheduler;
 mod task_script_parser;
-pub(crate) mod task_source_checker;
+pub mod task_source_checker;
 pub(crate) mod task_sources;
 pub(crate) mod task_template;
-pub(crate) mod task_tool_installer;
+pub mod task_tool_installer;
 // Some graph traversal APIs are currently consumed only by tests and follow-up
 // workspace-task features.
 #[allow(dead_code)]
-pub(crate) mod workspace;
+pub mod workspace;
 
 pub(crate) use task_cache::TaskCacheOutput;
-pub(crate) use task_cache::{TaskArtifactCache, TaskCacheConfig, TaskCacheMode};
+pub use task_cache::{TaskArtifactCache, TaskCacheConfig, TaskCacheMode};
 pub(crate) use task_cache_audit::TaskCacheAudit;
 pub(crate) use task_confirm::TaskConfirm;
 pub(crate) use task_load_context::monorepo_scope;
-pub(crate) use task_load_context::{
-    TaskLoadContext, expand_colon_task_syntax, is_workspace_project_task,
-};
-pub(crate) use task_output::TaskOutput;
-pub(crate) use task_script_parser::{has_any_args_defined, has_any_usage_spec};
+pub use task_load_context::{TaskLoadContext, expand_colon_task_syntax, is_workspace_project_task};
+pub use task_output::{TaskOutput, TaskOutputExt};
+pub use task_script_parser::{has_any_args_defined, has_any_usage_spec};
 pub(crate) use task_template::TaskTemplate;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[doc(hidden)]
-pub(crate) enum TaskRunPhase {
+pub enum TaskRunPhase {
     #[default]
     Normal,
     Post,
@@ -101,7 +99,7 @@ impl Task {
         self
     }
 
-    pub(crate) fn graph_display_name(&self) -> String {
+    pub fn graph_display_name(&self) -> String {
         match self.run_phase {
             TaskRunPhase::Normal => self.display_name.clone(),
             TaskRunPhase::Post => format!("{} (post)", self.display_name),
@@ -115,7 +113,7 @@ use crate::file::display_path;
 use crate::fuzzy::{FuzzyMatcher, FuzzyPattern};
 use crate::toolset::{ToolRequest, ToolSource, ToolVersionOptions, Toolset};
 use crate::ui::style;
-pub(crate) use deps::{Deps, TaskCompletionState, TaskCycleError, TaskDependencyState, TaskKey};
+pub use deps::{Deps, TaskCompletionState, TaskCycleError, TaskDependencyState, TaskKey};
 use task_dep::TaskDep;
 use task_sources::{RawOutputTemplates, TaskOutputs};
 
@@ -124,7 +122,7 @@ use task_sources::{RawOutputTemplates, TaskOutputs};
 /// (e.g., { version = "1.0.0", targets = ["x86_64"] })
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
-pub(crate) enum TaskToolValue {
+pub enum TaskToolValue {
     String(String),
     Map(TaskToolValueMap),
 }
@@ -172,7 +170,7 @@ impl<'de> Deserialize<'de> for TaskToolValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct TaskToolValueMap {
+pub struct TaskToolValueMap {
     pub version: String,
     #[serde(flatten)]
     pub opts: IndexMap<String, toml::Value>,
@@ -299,7 +297,7 @@ impl TaskToolValue {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum RunEntry {
+pub enum RunEntry {
     /// Shell script entry
     Script(String),
     /// Run a single task with optional args and env
@@ -409,7 +407,7 @@ impl RunEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub(crate) enum Silent {
+pub enum Silent {
     #[default]
     Off,
     Bool(bool),
@@ -567,7 +565,7 @@ impl Display for RunEntry {
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct TaskWatchOptions {
+pub struct TaskWatchOptions {
     /// Ignore VCS ignore files such as `.gitignore` when running `mise watch`.
     pub no_vcs_ignore: bool,
 }
@@ -590,7 +588,7 @@ impl Default for TaskRustCacheOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TaskRustCacheConfig {
+pub struct TaskRustCacheConfig {
     pub enabled: bool,
 }
 
@@ -638,9 +636,39 @@ impl<'de> Deserialize<'de> for TaskRustCacheConfig {
     }
 }
 
+/// Project daemons a task requires: `true` for every daemon declared in the
+/// project, or an explicit name or list of names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TaskDaemons {
+    All(bool),
+    One(String),
+    Names(Vec<String>),
+}
+
+impl TaskDaemons {
+    /// The names written in the declaration. Empty for `true` and `false`,
+    /// which name no daemon.
+    pub fn names(&self) -> &[String] {
+        match self {
+            Self::All(_) => &[],
+            Self::One(name) => std::slice::from_ref(name),
+            Self::Names(names) => names.as_slice(),
+        }
+    }
+
+    fn names_mut(&mut self) -> &mut [String] {
+        match self {
+            Self::All(_) => &mut [],
+            Self::One(name) => std::slice::from_mut(name),
+            Self::Names(names) => names.as_mut_slice(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Task {
+pub struct Task {
     /// Internal execution occurrence. A task referenced as both a regular and
     /// post dependency must run once in each phase.
     #[serde(skip)]
@@ -669,6 +697,10 @@ pub(crate) struct Task {
     pub confirm: Option<TaskConfirm>,
     #[serde(default, deserialize_with = "deserialize_arr")]
     pub depends: Vec<TaskDep>,
+    /// Project daemons that must be running and ready before this task's body
+    /// starts. Skipped along with dependencies under `--skip-deps`.
+    #[serde(default)]
+    pub daemons: Option<TaskDaemons>,
     #[serde(default, deserialize_with = "deserialize_arr")]
     pub depends_post: Vec<TaskDep>,
     #[serde(default, deserialize_with = "deserialize_arr")]
@@ -1093,18 +1125,92 @@ pub(crate) fn file_has_decoded_template(path: &Path, body: &str) -> bool {
     }
 }
 
+#[cfg(test)]
 fn parse_task_script_usage(file: &Path) -> usage::Result<usage::Spec> {
+    parse_task_script_usage_with_env(file, None)
+}
+
+fn parse_task_script_usage_with_env(
+    file: &Path,
+    env: Option<&EnvMap>,
+) -> usage::Result<usage::Spec> {
     let script = std::fs::read_to_string(file)?;
     // Same reason as the `#MISE` header scan: `#USAGE` on line 1 is invisible behind a mark.
     let raw = extract_usage_from_comments(crate::file::strip_utf8_bom(&script));
     if raw.trim().is_empty() {
         return usage::Spec::parse_script(file);
     }
-    parse_task_usage_raw(file, &hoist_root_usage_mounts(&raw).unwrap_or(raw))
+    parse_task_usage_raw(file, &hoist_root_usage_mounts(&raw).unwrap_or(raw), env)
 }
 
-fn parse_task_usage_raw(file: &Path, raw: &str) -> usage::Result<usage::Spec> {
-    let mut spec: usage::Spec = raw.parse()?;
+/// Render a usage spec failure with the detail its `Display` leaves behind.
+///
+/// `UsageErr::InvalidInput` displays as the bare "Invalid usage config" whatever went wrong:
+/// the message naming it, the offending span and the spec text itself all live in the
+/// diagnostic, which neither eyre nor a derived `Debug` asks for. Going through the reporter
+/// is what turns a spec error back into something that names a line.
+pub(crate) fn render_usage_err(err: usage::error::UsageErr) -> String {
+    format!("{:?}", usage::miette::Error::from(err))
+}
+
+/// Parse a task's `usage` field, naming the task and what was wrong with its spec.
+pub(crate) fn parse_task_usage_field(task_name: &str, spec: &str) -> Result<usage::Spec> {
+    spec.parse::<usage::Spec>().map_err(|err| {
+        eyre!(
+            "invalid usage spec for task '{task_name}'\n{}",
+            render_usage_err(err)
+        )
+    })
+}
+
+/// Parse a task script's usage spec, failing when the spec itself does not parse.
+///
+/// A script that cannot be read still warns and yields an empty spec: that is not a spec
+/// problem, and `mise tasks validate` reports a missing task file on its own.
+fn parse_task_script_usage_checked(file: &Path, env: Option<&EnvMap>) -> Result<usage::Spec> {
+    match parse_task_script_usage_with_env(file, env) {
+        Ok(spec) => Ok(spec),
+        // Reading the script is the first thing this does, and a script that was discovered
+        // and has since been deleted or made unreadable fails there. Calling that an invalid
+        // spec sends the reader to look at lines that are fine.
+        Err(usage::error::UsageErr::IO(err)) => {
+            warn!(
+                "could not read task file {}: {err}",
+                file::display_path(file)
+            );
+            Ok(usage::Spec::default())
+        }
+        Err(err) => Err(eyre!(
+            "invalid usage spec in task file {}\n{}",
+            file::display_path(file),
+            render_usage_err(err)
+        )),
+    }
+}
+
+/// Parse a task script's usage spec, warning with the detail and falling back to an empty spec.
+///
+/// A file task's spec failing must not take the whole task load down, the same way one
+/// unrecognised `#MISE` key does not: every task in the project is parsed in one loop.
+fn parse_task_script_usage_or_warn(file: &Path, env: Option<&EnvMap>) -> usage::Spec {
+    parse_task_script_usage_checked(file, env).unwrap_or_else(|err| {
+        warn!("{err}");
+        usage::Spec::default()
+    })
+}
+
+fn parse_task_usage_raw(
+    file: &Path,
+    raw: &str,
+    env: Option<&EnvMap>,
+) -> usage::Result<usage::Spec> {
+    let mut spec = match env {
+        Some(env) => {
+            let env: HashMap<_, _> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            usage::Spec::parse_str_with_path_and_env(raw, file, &env)?
+        }
+        None => usage::Spec::parse_str_with_path(raw, file)?,
+    };
     if spec.bin.is_empty()
         && let Some(name) = file.file_name().and_then(|n| n.to_str())
     {
@@ -1255,7 +1361,7 @@ fn normalize_root_mount_node(line: &str) -> String {
     }
 }
 
-pub(crate) fn usage_command_for_args<'a>(
+pub fn usage_command_for_args<'a>(
     spec: &'a usage::Spec,
     args: &[String],
 ) -> &'a usage::SpecCommand {
@@ -1332,20 +1438,20 @@ impl Task {
         }
     }
 
-    pub(crate) fn config_sources(&self) -> Vec<&Path> {
+    pub fn config_sources(&self) -> Vec<&Path> {
         once(self.config_source.as_path())
             .chain(self.additional_config_sources.iter().map(PathBuf::as_path))
             .collect()
     }
 
-    pub(crate) fn tool_args(&self) -> Result<Vec<ToolArg>> {
+    pub fn tool_args(&self) -> Result<Vec<ToolArg>> {
         self.tools
             .iter()
             .map(|(tool, value)| value.to_tool_arg(tool))
             .collect()
     }
 
-    pub(crate) fn new(path: &Path, prefix: &Path, config_root: &Path) -> Result<Task> {
+    pub fn new(path: &Path, prefix: &Path, config_root: &Path) -> Result<Task> {
         Ok(Self {
             name: name_from_path(prefix, path)?,
             config_source: path.to_path_buf(),
@@ -1354,7 +1460,7 @@ impl Task {
         })
     }
 
-    pub(crate) async fn from_path(
+    pub async fn from_path(
         config: &Arc<Config>,
         path: &Path,
         prefix: &Path,
@@ -1405,6 +1511,11 @@ impl Task {
         // trace!("task info: {:#?}", info);
 
         task.description = p.parse_str("description").unwrap_or_default();
+        // The loaders that build file tasks call `resolve_task_template` on the result, so a
+        // template named here is applied the same way a `mise.toml` task's `extends` is. Only
+        // the header parser was missing the field, which made `#MISE extends="..."` an unknown
+        // key: warned about and dropped.
+        task.extends = p.parse_str("extends");
         // Check for multiple alias fields before parsing
         let alias_fields: Vec<&str> = ["alias", "aliases"]
             .iter()
@@ -1433,6 +1544,13 @@ impl Task {
             })
             .transpose()?;
         task.depends = parse_task_dependencies(&mut p, "depends")?;
+        task.daemons = p
+            .get_raw("daemons")
+            .map(|v| {
+                TaskDaemons::deserialize(v.clone())
+                    .map_err(|e| eyre!("failed to parse daemons field in task header: {e}"))
+            })
+            .transpose()?;
         task.depends_post = parse_task_dependencies(&mut p, "depends_post")?;
         task.wait_for = parse_task_dependencies(&mut p, "wait_for")?;
         task.env = p.parse_env("env")?.unwrap_or_default();
@@ -1568,7 +1686,7 @@ impl Task {
         }
     }
 
-    pub(crate) fn is_match(&self, pat: &str) -> bool {
+    pub fn is_match(&self, pat: &str) -> bool {
         if self.name == pat || self.aliases.contains(&pat.to_string()) {
             return true;
         }
@@ -1601,7 +1719,7 @@ impl Task {
         matches || self.aliases.contains(&pat.to_string())
     }
 
-    pub(crate) async fn task_dir() -> Result<PathBuf> {
+    pub async fn task_dir() -> Result<PathBuf> {
         let config = Config::get().await?;
         let cwd = dirs::CWD.clone().unwrap_or_default();
         let project_root = config.project_root.clone().unwrap_or(cwd);
@@ -1628,7 +1746,7 @@ impl Task {
         }
     }
 
-    pub(crate) fn run(&self) -> &Vec<RunEntry> {
+    pub fn run(&self) -> &Vec<RunEntry> {
         if cfg!(windows) && !self.run_windows.is_empty() {
             &self.run_windows
         } else {
@@ -2021,15 +2139,11 @@ impl Task {
             clear_usage_env(&mut env);
         }
         let (mut spec, scripts) = if let Some(file) = self.file_path(config).await? {
-            let spec = parse_task_script_usage(&file)
-                .inspect_err(|e| {
-                    warn!(
-                        "failed to parse task file {} with usage: {e:?}",
-                        file::display_path(&file)
-                    )
-                })
-                .unwrap_or_default();
-            (spec, vec![])
+            let include_env = self.usage_include_env(config, &file);
+            (
+                parse_task_script_usage_or_warn(&file, Some(&include_env)),
+                vec![],
+            )
         } else {
             let scripts_only = self.run_script_strings();
             let parser_dir = match cwd {
@@ -2088,20 +2202,33 @@ impl Task {
     }
 
     /// Parse usage spec for display purposes without expensive environment rendering
-    pub(crate) async fn parse_usage_spec_for_display(
+    pub async fn parse_usage_spec_for_display(&self, config: &Arc<Config>) -> Result<usage::Spec> {
+        self.parse_usage_spec_for_display_inner(config, false).await
+    }
+
+    /// Parse usage spec like [`Self::parse_usage_spec_for_display`], except that a file task
+    /// whose `#USAGE` spec does not parse is an error rather than a warning and an empty spec.
+    /// Checking the spec is what `mise tasks validate` is for.
+    pub async fn parse_usage_spec_for_validation(
         &self,
         config: &Arc<Config>,
     ) -> Result<usage::Spec> {
+        self.parse_usage_spec_for_display_inner(config, true).await
+    }
+
+    async fn parse_usage_spec_for_display_inner(
+        &self,
+        config: &Arc<Config>,
+        strict: bool,
+    ) -> Result<usage::Spec> {
         let dir = self.dir(config).await?;
         let mut spec = if let Some(file) = self.file_path(config).await? {
-            parse_task_script_usage(&file)
-                .inspect_err(|e| {
-                    warn!(
-                        "failed to parse task file {} with usage: {e:?}",
-                        file::display_path(&file)
-                    )
-                })
-                .unwrap_or_default()
+            let env = self.usage_include_env(config, &file);
+            if strict {
+                parse_task_script_usage_checked(&file, Some(&env))?
+            } else {
+                parse_task_script_usage_or_warn(&file, Some(&env))
+            }
         } else {
             let scripts_only = self.run_script_strings();
             TaskScriptParser::new(dir)
@@ -2121,14 +2248,8 @@ impl Task {
         config: &Arc<Config>,
     ) -> Result<usage::Spec> {
         let mut spec = if let Some(file) = self.file_path_raw() {
-            parse_task_script_usage(&file)
-                .inspect_err(|e| {
-                    warn!(
-                        "failed to parse task file {} with usage: {e:?}",
-                        file::display_path(&file)
-                    )
-                })
-                .unwrap_or_default()
+            let env = self.usage_include_env(config, &file);
+            parse_task_script_usage_or_warn(&file, Some(&env))
         } else {
             let scripts_only = self.run_script_strings();
             TaskScriptParser::new(self.config_root.clone())
@@ -2138,6 +2259,27 @@ impl Task {
         self.populate_spec_metadata(&mut spec);
         self.populate_usage_about(&mut spec);
         Ok(spec)
+    }
+
+    fn usage_include_env(&self, config: &Config, file: &Path) -> EnvMap {
+        let mut env = env::PRISTINE_ENV.clone();
+        let path = task_executor::task_env_path;
+        env.insert("MISE_TASK_FILE".to_string(), path(file));
+        if let Some(dir) = file.parent() {
+            env.insert("MISE_TASK_DIR".to_string(), path(dir));
+        }
+        if let Some(root) = &self.config_root {
+            env.insert("MISE_CONFIG_ROOT".to_string(), path(root));
+        }
+        let project_root = if self.global || self.is_remote() {
+            config.project_root.as_ref().or(self.config_root.as_ref())
+        } else {
+            self.config_root.as_ref().or(config.project_root.as_ref())
+        };
+        if let Some(root) = project_root {
+            env.insert("MISE_PROJECT_ROOT".to_string(), path(root));
+        }
+        env
     }
 
     pub(crate) fn validate_template_syntax_for_preflight(&self, input: &str) -> Result<()> {
@@ -2191,7 +2333,7 @@ impl Task {
         }
     }
 
-    pub(crate) async fn render_markdown(&self, config: &Arc<Config>) -> Result<String> {
+    pub async fn render_markdown(&self, config: &Arc<Config>) -> Result<String> {
         let mut spec = self.parse_usage_spec_for_display(config).await?;
         if spec.about.is_some() && spec.cmd.help.as_deref() == Some(self.description.as_str()) {
             spec.cmd.help = None;
@@ -2202,11 +2344,11 @@ impl Task {
         Ok(ctx.render_spec()?)
     }
 
-    pub(crate) fn estyled_prefix(&self) -> String {
+    pub fn estyled_prefix(&self) -> String {
         style::prefix(self.prefix(), &self.display_name, true)
     }
 
-    pub(crate) async fn dir(&self, config: &Arc<Config>) -> Result<Option<PathBuf>> {
+    pub async fn dir(&self, config: &Arc<Config>) -> Result<Option<PathBuf>> {
         if let Some(dir) = self.dir.clone().or_else(|| {
             self.cf(config)
                 .as_ref()
@@ -2468,6 +2610,7 @@ impl Task {
             .map(|directive| (directive, self.config_source.clone()))
             .collect();
         directives.extend(self.overlay_vars.iter().cloned());
+        directives = bind_literal_vars_first(directives);
         let template_env: EnvMap = tera_ctx
             .get("env")
             .and_then(|v| serde::Deserialize::deserialize(v.clone()).ok())
@@ -2503,7 +2646,7 @@ impl Task {
         Ok(vars)
     }
 
-    pub(crate) fn cf<'a>(&'a self, config: &'a Config) -> Option<&'a Arc<dyn ConfigFile>> {
+    pub fn cf<'a>(&'a self, config: &'a Config) -> Option<&'a Arc<dyn ConfigFile>> {
         // For monorepo tasks, use the stored config file reference
         if let Some(ref cf) = self.cf {
             return Some(cf);
@@ -2615,6 +2758,12 @@ impl Task {
         self.depends.extend(other.depends);
         self.depends_post.extend(other.depends_post);
         self.wait_for.extend(other.wait_for);
+        // A `[tasks.<name>] daemons` overlay replaces the file task's own
+        // declaration rather than extending it, so a `true` or a shorter list
+        // in the overlay means what it says.
+        if other.daemons.is_some() {
+            self.daemons = other.daemons;
+        }
         if other.dir.is_some() {
             self.dir = other.dir;
         }
@@ -2713,6 +2862,7 @@ impl Task {
             || contains_template_syntax(&self.description)
             || self.sources.iter().any(|s| contains_template_syntax(s))
             || self.outputs.has_tera_template()
+            || daemons_have_template(self.daemons.as_ref())
             || deps_have_template(&self.depends)
             || deps_have_template(&self.depends_post)
             || deps_have_template(&self.wait_for)
@@ -2793,6 +2943,7 @@ impl Task {
         render_task_deps(&mut self.depends, &mut tera, &tera_ctx, true)?;
         render_task_deps(&mut self.depends_post, &mut tera, &tera_ctx, true)?;
         render_task_deps(&mut self.wait_for, &mut tera, &tera_ctx, true)?;
+        render_task_daemons(self.daemons.as_mut(), &mut tera, &tera_ctx, true)?;
         if let Some(dir) = &mut self.dir
             && contains_template_syntax(dir)
         {
@@ -2837,7 +2988,7 @@ impl Task {
     /// Re-render runtime templates with usage args/flags from this task invocation.
     /// Sources and outputs must be resolved before freshness/cache checks, while
     /// dependencies must be resolved before constructing the execution graph.
-    pub(crate) fn has_usage_runtime_templates(&self) -> bool {
+    pub fn has_usage_runtime_templates(&self) -> bool {
         let has_usage_deps = |raw: &Option<Vec<TaskDep>>| {
             raw.as_ref()
                 .is_some_and(|deps| deps.iter().any(dep_has_usage_ref))
@@ -2853,9 +3004,13 @@ impl Task {
         }) || has_usage_deps(&self.depends_raw)
             || has_usage_deps(&self.depends_post_raw)
             || has_usage_deps(&self.wait_for_raw)
+            || self
+                .daemons
+                .as_ref()
+                .is_some_and(|d| d.names().iter().any(|n| tera_template_has_usage_ref(n)))
     }
 
-    pub(crate) async fn render_runtime_templates_with_usage(
+    pub async fn render_runtime_templates_with_usage(
         &mut self,
         config: &Arc<Config>,
         usage_values: &IndexMap<String, tera::Value>,
@@ -2926,10 +3081,14 @@ impl Task {
             self.wait_for = raw.clone();
             render_task_deps(&mut self.wait_for, &mut tera, &tera_ctx, false)?;
         }
+        // Daemon names are plain strings, so the first pass left a name holding
+        // a usage reference literal and this one renders it in place; there is
+        // no parsed form to restore from.
+        render_task_daemons(self.daemons.as_mut(), &mut tera, &tera_ctx, false)?;
         Ok(())
     }
 
-    pub(crate) fn name_to_path(&self) -> PathBuf {
+    pub fn name_to_path(&self) -> PathBuf {
         self.name.replace(':', path::MAIN_SEPARATOR_STR).into()
     }
 
@@ -2938,7 +3097,7 @@ impl Task {
     /// A file task's `name` keeps its file's extension while everything else about the task drops
     /// it, so the two spellings disagree for exactly the tasks that come from a file. Anything
     /// naming a file *after* the task -- a task stub, say -- wants this one.
-    pub(crate) fn display_name_to_path(&self) -> PathBuf {
+    pub fn display_name_to_path(&self) -> PathBuf {
         self.display_name
             .replace(':', path::MAIN_SEPARATOR_STR)
             .into()
@@ -3031,6 +3190,122 @@ impl Task {
     }
 }
 
+/// Bind a task's literal vars before resolving the rest of them.
+///
+/// A task's vars are the concatenation of every layer that contributed one: a task template
+/// named with `extends`, a workspace-root task default, a `[tasks.<name>]` overlay on a file
+/// task, and the task's own table. Each directive renders against the vars resolved before it,
+/// so a var written in one layer could not read a value a later layer supplied. Most visibly,
+/// a var defined by a task template could not read the value the task passed it and silently
+/// fell back to its `default()` instead.
+///
+/// Resolving the literal values up front removes that ordering dependence without changing
+/// which value wins. A name is only hoisted when every directive that assigns it and actually
+/// runs is a plain literal from the same config file; the last of those is the one that wins
+/// today, and it still does, since it moves to the front and the copies it already overrode
+/// are dropped with it. Sharing a config file matters because [`EnvResults::resolve`] drops
+/// directives by their source in safe mode, so hoisting an assignment the resolver then drops
+/// would delete the copies that would have run.
+///
+/// This reads the list the way [`Task::resolve_task_vars`] resolves it, with
+/// [`ToolsFilter::NonToolsOnly`]: a `tools = true` directive never runs, so it neither wins a
+/// name nor keeps a literal that does run from being hoisted past it.
+fn bind_literal_vars_first(
+    directives: Vec<(EnvDirective, PathBuf)>,
+) -> Vec<(EnvDirective, PathBuf)> {
+    /// The var this directive assigns, or `None` when it can assign names not known until it
+    /// runs — a dotenv file, a sourced script, a module.
+    fn assigned_name(directive: &EnvDirective) -> Option<&str> {
+        match directive {
+            EnvDirective::Val(k, _, _)
+            | EnvDirective::Default(k, _, _)
+            | EnvDirective::Rm(k, _)
+            | EnvDirective::Required(k, _)
+            | EnvDirective::Age { key: k, .. } => Some(k),
+            EnvDirective::File(..)
+            | EnvDirective::Path(..)
+            | EnvDirective::Source(..)
+            | EnvDirective::Module(..)
+            | EnvDirective::PythonVenv { .. } => None,
+        }
+    }
+
+    /// A directive [`ToolsFilter::NonToolsOnly`] discards, so nothing it says about a name
+    /// counts: it is invisible to every rule below and stays where it is.
+    fn never_runs(directive: &EnvDirective) -> bool {
+        directive.options().tools
+    }
+
+    /// A value that renders to itself and records nothing else, so where it resolves cannot
+    /// change what it produces. A redacted literal is excluded: dropping the copies it
+    /// overrode would drop their redactions with them.
+    fn is_plain_literal(directive: &EnvDirective) -> bool {
+        matches!(
+            directive,
+            EnvDirective::Val(_, value, opts)
+                if !contains_template_syntax(value) && opts.redact.is_none()
+        )
+    }
+
+    let mut running = directives
+        .iter()
+        .filter(|(directive, _)| !never_runs(directive))
+        .peekable();
+    // One directive that assigns names we cannot see is enough to make any reordering
+    // unsound: it could be the assignment that wins for a name we were about to hoist.
+    if running
+        .clone()
+        .any(|(directive, _)| assigned_name(directive).is_none())
+    {
+        return directives;
+    }
+    // Nothing that runs can read a var, so the order the literals resolve in cannot matter.
+    if running.all(|(directive, _)| is_plain_literal(directive)) {
+        return directives;
+    }
+
+    // Per name, the literal to hoist and the file it came from, or `None` once anything
+    // disqualifies the name.
+    let mut winners: IndexMap<&str, Option<(usize, &Path)>> = IndexMap::new();
+    for (i, (directive, source)) in directives.iter().enumerate() {
+        if never_runs(directive) {
+            continue;
+        }
+        let Some(name) = assigned_name(directive) else {
+            continue;
+        };
+        let winner = match winners.get(name).copied() {
+            None => is_plain_literal(directive).then_some((i, source.as_path())),
+            Some(None) => None,
+            Some(Some((_, first_source))) => (is_plain_literal(directive)
+                && first_source == source.as_path())
+            .then_some((i, source.as_path())),
+        };
+        winners.insert(name, winner);
+    }
+    let hoisted: HashSet<String> = winners
+        .iter()
+        .filter(|(_, winner)| winner.is_some())
+        .map(|(name, _)| name.to_string())
+        .collect();
+    let prelude: Vec<(EnvDirective, PathBuf)> = winners
+        .values()
+        .flatten()
+        .map(|&(i, _)| directives[i].clone())
+        .collect();
+    if prelude.is_empty() {
+        return directives;
+    }
+
+    prelude
+        .into_iter()
+        .chain(directives.into_iter().filter(|(directive, _)| {
+            never_runs(directive)
+                || !assigned_name(directive).is_some_and(|name| hoisted.contains(name))
+        }))
+        .collect()
+}
+
 pub(crate) fn clear_usage_env(env: &mut EnvMap) {
     env.retain(|key, _| !is_usage_env_key(key));
 }
@@ -3097,7 +3372,7 @@ fn name_from_path(prefix: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<St
 /// e.g., "//projects/frontend:test" -> Some("projects/frontend")
 /// e.g., "//projects/frontend:test:nested" -> Some("projects/frontend")
 /// Returns None if the task name doesn't have monorepo syntax
-pub(crate) fn extract_monorepo_path(name: &str) -> Option<String> {
+pub fn extract_monorepo_path(name: &str) -> Option<String> {
     name.strip_prefix("//").and_then(|stripped| {
         // Find the FIRST colon after "//" prefix to handle task names with colons like "do:item-1"
         stripped.find(':').map(|idx| stripped[..idx].to_string())
@@ -3107,28 +3382,37 @@ pub(crate) fn extract_monorepo_path(name: &str) -> Option<String> {
 /// Build a map of task names and aliases to task references
 /// For monorepo tasks, creates entries for both prefixed and unprefixed aliases
 /// e.g., task "//:format" with alias "fmt" creates both "//:fmt" and "fmt"
-pub(crate) fn build_task_ref_map<'a, I>(tasks: I) -> BTreeMap<String, &'a Task>
+///
+/// A task's own name always wins over another task's alias. Without that, a
+/// `tests` task aliased to `test` in a parent directory's config would shadow a
+/// `test` task defined in the current directory's config (#13219).
+pub fn build_task_ref_map<'a, I>(tasks: I) -> BTreeMap<String, &'a Task>
 where
     I: Iterator<Item = (&'a String, &'a Task)> + 'a,
 {
-    tasks
-        .flat_map(|(_, t)| {
-            t.aliases
-                .iter()
-                .flat_map(|a| {
-                    // For monorepo tasks, create entries for both prefixed and unprefixed aliases
-                    // This allows references like "fmt" to resolve to "//:format"
-                    if let Some(path) = extract_monorepo_path(&t.name) {
-                        vec![(format!("//{}:{}", path, a), t), (a.to_string(), t)]
-                    } else {
-                        // Non-monorepo task, use alias as-is
-                        vec![(a.to_string(), t)]
-                    }
-                })
-                .chain(once((t.name.clone(), t)))
-                .collect::<Vec<_>>()
+    let tasks = tasks.map(|(_, t)| t).collect_vec();
+    let mut map: BTreeMap<String, &Task> = tasks
+        .iter()
+        .flat_map(|t| {
+            t.aliases.iter().flat_map(|a| {
+                // For monorepo tasks, create entries for both prefixed and unprefixed aliases
+                // This allows references like "fmt" to resolve to "//:format"
+                if a.starts_with("//") || is_workspace_project_task(a) {
+                    vec![(a.to_string(), *t)]
+                } else if let Some(path) = extract_monorepo_path(&t.name) {
+                    vec![(format!("//{}:{}", path, a), *t), (a.to_string(), *t)]
+                } else {
+                    // Non-monorepo task, use alias as-is
+                    vec![(a.to_string(), *t)]
+                }
+            })
         })
-        .collect()
+        .collect();
+    // Names are inserted last so they replace any alias registered above.
+    for t in tasks {
+        map.insert(t.name.clone(), t);
+    }
+    map
 }
 
 /// Resolve a task dependency pattern, optionally relative to a parent task.
@@ -3136,7 +3420,7 @@ where
 /// `:build` and bare task names resolve within the parent's project, while
 /// `./...:build` and other `./`-prefixed paths resolve from the parent's
 /// monorepo path.
-pub(crate) fn resolve_task_pattern(pattern: &str, parent_task: Option<&Task>) -> String {
+pub fn resolve_task_pattern(pattern: &str, parent_task: Option<&Task>) -> String {
     let is_relative_path = pattern.starts_with("./");
     // Check if this is a bare task name that should be treated as relative
     let is_bare_name = !is_relative_path
@@ -3275,6 +3559,7 @@ impl Default for Task {
             config_root: None,
             confirm: None,
             depends: vec![],
+            daemons: None,
             depends_post: vec![],
             wait_for: vec![],
             env: Default::default(),
@@ -3434,7 +3719,7 @@ impl TreeItem for (&Graph<Task, ()>, NodeIndex) {
     }
 }
 
-pub(crate) trait GetMatchingExt<T> {
+pub trait GetMatchingExt<T> {
     fn get_matching(&self, pat: &str) -> Result<Vec<&T>>;
 }
 
@@ -3462,6 +3747,23 @@ pub(crate) fn strip_extension(name: &str) -> &str {
     let result = name.rsplitn(2, '.').last().unwrap_or(name);
     // Don't strip extension if it would result in empty string (hidden files)
     if result.is_empty() { name } else { result }
+}
+
+/// [`strip_extension`] for a whole task name, keeping any monorepo path prefix
+/// (which may itself contain dots) intact: `//projects/my.app:build.sh` strips
+/// to `//projects/my.app:build`.
+pub(crate) fn strip_task_name_extension(name: &str) -> Cow<'_, str> {
+    match name.split_once(':') {
+        Some((path, task)) => {
+            let stripped = strip_extension(task);
+            if stripped.len() == task.len() {
+                Cow::Borrowed(name)
+            } else {
+                Cow::Owned(format!("{path}:{stripped}"))
+            }
+        }
+        None => Cow::Borrowed(strip_extension(name)),
+    }
 }
 
 impl<T> GetMatchingExt<T> for BTreeMap<String, T>
@@ -3535,23 +3837,27 @@ where
             let Some(matcher) = task_name_glob(pat).ok() else {
                 return Ok(vec![]);
             };
-            let exact: Vec<&T> = self
+            // Keys that match without extension stripping suppress only the
+            // extension-bearing task that shares their identity, e.g. a file
+            // task `hello.sh` next to a toml task `hello` (#10298). Tasks in
+            // other groups keep matching through the stripped form (#13273).
+            let exact_keys: HashSet<&str> = self
                 .iter()
                 .filter(|(name, _)| task_name_matches(&matcher, name, false))
-                .map(|(_, task)| task)
-                .unique()
+                .map(|(name, _)| name.as_str())
                 .collect();
-            if !exact.is_empty() {
-                return Ok(exact);
-            }
-            let ext_stripped: Vec<&T> = self
+            let matched: Vec<&T> = self
                 .iter()
-                .filter(|(name, _)| task_name_matches(&matcher, name, true))
+                .filter(|(name, _)| {
+                    exact_keys.contains(name.as_str())
+                        || (task_name_matches(&matcher, name, true)
+                            && !exact_keys.contains(strip_extension(name)))
+                })
                 .map(|(_, task)| task)
                 .unique()
                 .collect();
-            if !ext_stripped.is_empty() {
-                return Ok(ext_stripped);
+            if !matched.is_empty() {
+                return Ok(matched);
             }
             if self.keys().any(|k| k.starts_with("//")) {
                 return self.get_matching(&format!("//{pat}"));
@@ -3645,20 +3951,27 @@ where
             path_matches && task_matches
         };
 
-        // Prefer exact task-name matches; fall back to extension-stripped matches
-        // only when no key matched exactly.
-        let exact: Vec<&T> = self
+        // The extension-stripped form of a key, keeping any monorepo path
+        // prefix (which may itself contain dots) intact.
+        let stripped_key = strip_task_name_extension;
+
+        // Keys that match without extension stripping suppress only the
+        // extension-bearing task that shares their identity, e.g. a file task
+        // `//pkg:hello.sh` next to a toml task `//pkg:hello` (#10298). A task
+        // in another package still matches through its stripped form, so one
+        // package declaring the task in toml no longer removes every other
+        // package's file task from a glob (#13273).
+        let exact_keys: HashSet<&str> = self
             .iter()
             .filter(|(k, _)| entry_matches(k.as_str(), false))
-            .map(|(_, t)| t)
-            .unique()
+            .map(|(k, _)| k.as_str())
             .collect();
-        if !exact.is_empty() {
-            return Ok(exact);
-        }
         Ok(self
             .iter()
-            .filter(|(k, _)| entry_matches(k.as_str(), true))
+            .filter(|(k, _)| {
+                exact_keys.contains(k.as_str())
+                    || (entry_matches(k.as_str(), true) && !exact_keys.contains(&*stripped_key(k)))
+            })
             .map(|(_, t)| t)
             .unique()
             .collect())
@@ -3670,6 +3983,30 @@ pub(crate) fn dep_has_usage_ref(dep: &TaskDep) -> bool {
     tera_template_has_usage_ref(&dep.task)
         || dep.args.iter().any(|a| tera_template_has_usage_ref(a))
         || dep.env.values().any(|v| tera_template_has_usage_ref(v))
+}
+
+fn daemons_have_template(daemons: Option<&TaskDaemons>) -> bool {
+    daemons.is_some_and(|d| d.names().iter().any(|n| contains_template_syntax(n)))
+}
+
+/// Render the daemon names a task requires. `skip_usage` defers a name holding
+/// a `{{usage.*}}` reference to the pass that has the argument values.
+fn render_task_daemons(
+    daemons: Option<&mut TaskDaemons>,
+    tera: &mut TeraEngine,
+    ctx: &tera::Context,
+    skip_usage: bool,
+) -> Result<()> {
+    let Some(daemons) = daemons else {
+        return Ok(());
+    };
+    for name in daemons.names_mut() {
+        if !contains_template_syntax(name) || (skip_usage && tera_template_has_usage_ref(name)) {
+            continue;
+        }
+        *name = render_str(tera, name, ctx)?;
+    }
+    Ok(())
 }
 
 fn render_task_deps(
@@ -3720,7 +4057,7 @@ fn tera_tag_has_usage_ref(tag: &str) -> bool {
 /// Parse a task's usage spec against its current args and return a map of named
 /// arg/flag values preserving their Tera types (e.g., strings and booleans).
 /// Used to provide `{{usage.*}}` context when rendering dependency templates.
-pub(crate) async fn parse_usage_values_from_task(
+pub async fn parse_usage_values_from_task(
     config: &Arc<Config>,
     task: &Task,
 ) -> Result<IndexMap<String, tera::Value>> {
@@ -3743,19 +4080,202 @@ pub(crate) async fn parse_usage_values_from_task(
             return Ok(IndexMap::new());
         }
     };
-    let mut values: IndexMap<String, tera::Value> =
-        TaskScriptParser::make_usage_ctx(&po).into_iter().collect();
-    // `make_usage_ctx` only inserts `cmd` when a subcommand was actually selected.
-    // Templates referencing `{{ usage.cmd }}` should still resolve (to "") when
-    // subcommands are defined in the spec but none was selected.
-    if !spec.cmd.subcommands.is_empty() && !values.contains_key("cmd") {
-        values.insert("cmd".to_string(), tera::Value::from(String::new()));
-    }
-    Ok(values)
+    Ok(TaskScriptParser::make_usage_ctx(&spec, &po)
+        .into_iter()
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
+    mod literal_var_binding {
+        use super::super::bind_literal_vars_first;
+        use crate::config::env_directive::{EnvDirective, EnvDirectiveOptions};
+        use std::path::PathBuf;
+
+        fn val(key: &str, value: &str) -> (EnvDirective, PathBuf) {
+            (
+                EnvDirective::Val(key.into(), value.into(), Default::default()),
+                PathBuf::from("mise.toml"),
+            )
+        }
+
+        fn redacted(key: &str, value: &str) -> (EnvDirective, PathBuf) {
+            (
+                EnvDirective::Val(
+                    key.into(),
+                    value.into(),
+                    EnvDirectiveOptions {
+                        redact: Some(true),
+                        ..Default::default()
+                    },
+                ),
+                PathBuf::from("mise.toml"),
+            )
+        }
+
+        fn tools(key: &str, value: &str) -> (EnvDirective, PathBuf) {
+            (
+                EnvDirective::Val(
+                    key.into(),
+                    value.into(),
+                    EnvDirectiveOptions {
+                        tools: true,
+                        ..Default::default()
+                    },
+                ),
+                PathBuf::from("mise.toml"),
+            )
+        }
+
+        fn from(source: &str, directive: (EnvDirective, PathBuf)) -> (EnvDirective, PathBuf) {
+            (directive.0, PathBuf::from(source))
+        }
+
+        fn file(path: &str) -> (EnvDirective, PathBuf) {
+            (
+                EnvDirective::File(path.into(), Default::default()),
+                PathBuf::from("mise.toml"),
+            )
+        }
+
+        fn order(directives: Vec<(EnvDirective, PathBuf)>) -> Vec<String> {
+            bind_literal_vars_first(directives)
+                .into_iter()
+                .map(|(directive, _)| directive.to_string())
+                .collect()
+        }
+
+        /// The reported shape: a task template's var reads a value the task supplies, which
+        /// the task declares after it. Fails before the fix, where `wrap` renders first and
+        /// takes the `default()` branch.
+        #[test]
+        fn a_literal_binds_before_the_var_that_reads_it() {
+            assert_eq!(
+                order(vec![val("wrap", "--opt={{vars.opt}}"), val("opt", "task")]),
+                ["opt=task", "wrap=--opt={{vars.opt}}"]
+            );
+        }
+
+        /// A task overriding a template's literal default: only the winning assignment is
+        /// hoisted, so the template's own copy cannot clobber it again part way through.
+        #[test]
+        fn only_the_last_literal_for_a_name_survives() {
+            assert_eq!(
+                order(vec![
+                    val("name", "template"),
+                    val("greeting", "hello {{vars.name}}"),
+                    val("name", "task"),
+                ]),
+                ["name=task", "greeting=hello {{vars.name}}"]
+            );
+        }
+
+        /// The inverse direction stays intact: a templated var is never moved, so it still
+        /// resolves after whatever it reads.
+        #[test]
+        fn a_templated_value_keeps_its_place() {
+            assert_eq!(
+                order(vec![val("base", "/opt"), val("path", "{{vars.base}}/bin")]),
+                ["base=/opt", "path={{vars.base}}/bin"]
+            );
+        }
+
+        /// A name a `default` directive also assigns keeps its declaration order, since
+        /// `default` reads what resolved before it and hoisting would change its answer.
+        #[test]
+        fn a_name_a_default_assigns_is_left_alone() {
+            assert_eq!(
+                order(vec![
+                    val("mode", ""),
+                    val("cmd", "run --{{vars.mode}}"),
+                    (
+                        EnvDirective::Default("mode".into(), "fast".into(), Default::default()),
+                        PathBuf::from("mise.toml"),
+                    ),
+                ]),
+                ["mode=", "cmd=run --{{vars.mode}}", "mode default=fast"]
+            );
+        }
+
+        /// A redacted literal is left where it is: hoisting it would drop the redaction that
+        /// the copies it overrode registered.
+        #[test]
+        fn a_redacted_literal_is_left_alone() {
+            assert_eq!(
+                order(vec![
+                    redacted("token", "secret"),
+                    val("arg", "--token={{vars.token}}"),
+                ]),
+                ["token=secret", "arg=--token={{vars.token}}"]
+            );
+        }
+
+        /// `resolve_task_vars` resolves with `NonToolsOnly`, so a `tools = true` value never
+        /// runs and cannot win the name. Hoisting it would delete the copies that do run.
+        #[test]
+        fn a_tools_value_never_wins_a_name() {
+            assert_eq!(
+                order(vec![
+                    val("mode", "template"),
+                    val("cmd", "run --{{vars.mode}}"),
+                    tools("mode", "tool"),
+                ]),
+                ["mode=template", "cmd=run --{{vars.mode}}", "mode=tool"]
+            );
+        }
+
+        /// For the same reason it is not a competitor either: a literal that does run is
+        /// still hoisted past it.
+        #[test]
+        fn a_tools_value_does_not_block_a_hoist() {
+            assert_eq!(
+                order(vec![
+                    tools("mode", "tool"),
+                    val("cmd", "run --{{vars.mode}}"),
+                    val("mode", "task"),
+                ]),
+                ["mode=task", "mode=tool", "cmd=run --{{vars.mode}}"]
+            );
+        }
+
+        /// Safe mode drops directives by the config file they came from, so a name assigned
+        /// from two files keeps its order rather than risk hoisting the one that is dropped.
+        #[test]
+        fn a_name_assigned_from_two_files_is_left_alone() {
+            assert_eq!(
+                order(vec![
+                    val("mode", "base"),
+                    val("cmd", "run --{{vars.mode}}"),
+                    from("overlay.toml", val("mode", "overlay")),
+                ]),
+                ["mode=base", "cmd=run --{{vars.mode}}", "mode=overlay"]
+            );
+        }
+
+        /// A dotenv file can assign any name, so nothing moves past it.
+        #[test]
+        fn a_dotenv_file_stops_every_hoist() {
+            assert_eq!(
+                order(vec![
+                    val("cmd", "run --{{vars.mode}}"),
+                    file(".env"),
+                    val("mode", "fast"),
+                ]),
+                [
+                    "cmd=run --{{vars.mode}}".to_string(),
+                    format!("_.file = \"{}\"", crate::file::display_path(".env")),
+                    "mode=fast".to_string(),
+                ]
+            );
+        }
+
+        /// Nothing to gain when no value can read another, so the list is handed back as is.
+        #[test]
+        fn a_list_of_only_literals_is_untouched() {
+            assert_eq!(order(vec![val("a", "1"), val("b", "2")]), ["a=1", "b=2"]);
+        }
+    }
+
     mod header_key_paths {
         use super::super::{
             extract_usage_from_comments, merge_header_value, parse_mise_header_toml,
@@ -4253,6 +4773,49 @@ exec shapeme "$@"
             assert_eq!(spec.cmd.flags.len(), 1, "{label}");
             assert_eq!(&spec.cmd.flags[0].name, "force", "{label}");
         }
+    }
+
+    #[test]
+    fn test_parse_task_script_usage_resolves_relative_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        let included = dir.path().join("shared.usage.kdl");
+        let task = dir.path().join("build");
+        std::fs::write(&included, "flagset \"shared\" {\n  flag \"--release\"\n}\n").unwrap();
+        std::fs::write(
+            &task,
+            "#!/usr/bin/env bash\n#USAGE include file=\"./shared.usage.kdl\"\n#USAGE use \"shared\"\n",
+        )
+        .unwrap();
+
+        let spec = super::parse_task_script_usage(&task).unwrap();
+
+        assert_eq!(spec.cmd.flags.len(), 1);
+        assert_eq!(spec.cmd.flags[0].long, ["release"]);
+    }
+
+    #[tokio::test]
+    async fn test_file_task_usage_expands_mise_config_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let included = dir.path().join("shared.usage.kdl");
+        let task = dir.path().join("build");
+        std::fs::write(&included, "flagset \"shared\" {\n  flag \"--release\"\n}\n").unwrap();
+        std::fs::write(
+            &task,
+            "#!/usr/bin/env bash\n#USAGE include file=\"$MISE_CONFIG_ROOT/shared.usage.kdl\"\n#USAGE use \"shared\"\n",
+        )
+        .unwrap();
+        let task = Task {
+            name: "build".to_string(),
+            file: Some(PathBuf::from("build")),
+            config_root: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let config = Config::get().await.unwrap();
+
+        let spec = task.parse_usage_spec_for_display(&config).await.unwrap();
+
+        assert_eq!(spec.cmd.flags.len(), 1);
+        assert_eq!(spec.cmd.flags[0].long, ["release"]);
     }
 
     #[test]
@@ -5129,6 +5692,30 @@ echo "hello world"
     }
 
     #[test]
+    fn test_strip_task_name_extension() {
+        use super::strip_task_name_extension;
+
+        assert_eq!(strip_task_name_extension("hello.sh"), "hello");
+        assert_eq!(strip_task_name_extension("hello"), "hello");
+        // A dot in the monorepo path prefix is not an extension.
+        assert_eq!(
+            strip_task_name_extension("//projects/my.app:build.sh"),
+            "//projects/my.app:build"
+        );
+        assert_eq!(
+            strip_task_name_extension("//projects/my.app:build"),
+            "//projects/my.app:build"
+        );
+        // Task groups keep their colons; only the rightmost dot goes.
+        assert_eq!(
+            strip_task_name_extension("//pkg:build:frontend.sh"),
+            "//pkg:build:frontend"
+        );
+        // Hidden files keep their leading dot rather than stripping to empty.
+        assert_eq!(strip_task_name_extension(".hidden"), ".hidden");
+    }
+
+    #[test]
     fn test_circular_dependency_resolution_terminates() {
         use super::Task;
         use std::collections::BTreeMap;
@@ -5406,6 +5993,37 @@ echo "hello world"
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn toml_overlay_replaces_a_file_task_daemon_requirement() {
+        use super::TaskDaemons;
+        let overlay = |daemons: Option<TaskDaemons>| {
+            let mut task = Task {
+                daemons: Some(TaskDaemons::Names(vec!["postgres".into()])),
+                ..Default::default()
+            };
+            task.merge_toml_overlay(Task {
+                daemons,
+                ..Default::default()
+            });
+            task.daemons
+        };
+        // The overlay replaces rather than extends, so a shorter list and an
+        // explicit opt-out both mean what they say.
+        assert_eq!(
+            overlay(Some(TaskDaemons::Names(vec!["nats".into()]))),
+            Some(TaskDaemons::Names(vec!["nats".to_string()]))
+        );
+        assert_eq!(
+            overlay(Some(TaskDaemons::All(false))),
+            Some(TaskDaemons::All(false))
+        );
+        // An overlay that says nothing leaves the file task's declaration.
+        assert_eq!(
+            overlay(None),
+            Some(TaskDaemons::Names(vec!["postgres".to_string()]))
+        );
+    }
+
     #[tokio::test]
     #[cfg(unix)]
     async fn test_parses_all_fields() {
@@ -5420,9 +6038,11 @@ echo "hello world"
 
         // Create a file task with ALL possible header fields
         let script_content = r#"#!/usr/bin/env bash
+#MISE extends="base-template"
 #MISE description="Test task with all fields"
 #MISE aliases=["alias1", "alias2"]
 #MISE depends=["dep1", "dep2"]
+#MISE daemons=["postgres"]
 #MISE depends_post=["post1"]
 #MISE wait_for=["wait1"]
 #MISE env={TEST_VAR="value"}
@@ -5453,9 +6073,14 @@ echo "test"
             .await
             .unwrap();
 
+        assert_eq!(task.extends, Some("base-template".to_string()));
         assert_eq!(task.description, "Test task with all fields");
         assert_eq!(task.aliases, vec!["alias1", "alias2"]);
         assert_eq!(task.depends.len(), 2);
+        assert_eq!(
+            task.daemons,
+            Some(super::TaskDaemons::Names(vec!["postgres".to_string()]))
+        );
         assert_eq!(task.depends_post.len(), 1);
         assert_eq!(task.wait_for.len(), 1);
         assert_eq!(task.dir, Some("/some/dir".to_string()));
@@ -6609,6 +7234,39 @@ echo "test"
 
         let matches = tasks.get_matching("pr:remove").unwrap();
         assert_eq!(matches, vec![&"pr:remove".to_string()]);
+    }
+
+    #[test]
+    fn test_build_task_ref_map_prefers_names_over_aliases() {
+        use std::collections::BTreeMap;
+
+        use super::{Task, build_task_ref_map};
+
+        // A `tests` task aliased to `test` must not shadow a task actually
+        // named `test`, regardless of which config defined it (#13219).
+        let test = Task {
+            name: "test".to_string(),
+            ..Default::default()
+        };
+        let tests = Task {
+            name: "tests".to_string(),
+            aliases: vec!["test".to_string()],
+            ..Default::default()
+        };
+        let tasks: BTreeMap<String, Task> = [test.clone(), tests.clone()]
+            .into_iter()
+            .map(|t| (t.name.clone(), t))
+            .collect();
+
+        let refs = build_task_ref_map(tasks.iter());
+        assert_eq!(refs.get("test").map(|t| t.name.as_str()), Some("test"));
+        assert_eq!(refs.get("tests").map(|t| t.name.as_str()), Some("tests"));
+
+        // The alias still resolves when no task claims that name.
+        let only_tests: BTreeMap<String, Task> =
+            [(tests.name.clone(), tests)].into_iter().collect();
+        let refs = build_task_ref_map(only_tests.iter());
+        assert_eq!(refs.get("test").map(|t| t.name.as_str()), Some("tests"));
     }
 
     #[test]

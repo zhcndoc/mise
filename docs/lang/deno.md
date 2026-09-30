@@ -24,8 +24,29 @@ mise exec -- deno --version
 
 这些说明使用 mise 内置的 deno 支持。已安装的同名外部插件可能会更改行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/deno.rs)。
 
-## 工具选项
+## 版本文件
 
+启用[idiomatic version files](/configuration.html#idiomatic-version-files)，以读取 .deno-version 或 package.json 中的版本声明：
+
+~~~sh
+mise settings add idiomatic_version_file_enable_tools deno
+~~~
+
+例如，下面的 package.json 会选择 Deno 2.2.0：
+
+~~~json [package.json]
+{
+  "devEngines": {
+    "runtime": { "name": "deno", "version": "2.2.0" }
+  }
+}
+~~~
+
+当 name 为 deno 时，mise 会读取 devEngines.runtime。
+
+devEngines.runtime 可以是对象或数组；数组中只读取第一项。engines 兼容性字段不会用于选择版本。
+
+## 工具选项
 以下 [tool-options](/dev-tools/#tool-options) 可用于 `deno` 后端。这些选项应放在 `mise.toml` 的 `[tools]` 部分中。
 
 ### `install_env`

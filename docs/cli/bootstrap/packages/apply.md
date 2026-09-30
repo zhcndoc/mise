@@ -27,7 +27,7 @@ description: "应用 `[bootstrap.packages]` 中的系统包"
 - **`-m --manager <MANAGER>`** — 仅安装此内置包管理器或插件包管理器中的包
 - **`-n --dry-run`** — 输出将要运行的命令，但不实际运行
 - **`-y --yes`** — 跳过确认提示
-- **`--update`** — 先刷新包管理器元数据（apk：`--update-cache`、apt：`apt-get update`、winget：`source update`）
+- **`--update`** — 先刷新包管理器元数据（apk：`--update-cache`、apt：`apt-get update`、zypper：`refresh`、winget：`source update`）
 - **`-h --help`** — 显示帮助
 
 ## 示例

@@ -33,6 +33,7 @@ description: "根据当前配置设置计算机"
 
 ## 标志
 - **`--from <GIT_URL>`** — 克隆 Git 仓库，并根据其配置运行 bootstrap
+- 在 URL 后附加 `?ref=<branch|tag|commit>`，可检出指定 ref 而不是默认分支，例如 `git::https://github.com/example/dotfiles.git?ref=v1`。
 - **`--adopt <GIT_URL|OWNER/REPO>`** — 从 Git 仓库中采用全局配置或共享点文件历史，然后运行 bootstrap
 - **`--replace-history`** — 采用设置仓库时替换本地点文件历史
 - **`--from-dir <DIR>`** — 用于存放通过 --from 克隆的仓库的目录
@@ -94,6 +95,7 @@ mise bootstrap user apply --dry-run
 - [`mise bootstrap secrets <SUBCOMMAND>`](/cli/bootstrap/secrets.html)
 - [`mise bootstrap services <SUBCOMMAND>`](/cli/bootstrap/services.html)
 - [`mise bootstrap status [FLAGS]`](/cli/bootstrap/status.html)
+- [`mise bootstrap unapply [FLAGS] <ENV>…`](/cli/bootstrap/unapply.html)
 - [`mise bootstrap user <SUBCOMMAND>`](/cli/bootstrap/user.html)
 
 <!-- generated reference navigation -->

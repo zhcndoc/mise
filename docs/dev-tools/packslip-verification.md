@@ -93,6 +93,47 @@ mise 会在两个位置保留信任：
 
 请参阅[签名者变更](/dev-tools/backends/packslip.html#pinned-signers)，了解检查和重置命令，包括显式选项和锁定文件承诺如何影响轮换。
 
+### Renamed, transferred, and re-created repositories
+
+A GitHub or GitLab project's name locates it, but the forge's repository ID
+identifies it. GitHub Actions and GitLab CI signing certificates record that ID
+and the owner's ID, and neither changes when a repository is renamed. mise pins
+both with the signer, and compares each release's IDs with the pin:
+
+| What happened to the name                          | Result                                                                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Renamed or moved within the same owner             | Installs. mise warns once that the project has a new name, and the pin follows it to that name.                           |
+| Transferred to another owner                       | Refused. Trusting the old owner says nothing about the new one; forget the pin and name the new owner's repository.       |
+| Deleted and re-created, by anyone, under that name | Refused once the original is pinned, even though the name and workflow path match: the new repository has a different ID. |
+
+Signer continuity then compares the workflow's path inside the repository, so
+`github.com/old/tool/.github/workflows/release.yml` continues as
+`github.com/new/tool/.github/workflows/release.yml`. Releases published before a
+rename are signed under the old name and still install when the config names the
+new one.
+
+The pin is found by the repository ID in the release's certificate, whichever
+name changed first. A config switched to the new name before any release signed
+under it was accepted, or a pins file from a machine that never saw the rename,
+still holds the release to the pin recorded under the old name: its signer,
+owner, provenance, and attestor, as if the name had not changed. Once the release
+is accepted, the pin and its release-list state move to the new name, so a
+repository keeps one pin. A refusal names the pin as it is recorded, which is the
+name to give `mise packslip forget`.
+
+With no pin for the project yet, and a release signed under another name, mise
+asks the forge what the requested name resolves to. GitHub's
+`GET /repos/{owner}/{repo}` answers a renamed repository's old name with its new
+name and unchanged ID. If the forge cannot be asked, for example offline or when
+rate-limited, mise compares names only, as before, and refuses the release.
+
+This is still trust on first use. The first install on a machine with no pin and
+no lockfile entry accepts whichever repository the name belongs to at that
+moment, so a name taken over before that install is not detected. Commit
+`mise.lock` so every machine starts from the IDs the project accepted.
+Pins and lockfile entries written before mise recorded the IDs keep working and
+gain them from the next successful install.
+
 ## Stamps
 
 stamper 是一种注册表、镜像或审核服务，用于发布其批准的版本签名列表。默认不要求 stamp。若要强制要求，请配置所信任的主机，以及允许为每个主机的列表签名的密钥或身份：

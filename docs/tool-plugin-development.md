@@ -106,9 +106,7 @@ local attestation = {
 }
 ```
 
-将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有可选
-`cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，以及带有可选 `slsa_min_level` 的
-`slsa_provenance_path`。为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
+将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有可选 `cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，以及带有可选 `slsa_min_level` 的 `slsa_provenance_path`，还包括 `slsa_signer_identity`（准确的 Fulcio 证书 URI subject，包含 workflow ref）和 `slsa_signer_issuer`（准确的 OIDC issuer）。缺少签名者字段时会跳过 SLSA。为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
 
 mise 的生命周期会处理主要构件；不要依赖上游 vfox 的 `addition` 条目来安装第二个 SDK。需要时，请使用工具依赖，或明确实现额外工作。
 
@@ -148,6 +146,44 @@ end
 ```
 
 上面的检查假设采用 Unix 可执行文件布局。归档文件通常会携带可执行权限；只有在实际发行版需要时才修改权限。
+
+#### MiseInstallSatisfied Hook
+
+Some tools keep install state that depends on tool options, such as add-on components the
+plugin installs in `PostInstall`. Without this hook, mise treats a version as installed
+once its directory exists, so changing the option later has no effect until the user runs
+`mise install --force`, which downloads the tool again.
+
+`MiseInstallSatisfied` lets the plugin report that an installed version no longer matches
+the request. mise calls it whenever it decides whether a tool needs installing, including
+`mise install` and auto-install, so keep it fast and free of side effects: inspect files
+under `ctx.path` rather than running the tool or making network requests. `ctx.version` is
+the installed version and `ctx.options` contains the current tool options.
+
+```lua
+-- hooks/mise_install_satisfied.lua
+function PLUGIN:MiseInstallSatisfied(ctx)
+    local file = require("file")
+    for _, name in ipairs(ctx.options.components or {}) do
+        if not file.exists(file.join_path(ctx.path, "components", name)) then
+            return {satisfied = false, reason = "missing component " .. name}
+        end
+    end
+    return {satisfied = true}
+end
+```
+
+Return `{satisfied = false}` (or `false`) when the install needs updating. mise then runs
+`PostInstall` again on the existing install, without running `PreInstall`, downloading, or
+removing the install directory, so `PostInstall` must be safe to rerun. After that and the
+tool's `postinstall` script, mise calls `MiseInstallSatisfied` again and fails with its
+`reason` if the install still does not match;
+the existing install stays in place either way. `mise install --force` still reinstalls from
+scratch.
+
+`reason` appears in debug output (`MISE_DEBUG=1`). Returning `true` or `nil` keeps the install
+as it is. If the hook raises an error, mise warns and keeps the install, so a broken check
+cannot trigger work on every command.
 
 #### PreUse Hook
 
@@ -191,6 +227,7 @@ my-tool-plugin/
 │   ├── pre_install.lua
 │   ├── env_keys.lua
 │   ├── post_install.lua       # optional
+│   ├── mise_install_satisfied.lua  # optional
 │   └── parse_legacy_file.lua  # optional
 └── lib/
     └── helper.lua            # optional shared code
@@ -257,9 +294,9 @@ PLUGIN = {
 
 可选字段：
 
-- **`version`** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将依赖视为满足（存在即可），而不是阻止安装
-- **`optional`** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能时进行构建（例如 Erlang 的 `wxWidgets` GUI）
-- **`packages`** — 将包管理器名称（`brew`、`brew-cask`、`apt`、`dnf`、`pacman`、`apk`、`flatpak`、`flatpak-user`、`mas`、`winget`）映射到提供该功能的包。值可以是单个包名称（`apt = "bison"`），也可以是候选项列表（`apt = { "libaio1t64", "libaio1" }`），用于同一功能在不同发行版版本中使用不同包名称的情况。候选项按新名称优先的顺序排列：mise 会选择包管理器实际拥有的第一个候选项；如果无法判断，则回退到列表中的第一个候选项。只有可以查询包可用性的管理器（目前为 `apt`）会执行此选择；其他管理器始终使用第一个候选项，因此对它们而言，使用单个名称仍然是正确选择
+- **version** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将依赖视为满足（存在即可），而不是阻止安装
+- **optional** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能时进行构建（例如 Erlang 的 wxWidgets GUI）
+- **packages** — 将包管理器名称（brew、brew-cask、apt、dnf、zypper、pacman、apk、flatpak、flatpak-user、mas、scoop、winget）映射到提供该功能的包。值可以是单个包名称（apt = "bison"），也可以是候选项列表（apt = { "libaio1t64", "libaio1" }），用于同一功能在不同发行版版本中使用不同包名称的情况。候选项按新名称优先排列：mise 会选择包管理器实际拥有的第一个候选项；如果无法判断，则回退到列表中的第一个候选项。只有可以查询包可用性的管理器（目前为 apt）会执行此选择；其他管理器始终使用第一个候选项。
 
 **绝不要从 `metadata.lua` 探测主机。** 每次 mise 加载插件元数据时都会运行其顶层代码，因此在那里执行 Shell 命令（检查哪个包名称存在、读取发行版版本）会在许多 mise 调用中产生开销，并且其结果会与元数据一同缓存——当用户升级操作系统后，这个针对特定机器的答案会过时。请声明候选项并让 mise 解析它们；mise 会延迟执行此操作：只有实际未通过检查的依赖，在即将安装包时才会进行解析。
 

@@ -13,7 +13,7 @@ description: "[实验性] 根据当前 mise.toml 构建一个 OCI 镜像"
 
 每个工具版本都会成为其自身的内容寻址 OCI 层。升级某个工具版本只会使该工具的层失效，其他工具、基础镜像和配置都会原样复用。输出目录符合 OCI image-layout 规范。使用 `skopeo inspect oci:./mise-oci` 检查它，或使用 `mise oci run --image-dir ./mise-oci -- command` 加载并运行它。
 
-在 Linux 上使用目标架构构建：这会打包主机上的工具安装，并且默认会打包正在运行的 mise 二进制文件。`--no-mise` 会省略该二进制文件，但不会为其他操作系统交叉编译已安装的工具。不支持 asdf/vfox 工具。
+在 Linux 上使用目标架构构建：这会打包主机上的工具安装，并且默认会打包正在运行的 mise 二进制文件。`--no-mise` 会省略该二进制文件，但不会为其他操作系统交叉编译已安装的工具。不支持 asdf 工具。
 
 需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）。
 
@@ -51,8 +51,7 @@ mise oci run --image-dir ./img -- /bin/sh
 ```
 - 镜像只包含项目 mise 配置中的工具（以及项目根目录及其以下的任何配置）。`~/.config/mise/config.toml` 中的工具不会被包含；传入 --include-global
   也可将它们打包进去。
-- v1 不支持 asdf 和 vfox 插件；请为每个工具使用不同的后端
-  （core、aqua、ubi、github、cargo、npm、go、pipx、spm、http）。
+- v1 不支持 asdf 插件；vfox 插件会复制到镜像中，并放在它们安装的工具旁边。请为每个工具使用不同的后端（core、aqua、github、cargo、npm、go、pipx、spm、http）。
 - 默认情况下，宿主机上的 mise 二进制会嵌入到 `/usr/local/bin/mise`；请在与目标镜像相同的 OS/架构上构建（或传入 --no-mise）。
 ```
 

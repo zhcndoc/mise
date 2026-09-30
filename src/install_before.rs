@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use eyre::Result;
-use jiff::Timestamp;
+use jiff::civil::date;
+use jiff::{Span, Timestamp};
 
+use crate::args::{BackendArg, split_bracketed_opts};
 use crate::backend::Backend;
 use crate::backend::backend_type::BackendType;
-use crate::cli::args::{BackendArg, split_bracketed_opts};
 use crate::config::{Config, Settings};
 use crate::duration::{parse_duration, parse_into_timestamp};
 
@@ -55,7 +56,7 @@ pub(crate) fn resolve_before_date(
 
 /// Resolve the CLI `--minimum-release-age` flag without falling back to global
 /// settings or the built-in default when the flag is omitted.
-pub(crate) fn resolve_cli_minimum_release_age(
+pub fn resolve_cli_minimum_release_age(
     minimum_release_age: Option<&str>,
 ) -> Result<Option<Timestamp>> {
     if minimum_release_age
@@ -105,7 +106,7 @@ pub(crate) fn resolve_before_date_for_tool_with_source(
 /// `resolve_before_date_for_tool_with_source`, except cutoffs pre-resolved by
 /// the caller (e.g. the CLI flag) are not visible here — the caller already
 /// knows those. Returns `None` when no cutoff applies to the tool.
-pub(crate) fn effective_minimum_release_age_for_tool(
+pub fn effective_minimum_release_age_for_tool(
     backend_arg: &BackendArg,
     minimum_release_age: Option<&str>,
 ) -> Option<String> {
@@ -118,6 +119,23 @@ pub(crate) fn effective_minimum_release_age_for_tool(
     .ok()
     .flatten()
     .and_then(|(_, _, age)| age)
+}
+
+/// The configured `minimum_release_age` value, but only when it is what
+/// produced `before`.
+///
+/// A cutoff threaded down from `--minimum-release-age` or another resolution
+/// does not correspond to any configured value, and every configured value
+/// resolves against [`crate::duration::process_now`], so comparing the
+/// timestamps is exact within one invocation. Labelling an error with a value
+/// that did not produce its cutoff would name the wrong date.
+pub(crate) fn minimum_release_age_label(
+    backend_arg: &BackendArg,
+    minimum_release_age: Option<&str>,
+    before: Timestamp,
+) -> Option<String> {
+    effective_minimum_release_age_for_tool(backend_arg, minimum_release_age)
+        .filter(|age| parse_into_timestamp(age).is_ok_and(|resolved| resolved == before))
 }
 
 fn resolve_before_date_with_excludes(
@@ -215,7 +233,7 @@ fn is_minimum_release_age_excluded(backend_arg: &BackendArg) -> bool {
     })
 }
 
-pub(crate) async fn resolve_before_date_for_backend<B: Backend + ?Sized>(
+pub async fn resolve_before_date_for_backend<B: Backend + ?Sized>(
     config: &Arc<Config>,
     backend: &B,
     before_date: Option<Timestamp>,
@@ -228,17 +246,90 @@ pub(crate) async fn resolve_before_date_for_backend<B: Backend + ?Sized>(
     resolve_before_date_for_tool(backend.ba(), None, opts.minimum_release_age())
 }
 
+/// Human-readable fragments describing a release hidden by `minimum_release_age`:
+/// when it came out and when it becomes eligible, plus the configured age value.
+/// Shared by `mise upgrade`'s warning and the resolution error raised when the
+/// cutoff hides every candidate.
+pub fn format_hidden_release_details(
+    created_at: Option<Timestamp>,
+    age: Option<&str>,
+    tz: jiff::tz::TimeZone,
+) -> (String, String) {
+    let age_fragment = age.map(|age| format!(" ({age})")).unwrap_or_default();
+    let released_fragment = match created_at {
+        Some(created) => {
+            // An age given as an absolute date is a fixed cutoff, so the
+            // release never becomes eligible — only show when it will for
+            // relative ages.
+            let eligible_at = age.and_then(|age| release_eligible_at(created, age));
+            let released = created.to_zoned(tz.clone()).strftime("%Y-%m-%d");
+            match eligible_at {
+                Some(at) => format!(
+                    " (released {released}, eligible {})",
+                    at.to_zoned(tz).strftime("%Y-%m-%d %H:%M %Z")
+                ),
+                None => format!(" (released {released})"),
+            }
+        }
+        None => String::new(),
+    };
+    (released_fragment, age_fragment)
+}
+
+fn release_eligible_at(created_at: Timestamp, age: &str) -> Option<Timestamp> {
+    const DAY_NANOS: i128 = 86_400 * 1_000_000_000;
+
+    let span = age.parse::<Span>().ok()?;
+    let duration = span.to_duration(date(2025, 1, 1)).ok()?;
+    if duration.is_negative() {
+        return None;
+    }
+    let mut high = created_at
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .checked_add(span)
+        .ok()
+        .map(|eligible| eligible.timestamp())?;
+
+    for _ in 0..370 {
+        if release_is_eligible_at(created_at, high, &span) {
+            let mut low_nanos = created_at.as_nanosecond();
+            let mut high_nanos = high.as_nanosecond();
+            while low_nanos < high_nanos {
+                let mid_nanos = low_nanos + (high_nanos - low_nanos) / 2;
+                let mid = Timestamp::from_nanosecond(mid_nanos).ok()?;
+                if release_is_eligible_at(created_at, mid, &span) {
+                    high_nanos = mid_nanos;
+                } else {
+                    low_nanos = mid_nanos + 1;
+                }
+            }
+            return Timestamp::from_nanosecond(high_nanos).ok();
+        }
+        high = Timestamp::from_nanosecond(high.as_nanosecond().checked_add(DAY_NANOS)?).ok()?;
+    }
+    None
+}
+
+fn release_is_eligible_at(created_at: Timestamp, now: Timestamp, age: &Span) -> bool {
+    now.to_zoned(jiff::tz::TimeZone::UTC)
+        .checked_sub(age)
+        .is_ok_and(|cutoff| cutoff.timestamp() > created_at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BeforeDateSource, DEFAULT_MINIMUM_RELEASE_AGE, effective_minimum_release_age_for_tool,
+        format_hidden_release_details, minimum_release_age_label, release_is_eligible_at,
         resolve_before_date, resolve_before_date_for_tool,
         resolve_before_date_for_tool_with_source,
     };
-    use crate::cli::args::BackendArg;
+    use crate::args::BackendArg;
+    use crate::config::SettingsExt;
     use crate::config::settings::{Settings, SettingsPartial};
     use confique::Layer;
     use jiff::Timestamp;
+    use jiff::tz::TimeZone;
     use test_log::test;
 
     fn resolved_timestamp(
@@ -259,27 +350,28 @@ mod tests {
 
     #[test]
     fn test_effective_before_date_prefers_override() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         let cli_before = "2024-01-02T03:04:05Z".parse().unwrap();
         assert_eq!(
             resolved_timestamp(Some(cli_before), Some("7d")),
             Some(cli_before)
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_prefers_tool_option() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(
             resolved_timestamp(None, Some("2024-01-02")),
             Some(crate::duration::parse_into_timestamp("2024-01-02").unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_zero_minimum_release_age_disables_cutoff() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(resolved_timestamp(None, Some("0s")), None);
         assert_eq!(
@@ -292,11 +384,11 @@ mod tests {
         partial.minimum_release_age = Some("0s".to_string());
         Settings::reset(Some(partial));
         assert_eq!(resolved_tool_timestamp("github:cli/cli", None, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_falls_back_to_global_setting() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         Settings::reset(Some(partial));
@@ -304,21 +396,21 @@ mod tests {
             resolved_timestamp(None, None),
             Some(crate::duration::parse_into_timestamp("2024-01-03").unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_excludes_global_by_backend_id() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         partial.minimum_release_age_excludes = Some(vec!["npm:prettier".to_string()]);
         Settings::reset(Some(partial));
         assert_eq!(resolved_tool_timestamp("npm:prettier", None, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_pypi_release_age_exclusions_accept_both_backend_names() {
+        let _settings = crate::test::SettingsGuard::lock();
         for exclude in ["pipx:*", "pypi:*", "pipx:black", "pypi:black"] {
             let mut partial = SettingsPartial::empty();
             partial.minimum_release_age = Some("2024-01-03".to_string());
@@ -327,11 +419,11 @@ mod tests {
             assert_eq!(resolved_tool_timestamp("pypi:black", None, None), None);
             assert_eq!(resolved_tool_timestamp("pipx:black", None, None), None);
         }
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_does_not_exclude_backend_by_bare_name() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         partial.minimum_release_age_excludes = Some(vec!["npm".to_string()]);
@@ -340,21 +432,21 @@ mod tests {
             resolved_tool_timestamp("npm:prettier", None, None),
             Some(crate::duration::parse_into_timestamp("2024-01-03").unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_excludes_global_by_backend_wildcard() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         partial.minimum_release_age_excludes = Some(vec!["npm:*".to_string()]);
         Settings::reset(Some(partial));
         assert_eq!(resolved_tool_timestamp("npm:prettier", None, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_does_not_exclude_by_bare_backend_tool_name() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         partial.minimum_release_age_excludes = Some(vec!["prettier".to_string()]);
@@ -363,11 +455,11 @@ mod tests {
             resolved_tool_timestamp("npm:prettier", None, None),
             Some(crate::duration::parse_into_timestamp("2024-01-03").unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_exclude_does_not_override_tool_option() {
+        let _settings = crate::test::SettingsGuard::lock();
         let mut partial = SettingsPartial::empty();
         partial.minimum_release_age = Some("2024-01-03".to_string());
         partial.minimum_release_age_excludes = Some(vec!["npm".to_string()]);
@@ -376,45 +468,45 @@ mod tests {
             resolved_tool_timestamp("npm:prettier", None, Some("2024-01-02")),
             Some(crate::duration::parse_into_timestamp("2024-01-02").unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_without_backend_has_no_default() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(resolved_timestamp(None, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_falls_back_to_default_for_supported_backend() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(
             resolved_tool_timestamp("npm:prettier", None, None),
             Some(crate::duration::parse_into_timestamp(DEFAULT_MINIMUM_RELEASE_AGE).unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_falls_back_to_default_for_forgejo_backend() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(
             resolved_tool_timestamp("forgejo:codeberg.org/forgejo/forgejo", None, None),
             Some(crate::duration::parse_into_timestamp(DEFAULT_MINIMUM_RELEASE_AGE).unwrap())
         );
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_skips_default_for_unsupported_backend() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         assert_eq!(resolved_tool_timestamp("asdf:tiny", None, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_before_date_source_distinguishes_default_from_explicit() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         let ba: BackendArg = "npm:prettier".into();
 
@@ -447,11 +539,46 @@ mod tests {
             .unwrap();
         assert_eq!(ts, cli_before);
         assert_eq!(source, BeforeDateSource::Provided);
+    }
+
+    #[test]
+    fn test_minimum_release_age_label_only_names_the_value_that_produced_the_cutoff() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
+        let ba: BackendArg = "npm:prettier".into();
+
+        // The built-in default resolves to the cutoff it produced, so it is
+        // safe to name in an error message.
+        let default_cutoff = resolve_before_date_for_tool(&ba, None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            minimum_release_age_label(&ba, None, default_cutoff).as_deref(),
+            Some(DEFAULT_MINIMUM_RELEASE_AGE)
+        );
+
+        // A per-tool value is named the same way.
+        let tool_cutoff = resolve_before_date_for_tool(&ba, None, Some("7d"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            minimum_release_age_label(&ba, Some("7d"), tool_cutoff).as_deref(),
+            Some("7d")
+        );
+
+        // A cutoff passed down from --minimum-release-age matches no configured
+        // value, so nothing is named rather than the wrong date.
+        let flag_cutoff: Timestamp = "1990-01-01T00:00:00Z".parse().unwrap();
+        assert_eq!(minimum_release_age_label(&ba, None, flag_cutoff), None);
+        assert_eq!(
+            minimum_release_age_label(&ba, Some("7d"), flag_cutoff),
+            None
+        );
     }
 
     #[test]
     fn test_effective_minimum_release_age_for_tool_reports_raw_value() {
+        let _settings = crate::test::SettingsGuard::lock();
         Settings::reset(None);
         let ba: BackendArg = "npm:prettier".into();
 
@@ -480,11 +607,11 @@ mod tests {
         // Backend without release timestamps → no cutoff, no value
         let asdf_ba: BackendArg = "asdf:tiny".into();
         assert_eq!(effective_minimum_release_age_for_tool(&asdf_ba, None), None);
-        Settings::reset(None);
     }
 
     #[test]
     fn test_effective_before_date_stable_within_process() {
+        let _settings = crate::test::SettingsGuard::lock();
         // Covers the invariant behind #9156: relative durations resolve
         // identically across calls within one invocation.
         Settings::reset(None);
@@ -494,6 +621,77 @@ mod tests {
         let a = resolved_timestamp(None, None);
         let b = resolved_timestamp(None, None);
         assert_eq!(a, b);
-        Settings::reset(None);
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_with_duration_age() {
+        let created = "2026-06-26T14:03:00Z".parse().unwrap();
+        let (released, age) =
+            format_hidden_release_details(Some(created), Some("3d"), TimeZone::UTC);
+        assert_eq!(
+            released,
+            " (released 2026-06-26, eligible 2026-06-29 14:03 UTC)"
+        );
+        assert_eq!(age, " (3d)");
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_with_calendar_age() {
+        let created = "2023-03-01T14:03:00Z".parse().unwrap();
+        let (released, age) =
+            format_hidden_release_details(Some(created), Some("1y"), TimeZone::UTC);
+        assert_eq!(
+            released,
+            " (released 2023-03-01, eligible 2024-03-01 14:03 UTC)"
+        );
+        assert_eq!(age, " (1y)");
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_with_non_reversible_calendar_age() {
+        let created = "2019-01-31T15:30:00Z".parse().unwrap();
+        let (released, age) =
+            format_hidden_release_details(Some(created), Some("1mo"), TimeZone::UTC);
+        assert_eq!(
+            released,
+            " (released 2019-01-31, eligible 2019-03-01 00:00 UTC)"
+        );
+        assert_eq!(age, " (1mo)");
+    }
+
+    #[test]
+    fn test_release_is_eligible_at_uses_strict_cutoff() {
+        let created = "2024-01-01T00:00:00Z".parse().unwrap();
+        let age = "24h".parse().unwrap();
+        let exact_cutoff = "2024-01-02T00:00:00Z".parse().unwrap();
+        let after_cutoff = "2024-01-02T00:00:00.000000001Z".parse().unwrap();
+
+        assert!(!release_is_eligible_at(created, exact_cutoff, &age));
+        assert!(release_is_eligible_at(created, after_cutoff, &age));
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_with_absolute_age() {
+        // An absolute-date cutoff never becomes eligible, so no eligible time
+        let created = "2026-06-26T14:03:00Z".parse().unwrap();
+        let (released, age) =
+            format_hidden_release_details(Some(created), Some("2026-01-01"), TimeZone::UTC);
+        assert_eq!(released, " (released 2026-06-26)");
+        assert_eq!(age, " (2026-01-01)");
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_without_release_date() {
+        let (released, age) = format_hidden_release_details(None, Some("24h"), TimeZone::UTC);
+        assert_eq!(released, "");
+        assert_eq!(age, " (24h)");
+    }
+
+    #[test]
+    fn test_format_hidden_release_details_without_age() {
+        let created = "2026-06-26T14:03:00Z".parse().unwrap();
+        let (released, age) = format_hidden_release_details(Some(created), None, TimeZone::UTC);
+        assert_eq!(released, " (released 2026-06-26)");
+        assert_eq!(age, "");
     }
 }

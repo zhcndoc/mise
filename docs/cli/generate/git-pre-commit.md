@@ -16,6 +16,8 @@ description: "生成 git pre-commit 钩子"
 
 已暂存的文件会作为 `STAGED` 传递给该任务。
 
+git 传递消息文件的钩子（`commit-msg`、`prepare-commit-msg`、`applypatch-msg` 和 `sendemail-validate`）会将该文件传给任务。git 的其他参数不会转发，因此 `pre-push` 钩子的远程名称和 URL 不会追加到任务命令中。
+
 如需更高级的 pre-commit 功能，请查看 mise 的姊妹项目：<https://hk.jdx.dev/>
 
 ## 参数

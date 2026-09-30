@@ -187,6 +187,12 @@ TOML 值按如下方式映射为 property-list 类型：
 用户默认值是按用户设置的，因此与系统软件包不同，它们从不涉及 sudo。不支持 `sudo defaults`
 系统域。
 
+## 沙盒应用
+
+Safari 等沙盒应用会将偏好设置保存在 `~/Library/Containers/<domain>/Data/Library/Preferences/<domain>.plist`，而不是 `~/Library/Preferences`。当 `~/Library/Containers/<domain>` 存在时，mise 会读写容器的 plist；当前主机条目则使用容器的 `ByHost` 目录。这些就是 `defaults` 使用的文件。
+
+从未启动过的应用还没有容器，因此请先启动一次，再应用其默认设置。macOS 会保护其他应用的容器，因此终端可能需要“完全磁盘访问权限”（系统设置 → 隐私与安全性）才能让 `apply` 写入这些文件。
+
 ## 当前主机偏好设置
 
 对于通常使用 `defaults -currentHost` 写入的偏好设置，请使用显式条目：

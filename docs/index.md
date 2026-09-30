@@ -12,6 +12,7 @@ hero:
 
 <script setup>
 import ProjectSwitchDiagram from "./.vitepress/theme/ProjectSwitchDiagram.vue";
+import { data as showreel } from "./.vitepress/showreel.data";
 </script>
 
 <section class="landing-page" aria-label="mise 概览">
@@ -84,7 +85,7 @@ import ProjectSwitchDiagram from "./.vitepress/theme/ProjectSwitchDiagram.vue";
         </div>
         <div class="bootstrap-connector"><span aria-hidden="true">↓</span> <code>mise bootstrap</code></div>
         <div class="bootstrap-resources">
-          <div><strong>软件包</strong><span>brew · apt · winget</span></div>
+          <div><strong>软件包</strong><span>brew · apt · scoop · winget</span></div>
           <div><strong>代码仓库</strong><span>项目检出</span></div>
           <div><strong>Dotfiles</strong><span>链接 · 复制 · 模板</span></div>
           <div><strong>服务</strong><span>后台进程</span></div>
@@ -97,7 +98,7 @@ import ProjectSwitchDiagram from "./.vitepress/theme/ProjectSwitchDiagram.vue";
           声明机器所需的软件包、代码仓库、dotfiles 和服务，然后使用 <code>mise bootstrap</code> 应用它们。使用 <code>mise bootstrap plan</code> 预览声明式资源变更。添加 shell 激活和特定平台的设置，让机器设置与工具保持在一起。
         </p>
         <ul class="landing-checklist">
-          <li>通过 brew、apt、dnf、pacman、apk、mas 和 winget 安装软件包</li>
+          <li>通过 brew、apt、dnf、pacman、apk、mas、scoop 和 winget 安装软件包</li>
           <li>将 dotfiles 作为符号链接、复制文件或模板，并支持单行编辑</li>
           <li>通过 <code>mise bootstrap remote</code> 使用 SSH 连接远程主机</li>
         </ul>
@@ -224,7 +225,7 @@ import ProjectSwitchDiagram from "./.vitepress/theme/ProjectSwitchDiagram.vue";
     <div class="landing-mini-install"><code>curl https://mise.run | sh</code></div>
     <div class="landing-links">
       <a href="/getting-started">快速开始</a>
-      <a href="/demo">观看演示</a>
+      <a :href="showreel ? '/#showreel' : '/demo'">观看演示</a>
       <a href="https://github.com/jdx/mise">GitHub</a>
     </div>
   </div>

@@ -43,9 +43,21 @@ no_new_privileges = true
 private_tmp = true
 ```
 
-包含 `timer` 键的条目会被渲染为 `.timer`，而不是
-`.service`。例如：
+与图形会话绑定的服务可以随会话停止，并在启动前运行检查：
 
+~~~toml
+[bootstrap.linux.systemd.units.panel]
+description = "desktop panel"
+part_of = ["graphical-session.target"]
+after = ["graphical-session.target"]
+exec_start_pre = ["~/.local/bin/panel --check-config"]
+exec_start = "~/.local/bin/panel"
+wanted_by = ["graphical-session.target"]
+~~~
+
+wanted_by 只会在会话开始时启动服务；part_of 还会让它随 graphical-session.target 停止和重启。如果 exec_start_pre 命令失败，systemd 不会运行 exec_start，systemctl --user status 会将检查命令显示为失败原因。
+
+包含 timer 键的条目会被渲染为 .timer，而不是 .service。例如：
 ```toml
 [bootstrap.linux.systemd.units.healthcheck]
 description = "check daemon health"
@@ -90,10 +102,17 @@ unit = "healthcheck"
 | `after`                | `After`                        |
 | `wants`                | `Wants`                        |
 | `requires`             | `Requires`                     |
+| `before`               | `Before`                       |
+| `binds_to`             | `BindsTo`                      |
+| `part_of`              | `PartOf`                       |
+| `conflicts`            | `Conflicts`                    |
+| `exec_start_pre`       | `ExecStartPre`                 |
 | `exec_start`           | `ExecStart`                    |
+| `exec_start_post`      | `ExecStartPost`                |
 | `type`                 | `Type`                         |
 | `remain_after_exit`    | `RemainAfterExit`              |
 | `exec_stop`            | `ExecStop`                     |
+| `exec_stop_post`       | `ExecStopPost`                 |
 | `timeout_start_sec`    | `TimeoutStartSec`              |
 | `timeout_stop_sec`     | `TimeoutStopSec`               |
 | `no_new_privileges`    | `NoNewPrivileges`              |
@@ -126,14 +145,31 @@ unit = "healthcheck"
 单元命令不会继承交互式 shell 的 mise 激活状态。请设置明确的可执行文件路径和服务所需的环境。`ExecStart`
 使用 systemd 的命令语法；shell 运算符需要显式调用 shell 或使用包装脚本。
 
-`exec_start`、`exec_stop` 和 `working_directory` 会在写入服务文件之前，将裸
-`~` 和 `~/` 展开为当前用户的主目录。服务的 `wanted_by` 默认为
-`["default.target"]`，定时器的 `wanted_by` 默认为 `["timers.target"]`；设置
-`wanted_by = []` 可写入单元并禁用之前的任何启用状态。`start` 默认为
-`true`；设置 `start = false` 可写入并启用单元，同时不让其保持运行状态。
+after、before、wants、requires、binds_to、part_of 和 conflicts 是写入 [Unit] 部分的单元名称列表，因此同时适用于服务和定时器。exec_start_pre、exec_start_post 和 exec_stop_post 是命令列表；每个条目按顺序成为自己的 ExecStartPre=、ExecStartPost= 或 ExecStopPost= 行。这些键只适用于服务。
+
+在写入服务文件前，exec_* 键和 working_directory 会将裸 ~ 和 ~/ 展开为当前用户的主目录。在 exec_* 键中，systemd 命令前缀会保留在展开路径之前，因此 exec_start_pre = ["-~/bin/check"] 会从主目录运行可选检查。服务的 wanted_by 默认为 ["default.target"]，定时器的 wanted_by 默认为 ["timers.target"]；设置 wanted_by = [] 可写入单元并禁用之前的任何启用状态。start 默认为 true；设置 start = false 可写入并启用单元，同时不让其保持运行状态。
+
+## 模板
+
+在写入单元文件之前，unit 值会使用声明该 unit 的配置文件上下文，按照 Tera 模板渲染。这样，unit 可以随定义它的项目一起移动：
+
+~~~toml
+[bootstrap.linux.systemd.units.my-service]
+description = "my service"
+exec_start = "{{ config_root }}/bin/serve"
+working_directory = "{{ config_root }}"
+environment_file = ["{{ config_root }}/.env"]
+~~~
+
+如果该配置位于 ~/src/my-project/mise.toml，生成的 unit 会包含 WorkingDirectory=/home/you/src/my-project 和 EnvironmentFile=/home/you/src/my-project/.env。这对 environment_file 尤其重要，因为 systemd 不会展开 ~ 或 $HOME；在那里写入相对于主目录的路径时，另一种方式只有 %h。
+
+unit 中的每个字符串值都会渲染，包括 environment、environment_file 以及 unit 和命令列表中的条目。不包含模板语法的值会原样跳过渲染，因此 %h 和 %i 等 systemd specifier 会按原样进入 unit 文件；上文所述的 ~ 展开仍会在之后进行。模板渲染失败的 unit 会被报告并跳过，其他 unit 仍会应用。
+
+模板使用声明配置的上下文渲染，而不是当前目录，因此全局配置中声明的 unit 无论从哪里运行 mise bootstrap，<code v-pre>{{ config_root }}</code> 都会解析到该配置所在目录。
+
+unit 值不支持 <code v-pre>{{ exec(...) }}</code>。status、plan、apply --dry-run 和 apply 都会渲染相同声明，因此让 unit 启动 shell 要么会给只读命令带来副作用，要么会让预览与实际写入的 unit 文件不一致。请使用 <code v-pre>{{ vars.my_value }}</code> 或 <code v-pre>{{ env.MY_VALUE }}</code>，或在 [bootstrap hook](/bootstrap.html#hooks) 中计算值。
 
 ## 语义
-
 - **声明式且可追加**——单元名称会在
   [配置层级](/configuration.html)（全局 → 项目）中合并。同一单元名称的更局部配置会替换其完整声明。当条目在服务和定时器之间发生变化时，mise 会停止、禁用并移除过时的同级单元。
 - **仅限 Linux**——在其他平台上，此部分不会生效：

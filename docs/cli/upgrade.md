@@ -28,6 +28,7 @@ description: "升级过时的工具"
   这将安装 22.1.0，并在配置中设置 `node = "22.1.0"`。
 
   它会保留之前版本的精度，因此如果之前是 `node = "20"`，它会将配置改为 `node = "22"`。
+- 当显式提供选择器（`node@latest`、`node@3` 或 `node@prefix:3`）时，会持久化该选择器。对于版本选择器，`settings.pin` 会持久化解析后的具体版本。来自不可写来源的请求不会持久化。例如，`mise upgrade node@latest --bump` 会写入 `latest`。
 - **`-i --interactive`** — 从多选菜单中选择要升级的工具
 - **`-j --jobs <JOBS>`** — 并行运行的任务数
   小于 1 的值将按 1 处理

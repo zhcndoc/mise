@@ -1,5 +1,5 @@
 use crate::cmd::cmd;
-use crate::config::{Config, Settings, config_file};
+use crate::config::{Config, Settings, SettingsExt, config_file};
 use crate::shell::Shell;
 use crate::tera::{contains_template_syntax, get_tera, render_str};
 use crate::toolset::{ToolVersion, Toolset};
@@ -15,9 +15,20 @@ use tokio::sync::OnceCell;
 
 /// Represents installed tool info for hooks
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct InstalledToolInfo {
+pub struct InstalledToolInfo {
     pub name: String,
     pub version: String,
+    /// The canonical form of the selector the tool was requested with, before
+    /// resolution (e.g. `latest`, `prefix:1.2`, `ref:main`). Hooks cannot
+    /// recover this from `version` alone, and the install is not yet visible
+    /// to `mise ls`.
+    pub requested_version: String,
+    /// Canonical backend identifier used by the completed installation. Backend
+    /// options are omitted because they may contain registry credentials.
+    pub backend: String,
+    /// Exact installation directory for this resolved version, never a floating
+    /// runtime symlink such as `latest` or a version prefix.
+    pub install_path: String,
 }
 
 impl From<&ToolVersion> for InstalledToolInfo {
@@ -25,8 +36,28 @@ impl From<&ToolVersion> for InstalledToolInfo {
         Self {
             name: tv.ba().short.clone(),
             version: tv.version.clone(),
+            requested_version: tv.request.version(),
+            backend: hook_backend_identifier(&tv.ba().full_without_opts()),
+            install_path: tv.install_path().to_string_lossy().to_string(),
         }
     }
+}
+
+/// Remove URL secrets and query options before exposing a backend to hooks.
+fn hook_backend_identifier(full: &str) -> String {
+    let Some((backend, value)) = full.split_once(':') else {
+        return full.to_string();
+    };
+    let Ok(mut url) = url::Url::parse(value) else {
+        return full.to_string();
+    };
+    if url.scheme() != "ssh" {
+        let _ = url.set_username("");
+    }
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    format!("{backend}:{url}")
 }
 
 #[derive(
@@ -43,7 +74,7 @@ impl From<&ToolVersion> for InstalledToolInfo {
     Hash,
 )]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Hooks {
+pub enum Hooks {
     Enter,
     Leave,
     Cd,
@@ -73,6 +104,19 @@ pub(crate) enum HookDef {
     /// Array of hook definitions: `enter = ["echo hello", { task = "setup" }]`
     Array(Vec<HookDefItem>),
     One(HookDefItem),
+}
+
+impl HookDef {
+    /// This definition followed by the hooks of `later`, so both run.
+    pub(crate) fn then(self, later: HookDef) -> HookDef {
+        let items = |def: HookDef| match def {
+            HookDef::Array(items) => items,
+            HookDef::One(item) => vec![item],
+        };
+        let mut all = items(self);
+        all.extend(items(later));
+        HookDef::Array(all)
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -208,7 +252,7 @@ fn script_hook_action(
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub(crate) struct Hook {
+pub struct Hook {
     pub hook: Hooks,
     pub action: HookAction,
     /// Whether this hook comes from a global config (skip directory matching)
@@ -216,7 +260,7 @@ pub(crate) struct Hook {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub(crate) enum HookAction {
+pub enum HookAction {
     Run {
         run: Option<String>,
         run_windows: Option<String>,
@@ -291,12 +335,31 @@ impl HookAction {
 
 pub(crate) static SCHEDULED_HOOKS: Lazy<Mutex<IndexSet<Hooks>>> = Lazy::new(Default::default);
 
+/// The first failed write of current-shell hook output. The hook runners cannot return an
+/// error, so `hook-env` takes it afterwards and fails (or exits quietly on a closed pipe)
+/// instead of exiting 0 with truncated shell code.
+static OUTPUT_ERROR: Mutex<Option<std::io::Error>> = Mutex::new(None);
+
+fn record_output_error(err: std::io::Error) {
+    if err.kind() != std::io::ErrorKind::BrokenPipe {
+        warn!("failed to write hook output: {err}");
+    }
+    OUTPUT_ERROR.lock().unwrap().get_or_insert(err);
+}
+
+pub fn take_output_error() -> std::io::Result<()> {
+    match OUTPUT_ERROR.lock().unwrap().take() {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn schedule_hook(hook: Hooks) {
     let mut mu = SCHEDULED_HOOKS.lock().unwrap();
     mu.insert(hook);
 }
 
-pub(crate) async fn run_all_hooks(config: &Arc<Config>, ts: &Toolset, shell: &dyn Shell) {
+pub async fn run_all_hooks(config: &Arc<Config>, ts: &Toolset, shell: &dyn Shell) {
     if Settings::no_hooks() || Settings::get().no_hooks.unwrap_or(false) || Settings::get().safe {
         return;
     }
@@ -353,7 +416,7 @@ pub(crate) async fn run_one_hook(
 
 /// Run a hook with optional installed tools context (for postinstall hooks)
 #[async_backtrace::framed]
-pub(crate) async fn run_one_hook_with_context(
+pub async fn run_one_hook_with_context(
     config: &Arc<Config>,
     ts: &Toolset,
     hook: Hooks,
@@ -438,7 +501,7 @@ pub(crate) async fn run_one_hook_with_context(
     }
 }
 
-pub(crate) async fn run_enter_hooks_for_newly_loaded_configs(
+pub async fn run_enter_hooks_for_newly_loaded_configs(
     config: &Arc<Config>,
     ts: &Toolset,
     shell: &dyn Shell,
@@ -536,35 +599,33 @@ async fn run_matched_hook(
             }
         }
         HookAction::CurrentShell { script, .. } => {
+            let mut out = String::new();
             if let Some(shell) = shell {
                 // Set hook environment variables so shell hooks can access them
-                println!(
-                    "{}",
-                    shell.set_env("MISE_PROJECT_ROOT", &roots.project.to_string_lossy())
-                );
-                println!(
-                    "{}",
-                    shell.set_env("MISE_CONFIG_ROOT", &roots.config.to_string_lossy())
-                );
+                out.push_str(&shell.set_env("MISE_PROJECT_ROOT", &roots.project.to_string_lossy()));
+                out.push('\n');
+                out.push_str(&shell.set_env("MISE_CONFIG_ROOT", &roots.config.to_string_lossy()));
+                out.push('\n');
                 if let Some(cwd) = dirs::CWD.as_ref() {
-                    println!(
-                        "{}",
-                        shell.set_env("MISE_ORIGINAL_CWD", &cwd.to_string_lossy())
-                    );
+                    out.push_str(&shell.set_env("MISE_ORIGINAL_CWD", &cwd.to_string_lossy()));
+                    out.push('\n');
                 }
                 if let Some((Some(old), _new)) = hook_env::dir_change() {
-                    println!(
-                        "{}",
-                        shell.set_env("MISE_PREVIOUS_DIR", &old.to_string_lossy())
-                    );
+                    out.push_str(&shell.set_env("MISE_PREVIOUS_DIR", &old.to_string_lossy()));
+                    out.push('\n');
                 }
                 if let Some(tools) = installed_tools
                     && let Ok(json) = serde_json::to_string(tools)
                 {
-                    println!("{}", shell.set_env("MISE_INSTALLED_TOOLS", &json));
+                    out.push_str(&shell.set_env("MISE_INSTALLED_TOOLS", &json));
+                    out.push('\n');
                 }
             }
-            println!("{script}");
+            out.push_str(script);
+            out.push('\n');
+            if let Err(err) = miseprint!("{out}") {
+                record_output_error(err);
+            }
         }
         HookAction::Run { .. } => {
             if let Err(e) = execute(
@@ -855,11 +916,81 @@ fn task_hook_args(root: &Path, hook: Hooks, task_name: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::{BackendArg, BackendResolution};
+    use crate::toolset::{ToolRequest, ToolSource};
     use serde::Deserialize;
 
     #[derive(Deserialize)]
     struct TestHook {
         hook: HookDef,
+    }
+
+    fn opencodex_tool_version(version: &str, installs_path: &Path) -> ToolVersion {
+        let mut backend = BackendArg::new_raw(
+            "opencodex".into(),
+            Some("npm:@bitkyc08/opencodex".into()),
+            "@bitkyc08/opencodex".into(),
+            None,
+            BackendResolution::new(true),
+        );
+        backend.set_installs_path(installs_path.to_path_buf());
+        let request = ToolRequest::new(Arc::new(backend), "latest", ToolSource::Argument).unwrap();
+        ToolVersion::new(request, version.into())
+    }
+
+    #[test]
+    fn installed_tool_info_serializes_opaque_versions_and_exact_paths() {
+        let installs_path = Path::new("/tmp/data with spaces/installs/opencodex");
+        let tool_version = opencodex_tool_version("preview/channel@build+7", installs_path);
+        let info = InstalledToolInfo::from(&tool_version);
+        let expected_install_path = installs_path
+            .join("preview-channel@build+7")
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(
+            serde_json::to_value(info).unwrap(),
+            serde_json::json!({
+                "name": "opencodex",
+                "version": "preview/channel@build+7",
+                "requested_version": "latest",
+                "backend": "npm:@bitkyc08/opencodex",
+                "install_path": expected_install_path,
+            })
+        );
+    }
+
+    #[test]
+    fn hook_backend_identifiers_remove_url_credentials() {
+        assert_eq!(
+            hook_backend_identifier(
+                "http:https://build:secret@example.com/tools/archive.tgz?token=secret#bin"
+            ),
+            "http:https://example.com/tools/archive.tgz"
+        );
+        assert_eq!(
+            hook_backend_identifier(
+                "asdf:ssh://git:secret@gitlab.dev/org/plugin.git?token=secret#ref"
+            ),
+            "asdf:ssh://git@gitlab.dev/org/plugin.git"
+        );
+        assert_eq!(
+            hook_backend_identifier("npm:@bitkyc08/opencodex"),
+            "npm:@bitkyc08/opencodex"
+        );
+    }
+
+    #[test]
+    fn installed_tool_info_preserves_windows_path_spelling() {
+        let install_path = PathBuf::from(r"C:\Data Root\mise\installs\opencodex\2.59.0");
+        let mut tool_version = opencodex_tool_version("2.59.0", Path::new("unused"));
+        tool_version.install_path = Some(install_path);
+        let info = InstalledToolInfo::from(&tool_version);
+
+        assert_eq!(
+            serde_json::to_value(info).unwrap()["install_path"],
+            r"C:\Data Root\mise\installs\opencodex\2.59.0"
+        );
     }
 
     #[test]

@@ -14,6 +14,8 @@ description: 在 mise bootstrap 期间使本地 Windows 软件包与 WinGet 保�
 
 使用 `winget search` 显示的软件包标识符，而不是显示名称。mise 会将该标识符与 `--id` 和 `--exact` 一起传递给 WinGet，因此 bootstrap 永远不会接受含糊的模糊匹配。
 
+WinGet 软件包 ID 不区分大小写；请保持拼写一致，以避免[声明冲突](/bootstrap/packages/#semantics)。
+
 ## 命令
 
 ```sh
@@ -34,4 +36,4 @@ mise bootstrap packages upgrade --manager winget
 
 该管理器仅在 `winget.exe` 位于 `PATH` 中的 Windows 上可用。共享配置可以包含 `winget:` 条目以及 Linux 或 macOS 软件包条目；不可用的管理器会被报告为已跳过，不会阻止其他平台的 bootstrap。
 
-此支持仅适用于运行 `mise bootstrap` 的 Windows 本地计算机。[`mise bootstrap remote`](/bootstrap/remote.html) 仍需要 POSIX shell 目标；原生 Windows SSH/PowerShell 目标尚不支持。Scoop 和 Chocolatey 也不在此首个实现的范围内。
+此支持仅适用于运行 `mise bootstrap` 的 Windows 本地计算机。[`mise bootstrap remote`](/bootstrap/remote.html) 仍需要 POSIX shell 目标；原生 Windows SSH/PowerShell 目标尚不支持。Scoop 软件包有自己的 [`scoop`](/bootstrap/packages/scoop.html) 管理器；不支持 Chocolatey。

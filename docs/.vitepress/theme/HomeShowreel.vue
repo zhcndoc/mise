@@ -14,8 +14,8 @@ import { data as showreel } from "../showreel.data";
 function spoken(seconds: number) {
   const s = Math.round(seconds);
   const [m, r] = [Math.floor(s / 60), s % 60];
-  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  return [m && unit(m, "minute"), r && unit(r, "second")]
+  const unit = (n: number, word: string) => `${n}${word}`;
+  return [m && unit(m, "分钟"), r && unit(r, "秒")]
     .filter(Boolean)
     .join(" ");
 }
@@ -103,7 +103,7 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
     class="home-showreel"
     aria-labelledby="showreel-title"
   >
-    <h2 id="showreel-title" class="sr-only">Showreel</h2>
+    <h2 id="showreel-title" class="sr-only">视频展示</h2>
     <figure>
       <div class="home-showreel-stage">
         <!-- No autoplay, and nothing downloads until someone presses play. -->
@@ -116,14 +116,14 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
           :controls="!hydrated || started"
           playsinline
           preload="none"
-          :aria-label="`mise showreel, ${length}: dev tools, versions, environments, tasks, dotfiles, and a new machine, in terminal output recorded from real runs. Chapters are listed below.`"
+          :aria-label="`mise 视频展示，${length}：开发工具、版本、环境、任务、点文件和新机器，内容来自真实运行记录。章节列于下方。`"
           @play="started = true"
         >
           <!-- Generated from the reel's acts; see showreel/timeline.ts. -->
           <track
             kind="chapters"
             srclang="en"
-            label="Chapters"
+            label="章节"
             :src="withBase(showreel.track)"
             default
           />
@@ -134,7 +134,7 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
           ref="button"
           type="button"
           class="home-showreel-play"
-          :aria-label="`Play the mise showreel (${length})`"
+          :aria-label="`播放 mise 视频展示（${length}）`"
           @click="play"
         >
           <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -143,18 +143,17 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
           </svg>
         </button>
       </div>
-      <ol class="sr-only" aria-label="Showreel chapters">
+      <ol class="sr-only" aria-label="视频展示章节">
         <li v-for="c in chapters" :key="c.id">
           {{ c.label }}, at {{ c.at }}{{ c.text ? `: ${c.text}` : "." }}
         </li>
       </ol>
       <figcaption>
-        A {{ runtime }} tour of mise, from a first <code>mise use</code> to
-        setting up a new machine. Every terminal line was recorded in a real
-        shell with a released mise, and the captions are on screen, so it works
-        with the sound off.
+        一段 {{ runtime }} 的 mise 之旅：从第一次运行 <code>mise use</code> 到
+        设置一台新机器。每一行终端内容都来自真实 shell 中运行的正式版 mise，
+        屏幕上提供字幕，因此静音也能观看。
         <a :href="withBase('/getting-started')"
-          >Get started <span aria-hidden="true">→</span></a
+          >快速开始 <span aria-hidden="true">→</span></a
         >
       </figcaption>
     </figure>

@@ -6,34 +6,34 @@ defineProps(["setting", "level"]);
   <h2 v-if="level === 2" :id="setting.key">
     <code>{{ setting.key }}</code
     ><a :href="`#${setting.key}`" class="header-anchor"></a>
-    <span v-if="setting.deprecated" class="VPBadge warning">deprecated</span>
+    <span v-if="setting.deprecated" class="VPBadge warning">已弃用</span>
   </h2>
   <h3 v-if="level === 3" :id="setting.key">
     <code>{{ setting.key }}</code
     ><a :href="`#${setting.key}`" class="header-anchor"></a>
-    <span v-if="setting.deprecated" class="VPBadge warning">deprecated</span>
+    <span v-if="setting.deprecated" class="VPBadge warning">已弃用</span>
   </h3>
   <h4 v-if="level === 4" :id="setting.key">
     <code>{{ setting.key }}</code
     ><a :href="`#${setting.key}`" class="header-anchor"></a>
-    <span v-if="setting.deprecated" class="VPBadge warning">deprecated</span>
+    <span v-if="setting.deprecated" class="VPBadge warning">已弃用</span>
   </h4>
 
   <ul>
     <li>
-      Type: <code>{{ setting.type }}</code>
-      <span v-if="setting.optional">(optional)</span>
+      类型：<code>{{ setting.type }}</code>
+      <span v-if="setting.optional">（可选）</span>
     </li>
     <li v-if="setting.env">
-      Env: <code>{{ setting.env }}</code>
-      <span v-if="setting.parseEnv">({{ setting.parseEnv }} separated)</span>
+      环境变量：<code>{{ setting.env }}</code>
+      <span v-if="setting.parseEnv">（按 {{ setting.parseEnv }} 分隔）</span>
     </li>
     <li>
-      Default: <code>{{ setting.default }}</code>
+      默认值：<code>{{ setting.default }}</code>
     </li>
-    <li v-if="setting.deprecated">Deprecated: {{ setting.deprecated }}</li>
+    <li v-if="setting.deprecated">已弃用：{{ setting.deprecated }}</li>
     <li v-if="setting.enum">
-      Choices:
+      可选值：
       <ul>
         <li v-for="choice in setting.enum">
           <template

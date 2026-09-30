@@ -11,7 +11,7 @@ const selected = ref(projects[0]);
 <template>
   <figure
     class="project-switch-diagram"
-    aria-label="Project configuration follows your directory"
+    aria-label="项目配置随目录切换"
   >
     <div class="projects">
       <button
@@ -19,7 +19,7 @@ const selected = ref(projects[0]);
         :key="project.name"
         type="button"
         :aria-pressed="selected.name === project.name"
-        :aria-label="`Show the shell environment in ${project.name}`"
+        :aria-label="`显示 ${project.name} 的 shell 环境`"
         @click="selected = project"
       >
         <span class="project-path">{{ project.name }}/mise.toml</span>
@@ -38,7 +38,7 @@ const selected = ref(projects[0]);
     </div>
     <div class="project-shell" aria-live="polite" aria-atomic="true">
       <div class="project-shell-bar">
-        <span>Active shell</span><span>~/work/{{ selected.name }}</span>
+        <span>当前 shell</span><span>~/work/{{ selected.name }}</span>
       </div>
       <dl>
         <div>
@@ -52,8 +52,7 @@ const selected = ref(projects[0]);
       </dl>
     </div>
     <figcaption>
-      Choose a project to see its environment. Shell activation and installed
-      tool versions are required.
+      选择一个项目以查看其环境。需要启用 shell，并安装对应的工具版本。
     </figcaption>
   </figure>
 </template>

@@ -8,19 +8,19 @@ const demoLink = showreel ? "/#showreel" : "/demo";
 
 const examples = [
   {
-    name: "Tools",
+    name: "工具",
     section: "[tools]",
     lines: ['node = "24"', 'python = "3.13"', 'terraform = "1.13"'],
     command: "mise install",
     output: [
       "✓ node, python, terraform installed",
-      "Tool versions ready for this project.",
+      "项目工具版本已就绪。",
     ],
-    caption: "Tool versions for this project",
+    caption: "此项目的工具版本",
     link: "/dev-tools/",
   },
   {
-    name: "Environments",
+    name: "环境",
     section: "[env]",
     lines: [
       'DATABASE_URL = "postgres://localhost/app"',
@@ -28,31 +28,31 @@ const examples = [
     ],
     command: "mise env",
     output: ["export DATABASE_URL=postgres://localhost/app"],
-    caption: "Project environment variables",
+    caption: "项目环境变量",
     link: "/environments/",
   },
   {
-    name: "Tasks",
+    name: "任务",
     section: "[tasks.test]",
     lines: ['run = "python -m unittest"'],
     command: "mise run test",
-    output: ["[test] $ python -m unittest", "Ran 42 tests", "OK"],
-    caption: "A named command to run tests",
+    output: ["[test] $ python -m unittest", "已运行 42 个测试", "通过"],
+    caption: "用于运行测试的命名命令",
     link: "/tasks/",
   },
   {
-    name: "Bootstrap",
+    name: "引导",
     section: "[bootstrap.packages]",
     lines: ['"brew:jq" = "latest"', '"apt:build-essential" = "latest"'],
     command: "mise bootstrap",
-    output: ["✓ System packages installed", "✓ Dev tools ready"],
-    caption: "System packages to install",
+    output: ["✓ 系统软件包已安装", "✓ 开发工具已就绪"],
+    caption: "要安装的系统软件包",
     link: "/bootstrap",
   },
 ];
 const selected = ref(0);
 const active = computed(() => examples[selected.value]);
-const copyState = ref("Copy");
+const copyState = ref("复制");
 const installCommand = "curl https://mise.run | sh";
 const installCode = ref<HTMLElement | null>(null);
 let copyTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -84,8 +84,8 @@ async function copyInstall() {
   clearTimeout(copyTimeout);
   if (!installCode.value) return;
   if (copied) {
-    copyState.value = "Copied!";
-    copyTimeout = setTimeout(() => (copyState.value = "Copy"), 2500);
+    copyState.value = "已复制！";
+    copyTimeout = setTimeout(() => (copyState.value = "复制"), 2500);
   } else {
     const selection = window.getSelection();
     if (selection) {
@@ -94,9 +94,9 @@ async function copyInstall() {
       range.selectNodeContents(installCode.value);
       selection.removeAllRanges();
       selection.addRange(range);
-      copyState.value = "Press Ctrl/Cmd+C";
+      copyState.value = "按 Ctrl/Cmd+C";
     } else {
-      copyState.value = "Select to copy";
+      copyState.value = "选择以复制";
     }
   }
 }
@@ -109,36 +109,34 @@ onUnmounted(() => clearTimeout(copyTimeout));
       <a class="hero-song" href="/mise-en-place">
         <span class="hero-song-play" aria-hidden="true">▶</span>
         <span
-          >New: <strong>mise run</strong>, the theme song<span
+          >新歌：<strong>mise run</strong>，主题曲<span
             class="hero-song-extra"
           >
-            and music video</span
+            与音乐视频</span
           ></span
         >
         <span class="hero-song-arrow" aria-hidden="true">→</span>
       </a>
       <h1 id="home-title" class="hero-title">mise-en-place</h1>
-      <p class="hero-meaning">Development tools, environments, and tasks</p>
+      <p class="hero-meaning">开发工具、环境和任务</p>
       <p class="hero-pronunciation">
-        mise is pronounced <strong>“meez”</strong>
+        mise 的发音是 <strong>“meez”</strong>
       </p>
       <p class="hero-lede">
-        Define your tool versions, environment variables, and project commands
-        in <code>mise.toml</code>. mise installs the tools and makes the
-        configuration available in your shell, editor, and CI.
+        在 <code>mise.toml</code> 中定义工具版本、环境变量和项目命令。mise 会安装这些工具，并让配置在 shell、编辑器和 CI 中可用。
       </p>
       <div class="hero-actions">
         <a class="action-btn action-btn-brand" href="/getting-started">
-          Get started <span aria-hidden="true">→</span>
+          快速开始 <span aria-hidden="true">→</span>
         </a>
-        <a class="action-btn action-btn-alt" :href="demoLink">Watch the demo</a>
+        <a class="action-btn action-btn-alt" :href="demoLink">观看演示</a>
       </div>
       <div class="hero-install">
         <span class="install-prompt" aria-hidden="true">$</span>
         <code ref="installCode" tabindex="-1">{{ installCommand }}</code>
         <button
           type="button"
-          aria-label="Copy mise install command"
+          aria-label="复制 mise 安装命令"
           @click="copyInstall"
         >
           <span aria-live="polite">{{ copyState }}</span>
@@ -147,7 +145,7 @@ onUnmounted(() => clearTimeout(copyTimeout));
       <p class="hero-install-note">
         macOS &amp; Linux <span aria-hidden="true">·</span>
         <a href="/getting-started#installing-mise-cli"
-          >Installing on Windows?</a
+          >在 Windows 上安装？</a
         >
       </p>
     </div>
@@ -156,12 +154,12 @@ onUnmounted(() => clearTimeout(copyTimeout));
         <span class="workbench-file"
           ><span aria-hidden="true">≡</span> mise.toml</span
         >
-        <span>Example configuration</span>
+        <span>示例配置</span>
       </div>
       <div
         class="workbench-select"
         role="group"
-        aria-label="Explore mise features"
+        aria-label="探索 mise 功能"
       >
         <button
           v-for="(example, index) in examples"
@@ -178,14 +176,14 @@ onUnmounted(() => clearTimeout(copyTimeout));
         <div class="workbench-config">
           <p class="workbench-comment"># {{ active.caption }}</p>
           <pre
-            :aria-label="`${active.name} configuration example`"
+            :aria-label="`${active.name}配置示例`"
           ><code><span class="workbench-section">{{ active.section }}</span>
 <span v-for="line in active.lines" :key="line" class="workbench-line">{{ line.split(' = ')[0] }}<span class="workbench-equals"> = </span><span class="workbench-value">{{ line.split(' = ')[1] }}</span>
 </span></code></pre>
         </div>
         <div class="workbench-terminal">
           <p class="workbench-terminal-label">
-            Illustrative output <span>~/my-project</span>
+            示例输出 <span>~/my-project</span>
           </p>
           <pre><code><span class="workbench-prompt">$</span> {{ active.command }}
 <span v-for="line in active.output" :key="line" class="workbench-output">{{ line }}
@@ -193,17 +191,17 @@ onUnmounted(() => clearTimeout(copyTimeout));
         </div>
       </div>
       <a class="workbench-guide" :href="active.link"
-        >Explore {{ active.name.toLowerCase() }}
+        >探索{{ active.name }}
         <span aria-hidden="true">↗</span></a
       >
     </div>
   </section>
   <div class="hero-footnote">
-    <span>Project configuration in mise.toml</span>
-    <ul aria-label="About mise">
-      <li>Open source &amp; MIT licensed</li>
-      <li>macOS, Linux &amp; Windows</li>
-      <li>Single CLI</li>
+    <span>mise.toml 中的项目配置</span>
+    <ul aria-label="关于 mise">
+      <li>开源并采用 MIT 许可</li>
+      <li>macOS、Linux 和 Windows</li>
+      <li>单一 CLI</li>
     </ul>
   </div>
 </template>

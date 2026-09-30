@@ -2,25 +2,25 @@
   <input
     class="filter"
     type="text"
-    placeholder="Filter by Short or Full"
+    placeholder="按简写或完整名称筛选"
     v-model="filter"
     autofocus="autofocus"
   />
   <label class="verified-filter">
     <input type="checkbox" v-model="verifiedOnly" />
-    Only show tools with signature or provenance verification
+    仅显示经过签名或来源证明验证的工具
   </label>
   <table class="full-width">
     <thead>
       <tr>
-        <th>Short</th>
-        <th>Full</th>
-        <th>OS</th>
+        <th>简写</th>
+        <th>完整名称</th>
+        <th>操作系统</th>
       </tr>
     </thead>
     <tbody>
       <tr v-if="filteredData.length === 0">
-        <td colspan="3" class="no-matches">No matches found</td>
+        <td colspan="3" class="no-matches">没有匹配项</td>
       </tr>
       <tr
         v-else
@@ -37,8 +37,8 @@
           <a
             class="mise-versions"
             :href="`https://mise-versions.jdx.dev/tools/${encodeURIComponent(entry.short)}`"
-            title="Versions and security info on mise-versions"
-            >details ↗</a
+            title="在 mise-versions 查看版本和安全信息"
+            >详情 ↗</a
           >
         </td>
         <td>
@@ -82,15 +82,15 @@ export default {
       verificationLabels: {
         packslip: {
           label: "packslip",
-          title: "Signed packslip release manifest",
+          title: "已签名的 Packslip 发布清单",
         },
         "github-attestations": {
           label: "attestations",
-          title: "GitHub artifact attestations",
+          title: "GitHub 构件证明",
         },
-        slsa: { label: "SLSA", title: "SLSA provenance" },
-        cosign: { label: "cosign", title: "Cosign signature" },
-        minisign: { label: "minisign", title: "Minisign signature" },
+        slsa: { label: "SLSA", title: "SLSA 来源证明" },
+        cosign: { label: "cosign", title: "Cosign 签名" },
+        minisign: { label: "minisign", title: "Minisign 签名" },
       },
     };
   },

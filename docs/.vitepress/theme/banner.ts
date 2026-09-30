@@ -173,7 +173,7 @@ function render(b: BannerData, persist = true): void {
     msg.textContent = next.message;
     if (next.link && isHttpUrl(next.link)) {
       link.href = next.link;
-      link.textContent = next.linkText || "Learn more";
+      link.textContent = next.linkText || "了解更多";
       link.hidden = false;
     } else {
       link.removeAttribute("href");

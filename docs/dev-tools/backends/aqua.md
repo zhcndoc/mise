@@ -87,6 +87,20 @@ mise exec -- rg --version
 
 ## 工具选项
 
+### `slsa_signer_identity` 和 `slsa_signer_issuer`
+
+某些注册表条目配置了 `slsa_provenance`，但没有配置预期的签名者，因此 mise 会跳过这些条目的 SLSA，
+要求 SLSA 的现有锁定文件也会失败。设置预期的 Fulcio 证书 URI subject 和 OIDC issuer，即可自行提供签名者：
+
+```toml
+[tools]
+"aqua:google/osv-scanner" = { version = "2.6.0", slsa_signer_identity = "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0", slsa_signer_issuer = "https://token.actions.githubusercontent.com" }
+```
+
+两个选项必须同时设置，并且必须与证书完全匹配；它们会替换注册表条目中的任何签名者。
+两个值中都可以使用 <span v-pre>`{{.Version}}`</span> aqua 模板。请从项目的发布来源证明中查找签名者，
+不要从未经审查的来源复制。此选项只提供签名者：如果软件包的注册表条目没有 `slsa_provenance`，它不会启用 SLSA。
+
 ### `symlink_bins`
 
 有些工具会捆绑额外的可执行文件，这些文件你可能不希望暴露在 PATH 上。例如，`aws-cli` 会捆绑
@@ -144,6 +158,10 @@ under that setting a tool's `libc = "glibc"` has no effect. The value is recorde
 so changing it resolves the tool again. A version that is already installed keeps its
 build until you reinstall it with `mise install --force`, as with other install options.
 
+在没有通过工具的 `libc = "musl"` 或设置中的 `libc = "musl"` 请求 musl 构建的 musl 平台上（例如 Alpine 主机），
+mise 不会主动寻找 musl 构建。它会安装 aqua 注册表指定的构件，无论这是 glibc 还是 musl 构建；因此，注册表条目
+只指定 glibc 构建的工具也会安装该构建。要在 Alpine 上运行 glibc 构建，需要 glibc 或 gcompat 等兼容运行时。
+
 `libc` affects install, lock, and resolving `latest` from the release GitHub marks as latest. The
 full version list (`mise ls-remote`) is shared by every configuration of a tool, so it still uses the
 host's libc.
@@ -188,9 +206,13 @@ mise 原生实现了校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign
 相应的 `aqua.*` 验证设置默认处于启用状态。某些检查还具有全局设置，例如
 `github_attestations` 或 `slsa`。完整配置请参阅[设置](#settings)。
 
-签名者字段必须是 Fulcio 证书 URI subject 和 OIDC issuer 的准确值。缺少这些字段的注册表软件包会跳过 SLSA，并可能使用其他验证方式。要求 SLSA 的现有锁文件会失败，直到补充签名者元数据，或使用其他验证方式刷新锁文件。
+签名者字段分别是 Fulcio 证书 URI subject 和 OIDC issuer 的准确值。没有这些字段的注册表软件包会跳过
+SLSA，并可能使用其他验证方式。若要让 `mise lock` 为注册表条目声明了来源证明构件但未声明签名者的软件包
+验证并记录 SLSA，请在工具选项中设置签名者；请参阅[`slsa_signer_identity` 和 `slsa_signer_issuer`](#slsa_signer_identity-and-slsa_signer_issuer)。
 
-经过验证的[锁定文件](/dev-tools/mise-lock.html)可以在检查构件摘要时复用之前的非 SLSA 来源证明结果；SLSA 始终检查当前预期的签名者。设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
+经过验证的[锁定文件](/dev-tools/mise-lock.html)是可信的：当其中记录了校验和和来源证明（包括 SLSA）时，
+mise 会检查构件摘要，但不会再次验证来源证明，因此从其中安装时不需要签名者。设置
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
 
 ### 故障排查
 

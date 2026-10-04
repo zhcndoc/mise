@@ -6,10 +6,11 @@
 // and offers the 60 fps file as og:video. Every frame of the reel
 // is a pure function of time and of the capture set, which it loads from
 // docs/.vitepress/showreel-capture/out (theme/showreel/load.ts; a missing
-// take draws a labelled box). The score is rendered offline, and the end
-// card's recording (theme/showreel/score/song.ts) is cut from
-// docs/.vitepress/theme/showreel/score/mise-en-place.mp3 and mixed over it with ffmpeg. None of the
-// outputs is committed (docs/.gitignore).
+// take draws a labelled box). The soundtrack is rendered offline in the
+// page: the score's sound design over the bed, the recorded music track
+// committed at docs/.vitepress/theme/showreel/score/bed.opus
+// (theme/showreel/score/bed.ts), which this reads, checks and hands to the
+// page to decode. None of the outputs is committed (docs/.gitignore).
 //
 // Needs ffmpeg on PATH and a Chromium: SHOWREEL_CHROMIUM (or CHROME_PATH),
 // else Playwright's headless shell (`aube exec playwright-core install
@@ -21,6 +22,7 @@
 //   aube run showreel:video --out <file.mp4> [--fps 30|60|120] [--from <s>] [--until <s>] [--section <id>] [--burn-in]
 //   aube run showreel:video --audio-only <file.wav> [--from <s>] [--until <s>] [--section <id>]
 //
+//   --edition tour|overview|source  choose a film (default tour; --section uses source)
 //   --out <file.mp4>         one video, at --fps (default 60), to this file only
 //   --fps 30|60|120          the draft's frame rate; 30 for animatics
 //   --from <seconds>         the first frame, reel time (default 0); with
@@ -30,8 +32,8 @@
 //   --section <id>           the range of one section, as --from and --until
 //   --burn-in                burn the timecode, act, section and beat into
 //                            the corner of every frame
-//   --audio-only <file.wav>  only the soundtrack (the score and the end
-//                            card's recording), as 48 kHz 16-bit stereo PCM
+//   --audio-only <file.wav>  only the soundtrack (the score over the bed),
+//                            as 48 kHz 16-bit stereo PCM
 //
 // With no arguments it makes the full render. Every other flag needs --out
 // or --audio-only, which must name a file outside docs/public, so only a
@@ -132,6 +134,11 @@ function parseArgs(argv) {
       case "--until":
         o.until = seconds(value(i++, a), a);
         break;
+      case "--edition":
+        o.edition = value(i++, a);
+        if (!["tour", "overview", "source"].includes(o.edition))
+          fail("--edition is tour, overview or source");
+        break;
       case "--section":
         o.section = value(i++, a);
         break;
@@ -196,6 +203,11 @@ function parseArgs(argv) {
 
 const opts = parseArgs(process.argv.slice(2));
 const draft = Boolean(opts.out || opts.audioOnly);
+const edition = opts.edition ?? (opts.section ? "source" : "tour");
+if (opts.section && edition !== "source")
+  fail("--section uses --edition source; edited films use --from/--until");
+if (!draft && edition === "source")
+  fail("--edition source needs a draft output");
 
 /** A small ESM bundle of `contents`, imported in node. */
 async function nodeModule(contents) {
@@ -213,13 +225,15 @@ async function nodeModule(contents) {
   );
 }
 
-// The timeline, the font list, the capture set's loader and the end card's
-// recording, read in node from the same sources the page draws with.
-const { FONTS, SECTIONS, sec, loadFacts, SONG } =
+// The timeline, the font list, the capture set's loader and the bed, read
+// in node from the same sources the page draws with.
+const { FONTS, SECTIONS, sec, loadFacts, BED, MUSIC, filmChaptersVtt } =
   await nodeModule(`export { FONTS } from "./theme/showreel/fonts.ts";
 export { SECTIONS, sec } from "./theme/showreel/timeline.ts";
 export { loadFacts } from "./theme/showreel/load.ts";
-export { SONG } from "./theme/showreel/score/song.ts";`);
+export { BED } from "./theme/showreel/score/bed.ts";
+export { MUSIC } from "./theme/showreel/film-music.ts";
+export { filmChaptersVtt } from "./theme/showreel/edit.ts";`);
 const REPO = resolve(here, "../..");
 // The capture set every terminal line and version number comes from. A
 // missing take draws a labelled "CAPTURE MISSING" box.
@@ -237,7 +251,10 @@ if (
 const bundle = await build({
   stdin: {
     contents: `export { createReel, POSTER_TIME, resetTypeCache } from "./theme/showreel/reel.ts";
-export { playScore } from "./theme/showreel/audio.ts";`,
+export { playScore } from "./theme/showreel/audio.ts";
+export { createFilm, drawFilmPoster } from "./theme/showreel/film.ts";
+export { filmSoundtrack } from "./theme/showreel/film-audio.ts";
+export { DURATION as SOURCE_DURATION } from "./theme/showreel/timeline.ts";`,
     resolveDir: here,
     loader: "ts",
   },
@@ -250,61 +267,83 @@ export { playScore } from "./theme/showreel/audio.ts";`,
 });
 
 /**
- * The end card's recording (score/song.ts), mixed over the score at mux
- * time: each segment cut from the MP3's own decode (t = 0 is its first
- * decoded sample), faded at both ends, set to the fixed gain and placed at
- * its reel time, then the whole mix trimmed to the range rendered. Writes
- * `out`, 48 kHz 16-bit stereo, the same length as `score`.
+ * The bytes of `file` (from the checkout's root), if they are the ones
+ * pinned by `sha256`: the soundtrack was set against exactly that file.
  */
-function spliceRecording(score, out, from, duration) {
-  const mp3 = join(REPO, SONG.file);
-  const sha = createHash("sha256").update(readFileSync(mp3)).digest("hex");
-  if (sha !== SONG.sha256)
+function pinned(file, sha256, what) {
+  const bytes = readFileSync(join(REPO, file));
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  if (sha !== sha256)
     throw new Error(
-      `${SONG.file} is not the recording the end card was measured on (sha256 ${sha}, want ${SONG.sha256})`,
+      `${file} is not the ${what} the score was set against (sha256 ${sha}, want ${sha256}); update its pin`,
     );
-  const S = (t) => Math.round(t * SAMPLE_RATE);
-  const n = SONG.segments.length;
-  const parts = [
-    `[1:a]aresample=${SAMPLE_RATE},asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=${n}${SONG.segments.map((_, i) => `[r${i}]`).join("")}`,
-  ];
-  SONG.segments.forEach((seg, i) => {
-    const len = seg.to - seg.from;
-    parts.push(
-      `[r${i}]atrim=start_sample=${S(seg.from)}:end_sample=${S(seg.to)},asetpts=PTS-STARTPTS,` +
-        `afade=t=in:st=0:d=${seg.fadeIn},afade=t=out:st=${(len - seg.fadeOut).toFixed(4)}:d=${seg.fadeOut},` +
-        `volume=${SONG.gainDb}dB,adelay=delays=${S(seg.at)}S:all=1[s${i}]`,
-    );
+  return bytes;
+}
+
+/**
+ * The bed's bytes go to the page as base64 in pieces of at most this many
+ * bytes, a multiple of 3 so each piece encodes on its own: 15 MiB, 20 MiB of
+ * base64 an evaluate call. One call with the whole of a large file crashes
+ * Chromium (about 100 MB of argument did), and a route's body travels the
+ * protocol as base64 too (81 MB crashed it).
+ */
+const BED_PIECE = 5 * 3 * 2 ** 20;
+
+/**
+ * Throw unless `bytes` open an Ogg Opus stream of two channels (RFC 7845
+ * §5.1: the first page's packet is the OpusHead). The rate is checked
+ * here, not after decoding: decodeAudioData resamples whatever it is given
+ * to its context's rate, so a bed at another rate would decode at 48 kHz
+ * without complaint, its frames no longer the reel's. Opus always decodes
+ * at 48 kHz (the OpusHead's input rate is only a note of the source's), so
+ * an Ogg Opus file is a 48 kHz one.
+ */
+function checkOpus(bytes, file) {
+  // The page's 27-byte header ends with its segment count, then the
+  // segment table, then the packet: "OpusHead", the version, the channels.
+  // A file too short for any of it is not one.
+  const at = bytes.length > 26 ? 27 + bytes[26] : Infinity;
+  if (
+    bytes.length < at + 10 ||
+    bytes.toString("latin1", 0, 4) !== "OggS" ||
+    bytes.toString("latin1", at, at + 8) !== "OpusHead"
+  )
+    throw new Error(`${file} is not Ogg Opus`);
+  if (bytes[at + 9] !== 2)
+    throw new Error(`${file} has ${bytes[at + 9]} channels, not 2`);
+}
+
+/**
+ * Hand the pinned music asset to `page`, which keeps its bytes as
+ * window.bedBytes for the score's render to decode.
+ */
+async function sendBed(page, asset) {
+  const bytes = pinned(asset.file, asset.sha256, "music");
+  checkOpus(bytes, asset.file);
+  await page.evaluate(() => {
+    window.bedPieces = [];
   });
-  parts.push(
-    `[0:a]aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=delays=${S(from)}S:all=1[sc]`,
-    `[sc]${SONG.segments.map((_, i) => `[s${i}]`).join("")}amix=inputs=${n + 1}:normalize=0:duration=longest,` +
-      `atrim=start_sample=${S(from)}:end_sample=${S(from) + S(duration)},asetpts=PTS-STARTPTS[out]`,
-  );
-  const r = spawnSync(
-    "ffmpeg",
-    [
-      "-y",
-      "-loglevel",
-      "error",
-      "-i",
-      score,
-      "-i",
-      mp3,
-      "-filter_complex",
-      parts.join(";"),
-      "-map",
-      "[out]",
-      "-ar",
-      String(SAMPLE_RATE),
-      "-c:a",
-      "pcm_s16le",
-      out,
-    ],
-    { stdio: ["ignore", "inherit", "inherit"] },
-  );
-  if (r.status !== 0)
-    throw new Error(`ffmpeg could not splice the recording (exit ${r.status})`);
+  for (let i = 0; i < bytes.length; i += BED_PIECE) {
+    await page.evaluate(
+      (b64) => {
+        const bin = atob(b64);
+        const piece = new Uint8Array(bin.length);
+        for (let k = 0; k < bin.length; k++) piece[k] = bin.charCodeAt(k);
+        window.bedPieces.push(piece);
+      },
+      bytes.subarray(i, i + BED_PIECE).toString("base64"),
+    );
+  }
+  await page.evaluate((length) => {
+    const all = new Uint8Array(length);
+    let at = 0;
+    for (const piece of window.bedPieces) {
+      all.set(piece, at);
+      at += piece.length;
+    }
+    window.bedPieces = null;
+    window.bedBytes = all;
+  }, bytes.length);
 }
 
 /** 16-bit stereo PCM, base64 from the page, as a WAV file. */
@@ -327,7 +366,7 @@ function wavFile(pcm) {
 }
 
 const fps = opts.fps ?? 60;
-const FPS = opts.out ? fps : 120;
+const FPS = opts.out ? fps : edition === "overview" ? 60 : 120;
 const encoders = opts.audioOnly
   ? []
   : opts.out
@@ -341,7 +380,10 @@ const encoders = opts.audioOnly
           partial: join(dirname(opts.out), `.${basename(opts.out)}.partial`),
         },
       ]
-    : VIDEOS.map((video) => ({
+    : (edition === "overview"
+        ? [{ name: "showreel-overview.mp4", fps: 60, level: "4.2" }]
+        : VIDEOS
+      ).map((video) => ({
         ...video,
         out: join(PUBLIC, video.name),
         partial: join(staging, video.name),
@@ -370,7 +412,7 @@ try {
       );
       await page.addScriptTag({ content: bundle.outputFiles[0].text });
       await page.evaluate(
-        async ({ fonts, burnIn, facts }) => {
+        async ({ fonts, burnIn, facts, edition }) => {
           for (const font of fonts) {
             const bytes = Uint8Array.from(atob(font.bytes), (c) =>
               c.charCodeAt(0),
@@ -387,10 +429,13 @@ try {
           // The capture set (theme/showreel/load.ts): the takes' screens,
           // files and versions, as JSON.
           window.facts = facts;
-          window.reel = Showreel.createReel(window.facts, { burnIn });
+          window.reel =
+            edition === "source"
+              ? Showreel.createReel(window.facts, { burnIn })
+              : Showreel.createFilm(window.facts, edition, { burnIn });
           window.ctx = canvas.getContext("2d", { alpha: false });
         },
-        { fonts, burnIn: opts.burnIn, facts },
+        { fonts, burnIn: opts.burnIn, facts, edition },
       );
       return page;
     }),
@@ -418,18 +463,54 @@ try {
     `Rendering ${from === 0 && duration === full ? "the whole reel" : `${from}–${from + duration} s of the reel`} (${full} s) at ${opts.audioOnly ? "48 kHz" : `${FPS} fps`} in ${executablePath ?? "Playwright's Chromium"}`,
   );
 
-  // The score, as 16-bit stereo PCM, from the range's first frame: it plays
-  // there exactly what a full render plays (test/score.test.ts).
+  // The score over the bed, as 16-bit stereo PCM, from the range's first
+  // frame: it plays there exactly what a full render plays
+  // (test/score.test.ts). The bed decodes in the page at the score's rate,
+  // Opus's own 48 kHz (Chromium honours Opus's pre-skip). Source renders
+  // use the original arranged bed; films use the original song instead.
+  const musicAsset = edition === "source" ? BED : MUSIC;
+  await sendBed(page, musicAsset);
   const pcm = await page.evaluate(
-    async ({ from, duration, preRoll, rate }) => {
+    async ({ from, duration, preRoll, rate, edition, minimumMusic }) => {
       const ac = new OfflineAudioContext(
         2,
         Math.ceil(rate * (duration + preRoll)),
         rate,
       );
-      Showreel.playScore(ac, ac.destination, from, preRoll, window.facts);
-      const buffer = await ac.startRendering();
-      const skip = Math.round(preRoll * rate);
+      const bed = await ac.decodeAudioData(window.bedBytes.buffer);
+      window.bedBytes = null;
+      // Its rate was checked in node (checkOpus): whatever the file's,
+      // decodeAudioData hands it back at the context's.
+      if (bed.numberOfChannels !== 2)
+        throw new Error(
+          `the bed decodes to ${bed.numberOfChannels} channels, not stereo`,
+        );
+      if (bed.length < Math.round(minimumMusic * rate))
+        throw new Error(
+          `the bed is ${bed.length / rate} s long, shorter than the required ${minimumMusic} s`,
+        );
+      let buffer;
+      let skip;
+      if (edition === "source") {
+        Showreel.playScore(
+          ac,
+          ac.destination,
+          from,
+          preRoll,
+          window.facts,
+          bed,
+        );
+        buffer = await ac.startRendering();
+        skip = Math.round(preRoll * rate);
+      } else {
+        buffer = await Showreel.filmSoundtrack(
+          window.facts,
+          bed,
+          edition,
+          rate,
+        );
+        skip = Math.round(from * rate);
+      }
       const frames = Math.round(duration * rate);
       const left = buffer.getChannelData(0);
       const right = buffer.getChannelData(1);
@@ -448,21 +529,24 @@ try {
       }
       return btoa(binary);
     },
-    { from, duration, preRoll: PRE_ROLL, rate: SAMPLE_RATE },
+    {
+      from,
+      duration,
+      preRoll: PRE_ROLL,
+      rate: SAMPLE_RATE,
+      edition,
+      minimumMusic: edition === "source" ? 436 : MUSIC.duration,
+    },
   );
   if (pageError) throw pageError;
   if (opts.audioOnly) {
     mkdirSync(dirname(opts.audioOnly), { recursive: true });
-    const scoreOnly = join(work, "score.wav");
-    writeFileSync(scoreOnly, wavFile(pcm));
-    spliceRecording(scoreOnly, opts.audioOnly, from, duration);
+    writeFileSync(opts.audioOnly, wavFile(pcm));
     const elapsed = (performance.now() - started) / 1000;
     console.log(`Rendered ${opts.audioOnly} in ${elapsed.toFixed(1)} s`);
   } else {
-    const scoreOnly = join(work, "score.wav");
-    writeFileSync(scoreOnly, wavFile(pcm));
     const wav = join(work, "mix.wav");
-    spliceRecording(scoreOnly, wav, from, duration);
+    writeFileSync(wav, wavFile(pcm));
 
     // 1080p H.264 High with AAC and the index up front: sharp on the landing
     // page and, at 60 fps, playable by every link preview that plays video.
@@ -586,11 +670,17 @@ try {
       console.log(
         `Rendered ${total} frames to ${opts.out} in ${elapsed.toFixed(0)} s`,
       );
-    } else {
+    } else if (edition === "overview") {
+      for (const encoder of encoders) renameSync(encoder.partial, encoder.out);
+      writeFileSync(
+        join(PUBLIC, "showreel-overview-chapters.vtt"),
+        filmChaptersVtt("overview"),
+      );
+    } else if (edition === "tour") {
       // The poster the player shows until someone presses play.
       const jpeg = await page.evaluate(
         ({ w, h }) => {
-          window.reel.render(window.ctx, Showreel.POSTER_TIME, w, h);
+          Showreel.drawFilmPoster(window.ctx, w, h, window.facts);
           return document.getElementById("reel").toDataURL("image/jpeg", 0.9);
         },
         { w: WIDTH, h: HEIGHT },
@@ -602,6 +692,7 @@ try {
       if (pageError) throw pageError;
       for (const encoder of encoders) renameSync(encoder.partial, encoder.out);
       renameSync(posterPartial, poster);
+      writeFileSync(join(PUBLIC, "showreel-chapters.vtt"), filmChaptersVtt());
       const elapsed = (performance.now() - started) / 1000;
       console.log(
         `Rendered ${encoders.map((encoder) => encoder.out).join(", ")} and ${poster} in ${elapsed.toFixed(0)} s`,
@@ -616,4 +707,14 @@ try {
   rmSync(work, { recursive: true, force: true });
   for (const encoder of encoders) rmSync(encoder.partial, { force: true });
   if (!draft) rmSync(posterPartial, { force: true });
+}
+
+// Full site renders deliver both films. Drafts remain outside public/.
+if (!draft && edition === "tour") {
+  const child = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--edition", "overview"],
+    { stdio: "inherit" },
+  );
+  if (child.status !== 0) throw new Error("the overview render failed");
 }

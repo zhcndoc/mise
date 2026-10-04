@@ -7,7 +7,7 @@
 // showreel.data.ts is imported here: it draws nothing, so it is safe to
 // server-render.
 import { withBase } from "vitepress";
-import { nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { data as showreel } from "../showreel.data";
 
 /** 3:26 as "3 minutes 26 seconds", for the labels a screen reader reads. */
@@ -24,12 +24,21 @@ const clock = (seconds: number) => {
   const s = Math.floor(seconds + 1e-6);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
-const length = showreel ? spoken(showreel.seconds) : "";
-const runtime = showreel ? clock(showreel.seconds) : "";
-const chapters = (showreel?.chapters ?? []).map((c) => ({
-  ...c,
-  at: clock(c.start),
-}));
+const edition = ref<"tour" | "overview">("tour");
+const chosen = computed(() =>
+  edition.value === "overview" && showreel?.overview
+    ? showreel.overview
+    : showreel,
+);
+const length = computed(() =>
+  chosen.value ? spoken(chosen.value.seconds) : "",
+);
+const runtime = computed(() =>
+  chosen.value ? clock(chosen.value.seconds) : "",
+);
+const chapters = computed(() =>
+  (chosen.value?.chapters ?? []).map((c) => ({ ...c, at: clock(c.start) })),
+);
 
 // The page is served with the 60 fps file, which plays everywhere. Once it is
 // mounted, and before anyone presses play, it switches to the 120 fps file if
@@ -38,7 +47,13 @@ const chapters = (showreel?.chapters ?? []).map((c) => ({
 // capable 60 Hz screen gets the larger file too. Nothing downloads until play.
 const player = ref<HTMLVideoElement>();
 const button = ref<HTMLButtonElement>();
-const src = ref(showreel?.src ?? "");
+const highFrameRate = ref("");
+const src = computed(() =>
+  edition.value === "tour" && highFrameRate.value
+    ? highFrameRate.value
+    : (chosen.value?.src ?? ""),
+);
+let pendingSeek: number | undefined;
 
 // The native controls keep a fixed height while the video shrinks, so on a
 // phone they cover the poster's caption band. Until someone starts the reel,
@@ -48,6 +63,29 @@ const src = ref(showreel?.src ?? "");
 // the page is hydrated.
 const hydrated = ref(false);
 const started = ref(false);
+/** Pause playback and discard any queued chapter seek when changing films. */
+function selectEdition(value: "tour" | "overview") {
+  if (value === edition.value) return;
+  player.value?.pause();
+  pendingSeek = undefined;
+  started.value = false;
+  edition.value = value;
+}
+/** Start a chapter, deferring the seek until metadata is available if needed. */
+function seek(seconds: number) {
+  const video = player.value;
+  if (!video) return;
+  if (video.readyState > 0) video.currentTime = seconds;
+  else pendingSeek = seconds;
+  play();
+}
+/** Apply the chapter seek queued before this source loaded its metadata. */
+function loaded() {
+  if (pendingSeek === undefined || !player.value) return;
+  player.value.currentTime = pendingSeek;
+  pendingSeek = undefined;
+}
+/** Start native playback and move keyboard focus from the overlay to the video. */
 function play() {
   started.value = true;
   const video = player.value;
@@ -88,7 +126,7 @@ onMounted(async () => {
     const idle =
       player.value?.paused &&
       player.value.readyState === HTMLMediaElement.HAVE_NOTHING;
-    if (smooth && powerEfficient && idle) src.value = video120.src;
+    if (smooth && powerEfficient && idle) highFrameRate.value = video120.src;
   } catch {
     // Older browsers reject the query; they keep the 60 fps file.
   }
@@ -104,6 +142,26 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
     aria-labelledby="showreel-title"
   >
     <h2 id="showreel-title" class="sr-only">视频展示</h2>
+    <nav
+      v-if="showreel.overview"
+      class="home-showreel-editions"
+      aria-label="演示时长"
+    >
+      <button
+        type="button"
+        :aria-pressed="edition === 'overview'"
+        @click="selectEdition('overview')"
+      >
+        快速概览 <span>{{ clock(showreel.overview.seconds) }}</span>
+      </button>
+      <button
+        type="button"
+        :aria-pressed="edition === 'tour'"
+        @click="selectEdition('tour')"
+      >
+        完整演示 <span>{{ clock(showreel.seconds) }}</span>
+      </button>
+    </nav>
     <figure>
       <div class="home-showreel-stage">
         <!-- No autoplay, and nothing downloads until someone presses play. -->
@@ -116,15 +174,16 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
           :controls="!hydrated || started"
           playsinline
           preload="none"
-          :aria-label="`mise 视频展示，${length}：开发工具、版本、环境、任务、点文件和新机器，内容来自真实运行记录。章节列于下方。`"
+          :aria-label="`mise ${edition === 'overview' ? '概览' : '演示'}，时长 ${length}。终端输出来自真实运行记录。章节列于下方。`"
           @play="started = true"
+          @loadedmetadata="loaded"
         >
           <!-- Generated from the reel's acts; see showreel/timeline.ts. -->
           <track
             kind="chapters"
             srclang="en"
             label="章节"
-            :src="withBase(showreel.track)"
+            :src="withBase(chosen?.track ?? showreel.track)"
             default
           />
         </video>
@@ -142,25 +201,110 @@ onUnmounted(() => window.removeEventListener("hashchange", focusOnArrival));
             <path d="M26 20.5v23L44.5 32z" />
           </svg>
         </button>
+        <span
+          v-if="!started"
+          class="home-showreel-runtime"
+          aria-hidden="true"
+          >{{ runtime }}</span
+        >
       </div>
+      <nav class="home-showreel-chapters" aria-label="跳转到章节">
+        <button
+          v-for="c in chapters"
+          :key="c.id"
+          type="button"
+          @click="seek(c.start)"
+          :aria-label="`播放 ${c.label}，位于 ${spoken(c.start) || '开头'}`"
+        >
+          <span>{{ c.at }}</span> {{ c.label }}
+        </button>
+      </nav>
       <ol class="sr-only" aria-label="视频展示章节">
         <li v-for="c in chapters" :key="c.id">
-          {{ c.label }}, at {{ c.at }}{{ c.text ? `: ${c.text}` : "." }}
+          {{ c.label }}，位于 {{ c.at }}{{ c.text ? `：${c.text}` : "。" }}
         </li>
       </ol>
-      <figcaption>
-        一段 {{ runtime }} 的 mise 之旅：从第一次运行 <code>mise use</code> 到
-        设置一台新机器。每一行终端内容都来自真实 shell 中运行的正式版 mise，
-        屏幕上提供字幕，因此静音也能观看。
-        <a :href="withBase('/getting-started')"
-          >快速开始 <span aria-hidden="true">→</span></a
-        >
-      </figcaption>
     </figure>
   </section>
 </template>
 
 <style scoped>
+/* Two buttons side by side at every width: on a phone they share the row
+   rather than wrapping the selected one onto a line of its own. Inside a
+   button the runtime may drop under the label where the row is too narrow
+   for both (a 320 px phone has 272 px between the gutters). */
+.home-showreel-editions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.home-showreel-editions button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--vp-c-border);
+  border-radius: 8px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+@media (min-width: 641px) {
+  .home-showreel-editions button {
+    flex: 0 0 auto;
+    padding: 10px 16px;
+  }
+}
+.home-showreel-editions button[aria-pressed="true"] {
+  background: var(--vp-c-brand-soft);
+  border-color: var(--vp-c-brand-1);
+}
+.home-showreel-editions span {
+  margin-left: 8px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}
+.home-showreel-chapters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 20px;
+}
+/* Each chapter a 44 px touch target, on one line. */
+.home-showreel-chapters button {
+  color: var(--vp-c-text-1);
+  font-size: 14px;
+  min-height: 44px;
+  padding: 6px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+.home-showreel-chapters button span {
+  color: var(--vp-c-brand-1);
+  margin-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.home-showreel-runtime {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  padding: 4px 10px;
+  color: #f4eee3;
+  background: #211d21;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.home-showreel-editions button:focus-visible,
+.home-showreel-chapters button:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 4px;
+}
+.home-showreel-editions button:hover,
+.home-showreel-chapters button:hover {
+  color: var(--vp-c-brand-1);
+}
+
 /* Under the hero's footnote strip, as wide as the landing page below it
    (.landing-page and .hero-footnote: 1160 px, with 24 px gutters on narrower
    screens). "What mise manages" brings its own top margin. */
@@ -249,27 +393,6 @@ video:focus-visible,
   .home-showreel-play:hover svg {
     transform: none;
   }
-}
-figcaption {
-  max-width: 72ch;
-  margin-top: 16px;
-  color: var(--vp-c-text-2);
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-/* As the hero's lede sets its code. */
-figcaption code {
-  font-size: 0.9em;
-  color: var(--vp-c-text-1);
-}
-figcaption a {
-  color: var(--vp-c-brand-1);
-  font-weight: 500;
-  white-space: nowrap;
-}
-figcaption a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 .sr-only {
   border: 0;

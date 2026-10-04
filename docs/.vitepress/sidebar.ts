@@ -104,6 +104,7 @@ export const sidebar: SidebarItem[] = [
           { text: "npm", link: "/dev-tools/backends/npm" },
           { text: "packslip", link: "/dev-tools/backends/packslip" },
           { text: "pypi", link: "/dev-tools/backends/pypi" },
+          { text: "spinel", link: "/dev-tools/backends/spinel" },
           { text: "spm", link: "/dev-tools/backends/spm" },
           { text: "ubi", link: "/dev-tools/backends/ubi" },
           { text: "vfox", link: "/dev-tools/backends/vfox" },
@@ -271,7 +272,8 @@ export const sidebar: SidebarItem[] = [
     text: "关于",
     items: [
       { text: "关于 mise", link: "/about" },
-      { text: "mise-en-place：歌曲", link: "/mise-en-place" },
+      { text: "版本发布", link: "/releases" },
+      { text: "mise run：歌曲", link: "/mise-en-place" },
       { text: "术语表", link: "/glossary" },
       { text: "常见问题", link: "/faq" },
       { text: "故障排除", link: "/troubleshooting" },

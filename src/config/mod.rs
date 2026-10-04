@@ -9,6 +9,7 @@ use std::env::join_paths;
 use std::fmt::{Debug, Formatter};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock as Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::{sync::OnceCell, task::JoinSet};
@@ -265,7 +266,7 @@ impl Config {
             Duration::from_secs(5),
         )
         .await?;
-        Settings::reload();
+        Settings::reload()?;
         Config::load().await
     }
 
@@ -3533,6 +3534,30 @@ pub fn resolve_target_config_path(opts: ConfigPathOptions) -> Result<PathBuf> {
     }
 }
 
+/// Whether `err` is the untrusted-config error for a config the user has just
+/// declined to trust, so the declined config is now ignored.
+fn declined_trust_prompt(path: &Path, err: &eyre::Report) -> bool {
+    matches!(
+        err.downcast_ref::<crate::errors::Error>(),
+        Some(crate::errors::Error::UntrustedConfig(_))
+    ) && (config_file::is_ignored(&config_trust_root(path)) || config_file::is_ignored(path))
+}
+
+static SKIP_UNTRUSTED_CONFIGS: AtomicBool = AtomicBool::new(false);
+static SKIPPED_UNTRUSTED_CONFIGS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Makes config loading skip untrusted config files instead of failing, so the
+/// remaining (e.g. global) configs still apply. Used by `hook-env`, where entering
+/// a directory is not an explicit request to run its config.
+pub fn skip_untrusted_configs() {
+    SKIP_UNTRUSTED_CONFIGS.store(true, Ordering::Relaxed);
+}
+
+/// Untrusted config files skipped so far when [`skip_untrusted_configs`] is active.
+pub fn skipped_untrusted_configs() -> Vec<PathBuf> {
+    SKIPPED_UNTRUSTED_CONFIGS.lock().unwrap().clone()
+}
+
 async fn load_all_config_files(
     config_filenames: &[PathBuf],
     idiomatic_filenames: &BTreeMap<String, Vec<String>>,
@@ -3564,6 +3589,30 @@ async fn load_all_config_files(
         for f in paths {
             let cf = match parse_config_file(f, idiomatic_filenames).await {
                 Ok(cfg) => cfg,
+                // Declining the trust prompt records an ignore marker, which
+                // makes the config skipped on every later load. Skip it for
+                // the run that was asked too, rather than failing it.
+                Err(err) if declined_trust_prompt(f, &err) => {
+                    debug!(
+                        "skipping config file ignored at the trust prompt: {}",
+                        display_path(f)
+                    );
+                    continue;
+                }
+                Err(err)
+                    if SKIP_UNTRUSTED_CONFIGS.load(Ordering::Relaxed)
+                        && matches!(
+                            err.downcast_ref::<crate::errors::Error>(),
+                            Some(crate::errors::Error::UntrustedConfig(_))
+                        ) =>
+                {
+                    debug!("skipping untrusted config file: {}", display_path(f));
+                    let mut skipped = SKIPPED_UNTRUSTED_CONFIGS.lock().unwrap();
+                    if !skipped.contains(f) {
+                        skipped.push(f.clone());
+                    }
+                    continue;
+                }
                 Err(err) => {
                     return Err(err.wrap_err(format!(
                         "error parsing config file: {}",

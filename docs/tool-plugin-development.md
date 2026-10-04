@@ -106,7 +106,14 @@ local attestation = {
 }
 ```
 
-将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有可选 `cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，以及带有可选 `slsa_min_level` 的 `slsa_provenance_path`，还包括 `slsa_signer_identity`（准确的 Fulcio 证书 URI subject，包含 workflow ref）和 `slsa_signer_issuer`（准确的 OIDC issuer）。缺少签名者字段时会跳过 SLSA。为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
+将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有
+`cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，或者对于无密钥签名，带有
+`cosign_certificate_identity`／`cosign_certificate_identity_regexp`（必需）和
+`cosign_certificate_oidc_issuer` 的 `cosign_sig_or_bundle_path`。如果无密钥 Cosign 没有固定的身份，
+则会被拒绝，因为任何 GitHub Actions 工作流都可以获取有效的 Fulcio 证书。还支持带有可选
+`slsa_min_level` 的 `slsa_provenance_path`，以及 `slsa_signer_identity`（准确的 Fulcio 证书 URI subject，
+包含 workflow ref）和 `slsa_signer_issuer`（准确的 OIDC issuer）。缺少签名者字段时会跳过 SLSA。
+为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
 
 mise 的生命周期会处理主要构件；不要依赖上游 vfox 的 `addition` 条目来安装第二个 SDK。需要时，请使用工具依赖，或明确实现额外工作。
 

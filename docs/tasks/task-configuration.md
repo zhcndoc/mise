@@ -750,7 +750,8 @@ console.log('hello world')
 - **类型**：`string`
 - **默认值**：未设置
 
-此任务的最大执行时间。该值接受 `30s`、`5m` 或 `1h` 等时长，并支持 Tera 模板。如果任务未能在配置的时长内完成，则任务失败。
+此任务的最大执行时间。该值接受 `30s`、`5m` 或 `1h` 等时长，并支持 Tera 模板。如果任务未能在配置的时长内完成，
+即使任务在被停止后成功退出，任务仍会失败。
 
 ```mise-toml
 [tasks.integration-test]
@@ -758,7 +759,12 @@ run = "./scripts/integration-test.sh"
 timeout = "10m"
 ```
 
-这会限制单个任务。使用 [`mise run --timeout`](/cli/run.html) 或 [`task.timeout`](/configuration/settings.html#task.timeout) 设置来限制整个任务运行。当同时设置全局超时和单个任务超时时，以两者中较短的时间为准：单个任务超时不能超过全局超时。`--timeout` CLI 标志会覆盖全局设置。
+这会限制单个任务。使用 [`mise run --timeout`](/cli/run.html) 或 [`task.timeout`](/configuration/settings.html#task.timeout)
+设置来限制整个任务运行。当同时设置全局超时和单个任务超时时，以两者中较短的时间为准：单个任务超时不能超过
+全局超时。`--timeout` CLI 标志会覆盖全局设置。任一超时都会先用 SIGTERM 停止任务进程，5 秒后再用 SIGKILL。
+Windows 上，单个任务超时会发送 Ctrl+C，并在 5 秒后终止进程树；如果程序不响应 Ctrl+C，例如批处理文件停在
+`Terminate batch job (Y/N)?` 提示处，也会在随后被终止。全局超时会立即终止 Windows 上的进程树。全局超时不会停止
+使用 [`raw`](#raw) 运行的任务的进程。
 
 ### `deny_all`
 

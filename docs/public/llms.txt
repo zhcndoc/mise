@@ -63,6 +63,7 @@
 - [npm](https://mise.jdx.dev/dev-tools/backends/npm.html): The npm backend installs command-line packages from npm registries into separate tool directories. Keep your application's dependencies in package.json and use its package manager or mise deps to…
 - [packslip](https://mise.jdx.dev/dev-tools/backends/packslip.html): The Packslip backend installs tools using signed release manifests published by their maintainers. mise verifies the release, selects the build for your platform, and installs its executables.
 - [pypi](https://mise.jdx.dev/dev-tools/backends/pypi.html): The pypi backend installs Python command-line applications in isolated virtual environments. Each tool gets its own dependencies.
+- [spinel](https://mise.jdx.dev/dev-tools/backends/spinel.html): The spinel: backend compiles a Ruby command-line tool from a GitHub repository into a native executable with Spinel, Matz's Ruby AOT compiler. The result needs neither Ruby nor Spinel to run.
 - [spm](https://mise.jdx.dev/dev-tools/backends/spm.html): You may install executables managed by Swift Package Manager directly from GitHub or GitLab releases.
 - [ubi](https://mise.jdx.dev/dev-tools/backends/ubi.html): The ubi backend is deprecated. Use the GitHub backend instead.
 - [vfox](https://mise.jdx.dev/dev-tools/backends/vfox.html): vfox is the recommended plugin system for mise. It provides cross-platform support, built-in modules, and a modern hook-based architecture.
@@ -141,6 +142,7 @@
 ## About
 
 - [About mise](https://mise.jdx.dev/about.html): mise (pronounced “meez”), short for mise-en-place, helps you set up and work in development environments.
+- [Releases](https://mise.jdx.dev/releases.html): mise ships a release almost every day. Each bar below is one release, oldest on the left, and its height is the number of changes in that release's changelog.
 - [mise run: The Song](https://mise.jdx.dev/mise-en-place.html): mise run is the mise theme song, and this is its music video. Captions are available from the player. You can also download the video in 1080p or 4K (HEVC), both at 120 fps, or download the MP3.
 - [Glossary](https://mise.jdx.dev/glossary.html): Definitions for the concepts used in the guides and CLI reference. Follow a term's link for configuration syntax and examples.
 - [FAQs](https://mise.jdx.dev/faq.html): Quick answers about daily commands, shell integration, and configuration. For a failed command, start with Troubleshooting or Errors.
@@ -158,7 +160,7 @@
 - [Presets](https://mise.jdx.dev/mise-cookbook/presets.html): A preset is a task you write to create a project's starting configuration. Store it as a global file task so it is available in new repositories.
 - [Shell tricks](https://mise.jdx.dev/mise-cookbook/shell-tricks.html): A collection of shell utilities that build on mise.
 - [Team](https://mise.jdx.dev/team.html): mise is maintained by Jeff Dickey with help from the community. For questions, feedback, and bug reports, use the channels on the Contact page.
-- [Contributing](https://mise.jdx.dev/contributing.html): AI-assisted responses are welcome, including one-off responses from people trying to help. This is especially true when you are answering your own question, are directly involved in or personally…
+- [Contributing](https://mise.jdx.dev/contributing.html): AI replies to Discussions and Issues are restricted, and breaking the rule is an instant ban across all of jdx's projects.
 - [External Resources](https://mise.jdx.dev/external-resources.html): Articles, videos, and related tools from the mise community. Examples reflect the version available when they were published; check the current configuration and CLI reference when adapting older…
 
 ## Advanced

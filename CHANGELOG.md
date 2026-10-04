@@ -1,5 +1,212 @@
 # Changelog
 
+## [2026.10.1](https://github.com/jdx/mise/compare/v2026.10.0..v2026.10.1) - 2026-10-03
+
+### 🐛 Bug Fixes
+
+- **(aqua)** invalidate incompatible compiled registry caches by @jdx in [#13884](https://github.com/jdx/mise/pull/13884)
+- **(brew-cask)** stop reinstalling pkg casks whose uninstall ids span architectures by @jdx in [#13893](https://github.com/jdx/mise/pull/13893)
+- **(completions)** complete `:task` shorthand for the current config root by @pikeas in [#13882](https://github.com/jdx/mise/pull/13882)
+- **(daemons)** start task daemons without a shell so they work on Windows by @JamBalaya56562 in [#13714](https://github.com/jdx/mise/pull/13714)
+- **(daemons)** render env and vars in daemon commands at launch by @jdx in [#13894](https://github.com/jdx/mise/pull/13894)
+- **(github)** never auto-select metadata assets as the tool by @jdx in [#13908](https://github.com/jdx/mise/pull/13908)
+- **(lock)** prune unbound entries superseded by a bound entry by @jdx in [#13909](https://github.com/jdx/mise/pull/13909)
+- **(packslip)** retry missing declared skills by @jdx in [#13885](https://github.com/jdx/mise/pull/13885)
+- **(plugins)** update plugin repos whose remote is not named origin by @jdx in [#13914](https://github.com/jdx/mise/pull/13914)
+- **(release)** back up alpine bump to GitHub and allow SSH push to GitLab by @jdx in [#13892](https://github.com/jdx/mise/pull/13892)
+- **(rust)** upgrade stable and beta when rustup reports an update by @jdx in [#13898](https://github.com/jdx/mise/pull/13898)
+- **(rust)** honor mise.lock for core:rust installs by @jdx in [#13915](https://github.com/jdx/mise/pull/13915)
+- **(shim)** stop native shim copies recursing through mise x by @JamBalaya56562 in [#13681](https://github.com/jdx/mise/pull/13681)
+- **(shim)** forward Node IPC through Windows shims by @jdx in [#13903](https://github.com/jdx/mise/pull/13903)
+- **(skills)** show $HOME as ~ in skills sync output by @jdx in [#13910](https://github.com/jdx/mise/pull/13910)
+- **(task)** stop running tasks when mise run --timeout expires by @Marukome0743 in [#13876](https://github.com/jdx/mise/pull/13876)
+- **(task)** let tasks shut down after a single Ctrl-C by @jdx in [#13904](https://github.com/jdx/mise/pull/13904)
+
+### 📚 Documentation
+
+- **(contributing)** make the restricted AI reply policy and instant ban unmissable by @jdx in [#13886](https://github.com/jdx/mise/pull/13886)
+- replace the landing-page showreel's synthesized music with a Suno track by @jdx in [#13900](https://github.com/jdx/mise/pull/13900)
+- stop the showreel's dark gradients from banding into rings by @jdx in [#13902](https://github.com/jdx/mise/pull/13902)
+- tighten the landing-page video and smooth its soundtrack by @jdx in [#13916](https://github.com/jdx/mise/pull/13916)
+- retime the mise run captions to the vocal by @jdx in [#13917](https://github.com/jdx/mise/pull/13917)
+
+### 🧪 Testing
+
+- **(zig)** follow indexed master version by @jdx in [#13911](https://github.com/jdx/mise/pull/13911)
+
+### Ci
+
+- **(release)** arm release PR after daily cutoff by @jdx in [#13905](https://github.com/jdx/mise/pull/13905)
+- give windows-unit enough time to save its cache by @jdx in [#13874](https://github.com/jdx/mise/pull/13874)
+- run trusted Windows jobs on a self-hosted runner by @jdx in [#13888](https://github.com/jdx/mise/pull/13888)
+- build real Windows releases on a dedicated release runner by @jdx in [#13899](https://github.com/jdx/mise/pull/13899)
+
+### 📦 Aqua Registry Updates
+
+#### New Packages (2)
+
+- [`agentgateway/agentgateway/agctl`](https://github.com/agentgateway/agentgateway)
+- [`agentgateway/agentgateway/agentgateway`](https://github.com/agentgateway/agentgateway)
+
+## [2026.10.0](https://github.com/jdx/mise/compare/v2026.9.18..v2026.10.0) - 2026-10-01
+
+### 🚀 Features
+
+- add per-cask app directory overrides by @jdx in [#13865](https://github.com/jdx/mise/pull/13865)
+
+### 🐛 Bug Fixes
+
+- **(aqua)** install the registry's gnu build on musl hosts instead of requiring a musl asset by @jdx in [#13857](https://github.com/jdx/mise/pull/13857)
+- **(aqua)** accept RE2 quoted literals in cosign identity patterns by @jdx in [#13879](https://github.com/jdx/mise/pull/13879)
+- **(backend)** trust SLSA provenance recorded in a lockfile by @jdx in [#13856](https://github.com/jdx/mise/pull/13856)
+- **(backend)** retire expired runtime symlink migration by @jdx in [#13868](https://github.com/jdx/mise/pull/13868)
+- **(bootstrap)** remove the deprecated --from-git alias by @jdx in [#13872](https://github.com/jdx/mise/pull/13872)
+- **(dotfiles)** diagnose stale history watchers by @jdx in [#13864](https://github.com/jdx/mise/pull/13864)
+- **(java)** include target platform in missing metadata error by @jsiu93 in [#13873](https://github.com/jdx/mise/pull/13873)
+- **(lock)** switch backends for lock entries the config no longer resolves from by @jdx in [#13859](https://github.com/jdx/mise/pull/13859)
+- exit with status 130 on Ctrl-C by @jdx in [#13862](https://github.com/jdx/mise/pull/13862)
+
+### 📚 Documentation
+
+- add a releases page with a timeline of release sizes and resolved issues by @jdx in [#13855](https://github.com/jdx/mise/pull/13855)
+
+### 🧪 Testing
+
+- **(task)** run the Windows console interrupt test in a windowless console by @JamBalaya56562 in [#13763](https://github.com/jdx/mise/pull/13763)
+
+### 📦️ Dependency Updates
+
+- update dependency aube to latest by @renovate[bot] in [#13848](https://github.com/jdx/mise/pull/13848)
+
+### 📦 Registry
+
+- add cloudflare-cf by @jdx in [#13871](https://github.com/jdx/mise/pull/13871)
+
+### Chore
+
+- **(ci)** run clippy on Windows and fix the lints only it finds by @JamBalaya56562 in [#13757](https://github.com/jdx/mise/pull/13757)
+
+### Ci
+
+- **(release)** enforce 15:00 Central cutoff by @jdx in [#13863](https://github.com/jdx/mise/pull/13863)
+- **(release)** comment on resolved issues and discussions with the fixing release by @jdx in [#13870](https://github.com/jdx/mise/pull/13870)
+
+### Security
+
+- **(backend)** enforce signer identity for keyless cosign bundles by @jdx in [#13875](https://github.com/jdx/mise/pull/13875)
+- **(backend)** anchor signer workflow match for GitHub attestations by @jdx in [#13877](https://github.com/jdx/mise/pull/13877)
+- **(config)** require trust for .tool-versions entries with inline options by @jdx in [#13869](https://github.com/jdx/mise/pull/13869)
+
+### New Contributors
+
+- @jsiu93 made their first contribution in [#13873](https://github.com/jdx/mise/pull/13873)
+
+### 📦 Aqua Registry Updates
+
+#### New Packages (1)
+
+- [`kunchenguid/no-mistakes`](https://github.com/kunchenguid/no-mistakes)
+
+#### Updated Packages (34)
+
+- [`aquaproj/aqua-registry-updater`](https://github.com/aquaproj/aqua-registry-updater)
+- [`aquaproj/ar2`](https://github.com/aquaproj/ar2)
+- [`aquaproj/registry-tool`](https://github.com/aquaproj/registry-tool)
+- [`lintnet/lintnet`](https://github.com/lintnet/lintnet)
+- [`suzuki-shunsuke/asciinema-trim`](https://github.com/suzuki-shunsuke/asciinema-trim)
+- [`suzuki-shunsuke/ci-info`](https://github.com/suzuki-shunsuke/ci-info)
+- [`suzuki-shunsuke/circleci-config-merge`](https://github.com/suzuki-shunsuke/circleci-config-merge)
+- [`suzuki-shunsuke/cmdx`](https://github.com/suzuki-shunsuke/cmdx)
+- [`suzuki-shunsuke/deny-self-approve`](https://github.com/suzuki-shunsuke/deny-self-approve)
+- [`suzuki-shunsuke/disable-checkout-persist-credentials`](https://github.com/suzuki-shunsuke/disable-checkout-persist-credentials)
+- [`suzuki-shunsuke/docfresh`](https://github.com/suzuki-shunsuke/docfresh)
+- [`suzuki-shunsuke/ghalint`](https://github.com/suzuki-shunsuke/ghalint)
+- [`suzuki-shunsuke/ghaperf`](https://github.com/suzuki-shunsuke/ghaperf)
+- [`suzuki-shunsuke/ghatm`](https://github.com/suzuki-shunsuke/ghatm)
+- [`suzuki-shunsuke/ghcp`](https://github.com/suzuki-shunsuke/ghcp)
+- [`suzuki-shunsuke/ghir`](https://github.com/suzuki-shunsuke/ghir)
+- [`suzuki-shunsuke/ghomfc`](https://github.com/suzuki-shunsuke/ghomfc)
+- [`suzuki-shunsuke/ghproj`](https://github.com/suzuki-shunsuke/ghproj)
+- [`suzuki-shunsuke/ghtkn`](https://github.com/suzuki-shunsuke/ghtkn)
+- [`suzuki-shunsuke/github-comment`](https://github.com/suzuki-shunsuke/github-comment)
+- [`suzuki-shunsuke/langcheck`](https://github.com/suzuki-shunsuke/langcheck)
+- [`suzuki-shunsuke/migrate-urfave-cli-v3`](https://github.com/suzuki-shunsuke/migrate-urfave-cli-v3)
+- [`suzuki-shunsuke/mkghtag`](https://github.com/suzuki-shunsuke/mkghtag)
+- [`suzuki-shunsuke/nllint`](https://github.com/suzuki-shunsuke/nllint)
+- [`suzuki-shunsuke/pinact`](https://github.com/suzuki-shunsuke/pinact)
+- [`suzuki-shunsuke/renovate-issue-action`](https://github.com/suzuki-shunsuke/renovate-issue-action)
+- [`suzuki-shunsuke/rgo`](https://github.com/suzuki-shunsuke/rgo)
+- [`suzuki-shunsuke/sort-issue-template`](https://github.com/suzuki-shunsuke/sort-issue-template)
+- [`suzuki-shunsuke/tfaction-go`](https://github.com/suzuki-shunsuke/tfaction-go)
+- [`suzuki-shunsuke/tfcmt`](https://github.com/suzuki-shunsuke/tfcmt)
+- [`suzuki-shunsuke/tfmv`](https://github.com/suzuki-shunsuke/tfmv)
+- [`suzuki-shunsuke/tfprovidercheck`](https://github.com/suzuki-shunsuke/tfprovidercheck)
+- [`suzuki-shunsuke/tfrstate`](https://github.com/suzuki-shunsuke/tfrstate)
+- [`suzuki-shunsuke/yodoc`](https://github.com/suzuki-shunsuke/yodoc)
+
+## [2026.9.18](https://github.com/jdx/mise/compare/v2026.9.17..v2026.9.18) - 2026-09-30
+
+### 🚀 Features
+
+- **(bootstrap)** support ?ref= in bootstrap --from by @jdx in [#13822](https://github.com/jdx/mise/pull/13822)
+- **(config)** include a shared config file from a remote git or OCI source by @jdx in [#13843](https://github.com/jdx/mise/pull/13843)
+- **(daemons)** export a preset's named ports as environment variables by @jdx in [#13835](https://github.com/jdx/mise/pull/13835)
+- **(gem)** add a source option for installing from one registry by @waynehoover in [#13391](https://github.com/jdx/mise/pull/13391)
+- **(gem)** use the GitHub token for GitHub Packages sources by @waynehoover in [#13832](https://github.com/jdx/mise/pull/13832)
+- **(lock)** add --sidecars to list native dependency sidecars by @jdx in [#13819](https://github.com/jdx/mise/pull/13819)
+- **(task)** include task catalogs from OCI artifacts with oci:: prefix by @jdx in [#13820](https://github.com/jdx/mise/pull/13820)
+
+### 🐛 Bug Fixes
+
+- **(daemons)** make `mise daemons stop --all` cover the project's daemons by @jdx in [#13827](https://github.com/jdx/mise/pull/13827)
+- **(daemons)** register the hostname label with pitchfork so printed URLs route by @jdx in [#13833](https://github.com/jdx/mise/pull/13833)
+- **(daemons)** install preset tools on the first daemons start by @jdx in [#13837](https://github.com/jdx/mise/pull/13837)
+- **(daemons)** tell the user how to pin a different port when a daemon's port is taken by @jdx in [#13839](https://github.com/jdx/mise/pull/13839)
+- **(dotfiles)** keep internal Git commands working with Git for Windows 2.56 by @genskyff in [#13812](https://github.com/jdx/mise/pull/13812)
+- **(dotfiles)** restart the history watcher after mise is upgraded by @jdx in [#13845](https://github.com/jdx/mise/pull/13845)
+- **(install-script)** pin the version instead of scraping the installer by @jdx in [#13816](https://github.com/jdx/mise/pull/13816)
+- **(lock)** warn with the cause when a tool is skipped by @jdx in [#13831](https://github.com/jdx/mise/pull/13831)
+- **(oci)** let [oci.env] satisfy required env vars during mise oci by @jdx in [#13821](https://github.com/jdx/mise/pull/13821)
+
+### 📚 Documentation
+
+- **(daemons)** document stopping idle daemons with proxy_idle_timeout by @jdx in [#13830](https://github.com/jdx/mise/pull/13830)
+- **(daemons)** document proxy_idle_timeout and type it in the schema by @jdx in [#13836](https://github.com/jdx/mise/pull/13836)
+
+### 🧪 Testing
+
+- **(git)** keep the update test independent of the tag signing setting by @JamBalaya56562 in [#13762](https://github.com/jdx/mise/pull/13762)
+
+### 📦️ Dependency Updates
+
+- update rust crate nodejs-semver to v6 by @renovate[bot] in [#13807](https://github.com/jdx/mise/pull/13807)
+- update github actions by @renovate[bot] in [#13814](https://github.com/jdx/mise/pull/13814)
+- update rust crate clx to v3.0.3 by @renovate[bot] in [#13825](https://github.com/jdx/mise/pull/13825)
+- update mise tools by @renovate[bot] in [#13805](https://github.com/jdx/mise/pull/13805)
+- update rust crate aws-sdk-s3 to v1.149.0 by @renovate[bot] in [#13840](https://github.com/jdx/mise/pull/13840)
+- update aube to v2.6.1 by @renovate[bot] in [#13846](https://github.com/jdx/mise/pull/13846)
+
+### 📦 Registry
+
+- add lstk and warn when installing deprecated localstack by @jdx in [#13817](https://github.com/jdx/mise/pull/13817)
+
+### Ci
+
+- **(deps)** refresh aube crates via a workflow instead of postUpgradeTasks by @jdx in [#13824](https://github.com/jdx/mise/pull/13824)
+- **(deps)** remove the aube crates lock workflow by @jdx in [#13842](https://github.com/jdx/mise/pull/13842)
+- limit each contributor to one open draft PR by @jdx in [#13847](https://github.com/jdx/mise/pull/13847)
+
+### Security
+
+- **(config)** require trust for tool keys with inline options by @jdx in [#13849](https://github.com/jdx/mise/pull/13849)
+
+### 📦 Aqua Registry Updates
+
+#### New Packages (2)
+
+- [`mdsakalu/zmx-session-manager`](https://github.com/mdsakalu/zmx-session-manager)
+- [`trinodb/trino/trino-cli`](https://github.com/trinodb/trino)
+
 ## [2026.9.17](https://github.com/jdx/mise/compare/v2026.9.16..v2026.9.17) - 2026-09-29
 
 ### 🚀 Features

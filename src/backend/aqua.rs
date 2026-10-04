@@ -98,6 +98,31 @@ impl<'a> AquaOptions<'a> {
         }
     }
 
+    /// The per-tool `slsa_signer_identity` and `slsa_signer_issuer` options. They supply the
+    /// expected SLSA signer when the registry entry names the provenance asset but not who
+    /// signed it, and take precedence over registry metadata.
+    fn slsa_signer(&self) -> Result<Option<(&'a str, &'a str)>> {
+        // A present but empty or non-string value is an error: skipping it would silently
+        // turn off the SLSA check the user asked for.
+        let signer_option = |key: &str| -> Result<Option<&'a str>> {
+            let Some(value) = self.values.raw().opts.get(key) else {
+                return Ok(None);
+            };
+            match value.as_str() {
+                Some(s) if !s.is_empty() => Ok(Some(s)),
+                _ => bail!("invalid aqua `{key}` option {value}: expected a non-empty string"),
+            }
+        };
+        match (
+            signer_option("slsa_signer_identity")?,
+            signer_option("slsa_signer_issuer")?,
+        ) {
+            (Some(identity), Some(issuer)) => Ok(Some((identity, issuer))),
+            (None, None) => Ok(None),
+            _ => bail!("aqua `slsa_signer_identity` and `slsa_signer_issuer` must be set together"),
+        }
+    }
+
     fn var(&self, name: &str) -> Result<Option<String>> {
         self.canonical_var_options()?
             .get(name)
@@ -122,8 +147,10 @@ impl<'a> AquaOptions<'a> {
     fn canonical_var_options(&self) -> Result<BTreeMap<String, &toml::Value>> {
         let mut vars = BTreeMap::new();
         for (key, value) in self.values.raw().iter() {
-            if matches!(key.as_str(), "symlink_bins" | "libc")
-                || EPHEMERAL_OPT_KEYS.contains(&key.as_str())
+            if matches!(
+                key.as_str(),
+                "symlink_bins" | "libc" | "slsa_signer_identity" | "slsa_signer_issuer"
+            ) || EPHEMERAL_OPT_KEYS.contains(&key.as_str())
             {
                 continue;
             }
@@ -435,13 +462,11 @@ impl Backend for AquaBackend {
                         .unwrap_or_default()
                         .iter()
                         .any(|expected| {
-                            asset_name_matches_expected(
+                            locked_asset_matches_expected(
                                 &cached_filename,
                                 expected,
-                                libc_asset_preference(
-                                    &PlatformTarget::from_current(),
-                                    self.tool_libc,
-                                ),
+                                &PlatformTarget::from_current(),
+                                self.tool_libc,
                             )
                         })
                 });
@@ -737,9 +762,9 @@ impl Backend for AquaBackend {
         let pkg = Self::apply_aqua_libc_replacement(
             pkg,
             target_os,
-            Self::target_libc(target, self.tool_libc),
+            Self::asset_libc(target, self.tool_libc),
         );
-        let mut pkg = Self::apply_var_options(pkg, &opts)?;
+        let mut pkg = Self::apply_tool_options(pkg, &opts)?;
 
         // Apply version prefix if present
         if let Some(prefix) = &pkg.version_prefix
@@ -1057,17 +1082,22 @@ impl AquaBackend {
     ) -> Result<AquaPackage> {
         let raw_opts = tv.request.options();
         let opts = AquaOptions::new(&raw_opts);
+        Self::package_for_target(&PlatformTarget::from_current(), pkg, versions, &opts)
+    }
+
+    fn package_for_target(
+        target: &PlatformTarget,
+        pkg: AquaPackage,
+        versions: &[&str],
+        opts: &AquaOptions<'_>,
+    ) -> Result<AquaPackage> {
         let tool_libc = opts.libc()?;
-        let target = PlatformTarget::from_current();
-        let (target_os, target_arch) = Self::to_aqua_platform(&target);
-        let target_libc = Self::target_variant_libc(&target, tool_libc);
+        let (target_os, target_arch) = Self::to_aqua_platform(target);
+        let target_libc = Self::target_variant_libc(target, tool_libc);
         let pkg = pkg.with_version_libc(versions, target_os, target_arch, target_libc.as_deref());
-        let pkg = Self::apply_aqua_libc_replacement(
-            pkg,
-            target_os,
-            Self::target_libc(&target, tool_libc),
-        );
-        Self::apply_var_options(pkg, &opts)
+        let pkg =
+            Self::apply_aqua_libc_replacement(pkg, target_os, Self::asset_libc(target, tool_libc));
+        Self::apply_tool_options(pkg, opts)
     }
 
     async fn package_with_version_candidates(&self, tv: &ToolVersion) -> Result<AquaPackage> {
@@ -1089,10 +1119,11 @@ impl AquaBackend {
     /// The libc to select assets for. A libc the target platform names wins, then the tool's
     /// `libc` option, then the `libc` setting on the current platform.
     ///
-    /// The platform wins even over the tool option because a lockfile entry is keyed by it: a
-    /// gnu build recorded under `linux-x64-musl` would break every musl machine using the
-    /// lockfile. That includes the current platform when `libc = "musl"` is set, since
-    /// `Platform::current()` turns the setting into its qualifier.
+    /// The platform wins even over the tool option because a lockfile entry is keyed by it: the
+    /// tool's `libc = "glibc"` must not put a gnu build the registry doesn't name under
+    /// `linux-x64-musl`. That includes the current platform when `libc = "musl"` is set, since
+    /// `Platform::current()` turns the setting into its qualifier. See [`Self::asset_libc`] for
+    /// which assets a musl platform then takes.
     fn target_libc(target: &PlatformTarget, tool_libc: Option<&str>) -> Option<String> {
         target.libc().or(tool_libc).map(str::to_string).or_else(|| {
             if target.is_current() {
@@ -1101,6 +1132,25 @@ impl AquaBackend {
                 None
             }
         })
+    }
+
+    /// The libc to rewrite registry asset names to, or `None` to use the registry's names as
+    /// they are.
+    ///
+    /// A musl platform that nothing asked for explicitly keeps the registry's names: aqua
+    /// registries list the builds that exist, and a tool whose entry names only a gnu build
+    /// has no musl build for mise to invent. The tool's `libc` option and `libc = "musl"` in
+    /// settings are explicit, so they still select the musl build.
+    fn asset_libc(target: &PlatformTarget, tool_libc: Option<&str>) -> Option<String> {
+        let libc = Self::target_libc(target, tool_libc)?;
+        if libc == "musl" && !Self::musl_requested(tool_libc) {
+            return None;
+        }
+        Some(libc)
+    }
+
+    fn musl_requested(tool_libc: Option<&str>) -> bool {
+        tool_libc == Some("musl") || Settings::get().libc() == Some("musl")
     }
 
     fn target_variant_libc(target: &PlatformTarget, tool_libc: Option<&str>) -> Option<String> {
@@ -1167,6 +1217,54 @@ impl AquaBackend {
             None
         };
         Self::apply_aqua_libc_replacement(pkg, target_os, libc.map(str::to_string))
+    }
+
+    /// A lockfile that records SLSA provenance must not install without an expected signer,
+    /// or the SLSA requirement would be dropped without a word.
+    fn ensure_locked_slsa_signer(
+        tv: &ToolVersion,
+        locked_provenance: Option<&ProvenanceType>,
+        pkg: &AquaPackage,
+    ) -> Result<()> {
+        if locked_provenance.is_some_and(ProvenanceType::is_slsa)
+            && !pkg
+                .slsa_provenance
+                .as_ref()
+                .is_some_and(|s| s.has_signer_identity())
+        {
+            bail!(
+                "Lockfile requires SLSA provenance for {tv}, but Aqua registry metadata has no signer_identity and signer_issuer. Set slsa_signer_identity and slsa_signer_issuer in the tool options, or refresh the lockfile after choosing another verification method."
+            );
+        }
+        Ok(())
+    }
+
+    /// Applies the tool options that change the package itself. Install and lock both resolve
+    /// the package, so they share this to stay in agreement.
+    fn apply_tool_options(pkg: AquaPackage, opts: &AquaOptions<'_>) -> Result<AquaPackage> {
+        let pkg = Self::apply_var_options(pkg, opts)?;
+        Self::apply_slsa_signer_options(pkg, opts)
+    }
+
+    /// Sets the expected SLSA signer from the tool options on every provenance configuration
+    /// in the package, including version overrides. Packages without SLSA provenance are left
+    /// alone: the options name the signer, not where the provenance asset lives.
+    fn apply_slsa_signer_options(
+        mut pkg: AquaPackage,
+        opts: &AquaOptions<'_>,
+    ) -> Result<AquaPackage> {
+        let Some((identity, issuer)) = opts.slsa_signer()? else {
+            return Ok(pkg);
+        };
+        let set_signer = |pkg: &mut AquaPackage| {
+            if let Some(slsa) = pkg.slsa_provenance.as_mut() {
+                slsa.signer_identity = Some(identity.to_string());
+                slsa.signer_issuer = Some(issuer.to_string());
+            }
+        };
+        set_signer(&mut pkg);
+        pkg.version_overrides.iter_mut().for_each(set_signer);
+        Ok(pkg)
     }
 
     fn apply_var_options(pkg: AquaPackage, opts: &AquaOptions<'_>) -> Result<AquaPackage> {
@@ -2104,7 +2202,13 @@ impl AquaBackend {
                 )
                 .await
             } else {
-                crate::github::sigstore::verify_cosign_signature(target_path, &bundle_path).await
+                let identity = crate::github::sigstore::CosignIdentity::from_opts(&opts)?;
+                crate::github::sigstore::verify_cosign_signature(
+                    target_path,
+                    &bundle_path,
+                    &identity,
+                )
+                .await
             };
 
             match result {
@@ -2708,9 +2812,9 @@ impl AquaBackend {
         filename: &str,
         lockfile_has_checksum: bool,
     ) -> Result<()> {
-        // Reuse checksum-backed non-SLSA provenance. SLSA locks always re-verify
-        // the certificate against the current expected signer identity.
-        // However, still check that the recorded provenance type's setting is enabled —
+        // Reuse checksum-backed provenance, SLSA included: the lockfile asserts it was
+        // verified when it was written, so the signer is not needed to install from it.
+        // Still check that the recorded provenance type's setting is enabled —
         // disabling a verification setting with a provenance-bearing lockfile is a downgrade.
         //
         // When locked_verify_provenance is enabled (or paranoid mode is on), always
@@ -2728,24 +2832,7 @@ impl AquaBackend {
             .lock_platforms
             .get(&platform_key)
             .and_then(|p| p.provenance.clone());
-        if locked_provenance
-            .as_ref()
-            .is_some_and(ProvenanceType::is_slsa)
-            && !pkg
-                .slsa_provenance
-                .as_ref()
-                .is_some_and(|s| s.has_signer_identity())
-        {
-            return Err(eyre!(
-                "Lockfile requires SLSA provenance for {tv}, but Aqua registry metadata has no signer_identity and signer_issuer. Add the expected signer or refresh the lockfile."
-            ));
-        }
-        if has_lockfile_integrity
-            && !force_verify
-            && !locked_provenance
-                .as_ref()
-                .is_some_and(ProvenanceType::is_slsa)
-        {
+        if lockfile_has_checksum && has_lockfile_integrity && !force_verify {
             self.ensure_provenance_setting_enabled(tv, &platform_key)?;
         } else if !force_verify && locked_provenance.is_none() && lockfile_has_checksum {
             debug!(
@@ -2754,6 +2841,9 @@ impl AquaBackend {
                 tv.style()
             );
         } else {
+            // Verifying for real needs the expected signer; without one the locked SLSA
+            // requirement would be dropped silently.
+            Self::ensure_locked_slsa_signer(tv, locked_provenance.as_ref(), pkg)?;
             self.verify_provenance(ctx, tv, pkg, v, filename).await?;
         }
 
@@ -3892,6 +3982,7 @@ pub(crate) fn is_install_time_option_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aqua_registry::types::AquaSlsaProvenance;
     use aqua_registry::{AquaFile, AquaVar, ParsedRegistry};
 
     /// The regex filter [`aqua_fuzzy_match`] replaced, kept to show the two agree.
@@ -4679,6 +4770,160 @@ packages:
             ),
             PathBuf::from("bin/tool_1.0.0.exe")
         );
+    }
+
+    fn slsa_package() -> AquaPackage {
+        let mut pkg = AquaPackage::default();
+        pkg.slsa_provenance = Some(AquaSlsaProvenance {
+            enabled: None,
+            r#type: Some("github_release".to_string()),
+            repo_owner: None,
+            repo_name: None,
+            url: None,
+            asset: Some("multiple.intoto.jsonl".to_string()),
+            source_uri: None,
+            source_tag: None,
+            signer_identity: None,
+            signer_issuer: None,
+        });
+        let mut over = AquaPackage::default();
+        over.slsa_provenance = pkg.slsa_provenance.clone();
+        pkg.version_overrides = vec![over];
+        pkg
+    }
+
+    fn slsa_signer_opts(identity: Option<&str>, issuer: Option<&str>) -> ToolVersionOptions {
+        let mut opts = ToolVersionOptions::default();
+        for (key, value) in [
+            ("slsa_signer_identity", identity),
+            ("slsa_signer_issuer", issuer),
+        ] {
+            if let Some(value) = value {
+                opts.opts
+                    .insert(key.to_string(), toml::Value::String(value.to_string()));
+            }
+        }
+        opts
+    }
+
+    #[test]
+    fn test_slsa_signer_options_fill_missing_registry_signer() {
+        let opts = slsa_signer_opts(
+            Some("https://github.com/example/tool/.github/workflows/release.yml@refs/tags/v1.0.0"),
+            Some("https://token.actions.githubusercontent.com"),
+        );
+        let opts = AquaOptions::new(&opts);
+        let pkg = slsa_package();
+        assert!(!pkg.slsa_provenance.as_ref().unwrap().has_signer_identity());
+
+        let pkg = AquaBackend::apply_slsa_signer_options(pkg, &opts).unwrap();
+
+        for slsa in std::iter::once(&pkg)
+            .chain(pkg.version_overrides.iter())
+            .map(|p| p.slsa_provenance.as_ref().unwrap())
+        {
+            assert_eq!(
+                slsa.signer_identity.as_deref(),
+                Some(
+                    "https://github.com/example/tool/.github/workflows/release.yml@refs/tags/v1.0.0"
+                )
+            );
+            assert_eq!(
+                slsa.signer_issuer.as_deref(),
+                Some("https://token.actions.githubusercontent.com")
+            );
+        }
+    }
+
+    #[test]
+    fn test_package_options_supply_slsa_signer() {
+        let backend = Arc::new(BackendArg::new(
+            "osv-scanner".to_string(),
+            Some("aqua:google/osv-scanner".to_string()),
+        ));
+        let mut request =
+            ToolRequest::new(backend, "2.6.0", crate::toolset::ToolSource::Unknown).unwrap();
+        request.set_options(slsa_signer_opts(
+            Some("identity"),
+            Some("https://token.actions.githubusercontent.com"),
+        ));
+        let tv = ToolVersion::new(request, "2.6.0".to_string());
+
+        let pkg =
+            AquaBackend::package_with_options_for_pkg(&tv, slsa_package(), &["v2.6.0"]).unwrap();
+
+        assert!(pkg.slsa_provenance.as_ref().unwrap().has_signer_identity());
+    }
+
+    #[test]
+    fn test_locked_slsa_requires_signer_from_registry_or_options() {
+        let backend = Arc::new(BackendArg::new(
+            "osv-scanner".to_string(),
+            Some("aqua:google/osv-scanner".to_string()),
+        ));
+        let request =
+            ToolRequest::new(backend, "2.6.0", crate::toolset::ToolSource::Unknown).unwrap();
+        let tv = ToolVersion::new(request, "2.6.0".to_string());
+        let locked = ProvenanceType::Slsa { url: None };
+
+        // The registry names the provenance asset but not the signer: the reported failure.
+        let err = AquaBackend::ensure_locked_slsa_signer(&tv, Some(&locked), &slsa_package())
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Set slsa_signer_identity and slsa_signer_issuer"),
+            "unexpected error: {err}"
+        );
+
+        // The same lock installs once the tool options supply the signer.
+        let opts = slsa_signer_opts(Some("identity"), Some("issuer"));
+        let pkg =
+            AquaBackend::apply_tool_options(slsa_package(), &AquaOptions::new(&opts)).unwrap();
+        AquaBackend::ensure_locked_slsa_signer(&tv, Some(&locked), &pkg).unwrap();
+
+        // A lock that does not require SLSA is unaffected.
+        AquaBackend::ensure_locked_slsa_signer(&tv, None, &slsa_package()).unwrap();
+    }
+
+    #[test]
+    fn test_slsa_signer_options_require_both_fields() {
+        for opts in [
+            slsa_signer_opts(Some("identity"), None),
+            slsa_signer_opts(None, Some("issuer")),
+        ] {
+            let opts = AquaOptions::new(&opts);
+            let err = AquaBackend::apply_slsa_signer_options(slsa_package(), &opts).unwrap_err();
+            assert!(
+                err.to_string().contains("must be set together"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_slsa_signer_options_reject_empty_and_non_string_values() {
+        for (identity, issuer) in [
+            (toml::Value::String(String::new()), "issuer"),
+            (toml::Value::Integer(5), "issuer"),
+        ] {
+            let mut opts = slsa_signer_opts(None, Some(issuer));
+            opts.opts
+                .insert("slsa_signer_identity".to_string(), identity);
+            let opts = AquaOptions::new(&opts);
+            let err = AquaBackend::apply_slsa_signer_options(slsa_package(), &opts).unwrap_err();
+            assert!(
+                err.to_string().contains("expected a non-empty string"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_slsa_signer_options_are_not_package_vars() {
+        let opts = slsa_signer_opts(Some("identity"), Some("issuer"));
+        let opts = AquaOptions::new(&opts);
+        assert!(opts.canonical_var_options().unwrap().is_empty());
+        assert!(opts.lockfile_options().unwrap().is_empty());
     }
 
     #[test]
@@ -5561,7 +5806,9 @@ fn libc_asset_preference(target: &PlatformTarget, tool_libc: Option<&str>) -> Li
     }
     match AquaBackend::target_libc(target, tool_libc).as_deref() {
         Some("gnu") => LibcAssetPreference::GlibcStrict,
-        Some("musl") => LibcAssetPreference::MuslStrict,
+        Some("musl") if AquaBackend::musl_requested(tool_libc) => LibcAssetPreference::MuslStrict,
+        // A musl platform nobody asked for takes the registry's asset as named.
+        Some("musl") => LibcAssetPreference::Exact,
         _ => LibcAssetPreference::GlibcWithFallback,
     }
 }
@@ -5616,6 +5863,24 @@ fn exact_asset_matches_libc_preference(
             .iter()
             .any(|token| matches!(token.as_str(), "gnu" | "glibc")),
     }
+}
+
+/// Whether a lockfile's asset is still the one to install for `expected`.
+///
+/// A musl platform that nothing asked for takes the registry's asset as named, but a lockfile
+/// written before that recorded the musl sibling of a gnu asset. Its checksum belongs to that
+/// archive, so it stays valid rather than being refreshed to the registry's asset.
+fn locked_asset_matches_expected(
+    actual: &str,
+    expected: &str,
+    target: &PlatformTarget,
+    tool_libc: Option<&str>,
+) -> bool {
+    let preference = libc_asset_preference(target, tool_libc);
+    asset_name_matches_expected(actual, expected, preference)
+        || (preference == LibcAssetPreference::Exact
+            && target.os_name() == "linux"
+            && asset_name_matches_expected(actual, expected, LibcAssetPreference::MuslStrict))
 }
 
 fn asset_name_matches_expected(
@@ -5692,6 +5957,18 @@ mod lock_candidate_tests {
     use crate::platform::Platform;
 
     use super::*;
+    use crate::config::settings::SettingsPartial;
+    use confique::Layer;
+
+    /// Pins the `libc` setting so a test does not depend on the runner's `MISE_LIBC` or
+    /// global config. Dropping the guard restores the default settings.
+    fn pin_libc_setting(libc: &str) -> crate::test::SettingsGuard {
+        let guard = crate::test::SettingsGuard::lock();
+        let mut partial = SettingsPartial::empty();
+        partial.libc = Some(libc.to_string());
+        Settings::reset(Some(partial));
+        guard
+    }
 
     fn build_lock_candidates(
         version: &str,
@@ -6462,6 +6739,7 @@ no_asset: true
 
     #[test]
     fn test_libc_asset_preference_uses_tool_libc() {
+        let _settings = pin_libc_setting("gnu");
         let linux = PlatformTarget::new(Platform::parse("linux-arm64").unwrap());
         assert_eq!(
             libc_asset_preference(&linux, Some("musl")),
@@ -6476,7 +6754,17 @@ no_asset: true
         let linux_musl = PlatformTarget::new(Platform::parse("linux-arm64-musl").unwrap());
         assert_eq!(
             libc_asset_preference(&linux_musl, Some("gnu")),
+            LibcAssetPreference::Exact
+        );
+        assert_eq!(
+            libc_asset_preference(&linux_musl, Some("musl")),
             LibcAssetPreference::MuslStrict
+        );
+        assert_eq!(AquaBackend::asset_libc(&linux_musl, Some("gnu")), None);
+        assert_eq!(AquaBackend::asset_libc(&linux_musl, None), None);
+        assert_eq!(
+            AquaBackend::asset_libc(&linux_musl, Some("musl")).as_deref(),
+            Some("musl")
         );
 
         let macos = PlatformTarget::new(Platform::parse("macos-arm64").unwrap());
@@ -6509,6 +6797,62 @@ no_asset: true
             selected.name,
             "rustnet-v1.6.0-aarch64-unknown-linux-musl.tar.gz"
         );
+    }
+
+    #[test]
+    fn test_musl_setting_requests_musl_for_every_musl_target() {
+        let _settings = pin_libc_setting("musl");
+        let gnu = "tool-1.0.0-x86_64-unknown-linux-gnu.tar.gz";
+        let musl = "tool-1.0.0-x86_64-unknown-linux-musl.tar.gz";
+        // A target that is not the host's gets the setting too, so a lockfile written on one
+        // machine agrees with every other.
+        let other = PlatformTarget::new(Platform::parse("linux-riscv64-musl").unwrap());
+
+        assert_eq!(
+            AquaBackend::asset_libc(&other, None).as_deref(),
+            Some("musl")
+        );
+        assert_eq!(
+            libc_asset_preference(&other, Some("gnu")),
+            LibcAssetPreference::MuslStrict
+        );
+        assert!(!locked_asset_matches_expected(gnu, gnu, &other, None));
+        assert!(locked_asset_matches_expected(musl, gnu, &other, None));
+    }
+
+    #[test]
+    fn test_locked_musl_sibling_stays_valid_on_implicit_musl_target() {
+        let _settings = pin_libc_setting("gnu");
+        let gnu = "tool-1.0.0-x86_64-unknown-linux-gnu.tar.gz";
+        let musl = "tool-1.0.0-x86_64-unknown-linux-musl.tar.gz";
+        let alpine = PlatformTarget::new(Platform::parse("linux-x64-musl").unwrap());
+        let glibc = PlatformTarget::new(Platform::parse("linux-x64").unwrap());
+        let macos = PlatformTarget::new(Platform::parse("macos-arm64").unwrap());
+
+        // The registry names gnu; a lockfile that recorded either build is still valid.
+        assert!(locked_asset_matches_expected(gnu, gnu, &alpine, None));
+        assert!(locked_asset_matches_expected(musl, gnu, &alpine, None));
+        assert!(locked_asset_matches_expected(
+            musl,
+            gnu,
+            &alpine,
+            Some("gnu")
+        ));
+
+        // Asking for musl explicitly, or a glibc platform, keeps its strict validation.
+        assert!(!locked_asset_matches_expected(
+            gnu,
+            gnu,
+            &alpine,
+            Some("musl")
+        ));
+        assert!(!locked_asset_matches_expected(
+            musl,
+            gnu,
+            &glibc,
+            Some("gnu")
+        ));
+        assert!(!locked_asset_matches_expected(musl, gnu, &macos, None));
     }
 
     #[test]
@@ -6577,6 +6921,59 @@ no_asset: true
         assert_eq!(
             pkg.replacements.get("linux").map(String::as_str),
             Some("Linux")
+        );
+    }
+
+    #[test]
+    fn test_package_for_implicit_musl_target_keeps_registry_gnu_asset() {
+        let _settings = pin_libc_setting("gnu");
+        // An Alpine host is a musl platform nothing asked for: a registry entry that names only
+        // a gnu build installs that build instead of a musl build that may not exist.
+        let mut pkg = AquaPackage::default();
+        pkg.replacements
+            .insert("linux".to_string(), "unknown-linux-gnu".to_string());
+        let musl = PlatformTarget::new(Platform::parse("linux-x64-musl").unwrap());
+
+        let opts = ToolVersionOptions::default();
+        let implicit = AquaBackend::package_for_target(
+            &musl,
+            pkg.clone(),
+            &["1.0.0"],
+            &AquaOptions::new(&opts),
+        )
+        .unwrap();
+        assert_eq!(
+            implicit.replacements.get("linux").map(String::as_str),
+            Some("unknown-linux-gnu")
+        );
+
+        // The tool's `libc = "gnu"` changes nothing: the musl platform already keeps the
+        // registry's asset.
+        let mut opts = ToolVersionOptions::default();
+        opts.opts
+            .insert("libc".to_string(), toml::Value::String("gnu".to_string()));
+        let gnu = AquaBackend::package_for_target(
+            &musl,
+            pkg.clone(),
+            &["1.0.0"],
+            &AquaOptions::new(&opts),
+        )
+        .unwrap();
+        assert_eq!(
+            gnu.replacements.get("linux").map(String::as_str),
+            Some("unknown-linux-gnu")
+        );
+
+        // Asking for musl explicitly still selects the musl build.
+        let mut opts = ToolVersionOptions::default();
+        opts.opts
+            .insert("libc".to_string(), toml::Value::String("musl".to_string()));
+        let explicit =
+            AquaBackend::package_for_target(&musl, pkg, &["1.0.0"], &AquaOptions::new(&opts))
+                .unwrap();
+        assert_eq!(
+            explicit.replacements.get("linux").map(String::as_str),
+            Some("unknown-linux-musl")
         );
     }
 

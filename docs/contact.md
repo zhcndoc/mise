@@ -6,9 +6,10 @@ description: "如有关于 mise 的问题，请发起 GitHub Discussion。"
 
 如有关于 mise 的问题，请发起 [GitHub Discussion](https://github.com/jdx/mise/discussions/new/choose)。这样可以让答案更容易被搜索，也能让其他用户提供帮助。请在 [GitHub Issues](https://github.com/jdx/mise/issues) 中报告错误。Discussions 用于一般问题和功能想法。
 
-参与之前，请阅读[社区参与政策](/contributing.html#community-participation)。
-欢迎经过审核的 AI 辅助回复，包括一次性回复。该政策针对的是那些与问题或项目毫无关联，
-却在 Discussions 中随意发送 AI 答案的垃圾账号；这些账号将被封禁。
+参与之前，请阅读[社区参与政策](/contributing.html#community-participation)。只有在你创建了该
+Discussion 或 Issue、提交了修复它的 PR，或已有归属于你 GitHub 帐户的贡献合并到 mise 默认分支时，
+才能使用 AI 回复 Discussion 或 Issue。其他人使用 AI 回复将被禁止参与 jdx 的所有项目。使用 AI
+协助编写并提交自己的 Discussion 或 Issue 没问题。
 
 - [Issues](https://github.com/jdx/mise/issues)：报告错误时请附上命令、相关配置、预期行为和实际行为，以及经过审核的 `mise doctor` 输出。请参阅[故障排除](/troubleshooting.html)以了解有用的诊断方法。
 - [故障排除](https://github.com/jdx/mise/discussions/categories/troubleshooting-and-bug-reports)：当你不确定某件事是否是错误时请求帮助。

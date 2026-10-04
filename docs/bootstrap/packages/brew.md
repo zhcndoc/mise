@@ -129,7 +129,25 @@ table form with `adopt = true`:
 "brew-cask:textmate" = { version = "latest", adopt = true }
 ```
 
-要为所有已配置的 cask 启用接管，请设置 Homebrew bootstrap 默认值。单个 cask 可以使用 `adopt = false` 选择退出：
+要为单个 cask 使用不同的目录，请为该软件包设置 `appdir`。它优先于
+`MISE_BREW_CASK_OPT_APPDIR`，因此可以让需要安装到 `/Applications` 的 cask
+与使用可写全局目录的其他 cask 共存：
+
+```toml
+[bootstrap.packages]
+"brew-cask:1password" = { appdir = "/Applications" }
+```
+
+`appdir` 支持 `~/` 展开，其他方面遵循与环境变量相同的验证规则：必须是绝对路径，
+不能包含 `..`，且不能解析为文件系统根目录。它适用于随该 cask 安装的任何 cask
+依赖项。它只影响安装和升级；mise 不会移动已安装的 app。其他软件包管理器会忽略
+`appdir` 并发出警告。
+
+首次安装到单个 cask 的 `appdir` 时，除非设置 `adopt = true`，否则拒绝替换那里已有
+的 app，因此将 cask 指向某个目录不会覆盖无关的 app。
+
+要为所有已配置的 cask 启用接管，请设置 Homebrew bootstrap 默认值。单个 cask 可以使用
+`adopt = false` 选择退出：
 
 ```toml
 [bootstrap.brew]

@@ -7,15 +7,19 @@ outline: [2, 3]
 
 ## Community Participation
 
-AI-assisted responses are welcome, including one-off responses from people trying to help.
-This is especially true when you are answering your own question, are directly involved in or
-personally connected to the original question, or are an established project contributor. In
-all cases, review and verify the response before posting it.
+::: danger Discussions 和 Issues 中的 AI 回复受到限制
+Discussions 和 Issues 中的 AI 回复受到限制，违反规定将**立即被封禁，且适用于 jdx 的所有项目**。
 
-Do not use AI to spam project support channels with drive-by answers across Discussions when
-you have no connection to the questions or the project. This includes raw, lightly edited, or
-disclosed model output. This policy is intended to prevent discussion spam, not discourage
-individual responses. Accounts that engage in this behavior will be blocked from the project.
+只有在你创建了某个 [Discussion](https://github.com/jdx/mise/discussions)、提交了修复它的 PR，
+或已有归属于你的 GitHub 帐户的贡献合并到 mise 的默认分支时，才可以使用 AI 回复该 Discussion 或
+[Issue](https://github.com/jdx/mise/issues)。其他人不得使用 AI 回复。这是一个日益严重的问题。
+
+这包括原始、轻度编辑、经审阅以及已披露的模型输出。添加“AI 辅助”页脚本身并不能让 AI 回复变得
+合规。如果你正在运行代理，请确保它不会向你无权回复的主题发帖，也绝不要让它一次处理大量主题。
+:::
+
+使用 AI 协助编写并提交自己的 Discussion 或 Issue 没问题。发布前请进行审阅，并披露 AI 参与其中。
+如果你有权使用 AI 回复，请在发布前审阅并核实回复，并披露 AI 参与其中。
 
 ## Contribution Expectations
 
@@ -162,9 +166,10 @@ eval "$(@mise activate zsh)"
 
 ### hk Configuration
 
-[`hk.pkl`](https://github.com/jdx/mise/blob/main/hk.pkl) defines `check` and `fix` workflows.
-It currently has no Git `pre-commit` hook, so `hk install --mise` may report that there is
-nothing to install. Run the checks explicitly before committing.
+[`hk.pkl`](https://github.com/jdx/mise/blob/main/hk.pkl) 定义 `check` 和 `fix` 工作流，并包含 Git
+`pre-commit` 钩子。`hk install --mise` 会安装该钩子，在每次提交前运行与 `fix` 相同的检查工具并应用修复
+（运行期间会暂存未暂存的改动）。你也可以使用 `mise run lint` 或 `mise run lint-fix` 显式运行检查。在 Windows
+上，`lint-fix` 仅运行 Clippy、Prettier 和 `cargo fmt`，不会运行其他 hk 步骤。
 
 ### Available Linters in hk
 

@@ -1052,7 +1052,10 @@ impl MiseToml {
             .is_none_or(|bootstrap| !bootstrap.packages.contains_key(spec));
         if is_missing
             && let Some(PackageTomlConfig::Options(options)) = fallback
-            && (!options.os.is_empty() || !options.env.is_empty() || options.adopt.is_some())
+            && (!options.os.is_empty()
+                || !options.env.is_empty()
+                || options.adopt.is_some()
+                || options.appdir.is_some())
         {
             let mut options = options.clone();
             options.version = version.to_string();
@@ -1093,6 +1096,9 @@ impl MiseToml {
             }
             if let Some(adopt) = options.adopt {
                 value.insert("adopt", Value::from(adopt));
+            }
+            if let Some(appdir) = &options.appdir {
+                value.insert("appdir", Value::from(appdir));
             }
             packages.insert(spec, Item::Value(Value::InlineTable(value)));
             return Ok(());
@@ -3128,7 +3134,9 @@ impl<'de> de::Deserialize<'de> for Alias {
 /// - `[tools]` entries with plain version strings only matter when the user
 ///   runs something like `mise install`. Entries with options (tables) are
 ///   excluded because options like `postinstall` and `install_env` run code
-///   or alter the install environment.
+///   or alter the install environment. Options can also ride in the key
+///   (`"tool[postinstall=...]" = "1"`), so keys with inline options are
+///   excluded too.
 /// - `[tasks]` definitions are inert until the user explicitly runs one
 /// - no Tera template syntax anywhere — templates render while config and
 ///   tasks load and can run arbitrary commands via exec()
@@ -3152,12 +3160,15 @@ fn is_safe_config_body(body: &str) -> bool {
     table.iter().all(|(key, value)| match key.as_str() {
         "min_version" | "tasks" => true,
         "tools" => value.as_table().is_some_and(|tools| {
-            tools.values().all(|version| match version {
-                toml::Value::String(_) => true,
-                toml::Value::Array(versions) => {
-                    versions.iter().all(|v| matches!(v, toml::Value::String(_)))
-                }
-                _ => false,
+            tools.iter().all(|(tool, version)| {
+                !tool.contains('[')
+                    && match version {
+                        toml::Value::String(_) => true,
+                        toml::Value::Array(versions) => {
+                            versions.iter().all(|v| matches!(v, toml::Value::String(_)))
+                        }
+                        _ => false,
+                    }
             })
         }),
         _ => false,
@@ -3944,6 +3955,7 @@ mod tests {
                         os: vec![],
                         env: vec![],
                         adopt: None,
+                        appdir: None,
                         state: crate::system::PackageDesiredStateTomlConfig::Present,
                         url: None,
                         sha256: None,
@@ -3953,6 +3965,24 @@ mod tests {
                     "brew:tree",
                     "latest",
                     Some(&inherited_without_selector),
+                )
+                .unwrap();
+                let inherited_with_appdir =
+                    PackageTomlConfig::Options(crate::system::PackageOptionsTomlConfig {
+                        version: "1.0.0".to_string(),
+                        os: vec![],
+                        env: vec![],
+                        adopt: None,
+                        appdir: Some("/Applications".to_string()),
+                        state: crate::system::PackageDesiredStateTomlConfig::Present,
+                        url: None,
+                        sha256: None,
+                        artifact: None,
+                    });
+                cf.update_bootstrap_package_with_fallback(
+                    "brew-cask:1password",
+                    "latest",
+                    Some(&inherited_with_appdir),
                 )
                 .unwrap();
             }
@@ -3988,6 +4018,13 @@ mod tests {
         assert!(
             dump.contains(r#""brew:tree" = "latest""#),
             "an inherited options table without selectors should use scalar form: {dump}"
+        );
+        #[cfg(unix)]
+        assert!(
+            dump.contains(
+                r#""brew-cask:1password" = { version = "latest", appdir = "/Applications" }"#
+            ),
+            "an inherited appdir should be written locally: {dump}"
         );
         #[cfg(unix)]
         MiseToml::from_str(&dump, &p).expect("updated package config should parse");
@@ -5050,6 +5087,15 @@ run = "cargo build"
         assert!(!is_safe_config_body(indoc! {r#"
         [tools]
         node = [{ version = "20" }]
+        "#}));
+        // options can also be written inline in the key
+        assert!(!is_safe_config_body(indoc! {r#"
+        [tools]
+        "http:probe[url=https://example.com/x.tar.gz,postinstall=touch PWNED]" = "1"
+        "#}));
+        assert!(!is_safe_config_body(indoc! {r#"
+        [tools]
+        "github:owner/repo[api_url=http://example.com/api/v3]" = "latest"
         "#}));
         // tasks with templates render (and can exec) while loading
         assert!(!is_safe_config_body(indoc! {r#"

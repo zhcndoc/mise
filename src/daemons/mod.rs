@@ -495,7 +495,11 @@ pub fn load(files: &ConfigMap) -> Result<DaemonSet> {
             .iter()
             .map(|k| {
                 let daemon = &set.daemons[k];
-                format!("{} in {}", daemon.name, daemon.root.display())
+                format!(
+                    "{} in {}",
+                    daemon.name,
+                    crate::file::display_path(&daemon.root)
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -810,20 +814,13 @@ fn build(
         if task.is_empty() {
             bail!("[daemons.{name}] task must not be empty");
         }
-        let mut run = format!(
-            "exec {} run {}",
-            presets::quote(crate::env::MISE_BIN.to_string_lossy()),
-            presets::quote(task)
+        let run = task_run(
+            &crate::env::MISE_BIN.to_string_lossy(),
+            task,
+            &args.unwrap_or_default(),
+            !init.is_empty(),
         );
-        let args = args.unwrap_or_default();
-        if !args.is_empty() {
-            run.push_str(" --");
-            for arg in args {
-                run.push(' ');
-                run.push_str(&presets::quote(arg));
-            }
-        }
-        table.insert("run".into(), toml::Value::String(run));
+        table.insert("run".into(), run);
         // The task runs through `mise run`, which would start this very
         // daemon again. This marker breaks that cycle in `tasks::start`
         // instead of `--skip-deps`, which would also have discarded the
@@ -855,7 +852,8 @@ fn build(
                 .or_insert(toml::Value::Boolean(false));
         }
     }
-    if table.get("run").and_then(toml::Value::as_str).is_none() {
+    // A task daemon's generated `run` may be an argv; one declared with `run` is a command line.
+    if task.is_none() && table.get("run").and_then(toml::Value::as_str).is_none() {
         bail!("[daemons.{name}] requires run, task, preset, or project");
     }
     let claim = match request {
@@ -979,7 +977,7 @@ pub fn ensure_not_blocked(
         return Ok(());
     };
     let project = root
-        .map(|root| format!(" in {}", root.display()))
+        .map(|root| format!(" in {}", crate::file::display_path(root)))
         .unwrap_or_default();
     let (import, error) = import;
     bail!("daemon {name:?}{project} depends on [daemons.{import}], which is unavailable: {error}");
@@ -1460,6 +1458,66 @@ fn take_args(table: &mut toml::Table, name: &str) -> Result<Option<Vec<String>>>
             _ => bail!("[daemons.{name}] args must be an array of strings"),
         })
         .transpose()
+}
+
+/// The `run` of a `task` daemon: `mise run <task> [-- args]`. Pitchfork starts an
+/// argv without a shell, so it works whatever shell is configured, on Windows too.
+/// `init` steps are shell commands to chain it onto, so with them it is a command line.
+fn task_run(mise: &str, task: &str, args: &[String], after_init: bool) -> toml::Value {
+    if after_init {
+        // pitchfork's shell is cmd.exe by default on Windows.
+        if cfg!(windows) {
+            return toml::Value::String(cmd_task_command(mise, task, args));
+        }
+        let mut run = format!("exec {} run {}", presets::quote(mise), presets::quote(task));
+        if !args.is_empty() {
+            run.push_str(" --");
+            for arg in args {
+                run.push(' ');
+                run.push_str(&presets::quote(arg));
+            }
+        }
+        return toml::Value::String(run);
+    }
+    let mut argv = vec![mise.to_string(), "run".to_string(), task.to_string()];
+    if !args.is_empty() {
+        argv.push("--".to_string());
+        argv.extend(args.iter().cloned());
+    }
+    toml::Value::Array(argv.into_iter().map(toml::Value::String).collect())
+}
+
+/// `mise run <task> [-- args]` as cmd.exe reads it: cmd has no `exec` and does not
+/// treat `'` as a quote, so the program path is double-quoted and so is any
+/// argument that needs it.
+fn cmd_task_command(mise: &str, task: &str, args: &[String]) -> String {
+    // cmd expands `%VAR%` inside quotes too, and `^` does not escape there, so each
+    // `%` of the path is left outside the quotes and escaped.
+    let mise = mise.replace('%', "\"^%\"");
+    let mut run = format!("\"{mise}\" run {}", cmd_escaped_arg(task));
+    if !args.is_empty() {
+        run.push_str(" --");
+        for arg in args {
+            run.push(' ');
+            run.push_str(&cmd_escaped_arg(arg));
+        }
+    }
+    run
+}
+
+/// One argument quoted for the program, with cmd's own metacharacters escaped by
+/// `^`: cmd ignores `\"`, so an escaped quote would otherwise end its quoting and
+/// expose what follows, and it expands `%VAR%` even inside quotes.
+fn cmd_escaped_arg(arg: &str) -> String {
+    let quoted = crate::path::quote_arg_for_cmd_body(arg);
+    let mut escaped = String::with_capacity(quoted.len() * 2);
+    for c in quoted.chars() {
+        if matches!(c, '(' | ')' | '%' | '!' | '^' | '"' | '<' | '>' | '&' | '|') {
+            escaped.push('^');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 fn take_string(table: &mut toml::Table, key: &str) -> Result<Option<String>> {
@@ -1958,10 +2016,20 @@ mod tests {
         )]);
         let set = load(&config).unwrap();
         let daemon = &set.daemons["core"];
-        let mise = presets::quote(crate::env::MISE_BIN.to_string_lossy());
+        let mise = crate::env::MISE_BIN.to_string_lossy().into_owned();
+        let argv = |args: &[&str]| {
+            toml::Value::Array(
+                std::iter::once(mise.as_str())
+                    .chain(args.iter().copied())
+                    .map(|arg| toml::Value::String(arg.into()))
+                    .collect(),
+            )
+        };
+        // An argv, which pitchfork starts without a shell: arguments reach the
+        // task unquoted, on Windows as well as Unix.
         assert_eq!(
-            daemon.table["run"].as_str(),
-            Some(format!("exec {mise} run 'dev:core' -- '--port' 'it'\\''s 3000'").as_str())
+            daemon.table["run"],
+            argv(&["run", "dev:core", "--", "--port", "it's 3000"])
         );
         // The task keeps its own `depends`; a marker in the daemon environment
         // is what stops the nested run from starting this daemon again.
@@ -1976,8 +2044,34 @@ mod tests {
         // A task daemon with no args does not emit a dangling separator.
         let config = files(&[("/project/mise.toml", "[daemons.core]\ntask = 'dev'\n")]);
         assert_eq!(
-            load(&config).unwrap().daemons["core"].table["run"].as_str(),
-            Some(format!("exec {mise} run 'dev'").as_str())
+            load(&config).unwrap().daemons["core"].table["run"],
+            argv(&["run", "dev"])
+        );
+    }
+
+    #[test]
+    fn a_task_after_init_is_a_command_line_cmd_can_read() {
+        let mise = r"C:\Program Files\mise\mise.exe";
+        assert_eq!(
+            cmd_task_command(mise, "dev:core", &[]),
+            r#""C:\Program Files\mise\mise.exe" run dev:core"#
+        );
+        // Arguments cmd would split or interpret are double-quoted; `'` is not a quote there.
+        let args = ["--port".to_string(), "it's 3000".into(), "a&b".into()];
+        assert_eq!(
+            cmd_task_command(mise, "dev", &args),
+            r#""C:\Program Files\mise\mise.exe" run dev -- --port ^"it's 3000^" ^"a^&b^""#
+        );
+        // A quote inside an argument must not end cmd's quoting, and `%VAR%` is not expanded.
+        let args = [r#"a" & echo x & "b"#.to_string(), "%APPDATA%".into()];
+        assert_eq!(
+            cmd_task_command(mise, "dev", &args),
+            r#""C:\Program Files\mise\mise.exe" run dev -- ^"a\^" ^& echo x ^& \^"b^" ^%APPDATA^%"#
+        );
+        // A `%` in the path itself is kept out of cmd's expansion as well.
+        assert_eq!(
+            cmd_task_command(r"C:\Users\%TEMP% x\mise.exe", "dev", &[]),
+            r#""C:\Users\"^%"TEMP"^%" x\mise.exe" run dev"#
         );
     }
 
@@ -2057,11 +2151,14 @@ mod tests {
         )]);
         let daemon = &load(&wrapped).unwrap().daemons["core"];
         let run = daemon.table["run"].as_str().unwrap().to_string();
-        assert!(
-            run.starts_with("npm ci && npm run migrate && exec "),
-            "{run}"
-        );
-        assert!(run.ends_with("run 'dev'"), "{run}");
+        let mise = crate::env::MISE_BIN.to_string_lossy();
+        // cmd.exe, pitchfork's shell on Windows, has no `exec` and no `'` quoting.
+        let task = if cfg!(windows) {
+            format!("\"{mise}\" run dev")
+        } else {
+            format!("exec {} run 'dev'", presets::quote(&mise))
+        };
+        assert_eq!(run, format!("npm ci && npm run migrate && {task}"));
         assert_eq!(daemon.table["mise"].as_bool(), Some(true));
         // An explicit `mise` value stays the user's call.
         let explicit = files(&[(

@@ -58,7 +58,34 @@ version = "18"
 port = 5433
 ```
 
-字符串会选择与条目名称匹配的预设。带有 `run` 的表定义自定义进程。带有 `preset` 和 `version` 的表会为任意实例名称选择预设，其余字段会覆盖其 pitchfork 守护进程定义。对于预设，`port` 是整数。自定义守护进程接受相同的整数简写或 pitchfork 的结构化 `port` 配置。用户提供的字符串会保留 pitchfork 模板语法；mise 只渲染其中嵌入的预设模板。
+自定义命令默认使用项目的 mise 工具环境。在 `[tools]` 中声明其工具；预设会添加自身所需的工具。
+使用 `task` 声明的守护进程是例外：mise 是其中的入口，因此除非它同时具有
+[`init`](#setup-before-the-process-starts)，否则不会再次包装。任务仍会从 mise 自身获得工具环境。
+使用 `exec` 作为最终的长时间运行命令，以便它直接接收停止信号。
+
+`ready_port`、`ready_cmd` 和 `auto` 等字段用于配置 pitchfork 的守护进程行为。设置一个能反映服务
+何时可以接受工作的就绪检查；上面的示例会等待 3000 端口。使用整数 `port` 指定固定端口，或使用
+[自动端口](#ports-across-git-worktrees) 在多个工作树中运行服务。使用 [`ports`](#ports) 配置预设的
+其他监听器。自定义守护进程也接受 pitchfork 的结构化 `port` 表；预设只接受整数或 mise 的自动端口语法。
+
+::: v-pre
+用户提供的字符串会保留 pitchfork 模板语法，mise 会渲染其中嵌入的预设模板。`run` 命令还可以使用
+项目 [`[env]`](/environments/) 和 [`[vars]`](/configuration/vars) 中的 `{{ env.NAME }}` 和
+`{{ vars.NAME }}`，以及 mise 的其他模板过滤器（例如 `quote`）。Pitchfork 会渲染它定义的变量
+（`{{ port }}`、`{{ url }}` 等），并将命令传递给 `mise x`；守护进程启动时，mise 会渲染其余部分。
+`[env]` 中的值绝不会写入生成的 pitchfork 文件。此功能需要高于 2.29.0 的 pitchfork 版本，且仅适用于 `run`。
+:::
+
+```toml
+[env]
+AUDIENCE = "world"
+
+[vars]
+greeting = "hello"
+
+[daemons.hello]
+run = "exec echo {{ vars.greeting | quote }} {{ env.AUDIENCE | quote }}"
+```
 
 ## Tasks that require daemons
 
@@ -115,6 +142,10 @@ The daemon's readiness check is configured on `[daemons.core]`, not on the task.
 
 A daemon's `task` cannot be combined with `run` or `preset`, and `args` requires
 `task`. The referenced task must exist when daemons are registered.
+
+mise 不通过 shell 启动任务，因此参数在 Windows 和 Unix 上都会按原样传递给任务。这需要 pitchfork 2.28.0
+或更高版本。带有 [`init`](#setup-before-the-process-starts) 的任务守护进程是例外：它的设置步骤和任务共享
+同一个 shell。在 Windows 上，这是 pitchfork 的默认 `cmd /C`，因此请将 `init` 步骤写成 cmd 命令。
 
 ::: warning Subtasks do not start daemons
 A task requirement is honored for the tasks a run resolves up front, including

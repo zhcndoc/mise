@@ -627,7 +627,101 @@ unchanged:
 `dot-bashrc` and `.bashrc`, apply fails and reports both paths. `dot_prefix`
 requires a directory source and `symlink-each` or `copy` mode. `mise dot add` refuses to capture into
 a `dot_prefix` entry because it would copy target names into the source; edit
-the source directly instead.
+the source directly instead. 带有 `dot_prefix` 的[组](#groups)可以接收新文件，并将其存储为 `dot-` 名称。
+
+## 组 {#groups}
+
+**组**是一个有名称的 dotfiles 目录树，例如为每个应用或机器角色建立一个目录，类似 GNU Stow 的软件包。每台机器可以选择应用哪些组。
+使用声明 `root` 的 `[dotfile_groups.<name>]` 表定义组：
+
+```toml
+[dotfile_groups.zsh]
+root = "zsh"           # 将 ~/.dotfiles/zsh/.zshrc 链接到 ~/.zshrc
+
+[dotfile_groups.home]
+root = "home"          # ~/.dotfiles/home
+target = "~"
+mode = "symlink-each"
+dot_prefix = true
+exclude = ["README.md"]
+```
+
+mise 会遍历 root，并将每个文件部署到 target 下的相同路径；无需逐个列出文件。
+
+| 键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `root` | 必填 | 要部署的目录树。相对路径从 `dotfiles.root`（`~/.dotfiles`）开始。 |
+| `target` | `~` | 目录树部署到的目录。 |
+| `mode` | `symlink-each` | `symlink-each` 逐个链接文件，`copy` 逐个复制文件，`symlink` 链接整棵树。 |
+| `exclude` |  | 要跳过的 root 路径，匹配方式见[排除文件](#excluding-files)。 |
+| `dot_prefix` | `false` | 按[可见源名称](#dot-prefix)的规则，将 `dot-<name>` 部署为 `.<name>`。 |
+| `manifest` |  | 使用 `"git"` 时只管理 Git 索引中的文件，见[Git 跟踪的目录](#git-tracked-directories)。 |
+| `relative` |  | 使用相对路径创建链接，见[相对符号链接](#relative)。 |
+| `entries` |  | 为树中的部分路径指定整文件条目，见下文。 |
+
+组的相对 `root` 始终从 `dotfiles.root` 开始，而不是从声明该组的配置文件目录开始。更局部的配置文件定义同名组时，会替换整个组。
+
+### 组条目
+
+`[dotfile_groups.<name>.entries]` 使用与[整文件条目](#whole-file-entries)相同的语法，并以目标路径为键。条目会从遍历中切出，因此可以决定该路径如何部署。例如，将目录整体链接，使应用以后创建的文件也进入 dotfiles：
+
+```toml
+[dotfile_groups.home]
+root = "home"
+dot_prefix = true
+
+[dotfile_groups.home.entries]
+"~/.config/kitty" = { mode = "symlink" }
+"~/.ssh/config" = { mode = "copy", permissions = "0600" }
+"~/.gitconfig" = { source = "git/config.tmpl", mode = "template" }
+"~/.kitty-old.conf" = { mode = "absent" }
+```
+
+- 未设置 `source` 的条目会在组 root 中按 target 的组内路径查找文件。
+- 相对 `source` 从 root 开始；如果它位于 root 或另一个目录遍历条目内，对应遍历会跳过它。
+- 未设置 `mode` 的条目沿用组的部署方式。
+- 遍历目录的条目继承组的 `dot_prefix`、`manifest` 以及不含 `/` 的 `exclude` 模式。
+- 每个条目（包括 `variants` 中的目标）必须位于组的 target 内；嵌套在另一个遍历条目下的条目也会从外层切出。
+
+`[dotfiles]` 条目不属于任何组，也不能使用 `group` 键；应将其声明在相应组下。
+
+### 选择组
+
+默认情况下所有组都会应用。若要选择部分组，可在机器的 `config.local.toml` 中使用 `[bootstrap] dotfile_groups`：
+
+```toml
+[bootstrap]
+dotfile_groups = ["home", "zsh"]
+```
+
+更局部配置中的列表会替换其他列表；`[dotfiles]` 条目始终应用。列表中未被任何配置声明的组会触发警告。两个选中的组不能部署同一个目标文件，也不能一个整体链接目录而另一个在该目录中放置文件；这些冲突会在写入前报告。
+
+### 取消选择和移除组
+
+取消选择组或删除其声明不会立即删除文件。mise 会把每个组部署的文件记录在 `$MISE_STATE_DIR/dotfiles/groups` 中，并在 `mise dot status` 中标为 `orphaned`。新 `exclude` 模式排除的文件以及已删除源文件的复制品也属于 orphaned。仍由活动条目部署的文件不会被标记为 orphaned，即使条目已移动到另一个组。
+
+```sh
+mise dot apply --prune          # 应用后移除 orphaned 文件
+mise dot unapply --group work   # 移除某个组的文件
+```
+
+`--prune` 和 `unapply --group` 只会在链接仍指向 mise 创建的源、复制内容仍未被修改时移除它们；被修改的副本会保留并给出警告。传入 `--force` 才会移除修改后的副本。`--prune` 默认会在删除前询问，传入 `--yes` 可跳过确认，并覆盖所有组。
+
+### 向组添加文件
+
+`mise dot add` 会将 target 中的文件捕获到组 root，而不写入单独条目。`dot_prefix` 组会使用 `dot-` 源名称：
+
+```sh
+mise dot add ~/.config/starship.toml   # -> ~/.dotfiles/home/dot-config/starship.toml
+```
+
+多个组包含同一路径时，优先选择 target 更深的组；同一深度下，已有该文件的 root 优先。新文件可使用 `--group` 指定：
+
+```sh
+mise dot add --group zsh ~/.zprofile
+```
+
+`mise dot edit` 对组内路径也接受相同的 `--group`。使用 `manifest = "git"` 的组只部署 Git 索引中的文件，因此 `add` 不会捕获到该组；请复制到 root 后执行 `git add`。
 
 ## Edit entries
 
@@ -665,6 +759,33 @@ mise appends it; set `position = "prepend"` to insert it at the beginning.
 Running apply again leaves an existing match wherever it is. Other bytes,
 including line endings, stay unchanged. The value must be a single line;
 use a block for multi-line content.
+
+### 合并配置文件中的部分键 {#merge}
+
+有些应用会重写包含自身状态的配置文件。`merge = true` 条目只拥有源文件中的键，目标中的其他键、注释和应用格式保持不变：
+
+```toml
+[dotfiles]
+"~/.codex/config.toml/shared" = { source = "codex/shared.toml", merge = true }
+"~/.claude/settings.json/shared" = { source = "claude/shared.json", merge = true }
+"~/.omp/agent/config.yml/shared" = { source = "omp/shared.yml", merge = true }
+```
+
+源文件使用与目标相同的 JSON、TOML、YAML 或 YML 格式。双方同名的表或对象递归合并，其他值（包括数组）由源值替换；只存在于目标的键不会被删除，从源中移除的键也不会从目标删除。`mise dot status` 和 `mise dot diff` 只检查源拥有的键。
+
+TOML 和 YAML 会原地编辑，以保留未触及键的注释、顺序和格式；JSON 保留键顺序和缩进，并仅在拥有的键变化时重写。无效目标不会被覆盖。多个条目为同一键设置不同值会报冲突；`template = "tera"` 会先渲染源。没有 `source` 时，源路径按 `dotfiles.root` 下的目标路径解析。`mise dot unapply` 会保留合并键，因为应用可能已修改它们。
+
+#### 应用可修改的默认值 {#merge-missing}
+
+对于只想提供初始值的键，使用 `merge = "missing"`：
+
+```toml
+[dotfiles]
+"~/.codex/config.toml/shared" = { merge = true }
+"~/.codex/config.toml/defaults" = { source = "codex/defaults.toml", merge = "missing" }
+```
+
+目标已有的键会保留原值；目标移除的键会在下次 apply 时重新填充。`missing` 条目不会与同一键的其他条目冲突。
 
 ## How configuration is applied {#semantics}
 
@@ -1003,6 +1124,47 @@ skips the path until you fix it.
 When nothing matches, mise uses the variant marked `default = true`.
 Without a default, it skips saving and applying the path on that machine.
 Checkpoints preserve the versions saved by other machines.
+
+#### 每台机器一个版本 {#machine-variants}
+
+对于显示器布局、触控板设置等描述机器本身的文件，可使用 `machine` 变体：
+
+```toml
+[dotfiles]
+"~/.config/hypr/monitors.lua" = { mode = "track", variants = [{ machine = true }] }
+```
+
+也可以运行 `mise dot track ~/.config/hypr/monitors.lua --machine`。每台机器只保存、回滚和恢复自己的版本；同步仍会共享其他跟踪文件，但不会将某台机器的版本应用到另一台机器。版本仍会随历史推送到 origin，之后可在原机器恢复。
+
+机器流名称类似 `machine-omarchy-3f2a9c1b`，记录在 `$MISE_STATE_DIR/history/machine`。可在全局配置中设置稳定名称：
+
+```toml
+[history]
+machine = "desk"
+```
+
+`machine` 必须是条目的唯一变体，不能与 `encrypt` 组合。共享设置的所有机器应先升级到支持该字段的 mise。
+
+### 仅本机历史 {#local-only}
+
+需要保留历史但绝不能离开本机的文件，可使用 `mode = "track-local"`：
+
+```toml
+[dotfiles]
+"~/.config/app/state.json" = { mode = "track-local" }
+```
+
+或运行 `mise dot track --local ~/.config/app/state.json`。版本保存在本机的 `$MISE_STATE_DIR/history-local`，不会进入共享历史或 push；共享配置文件中的声明文本仍会共享。
+
+```sh
+mise dot save
+mise dot history --path ~/.config/app/state.json
+mise dot rollback ~/.config/app/state.json
+mise dot --local history
+mise dot --local undo
+```
+
+路径命令会使用负责保存该路径的历史；`mise dot --local` 为不带路径的命令选择本机历史。本机路径可以位于共享跟踪目录内，共享历史会将其排除。`track-local` 不接受 `encrypt` 或 `variants`；凭据名称的文件仍会被排除，除非设置 `allow_plaintext = true`。
 
 ### Tracking files that mise also manages {#ownership}
 

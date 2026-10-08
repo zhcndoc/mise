@@ -72,7 +72,7 @@ mise use my-plugin:some-tool@latest
 # Install a plugin from a zip file over HTTPS
 mise plugins install PLUGIN_NAME HTTPS_ZIP_URL
 # Example: Installing a plugin from a zip file
-mise plugins install vfox-cmake https://github.com/mise-plugins/vfox-cmake/archive/refs/heads/main.zip
+mise plugins install vfox-cmake https://github.com/jdx/vfox-cmake/archive/refs/heads/main.zip
 ```
 
 ### 从签名的 packslip 安装
@@ -94,7 +94,7 @@ mise plugins install vfox:PLUGIN_NAME 'packslip:OWNER/REPO#PLUGIN_VERSION'
 
 目前支持发布 `packslip.sigstore.json` 的 GitHub 仓库，并要求其包含一个带有 `extensions.mise.plugin = "vfox"` 声明的可移植 `tar.gz` 制品，且不包含可执行文件或主机要求。归档的根目录必须包含 `metadata.lua`，并且不得包含链接、特殊文件、Git 元数据或不安全路径。Mise 使用 packslip 后端的签名、摘要、签名者和发布策略检查。它会在移除之前的插件前完成验证并暂存替换内容。
 
-[bfs 发布者示例](https://github.com/mise-plugins/vfox-bfs/releases/tag/v0.1.0)展示了该格式，并已在 Linux 和 macOS 上完成验证。常规 bfs 用法仍会继续使用其内置插件，而不会下载插件发布版本。Packslip 是一个明确的来源选项；现有的注册表默认值、Git 和 ZIP 来源保持不变。
+[bfs 发布者示例](https://github.com/jdx/vfox-bfs/releases/tag/v0.1.0)展示了该格式，并已在 Linux 和 macOS 上完成验证。常规 bfs 用法仍会继续使用其内置插件，而不会下载插件发布版本。Packslip 是一个明确的来源选项；现有的注册表默认值、Git 和 ZIP 来源保持不变。
 
 更多信息请参阅：
 

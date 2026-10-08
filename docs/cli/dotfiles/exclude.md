@@ -24,5 +24,5 @@ description: "永不捕获匹配 glob 的路径"
 ## 相关文档
 
 - [开始使用](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

@@ -28,5 +28,5 @@ description: "撤销某项操作对受跟踪文件所做的更改"
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

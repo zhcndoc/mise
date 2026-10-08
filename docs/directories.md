@@ -71,6 +71,18 @@ ln -s ~/src/mise-my-tool ~/.local/share/mise/plugins/my-tool
 
 你可以设置 `MISE_INSTALLS_DIR` 环境变量来覆盖这个位置。
 
+如果要在 CI 或离线工作流中避免重新安装工具，请同时缓存安装存储（当它是单独目录时也要缓存）：
+`MISE_INSTALL_STORE_DIR`，或者在 Windows 使用 identity [安装布局](/dev-tools/install-layout.html) 时的 `%LOCALAPPDATA%\mise\i`。
+
+使用实验性的[安装布局](/dev-tools/install-layout.html)（`install_layout = "identity"`，还需要 `experimental = true`）时，
+新安装会放在 `installs/<label>-<hash>/` 中，例如 `installs/age-hlencrst`，而 `installs/age/1.2.1` 会成为指向该目录的链接。
+`installs/.mise/` 目录保存安装目录和未锁定请求所选安装的目录清单。这是持久元数据而不是缓存，应与它描述的安装一起保留。
+启用布局之前创建的安装会留在原位置。
+
+在 Windows 上，安装本身会放在 `installs` 旁边的 `i` 目录中（`%LOCALAPPDATA%\mise\i\age-hlencrst`），以缩短路径并为 260 字符限制留出空间。
+链接、运行时别名和目录清单仍位于 `installs` 中。可以在任意平台使用 `MISE_INSTALL_STORE_DIR` 选择安装位置；默认值为 installs 目录，
+Windows 上则为 `i`（除非设置了 `MISE_INSTALLS_DIR`）。位于 installs 目录内的目录会被忽略。
+
 `MISE_INSTALLS_DIR` 会在 mise 启动时读取。请在调用 mise 之前将其设置到环境中，并在之后调用 mise 以及 shim 时保持设置状态。不要将它设置在 `mise.toml` 的 `[env]` 部分中：`[env]` 描述的是 mise 导出的环境，而此时 mise 已经选择好了其安装目录。
 将它设置在那里可能会导致安装过程使用一个目录，而后续命令和 shim 则在另一个目录中查找。
 

@@ -19,6 +19,7 @@ description: "编辑受管理的 dotfile 源文件"
 - **`-m --mode <MODE>`** — 如果目标尚未受管理，要使用的 dotfile 模式
 - **`-s --source <PATH>`** — 如果目标尚未受管理，要使用的源路径
 - **`-y --yes`** — 添加未受管理的目标时跳过确认提示
+- **`--group <NAME>`** — 当多个组部署到该目录时，保存目标的点文件组
 - **`--prompt-secrets`** — 安全地提示输入缺失的 bootstrap 密钥
 - **`-h --help`** — 打印帮助
 
@@ -34,5 +35,5 @@ mise dot edit --apply ~/.config/starship.toml
 ## 相关文档
 
 - [Dotfile 所有权和模式](/dotfiles.html)。
-- [`mise bootstrap dotfiles <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
+- [`mise bootstrap dotfiles [--local] <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

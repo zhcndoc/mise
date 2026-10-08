@@ -286,6 +286,7 @@ mise dot history diff 11 12
 | [`[bootstrap.packages]`](/bootstrap/packages/)                          | OS packages from apk, apt, dnf, pacman, brew, flatpak, mas, scoop, winget   |
 | [`[bootstrap.repos]`](/bootstrap/repos.html)                            | Git repos cloned before dotfiles are applied                                |
 | [`[dotfiles]`](/dotfiles.html)                                          | Tracking dotfiles, creating files from sources, and editing blocks or lines |
+| [`[dotfile_groups]`, `[bootstrap] dotfile_groups`](/dotfiles.html#groups) | Directory trees of dotfiles and which of them a machine applies             |
 | [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)              | mise activation snippets in shell startup files                             |
 | [`[bootstrap.macos.*]`](/bootstrap/macos-defaults.html)                 | Curated macOS preferences for Dock/Finder/keyboard/trackpad                 |
 | [`[bootstrap.macos.defaults]`](/bootstrap/macos-defaults.html)          | macOS user preferences written through `defaults write`                     |
@@ -405,6 +406,7 @@ mise.toml 的每个部分都不是 Tera 模板。在 bootstrap 中，下列内�
 | ------------------------------------------------------------ | -------------------------------------------------------------- |
 | bootstrap.linux.systemd.units                                  | 单元中的每个字符串值                                           |
 | bootstrap.macos.launchd.agents                                 | agent 中的每个字符串值                                         |
+| bootstrap.compose                                               | Compose 项目中的每个字符串值                                   |
 | bootstrap.hooks                                                  | 钩子命令                                                       |
 | bootstrap.files                                                   | 仅当 template = true 时渲染文件内容                             |
 | dotfiles                                                         | 仅当 mode = "template" 或 template = "tera" 时渲染文件内容       |
@@ -413,9 +415,9 @@ mise.toml 的每个部分都不是 Tera 模板。在 bootstrap 中，下列内�
 
 渲染使用声明该条目的配置文件上下文，因此 <code v-pre>{{ config_root }}</code> 是该配置的目录，而不是运行 mise bootstrap 的目录。受管理文件的内容模板还会获得 <code v-pre>{{ target }}</code> 和 <code v-pre>{{ secret(name="...") }}</code>。
 
-不含模板语法的值会完全跳过渲染，因此单元或 agent 中字面形式的 %h、%i 或 $HOME 会原样进入生成文件。章节所述的任何 ~ 展开仍会在之后进行。
+不含模板语法的值会完全跳过渲染，因此单元、agent 或 Compose 项目中字面形式的 %h、%i 或 $HOME 会原样进入生成文件。章节所述的任何 ~ 展开仍会在之后进行。
 
-<code v-pre>{{ exec(...) }}</code> 可用于 bootstrap.hooks 和文件内容模板，但不能用于单元或 agent 值：这些值在 status、plan、--dry-run 和 apply 中以相同方式渲染，因此只读命令绝不能启动 shell。
+<code v-pre>{{ exec(...) }}</code> 可用于 bootstrap.hooks 和文件内容模板，但不能用于单元、agent 或 Compose 值：这些值在 status、plan、--dry-run 和 apply 中以相同方式渲染，因此只读命令绝不能启动 shell。
 
 ## 钩子
 

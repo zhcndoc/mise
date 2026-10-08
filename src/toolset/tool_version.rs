@@ -34,6 +34,7 @@ static INSTALL_PATH_CACHE: LazyLock<DashMap<ToolVersion, PathBuf>> = LazyLock::n
 /// to avoid stale paths (e.g. shared dir paths after a new install).
 pub(super) fn reset_install_path_cache() {
     INSTALL_PATH_CACHE.clear();
+    crate::install_layout::resolver::reset_cache();
 }
 
 /// represents a single version of a tool for a particular plugin
@@ -202,6 +203,12 @@ impl ToolVersion {
             let tv = Self::new(request.clone(), request.version());
             return Ok(tv.with_before_date(opts.before_date));
         }
+        if Self::defers_missing_lazy(&request, &opts)
+            && backend.list_installed_versions().is_empty()
+        {
+            let version = request.version();
+            return Ok(Self::new(request, version).with_before_date(opts.before_date));
+        }
         if matches!(
             request,
             ToolRequest::Prefix { .. } | ToolRequest::Ref { .. }
@@ -226,6 +233,17 @@ impl ToolVersion {
         let tv = tv.with_before_date(opts.before_date);
         trace!("resolved: {tv}");
         Ok(tv)
+    }
+
+    /// Whether a command that runs tools may leave this lazy request unresolved
+    /// rather than wait on remote version lists for a tool nobody has run yet.
+    /// Installing the tool resolves the request then.
+    fn defers_missing_lazy(request: &ToolRequest, opts: &ResolveOptions) -> bool {
+        opts.defer_missing_lazy_tools
+            && !opts.latest_versions
+            && request.options().lazy == Some(true)
+            && Settings::get().prefer_offline()
+            && !matches!(request.source(), ToolSource::Argument)
     }
 
     fn with_before_date(mut self, before_date: Option<Timestamp>) -> Self {
@@ -361,7 +379,7 @@ impl ToolVersion {
         (identity.len() == 16 && identity.bytes().all(|b| b.is_ascii_hexdigit())).then_some(version)
     }
 
-    fn uv_install_identity(&self) -> Option<String> {
+    pub(crate) fn uv_install_identity(&self) -> Option<String> {
         use sha2::{Digest, Sha256};
         let lock = self.uv_lock.as_ref()?;
         let python = self
@@ -419,6 +437,11 @@ impl ToolVersion {
         if let Some(p) = &self.install_path {
             return p.clone();
         }
+        // The identity layout names the directory by what is installed, so it is
+        // resolved before (and instead of) the legacy `<short>/<version>` path.
+        if let Some(located) = crate::install_layout::resolver::locate(self) {
+            return located.dir;
+        }
         if let Some(p) = INSTALL_PATH_CACHE.get(self) {
             return p.clone();
         }
@@ -469,6 +492,12 @@ impl ToolVersion {
         if self.locked {
             return self.install_path();
         }
+        // Identity layout: an unlocked request puts the friendly link path on
+        // PATH (`installs/node/20`, `installs/node/20.1.0`), never the hashed
+        // directory it points at, whenever that link is this installation.
+        if crate::install_layout::resolver::governs(self) {
+            return crate::install_layout::resolver::runtime_dir(self);
+        }
         let Some(pathname) = self.runtime_pathname() else {
             return self.install_path();
         };
@@ -496,10 +525,10 @@ impl ToolVersion {
         self.install_path()
     }
     pub(crate) fn cache_path(&self) -> PathBuf {
-        self.ba().cache_path().join(self.tv_pathname())
+        self.ba().cache_path().join(self.state_key())
     }
     pub(crate) fn download_path(&self) -> PathBuf {
-        self.request.ba().downloads_path().join(self.tv_pathname())
+        self.request.ba().downloads_path().join(self.state_key())
     }
     pub(crate) async fn latest_version(&self, config: &Arc<Config>) -> Result<String> {
         self.latest_version_with_opts(config, &ResolveOptions::default())
@@ -516,6 +545,7 @@ impl ToolVersion {
         let opts = ResolveOptions {
             latest_versions: true,
             latest_versions_for_all_requests: false,
+            latest_versions_for_arguments_only: false,
             use_locked_version: false,
             resolve_rolling_channels: false,
             prefer_exact_version: false,
@@ -527,6 +557,7 @@ impl ToolVersion {
             refresh_remote_versions: base_opts.refresh_remote_versions,
             inactive: base_opts.inactive,
             warn_not_in_lockfile: base_opts.warn_not_in_lockfile,
+            defer_missing_lazy_tools: false,
         };
         let tv = self.request.resolve(config, &opts).await?;
         Ok(tv.version)
@@ -538,8 +569,10 @@ impl ToolVersion {
             style(&format!("@{}", self.version)).for_stderr()
         )
     }
-    pub fn tv_pathname(&self) -> String {
-        let pathname = match &self.request {
+    /// The logical name of this version as a path component: the version, a
+    /// `<ref type>-<ref>`, and so on, without any dependency-graph identity.
+    pub(crate) fn logical_pathname(&self) -> String {
+        match &self.request {
             ToolRequest::Version { .. } => self.version.to_string(),
             ToolRequest::Prefix { .. } => self.version.to_string(),
             ToolRequest::Sub { .. } => self.version.to_string(),
@@ -563,7 +596,11 @@ impl ToolVersion {
                 "system".to_string()
             }
         }
-        .replace([':', '/'], "-");
+        .replace([':', '/'], "-")
+    }
+
+    pub fn tv_pathname(&self) -> String {
+        let pathname = self.logical_pathname();
         if let Some(identity) = self.uv_install_identity() {
             return format!("{pathname}~uv~{}", &identity[..16]);
         }
@@ -576,7 +613,29 @@ impl ToolVersion {
         pathname
     }
 
-    fn aube_install_identity(&self) -> Option<String> {
+    /// What install state (the incomplete marker, the install lock, the cache and
+    /// download directories) is keyed by. The legacy layout keys it by the
+    /// logical version; the identity layout by the installation directory, so
+    /// two variants of one version never share it.
+    pub(crate) fn state_key(&self) -> String {
+        // Resolving the install path is not free, and with the layout off it is
+        // never an installation directory.
+        if !crate::install_layout::resolver::governs(self) {
+            return self.tv_pathname();
+        }
+        crate::install_layout::resolver::dir_name_of(&self.install_path())
+            .unwrap_or_else(|| self.tv_pathname())
+    }
+
+    /// Whether an install into `path` was interrupted: the incomplete marker for
+    /// it is still in place.
+    pub(crate) fn is_incomplete_at(&self, path: &Path) -> bool {
+        let key = crate::install_layout::resolver::dir_name_of(path)
+            .unwrap_or_else(|| self.tv_pathname());
+        install_state::is_incomplete(self.ba(), &key)
+    }
+
+    pub(crate) fn aube_install_identity(&self) -> Option<String> {
         use sha2::{Digest, Sha256};
 
         let lock = self.aube_lock.as_ref()?;
@@ -706,6 +765,10 @@ impl ToolVersion {
             && !opts.before_date_from_default
             && !is_offline
             && !prefer_offline;
+        // resolve_ defers a lazy tool with nothing installed. One whose installed
+        // versions don't match this request is deferred below, after the installed
+        // shortcuts.
+        let defer_missing_lazy = Self::defers_missing_lazy(&request, opts);
         // Rolling release channels (e.g. zig's "master") are moving pointers that
         // mise must resolve before the plugin-installed shortcut can preserve their
         // symbolic name as an install identity.
@@ -763,6 +826,9 @@ impl ToolVersion {
                 && !should_filter_installed_versions
                 && let Some(v) = backend.latest_installed_version(None)?
             {
+                return build(v);
+            }
+            if defer_missing_lazy {
                 return build(v);
             }
             if !is_offline
@@ -835,6 +901,9 @@ impl ToolVersion {
                 .and_then(|matches| matches.last())
         {
             return build(v.clone());
+        }
+        if defer_missing_lazy {
+            return build(v);
         }
         if matches!(
             request.source(),
@@ -1139,6 +1208,11 @@ pub struct ResolveOptions {
     /// `mise lock --bump` needs this; `mise x node@20 npm@latest` must not
     /// look up newer Node releases.
     pub latest_versions_for_all_requests: bool,
+    /// Apply `latest_versions` and `use_locked_version = false` only to tools
+    /// named as command-line arguments. Configured tools keep resolving
+    /// against installed versions and the lockfile, so `mise x tool@latest`
+    /// does not bump every `latest` tool in mise.toml past what is installed.
+    pub latest_versions_for_arguments_only: bool,
     pub use_locked_version: bool,
     /// Resolve rolling channels to their current concrete version even when
     /// ordinary version requests may reuse installed versions.
@@ -1166,6 +1240,10 @@ pub struct ResolveOptions {
     pub inactive: bool,
     /// If false, missing lockfile entries log at debug instead of warn.
     pub warn_not_in_lockfile: bool,
+    /// Under `prefer_offline`, leave a lazy tool that has no installed match at its
+    /// requested version instead of listing remote versions. Installing it through its
+    /// shim resolves the request then.
+    pub defer_missing_lazy_tools: bool,
 }
 
 impl Default for ResolveOptions {
@@ -1173,6 +1251,7 @@ impl Default for ResolveOptions {
         Self {
             latest_versions: false,
             latest_versions_for_all_requests: false,
+            latest_versions_for_arguments_only: false,
             use_locked_version: true,
             resolve_rolling_channels: false,
             prefer_exact_version: false,
@@ -1183,6 +1262,7 @@ impl Default for ResolveOptions {
             refresh_remote_versions: false,
             inactive: false,
             warn_not_in_lockfile: true,
+            defer_missing_lazy_tools: false,
         }
     }
 }
@@ -1287,9 +1367,15 @@ fn is_mise_managed_symlink_target(target: &Path) -> bool {
     debug_assert!(target.is_absolute(), "caller filters relative targets");
     let target = normalize_path_components(target);
 
-    [*dirs::DATA, *dirs::CACHE, *dirs::DOWNLOADS, *dirs::INSTALLS]
-        .into_iter()
-        .any(|root| target.starts_with(normalize_path_components(root)))
+    [
+        *dirs::DATA,
+        *dirs::CACHE,
+        *dirs::DOWNLOADS,
+        *dirs::INSTALLS,
+        *dirs::INSTALL_STORE,
+    ]
+    .into_iter()
+    .any(|root| target.starts_with(normalize_path_components(root)))
         || env::shared_install_dirs()
             .iter()
             .any(|root| target.starts_with(normalize_path_components(root)))
@@ -1319,6 +1405,9 @@ impl Display for ResolveOptions {
         }
         if self.latest_versions_for_all_requests {
             opts.push("latest_versions_for_all_requests".to_string());
+        }
+        if self.latest_versions_for_arguments_only {
+            opts.push("latest_versions_for_arguments_only".to_string());
         }
         if self.use_locked_version {
             opts.push("use_locked_version".to_string());

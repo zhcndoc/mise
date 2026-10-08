@@ -31,5 +31,5 @@ description: "发布、获取并记录当前待处理的内容"
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

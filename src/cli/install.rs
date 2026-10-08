@@ -494,6 +494,7 @@ impl Install {
                 use_locked_version: true,
                 latest_versions: true,
                 latest_versions_for_all_requests: false,
+                latest_versions_for_arguments_only: false,
                 resolve_rolling_channels: false,
                 prefer_exact_version: false,
                 before_date: self.get_before_date()?,
@@ -503,6 +504,7 @@ impl Install {
                 refresh_remote_versions: false,
                 inactive: false,
                 warn_not_in_lockfile: true,
+                defer_missing_lazy_tools: false,
             },
             dry_run: self.is_dry_run(),
             locked: Settings::get().locked,
@@ -633,6 +635,12 @@ impl Install {
                         tr.is_install_satisfied(&install_config),
                     )
                     .await;
+                    // An installation that already satisfies the request is still recorded
+                    // by the install layout (its version link, a lockfile pin); a preview
+                    // never writes.
+                    if satisfied && !opts.dry_run {
+                        tr.note_layout_use(&install_config).await;
+                    }
                     if satisfied && tr.options().postinstall().is_none_or(|(_, always)| !always) {
                         if let Some(reporter) = reporter {
                             reporter.finish_with_icon(

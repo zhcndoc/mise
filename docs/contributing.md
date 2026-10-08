@@ -441,10 +441,11 @@ mise 很少接受破坏性变更，只有在没有更好替代方案的特殊情
 
 1. Mark the feature deprecated in documentation immediately and normally add a CLI warning
    with `deprecated_at!` in the same release.
-2. Allow 12 months after the warning before removal.
+2. Allow 12 months after the warning before removal by default. Some deprecations
+   use a shorter window on purpose; do not lengthen an existing shorter window.
 3. Delay the warning by up to 6 months only when migration requires a new setting, syntax,
-   or replacement that older supported clients reject. Removal remains 12 months after
-   the warning, not after the initial documentation notice.
+   or replacement that older supported clients reject. Removal is then counted from the
+   warning, not from the initial documentation notice.
 4. Provide a working migration path and explain the affected behavior.
 
 对于破坏性变更，请在类型后添加 `!`，或在页脚中加入 `BREAKING CHANGE:`：

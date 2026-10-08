@@ -93,18 +93,18 @@ mise 会在两个位置保留信任：
 
 请参阅[签名者变更](/dev-tools/backends/packslip.html#pinned-signers)，了解检查和重置命令，包括显式选项和锁定文件承诺如何影响轮换。
 
-### Renamed, transferred, and re-created repositories
+### 重命名、转移和重新创建的仓库
 
-A GitHub or GitLab project's name locates it, but the forge's repository ID
-identifies it. GitHub Actions and GitLab CI signing certificates record that ID
-and the owner's ID, and neither changes when a repository is renamed. mise pins
-both with the signer, and compares each release's IDs with the pin:
+GitHub 或 GitLab 项目的名称用于定位仓库，但 forge 的仓库 ID 才能标识它。GitHub Actions 和 GitLab CI 的签名证书会记录仓库 ID，
+仓库重命名或转移给其他所有者时该 ID 不会改变。mise 会将它与签名者一起固定，并比较每个发布版本的 ID：
 
-| What happened to the name                          | Result                                                                                                                    |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Renamed or moved within the same owner             | Installs. mise warns once that the project has a new name, and the pin follows it to that name.                           |
-| Transferred to another owner                       | Refused. Trusting the old owner says nothing about the new one; forget the pin and name the new owner's repository.       |
-| Deleted and re-created, by anyone, under that name | Refused once the original is pinned, even though the name and workflow path match: the new repository has a different ID. |
+| 名称发生的变化                         | 结果                                                                                                      |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| 重命名，或在同一所有者下移动            | 安装。mise 会警告一次项目有新名称，固定会跟随到该名称。                                                    |
+| 转移给其他所有者                       | 安装。mise 会警告一次项目有新名称，固定会跟随到该名称。                                                    |
+| 任何人删除后以同名重新创建             | 原仓库已固定时拒绝，即使名称和工作流路径相同，因为新仓库具有不同的 ID。                                    |
+
+所有者不属于身份的一部分：只有仓库的当前所有者才能转移它，并且该所有者已经为其发布版本签名。旧版 mise 写入的固定和锁定文件条目仍可读取，所有者 ID 会被忽略。
 
 Signer continuity then compares the workflow's path inside the repository, so
 `github.com/old/tool/.github/workflows/release.yml` continues as
@@ -116,7 +116,7 @@ The pin is found by the repository ID in the release's certificate, whichever
 name changed first. A config switched to the new name before any release signed
 under it was accepted, or a pins file from a machine that never saw the rename,
 still holds the release to the pin recorded under the old name: its signer,
-owner, provenance, and attestor, as if the name had not changed. Once the release
+provenance, and attestor, as if the name had not changed. Once the release
 is accepted, the pin and its release-list state move to the new name, so a
 repository keeps one pin. A refusal names the pin as it is recorded, which is the
 name to give `mise packslip forget`.

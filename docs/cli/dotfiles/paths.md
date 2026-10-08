@@ -24,5 +24,5 @@ description: "显示历史记录跟踪的内容及其适用的策略"
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

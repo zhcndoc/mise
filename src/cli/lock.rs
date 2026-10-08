@@ -516,6 +516,7 @@ impl Lock {
         }
         let settings = Settings::get();
         let generate = settings.generate_lockfiles();
+        let auto_prune = settings.lockfile_auto_prune;
         let atomic = self.upgrade || generate;
         if !self.dry_run && !atomic && self.lockfiles.is_none() {
             lockfile::migrate_monorepo_lockfiles(&config, self.upgrade)?;
@@ -526,6 +527,7 @@ impl Lock {
             filter_installed_versions_by_release_date: true,
             latest_versions: self.bump,
             latest_versions_for_all_requests: self.bump,
+            latest_versions_for_arguments_only: false,
             use_locked_version: !self.bump,
             // Lock moving channels to their current concrete value without making
             // ordinary `latest` requests ignore an installed concrete version.
@@ -755,7 +757,7 @@ impl Lock {
                     );
                     let pruned_stubs = lockfile.retain_live_tool_stubs(&lockfile_path);
                     let format_changed = if self.upgrade {
-                        if lockfile.tools().is_empty() {
+                        if lockfile.tools().is_empty() || !auto_prune {
                             self.prepare_lockfile_format(&lockfile_path, &mut lockfile)
                         } else {
                             bail!(
@@ -887,7 +889,7 @@ impl Lock {
             if can_skip_generation
                 && !pruned_stubs
                 && original_content.is_some()
-                && lockfile::generate::is_current(&lockfile, &tools, &target_platforms)?
+                && lockfile::generate::is_current(&lockfile, &tools, &target_platforms, auto_prune)?
             {
                 debug!(
                     "lockfile {} is already current",
@@ -901,7 +903,7 @@ impl Lock {
                     &lockfile,
                     &tools,
                     &target_platforms,
-                    !self.tool.is_empty(),
+                    !self.tool.is_empty() || !auto_prune,
                     !self.platform.is_empty(),
                     crate::jobs::resolve(settings.jobs, self.jobs),
                     installed.unwrap_or_default(),
@@ -1204,9 +1206,9 @@ impl Lock {
 
     /// Compare the versions currently in the lockfile against the freshly
     /// resolved tool versions and report the differences. Only tools targeted
-    /// by this run are compared; on unfiltered runs, lockfile tools that are
-    /// no longer configured (and will be pruned) are reported with an empty
-    /// `new_versions`.
+    /// by this run are compared; on unfiltered runs that retain the default
+    /// pruning behavior, lockfile tools that are no longer configured are
+    /// reported with an empty `new_versions`.
     ///
     /// Versions are never sorted here: `new_versions` keeps resolution order
     /// (which follows config declaration order) and `old_versions` keeps
@@ -1229,7 +1231,7 @@ impl Lock {
             }
         }
         let mut shorts: Vec<String> = new_versions.keys().cloned().collect();
-        if self.is_unfiltered_lock_run() {
+        if self.is_unfiltered_lock_run() && Settings::get().lockfile_auto_prune {
             for short in lockfile.tools().keys() {
                 if !new_versions.contains_key(short) {
                     shorts.push(short.clone());
@@ -1445,6 +1447,9 @@ impl Lock {
         if !self.is_unfiltered_lock_run() {
             return BTreeSet::new();
         }
+        if !Settings::get().lockfile_auto_prune {
+            return BTreeSet::new();
+        }
         let stale_tools =
             self.stale_entries_for_selectors(lockfile, configured_tools, configured_backends);
         if !stale_tools.is_empty() {
@@ -1528,6 +1533,9 @@ impl Lock {
             return BTreeSet::new();
         };
         if !self.is_unfiltered_lock_run() {
+            return BTreeSet::new();
+        }
+        if !Settings::get().lockfile_auto_prune {
             return BTreeSet::new();
         }
         self.stale_entries_for_selectors(lockfile, configured_tools, configured_backends)

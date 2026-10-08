@@ -176,6 +176,12 @@ mise dot status
 mise dot pull --take-remote-all
 ~~~
 
+要预先选择该行为，请使用 `--take-remote-all` 采用：
+
+~~~sh
+mise bootstrap --adopt you/setup --take-remote-all
+~~~
+
 --take-remote-all 会先保存将被替换的版本，因此 mise dot undo 可以撤销整个拉取。最后一个路径决定后，同一次 pull 会写入其余受跟踪文件。随后运行 mise bootstrap，完成点文件以外的部分，例如工具和服务。
 
 如果想逐个决定路径，请指定路径：
@@ -201,7 +207,13 @@ mise dot pull --take-remote-all --keep-local ~/.bashrc
 在采用前将冲突文件移开，可以完全避免这些决定：不存在的路径会直接写入。
 :::
 
---replace-history 是另一项功能，不能解决这里的问题：它会在采用设置仓库时丢弃无关的本地历史，而现有的差异文件仍会暂停操作。--force-dotfiles 也无关；它适用于 [dotfiles] 的 link 和 copy 目标，而不是共享历史。
+如果此机器已经保存了自己的历史记录，例如在共享它们之前跟踪过相同文件，采用时会因为两个历史记录无关而停止。--replace-history 会丢弃此机器的历史并采用仓库的历史。现有的差异文件仍需要选择，因此请将它与 --take-remote-all 结合使用：
+
+~~~sh
+mise bootstrap --adopt you/setup --replace-history --take-remote-all
+~~~
+
+被替换的版本会先保存在采用后的历史顶部，因此 `mise dot undo` 可以恢复它们。--force-dotfiles 无关：它适用于 [dotfiles] 的 link 和 copy 目标，而不是共享历史。
 
 在此机器上启用自动共享并检查其状态：
 ```sh

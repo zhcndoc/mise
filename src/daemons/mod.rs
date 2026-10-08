@@ -837,7 +837,7 @@ fn build(
             );
         // Preserve an explicit opt-out before inserting the task's own `mise =
         // false` default: probes still need the project environment by default.
-        if cfg!(unix) && table.get("mise").and_then(toml::Value::as_bool) != Some(false) {
+        if table.get("mise").and_then(toml::Value::as_bool) != Some(false) {
             presets::wrap_probe_commands(&mut table);
         }
         // mise is already the entry point, so pitchfork does not need
@@ -1491,33 +1491,19 @@ fn task_run(mise: &str, task: &str, args: &[String], after_init: bool) -> toml::
 /// treat `'` as a quote, so the program path is double-quoted and so is any
 /// argument that needs it.
 fn cmd_task_command(mise: &str, task: &str, args: &[String]) -> String {
-    // cmd expands `%VAR%` inside quotes too, and `^` does not escape there, so each
-    // `%` of the path is left outside the quotes and escaped.
-    let mise = mise.replace('%', "\"^%\"");
-    let mut run = format!("\"{mise}\" run {}", cmd_escaped_arg(task));
+    let mut run = format!(
+        "{} run {}",
+        presets::cmd_program(mise),
+        crate::path::escape_arg_for_cmd_line(task)
+    );
     if !args.is_empty() {
         run.push_str(" --");
         for arg in args {
             run.push(' ');
-            run.push_str(&cmd_escaped_arg(arg));
+            run.push_str(&crate::path::escape_arg_for_cmd_line(arg));
         }
     }
     run
-}
-
-/// One argument quoted for the program, with cmd's own metacharacters escaped by
-/// `^`: cmd ignores `\"`, so an escaped quote would otherwise end its quoting and
-/// expose what follows, and it expands `%VAR%` even inside quotes.
-fn cmd_escaped_arg(arg: &str) -> String {
-    let quoted = crate::path::quote_arg_for_cmd_body(arg);
-    let mut escaped = String::with_capacity(quoted.len() * 2);
-    for c in quoted.chars() {
-        if matches!(c, '(' | ')' | '%' | '!' | '^' | '"' | '<' | '>' | '&' | '|') {
-            escaped.push('^');
-        }
-        escaped.push(c);
-    }
-    escaped
 }
 
 fn take_string(table: &mut toml::Table, key: &str) -> Result<Option<String>> {
@@ -1982,7 +1968,32 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
+    fn argv_probes_stay_argv_inside_the_tool_environment() {
+        let config = files(&[(
+            "/project/mise.toml",
+            "[daemons.api]\ntask = 'dev'\nready_cmd = ['pg_isready', '-d', 'my db']\nhealth_cmd = { run = ['curl', '-f', 'http://127.0.0.1'], interval = '2s' }\n",
+        )]);
+        let set = load(&config).unwrap();
+        let table = &set.daemons["api"].table;
+        let mise = crate::env::MISE_BIN.to_string_lossy().into_owned();
+        let argv = |args: &[&str]| {
+            toml::Value::Array(
+                [mise.as_str(), "x", "--"]
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .map(|arg| toml::Value::String(arg.into()))
+                    .collect(),
+            )
+        };
+        assert_eq!(table["ready_cmd"], argv(&["pg_isready", "-d", "my db"]));
+        assert_eq!(
+            table["health_cmd"]["run"],
+            argv(&["curl", "-f", "http://127.0.0.1"])
+        );
+        assert_eq!(table["health_cmd"]["interval"].as_str(), Some("2s"));
+    }
+
+    #[test]
     fn task_probe_environment_respects_explicit_opt_out() {
         for opt_out in [false, true] {
             let source = format!(
@@ -2060,7 +2071,7 @@ mod tests {
         let args = ["--port".to_string(), "it's 3000".into(), "a&b".into()];
         assert_eq!(
             cmd_task_command(mise, "dev", &args),
-            r#""C:\Program Files\mise\mise.exe" run dev -- --port ^"it's 3000^" ^"a^&b^""#
+            r#""C:\Program Files\mise\mise.exe" run dev -- --port "it's 3000" "a&b""#
         );
         // A quote inside an argument must not end cmd's quoting, and `%VAR%` is not expanded.
         let args = [r#"a" & echo x & "b"#.to_string(), "%APPDATA%".into()];
@@ -2142,7 +2153,13 @@ mod tests {
             .to_string();
         let init = run.find(" daemons __init ").unwrap();
         assert!(init < run.find("echo ready").unwrap());
-        assert!(run.contains("&& echo ready && exec "));
+        // cmd.exe has no `exec`, so on Windows the server follows the steps directly.
+        let server = if cfg!(windows) {
+            "&& echo ready && postgres "
+        } else {
+            "&& echo ready && exec "
+        };
+        assert!(run.contains(server), "{run}");
         // A task daemon with init keeps pitchfork's `mise x` wrapper, so the
         // steps and the task share one shell that has the project's tools.
         let wrapped = files(&[(

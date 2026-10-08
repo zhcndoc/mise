@@ -220,6 +220,31 @@ Other commands select files differently:
 - [`mise config get`](/cli/config/get) and [`mise config set`](/cli/config/set) default to the **highest-precedence loaded TOML file**, which can be `mise.local.toml`. Use `--file` to choose an existing project file explicitly.
 - [`mise unuse`](/cli/unuse) defaults to the first loaded config that declares any requested tool. A version-qualified argument matches the literal configured request: `node@20` matches `node = "20"`, not `node = "20.0.0"`. Use `--path` to choose the file.
 
+**密钥源**（`[secrets.*]`）：每个字段由最近的项目文件决定；全局配置会忽略此部分
+
+### 全局部分写入目标
+
+全局配置可以将工具、bootstrap 软件包和点文件分别保存到不同文件，同时继续使用各自的添加命令。
+为每个部分配置可选的目标：
+
+```toml [~/.config/mise/config.toml]
+[settings.write_targets]
+tools = "~/.config/mise/conf.d/10-tools.toml"
+packages = "~/.config/mise/conf.d/20-packages.toml"
+dotfiles = "~/.config/mise/conf.d/30-dotfiles.toml"
+```
+
+这样配置后，`mise use --global`、`mise bootstrap packages use --global`、
+`mise bootstrap packages import --global` 和全局 `mise dot add` 会分别写入对应文件。
+目标必须是绝对路径（或以 `~/` 开头），并且必须是 mise 会从全局配置根目录加载的文件：
+`config.toml`、`mise.toml` 或受支持的 `conf.d` 片段，例如 `conf.d/10-tools.toml`。
+不会自动加载 `~/.config/mise/tools.toml`，因此会拒绝该路径。
+
+既有声明不会迁移：更新既有全局工具或软件包时仍保留在声明它的全局文件中，`mise dot add` 也会继续捕获其配置的源。
+如果一个命令要更新位于多个全局文件中的条目，mise 会停止并要求使用 `--path`，不会猜测合并更新应写入哪个文件。
+`--path` 始终选择显式目标。这些默认值不影响本地或环境专用写入，因此 `mise use --env staging` 和
+`mise bootstrap packages use --env staging` 仍然写入选中的项目环境文件。未设置部分目标时，全局写入继续使用常规全局配置目标。
+
 ### `[tools]` - 开发工具
 
 参见 [工具](/dev-tools/)。除了指定版本之外，每个工具条目还可以包含以下选项：
@@ -228,6 +253,7 @@ Other commands select files differently:
 - `depends`: Install order relative to other tools in this config only; vfox plugin hook dependencies belong in plugin `metadata.lua` (see [Tool Dependencies](/dev-tools/#tool-dependencies))
 - `install_env`: Environment vars used during download, install, and tool-level `postinstall`
 - `postinstall`: Command to run after installation completes for that specific tool
+- `auto_update`: 在运行全局工具前更新它（`true` 或类似 `"6h"` 的检查间隔）；参见[自动更新工具](#automatic-tool-updates)
 
 示例：
 
@@ -235,6 +261,39 @@ Other commands select files differently:
 [tools]
 node = { version = "22", postinstall = "corepack enable" }
 ```
+
+### 自动更新工具
+
+全局配置（例如 `~/.config/mise/config.toml`）中的工具可以自动保持最新。在工具条目上设置 `auto_update`：
+
+```toml
+[tools]
+claude = { version = "latest", auto_update = true }
+node = { version = "22", auto_update = "6h" }
+```
+
+当 shim 或 `mise x` 即将运行该工具，且 mise 在指定间隔内尚未检查更新时，它会先运行 `mise upgrade`，
+显示常规安装进度，然后运行新版本。更新仍在已配置的版本范围内：`node = "22"` 只会获取最新的 22.x，
+不会变成 23。更新失败或处于离线状态时，mise 会发出警告并运行当前版本。
+
+`auto_update = true` 每 24 小时检查一次，也可以使用
+[`tool_update.check_duration`](/configuration/settings.html#tool_update.check_duration) 配置。
+类似 `"6h"` 的间隔会设置该工具自己的检查周期，短于一小时的间隔会提升为一小时。
+
+- 只有全局配置可以启用此功能。项目配置不能启用；当项目为该工具设置自己的版本时，该项目中的运行不会更新它。
+- 只检查当前运行的工具：`mise x -- npm test` 不会更新 `claude`。任务、`mise hook-env` 和 shell 激活从不更新工具。
+- 精确版本（如 `node = "22.11.0"`）永远不会更新。全局锁定文件（`mise lock --global`）固定工具时，更新会将锁定条目移动到新版本；不会修改项目配置或锁定文件。
+- 离线、CI 或 `locked = true` 时不会更新。
+- 旧版本会按照 `upgrade.auto_prune` 的计划清理；上次更新失败时，`mise doctor` 会显示错误。
+
+如要在后台更新，使启动永远不会等待，并让通过 PATH 直接运行的工具也保持最新，请在全局配置声明 `tool-update` 服务并运行 `mise bootstrap services apply`：
+
+```toml
+[bootstrap.services.mise-tool-update]
+builtin = "tool-update"
+```
+
+该服务每小时检查一次，并在工具的间隔到期时更新它。服务运行期间，启动不会自行更新工具。参见[服务](/bootstrap/services.html#user-services)。
 
 ### `[tool_config]` - 配置根目录范围的工具策略
 
@@ -253,6 +312,13 @@ node = "24"
 ### `[env]` - 任意环境变量
 
 请参阅 [环境](/environments/)。
+
+### `[secrets.*]` - 密钥源 {#secrets}
+
+<Badge type="warning" text="实验性" />
+
+mise 密钥的来源：只有在 mise 启动被授予密钥的任务或 `mise x` 命令时才解析值。
+仅限项目配置使用，例如 `[secrets.fnox]`。参见[mise 使用 fnox 管理密钥](/environments/secrets/fnox.html)。
 
 ### `[vars]` - 配置变量
 

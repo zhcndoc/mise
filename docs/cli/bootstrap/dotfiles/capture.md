@@ -24,5 +24,5 @@ description: "在外部命令执行前后记录已跟踪文件"
 ## 相关文档
 
 - [Dotfile 所有权和模式](/dotfiles.html)。
-- [`mise bootstrap dotfiles <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
+- [`mise bootstrap dotfiles [--local] <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

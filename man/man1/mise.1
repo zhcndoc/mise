@@ -232,6 +232,9 @@ Show one checkpoint: what triggered it, what changed, and its journal
 \fBbootstrap dotfiles include\fR
 Stop excluding paths matching a glob
 .TP
+\fBbootstrap dotfiles notify\fR
+Send a test desktop notification
+.TP
 \fBbootstrap dotfiles origin\fR
 Connect or disconnect the setup repository
 .TP
@@ -616,6 +619,9 @@ Show one checkpoint: what triggered it, what changed, and its journal
 \fBdotfiles include\fR
 Stop excluding paths matching a glob
 .TP
+\fBdotfiles notify\fR
+Send a test desktop notification
+.TP
 \fBdotfiles origin\fR
 Connect or disconnect the setup repository
 .TP
@@ -741,6 +747,21 @@ Install a tool version
 .TP
 \fBinstall\-into\fR
 Install a tool version to a specific path
+.TP
+\fBinstalls\fR
+[experimental] Inspect and choose installations of the identity install layout
+.TP
+\fBinstalls ls\fR
+List the installations of the identity install layout
+.RS
+\fIAliases: \fRlist
+.RE
+.TP
+\fBinstalls migrate\fR
+Reinstall legacy installations into the identity install layout
+.TP
+\fBinstalls select\fR
+Choose the installation that requests without a lockfile use
 .TP
 \fBlatest\fR
 Resolve the latest matching version request for a tool
@@ -873,6 +894,15 @@ Run tasks and their dependencies
 .TP
 \fBsearch\fR
 Search for available tools
+.TP
+\fBsecrets\fR
+[experimental] List the secret names this project's secrets source provides, without their values
+.TP
+\fBsecrets ls\fR
+List the secret names this project's secrets source provides, without their values
+.RS
+\fIAliases: \fRlist
+.RE
 .TP
 \fBself\-update\fR
 Update mise itself
@@ -1428,6 +1458,9 @@ Adopt global configuration or shared dotfile history from a Git repository, then
 \fB\-\-replace\-history\fR
 Replace local dotfile history while adopting a setup repository
 .TP
+\fB\-\-take\-remote\-all\fR
+While adopting a setup repository, take its version of every existing file that differs; the replaced versions are saved first, so `mise dot undo` restores them
+.TP
 \fB\-\-from\-dir\fR \fI<DIR>\fR
 Directory used for the repository cloned by \-\-from
 .TP
@@ -1581,6 +1614,9 @@ Manage dotfiles from `[dotfiles]`
 \fBOptions:\fR
 .PP
 .TP
+\fB\-\-local\fR
+Work on this machine's local\-only history (`mode = "track\-local"`), which is never shared
+.TP
 \fB\-h, \-\-help\fR
 Print help
 .SH "MISE BOOTSTRAP DOTFILES ADD"
@@ -1591,6 +1627,10 @@ target. Otherwise it creates a `[dotfiles]` entry and seeds the source
 under `dotfiles.root` unless `\-\-source` is provided. Captured entries are
 applied unless `\-\-no\-apply` is passed. Use `\-\-dry\-run` to preview both the
 source capture and config write without making those changes.
+
+A target inside the tree of a dotfile group is captured into that group's
+source instead, without a new `[dotfiles]` entry: the deepest group whose
+target contains it, or the one named with `\-\-group`.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles add [OPTIONS] [<TARGET>] ...
 .PP
@@ -1630,6 +1670,9 @@ Skip the confirmation prompt
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
 .TP
+\fB\-\-group\fR \fI<NAME>\fR
+Capture into the tree of this dotfile group
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -1644,6 +1687,7 @@ Targets to add or update
 mise dot add ~/.zshrc
 mise dot add \-\-mode copy ~/.config/starship.toml
 mise dot add \-\-source dotfiles/gitconfig ~/.gitconfig
+mise dot add \-\-group home ~/.config/starship.toml
 mise dot add \-\-changed
 .RE
 .SH "MISE BOOTSTRAP DOTFILES APPLY"
@@ -1653,6 +1697,9 @@ Applies configured whole\-file entries and edits that aren't in their
 desired state. Whole\-file entries may symlink, copy, or render templates.
 Edit entries manage a marker\-delimited block or a single line in a file
 mise doesn't otherwise own.
+
+With `\-\-prune`, files deployed by dotfile groups that are no longer
+selected or declared are removed too.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles apply [OPTIONS] [<TARGET>] ...
 .PP
@@ -1667,6 +1714,9 @@ Print the actions that would run without writing anything
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt
+.TP
+\fB\-\-prune\fR
+Also remove files deployed by dotfile groups that are no longer selected or declared
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -1684,6 +1734,7 @@ Only apply these targets
 .RS 4
 mise dot apply
 mise dot apply \-\-dry\-run
+mise dot apply \-\-prune
 mise dot apply \-\-force \-\-yes
 .RE
 .SH "MISE BOOTSTRAP DOTFILES CAPTURE"
@@ -1780,6 +1831,9 @@ Source path to use if the target is not yet managed
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt when adding an unmanaged target
+.TP
+\fB\-\-group\fR \fI<NAME>\fR
+Dotfile group whose tree holds the target, when several groups deploy into its directory
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -1993,6 +2047,33 @@ Print help
 .TP
 \fB<GLOB>\fR
 The glob as written by `mise dot exclude`
+.SH "MISE BOOTSTRAP DOTFILES NOTIFY"
+Send a test desktop notification
+
+Checks that `history.notify` can reach you. On macOS the first
+notification asks for permission, so run this once to be prompted now
+instead of at the first sync conflict. Fails with the reason when this
+build or machine cannot show notifications, such as an unofficial macOS
+build (Homebrew), a missing `notify\-send` on Linux, denied permission, or
+`history.notify = false`.
+
+Notifications are only sent when conflicts pause sharing for the setup.
+Other problems, such as a watcher that cannot save, show in `mise doctor`
+and `mise dot status`.
+.PP
+\fBUsage:\fR mise bootstrap dotfiles notify [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBExamples:\fR
+.PP
+.PP
+.RS 4
+mise dot notify
+.RE
 .SH "MISE BOOTSTRAP DOTFILES ORIGIN"
 Connect or disconnect the setup repository
 
@@ -2097,7 +2178,7 @@ their shared versions follow in the same run.
 Show the plan without changing anything
 .TP
 \fB\-y, \-\-yes\fR
-Pull without prompting
+Accepted for compatibility; pull skips the apply confirmation
 .TP
 \fB\-\-take\-remote\fR \fI<PATH>\fR
 Resolve a conflict with the repository's version
@@ -2229,6 +2310,9 @@ Template entries are rendered to compare their output; trusted template
 functions may execute. JSON includes each entry's origin and uses the states
 `applied`, `missing`, `differs`, `source_missing`, and `tracked`.
 
+Files deployed by a dotfile group that is no longer selected or declared
+are listed as `orphaned`; `mise dot apply \-\-prune` removes them.
+
 The management state of every declaration (applied, missing, differs,
 tracked) followed by the history state: what is tracked, the latest
 checkpoint, unfinished operations, and whether edits are saved
@@ -2310,6 +2394,8 @@ saved automatically; without it, `mise dot save` saves them.
 `\-\-os` and `\-\-profile` declare a variant: a separate shared stream for
 machines matching that platform or mise environment, so a Mac and a
 Linux box can share the same live path with different contents.
+`\-\-machine` gives every machine its own stream instead, for files such
+as a monitor layout that should never be applied on another machine.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles track [OPTIONS] <PATH> ...
 .PP
@@ -2322,6 +2408,12 @@ Declare a variant for this platform (macos, linux, linux/arm64, …)
 \fB\-\-profile\fR \fI<PROFILE>\fR
 Declare a variant for this mise environment
 .TP
+\fB\-\-local\fR
+Keep this file's history on this machine only; it is never shared
+.TP
+\fB\-\-machine\fR
+Keep a separate stream on every machine, never applied on another
+.TP
 \fB\-\-no\-autosave\fR
 Save only on `mise dot save <path>`, never automatically
 .TP
@@ -2332,7 +2424,7 @@ Encrypt contents before saving them to history (requires `[history.encryption].r
 Save an explicitly tracked credential\-named file in plaintext
 .TP
 \fB\-y, \-\-yes\fR
-Accept without prompting
+Accepted for compatibility; track no longer asks to confirm the paths
 .TP
 \fB\-n, \-\-dry\-run\fR
 Show what each path expands to (files, size, what is left out) without tracking it
@@ -2351,6 +2443,10 @@ Removes configured whole\-file entries and edits while preserving files
 mise cannot identify as managed. Modified copies, templates, and plain\-line
 edits require `\-\-force`. Source files and configuration entries are retained.
 Run this before deleting a declaration so mise can still identify its targets.
+
+With `\-\-group`, only that dotfile group's files are removed, using what
+mise recorded when it applied them, so this works even after the group
+is deselected or deleted from the config.
 .PP
 \fBUsage:\fR mise bootstrap dotfiles unapply [OPTIONS] [<TARGET>] ...
 .PP
@@ -2365,6 +2461,9 @@ Print the actions that would run without writing anything
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt
+.TP
+\fB\-\-group\fR \fI<NAME>\fR
+Only unapply the files of this dotfile group, even one that is no longer selected or declared
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -2382,6 +2481,7 @@ Only unapply these targets
 .RS 4
 mise dot unapply
 mise dot unapply ~/.zshrc
+mise dot unapply \-\-group work
 mise dot unapply \-\-dry\-run
 mise dot unapply \-\-force \-\-yes
 .RE
@@ -4211,6 +4311,9 @@ Manage dotfiles from `[dotfiles]`
 \fBOptions:\fR
 .PP
 .TP
+\fB\-\-local\fR
+Work on this machine's local\-only history (`mode = "track\-local"`), which is never shared
+.TP
 \fB\-h, \-\-help\fR
 Print help
 .SH "MISE DOTFILES ADD"
@@ -4221,6 +4324,10 @@ target. Otherwise it creates a `[dotfiles]` entry and seeds the source
 under `dotfiles.root` unless `\-\-source` is provided. Captured entries are
 applied unless `\-\-no\-apply` is passed. Use `\-\-dry\-run` to preview both the
 source capture and config write without making those changes.
+
+A target inside the tree of a dotfile group is captured into that group's
+source instead, without a new `[dotfiles]` entry: the deepest group whose
+target contains it, or the one named with `\-\-group`.
 .PP
 \fBUsage:\fR mise dotfiles add [OPTIONS] [<TARGET>] ...
 .PP
@@ -4260,6 +4367,9 @@ Skip the confirmation prompt
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
 .TP
+\fB\-\-group\fR \fI<NAME>\fR
+Capture into the tree of this dotfile group
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -4274,6 +4384,7 @@ Targets to add or update
 mise dot add ~/.zshrc
 mise dot add \-\-mode copy ~/.config/starship.toml
 mise dot add \-\-source dotfiles/gitconfig ~/.gitconfig
+mise dot add \-\-group home ~/.config/starship.toml
 mise dot add \-\-changed
 .RE
 .SH "MISE DOTFILES APPLY"
@@ -4283,6 +4394,9 @@ Applies configured whole\-file entries and edits that aren't in their
 desired state. Whole\-file entries may symlink, copy, or render templates.
 Edit entries manage a marker\-delimited block or a single line in a file
 mise doesn't otherwise own.
+
+With `\-\-prune`, files deployed by dotfile groups that are no longer
+selected or declared are removed too.
 .PP
 \fBUsage:\fR mise dotfiles apply [OPTIONS] [<TARGET>] ...
 .PP
@@ -4297,6 +4411,9 @@ Print the actions that would run without writing anything
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt
+.TP
+\fB\-\-prune\fR
+Also remove files deployed by dotfile groups that are no longer selected or declared
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -4314,6 +4431,7 @@ Only apply these targets
 .RS 4
 mise dot apply
 mise dot apply \-\-dry\-run
+mise dot apply \-\-prune
 mise dot apply \-\-force \-\-yes
 .RE
 .SH "MISE DOTFILES CAPTURE"
@@ -4410,6 +4528,9 @@ Source path to use if the target is not yet managed
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt when adding an unmanaged target
+.TP
+\fB\-\-group\fR \fI<NAME>\fR
+Dotfile group whose tree holds the target, when several groups deploy into its directory
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -4623,6 +4744,33 @@ Print help
 .TP
 \fB<GLOB>\fR
 The glob as written by `mise dot exclude`
+.SH "MISE DOTFILES NOTIFY"
+Send a test desktop notification
+
+Checks that `history.notify` can reach you. On macOS the first
+notification asks for permission, so run this once to be prompted now
+instead of at the first sync conflict. Fails with the reason when this
+build or machine cannot show notifications, such as an unofficial macOS
+build (Homebrew), a missing `notify\-send` on Linux, denied permission, or
+`history.notify = false`.
+
+Notifications are only sent when conflicts pause sharing for the setup.
+Other problems, such as a watcher that cannot save, show in `mise doctor`
+and `mise dot status`.
+.PP
+\fBUsage:\fR mise dotfiles notify [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBExamples:\fR
+.PP
+.PP
+.RS 4
+mise dot notify
+.RE
 .SH "MISE DOTFILES ORIGIN"
 Connect or disconnect the setup repository
 
@@ -4727,7 +4875,7 @@ their shared versions follow in the same run.
 Show the plan without changing anything
 .TP
 \fB\-y, \-\-yes\fR
-Pull without prompting
+Accepted for compatibility; pull skips the apply confirmation
 .TP
 \fB\-\-take\-remote\fR \fI<PATH>\fR
 Resolve a conflict with the repository's version
@@ -4859,6 +5007,9 @@ Template entries are rendered to compare their output; trusted template
 functions may execute. JSON includes each entry's origin and uses the states
 `applied`, `missing`, `differs`, `source_missing`, and `tracked`.
 
+Files deployed by a dotfile group that is no longer selected or declared
+are listed as `orphaned`; `mise dot apply \-\-prune` removes them.
+
 The management state of every declaration (applied, missing, differs,
 tracked) followed by the history state: what is tracked, the latest
 checkpoint, unfinished operations, and whether edits are saved
@@ -4940,6 +5091,8 @@ saved automatically; without it, `mise dot save` saves them.
 `\-\-os` and `\-\-profile` declare a variant: a separate shared stream for
 machines matching that platform or mise environment, so a Mac and a
 Linux box can share the same live path with different contents.
+`\-\-machine` gives every machine its own stream instead, for files such
+as a monitor layout that should never be applied on another machine.
 .PP
 \fBUsage:\fR mise dotfiles track [OPTIONS] <PATH> ...
 .PP
@@ -4952,6 +5105,12 @@ Declare a variant for this platform (macos, linux, linux/arm64, …)
 \fB\-\-profile\fR \fI<PROFILE>\fR
 Declare a variant for this mise environment
 .TP
+\fB\-\-local\fR
+Keep this file's history on this machine only; it is never shared
+.TP
+\fB\-\-machine\fR
+Keep a separate stream on every machine, never applied on another
+.TP
 \fB\-\-no\-autosave\fR
 Save only on `mise dot save <path>`, never automatically
 .TP
@@ -4962,7 +5121,7 @@ Encrypt contents before saving them to history (requires `[history.encryption].r
 Save an explicitly tracked credential\-named file in plaintext
 .TP
 \fB\-y, \-\-yes\fR
-Accept without prompting
+Accepted for compatibility; track no longer asks to confirm the paths
 .TP
 \fB\-n, \-\-dry\-run\fR
 Show what each path expands to (files, size, what is left out) without tracking it
@@ -4981,6 +5140,10 @@ Removes configured whole\-file entries and edits while preserving files
 mise cannot identify as managed. Modified copies, templates, and plain\-line
 edits require `\-\-force`. Source files and configuration entries are retained.
 Run this before deleting a declaration so mise can still identify its targets.
+
+With `\-\-group`, only that dotfile group's files are removed, using what
+mise recorded when it applied them, so this works even after the group
+is deselected or deleted from the config.
 .PP
 \fBUsage:\fR mise dotfiles unapply [OPTIONS] [<TARGET>] ...
 .PP
@@ -4995,6 +5158,9 @@ Print the actions that would run without writing anything
 .TP
 \fB\-y, \-\-yes\fR
 Skip the confirmation prompt
+.TP
+\fB\-\-group\fR \fI<NAME>\fR
+Only unapply the files of this dotfile group, even one that is no longer selected or declared
 .TP
 \fB\-\-prompt\-secrets\fR
 Prompt securely for missing bootstrap secret inputs
@@ -5012,6 +5178,7 @@ Only unapply these targets
 .RS 4
 mise dot unapply
 mise dot unapply ~/.zshrc
+mise dot unapply \-\-group work
 mise dot unapply \-\-dry\-run
 mise dot unapply \-\-force \-\-yes
 .RE
@@ -5327,6 +5494,12 @@ Skip automatic dependency preparation
 \fB\-\-raw\fR
 Connect backend install command stdin/stdout/stderr directly to the terminal. Implies `\-\-jobs=1`
 .TP
+\fB\-\-secrets\fR \fI<SECRET>\fR
+Give the command these secrets (comma\-separated); by default it gets none
+.TP
+\fB\-\-secrets\-all\fR
+Give the command every secret the project can inject, except file secrets
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -5350,6 +5523,12 @@ Specify command as a string:
 .PP
 .RS 4
 mise exec node@20 python@3.11 \-\-command "node \-v && python \-V"
+.RE
+.PP
+Give the command the GH_TOKEN secret from the project's secrets source. Without a flag it gets none.
+.PP
+.RS 4
+mise x \-\-secrets GH_TOKEN \-\- gh release list
 .RE
 .PP
 Run a command in a different directory:
@@ -6043,6 +6222,152 @@ install node@20.0.0 into ./mynode
 .RS 4
 mise install\-into node@20.0.0 ./mynode && ./mynode/bin/node \-v
 v20.0.0
+.RE
+.SH "MISE INSTALLS"
+[experimental] Inspect and choose installations of the identity install layout
+
+With `install_layout = "identity"`, each installation lives in its own
+`<label>\-<hash>` directory, and several installations of one version can
+exist side by side (different options, platforms, pinned artifacts, or a
+refreshed copy). These commands list them, choose which one requests
+without a lockfile use, and move installations made before the layout
+was turned on into it.
+.PP
+\fBUsage:\fR mise installs [OPTIONS] [COMMAND]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE INSTALLS LS"
+List the installations of the identity install layout
+
+Every installation is listed separately, so variants of one version (made
+with different options, or pinned to different artifacts by lockfiles) can
+be told apart. The status column says which installation requests without
+a lockfile use (`selected`), which a lockfile adopted (`pinned`), and which
+live in a read\-only shared installs directory (`shared`).
+.PP
+\fBUsage:\fR mise installs ls [OPTIONS] [<TOOL>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-no\-header\fR
+Don't display headers
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<TOOL>\fR
+Only show the installations of these tools
+\fBExamples:\fR
+.PP
+Every installation in the identity layout
+.PP
+.RS 4
+mise installs ls
+.RE
+.PP
+The installations of node, as JSON
+.PP
+.RS 4
+mise installs ls node \-\-json
+.RE
+.SH "MISE INSTALLS MIGRATE"
+Reinstall legacy installations into the identity install layout
+
+Installations made before `install_layout = "identity"` was turned on stay in
+`installs/<tool>/<version>` and keep working; mise never moves them on its own,
+because tools record their own path in shebangs, virtual environments and
+package\-manager files. This reinstalls each one into its own `<label>\-<hash>`
+directory, then removes the old directory and puts the version link in its
+place, so a path that pointed into the old directory still resolves.
+
+Each version is reinstalled from its backend, not copied, so the files are
+written for their new path. Run it while nothing is using the tools: the old
+directory is moved aside while its replacement installs, and put back if that
+fails. Versions whose recorded backend is not the one their tool resolves to
+now are left alone, as are tools that keep the legacy layout (`http:`,
+`rust`, `dotnet`).
+
+A version that cannot be reinstalled (its release was withdrawn or is signed
+by someone else now, or the network is unavailable) is not an error: its
+directory is moved as it is into the identity layout, behind the same version
+link. Only a version that cannot be moved either keeps its old directory,
+reported as kept in the legacy layout. The command ends with a count of what
+was migrated, relocated, kept and failed, and fails only when a migration
+itself broke.
+.PP
+\fBUsage:\fR mise installs migrate [OPTIONS] [<TOOL@VERSION>] ...
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-n, \-\-dry\-run\fR
+Show what would move without changing anything
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<TOOL@VERSION>\fR
+Only migrate these tools, or these versions of them
+
+Defaults to every legacy installation.
+\fBExamples:\fR
+.PP
+List the legacy installations that would move
+.PP
+.RS 4
+mise installs migrate \-\-dry\-run
+.RE
+.PP
+Move every installed node, and one python
+.PP
+.RS 4
+mise installs migrate node python@3.12.1
+.RE
+.SH "MISE INSTALLS SELECT"
+Choose the installation that requests without a lockfile use
+
+Several installations can answer the same request: a refresh that could not
+replace a lockfile's installation in place, or installations made for
+different lockfiles. Requests without a lockfile entry use the one selected
+for their tool, version, platform and options, and when none is selected and
+several match, mise stops and asks for this command.
+
+The selection is shared by every project on this machine that makes the same
+request without a lockfile. Projects whose lockfile pins an artifact keep the
+installation of that artifact. The version link (`installs/<tool>/<version>`)
+is pointed at the selected installation.
+.PP
+\fBUsage:\fR mise installs select [OPTIONS] <INSTALLATION>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<INSTALLATION>\fR
+The installation to select: its directory name, or its path
+\fBExamples:\fR
+.PP
+Find jq's installations, then choose one
+.PP
+.RS 4
+mise installs ls jq
+mise installs select jq\-hm3qa4vb
 .RE
 .SH "MISE LATEST"
 Resolve the latest matching version request for a tool
@@ -6955,7 +7280,7 @@ These are hidden by default
 .TP
 \fB\-u, \-\-urls\fR
 Show the git url for each plugin
-e.g.: https://github.com/mise\-plugins/vfox\-cmake.git
+e.g.: https://github.com/jdx/vfox\-cmake.git
 .TP
 \fB\-\-refs\fR
 Show the git refs for each plugin
@@ -7100,7 +7425,7 @@ Checks the remote for newer versions and only displays plugins that are outdated
 .TP
 \fB\-u, \-\-urls\fR
 Show the git url for each plugin
-e.g.: https://github.com/mise\-plugins/vfox\-cmake.git
+e.g.: https://github.com/jdx/vfox\-cmake.git
 .TP
 \fB\-\-refs\fR
 Show the git refs for each plugin
@@ -7134,7 +7459,7 @@ These are the shorthand names from the registry: https://github.com/jdx/mise/blo
 .PP
 .TP
 \fB\-u, \-\-urls\fR
-Show the git url for each plugin, e.g. https://github.com/mise\-plugins/mise\-poetry.git
+Show the plugin source for each shorthand, e.g. vfox:jdx/vfox\-poetry
 .TP
 \fB\-\-only\-names\fR
 Only show the name of each plugin, without the "*" marking installed plugins
@@ -7368,6 +7693,9 @@ as will versions only referenced on the command line `mise exec <TOOL>@<VERSION>
 Tool stubs that have been executed are tracked in ~/.local/state/mise/tracked\-stubs.
 Versions still referenced by a tracked stub are not deleted.
 
+Versions that a running process was started from are not deleted either,
+so a long\-running program keeps its files after its version stops being needed.
+
 You can list prunable tools with `mise ls \-\-prunable`
 .PP
 \fBUsage:\fR mise prune [OPTIONS] [<INSTALLED_TOOL>] ...
@@ -7586,6 +7914,14 @@ Read/write directly to stdin/stdout/stderr instead of by line
 Redactions are not applied with this option
 Configure with `raw` config or `MISE_RAW` env var
 .TP
+\fB\-\-secrets\fR \fI<SECRET>\fR
+Give the tasks named on the command line these secrets (comma\-separated)
+Their dependencies and subtasks do not receive them. Put this flag before the task name.
+.TP
+\fB\-\-secrets\-all\fR
+Give the tasks named on the command line every secret the project can inject
+(fnox env = true or "exec"; never env = false). Dependencies and subtasks do not receive them.
+.TP
 \fB\-s, \-\-shell\fR \fI<SHELL>\fR
 Shell to use to run toml tasks
 
@@ -7714,6 +8050,12 @@ Run "test" with stdin/stdout/stderr all connected to the current terminal. This 
 mise run \-\-raw test
 .RE
 .PP
+Give the "deploy" task the DEPLOY_KEY secret from the project's secrets source. Its dependencies do not receive it.
+.PP
+.RS 4
+mise run \-\-secrets DEPLOY_KEY deploy
+.RE
+.PP
 Run the "lint", "test", and "check" tasks in parallel.
 .PP
 .RS 4
@@ -7801,6 +8143,54 @@ Search a tool
   gojq  Pure Go implementation of jq. https://github.com/itchyny/gojq
 /jq
 esc clear filter • enter confirm
+.RE
+.SH "MISE SECRETS"
+[experimental] List the secret names this project's secrets source provides, without their values
+.PP
+\fBUsage:\fR mise secrets [OPTIONS] [COMMAND]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-no\-header\fR
+Don't show table header
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE SECRETS LS"
+List the secret names this project's secrets source provides, without their values
+
+Shows names and metadata only; values are never shown. The source is declared in the
+project's `mise.toml` with `[secrets.fnox]`.
+.PP
+\fBUsage:\fR mise secrets ls [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-J, \-\-json\fR
+Output in JSON format
+.TP
+\fB\-\-no\-header\fR
+Don't show table header
+.TP
+\fB\-\-complete\fR
+Render completions: the injectable key names, one per line
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBExamples:\fR
+.PP
+.PP
+.RS 4
+mise secrets ls
+KEY                ENV    FILE  SCOPES  TASKS   DESCRIPTION
+DATABASE_URL       true   no    run, exec  deploy  app database
+GCP_SA_JSON        exec   yes   run               service account
+SIGNING_KEY        false  no    \-                 release signing key
 .RE
 .SH "MISE SELF-UPDATE"
 Update mise itself
@@ -9031,6 +9421,14 @@ Read/write directly to stdin/stdout/stderr instead of by line
 Redactions are not applied with this option
 Configure with `raw` config or `MISE_RAW` env var
 .TP
+\fB\-\-secrets\fR \fI<SECRET>\fR
+Give the tasks named on the command line these secrets (comma\-separated)
+Their dependencies and subtasks do not receive them. Put this flag before the task name.
+.TP
+\fB\-\-secrets\-all\fR
+Give the tasks named on the command line every secret the project can inject
+(fnox env = true or "exec"; never env = false). Dependencies and subtasks do not receive them.
+.TP
 \fB\-s, \-\-shell\fR \fI<SHELL>\fR
 Shell to use to run toml tasks
 
@@ -9157,6 +9555,12 @@ Run "test" with stdin/stdout/stderr all connected to the current terminal. This 
 .PP
 .RS 4
 mise run \-\-raw test
+.RE
+.PP
+Give the "deploy" task the DEPLOY_KEY secret from the project's secrets source. Its dependencies do not receive it.
+.PP
+.RS 4
+mise run \-\-secrets DEPLOY_KEY deploy
 .RE
 .PP
 Run the "lint", "test", and "check" tasks in parallel.

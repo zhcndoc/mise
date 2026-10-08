@@ -35,5 +35,5 @@ mise dot conflicts --difftool --tool meld ~/.zshrc
 ## 相关文档
 
 - [Dotfile 的所有权和模式](/dotfiles.html)。
-- [`mise bootstrap dotfiles <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
+- [`mise bootstrap dotfiles [--local] <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

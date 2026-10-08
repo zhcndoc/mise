@@ -13,6 +13,8 @@ description: "在 `[dotfiles]` 中添加或更新 dotfiles"
 
 如果目标已受管理，则从实时目标更新其源。否则创建一个 `[dotfiles]` 条目，并在 `dotfiles.root` 下初始化源，除非提供了 `--source`。除非传入 `--no-apply`，否则会应用捕获的条目。使用 `--dry-run` 可预览源捕获和配置写入，而不会实际进行这些更改。
 
+目标位于点文件组的树中时，会捕获到该组的源中，不会创建新的 `[dotfiles]` 条目：默认选择目标包含它的最深组，也可以用 `--group` 指定组。
+
 ## 参数
 - **`[TARGET]…`** — 要添加或更新的目标
 
@@ -28,6 +30,7 @@ description: "在 `[dotfiles]` 中添加或更新 dotfiles"
 - **`-s --source <PATH>`** — 用于单个目标的源路径
 - **`-y --yes`** — 跳过确认提示
 - **`--prompt-secrets`** — 安全地提示输入缺失的引导密钥
+- **`--group <NAME>`** — 捕获到此点文件组的树中
 - **`-h --help`** — 打印帮助
 
 ## 示例
@@ -36,6 +39,7 @@ description: "在 `[dotfiles]` 中添加或更新 dotfiles"
 mise dot add ~/.zshrc
 mise dot add --mode copy ~/.config/starship.toml
 mise dot add --source dotfiles/gitconfig ~/.gitconfig
+mise dot add --group home ~/.config/starship.toml
 mise dot add --changed
 ```
 
@@ -44,5 +48,5 @@ mise dot add --changed
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

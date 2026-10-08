@@ -38,6 +38,7 @@ PATH="$HOME/.local/share/mise/installs/python/3.14.7/bin:/usr/local/bin:/usr/bin
 
 在此示例中，python 的 `bin` 目录被添加到了 `PATH` 的开头，因此它在当前 shell 会话中可用。
 当激活的是类似 `python = "3.14"` 或 `node = "26"` 这样的模糊版本时，此路径可能会使用请求版本的符号链接，例如 `~/.local/share/mise/installs/python/3.14/bin`，而不是完全解析后的补丁版本。
+使用实验性的[安装布局](/dev-tools/install-layout.html)时，这些路径会链接到安装自身的目录，例如 `installs/python-<hash>`。从锁定文件条目恢复的工具会直接将该目录加入 `PATH`。
 
 当某个程序需要工具的稳定路径时，请使用 shims，例如配置了 Python 可执行文件的 IDE。对于脚本，`mise exec -- <command>` 会显式加载工具和环境变量。
 

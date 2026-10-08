@@ -76,6 +76,9 @@ port = 5433
 `[env]` 中的值绝不会写入生成的 pitchfork 文件。此功能需要高于 2.29.0 的 pitchfork 版本，且仅适用于 `run`。
 :::
 
+现在 mise 会在 `mise x` 中运行 `ready_cmd` 和 `health_cmd`，因此它们可以看到项目工具和 `[env]`，除非守护进程设置 `mise = false`。
+它们也可以是参数数组，pitchfork 2.30.0 及更高版本会在不使用 shell 的情况下运行数组。
+
 ```toml
 [env]
 AUDIENCE = "world"
@@ -117,7 +120,8 @@ task asking for everything never reaches into a referenced project.
 Daemon startup is part of dependency handling: `--skip-deps` and the
 `task.skip_depends` setting skip it. `--dry-run` validates daemon names and the
 experimental setting, and reports what would start without starting anything.
-Safe mode blocks task daemon startup.
+Safe mode blocks task daemon startup. A task that lists
+[`secrets`](/tasks/task-configuration.html#secrets) does not run as a task daemon in this version.
 
 See the [`daemons` task option](/tasks/task-configuration.html#daemons) for all
 accepted values. Use `mise tasks info <task>` to inspect a task's daemon requirements.
@@ -211,6 +215,10 @@ mise daemons tui
 | `redis`    | `redis`    | 6379     | `REDIS_URL`                                                |
 
 两者都绑定到回环地址，并要求其配置的端口空闲；端口不会自动递增。PostgreSQL 使用 `postgres` 用户和本地信任身份验证。任何能够访问其回环端口的进程都可以无需密码连接。这些预设适用于受信任的本地计算机上的开发；对于共享或不受信任的环境，请使用带身份验证的自定义守护进程。这些预设会启用仅追加持久化。目前这些预设仅适用于 Unix。
+
+在 Windows 上，除没有 Windows 构建的 `redis` 外，每个预设都使用 pitchfork 默认的 `cmd /C` shell；不支持其他 `windows_shell`。
+PostgreSQL 只有在 pitchfork 2.29.0 或更高版本中才能干净停止，该版本会向它发送 Ctrl+C；旧版本会终止它，并在下次启动时恢复。
+PostgreSQL 也拒绝以管理员权限运行，因此不要从提升权限的提示符或以管理员身份运行的监管器启动它。Windows 还会为 Hyper-V 和 WSL 保留某些端口范围（参见 `netsh interface ipv4 show excludedportrange protocol=tcp`）。如果预设端口落入其中，请将 `port` 或 `ports` 设置为其他端口。
 
 使用 `options.database` 可以在首次初始化期间创建不同的 PostgreSQL 数据库。名称可以包含字母、数字和下划线。在现有集群中更改此选项不会再创建另一个数据库。
 

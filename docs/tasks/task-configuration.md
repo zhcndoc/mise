@@ -331,6 +331,22 @@ run = [
 ]
 ```
 
+值可以通过 <span v-pre>`{{ secrets.NAME }}`</span> 引用密钥（实验性）。任务开始时才会组合该值，引用会将对应键授予当前任务。详见[组合值](/environments/secrets/fnox.html#compose-values)。
+
+### `secrets` <Badge type="warning" text="experimental" />
+
+- **类型**: `string | string[]`
+
+任务启动时从项目的[密钥源](/environments/secrets/fnox.html)（`[secrets.fnox]`）解析并传递的密钥键。只有此任务会获得这些值；依赖项、后置依赖项以及 `run = [{ task = "..." }]` 子任务只会获得各自声明的密钥，mise 会从任务输出中脱敏这些值。需要支持该字段的版本，并且不能用于任务模板或 `monorepo.task_defaults`，也不能用于远程任务及由钩子、`watch_files`、守护进程或 `mise bootstrap` 启动的任务。
+
+```mise-toml
+[secrets.fnox]
+
+[tasks.deploy]
+secrets = ["DEPLOY_KEY", "DATABASE_URL"]
+run = "./deploy.sh"
+```
+
 ### `vars` {#task-vars}
 
 - **类型**: `{ [key]: string | int | bool | directive }`
@@ -404,7 +420,7 @@ run = "echo my internal task"
 
 ### `confirm`
 
-- **类型**: `string` | `{ message: string, default: string }`
+- **类型**: `string` | `{ message: string, default?: string, yes?: string, no?: string }`
 
 A message to show before running the task. This is useful for tasks that are destructive or take a long
 time to run. The user is prompted to confirm before the task's own `run` command executes.
@@ -431,6 +447,8 @@ flag "--force" help="强制部署"
 confirm = "部署到 {{ usage.environment }}？{% if usage.force %}（强制）{% endif %}"
 run = "deploy.sh ${usage_environment}"
 ```
+
+使用 `yes` 和 `no` 可以自定义两个回答的标签；`default` 可选，默认值为 `yes`。管道输入（例如 `echo y | mise run release`）仍接受 `y`/`n`。
 
 ### `raw`
 

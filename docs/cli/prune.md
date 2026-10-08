@@ -19,6 +19,8 @@ mise 会在 ~/.local/state/mise/tracked-configs 中跟踪哪些配置文件被�
 已执行的工具存根会被跟踪在 ~/.local/state/mise/tracked-stubs 中。
 仍被已跟踪存根引用的版本不会被删除。
 
+正在运行的进程所启动的版本也不会被删除，因此长时间运行的程序在其版本不再需要后仍能继续使用文件。
+
 你可以使用 `mise ls --prunable` 列出可清理的工具
 
 ## 参数

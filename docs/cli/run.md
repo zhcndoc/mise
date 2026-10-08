@@ -61,6 +61,8 @@ outputs = ["dist/**/*.js"]
 - **`-r --raw`** — 直接读写 stdin/stdout/stderr，而不是按行读写
   使用此选项时不会应用脱敏
   使用 `raw` 配置或 `MISE_RAW` 环境变量进行配置
+- **`--secrets <SECRET>`** — 将这些密钥（逗号分隔）提供给命令行指定的任务；依赖项和子任务不会收到。将此标志放在任务名称之前
+- **`--secrets-all`** — 将项目可注入的所有密钥提供给命令行指定的任务（fnox `env = true` 或 `"exec"`，不包括 `env = false`）。依赖项和子任务不会收到
 - **`-s --shell <SHELL>`** — 用于运行 toml 任务的 Shell
 
   在 unix 上默认为 `sh -o errexit -c`，在 Windows 上默认为 `cmd /c`
@@ -134,6 +136,12 @@ mise run --force build
 
 ```
 mise run --raw test
+```
+
+从项目的密钥源向 `deploy` 任务提供 DEPLOY_KEY。它的依赖项不会收到该密钥。
+
+```
+mise run --secrets DEPLOY_KEY deploy
 ```
 
 并行运行 `lint`、`test` 和 `check` 任务

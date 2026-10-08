@@ -16,7 +16,7 @@ description: "管理插件"
 - **`-c --core`** — 仅显示内置（核心）插件
   默认隐藏这些插件
 - **`-u --urls`** — 显示每个插件的 git url
-  例如：<https://github.com/mise-plugins/vfox-cmake.git>
+  例如：<https://github.com/jdx/vfox-cmake.git>
 - **`--user`** — 列出已安装的插件
 
   这是默认行为，但可以与 --core 一起使用

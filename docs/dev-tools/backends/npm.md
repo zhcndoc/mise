@@ -25,6 +25,14 @@ node = "24"
 
 对于作用域包，请引用其完整标识符，例如 `mise use 'npm:@biomejs/biome'`。包的可执行文件名称可能与其注册表名称不同。mise 安装的是 CLI 包，而不是任意库。
 
+如果要从 Git 仓库而不是注册表安装，请使用 git URL 或 `github:`、`gitlab:`、`bitbucket:` 简写。
+版本就是 git ref（标签、分支或提交）；`latest` 表示仓库的默认分支：
+
+```sh
+mise use 'npm:git+https://github.com/owner/repo'
+mise use 'npm:github:owner/repo@v1.2.0'
+```
+
 如果项目已经在 `package.json` 中声明了 Prettier，请通过包脚本运行该副本，以使其插件和版本与项目保持一致。
 
 ## 依赖项

@@ -24,5 +24,5 @@ description: "记录外部命令执行前后的已跟踪文件"
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局选项和参数语法](/cli/#global-flags)。

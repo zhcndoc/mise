@@ -274,6 +274,10 @@ range when the requirement is only needed on some versions.
 
 使用 `uv tool install` 进行仅版本安装时的其他参数。这些参数不支持依赖关系图；`pipx_args` 仅适用于 pipx。
 
+When mise manages Python, version-only installs pass `--python <mise python>` to
+`uv tool install`, so the tool's venv does not depend on a Python uv downloaded
+itself. Pass your own `--python` here to choose a different interpreter.
+
 ```toml
 [tools]
 "pypi:ansible-core" = { version = "latest", uvx_args = "--resolution lowest" }

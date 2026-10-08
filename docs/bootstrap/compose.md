@@ -52,6 +52,25 @@ depends_on = ["package:apt:docker.io", "service:docker"]
 
 `project_dir` 是必需项，且必须是绝对路径。`files` 和 `env_files` 中的相对路径将以它为基准解析。如果没有指定 `files`，Compose 将执行其正常的项目目录发现。mise 按声明顺序传递多个文件和环境文件，因此后面的条目会保留 Compose 的覆盖语义。
 
+## 模板
+
+Compose 项目值会在 mise 验证 `project_dir` 或解析 `files` 和 `env_files` 之前，作为
+[Tera 模板](/templates.html)渲染。这样，可移植配置可以使用声明它的配置目录或环境变量：
+
+```toml
+[bootstrap.compose.mise-cache]
+project_dir = "{{ config_root }}/compose"
+files = ["{{ env.COMPOSE_FILE }}"]
+env_files = ["{{ config_root }}/compose/.env"]
+```
+
+支持渲染文本和文本数组字段，包括路径、命令、服务、配置文件和依赖数组中的条目。
+`state`、`pull`、`build`、`recreate` 和 `down_images` 等枚举字段必须使用字面量 TOML 值。
+模板使用声明该项目的配置文件上下文渲染，因此 <code v-pre>{{ config_root }}</code> 不会随你运行
+`mise bootstrap` 的目录改变。没有模板语法的值保持不变。由于 `status`、`plan`、
+`apply --dry-run` 和 `apply` 必须渲染相同的声明，因此不能使用 <code v-pre>{{ exec(...) }}</code>。
+模板失败会停止命令，并报告声明它的配置文件。
+
 ## 预览完整设置
 
 ```sh

@@ -442,8 +442,8 @@ impl ToolRequest {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn option_source(&self, key: &str) -> Option<ToolOptionSource> {
+    /// Where the effective value of an option came from.
+    pub(crate) fn option_source(&self, key: &str) -> Option<ToolOptionSource> {
         self.resolved_options().source_for_key(key)
     }
 
@@ -504,6 +504,29 @@ impl ToolRequest {
         } else {
             false
         }
+    }
+
+    /// An already-installed request is being used: let the install layout record
+    /// it. A request a lockfile pins is resolved from the lockfile for this, because
+    /// that pin is what a later refresh must not overwrite.
+    pub async fn note_layout_use(&self, config: &Arc<Config>) {
+        if !crate::install_layout::resolver::enabled() {
+            return;
+        }
+        let Ok(tv) = self.resolve(config, &ResolveOptions::default()).await else {
+            return;
+        };
+        let opts = ResolveOptions {
+            use_locked_version: true,
+            offline: true,
+            ..Default::default()
+        };
+        let locked = self
+            .resolve(config, &opts)
+            .await
+            .ok()
+            .filter(|locked| locked.resolved_from_lockfile());
+        crate::install_layout::resolver::note_satisfied(locked.as_ref().unwrap_or(&tv));
     }
 
     pub(crate) fn install_path(&self, config: &Config) -> Option<PathBuf> {

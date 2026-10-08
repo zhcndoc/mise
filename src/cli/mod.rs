@@ -63,6 +63,7 @@ mod global;
 mod hook_env;
 mod hook_not_found;
 mod tool_alias;
+mod tool_update;
 
 mod command_effects;
 mod deps;
@@ -71,6 +72,7 @@ mod editor;
 mod implode;
 mod install;
 mod install_into;
+mod installs;
 mod latest;
 mod link;
 mod local;
@@ -91,6 +93,7 @@ mod render_help;
 mod reshim;
 pub(crate) mod run;
 mod search;
+mod secrets;
 #[cfg_attr(not(feature = "self_update"), path = "self_update_stub.rs")]
 pub(crate) mod self_update;
 mod set;
@@ -320,6 +323,8 @@ fn render_subcommand_help(name: &str, long: bool) -> String {
 pub(crate) enum Commands {
     Activate(activate::Activate),
     ToolAlias(Box<tool_alias::ToolAlias>),
+    #[usage(name = "__tool-update", hide = true)]
+    ToolUpdate(tool_update::ToolUpdate),
     Asdf(asdf::Asdf),
     Backends(backends::Backends),
     BinPaths(bin_paths::BinPaths),
@@ -348,6 +353,7 @@ pub(crate) enum Commands {
     Edit(edit::Edit),
     Install(install::Install),
     InstallInto(install_into::InstallInto),
+    Installs(installs::Installs),
     Latest(latest::Latest),
     Link(link::Link),
     Local(local::Local),
@@ -370,6 +376,7 @@ pub(crate) enum Commands {
     Reshim(reshim::Reshim),
     Run(Box<run::Run>),
     Search(search::Search),
+    Secrets(secrets::Secrets),
     SelfUpdate(self_update::SelfUpdate),
     Set(set::Set),
     Settings(settings::Settings),
@@ -445,6 +452,7 @@ impl Commands {
                 | Self::Implode(_)
                 | Self::PublishSystemInstall(_)
                 | Self::SelfUpdate(_)
+                | Self::ToolUpdate(_)
                 | Self::Settings(_)
                 | Self::Shell(_)
                 | Self::Ssh(_)
@@ -465,6 +473,7 @@ impl Commands {
                 | Self::HookNotFound(_)
                 | Self::PublishSystemInstall(_)
                 | Self::Ssh(_)
+                | Self::ToolUpdate(_)
         )
     }
 
@@ -487,6 +496,7 @@ impl Commands {
         match self {
             Self::Activate(cmd) => Box::pin(async move { cmd.run() }),
             Self::ToolAlias(cmd) => Box::pin(cmd.run()),
+            Self::ToolUpdate(cmd) => Box::pin(cmd.run()),
             Self::Asdf(cmd) => Box::pin(cmd.run()),
             Self::Backends(cmd) => Box::pin(cmd.run()),
             Self::BinPaths(cmd) => Box::pin(cmd.run()),
@@ -513,6 +523,7 @@ impl Commands {
             Self::Edit(cmd) => Box::pin(cmd.run()),
             Self::Install(cmd) => Box::pin(cmd.run()),
             Self::InstallInto(cmd) => Box::pin(cmd.run()),
+            Self::Installs(cmd) => Box::pin(cmd.run()),
             Self::Latest(cmd) => Box::pin(cmd.run()),
             Self::Link(cmd) => Box::pin(cmd.run()),
             Self::Local(cmd) => Box::pin(cmd.run()),
@@ -534,6 +545,7 @@ impl Commands {
             Self::Reshim(cmd) => Box::pin(cmd.run()),
             Self::Run(cmd) => Box::pin((*cmd).run()),
             Self::Search(cmd) => Box::pin(cmd.run()),
+            Self::Secrets(cmd) => Box::pin(cmd.run()),
             Self::SelfUpdate(cmd) => Box::pin(cmd.run()),
             Self::Set(cmd) => Box::pin(cmd.run()),
             Self::Settings(cmd) => Box::pin(cmd.run()),
@@ -1258,6 +1270,10 @@ impl Cli {
                         context_builder: Default::default(),
                         executor: None,
                         telemetry: None,
+                        secrets_denied: None,
+                        cli_secrets: None,
+                        secrets: vec![],
+                        secrets_all: false,
                         no_cache: Default::default(),
                         task_cache: crate::task::TaskCacheMode::from_env()?,
                         task_cache_explain: false,

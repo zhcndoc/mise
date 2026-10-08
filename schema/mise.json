@@ -717,14 +717,14 @@
           }
         },
         "auto_update": {
-          "default": false,
-          "description": "Automatically update mise before running eligible commands.",
-          "type": "boolean"
+          "description": "[deprecated] Use `self_update.auto` instead.",
+          "type": "boolean",
+          "deprecated": true
         },
         "auto_update_check_duration": {
-          "default": "7d",
-          "description": "How often to check for a new mise release when auto-update is enabled.",
-          "type": "string"
+          "description": "[deprecated] Use `self_update.check_duration` instead.",
+          "type": "string",
+          "deprecated": true
         },
         "cache_prune_age": {
           "default": "30d",
@@ -1351,6 +1351,11 @@
           "type": "string",
           "deprecated": true
         },
+        "install_layout": {
+          "description": "[experimental] Name installations by what they are (`identity`) instead of `installs/<tool>/<version>` (`legacy`).",
+          "type": "string",
+          "enum": ["legacy", "identity"]
+        },
         "java": {
           "type": "object",
           "unevaluatedProperties": false,
@@ -1414,6 +1419,11 @@
         },
         "lockfile": {
           "description": "Create and read lockfiles for tool versions.",
+          "type": "boolean"
+        },
+        "lockfile_auto_prune": {
+          "default": true,
+          "description": "Remove lockfile tools that are absent from the active configuration.",
           "type": "boolean"
         },
         "lockfile_mode": {
@@ -1709,6 +1719,20 @@
           "description": "Fail when provenance API checks cannot be completed.",
           "type": "boolean"
         },
+        "prune": {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "exclude": {
+              "default": [],
+              "description": "Tools that `mise prune` never removes, such as `node` or `aqua:BurntSushi/ripgrep`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "pypi": {
           "type": "object",
           "unevaluatedProperties": false,
@@ -1943,6 +1967,16 @@
             "api_url": {
               "default": "https://api.github.com",
               "description": "GitHub API base URL used by `mise self-update`.",
+              "type": "string"
+            },
+            "auto": {
+              "default": false,
+              "description": "Automatically update mise before running eligible commands.",
+              "type": "boolean"
+            },
+            "check_duration": {
+              "default": "7d",
+              "description": "How often to check for a new mise release when `self_update.auto` is enabled.",
               "type": "string"
             },
             "minimum_release_age": {
@@ -2390,6 +2424,17 @@
           "description": "Enable terminal progress indicators (OSC 9;4) for compatible terminals.",
           "type": "boolean"
         },
+        "tool_update": {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "check_duration": {
+              "default": "24h",
+              "description": "How often to check for updates to a global tool with `auto_update = true`.",
+              "type": "string"
+            }
+          }
+        },
         "trace": {
           "description": "Sets log level to trace",
           "type": "boolean"
@@ -2486,6 +2531,24 @@
           "default": "exe",
           "description": "Shim file mode for Windows. Options: `exe`, `file`, `hardlink`, `symlink`.",
           "type": "string"
+        },
+        "write_targets": {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "dotfiles": {
+              "description": "Global config file to create new [dotfiles] entries in. Existing entries stay in the config file that already declares them.",
+              "type": "string"
+            },
+            "packages": {
+              "description": "Global config file to create new [bootstrap.packages] entries in. Existing entries stay in the config file that already declares them.",
+              "type": "string"
+            },
+            "tools": {
+              "description": "Global config file to create new [tools] entries in. Existing entries stay in the config file that already declares them.",
+              "type": "string"
+            }
+          }
         },
         "yes": {
           "description": "This will automatically answer yes or no to prompts. This is useful for scripting.",
@@ -2966,6 +3029,17 @@
             },
             {
               "properties": {
+                "auto_update": {
+                  "description": "update this tool before it runs when its check is due; true, or a check interval such as \"12h\". Only honored in global config",
+                  "oneOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
                 "install_env": {
                   "type": "object",
                   "additionalProperties": {
@@ -3534,6 +3608,30 @@
         "checksum_expr": {
           "description": "expr-lang expression extracting algo:hash from the checksum_url manifest",
           "type": "string"
+        },
+        "headers": {
+          "description": "request headers sent with the download, version_list_url and checksum_url requests; values are tera templated (e.g. Bearer {{ env.TOKEN }})",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "headers_forward": {
+          "description": "hosts each header in headers may follow a redirect to; exact hosts or *.suffix, and a header with no entry is never forwarded",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
         },
         "size": {
           "description": "expected artifact size in bytes",
@@ -4449,6 +4547,10 @@
           "description": "keyless signer certificate identity prefix",
           "type": "string"
         },
+        "workflow": {
+          "description": "repository workflow file that signs releases on a tag; github.com projects only, not valid with pubkey, identity, identity_prefix, or issuer",
+          "type": "string"
+        },
         "list_identity_prefix": {
           "description": "separate identity prefix for the vendor release list; needs an issuer, not valid with pubkey",
           "type": "string"
@@ -5158,7 +5260,7 @@
               "type": "string"
             },
             {
-              "description": "confirmation message before running this task with default value",
+              "description": "confirmation message before running this task with optional default value and custom answer labels",
               "properties": {
                 "message": {
                   "description": "confirmation message before running this task",
@@ -5168,9 +5270,17 @@
                   "description": "default value for confirmation (yes/no/true/false)",
                   "enum": ["yes", "no", "y", "n", "true", "false"],
                   "type": "string"
+                },
+                "yes": {
+                  "description": "custom label for the affirmative answer",
+                  "type": "string"
+                },
+                "no": {
+                  "description": "custom label for the negative answer",
+                  "type": "string"
                 }
               },
-              "required": ["message", "default"],
+              "required": ["message"],
               "unevaluatedProperties": false,
               "type": "object"
             }
@@ -5574,6 +5684,22 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "secrets": {
+          "description": "[experimental] Secret keys this task receives when it starts, e.g. [\"DEPLOY_KEY\"]. Dependencies do not inherit them. See `mise secrets ls`.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            }
+          ]
         }
       },
       "type": "object"
@@ -5590,7 +5716,8 @@
             "interactive": false,
             "quiet": false,
             "raw": false,
-            "raw_args": false
+            "raw_args": false,
+            "secrets": false
           }
         }
       ],
@@ -5946,6 +6073,23 @@
         }
       ]
     },
+    "secrets": {
+      "description": "[experimental] Sources for mise secrets: values resolved only when mise starts a task or `mise x` command that was granted them. Project config only.",
+      "type": "object",
+      "properties": {
+        "fnox": {
+          "description": "Use fnox (fnox.toml discovered from this config's directory). https://mise.jdx.dev/environments/secrets/fnox.html",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profile": {
+              "type": "string",
+              "description": "fnox profile (fnox -P); defaults to FNOX_PROFILE, then \"default\""
+            }
+          }
+        }
+      }
+    },
     "redactions": {
       "description": "env or vars keys to redact from logs",
       "type": "array",
@@ -6151,7 +6295,7 @@
               },
               "mode": {
                 "type": "string",
-                "description": "how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. \"absent\" removes a file or symlink at the target and takes no source",
+                "description": "how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. \"absent\" removes a file or symlink at the target and takes no source. \"track\" saves the file's history where it is, and \"track-local\" saves it in this machine's local-only history, which is never shared",
                 "anyOf": [
                   {
                     "enum": [
@@ -6159,7 +6303,9 @@
                       "symlink-each",
                       "copy",
                       "template",
-                      "absent"
+                      "absent",
+                      "track",
+                      "track-local"
                     ]
                   },
                   {
@@ -6242,6 +6388,17 @@
                 "type": "string",
                 "description": "comment prefix for edit marker lines; inferred from the file extension when omitted"
               },
+              "merge": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "const": "missing"
+                  }
+                ],
+                "description": "edit entry: true sets the keys of source (default: the target's path under dotfiles.root) on a JSON, TOML, or YAML target and leaves the target's other keys to the application that also writes it; \"missing\" sets only the keys the target has no value for; the format comes from the target's extension"
+              },
               "variants": {
                 "type": "array",
                 "description": "OS/profile variants: history streams for track mode, or optional destinations for deployment modes",
@@ -6269,6 +6426,10 @@
                     "default": {
                       "type": "boolean"
                     },
+                    "machine": {
+                      "type": "boolean",
+                      "description": "track mode only: a separate stream on every machine, never applied on another machine; must be the only variant and cannot be combined with encrypt"
+                    },
                     "target": {
                       "type": "string",
                       "description": "deployment destination override; requires either an explicit source or a safe relative entry key when every variant has a target, and is not supported in track mode"
@@ -6278,6 +6439,39 @@
               }
             },
             "allOf": [
+              {
+                "if": {
+                  "required": ["merge"],
+                  "properties": {
+                    "merge": {
+                      "enum": [true, "missing"]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "mode": false,
+                    "content": false,
+                    "permissions": false,
+                    "exclude": false,
+                    "include": false,
+                    "manifest": false,
+                    "autosave": false,
+                    "encrypt": false,
+                    "allow_plaintext": false,
+                    "variants": false,
+                    "enabled": false,
+                    "remove_empty": false,
+                    "relative": false,
+                    "dot_prefix": false,
+                    "group": false,
+                    "block": false,
+                    "line": false,
+                    "position": false,
+                    "comment": false
+                  }
+                }
+              },
               {
                 "anyOf": [
                   {
@@ -6512,7 +6706,7 @@
                     "required": ["include", "mode"],
                     "properties": {
                       "mode": {
-                        "const": "track"
+                        "enum": ["track", "track-local"]
                       }
                     }
                   },
@@ -6529,7 +6723,7 @@
                     "required": ["allow_plaintext", "mode"],
                     "properties": {
                       "mode": {
-                        "const": "track"
+                        "enum": ["track", "track-local"]
                       }
                     }
                   },
@@ -6560,6 +6754,72 @@
             ]
           }
         ]
+      }
+    },
+    "dotfile_groups": {
+      "type": "object",
+      "description": "named directory trees of dotfiles, applied with `mise dotfiles apply` or `mise bootstrap` while [bootstrap] dotfile_groups selects them (or is unset)",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["root"],
+        "properties": {
+          "root": {
+            "type": "string",
+            "description": "the directory tree the group deploys; a relative path resolves against dotfiles.root"
+          },
+          "target": {
+            "type": "string",
+            "description": "target directory, absolute or starting with ~/",
+            "default": "~"
+          },
+          "mode": {
+            "type": "string",
+            "description": "how the tree is deployed",
+            "enum": ["symlink-each", "copy", "symlink"],
+            "default": "symlink-each"
+          },
+          "exclude": {
+            "type": "array",
+            "description": "glob patterns of source paths to skip, as for [dotfiles] exclude",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dot_prefix": {
+            "type": "boolean",
+            "default": false,
+            "description": "deploy each source path component named \"dot-<name>\" as \".<name>\", like GNU Stow's --dotfiles"
+          },
+          "manifest": {
+            "type": "string",
+            "description": "source manifest used to select managed files from the tree",
+            "enum": ["git"]
+          },
+          "relative": {
+            "type": "boolean",
+            "description": "link by a path relative to the link's directory; overrides the dotfiles.relative_symlinks setting (ignored on Windows)"
+          },
+          "entries": {
+            "type": "object",
+            "description": "whole-file entries for parts of the tree, keyed by target path inside the group's target and written like [dotfiles] entries; each is cut out of the walk. A missing source is found under the root at the entry's path inside the target, and a relative source starts at the root",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "source path, relative to the group root"
+                },
+                {
+                  "type": "object",
+                  "description": "whole-file entry, as in [dotfiles]"
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "bootstrap": {
@@ -6603,6 +6863,10 @@
               },
               "replace": {
                 "type": "boolean"
+              },
+              "os": {
+                "$ref": "#/$defs/os_filter",
+                "description": "OS or OS/arch selectors; entries on other platforms are skipped"
               },
               "notify": {
                 "type": "array",
@@ -6706,6 +6970,10 @@
               "replace": {
                 "type": "boolean"
               },
+              "os": {
+                "$ref": "#/$defs/os_filter",
+                "description": "OS or OS/arch selectors; entries on other platforms are skipped"
+              },
               "notify": {
                 "type": "array",
                 "items": {
@@ -6714,6 +6982,14 @@
               }
             },
             "additionalProperties": false
+          }
+        },
+        "dotfile_groups": {
+          "type": "array",
+          "description": "the dotfile groups this machine applies; when unset, every group applies. Entries without a group always apply, and a more local config's list replaces the others",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
           }
         },
         "config_roots": {
@@ -6888,7 +7164,7 @@
               },
               "builtin": {
                 "type": "string",
-                "enum": ["history-watch"],
+                "enum": ["history-watch", "tool-update"],
                 "description": "A mise-provided user service"
               },
               "command": {
@@ -6918,6 +7194,133 @@
                 "default": false
               }
             },
+            "additionalProperties": false
+          }
+        },
+        "compose": {
+          "type": "object",
+          "description": "Docker Compose projects managed with `mise bootstrap compose`, keyed by project name. Text fields support Tera templates.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "project_dir": {
+                "type": "string",
+                "minLength": 1,
+                "description": "absolute directory containing the Compose project"
+              },
+              "files": {
+                "type": "array",
+                "description": "Compose file paths relative to project_dir unless absolute",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env_files": {
+                "type": "array",
+                "description": "environment file paths relative to project_dir unless absolute",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "project_name": {
+                "type": "string",
+                "description": "optional Compose project name"
+              },
+              "profiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "services": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "oneshot": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "state": {
+                "type": "string",
+                "enum": ["running", "stopped", "absent"],
+                "default": "running"
+              },
+              "pull": {
+                "type": "string",
+                "enum": ["always", "missing", "never"],
+                "default": "missing"
+              },
+              "build": {
+                "type": "string",
+                "enum": ["auto", "always", "never"],
+                "default": "auto"
+              },
+              "recreate": {
+                "type": "string",
+                "enum": ["auto", "always", "never"],
+                "default": "auto"
+              },
+              "wait": {
+                "type": "boolean",
+                "default": true
+              },
+              "wait_timeout": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "wait timeout in seconds"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Compose shutdown timeout in seconds"
+              },
+              "remove_orphans": {
+                "type": "boolean",
+                "default": true
+              },
+              "renew_anonymous_volumes": {
+                "type": "boolean",
+                "default": false
+              },
+              "down_volumes": {
+                "type": "boolean",
+                "default": false
+              },
+              "down_images": {
+                "type": "string",
+                "enum": ["local", "all"]
+              },
+              "sudo": {
+                "type": "boolean",
+                "default": false
+              },
+              "command": {
+                "type": "array",
+                "description": "standalone Compose command",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "engine_command": {
+                "type": "array",
+                "description": "container engine command",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "depends_on": {
+                "type": "array",
+                "description": "bootstrap resource dependencies",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": ["project_dir"],
             "additionalProperties": false
           }
         },
@@ -8027,6 +8430,11 @@
         "git_email": {
           "type": "string",
           "description": "email used for history commit authors and committers; {hostname} expands to this machine's hostname"
+        },
+        "machine": {
+          "type": "string",
+          "description": "this machine's name in per-machine streams (variants = [{ machine = true }]) instead of the name generated with the history store",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
         },
         "reload": {
           "type": "object",

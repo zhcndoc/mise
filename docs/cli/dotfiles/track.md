@@ -14,6 +14,7 @@ description: "就地跟踪文件或目录"
 添加一个 `mode = "track"` 的 `[dotfiles]` 条目：文件保留在原位置，不会复制或链接，并立即由历史记录保存一个检查点。运行历史记录监视器服务后，之后的编辑会自动保存；未运行该服务时，可使用 `mise dot save` 保存。
 
 `--os` 和 `--profile` 用于声明变体：为符合该平台或 mise 环境的计算机提供独立的共享流，因此 Mac 和 Linux 计算机可以共享相同的实时路径，同时使用不同的内容。
+`--machine` 会让每台机器使用自己的流，适用于不应在其他机器上应用的显示器布局等文件。
 
 ## 参数
 - **`<PATH>…`** — 要跟踪的路径（绝对路径或以 ~/ 开头）
@@ -21,10 +22,12 @@ description: "就地跟踪文件或目录"
 ## 标志
 - **`--os <OS>`** — 为此平台声明变体（macos、linux、linux/arm64、…）
 - **`--profile <PROFILE>`** — 为此 mise 环境声明变体
+- **`--local`** — 仅在此机器上保留文件历史；永远不会共享
+- **`--machine`** — 每台机器使用独立的流，永远不会在其他机器上应用
 - **`--no-autosave`** — 仅在执行 `mise dot save <path>` 时保存，从不自动保存
 - **`--encrypt`** — 在保存到历史记录前加密内容（需要 `[history.encryption].recipients`）
 - **`--allow-plaintext`** — 允许将明确受跟踪且名称类似凭据的文件以明文保存
-- **`-y --yes`** — 接受而不提示
+- **`-y --yes`** — 为兼容而保留；track 不再询问是否确认路径
 - **`-n --dry-run`** — 显示每个路径展开后的文件、大小以及被排除内容，但不跟踪它
 - **`-h --help`** — 打印帮助
 
@@ -34,6 +37,7 @@ description: "就地跟踪文件或目录"
 mise dot track ~/.zshrc ~/.config/hypr
 mise dot track --dry-run ~/.codex
 mise dot track ~/.zshrc --os macos
+mise dot track ~/.config/hypr/monitors.lua --machine
 mise dot track ~/.config/app/credentials --encrypt
 mise dot track ~/.config/app/state.json --no-autosave
 ```
@@ -43,5 +47,5 @@ mise dot track ~/.config/app/state.json --no-autosave
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

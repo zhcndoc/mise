@@ -20,7 +20,7 @@ description: "列出已安装的外部插件"
 - **`-o --outdated`** — 显示有可用更新的插件
   检查远程仓库中的较新版本，仅显示已过时的插件
 - **`-u --urls`** — 显示每个插件的 git URL
-  例如：<https://github.com/mise-plugins/vfox-cmake.git>
+  例如：<https://github.com/jdx/vfox-cmake.git>
 - **`--user`** — 列出已安装的插件
 
   这是默认行为，但可以与 `--core` 一起使用

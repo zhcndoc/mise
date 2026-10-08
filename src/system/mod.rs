@@ -47,6 +47,7 @@ pub mod accounts;
 pub mod compose;
 pub mod defaults;
 pub mod deps;
+pub mod dotfile_groups;
 pub mod driver;
 pub mod edits;
 pub mod files;
@@ -87,6 +88,9 @@ pub struct BootstrapTomlConfig {
     /// Independent configuration roots whose declarative files and dotfiles
     /// participate in bootstrap composition.
     pub config_roots: Option<Vec<String>>,
+    /// The `[dotfile_groups]` (and `group = "..."` entries) to apply; every
+    /// group applies when unset. A later layer's list replaces earlier ones.
+    pub dotfile_groups: Option<Vec<String>>,
     /// Logical secret name -> environment input declaration.
     #[serde(default)]
     pub secrets: IndexMap<String, secrets::SecretTomlConfig>,
@@ -101,7 +105,7 @@ pub struct BootstrapTomlConfig {
     pub services: IndexMap<String, services::ServiceTomlConfig>,
     /// Docker Compose project name -> declarative project lifecycle.
     #[serde(default)]
-    pub compose: IndexMap<String, compose::ComposeTomlConfig>,
+    pub compose: IndexMap<String, Templated<compose::ComposeTomlConfig>>,
     /// OpenSSH targets used by `mise bootstrap remote`.
     #[serde(default)]
     pub remote: remote::RemoteTomlConfig,
@@ -269,7 +273,7 @@ fn latest_package_version() -> String {
     "latest".to_string()
 }
 
-fn deserialize_package_os<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+pub(crate) fn deserialize_package_os<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -286,7 +290,7 @@ where
     };
     if values.is_empty() || values.iter().any(|value| value.is_empty()) {
         return Err(serde::de::Error::custom(
-            "package os must contain at least one non-empty selector",
+            "os must contain at least one non-empty selector",
         ));
     }
     Ok(values)

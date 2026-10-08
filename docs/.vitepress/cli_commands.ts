@@ -11,6 +11,9 @@ export const commands: { [key: string]: Command } = {
   "__publish-system-install": {
     hide: true,
   },
+  "__tool-update": {
+    hide: true,
+  },
   activate: {
     hide: false,
   },
@@ -122,6 +125,9 @@ export const commands: { [key: string]: Command } = {
             },
           },
           include: {
+            hide: false,
+          },
+          notify: {
             hide: false,
           },
           origin: {
@@ -578,6 +584,9 @@ export const commands: { [key: string]: Command } = {
       include: {
         hide: false,
       },
+      notify: {
+        hide: false,
+      },
       origin: {
         hide: false,
         subcommands: {
@@ -697,6 +706,20 @@ export const commands: { [key: string]: Command } = {
   "install-into": {
     hide: false,
   },
+  installs: {
+    hide: false,
+    subcommands: {
+      ls: {
+        hide: false,
+      },
+      migrate: {
+        hide: false,
+      },
+      select: {
+        hide: false,
+      },
+    },
+  },
   latest: {
     hide: false,
   },
@@ -789,6 +812,14 @@ export const commands: { [key: string]: Command } = {
   },
   search: {
     hide: false,
+  },
+  secrets: {
+    hide: false,
+    subcommands: {
+      ls: {
+        hide: false,
+      },
+    },
   },
   "self-update": {
     hide: false,

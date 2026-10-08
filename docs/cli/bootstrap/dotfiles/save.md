@@ -31,5 +31,5 @@ description: "立即保存已跟踪文件的检查点"
 ## 相关文档
 
 - [Dotfile 所有权和模式](/dotfiles.html)。
-- [`mise bootstrap dotfiles <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
+- [`mise bootstrap dotfiles [--local] <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

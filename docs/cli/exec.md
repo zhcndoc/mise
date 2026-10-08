@@ -44,6 +44,8 @@ description: "使用已设置的工具执行命令"
 - **`--fresh-env`** — 绕过环境缓存并重新计算环境
 - **`--no-deps`** — 跳过自动依赖准备
 - **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含 `--jobs=1`
+- **`--secrets <SECRET>`** — 将这些密钥（逗号分隔）提供给命令；默认不提供
+- **`--secrets-all`** — 将项目可以注入的所有密钥提供给命令，但不包括文件密钥
 - **`-h --help`** — 打印帮助
 
 ## 示例
@@ -59,6 +61,12 @@ mise x node@20 -- node ./app.js
 
 ```
 mise exec node@20 python@3.11 --command "node -v && python -V"
+```
+
+从项目的密钥源向命令提供 GH_TOKEN。没有标志时不会提供任何密钥。
+
+```
+mise x --secrets GH_TOKEN -- gh release list
 ```
 
 在其他目录中运行命令：

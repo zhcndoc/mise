@@ -385,6 +385,24 @@ Use `MISE_LOCKFILE_MODE=generate` to try generation for one command. Set
 The default remains `merge` pending a maintainer review of trial feedback
 before mise 2026.12.0.
 
+### Shared lockfiles
+
+By default, a full `mise lock` run removes entries for tools that the active
+configuration no longer declares. This keeps a lockfile concise when it belongs
+to one configuration. For a committed lockfile shared by profiles that each
+declare different tools, disable automatic pruning:
+
+```toml [mise.toml]
+[settings]
+lockfile_auto_prune = false
+```
+
+The option works with both `merge` and `generate` modes, including `mise lock
+--global`. It preserves only tools outside the active configuration; configured
+tools are still refreshed and stale versions, option variants, and native
+dependency graphs are pruned. `mise lock node` already has this scoped
+preservation behavior for tools outside its filter.
+
 ## How It Works
 
 mise matches each configured request against its lock entry, including the
@@ -537,7 +555,7 @@ A platform entry is written under a quoted key such as
 - **`url_api`** (optional): API download URL, for sources that require authenticated asset requests
 - **`provenance`**: Verification method successfully used for the artifact
 - **`signer`** and **`attested_by`**: Packslip identity commitments
-- **`repository_ids`** (version 3): For a Packslip project on GitHub or GitLab, an inline table containing the forge's `repository` ID and, when available, `owner` ID from the signing certificate. For example, `repository_ids = { repository = "922514152", owner = "216188" }`. The commitment [follows a renamed repository](/dev-tools/backends/packslip.html#renamed-repositories) and refuses a different one under the same name
+- **`repository_ids`** (version 3): For a Packslip project on GitHub or GitLab, an inline table containing the forge's `repository` ID from the signing certificate. For example, `repository_ids = { repository = "922514152" }`. The commitment [follows a renamed or transferred repository](/dev-tools/backends/packslip.html#renamed-repositories) and refuses a different one under the same name. An `owner` ID written by an older mise is still read, ignored, and kept while the repository ID is unchanged
 
 ### Tool Entry Fields
 

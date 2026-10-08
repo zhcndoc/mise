@@ -14,6 +14,8 @@ description: "显示 `[dotfiles]` 中点文件的状态"
 
 模板条目会被渲染以比较其输出；受信任的模板函数可能会执行。JSON 包含每个条目的来源，并使用以下状态：`applied`、`missing`、`differs`、`source_missing` 和 `tracked`。
 
+不再选中或声明的点文件组部署的文件会列为 `orphaned`；`mise dot apply --prune` 会删除它们。
+
 每个声明的管理状态（applied、missing、differs、tracked），以及历史状态：哪些内容已被跟踪、最新检查点、未完成的操作，以及编辑是否会自动保存。
 
 ## 参数
@@ -42,5 +44,5 @@ mise dot status --missing # exit 1 if anything is out of sync
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

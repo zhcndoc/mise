@@ -36,6 +36,7 @@ description: "根据当前配置设置计算机"
 - 在 URL 后附加 `?ref=<branch|tag|commit>`，可检出指定 ref 而不是默认分支，例如 `git::https://github.com/example/dotfiles.git?ref=v1`。
 - **`--adopt <GIT_URL|OWNER/REPO>`** — 从 Git 仓库中采用全局配置或共享点文件历史，然后运行 bootstrap
 - **`--replace-history`** — 采用设置仓库时替换本地点文件历史
+- **`--take-remote-all`** — 采用设置仓库时，对每个不同的现有文件都采用仓库版本；替换前会先保存版本，因此 `mise dot undo` 可以恢复它们
 - **`--from-dir <DIR>`** — 用于存放通过 --from 克隆的仓库的目录
 - **`-n --dry-run`** — 打印将要执行的操作，而不安装任何内容
 - **`-y --yes`** — 跳过确认提示
@@ -81,7 +82,7 @@ mise bootstrap user apply --dry-run
 
 - [`mise bootstrap accounts <SUBCOMMAND>`](/cli/bootstrap/accounts.html)
 - [`mise bootstrap compose <SUBCOMMAND>`](/cli/bootstrap/compose.html)
-- [`mise bootstrap dotfiles <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)
+- [`mise bootstrap dotfiles [--local] <SUBCOMMAND>`](/cli/bootstrap/dotfiles.html)
 - [`mise bootstrap files <SUBCOMMAND>`](/cli/bootstrap/files.html)
 - [`mise bootstrap firewall <SUBCOMMAND>`](/cli/bootstrap/firewall.html)
 - [`mise bootstrap linux <SUBCOMMAND>`](/cli/bootstrap/linux.html)

@@ -109,6 +109,25 @@ phase = "pre-packages"
 `mise bootstrap --only files` 会运行两个文件阶段；`--skip files` 会跳过两个阶段。
 `--only packages` 不会应用文件。计划会包含每个文件的阶段。
 
+## 选择平台
+
+在文件或目录上设置 `os`，即可仅在匹配的机器上管理它。它可以是单个值或列表，使用与
+[`[bootstrap.packages]`](/bootstrap/packages/#choose-platforms)相同的名称和别名，例如
+`linux`、`macos`、`windows`、`unix`、`linux/x64` 和 `macos/arm64`。
+
+```toml
+[bootstrap.files."/etc/docker/daemon.json"]
+os = "linux"
+source = "./files/docker-daemon.json"
+
+[bootstrap.files."~/.colima/default/colima.yaml"]
+os = "macos"
+source = "./files/colima.yaml"
+```
+
+选择器与当前机器不匹配的条目会像未声明一样跳过：apply、status 和 dry-run 都会忽略它，
+mise 不会删除或触碰目标。
+
 ## 预览和检查
 
 ```sh

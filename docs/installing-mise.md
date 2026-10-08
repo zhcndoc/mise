@@ -15,10 +15,10 @@ description: "在 macOS、Linux 或 Windows 上安装 mise，并将其连接到�
 | macOS            | mise.run       | Homebrew        |
 | Linux            | mise.run       | 系统软件包     |
 | Windows          | Scoop          | winget          |
-| 任意平台（Rust 用户） | cargo binstall | cargo install   |
-| CI/Docker        | mise.run       | GitHub Releases |
+| 任意平台（Rust 用户） | cargo binstall  | cargo install   |
+| CI/Docker        | 官方镜像       | packslip        |
 
-通过 `mise.run` 安装的官方单文件发布版本是 macOS 和 Linux 上的首选方法。这些二进制文件使用 mise 的优化发布配置构建，并且可以通过 `mise self-update` 立即更新。请优先使用它们，而不是第三方软件包构建版本：Homebrew 配方可能明显更慢且体积更大，并且软件包管理器中的发布版本也可能落后于 mise 的发布版本。
+通过 `mise.run` 安装的官方单文件发布版本是 macOS 和 Linux 上的首选方法。若不想运行脚本，请使用 [packslip](#packslip) 安装该版本。这些二进制文件使用 mise 的优化发布配置构建，并且可以通过 `mise self-update` 立即更新。请优先使用它们，而不是第三方软件包构建版本：Homebrew 配方可能明显更慢且体积更大，并且软件包管理器中的发布版本也可能落后于 mise 的发布版本。
 
 ::: tip 哪些方法会自动更新？
 软件包管理器（apt、dnf、brew、pacman 等）会在你更新系统软件包时更新 mise。官方独立安装支持 `mise self-update`；某些构建或软件包可能会禁用此功能。更新 mise 本身不同于 `mise upgrade`，后者会更新受管理的工具。
@@ -26,10 +26,10 @@ description: "在 macOS、Linux 或 Windows 上安装 mise，并将其连接到�
 对于支持 `mise self-update` 的安装方式，可以全局启用自动更新：
 
 ```sh
-mise settings auto_update=true
+mise settings self_update.auto=true
 ```
 
-mise 随后会在符合条件的交互式命令运行前定期检查更新，在不更新插件的情况下安装较新的版本，并使用新二进制文件重新运行原始命令。使用 [`auto_update_check_duration`](/configuration/settings.html#auto_update_check_duration) 配置检查间隔。
+mise 随后会在符合条件的交互式命令运行前定期检查更新，在不更新插件的情况下安装较新的版本，并使用新二进制文件重新运行原始命令。使用 [`self_update.check_duration`](/configuration/settings.html#self_update.check_duration) 配置检查间隔。
 
 组织可以通过设置 [`self_update.repository`](/configuration/settings.html#self_update.repository)，将手动和自动自更新指向经过筛选的 GitHub 发布镜像。私有仓库和 GitHub Enterprise 使用 mise 现有的 GitHub 令牌解析机制。镜像存档必须保留官方文件名和嵌入的 mise 签名。API URL 必须使用 HTTPS：
 
@@ -45,7 +45,7 @@ api_url = "https://api.github.com"
 ::: tip 保持 mise 为最新版本
 mise 会连接许多外部注册表和后端，例如 aqua、GitHub releases、语言包注册表以及系统包管理器。这些服务会随着时间变化，因此当 CLI 保持在较新的版本时，mise 的效果最佳。
 
-项目和组织通常应在需要较新 mise 功能时设置 [`min_version`](/configuration.html#minimum-mise-version)，而不是将每个用户锁定到特定的 mise 可执行文件。虽然有多种方法可以固定或引导使用特定的 mise 版本，但通常不建议将用户锁定到某一个 mise 版本。在受控的 CI 构建中，固定 mise 版本可能很有用，但随着上游注册表的发展，需要制定计划来更新它。`min_version` 允许项目要求某项功能，同时让用户继续使用当前的 CLI。
+项目和组织通常应在需要较新 mise 功能时设置 [`min_version`](/configuration.html#minimum-mise-version)，而不是将每个用户锁定到特定的 mise 可执行文件。[固定的 packslip 引导程序](#pin-the-bootstrapper-and-let-mise-float)可以固定安装机制，同时让 mise 保持最新。在受控的 CI 构建中，固定 mise 版本可能很有用，但随着上游注册表的发展，需要制定计划来更新它。`min_version` 允许项目要求某项功能，同时让用户继续使用当前的 CLI。
 :::
 
 ### <https://mise.run> {#mise-run}
@@ -131,6 +131,42 @@ sh ./install.sh
 - `linux-armv7-musl`
 
 如果你需要其他内容，可以使用 `cargo install mise` 编译它（见下文）。
+
+### packslip {#packslip}
+
+[packslip](https://packslip.dev) 无需运行 mise 安装脚本即可安装 mise 的上游签名发布版本。它会针对 mise 的 GitHub 仓库验证 Sigstore 签名和透明日志条目，检查归档的摘要和大小，并从完整归档中提供 `mise` 可执行文件。需要经过身份验证的独立安装，或需要安装较新 mise 版本的固定引导程序时，请使用此方法。
+
+Linux x64/arm64、macOS arm64 或 Windows x64/arm64 请使用 packslip 1.5.1 或更高版本。Intel Mac 需要使用其他安装方式。
+
+从其签名的 [APT 或 RPM 软件源](https://packslip.dev/docs/distributions/)或[入门指南](https://packslip.dev/docs/getting-started/)中的其他方式安装 packslip，然后安装 mise。普通 Unix 用户可以运行：
+
+```sh
+packslip install github.com/jdx/mise --pin ps1_nlhmwtfeufglxv5myvwvronk7a
+~/.local/bin/mise --version
+```
+
+packslip 会打印已安装命令的路径。普通 Unix 用户使用 `~/.local/bin/mise`，root 用户使用 `/usr/local/bin/mise`。它不会修改 PATH 或 shell 文件。如需自动激活项目，请继续阅读[设置 shell](#shells)。
+
+签名者 pin 是 mise GitHub 仓库的指纹。仓库重命名、转移或发布新版本时它保持不变，接管该名称的其他仓库不会匹配。不使用 `--pin` 时，packslip 会在首次使用时信任 GitHub 报告的仓库，并让此机器后续安装继续使用该仓库。
+
+省略 `--version` 或传入 `--version latest` 会请求当前稳定版本。要同时固定 mise：
+
+```sh
+packslip install github.com/jdx/mise --version 2026.10.1 \
+  --pin ps1_nlhmwtfeufglxv5myvwvronk7a
+```
+
+通过此方式安装的 mise 支持 `mise self-update`。也可以重新运行 `packslip install`，替换为请求的版本。系统范围、目标覆盖和信任设置请参阅 [packslip 安装指南](https://packslip.dev/docs/bootstrap/)。
+
+#### 固定引导程序并让 mise 浮动 {#pin-the-bootstrapper-and-let-mise-float}
+
+packslip 版本、mise 版本和签名者 pin 控制不同的内容。可以固定经过审查的 packslip 二进制文件或容器摘要，同时省略 `--version` 以安装当前 mise 版本。签名者 pin 会继续验证新发布的 mise，但不会固定某个版本。这适用于基础镜像、CI 引导程序或不希望每次 mise 发布都更新安装器的发行版软件包。
+
+使用[带版本的安装脚本或容器摘要](https://packslip.dev/docs/getting-started/#install-packslip)固定 packslip。[Docker cookbook 示例](/mise-cookbook/docker.html#bootstrap-with-packslip)展示了完整的固定验证器、浮动 mise 设置，以及如何在不复用缓存安装的情况下重新构建。packslip 不会自我更新或自动更新 mise；请重新安装、使用 `mise self-update`，或启用 mise 的[自动更新](#installation-methods)。
+
+稳定的 packslip 版本 1 格式允许引导程序和 mise 独立演进。安全修复或新的签名格式仍可能要求更新验证器；未更新的引导程序不能保证永久可用。参见 [packslip 兼容性策略](https://packslip.dev/docs/compatibility/#maintaining-packaged-verifiers)。
+
+安装 mise 后，其[packslip 后端](/dev-tools/backends/packslip.html)可以使用 `mise use -g packslip:github.com/jdx/hk` 等命令安装其他工具。该后端内置于 mise，不需要单独的 packslip 可执行文件。
 
 ### apk
 

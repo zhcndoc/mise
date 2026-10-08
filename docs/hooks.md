@@ -103,7 +103,7 @@ python = { version = "3.12", postinstall = "python --version" }
 
 - `MISE_TOOL_NAME`：工具的短名称（例如，"node"、"python"）
 - `MISE_TOOL_VERSION`：已安装的版本（例如，"20.10.0"、"3.12.0"）
-- `MISE_TOOL_INSTALL_PATH`：工具的安装路径
+- `MISE_TOOL_INSTALL_PATH`：工具的安装路径。使用实验性的[安装布局](/dev-tools/install-layout.html)时，这是安装自身的目录，例如 `~/.local/share/mise/installs/node-<hash>`，而不是 `installs/node/` 下的路径
 - 该工具的 `install_env` 选项中的变量
 - `MISE_CONFIG_FILE`：声明该工具的确切配置文件
 - `MISE_CONFIG_ROOT`：该配置的根目录

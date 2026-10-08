@@ -33,6 +33,22 @@ url_replacements = { "https://example.com/" = "https://mirror.example.com/" }
 
 包含协议和末尾 `/`，例如 `https://github.com/`，可以避免匹配这些主机名。对于必须仅在 URL 开头匹配的规则，请使用带锚点的正则表达式。
 
+### 通过 Package Proxy 路由 GitHub
+
+普通前缀键会保留 URL 的其余部分，因此将 GitHub 映射到带路径前缀的代理无需正则表达式或捕获组：
+
+```toml
+[settings.url_replacements]
+"https://github.com/" = "http://pkgproxy.internal:8080/generic/github/"
+"https://api.github.com/" = "http://pkgproxy.internal:8080/generic/github-api/"
+```
+
+第一条规则会将 `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz` 路由到
+`http://pkgproxy.internal:8080/generic/github/owner/repo/releases/download/v1.0.0/file.tar.gz`；第二条将 GitHub API 请求（例如发布查询）路由到代理的 API 路径。`https://github.com/` 不会匹配 `https://api.github.com/`，两条规则不会重叠。
+
+只有代理提供 GitHub API 时才应重定向 API；否则 mise 将无法使用
+[`mise-versions`](/configuration/settings.html#use_versions_host) 获取发布和证明元数据。如果代理只镜像发布下载，请只保留第一条规则。只有代理路径无法用前缀表示时才需要正则规则。
+
 ## 高级正则替换
 
 为键添加 `regex:` 前缀即可使用 Rust 正则表达式引擎。替换值中的捕获组使用 `$1`、`$2` 或命名捕获。以下示例对正则键使用 TOML 字面字符串，因此反斜杠不需要加倍。

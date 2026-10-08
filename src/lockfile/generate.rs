@@ -249,10 +249,15 @@ pub(crate) type Tool = (crate::args::BackendArg, ToolVersion);
 ///
 /// Multiple requests for one short and shared dependency tables use the normal
 /// generator, which owns binding conflicts and dependency-table cleanup.
-pub fn is_current(previous: &Lockfile, tools: &[Tool], platforms: &[Platform]) -> Result<bool> {
+pub fn is_current(
+    previous: &Lockfile,
+    tools: &[Tool],
+    platforms: &[Platform],
+    auto_prune: bool,
+) -> Result<bool> {
     if tools.is_empty()
         || platforms.is_empty()
-        || previous.tools.len() != tools.len()
+        || (auto_prune && previous.tools.len() != tools.len())
         || !previous.conda_packages.is_empty()
         || Settings::get().force_provenance_verify()
     {
@@ -357,7 +362,7 @@ pub async fn generate(
     previous: &Lockfile,
     tools: &[Tool],
     platforms: &[Platform],
-    filtered_tools: bool,
+    retain_unselected_tools: bool,
     filtered_platforms: bool,
     jobs: usize,
     installed: &[ToolVersion],
@@ -397,7 +402,7 @@ pub async fn generate(
                 if untouched.platforms.is_empty() {
                     continue;
                 }
-            } else if !filtered_tools {
+            } else if !retain_unselected_tools {
                 continue;
             }
             candidate
@@ -619,8 +624,17 @@ pub async fn populate_aube_locks(
         return Ok(());
     }
     if !crate::backend::npm::NPMBackend::uses_embedded_aube() {
-        for entry in lockfile.tools.values_mut().flatten() {
-            entry.aube = None;
+        let selected_npm_tools: BTreeSet<_> = tools
+            .iter()
+            .filter(|(ba, _)| ba.backend_type() == BackendType::Npm)
+            .map(|(ba, _)| ba.short.as_str())
+            .collect();
+        for (short, entries) in &mut lockfile.tools {
+            if selected_npm_tools.contains(short.as_str()) {
+                for entry in entries {
+                    entry.aube = None;
+                }
+            }
         }
         return Ok(());
     }
@@ -750,46 +764,16 @@ pub async fn populate_uv_locks(
     Ok(())
 }
 
-/// Whether a newly resolved Packslip entry is signed by the signer the old
-/// one committed to. That is the same signer string, or, when both entries
-/// record the same forge repository and owner IDs, the same workflow of that
-/// repository under the name it has now. A repository ID that changed is a
-/// different repository, and an owner ID that changed is a transfer, even
-/// under the same name and signer: install refuses both, and so does this.
-fn packslip_signer_continues(old: &PlatformInfo, new: &PlatformInfo) -> bool {
-    let (Some(old_signer), Some(new_signer)) = (&old.signer, &new.signer) else {
-        return old.signer.is_none();
-    };
-    let changed = |before: &Option<String>, now: &Option<String>| matches!((before, now), (Some(before), Some(now)) if before != now);
-    if changed(&old.repository_id, &new.repository_id)
-        || changed(&old.repository_owner_id, &new.repository_owner_id)
-    {
-        return false;
-    }
-    // A resolution that checked no forge identity, as under explicit signer
-    // options, continues only the same signer, whose IDs
-    // [`carry_forge_ids`] then keeps. Losing them otherwise is a change.
-    if old.repository_id.is_some() && new.repository_id.is_none() {
-        return old_signer == new_signer;
-    }
-    if old_signer == new_signer {
-        return true;
-    }
-    let same_repository = old.repository_id.is_some() && old.repository_id == new.repository_id;
-    let same_owner =
-        old.repository_owner_id.is_some() && old.repository_owner_id == new.repository_owner_id;
-    same_repository && same_owner && crate::packslip_pins::same_workflow(old_signer, new_signer)
-}
-
 /// Keep the forge IDs an old Packslip entry recorded when the new one, for
 /// the same signer, recorded none: explicit signer options verify a release
 /// without the forge check, and an older certificate carries no IDs. Neither
 /// says the repository changed, so the commitment stays for the next
-/// resolution that does check it.
+/// resolution that does check it. Another signer cannot drop them:
+/// [`crate::packslip_forge::lock_entry_continues`] refuses it.
 ///
-/// Likewise the owner ID alone, when the new entry records the same
-/// repository without it, as a certificate with the repository's ID but not
-/// its owner's does.
+/// Likewise the owner ID alone, which only an older mise recorded, when the
+/// new entry records the same repository: it is ignored, but kept so that an
+/// unchanged entry is not rewritten.
 fn carry_forge_ids(old: &PlatformInfo, new: &mut PlatformInfo) {
     if new.signer.is_some() && new.signer == old.signer && new.repository_id.is_none() {
         new.repository_id = old.repository_id.clone();
@@ -820,8 +804,17 @@ fn ensure_no_downgrade(old: &PlatformInfo, new: &PlatformInfo, backend: &str) ->
             "lockfile generation would downgrade recorded provenance; previous files were preserved"
         );
     }
+    // A Packslip entry's signer continues as the same string, or, when both
+    // entries record the same forge repository ID, as the same workflow of
+    // it under the name it has now. A changed repository ID is a different
+    // repository even under the same name and signer: install refuses it,
+    // and so does this.
+    let project = backend
+        .strip_prefix("packslip:")
+        .and_then(|name| crate::backend::packslip::project_name(name).ok());
     if old.signer.is_some()
-        && (!packslip_signer_continues(old, new) || new.attested_by != old.attested_by)
+        && (!crate::packslip_forge::lock_entry_continues(project.as_deref(), old, new)
+            || new.attested_by != old.attested_by)
     {
         bail!(
             "lockfile generation would change the recorded signer; previous files were preserved"
@@ -1233,7 +1226,15 @@ mod tests {
         entry.uv = Some(graph.clone());
         let (ba, mut tv) = tool();
         tv.uv_lock = Some(graph);
-        assert!(is_current(&old, &[(ba, tv)], &[Platform::parse("linux-x64").unwrap()]).unwrap());
+        assert!(
+            is_current(
+                &old,
+                &[(ba, tv)],
+                &[Platform::parse("linux-x64").unwrap()],
+                true,
+            )
+            .unwrap()
+        );
         assert!(!temp.path().join("missing").exists());
     }
 
@@ -1251,7 +1252,7 @@ mod tests {
             if version == 0 {
                 old.tools_for_mut("fixture").unwrap()[0].specifiers.clear();
             }
-            assert!(is_current(&old, &tools, &platforms).unwrap());
+            assert!(is_current(&old, &tools, &platforms, true).unwrap());
             let generated = generate(&old, &tools, &platforms, false, false, 2, &[])
                 .await
                 .unwrap();
@@ -1268,51 +1269,51 @@ mod tests {
         ];
         let tools = vec![tool()];
         let old = previous();
-        assert!(!is_current(&old, &tools, &platforms[..1]).unwrap());
+        assert!(!is_current(&old, &tools, &platforms[..1], true).unwrap());
         let mut extra_platform = platforms.clone();
         extra_platform.push(Platform::parse("linux-arm64").unwrap());
-        assert!(!is_current(&old, &tools, &extra_platform).unwrap());
-        assert!(!is_current(&old, &[], &platforms).unwrap());
-        assert!(!is_current(&old, &tools, &[]).unwrap());
-        assert!(!is_current(&old, &[tool(), tool()], &platforms).unwrap());
+        assert!(!is_current(&old, &tools, &extra_platform, true).unwrap());
+        assert!(!is_current(&old, &[], &platforms, true).unwrap());
+        assert!(!is_current(&old, &tools, &[], true).unwrap());
+        assert!(!is_current(&old, &[tool(), tool()], &platforms, true).unwrap());
 
         let mut changed = old.clone();
         changed
             .tools
             .insert("obsolete".into(), old.tools["fixture"].clone());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed
             .tools_for_mut("fixture")
             .unwrap()
             .push(old.tools["fixture"][0].clone());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0].version = "other-tag".into();
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0].backend = Some("http:other".into());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .options
             .insert("format".into(), "tar.gz".into());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .specifiers
             .clear();
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .specifiers
             .insert("obsolete".into());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed
             .conda_packages
             .insert("linux-x64".into(), BTreeMap::new());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
     }
 
     #[tokio::test]
@@ -1330,21 +1331,21 @@ mod tests {
             .get_mut("linux-x64")
             .unwrap()
             .checksum = None;
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .platforms
             .get_mut("linux-x64")
             .unwrap()
             .url = None;
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .platforms
             .get_mut("linux-x64")
             .unwrap()
             .signer = Some("signer".into());
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
         let mut changed = old.clone();
         changed.tools_for_mut("fixture").unwrap()[0]
             .platforms
@@ -1355,7 +1356,7 @@ mod tests {
                 url: "https://example.invalid/extra".into(),
                 ..Default::default()
             });
-        assert!(!is_current(&changed, &tools, &platforms).unwrap());
+        assert!(!is_current(&changed, &tools, &platforms, true).unwrap());
 
         let ba = BackendArg::new("fixture".into(), Some("github:example/fixture".into()));
         let request = ToolRequest::new(Arc::new(ba.clone()), "1", ToolSource::Argument).unwrap();
@@ -1369,7 +1370,7 @@ mod tests {
             .additional_artifacts[0];
         artifact.checksum = Some("sha256:unchanged".into());
         artifact.provenance = Some(ProvenanceType::Minisign);
-        let error = is_current(&changed, &[(ba, tv)], &platforms).unwrap_err();
+        let error = is_current(&changed, &[(ba, tv)], &platforms, true).unwrap_err();
         assert!(error.to_string().contains("unexpected provenance type"));
     }
 
@@ -1401,6 +1402,40 @@ mod tests {
         assert!(empty.tools.is_empty());
         let retained = generate(&old, &[], &[], true, false, 1, &[]).await.unwrap();
         assert_eq!(old.tools, retained.tools);
+    }
+
+    #[tokio::test]
+    async fn retaining_unselected_tools_carries_graphs_but_refreshes_selected_tools() {
+        crate::backend::load_tools().await.unwrap();
+        let mut old = previous();
+        let mut retained = old.tools["fixture"][0].clone();
+        retained.aube = Some(super::super::GraphRef::Sidecar {
+            dir: PathBuf::from(".mise/locks/npm-retained/1.0.0"),
+            digest: "sha256:recorded".into(),
+            cell: std::sync::OnceLock::new(),
+        });
+        old.tools
+            .insert("npm:retained".into(), vec![retained.clone()]);
+        let current = old.clone();
+        let mut stale_option = old.tools["fixture"][0].clone();
+        stale_option
+            .options
+            .insert("obsolete".into(), "true".into());
+        old.tools_for_mut("fixture").unwrap().push(stale_option);
+        let platforms = vec![
+            Platform::parse("linux-x64").unwrap(),
+            Platform::parse("macos-arm64").unwrap(),
+        ];
+
+        assert!(!is_current(&current, &[tool()], &platforms, true).unwrap());
+        assert!(is_current(&current, &[tool()], &platforms, false).unwrap());
+
+        let generated = generate(&old, &[tool()], &platforms, true, false, 2, &[])
+            .await
+            .unwrap();
+        assert_eq!(generated.tools["npm:retained"], vec![retained]);
+        assert_eq!(generated.tools["fixture"].len(), 1);
+        assert!(generated.tools["fixture"][0].options.is_empty());
     }
 
     #[test]
@@ -1462,7 +1497,7 @@ mod tests {
             );
             old.bind_request("erlang", "28", "28.0", &options);
         }
-        assert!(is_current(&old, &[(ba.clone(), tv.clone())], &platforms).unwrap());
+        assert!(is_current(&old, &[(ba.clone(), tv.clone())], &platforms, true).unwrap());
         let generated = generate(&old, &[(ba, tv)], &platforms, false, false, 2, &[])
             .await
             .unwrap();
@@ -1539,20 +1574,19 @@ mod tests {
             ..old.clone()
         };
         assert!(ensure_no_downgrade(&old, &squatted, backend).is_err());
-        // Another owner is a transfer, not a rename.
+        // A transfer to another owner is the same repository, like a rename,
+        // whatever owner ID an older mise recorded.
         let transferred = PlatformInfo {
             signer: signer("acme/tool"),
             repository_owner_id: Some("8".into()),
             ..old.clone()
         };
-        assert!(ensure_no_downgrade(&old, &transferred, backend).is_err());
-        // Even under the same name and signer: the owner commitment does not
-        // change without a transfer someone accepted.
-        let retaken = PlatformInfo {
-            repository_owner_id: Some("8".into()),
-            ..old.clone()
+        assert!(ensure_no_downgrade(&old, &transferred, backend).is_ok());
+        let ownerless_transfer = PlatformInfo {
+            repository_owner_id: None,
+            ..transferred
         };
-        assert!(ensure_no_downgrade(&old, &retaken, backend).is_err());
+        assert!(ensure_no_downgrade(&old, &ownerless_transfer, backend).is_ok());
         // A resolution under explicit signer options records no IDs: the same
         // signer keeps the old entry's, and another signer cannot drop them.
         let unchecked = PlatformInfo {
@@ -1572,8 +1606,8 @@ mod tests {
         let mut not_carried = unchecked_renamed.clone();
         carry_forge_ids(&old, &mut not_carried);
         assert_eq!(not_carried.repository_id, None);
-        // A certificate with the repository's ID but not its owner's keeps
-        // the owner ID recorded for the same repository, and only for it.
+        // A new entry records no owner ID; the one an older mise recorded for
+        // the same repository stays, and only for it.
         let ownerless = PlatformInfo {
             repository_owner_id: None,
             ..old.clone()

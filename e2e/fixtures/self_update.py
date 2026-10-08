@@ -16,7 +16,7 @@ def digest(path):
 
 def run(binary, args, env, cwd):
     result = subprocess.run(
-        [str(binary), *args], env=env, cwd=cwd, text=True,
+        [str(binary), *args], env=env, cwd=cwd, text=True, encoding="utf-8", errors="backslashreplace",
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240,
     )
     print(result.stdout, flush=True)
@@ -25,6 +25,8 @@ def run(binary, args, env, cwd):
 
 
 def main():
+    # Windows runners default stdout to cp1252, which cannot print the updater's checkmarks.
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     source = Path(sys.argv[1]).resolve()
     original = digest(source)
     # Each case starts with the newly built updater, never the release installed
@@ -45,7 +47,7 @@ def main():
                 "MISE_DATA_DIR": str(root / "data"),
                 "MISE_CACHE_DIR": str(root / "cache"),
                 "MISE_STATE_DIR": str(root / "state"),
-                "MISE_SELF_UPDATE_AVAILABLE": "true", "MISE_AUTO_UPDATE": "false",
+                "MISE_SELF_UPDATE_AVAILABLE": "true", "MISE_SELF_UPDATE_AUTO": "false",
                 "MISE_LOG_LEVEL": "info", "MISE_CI": "true",
                 # Exact versions must bypass even an impossible age policy.
                 "MISE_SELF_UPDATE_MINIMUM_RELEASE_AGE": "100y",

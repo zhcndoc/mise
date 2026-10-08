@@ -153,10 +153,9 @@ GitHub 或 GitLab 项目根据 forge 的仓库 ID 固定，签名证书也会记
 
 mise 会警告一次项目现在是 github.com/new/tool；方便时请将配置改为新名称。签名者固定和 mise.lock 承诺会跟随仓库，因此无需运行 mise packslip forget。如果配置先改为新名称也一样：旧名称建立的固定仍然适用，并会移动到新名称。
 
-但以下两种变化会被拒绝：
+转移会像重命名一样跟随：只有仓库的当前所有者才能转移它，并且该所有者已经为其发布版本签名。
 
-- **转移给另一个所有者。** 对旧所有者的信任不会延伸到新所有者。确认转移后，为旧名称运行 mise packslip forget，并使用当前仓库名称，例如 packslip:github.com/new-owner/tool。固定会根据仓库 ID 在两个名称下找到，因此单纯改名不会重置它。
-- **同名但不同的仓库。** 删除的仓库被他人占用时会出现这种情况。错误消息会说明原因；如果供应商重新创建了自己的仓库，请为该项目运行 mise packslip forget，并移除其 mise.lock 条目。
+**同名但不同的仓库**会被拒绝，例如删除的仓库被他人占用时。错误消息会说明原因，并指出固定原仓库的记录：本机固定、`mise.lock` 条目，或两者。如果供应商重新创建了自己的仓库，请清除错误消息指出的每一项：为项目运行 `mise packslip forget`、移除工具的 `mise.lock` 条目，或同时执行两者。
 
 没有固定且没有锁文件条目的机器会在首次安装时信任拥有该名称的仓库。详情和限制请参阅[重命名、转移和重新创建的仓库](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)。
 
@@ -169,6 +168,7 @@ mise 会警告一次项目现在是 github.com/new/tool；方便时请将配置�
 | [`variant`](#variant)                                                     | 无变体                         | 选择发布者声明的替代构建版本                                  |
 | [`pubkey`](#pubkey)                                                       | 未设置                         | 固定 minisign 格式的公钥或公钥文件                            |
 | [`identity`, `identity_prefix`, `issuer`](#identity-identity-prefix-issuer) | 从已识别的 forge 派生           | 设置预期的无密钥签名者和 OIDC 颁发者                         |
+| [`workflow`](#workflow)                                                     | 仓库的任意工作流               | 固定在标签上为发布签名的仓库工作流                           |
 | [`list_identity_prefix`](#list-identity-prefix)                           | 发布签名者策略                 | 为供应商发布列表固定不同的工作流                              |
 | [`prerelease`](#prerelease)                                               | `false`                        | 包含预发布版本                                               |
 | [`trust`](#trust)                                                         | 应用已配置的盖章者             | 使用 `"vendor"` 使此工具免于盖章要求                         |
@@ -203,6 +203,23 @@ mise 会警告一次项目现在是 github.com/new/tool；方便时请将配置�
 ```
 
 将示例身份替换为发布者经过验证的身份。识别签名颁发者不会添加发布发现功能：该域名仍然需要[签名发布列表](/dev-tools/packslip-verification.html#project-discovery)。
+
+### `workflow`
+
+GitHub 项目默认接受其仓库任意工作流签名的发布。要只接受在标签上运行的指定工作流，请写出工作流文件名：
+
+```toml
+[tools]
+"packslip:github.com/example/tool" = { version = "latest", workflow = "release.yaml" }
+```
+
+这会使用 GitHub 的 OIDC 颁发者，将身份前缀扩展为
+`https://github.com/example/tool/.github/workflows/release.yaml@refs/tags/`，因此分支上的工作流不能为发布签名。
+它不能与 `pubkey`、`identity`、`identity_prefix` 或 `issuer` 组合；要固定其他 ref 或 forge，请使用这些选项。
+和这些选项一样，它按名称固定签名者，因此仓库重命名后需要在此处使用新名称。
+
+同一前缀也用于项目签名发布列表。如果供应商使用另一个工作流或 ref 为列表签名，请使用
+[`list_identity_prefix`](#list-identity-prefix) 固定它。
 
 ### `list_identity_prefix` {#list-identity-prefix}
 
@@ -276,7 +293,7 @@ MISE_DEBUG=1 mise install packslip:github.com/jdx/hk
 | 版本被盖章策略排除                           | 检查已配置的盖章者。受信任的盖章者必须批准该版本，并且供应商不得已撤回该版本。                                                                                                               |
 | 摘要或大小不匹配                             | 向发布者报告受影响的发布版本和构件；下载内容必须与签名清单匹配。                                                                                                                            |
 | 私有仓库发布版本返回 404                     | 确认 `MISE_GITHUB_TOKEN`、`GITHUB_API_TOKEN` 或 `GITHUB_TOKEN` 中的令牌可以读取该仓库。请参阅[私有 GitHub 仓库](#private-repositories)。                                                    |
-| 转移给其他所有者或变成不同的仓库               | 请参阅[重命名的仓库](#renamed-repositories)。在信任新所有者或仓库前确认项目变更。                                           |
+| 同名但不同的仓库                               | 请参阅[重命名的仓库](#renamed-repositories)。确认项目重新创建了仓库后，再清除固定并信任它。                                           |
 
 有关补全和技能错误，请参阅[资源故障排除](/dev-tools/packslip-resources.html#troubleshooting)。
 

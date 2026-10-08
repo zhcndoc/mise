@@ -25,6 +25,14 @@ mise bootstrap services apply
 mise dot status
 ```
 
+若要在后台更新设置了 [`auto_update`](/configuration.html#automatic-tool-updates) 的工具，
+而不是在工具启动时更新，请添加：
+
+```toml
+[bootstrap.services.mise-tool-update]
+builtin = "tool-update"
+```
+
 监视器运行后，继续正常编辑文件。有关保存行为，请参阅[自动保存](/history.html#automatic-saves)；如果启动失败，请参阅[故障排除](#troubleshooting-user-services)。
 
 ### 运行你自己的程序
@@ -52,7 +60,7 @@ mise 会为你的平台创建服务定义：
 ### 用户服务选项
 
 - `command`：要运行的命令行。`~` 和 `~/` 会进行展开。除非设置了 `builtin`，否则为必需项。
-- `builtin`：由 mise 提供的服务。`"history-watch"` 会以低优先级运行 `mise dot watch`。它会设置 `scope = "user"` 和 `restart = "on-failure"`。使用它时不要设置 `command`。
+- `builtin`：由 mise 提供的服务。`"history-watch"` 会以低优先级运行 `mise dot watch`；`"tool-update"` 每小时检查设置了 `auto_update` 的工具，并更新到期的工具。两者都会设置 `scope = "user"` 和 `restart = "on-failure"`，使用时不要设置 `command`。
 - `description`：由服务管理器显示。
 - `restart`：`"on-failure"`（默认值）、`"always"` 或 `"never"`。Windows 仅会在失败后重启；请参阅[平台差异](#platform-differences)。
 - `environment`：传递给程序的环境变量，例如 `{ LOG_LEVEL = "info" }`。

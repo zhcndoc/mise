@@ -266,7 +266,18 @@ fn has_local_version_listing_option_override(
 fn listing_option_digest(opts: &ToolVersionOptions, version_listing_opt_keys: &[&str]) -> String {
     let values: BTreeMap<&str, String> = version_listing_opt_keys
         .iter()
-        .filter_map(|key| opts.get_string(key).map(|value| (*key, value)))
+        .filter_map(|key| {
+            // A table such as `headers` has no scalar form but still shapes the list, and its
+            // values can be credentials, so only the digest of it is kept.
+            opts.get_string(key)
+                .or_else(|| {
+                    opts.opts
+                        .get(*key)
+                        .filter(|value| value.is_table())
+                        .map(ToString::to_string)
+                })
+                .map(|value| (*key, value))
+        })
         .collect();
     hash::hash_to_str(&values)
 }
@@ -291,7 +302,11 @@ pub(crate) fn runtime_path_for_install_path(tv: &ToolVersion, path: PathBuf) -> 
     // A re-resolved ToolVersion does not retain the transient destination flags
     // used by install-into/system/shared installs. Never cross from a discovered
     // shared/system install into a fuzzy alias in the primary user install root.
-    if install_path.parent() != runtime_path.parent() {
+    // Under the identity layout the install is a hashed directory in the install
+    // store and the runtime path is a link in the tool's own directory.
+    let hashed_alias = crate::install_layout::resolver::is_primary_install(&install_path)
+        && runtime_path.parent() == Some(tv.ba().installs_path());
+    if install_path.parent() != runtime_path.parent() && !hashed_alias {
         return path;
     }
     if let Ok(relative_path) = path.strip_prefix(&install_path) {
@@ -907,6 +922,17 @@ pub(crate) fn which_no_shims_spawnable(bin: &str) -> Option<PathBuf> {
     which_in_dirs(dirs, bin, true)
 }
 
+/// [`which_no_shims_spawnable`] over an explicit PATH value instead of the inherited one.
+pub(crate) fn which_in_path_value_no_shims_spawnable(
+    bin: &str,
+    path: &std::ffi::OsStr,
+) -> Option<PathBuf> {
+    let dirs = std::env::split_paths(path)
+        .filter(|p| !file::is_mise_dispatch_dir(p))
+        .collect::<Vec<_>>();
+    which_in_dirs(dirs, bin, true)
+}
+
 pub(crate) async fn configured_toolset_or_path_which(
     config: &Arc<Config>,
     tools: impl IntoIterator<Item = String>,
@@ -1109,6 +1135,27 @@ mod tests {
                 "{name} should still satisfy the permissive predicate"
             );
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn which_in_path_value_finds_a_binary_on_the_given_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("fnox-fixture");
+        fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([other.path(), dir.path()]).unwrap();
+        assert_eq!(
+            which_in_path_value_no_shims_spawnable("fnox-fixture", &path),
+            Some(bin)
+        );
+        assert_eq!(
+            which_in_path_value_no_shims_spawnable("fnox-fixture", other.path().as_os_str()),
+            None
+        );
     }
 
     #[test]
@@ -2352,6 +2399,27 @@ pub trait Backend: Debug + Send + Sync {
         Ok(BTreeMap::new()) // Default: no options affect artifact identity
     }
 
+    /// Options that are not install-affecting: they only change how versions are
+    /// listed or how installed files are used, so two requests that differ in
+    /// them still share one installation. Everything else a request sets is part
+    /// of its installation identity.
+    fn identity_ignored_options(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The options that make one installation of a version different from another,
+    /// for the identity layout (`installs/<name>-<hash>`).
+    ///
+    /// The base is [`Self::resolve_lockfile_options`], which is already the set of
+    /// options that must match for a lockfile entry to apply. The rest of the
+    /// request's options join it unless the backend lists them as
+    /// [`Self::identity_ignored_options`], because leaving out a choice that does
+    /// change the install would let two different installs share one directory,
+    /// while including a harmless one only costs a second copy.
+    fn install_identity_options(&self, tv: &ToolVersion) -> BTreeMap<String, String> {
+        static_helpers::request_identity_options(self, tv)
+    }
+
     /// Returns all platform variants that should be locked for a given base platform.
     ///
     /// Some tools have compile-time variants (e.g., bun has baseline/musl variants)
@@ -2899,7 +2967,7 @@ pub trait Backend: Debug + Send + Sync {
         true
     }
     fn list_installed_versions(&self) -> Vec<String> {
-        install_state::list_versions(&self.ba().short)
+        install_state::list_versions_for(self.ba())
     }
     fn is_version_installed(
         &self,
@@ -2909,11 +2977,18 @@ pub trait Backend: Debug + Send + Sync {
     ) -> bool {
         let check_path = |install_path: &Path, check_symlink: bool| {
             let is_installed = install_path.exists();
-            let is_not_incomplete = !self.incomplete_file_path(tv).exists();
+            let is_active_postinstall = is_active_postinstall_install(tv, install_path);
+            let is_not_incomplete =
+                !install_state::is_incomplete(tv.ba(), &tv.state_key()) || is_active_postinstall;
             let is_valid_symlink = !check_symlink || !is_runtime_symlink(install_path);
             let is_healthy = is_installed && self.is_install_path_healthy(install_path);
+            // An identity-layout installation is complete once its receipt is there;
+            // the receipt is written last.
+            let has_receipt = is_active_postinstall
+                || crate::install_layout::resolver::dir_name_of(install_path).is_none()
+                || crate::install_layout::resolver::is_complete(install_path);
 
-            let installed = is_healthy && is_not_incomplete && is_valid_symlink;
+            let installed = is_healthy && is_not_incomplete && is_valid_symlink && has_receipt;
             if log::log_enabled!(log::Level::Trace) && !installed {
                 let mut msg = format!(
                     "{} is not installed, path: {}",
@@ -2943,6 +3018,12 @@ pub trait Backend: Debug + Send + Sync {
                 // identity. A version-only request path must never satisfy a
                 // graph-locked request for the same top-level version.
                 if tv.aube_lock.is_some() || tv.uv_lock.is_some() {
+                    return check_path(&tv.install_path(), check_symlink);
+                }
+                // The identity layout resolves the exact installation for this
+                // request. The request's version slot is a compatibility link that
+                // can point at only one variant, so it is not consulted.
+                if crate::install_layout::resolver::governs(tv) {
                     return check_path(&tv.install_path(), check_symlink);
                 }
                 if let Some(install_path) = tv.request.install_path(config)
@@ -3055,11 +3136,13 @@ pub trait Backend: Debug + Send + Sync {
             // Canonicalize to resolve any ".." components before checking.
             // If target doesn't exist (canonicalize fails), don't skip - treat as needing install
             let target = canonicalize_cached(&target)?;
-            // Canonicalize INSTALLS too for consistent comparison (handles symlinked data dirs)
-            let installs =
-                canonicalize_cached(&dirs::INSTALLS).unwrap_or(dirs::INSTALLS.to_path_buf());
-            if target.starts_with(&installs) {
-                return Some(path);
+            // Canonicalize INSTALLS too for consistent comparison (handles symlinked data
+            // dirs), and the install store, where a version link points.
+            for own in [*dirs::INSTALLS, *dirs::INSTALL_STORE] {
+                let own = canonicalize_cached(own).unwrap_or(own.to_path_buf());
+                if target.starts_with(&own) {
+                    return Some(path);
+                }
             }
             // Also check shared install directories
             for shared_dir in env::shared_install_dirs() {
@@ -3533,7 +3616,7 @@ pub trait Backend: Debug + Send + Sync {
                     // version is a pre-release must not keep winning, and neither
                     // may one left pointing into an interrupted install.
                     if (!filter || !self.is_backend_prerelease(&version))
-                        && !install_state::incomplete_file_path(self.ba(), &version).exists()
+                        && !install_state::is_incomplete(self.ba(), &version)
                     {
                         return Ok(Some(version));
                     }
@@ -3543,7 +3626,7 @@ pub trait Backend: Debug + Send + Sync {
                     .into_iter()
                     .filter(|v| !v.starts_with('.'))
                     .filter(|v| !is_runtime_symlink(&installs_path.join(v)))
-                    .filter(|v| !install_state::incomplete_file_path(self.ba(), v).exists())
+                    .filter(|v| !install_state::is_incomplete(self.ba(), v))
                     .filter(|v| v != "latest")
                     .sorted_by_cached_key(|v| (Versioning::new(v), v.to_string()))
                     .collect_vec();
@@ -3651,9 +3734,11 @@ pub trait Backend: Debug + Send + Sync {
     }
 
     fn purge(&self, pr: &dyn SingleReport) -> eyre::Result<()> {
+        crate::install_layout::resolver::purge_installs(self.ba())?;
         remove_all_with_progress(self.ba().installs_path(), pr)?;
         remove_all_with_progress(self.ba().cache_path(), pr)?;
         remove_all_with_progress(self.ba().downloads_path(), pr)?;
+        install_state::clear_incomplete_markers(self.ba())?;
         Ok(())
     }
     fn get_aliases(&self) -> eyre::Result<BTreeMap<String, String>> {
@@ -3876,6 +3961,21 @@ pub trait Backend: Debug + Send + Sync {
             return Ok(tv);
         }
 
+        // Identity layout: choose (and reserve) the directory this install goes into
+        // before anything is keyed by it. A legacy install, an explicit
+        // destination, or a request the layout does not cover returns `None`
+        // and keeps its legacy path.
+        let allocated =
+            crate::install_layout::resolver::allocate(&tv, ctx.force || rolling_reinstall)?;
+        if let Some(allocated) = &allocated {
+            tv.install_path = Some(allocated.dir.clone());
+        } else if let Some(legacy) = crate::install_layout::resolver::legacy_in_place(&tv) {
+            // A legacy install is refreshed where it is. Its path is fixed now: a
+            // forced reinstall removes it first, and the path would otherwise
+            // resolve to a hashed directory that nothing records.
+            tv.install_path = Some(legacy);
+        }
+
         #[cfg(unix)]
         if tv.install_path_is_explicit
             && env::install_path_category(&tv.install_path()) == env::InstallPathCategory::System
@@ -3899,18 +3999,65 @@ pub trait Backend: Debug + Send + Sync {
         // the physical install path. Use the same logical key as link and
         // uninstall so shared and system installs cannot have their marker
         // cleared while an install is still in progress.
-        let state_version = tv.tv_pathname();
-        // Another mise may be installing this exact version. Say so while we
-        // wait on it: a row that sits in "resolving" for a minute looks hung.
-        let _state_lock =
-            install_state::lock_tool_version_with_notice(tv.ba(), &state_version, &|pid| {
+        let state_version = tv.state_key();
+        // An identity-layout installation is shared by every spelling of its tool, so
+        // it is locked by its own directory as well as by this tool's state below.
+        let mut _identity_lock =
+            crate::install_layout::resolver::lock_install(&tv.install_path(), &|pid| {
                 ctx.pr.set_message(install_lock_wait_message(pid));
             })?;
+        // Another mise may be installing this exact version. Say so while we
+        // wait on it: a row that sits in "resolving" for a minute looks hung.
+        let mut _state_lock = Some(install_state::lock_tool_version_with_notice(
+            tv.ba(),
+            &state_version,
+            &|pid| {
+                ctx.pr.set_message(install_lock_wait_message(pid));
+            },
+        )?);
 
         let mut install_satisfied = self
             .is_install_satisfied_or_false(&ctx.config, &tv, true)
             .await
             && !rolling_reinstall;
+
+        // An identity-layout installation found in a read-only shared root, or a
+        // variant standing in for a bare version, is used as it is; anything that
+        // would write (a forced or incompatible install, or a postinstall hook that
+        // runs even when nothing is installed) is allocated afresh in the primary
+        // root first, before it can touch that directory.
+        let mut allocated = allocated;
+        let always_postinstall = tv
+            .request
+            .options()
+            .postinstall()
+            .is_some_and(|(_, always)| always);
+        if allocated.as_ref().is_some_and(|a| a.read_only)
+            && (ctx.force || rolling_reinstall || !install_satisfied || always_postinstall)
+        {
+            let mut bare = tv.clone();
+            bare.install_path = None;
+            allocated = crate::install_layout::resolver::allocate(&bare, true)?;
+            tv.install_path = allocated.as_ref().map(|a| a.dir.clone());
+            install_satisfied = false;
+            // The destination is now the primary directory: lock that one before
+            // anything is changed in it. Locks are always taken installation first,
+            // then the tool's state, so the state lock is released and retaken
+            // for the new destination. (A shared root is never locked.)
+            _state_lock = None;
+            _identity_lock = None;
+            _identity_lock =
+                crate::install_layout::resolver::lock_install(&tv.install_path(), &|pid| {
+                    ctx.pr.set_message(install_lock_wait_message(pid));
+                })?;
+            _state_lock = Some(install_state::lock_tool_version_with_notice(
+                tv.ba(),
+                &tv.state_key(),
+                &|pid| {
+                    ctx.pr.set_message(install_lock_wait_message(pid));
+                },
+            )?);
+        }
 
         // If the install path resolved to a shared dir (but wasn't explicitly set via
         // --system/--shared), redirect forced or incompatible installs to the primary dir
@@ -3928,6 +4075,11 @@ pub trait Backend: Debug + Send + Sync {
             && self.is_version_installed(&ctx.config, &tv, true);
 
         if install_satisfied && !will_uninstall {
+            // A satisfied identity-layout install is shared: make sure this tool
+            // has its version link, and remember a lockfile pin that adopted it.
+            if let Err(err) = crate::install_layout::resolver::note_reuse(&tv) {
+                warn!("could not record the use of {}: {err:#}", tv.style());
+            }
             if let Some((script, true)) = tv.request.options().postinstall() {
                 tv.install_satisfied = Some(true);
                 ctx.pr
@@ -3945,12 +4097,17 @@ pub trait Backend: Debug + Send + Sync {
             }
             return Ok(tv);
         }
-
         // The scheduler has released this tool only after its in-batch dependencies
         // succeeded. Validate configured dependencies before replacing the target or
         // creating any of its install directories, then reuse the stored context in
         // backend and tool-level hooks.
         ctx.dependency_context(&tv.request).await?;
+
+        // From here the install writes into its directory: repairing it in place
+        // or installing it afresh.
+        if let Some(allocated) = &allocated {
+            crate::install_layout::resolver::note_writing(allocated)?;
+        }
 
         // Repair in place before anything below removes the working install.
         if !ctx.force
@@ -3959,9 +4116,12 @@ pub trait Backend: Debug + Send + Sync {
             && self.is_version_installed(&ctx.config, &tv, true)
             && self.repair_install(&ctx, &tv).await?
         {
+            // The installation is complete as it stands; make sure its version link and
+            // any lockfile pin are recorded.
+            crate::install_layout::resolver::note_satisfied(&tv);
             self.finish_install_changes(&ctx, &tv).await?;
             self.verify_repaired_install(&ctx, &tv).await?;
-            install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.tv_pathname());
+            install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.state_key());
             ctx.pr.finish_with_message("updated".to_string());
             return Ok(tv);
         }
@@ -4031,27 +4191,75 @@ pub trait Backend: Debug + Send + Sync {
         };
 
         let install_path = tv.install_path();
-        let mut update_install_state = false;
-        if install_path.starts_with(*dirs::INSTALLS) {
-            install_state::write_backend_meta(self.ba())?;
-            update_install_state = true;
-        } else if env::install_path_category(&install_path) != env::InstallPathCategory::Local {
-            // For --system/--shared installs, write manifest to the target installs dir
-            if let Some(installs_dir) = install_path.parent().and_then(|p| p.parent()) {
-                let manifest = installs_dir.join(".mise-installs.toml");
-                install_state::write_backend_meta_to(self.ba(), &manifest)?;
-                update_install_state = true;
-            }
+        // Identity layout: the receipt (it marks the install complete), the version
+        // link for the requesting tool and the unlocked selection. A failure after
+        // the receipt is written withdraws the install, as below.
+        if let Some(allocated) = &allocated
+            && let Err(err) = crate::install_layout::resolver::finish(
+                &tv,
+                allocated,
+                ctx.force || rolling_reinstall,
+            )
+        {
+            crate::install_layout::resolver::unpublish(&install_path);
+            return Err(err);
         }
-        if update_install_state {
-            install_state::add_tool_version(self.ba(), &install_path, &tv.tv_pathname());
+        // Everything below that can fail runs with the install already published,
+        // so a failure withdraws it again instead of leaving a receipt behind.
+        let bookkeeping = (|| -> eyre::Result<()> {
+            let mut update_install_state = false;
+            if install_path.starts_with(*dirs::INSTALLS)
+                || crate::install_layout::resolver::is_primary_install(&install_path)
+            {
+                install_state::write_backend_meta(self.ba())?;
+                update_install_state = true;
+            } else if env::install_path_category(&install_path) != env::InstallPathCategory::Local {
+                // For --system/--shared installs, write manifest to the target installs dir
+                if let Some(installs_dir) = install_path.parent().and_then(|p| p.parent()) {
+                    let manifest = installs_dir.join(".mise-installs.toml");
+                    install_state::write_backend_meta_to(self.ba(), &manifest)?;
+                    update_install_state = true;
+                }
+            }
+            if update_install_state {
+                install_state::add_tool_version(self.ba(), &install_path, &tv.tv_pathname());
+            }
+            Ok(())
+        })();
+        if let Err(err) = bookkeeping {
+            if allocated.is_some() {
+                crate::install_layout::resolver::unpublish(&install_path);
+            }
+            return Err(err);
         }
 
         self.cleanup_install_dirs(&tv);
-        install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.tv_pathname());
-        self.finish_install_changes(&ctx, &tv).await?;
-        self.verify_install(&ctx, &tv).await?;
-        ctx.pr.finish_with_message("installed".to_string());
+        let finished = match self.finish_install_changes(&ctx, &tv).await {
+            Ok(()) => {
+                // Keep the incomplete marker through the postinstall hook, so a
+                // failed hook leaves a version no later resolution selects. A
+                // verification failure is the backend's to track (packslip keeps
+                // a usable binary and marks only its skills incomplete).
+                install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.state_key());
+                self.verify_install(&ctx, &tv).await
+            }
+            Err(err) => Err(err),
+        };
+        if let Err(err) = finished {
+            // A failed postinstall or verification leaves a half-done install: take
+            // it back out of the layout so it is not selected, linked, or taken for
+            // complete, and the next install repairs it.
+            if allocated.is_some() {
+                crate::install_layout::resolver::unpublish(&install_path);
+            }
+            return Err(err);
+        }
+        // A refresh of an unlocked request changes what every project that makes the
+        // same request selects; say so rather than leave it implied.
+        let selection_note = (ctx.force && allocated.as_ref().is_some_and(|a| a.selects.is_some()))
+            .then_some("installed (updated the shared selection for this version)");
+        ctx.pr
+            .finish_with_message(selection_note.unwrap_or("installed").to_string());
         Ok(tv)
     }
 
@@ -4194,6 +4402,7 @@ pub trait Backend: Debug + Send + Sync {
             )
         })?;
 
+        let token = install_state::PostinstallToken::start(tv.ba(), &tv.state_key())?;
         let mut runner = CmdLineRunner::new(program)
             .env(&*env::PATH_KEY, path_env.join())
             .env("MISE_TOOL_INSTALL_PATH", tv.install_path())
@@ -4205,6 +4414,8 @@ pub trait Backend: Debug + Send + Sync {
         for key in install_env_removals {
             runner = runner.env_remove(key);
         }
+        // After `install_env`, which must not be able to replace or remove it.
+        runner = runner.env(POSTINSTALL_TOKEN_ENV, &token.token);
 
         // Keep the declaring config and active project distinct. MISE_CONFIG_FILE is also a
         // legacy alias for the global config, so pin the actual global path for nested mise calls.
@@ -4229,6 +4440,7 @@ pub trait Backend: Debug + Send + Sync {
         // output that an `[env]` value reads, and the hooks after it are entitled
         // to see that.
         invalidate_postinstall_env();
+        drop(token);
         result?;
         Ok(())
     }
@@ -4287,7 +4499,12 @@ pub trait Backend: Debug + Send + Sync {
         pr: &dyn SingleReport,
         dryrun: bool,
     ) -> eyre::Result<()> {
-        let state_version = tv.tv_pathname();
+        let state_version = tv.state_key();
+        let _identity_lock = if dryrun {
+            None
+        } else {
+            crate::install_layout::resolver::lock_install(&tv.install_path(), &|_| {})?
+        };
         let _state_lock = if dryrun {
             None
         } else {
@@ -4308,23 +4525,42 @@ pub trait Backend: Debug + Send + Sync {
         if !dryrun {
             self.uninstall_version_impl(config, pr, tv).await?;
         }
-        let rmdir = |dir: &Path| {
+        // A dry run reports once, after every path is known: each message on a live
+        // progress row is drawn as a row of its own, so reporting per path repeated the row.
+        let mut would_remove: Vec<String> = vec![];
+        let mut rmdir = |dir: &Path| {
             if dryrun {
                 // Not `exists()`, which resolves a link: a dry run has to name the entry the real
                 // run would remove, and a link whose target is gone is one of them.
                 if entry_exists(dir) {
-                    pr.set_message(format!("remove {}", display_path(dir)));
+                    would_remove.push(display_path(dir));
                 }
                 return Ok(());
             }
             remove_all_with_progress(dir, pr)
         };
-        rmdir(&tv.install_path())?;
+        let install_path = tv.install_path();
+        if !dryrun {
+            crate::install_layout::resolver::guard_removal(&install_path)?;
+        }
+        rmdir(&install_path)?;
+        if !dryrun {
+            // Version links into the removed installation, from every tool that
+            // linked it. The catalog record stays, so a reinstall lands on the
+            // same path.
+            crate::install_layout::resolver::unlink_installation(&install_path);
+        }
         if !Settings::get().always_keep_download {
             rmdir(&tv.download_path())?;
         }
         rmdir(&tv.cache_path())?;
-        if !dryrun {
+        if dryrun {
+            if !would_remove.is_empty() {
+                pr.set_message(format!("remove {}", would_remove.join(", ")));
+            }
+        } else {
+            // The marker is outside the cache dir removed above.
+            install_state::clear_incomplete_marker(tv.ba(), &tv.state_key())?;
             self.cleanup_empty_installs_dir();
         }
         Ok(())
@@ -4424,14 +4660,10 @@ pub trait Backend: Debug + Send + Sync {
         file::create_dir_all(tv.install_path())?;
         file::create_dir_all(tv.download_path())?;
         file::create_dir_all(tv.cache_path())?;
-        // `file::create` rather than `File::create`: it names the path in the error. The three
-        // calls above can return Ok without having created anything -- `std::fs::create_dir_all`
-        // does that for a path Windows refuses, such as one ending in `nul` -- and the first thing
-        // to notice is this write, three calls away from the cause. Unwrapped it was a bare
-        // `The system cannot find the path specified. (os error 3)` naming neither the file nor
-        // the operation.
-        file::create(&self.incomplete_file_path(tv))?;
-        Ok(())
+        // The three calls above can return Ok without having created anything for a version
+        // Windows refuses as a path; the marker sits in a directory named for the same version,
+        // so its write is what reports it, naming the path.
+        install_state::mark_incomplete(tv.ba(), &tv.state_key())
     }
     fn cleanup_install_dirs_on_error(&self, tv: &ToolVersion) {
         if !Settings::get().always_keep_install {
@@ -4442,7 +4674,7 @@ pub trait Backend: Debug + Send + Sync {
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound
                 );
             if install_removed {
-                install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.tv_pathname());
+                install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.state_key());
             }
             // Remove parent installs dir if it's now empty (no other versions present)
             let installs_path = &self.ba().installs_path();
@@ -4484,18 +4716,14 @@ pub trait Backend: Debug + Send + Sync {
     /// satisfied and its verification passes. Otherwise keep it so the next
     /// install repairs the version.
     async fn settle_restored_install(&self, ctx: &InstallContext, tv: &ToolVersion) {
-        install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.tv_pathname());
+        install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.state_key());
         let usable = self
             .is_install_satisfied_or_false(&ctx.config, tv, true)
             .await
             && self.verify_repaired_install(ctx, tv).await.is_ok();
         if !usable {
-            let _ = file::create(&self.incomplete_file_path(tv));
+            let _ = install_state::mark_incomplete(tv.ba(), &tv.state_key());
         }
-    }
-
-    fn incomplete_file_path(&self, tv: &ToolVersion) -> PathBuf {
-        install_state::incomplete_file_path(tv.ba(), &tv.tv_pathname())
     }
 
     async fn path_env_for_cmd(&self, config: &Arc<Config>, tv: &ToolVersion) -> Result<OsString> {
@@ -4539,7 +4767,13 @@ pub trait Backend: Debug + Send + Sync {
     }
 
     async fn dependency_which(&self, config: &Arc<Config>, bin: &str) -> Option<PathBuf> {
-        if let Some(bin) = which_non_pristine_executable(bin) {
+        // Never resolve a dependency to a mise shim: a shim re-enters mise and fails
+        // ("No version is set for shim") when the tool is installed but not active in
+        // any config. The dependency toolset below resolves the real install instead.
+        if let Some(bin) = file::executable_names(bin)
+            .into_iter()
+            .find_map(file::which_no_shims)
+        {
             return Some(bin);
         }
         let Ok(ts) = self.dependency_toolset(config).await else {
@@ -5131,6 +5365,32 @@ pub trait Backend: Debug + Send + Sync {
         })
     }
 }
+
+/// A postinstall hook may invoke mise for the exact installation it is
+/// finishing. That process is entitled to use the path supplied by its parent,
+/// even though the generic incomplete marker remains in place until the hook
+/// succeeds. Other processes never receive this environment, so they keep
+/// treating the install as incomplete. The hook's token must also still be the
+/// current one: a process the hook left running inherits the environment, but
+/// once that hook ends (or another install retries the version), the half-done
+/// version is not its to use.
+pub(crate) fn is_active_postinstall_install(tv: &ToolVersion, install_path: &Path) -> bool {
+    std::env::var_os("MISE_TOOL_INSTALL_PATH")
+        .as_deref()
+        .is_some_and(|path| Path::new(path) == install_path)
+        && std::env::var("MISE_TOOL_NAME").ok().as_deref() == Some(tv.ba().short.as_str())
+        && std::env::var(env::MISE_TOOL_VERSION_ENV_VAR)
+            .ok()
+            .as_deref()
+            == Some(tv.version.as_str())
+        && std::env::var(POSTINSTALL_TOKEN_ENV).is_ok_and(|token| {
+            install_state::PostinstallToken::matches(tv.ba(), &tv.state_key(), &token)
+        })
+}
+
+/// The token a tool-level postinstall hook receives; see
+/// [`install_state::PostinstallToken`].
+const POSTINSTALL_TOKEN_ENV: &str = "MISE_TOOL_INSTALL_TOKEN";
 
 fn effective_latest_before_date<B: Backend + ?Sized>(
     backend: &B,

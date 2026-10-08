@@ -59,6 +59,7 @@ description: "探索用于管理工具、环境、任务和机器设置的 mise 
 - [`mise use`](/cli/use.html) — 安装工具并将其添加到配置中
 - [`mise install`](/cli/install.html) — 安装工具版本
 - [`mise install-into`](/cli/install-into.html) — 将工具版本安装到特定路径
+- [`mise installs`](/cli/installs.html) — [实验性] 检查并选择 identity 安装布局中的安装
 - [`mise uninstall`](/cli/uninstall.html) — 移除已安装的工具版本
 - [`mise unuse`](/cli/unuse.html) — 从配置中移除工具请求并清理未使用的安装
 - [`mise upgrade`](/cli/upgrade.html) — 升级过时的工具
@@ -135,5 +136,6 @@ description: "探索用于管理工具、环境、任务和机器设置的 mise 
 - [`mise daemons`](/cli/daemons.html) — [实验性] 使用 pitchfork 管理项目守护进程
 - [`mise dotfiles`](/cli/dotfiles.html) — 管理来自 `[dotfiles]` 的 dotfiles
 - [`mise plugins`](/cli/plugins.html) — 管理插件
+- [`mise secrets`](/cli/secrets.html) — [实验性] 列出项目密钥源提供的密钥名称，不显示值
 - [`mise test-tool`](/cli/test-tool.html) — 测试工具是否能够安装和运行
 - [`mise token`](/cli/token.html) — 显示 mise 将使用的 git 提供商令牌

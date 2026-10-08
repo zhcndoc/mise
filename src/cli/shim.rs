@@ -16,6 +16,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[cfg(unix)]
+mod fallback;
+
+enum ShimCommand {
+    Tool(PathBuf),
+    Wrapper(CommandWrapper),
+    SystemFallback(PathBuf),
+}
+
 pub(crate) async fn handle_shim() -> Result<()> {
     // TODO: instead, check if bin is in shims dir
     let bin_name = *env::MISE_BIN_NAME;
@@ -42,11 +51,31 @@ pub(crate) async fn handle_shim() -> Result<()> {
         *env::MISE_SHIM_PATH.write().unwrap() = Some(shim_path.clone());
         env::set_var(env::MISE_SHIM_PATH_ENV, &shim_path);
     }
+    #[cfg(unix)]
+    let fallback_chain = fallback::Chain::take_inherited();
     let mut config = Config::get().await?;
     let mut args = env::ARGS.read().unwrap().clone();
     env::PREFER_OFFLINE.store(true, Ordering::Relaxed);
     trace!("shim[{bin_name}] args: {}", args.join(" "));
-    let (bin, ts, wrapper) = which_shim(&mut config, &env::MISE_BIN_NAME, &args).await?;
+    let (mut command, mut ts) = which_shim(&mut config, &env::MISE_BIN_NAME, &args).await?;
+    // A due `auto_update` upgrades this shim's tool before it runs, so look
+    // the binary up again to launch the new version. Never while completing.
+    let shim_name = command_name_without_exe_suffix(&env::MISE_BIN_NAME);
+    if !is_offline_completion(shim_name, &args)
+        && super::tool_update::update_before_launch(&config, &ts, shim_name).await
+    {
+        config = Config::reset().await?;
+        (command, ts) = which_shim(&mut config, &env::MISE_BIN_NAME, &args).await?;
+    }
+    let (bin, wrapper) = match command {
+        ShimCommand::Tool(bin) => (bin, None),
+        ShimCommand::Wrapper(wrapper) => (PathBuf::from(wrapper.command()), Some(wrapper)),
+        ShimCommand::SystemFallback(bin) => {
+            #[cfg(unix)]
+            fallback_chain.record(bin_name, &file::canonicalize_or_self(&bin))?;
+            (bin, None)
+        }
+    };
     args[0] = bin.to_string_lossy().to_string();
     if let Some(wrapper) = &wrapper {
         args.splice(1..1, wrapper.args().iter().cloned());
@@ -69,6 +98,8 @@ pub(crate) async fn handle_shim() -> Result<()> {
         allow_write: vec![],
         allow_net: vec![],
         allow_env: vec![],
+        secrets: vec![],
+        secrets_all: false,
     };
     time!("shim exec");
     if let Some(wrapper) = wrapper {
@@ -189,23 +220,26 @@ fn same_command_name(a: &str, b: &str) -> bool {
     }
 }
 
-async fn which_shim(
-    config: &mut Arc<Config>,
-    bin_name: &str,
-    args: &[String],
-) -> Result<(PathBuf, Toolset, Option<CommandWrapper>)> {
-    // Shell completion invokes `usage complete-word` through the `usage` shim.
-    // It should use the installed CLI or fail locally, never resolve a floating
-    // tool version or auto-install over the network while the user is pressing
-    // tab. On Windows the shim is invoked as `usage.exe`, so strip the platform
-    // executable suffix before comparing.
-    let shim_name = command_name_without_exe_suffix(bin_name);
+/// Shell completion invokes `usage complete-word` through the `usage` shim. It
+/// should use the installed CLI or fail locally, never resolve a floating tool
+/// version, auto-install, or update over the network while the user is pressing
+/// tab. `shim_name` has the Windows executable suffix stripped.
+pub(crate) fn is_offline_completion(shim_name: &str, args: &[String]) -> bool {
     let is_usage = if cfg!(windows) {
         shim_name.eq_ignore_ascii_case("usage")
     } else {
         shim_name == "usage"
     };
-    let completion_offline = is_usage && args.get(1).is_some_and(|arg| arg == "complete-word");
+    is_usage && args.get(1).is_some_and(|arg| arg == "complete-word")
+}
+
+async fn which_shim(
+    config: &mut Arc<Config>,
+    bin_name: &str,
+    args: &[String],
+) -> Result<(ShimCommand, Toolset)> {
+    let shim_name = command_name_without_exe_suffix(bin_name);
+    let completion_offline = is_offline_completion(shim_name, args);
     let resolve_options = if completion_offline {
         ResolveOptions {
             offline: true,
@@ -218,13 +252,14 @@ async fn which_shim(
     let mut ts = ToolsetBuilder::new()
         .with_args(&task_tools)
         .with_resolve_options(resolve_options)
+        .with_deferred_lazy_resolution()
         .build(config)
         .await?;
     if let Some(wrapper) =
         command_wrapper_for(config, &mut ts, shim_name, !completion_offline).await?
     {
         trace!("shim[{bin_name}] WRAPPER command: {}", wrapper.command());
-        return Ok((PathBuf::from(wrapper.command()), ts, Some(wrapper)));
+        return Ok((ShimCommand::Wrapper(wrapper), ts));
     }
     // A configured tool may intentionally override an executable bundled by another installed
     // tool (for example, a pinned npm overrides Node's npm). Install a missing provider declared
@@ -248,7 +283,7 @@ async fn which_shim(
                     "shim[{bin_name}] REGISTRY ToolVersion: {tv} bin: {bin}",
                     bin = display_path(&bin)
                 );
-                return Ok((bin, ts, None));
+                return Ok((ShimCommand::Tool(bin), ts));
             }
         }
     }
@@ -260,7 +295,7 @@ async fn which_shim(
                 "shim[{bin_name}] ToolVersion: {tv} bin: {bin}",
                 bin = display_path(&bin)
             );
-            return Ok((bin, ts, None));
+            return Ok((ShimCommand::Tool(bin), ts));
         }
     }
     // Lazy tools are explicit fallback providers. They install on first shim use even when
@@ -280,7 +315,7 @@ async fn which_shim(
                     "shim[{bin_name}] LAZY ToolVersion: {tv} bin: {bin}",
                     bin = display_path(&bin)
                 );
-                return Ok((bin, ts, None));
+                return Ok((ShimCommand::Tool(bin), ts));
             }
         }
     }
@@ -300,7 +335,7 @@ async fn which_shim(
                     "shim[{bin_name}] NOT_FOUND ToolVersion: {tv} bin: {bin}",
                     bin = display_path(&bin)
                 );
-                return Ok((bin, ts, None));
+                return Ok((ShimCommand::Tool(bin), ts));
             }
         }
     }
@@ -321,7 +356,7 @@ async fn which_shim(
                     continue;
                 }
                 trace!("shim[{bin_name}] SYSTEM {bin}", bin = display_path(&bin));
-                return Ok((bin, ts, None));
+                return Ok((ShimCommand::SystemFallback(bin), ts));
             }
         }
     }

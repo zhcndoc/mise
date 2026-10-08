@@ -4,7 +4,7 @@ description: "在镜像中安装 mise，使用它运行项目命令，或在用�
 
 # Docker 指南
 
-在镜像中安装 mise，使用它运行项目命令，或在用户主目录之外预安装工具，以用于共享开发容器。构建这些示例需要 Docker 和正在运行的容器引擎。
+在镜像中安装 mise，使用它运行项目命令，或在用户主目录之外预安装工具，以用于共享开发容器。要固定小型引导程序并让 mise 浮动，请[使用 packslip 安装](#bootstrap-with-packslip)。构建这些示例需要 Docker 和正在运行的容器引擎。
 
 ## 使用 mise 的 Docker 镜像
 
@@ -115,8 +115,47 @@ RUN <<EOF
 EOF
 ```
 
-With this approach you cannot choose the mise version with `MISE_VERSION`;
+使用此方法无法通过 `MISE_VERSION` 选择 mise 版本；
 pin it with apt version constraints instead.
+
+### 使用 packslip 引导
+
+当希望在 Dockerfile 中固定验证器，同时让 mise 跟随上游版本时，请使用 [packslip](/installing-mise.html#packslip)。这样可以将引导程序版本与安装的 mise 版本分开。packslip 会验证发布版本的签名、发布者和归档字节，无需运行 mise 安装脚本。
+
+下面的示例通过多平台镜像摘要固定 packslip 1.5.1，并复制其用于 HTTPS 的 CA 证书。packslip 会处理下载和归档提取，因此引导过程不需要 curl、tar 或其他包管理器：
+
+```Dockerfile [Dockerfile]
+FROM ghcr.io/jdx/packslip:1.5.1@sha256:fcbbcb85ab02d433d6108c212ffc7eaeda0bbafca4b82111c452568ac680b9c4 AS bootstrap
+FROM debian:13-slim
+
+COPY --from=bootstrap /packslip /usr/local/bin/packslip
+COPY --from=bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+ARG MISE_VERSION=latest
+RUN packslip install github.com/jdx/mise --version "$MISE_VERSION" \
+      --pin ps1_nlhmwtfeufglxv5myvwvronk7a \
+    && mise --version
+
+ENV MISE_DATA_DIR="/mise"
+ENV MISE_CONFIG_DIR="/mise"
+ENV MISE_CACHE_DIR="/mise/cache"
+ENV PATH="/mise/shims:$PATH"
+
+CMD ["mise", "--version"]
+```
+
+该摘要为 `linux/amd64` 和 `linux/arm64` 固定 packslip。签名者 pin 标识 mise GitHub 仓库，并会在新版本发布时继续有效。`MISE_VERSION=latest` 让 mise 浮动，同时固定 packslip。要同时固定 mise，请传入 `--build-arg MISE_VERSION=2026.10.1`。
+
+在包含此 Dockerfile 的目录中构建：
+
+```sh
+docker build --no-cache -t mise-bootstrap .
+docker run --rm mise-bootstrap
+```
+
+Docker 会缓存 `RUN` 层，包括请求 `latest` 的安装结果。需要 packslip 检查新版本时，请在不使用该缓存层的情况下重新构建。运行中的容器不会自动更新 mise。稳定的 manifest 格式允许在普通 mise 更新中保留引导程序，但[安全或格式变化](https://packslip.dev/docs/compatibility/#maintaining-packaged-verifiers)仍可能要求更新 packslip。
+
+root 用户会将 mise 的完整目录安装到 `/opt/packslip`，并在 `/usr/local/bin` 导出符号链接。将此安装复制到其他构建阶段时，也要复制该目录和符号链接。要安装项目工具，请继续阅读[安装项目工具](#installing-project-tools)，并按需添加操作系统依赖。在容器中使用 `mise exec` 或 `mise run`，无需 shell 激活。
 
 ### Verified release download
 

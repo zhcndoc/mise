@@ -90,7 +90,7 @@ end
 | `watch_files` | 修改时间参与缓存验证的文件；相对条目将从配置根目录解析                                                       |
 | `redact`      | 请求对 mise 处理后输出中的返回值进行脱敏；默认为 `false`                                                     |
 
-用户明确指定的指令级 `redact` 选项会覆盖插件的偏好。脱敏不会从环境中移除值，原始任务输出也不会经过脱敏。请参阅[脱敏](/environments/#redactions)。
+用户明确指定的指令级 `redact` 选项会覆盖插件的偏好。值被脱敏的模块永远不会使用环境缓存，无论 `cacheable` 如何设置。脱敏不会从环境中移除值，原始任务输出也不会经过脱敏。请参阅[脱敏](/environments/#redactions)。
 
 缓存需要全局 `env_cache` 设置。缓存按会话标识，并具有 TTL；文件监视无法检测远程服务中的值是否发生变化。当缓存的环境被嵌套的 mise 调用继承时，也存在一些限制。不要仅仅因为存在 `cacheable = false` 或 `watch_files` 就承诺密钥会立即刷新。需要当前值时请使用 `MISE_ENV_CACHE=0`；请参阅[缓存行为](/cache-behavior.html)。
 

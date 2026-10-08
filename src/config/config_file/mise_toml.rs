@@ -21,7 +21,8 @@ use versions::Versioning;
 use crate::args::BackendArg;
 use crate::backend::unalias_backend;
 use crate::config::config_file::{
-    ConfigFile, TaskConfig, ToolConfig, config_trust_root, is_ignored, trust, trust_check,
+    ConfigFile, TaskConfig, ToolConfig, config_trust_root, is_config_ignored_via_setting,
+    is_persisted_ignored, trust, trust_check,
 };
 use crate::config::config_file::{config_root, toml::deserialize_arr};
 use crate::config::env_directive::{
@@ -89,8 +90,10 @@ fn normalize_option_template_value(value: toml::Value) -> toml::Value {
 }
 
 fn should_normalize_option_template(key: &str) -> bool {
-    !matches!(key, "os" | "depends" | "install_env" | "lazy" | "lazy_bins")
-        && !key.starts_with("install_env.")
+    !matches!(
+        key,
+        "os" | "depends" | "install_env" | "lazy" | "lazy_bins" | "auto_update"
+    ) && !key.starts_with("install_env.")
 }
 
 fn insert_tool_option<E>(
@@ -209,6 +212,18 @@ fn insert_core_options(table: &mut InlineTable, options: ToolVersionOptions) {
         }
         table.insert("lazy_bins", Value::Array(bins));
     }
+    if let Some(auto_update) = core.auto_update {
+        table.insert("auto_update", auto_update_value(&auto_update));
+    }
+}
+
+/// `auto_update` as written: `true`/`false` as booleans, an interval as a string.
+fn auto_update_value(auto_update: &str) -> Value {
+    match auto_update {
+        "true" => Value::from(true),
+        "false" => Value::from(false),
+        _ => Value::from(auto_update),
+    }
 }
 
 const TOOL_SELECTOR_KEYS: [&str; 4] = ["version", "prefix", "ref", "path"];
@@ -313,6 +328,13 @@ fn update_explicit_tool_options(table: &mut toml_edit::Table, options: &ToolVers
         }
         insert_table_item_preserving_decor(table, "lazy_bins", Item::Value(Value::Array(bins)));
     }
+    if let Some(auto_update) = &options.auto_update {
+        insert_table_item_preserving_decor(
+            table,
+            "auto_update",
+            Item::Value(auto_update_value(auto_update)),
+        );
+    }
     update_install_env_table(table, options);
 }
 
@@ -391,6 +413,10 @@ pub struct MiseToml {
     context: TeraContext,
     #[serde(skip)]
     path: PathBuf,
+    /// Hash of the text this config was parsed from, so a command can tell that the
+    /// file changed after it was loaded.
+    #[serde(skip)]
+    loaded_hash: String,
     #[serde(default, deserialize_with = "deserialize_arr")]
     include: Vec<String>,
     /// The cache files of the remote `include` fragments merged into this
@@ -431,6 +457,9 @@ pub struct MiseToml {
     plugins: HashMap<String, String>,
     #[serde(default)]
     redactions: Redactions,
+    /// Raw on purpose: a malformed `[secrets]` must not fail the whole file.
+    #[serde(default)]
+    secrets: Option<toml::Value>,
     #[serde(default)]
     task_config: TaskConfig,
     #[serde(default)]
@@ -451,6 +480,8 @@ pub struct MiseToml {
     doctor: crate::config::doctor::DoctorConfig,
     #[serde(default)]
     dotfiles: Option<DotfilesTomlConfig>,
+    #[serde(default)]
+    dotfile_groups: Option<crate::system::dotfile_groups::DotfileGroupsTomlConfig>,
     #[serde(default)]
     history: Option<crate::system::history::config::HistoryTomlConfig>,
     #[serde(default, deserialize_with = "deserialize_vars")]
@@ -749,6 +780,7 @@ impl MiseToml {
             );
             rf.monorepo_root.get_or_insert(legacy_monorepo_root);
         }
+        rf.loaded_hash = crate::install_layout::snapshots::bytes_hash_of(body.as_bytes());
         rf.context = BASE_CONTEXT.clone();
         rf.context.insert(
             "config_root",
@@ -762,6 +794,19 @@ impl MiseToml {
         for task in rf.tasks.0.values_mut() {
             task.config_source.clone_from(&rf.path);
             task.config_root = project_root.clone();
+            task.record_late_secret_env(path)?;
+        }
+        // `{{ secrets.X }}` is allowed only in a task's own env values. Checked on the decoded
+        // document, so an escaped delimiter is caught too; a body that cannot name `secrets`
+        // (no such word, no escape that could spell it) is not parsed a second time.
+        if crate::secrets::may_name_secrets(body)
+            && let Ok(table) = toml::from_str::<toml::Table>(body)
+        {
+            crate::secrets::check_toml_locations(
+                crate::secrets::TomlShape::MiseToml,
+                &table,
+                path,
+            )?;
         }
         // trace!("{}", rf.dump()?);
         Ok(rf)
@@ -787,7 +832,10 @@ impl MiseToml {
         }
         // configs the user chose to ignore should stay unloaded rather than
         // becoming loadable because their content happens to be safe
-        if is_ignored(&config_trust_root(path)) || is_ignored(path) {
+        if is_config_ignored_via_setting(path)
+            || is_persisted_ignored(&config_trust_root(path))
+            || is_persisted_ignored(path)
+        {
             return false;
         }
         is_safe_config_body(body)
@@ -1277,6 +1325,135 @@ impl MiseToml {
         }
     }
 
+    fn build_tool_request_set(&self, skip_templated: bool) -> eyre::Result<ToolRequestSet> {
+        let source = ToolSource::MiseToml(self.path.clone());
+        let mut trs = ToolRequestSet::new();
+        let tools = self.tools.lock().unwrap();
+        let mut context = self.context.clone();
+        if let Some(config) = Config::maybe_get()
+            && let Some(env_results) = config.env_results_cached()
+        {
+            let mut env_vars: EnvMap =
+                if let Some(existing_env) = context.get("env").and_then(|v| v.as_map()) {
+                    existing_env
+                        .iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+                        .collect()
+                } else {
+                    env::PRISTINE_ENV.clone()
+                };
+            for key in &env_results.env_remove {
+                env_vars.remove(key);
+            }
+            env_vars.extend(
+                env_results
+                    .env
+                    .iter()
+                    .map(|(k, (v, _))| (k.clone(), v.clone())),
+            );
+            context.insert("env", &env_vars);
+        }
+        Self::insert_resolved_vars(&mut context);
+        for (ba, tvp) in tools.iter() {
+            for tool in &tvp.0 {
+                if skip_templated && tool_has_template(tool) {
+                    continue;
+                }
+                let version = self.parse_template_with_context(&context, &tool.request)?;
+                // taken before `ba` is consumed below
+                let short = ba.short.clone();
+                let tvr = if let Some(mut options) = tool.options.clone() {
+                    // Add placeholder for version since it's not available at config load time
+                    // This preserves {{ version }} in the output for install-time rendering
+                    let mut opts_context = context.clone();
+                    opts_context.insert("version", "{{ version }}");
+                    // The http and s3 backends re-render their url/checksum_url per
+                    // target platform (host at install, any target during `mise
+                    // lock`), so only those two options defer os()/arch() instead of
+                    // resolving them now. Every other option (here and for other
+                    // backends) is consumed verbatim, so it keeps host resolution at
+                    // config load — deferring it would leak raw `{{ os() }}`
+                    // fragments into consumers that never render again (e.g.
+                    // checksum_expr).
+                    let defer_os_arch = matches!(
+                        ba.backend_type(),
+                        crate::backend::backend_type::BackendType::Http
+                            | crate::backend::backend_type::BackendType::S3
+                    );
+                    // `install_env` is a typed core option, so it never reaches the
+                    // `opts` loop below and its values went to the installer
+                    // unrendered — `{{ env.HOME }}` arrived literally, unlike every
+                    // other tool option (#13306). Render it here, with `version`
+                    // bound to itself so the placeholder still round-trips: core
+                    // options are deliberately exempt from the backend `{version}`
+                    // normalization, and nothing renders `install_env` again later.
+                    let mut install_env_context = context.clone();
+                    install_env_context.insert("version", "{{version}}");
+                    for value in options.core.install_env.values_mut() {
+                        if let EnvValue::String(s) = value {
+                            *s = self.parse_template_with_context(&install_env_context, s)?;
+                        }
+                    }
+                    for (k, v) in options.opts.iter_mut() {
+                        self.parse_tool_option_value_template(
+                            &opts_context,
+                            Some(k),
+                            v,
+                            defer_os_arch,
+                        )?;
+                    }
+                    let mut ba = ba.clone();
+                    // Start with cached options but filter out install-time-only options
+                    // when config provides its own options. This allows:
+                    // - Changing url/asset_pattern/checksum without reinstall issues
+                    // - Replacing stale layout options like bin_path with current config values
+                    let mut ba_opts = ba.opts().clone();
+                    let backend_type = ba.backend_type();
+                    ba_opts.opts.retain(|k, _| {
+                        !crate::backend::is_install_time_option_key_for_type(&backend_type, k)
+                    });
+                    ba_opts.apply_overrides(&options);
+                    // Re-apply registry defaults for install-time keys not overridden by user.
+                    // The filtering above strips both stale install-state cache AND registry
+                    // defaults. We want to keep registry defaults while discarding stale cache.
+                    if let Some(rt) = crate::registry::REGISTRY.get(ba.short.as_str()) {
+                        let full = ba.full();
+                        // Get structured options from registry (table-format backends)
+                        let mut registry_opts = rt.backend_options(&full);
+                        // Also parse inline options from [key=val,...] in the full string
+                        if let Some(start) = full.rfind('[')
+                            && full.ends_with(']')
+                        {
+                            let inline = crate::toolset::parse_tool_options(
+                                &full[start + 1..full.len() - 1],
+                            );
+                            for (k, v) in inline.opts {
+                                registry_opts.opts.entry(k).or_insert(v);
+                            }
+                        }
+                        for (k, v) in registry_opts.opts {
+                            ba_opts.opts.entry(k).or_insert(v);
+                        }
+                    }
+                    // Replace config-owned fields rather than merging them with cached values.
+                    // This intentionally supersedes apply_overrides above so omitted values clear
+                    // stale cache and install_env does not retain cached entries.
+                    ba_opts.os = options.os.clone();
+                    ba_opts.depends = options.depends.clone();
+                    ba_opts.install_env = options.install_env.clone();
+                    ba.set_opts(Some(ba_opts.clone()));
+                    ToolRequest::new_with_options(ba.into(), &version, ba_opts, source.clone())
+                        .wrap_err_with(|| self.tool_request_error_context(&short, tool, &version))?
+                } else {
+                    ToolRequest::new(ba.clone().into(), &version, source.clone())
+                        .wrap_err_with(|| self.tool_request_error_context(&short, tool, &version))?
+                };
+                trs.add_version(tvr, &source);
+            }
+        }
+        Ok(trs)
+    }
+
     fn parse_template_with_context(
         &self,
         context: &TeraContext,
@@ -1375,6 +1552,18 @@ impl MiseToml {
         }
         Ok(())
     }
+}
+
+/// Whether anything that selects or configures a tool is a template: its version,
+/// a backend option, or an `install_env` value.
+fn tool_has_template(tool: &MiseTomlTool) -> bool {
+    contains_template_syntax(&tool.request)
+        || tool.options.as_ref().is_some_and(|options| {
+            options.opts.values.values().any(toml_value_has_template)
+                || options.core.install_env.values().any(
+                    |value| matches!(value, EnvValue::String(s) if contains_template_syntax(s)),
+                )
+        })
 }
 
 impl ConfigFile for MiseToml {
@@ -1649,130 +1838,62 @@ impl ConfigFile for MiseToml {
         ToolSource::MiseToml(self.path.clone())
     }
 
+    fn loaded_hash(&self) -> Option<String> {
+        (!self.loaded_hash.is_empty()).then(|| self.loaded_hash.clone())
+    }
+
     fn to_tool_request_set(&self) -> eyre::Result<ToolRequestSet> {
-        let source = ToolSource::MiseToml(self.path.clone());
-        let mut trs = ToolRequestSet::new();
-        let tools = self.tools.lock().unwrap();
-        let mut context = self.context.clone();
-        if let Some(config) = Config::maybe_get()
-            && let Some(env_results) = config.env_results_cached()
-        {
-            let mut env_vars: EnvMap =
-                if let Some(existing_env) = context.get("env").and_then(|v| v.as_map()) {
-                    existing_env
-                        .iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
-                        .collect()
-                } else {
-                    env::PRISTINE_ENV.clone()
-                };
-            for key in &env_results.env_remove {
-                env_vars.remove(key);
+        self.build_tool_request_set(false)
+    }
+
+    fn to_tool_request_set_skipping_templated(&self) -> eyre::Result<ToolRequestSet> {
+        self.build_tool_request_set(true)
+    }
+
+    fn templated_tool_backends(&self) -> Vec<String> {
+        let mut backends = vec![];
+        for (ba, tvp) in self.tools.lock().unwrap().iter() {
+            // A tool this platform never resolves is never recorded either.
+            if !ba.is_os_supported() {
+                continue;
             }
-            env_vars.extend(
-                env_results
-                    .env
-                    .iter()
-                    .map(|(k, (v, _))| (k.clone(), v.clone())),
-            );
-            context.insert("env", &env_vars);
-        }
-        Self::insert_resolved_vars(&mut context);
-        for (ba, tvp) in tools.iter() {
             for tool in &tvp.0 {
-                let version = self.parse_template_with_context(&context, &tool.request)?;
-                // taken before `ba` is consumed below
-                let short = ba.short.clone();
-                let tvr = if let Some(mut options) = tool.options.clone() {
-                    // Add placeholder for version since it's not available at config load time
-                    // This preserves {{ version }} in the output for install-time rendering
-                    let mut opts_context = context.clone();
-                    opts_context.insert("version", "{{ version }}");
-                    // The http and s3 backends re-render their url/checksum_url per
-                    // target platform (host at install, any target during `mise
-                    // lock`), so only those two options defer os()/arch() instead of
-                    // resolving them now. Every other option (here and for other
-                    // backends) is consumed verbatim, so it keeps host resolution at
-                    // config load — deferring it would leak raw `{{ os() }}`
-                    // fragments into consumers that never render again (e.g.
-                    // checksum_expr).
-                    let defer_os_arch = matches!(
-                        ba.backend_type(),
-                        crate::backend::backend_type::BackendType::Http
-                            | crate::backend::backend_type::BackendType::S3
-                    );
-                    // `install_env` is a typed core option, so it never reaches the
-                    // `opts` loop below and its values went to the installer
-                    // unrendered — `{{ env.HOME }}` arrived literally, unlike every
-                    // other tool option (#13306). Render it here, with `version`
-                    // bound to itself so the placeholder still round-trips: core
-                    // options are deliberately exempt from the backend `{version}`
-                    // normalization, and nothing renders `install_env` again later.
-                    let mut install_env_context = context.clone();
-                    install_env_context.insert("version", "{{version}}");
-                    for value in options.core.install_env.values_mut() {
-                        if let EnvValue::String(s) = value {
-                            *s = self.parse_template_with_context(&install_env_context, s)?;
-                        }
-                    }
-                    for (k, v) in options.opts.iter_mut() {
-                        self.parse_tool_option_value_template(
-                            &opts_context,
-                            Some(k),
-                            v,
-                            defer_os_arch,
-                        )?;
-                    }
-                    let mut ba = ba.clone();
-                    // Start with cached options but filter out install-time-only options
-                    // when config provides its own options. This allows:
-                    // - Changing url/asset_pattern/checksum without reinstall issues
-                    // - Replacing stale layout options like bin_path with current config values
-                    let mut ba_opts = ba.opts().clone();
-                    let backend_type = ba.backend_type();
-                    ba_opts.opts.retain(|k, _| {
-                        !crate::backend::is_install_time_option_key_for_type(&backend_type, k)
+                let on_this_os = tool
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.os.as_ref())
+                    .is_none_or(|os| {
+                        os.iter()
+                            .any(|entry| crate::platform::os_selector_matches(entry))
                     });
-                    ba_opts.apply_overrides(&options);
-                    // Re-apply registry defaults for install-time keys not overridden by user.
-                    // The filtering above strips both stale install-state cache AND registry
-                    // defaults. We want to keep registry defaults while discarding stale cache.
-                    if let Some(rt) = crate::registry::REGISTRY.get(ba.short.as_str()) {
-                        let full = ba.full();
-                        // Get structured options from registry (table-format backends)
-                        let mut registry_opts = rt.backend_options(&full);
-                        // Also parse inline options from [key=val,...] in the full string
-                        if let Some(start) = full.rfind('[')
-                            && full.ends_with(']')
-                        {
-                            let inline = crate::toolset::parse_tool_options(
-                                &full[start + 1..full.len() - 1],
-                            );
-                            for (k, v) in inline.opts {
-                                registry_opts.opts.entry(k).or_insert(v);
-                            }
-                        }
-                        for (k, v) in registry_opts.opts {
-                            ba_opts.opts.entry(k).or_insert(v);
-                        }
-                    }
-                    // Replace config-owned fields rather than merging them with cached values.
-                    // This intentionally supersedes apply_overrides above so omitted values clear
-                    // stale cache and install_env does not retain cached entries.
-                    ba_opts.os = options.os.clone();
-                    ba_opts.depends = options.depends.clone();
-                    ba_opts.install_env = options.install_env.clone();
-                    ba.set_opts(Some(ba_opts.clone()));
-                    ToolRequest::new_with_options(ba.into(), &version, ba_opts, source.clone())
-                        .wrap_err_with(|| self.tool_request_error_context(&short, tool, &version))?
-                } else {
-                    ToolRequest::new(ba.clone().into(), &version, source.clone())
-                        .wrap_err_with(|| self.tool_request_error_context(&short, tool, &version))?
-                };
-                trs.add_version(tvr, &source);
+                if on_this_os
+                    && tool_has_template(tool)
+                    && !backends.contains(&ba.short.to_string())
+                {
+                    backends.push(ba.short.to_string());
+                }
             }
         }
-        Ok(trs)
+        backends
+    }
+
+    fn tool_backends(&self) -> Vec<String> {
+        // `tiny = []` adds no request, so it does not replace a parent's.
+        self.tools
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, tvp)| !tvp.0.is_empty())
+            .map(|(ba, _)| ba.short.to_string())
+            .collect()
+    }
+
+    fn has_templated_tool_versions(&self) -> bool {
+        self.tools
+            .lock()
+            .unwrap()
+            .values()
+            .any(|tvp| tvp.0.iter().any(tool_has_template))
     }
 
     fn aliases(&self) -> eyre::Result<AliasMap> {
@@ -1969,8 +2090,18 @@ impl ConfigFile for MiseToml {
         self.bootstrap.clone()
     }
 
+    fn secrets_config(&self) -> Option<toml::Value> {
+        self.secrets.clone()
+    }
+
     fn dotfiles_config(&self) -> Option<DotfilesTomlConfig> {
         self.dotfiles.clone()
+    }
+
+    fn dotfile_groups_config(
+        &self,
+    ) -> Option<crate::system::dotfile_groups::DotfileGroupsTomlConfig> {
+        self.dotfile_groups.clone()
     }
 }
 
@@ -2130,6 +2261,7 @@ impl Clone for MiseToml {
             min_version: self.min_version.clone(),
             context: self.context.clone(),
             path: self.path.clone(),
+            loaded_hash: self.loaded_hash.clone(),
             include: self.include.clone(),
             included_paths: self.included_paths.clone(),
             env_file: self.env_file.clone(),
@@ -2148,6 +2280,7 @@ impl Clone for MiseToml {
             hooks: self.hooks.clone(),
             tools: Mutex::new(self.tools.lock().unwrap().clone()),
             redactions: self.redactions.clone(),
+            secrets: self.secrets.clone(),
             plugins: self.plugins.clone(),
             tasks: self.tasks.clone(),
             task_templates: self.task_templates.clone(),
@@ -2160,6 +2293,7 @@ impl Clone for MiseToml {
             bootstrap: self.bootstrap.clone(),
             doctor: self.doctor.clone(),
             dotfiles: self.dotfiles.clone(),
+            dotfile_groups: self.dotfile_groups.clone(),
             history: self.history.clone(),
             vars: self.vars.clone(),
             monorepo_root: self.monorepo_root,
@@ -2578,6 +2712,17 @@ impl<'de> de::Deserialize<'de> for EnvList {
                                                         {
                                                             opts.tools =
                                                                 tools.as_bool().unwrap_or(false);
+                                                        }
+                                                        // The user's explicit `redact` overrides the plugin's own preference.
+                                                        if let Some(table) = value.as_table_mut()
+                                                            && let Some(redact) =
+                                                                table.remove("redact")
+                                                        {
+                                                            opts.redact = Some(redact.as_bool().ok_or_else(|| {
+                                                                de::Error::custom(format!(
+                                                                    "_.{key}.redact must be a boolean"
+                                                                ))
+                                                            })?);
                                                         }
                                                         directives.push(EnvDirective::Module(
                                                             key, value, opts,
@@ -3158,7 +3303,13 @@ fn is_safe_config_body(body: &str) -> bool {
         return false;
     }
     table.iter().all(|(key, value)| match key.as_str() {
-        "min_version" | "tasks" => true,
+        "min_version" => true,
+        // a task that lists secrets is only inert once the file is trusted
+        "tasks" => !value.as_table().is_some_and(|tasks| {
+            tasks
+                .values()
+                .any(|t| t.as_table().is_some_and(|t| t.contains_key("secrets")))
+        }),
         "tools" => value.as_table().is_some_and(|tools| {
             tools.iter().all(|(tool, version)| {
                 !tool.contains('[')
@@ -3223,6 +3374,18 @@ fn is_tools_sorted(tools: &IndexMap<BackendArg, MiseTomlToolList>) -> bool {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    #[test]
+    fn tasks_that_list_secrets_are_not_safe_config() {
+        assert!(is_safe_config_body("[tasks.x]\nrun = 'echo'\n"));
+        assert!(!is_safe_config_body(
+            "[tasks.x]\nrun = 'echo'\nsecrets = ['A']\n"
+        ));
+        assert!(!is_safe_config_body(
+            "tasks.x = { run = 'echo', secrets = [] }\n"
+        ));
+        assert!(is_safe_config_body("tasks.x = 'echo'\n"));
+    }
+
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
@@ -4396,6 +4559,29 @@ run = 'echo " $usage_environment"'
     }
 
     #[test]
+    fn test_task_confirm_custom_labels_parse() {
+        let body = r#"
+[tasks.deploy]
+confirm = { message = "Deploy to prod?", yes = "Deploy", no = "Cancel" }
+run = 'echo deploy'
+"#;
+
+        let path = std::path::Path::new("/tmp/mise.toml");
+        let rf = MiseToml::from_str(body, path).unwrap();
+        let task = rf.tasks.0.get("deploy").expect("deploy task should exist");
+
+        assert_eq!(
+            task.confirm,
+            Some(crate::task::TaskConfirm::Options {
+                message: "Deploy to prod?".to_string(),
+                default: None,
+                yes: Some("Deploy".to_string()),
+                no: Some("Cancel".to_string()),
+            })
+        );
+    }
+
+    #[test]
     fn test_task_templates_confirm_parses() {
         let body = r#"
 [task_templates.deploy]
@@ -4909,6 +5095,41 @@ run = "cargo build"
     }
 
     #[test]
+    fn test_env_module_redact_option() {
+        let toml = indoc! {r#"
+        [env]
+        _.secret-plugin = { redact = false, vault = "main" }
+        _.other-plugin = { vault = "main" }
+        "#}
+        .to_string();
+        let entries = parse(toml).env_entries().unwrap();
+        let module = |name: &str| {
+            entries
+                .iter()
+                .find_map(|d| match d {
+                    EnvDirective::Module(n, value, opts) if n == name => Some((value, opts)),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (value, opts) = module("secret-plugin");
+        assert_eq!(opts.redact, Some(false));
+        // `redact` is a mise directive control, not an option for the plugin
+        assert!(value.get("redact").is_none());
+        assert_eq!(value.get("vault").and_then(|v| v.as_str()), Some("main"));
+        assert_eq!(module("other-plugin").1.redact, None);
+    }
+
+    #[test]
+    fn test_env_module_redact_must_be_boolean() {
+        let err = parse_error("[env]\n_.my-plugin = { redact = \"true\" }\n");
+        assert!(
+            err.contains("_.my-plugin.redact must be a boolean"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn test_env_default_invalid_combinations() {
         let err = parse_error("[env]\nFOO = { value = \"x\", default = \"y\" }\n");
         assert!(
@@ -5277,6 +5498,22 @@ run = "cargo build"
     }
 
     #[test]
+    fn test_secrets_section_is_never_trust_exempt() {
+        assert!(!is_safe_config_body("[secrets.fnox]\n"));
+        assert!(!is_safe_config_body("[secrets.fnox]\nprofile = \"dev\"\n"));
+    }
+
+    #[tokio::test]
+    async fn test_malformed_secrets_does_not_fail_the_file() {
+        let _config = Config::get().await.unwrap();
+        let cf = parse("secrets = [\"X\"]\n".to_string());
+        assert!(cf.secrets_config().is_some_and(|v| v.is_array()));
+        let cf = parse("[secrets.fnox]\nprofle = \"x\"\n".to_string());
+        assert!(cf.secrets_config().is_some_and(|v| v.is_table()));
+        assert!(parse(String::new()).secrets_config().is_none());
+    }
+
+    #[test]
     fn test_remote_fragment_rejects_what_cannot_apply() {
         let including = Path::new("/work/project/mise.toml");
         for (body, key) in [
@@ -5287,6 +5524,7 @@ run = "cargo build"
             ("[dotfiles]\n", "dotfiles"),
             ("[daemons.a]\ncommand = \"x\"\n", "daemons"),
             ("[redactions]\nenv = [\"X\"]\n", "redactions"),
+            ("[secrets.fnox]\n", "secrets"),
         ] {
             let err = MiseToml::parse_remote_fragment(body, including)
                 .unwrap_err()

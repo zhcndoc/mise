@@ -16,6 +16,8 @@ mise 无法识别为受管理的文件。修改后的副本、模板和纯行
 编辑需要使用 `--force`。源文件和配置条目会保留。
 在删除声明之前运行此命令，以便 mise 仍能识别其目标。
 
+使用 `--group` 时，只移除该点文件组的文件，使用 mise 应用时记录的信息，因此即使该组已取消选中或从配置中删除也能工作。
+
 ## 参数
 - **`[TARGET]…`** —— 仅取消应用这些目标
 
@@ -23,6 +25,7 @@ mise 无法识别为受管理的文件。修改后的副本、模板和纯行
 - **`-f --force`** —— 移除已修改或其他存在歧义的受管理文件和行
 - **`-n --dry-run`** —— 输出将执行的操作，但不写入任何内容
 - **`-y --yes`** —— 跳过确认提示
+- **`--group <NAME>`** —— 仅取消应用此点文件组的文件，即使该组已不再选中或声明
 - **`--prompt-secrets`** —— 安全地提示输入缺失的引导秘密输入
 - **`-h --help`** —— 输出帮助信息
 
@@ -31,6 +34,7 @@ mise 无法识别为受管理的文件。修改后的副本、模板和纯行
 ```
 mise dot unapply
 mise dot unapply ~/.zshrc
+mise dot unapply --group work
 mise dot unapply --dry-run
 mise dot unapply --force --yes
 ```
@@ -40,5 +44,5 @@ mise dot unapply --force --yes
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

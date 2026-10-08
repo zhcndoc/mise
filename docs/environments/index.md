@@ -414,8 +414,8 @@ BASE = "/opt/project"
 _.file = { path = ".env.json", expand = true }
 ```
 
-`env_shell_expand` 设置仍是全局开关，即使文件设置了 `expand = true`，它也可以禁用展开。无论如何，dotenv 文件都会保留 dotenvy
-正常的同文件展开行为；对于 dotenv 文件，`expand = true` 还会额外启用对之前加载的值的引用。
+`env_shell_expand` 设置仍是全局开关，即使文件设置了 `expand = true`，它也可以禁用展开。dotenv 文件始终会展开同一文件中较早赋值的引用，
+并且文件自身的值优先于已经设置的变量（例如 `mise activate` 从另一个 `.env` 导出的变量）；对于 dotenv 文件，`expand = true` 还会额外启用对之前加载的值的引用。
 
 ```toml
 [env]

@@ -63,6 +63,10 @@ export const sidebar: SidebarItem[] = [
       { text: "OCI 镜像（实验性）", link: "/dev-tools/mise-oci" },
       { text: "依赖", link: "/dev-tools/deps" },
       {
+        text: "安装布局（实验性）",
+        link: "/dev-tools/install-layout",
+      },
+      {
         text: "后端架构",
         link: "/dev-tools/backend_architecture",
       },
@@ -206,6 +210,7 @@ export const sidebar: SidebarItem[] = [
         link: "/environments/secrets/",
         collapsed: true,
         items: [
+          { text: "fnox（mise 密钥）", link: "/environments/secrets/fnox" },
           { text: "sops", link: "/environments/secrets/sops" },
           { text: "age", link: "/environments/secrets/age" },
         ],

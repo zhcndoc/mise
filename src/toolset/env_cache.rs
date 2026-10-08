@@ -304,7 +304,10 @@ impl CachedEnv {
 
     /// Returns true if env caching is enabled and we have an encryption key
     pub(crate) fn is_enabled() -> bool {
-        Settings::get().env_cache && get_encryption_key().is_some()
+        caching_allowed(
+            Settings::get().env_cache && get_encryption_key().is_some(),
+            &mise_util::env::INHERITED_SECRET_KEYS,
+        )
     }
 
     /// Clears all env cache files
@@ -451,8 +454,16 @@ impl CachedNonToolEnv {
 
     /// Returns true if env caching is enabled and we have an encryption key
     pub(crate) fn is_enabled() -> bool {
-        Settings::get().env_cache && get_encryption_key().is_some()
+        caching_allowed(
+            Settings::get().env_cache && get_encryption_key().is_some(),
+            &mise_util::env::INHERITED_SECRET_KEYS,
+        )
     }
+}
+
+/// A mise that inherited secrets from a parent must not write them to a cache.
+fn caching_allowed(enabled: bool, inherited_secrets: &std::collections::BTreeSet<String>) -> bool {
+    enabled && inherited_secrets.is_empty()
 }
 
 /// Helper to get the mtime of a file as seconds since UNIX epoch
@@ -476,6 +487,12 @@ pub(crate) fn compute_settings_hash() -> String {
     // with a different `safe` value must not be reused.
     hasher.update(settings.safe.to_string().as_bytes());
 
+    // Where tools are installed: the install layout decides which directory a
+    // tool's env (JAVA_HOME, PATH entries) names.
+    hasher.update(settings.install_layout.as_deref().unwrap_or("").as_bytes());
+    hasher.update(dirs::INSTALLS.to_string_lossy().as_bytes());
+    hasher.update(dirs::INSTALL_STORE.to_string_lossy().as_bytes());
+
     // Add any other relevant settings
     if let Some(env_file) = &settings.env_file {
         hasher.update(env_file.to_string_lossy().as_bytes());
@@ -488,6 +505,15 @@ pub(crate) fn compute_settings_hash() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_secrets_turn_caching_off() {
+        let none = std::collections::BTreeSet::new();
+        let some = std::collections::BTreeSet::from(["FOO".to_string()]);
+        assert!(caching_allowed(true, &none));
+        assert!(!caching_allowed(true, &some));
+        assert!(!caching_allowed(false, &none));
+    }
 
     #[test]
     fn test_cache_key_computation() {

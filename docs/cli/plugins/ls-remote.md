@@ -15,7 +15,7 @@ description: "列出所有可用的远程插件"
 这些是注册表中的简写名称：<https://github.com/jdx/mise/blob/main/registry/>
 
 ## 标志
-- **`-u --urls`** — 显示每个插件的 Git URL，例如 <https://github.com/mise-plugins/mise-poetry.git>
+- **`-u --urls`** — 显示每个插件的 Git URL，例如 <https://github.com/jdx/vfox-poetry.git>
 - **`--only-names`** — 仅显示每个插件的名称，不显示用于标记已安装插件的“*”
 - **`-h --help`** — 输出帮助
 

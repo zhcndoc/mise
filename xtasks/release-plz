@@ -382,6 +382,7 @@ if [[ $cur_version != "$latest_version" ]]; then
 	MISE_SIGSTORE_VERSION=""
 	MISE_CACHE_CORE_VERSION=""
 	MISE_BREW_RELOCATION_VERSION=""
+	MISE_DOTENV_VERSION=""
 	MISE_AGENT_ENV_VERSION=""
 	MISE_SETTINGS_VERSION=""
 	MISE_UTIL_VERSION=""
@@ -401,6 +402,9 @@ if [[ $cur_version != "$latest_version" ]]; then
 
 	bump_and_publish_subcrate "mise-brew-relocation" "crates/mise-brew-relocation" "MISE_BREW_RELOCATION_VERSION"
 	cargo add -p mise --target 'cfg(unix)' "mise-brew-relocation@$MISE_BREW_RELOCATION_VERSION"
+
+	bump_and_publish_subcrate "mise-dotenv" "crates/mise-dotenv" "MISE_DOTENV_VERSION"
+	cargo add -p mise "mise-dotenv@$MISE_DOTENV_VERSION"
 
 	# Copy settings.toml into the crate directory so the published package includes it.
 	cp settings.toml crates/mise-settings/settings.toml
@@ -604,17 +608,22 @@ EMBEDDED_PLUGINS_DIR="crates/vfox/embedded-plugins"
 rm -rf "$EMBEDDED_PLUGINS_DIR"
 mkdir -p "$EMBEDDED_PLUGINS_DIR"
 
-# Clone mise-plugins vfox tools when vfox is the default backend or the
+# Clone managed vfox tools when vfox is the default backend or the
 # fallback after an asdf default backend.
 mise registry | awk '
-	$2 ~ /^vfox:mise-plugins\// {
+	$2 ~ /^vfox:(mise-plugins|jdx)\// {
 		print $2
 	}
-	$2 ~ /^asdf:/ && $3 ~ /^vfox:mise-plugins\// {
+	$2 ~ /^asdf:/ && $3 ~ /^vfox:(mise-plugins|jdx)\// {
 		print $3
 	}
 ' | sed 's|vfox:||' | sort -u | while read -r repo_path; do
 	plugin="$(basename "$repo_path")"
+	# vfox-tiny is a fake plugin the e2e suite uses as a non-embedded fixture;
+	# embedding it changes how `tiny` resolves and breaks those tests.
+	if [[ $plugin == vfox-tiny ]]; then
+		continue
+	fi
 	echo "Cloning $plugin from https://github.com/$repo_path"
 	TEMP_DIR="$(mktemp -d)"
 	git clone --depth 1 "https://github.com/$repo_path.git" "$TEMP_DIR" 2>&1 | grep -v "^Cloning" || true

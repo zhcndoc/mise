@@ -28,7 +28,7 @@ description: "将传入的共享更改拉取到实时文件中"
 
 ## 标志
 - **`-n --dry-run`** — 显示计划但不进行任何更改
-- **`-y --yes`** — 不提示直接拉取
+- **`-y --yes`** — 为兼容而保留；拉取时跳过应用确认
 - **`--take-remote <PATH>`** — 使用仓库中的版本解决冲突
 - **`--keep-local <PATH>`** — 保留此机器的版本来解决冲突（之后发布）
 - **`--take-remote-all`** — 使用仓库中的版本解决所有剩余冲突
@@ -55,5 +55,5 @@ mise dot pull --take-remote-all --keep-local ~/.zshrc
 ## 相关文档
 
 - [入门](/getting-started.html)。
-- [`mise dotfiles <SUBCOMMAND>`](/cli/dotfiles.html)。
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
 - [全局标志和参数语法](/cli/#global-flags)。

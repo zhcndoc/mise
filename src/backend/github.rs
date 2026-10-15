@@ -6,8 +6,8 @@ use crate::backend::options::{BackendOptions, VersionOrder};
 use crate::backend::platform_target::PlatformTarget;
 use crate::backend::static_helpers::{
     ArchiveLayout, get_filename_from_url, install_artifact, lookup_platform_key,
-    lookup_with_fallback, template_string, try_with_v_prefix, try_with_v_prefix_and_repo,
-    verify_artifact,
+    lookup_with_fallback, pinned_checksum, template_string, try_with_v_prefix,
+    try_with_v_prefix_and_repo, verify_artifact,
 };
 use crate::backend::{MISE_BINS_DIR, SecurityFeature, runtime_path_for_install_path};
 use crate::config::{Config, Settings, SettingsExt};
@@ -122,10 +122,6 @@ impl<'a> GitBackendOptions<'a> {
 
     fn version_prefix(&self) -> Option<&'a str> {
         self.values.str("version_prefix")
-    }
-
-    fn checksum(&self) -> Option<String> {
-        self.values.platform_string("checksum")
     }
 
     fn bin_path(&self) -> Option<String> {
@@ -1676,9 +1672,6 @@ impl UnifiedGitBackend {
         let filename = asset.name.clone();
         let file_path = tv.download_path().join(&filename);
 
-        // Check if we'll verify checksum
-        let has_checksum = opts.checksum().is_some();
-
         // Store the asset URL and digest (if available) in the tool version
         let platform_key = self.get_platform_key();
         let lockfile_has_checksum = tv
@@ -1722,14 +1715,21 @@ impl UnifiedGitBackend {
         };
 
         ctx.pr.set_message(format!("download {filename}"));
-        HTTP.download_file_with_headers(url, &file_path, &headers, Some(ctx.pr.as_ref()))
-            .await?;
+        let pinned = pinned_checksum(tv, &self.get_platform_key(), opts.raw());
+        HTTP.download_file_linked(
+            url,
+            &file_path,
+            &headers,
+            pinned.as_deref(),
+            Some(ctx.pr.as_ref()),
+        )
+        .await?;
 
         // Verify and install
         ctx.pr.next_operation();
-        if has_checksum {
-            verify_artifact(tv, &file_path, opts.raw(), Some(ctx.pr.as_ref()))?;
-        }
+        // Keep this unconditional: verify_artifact checks the `checksum` and
+        // `size` options independently, so gating it on one skips the other.
+        verify_artifact(tv, &file_path, opts.raw(), Some(ctx.pr.as_ref()))?;
 
         // Check before verify_checksum, which may generate a new checksum from the
         // downloaded file. Reuse non-SLSA provenance only when the lockfile had
@@ -2578,7 +2578,7 @@ impl UnifiedGitBackend {
                 if src.exists() {
                     let dst = symlink_dir.join(&bin_name);
                     if !dst.exists() {
-                        file::make_symlink_or_copy(&src, &dst)?;
+                        super::mise_bins::link(&src, &dst)?;
                     }
                     found = true;
                     break;

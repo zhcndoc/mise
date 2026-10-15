@@ -18,6 +18,6 @@ description: "显示赞助 mise 和 jdx.dev 开源工具的公司"
 
 ## 相关文档
 
-- [支持 mise](/about.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Supporting mise](/about.html#supporting-mise).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

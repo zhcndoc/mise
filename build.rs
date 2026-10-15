@@ -10,7 +10,6 @@ use std::{env, fs};
 use aqua_registry::encode_package_rkyv;
 use aqua_registry::types::{AquaPackage, AquaPackageType, RegistryPackageRow, RegistryYaml};
 use eyre::{Result, eyre};
-use serde_yaml::Value;
 
 #[path = "build/lockfile_rollout.rs"]
 mod lockfile_rollout;
@@ -32,6 +31,7 @@ fn main() -> Result<()> {
     built::write_built_file()?;
     link_without_pie();
     build_notification_helper()?;
+    build_enclave_helper()?;
 
     let aqua_registry = load_aqua_registry()?;
     codegen_daemon_presets()?;
@@ -129,6 +129,81 @@ fn build_notification_helper() -> Result<()> {
         return Err(eyre!(
             "failed to sign the macOS notification helper: {}",
             String::from_utf8_lossy(&signed.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// The Secure Enclave helper (`src/enclave/macos.swift`) keeps the GitHub OAuth
+/// refresh token behind Touch ID. Persisting an enclave key outside the keychain
+/// needs CryptoKit, so unlike the notification helper it is Swift. A build
+/// without `swiftc` still works: the helper is then reported as unavailable and
+/// the token stays in the cache file.
+fn build_enclave_helper() -> Result<()> {
+    let source = "src/enclave/macos.swift";
+    let info = "src/enclave/macos.plist";
+    println!("cargo:rerun-if-changed={source}");
+    println!("cargo:rerun-if-changed={info}");
+    println!("cargo:rerun-if-env-changed=MISE_NOTIFICATION_SIGN_IDENTITY");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return Ok(());
+    }
+    let app = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("mise-enclave.app");
+    let contents = app.join("Contents");
+    let output = contents.join("MacOS/mise-enclave");
+    fs::create_dir_all(contents.join("MacOS"))?;
+    fs::create_dir_all(contents.join("_CodeSignature"))?;
+    fs::copy(info, contents.join("Info.plist"))?;
+    let identity = env::var("MISE_NOTIFICATION_SIGN_IDENTITY").unwrap_or_else(|_| "-".into());
+    let built = Command::new("swiftc")
+        .args(["-O", "-target"])
+        .arg(format!(
+            "{}-apple-macosx13.0",
+            env::var("CARGO_CFG_TARGET_ARCH")?.replace("aarch64", "arm64")
+        ))
+        .arg(source)
+        .arg("-o")
+        .arg(&output)
+        .output();
+    let ok = match &built {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            println!(
+                "cargo:warning=failed to build the macOS Secure Enclave helper: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            false
+        }
+        Err(err) => {
+            println!("cargo:warning=swiftc unavailable, skipping the Secure Enclave helper: {err}");
+            false
+        }
+    };
+    // Releases are the only builds whose helper is signed with an identity the
+    // enclave accepts, so an ad-hoc signed helper is reported as unavailable.
+    let signed = ok && identity != "-";
+    println!(
+        "cargo:rustc-env=MISE_ENCLAVE_RELEASE_SIGNED={}",
+        if signed { "1" } else { "0" }
+    );
+    if !ok {
+        fs::write(&output, b"")?;
+        fs::write(contents.join("_CodeSignature/CodeResources"), b"")?;
+        return Ok(());
+    }
+    let mut codesign = Command::new("/usr/bin/codesign");
+    codesign
+        .args(["--force", "--sign"])
+        .arg(&identity)
+        .args(["--identifier", "dev.jdx.mise.enclave"]);
+    if identity != "-" {
+        codesign.args(["--options", "runtime", "--timestamp"]);
+    }
+    let signed_out = codesign.arg(&app).output()?;
+    if !signed_out.status.success() {
+        return Err(eyre!(
+            "failed to sign the macOS Secure Enclave helper: {}",
+            String::from_utf8_lossy(&signed_out.stderr).trim()
         ));
     }
     Ok(())
@@ -641,7 +716,7 @@ fn phf_usize_map_code(entries: Vec<(String, String)>) -> String {
 fn load_aqua_registry() -> Result<RegistryYaml> {
     let registry_file = Path::new("vendor/aqua-registry/registry.yml");
     println!("cargo:rerun-if-changed={}", registry_file.display());
-    Ok(serde_yaml::from_str::<RegistryYaml>(&fs::read_to_string(
+    Ok(RegistryYaml::from_yaml(&fs::read_to_string(
         registry_file,
     )?)?)
 }
@@ -697,14 +772,20 @@ fn codegen_aqua_standard_registry(registry_yaml: &RegistryYaml) -> Result<()> {
     fs::write(aliases_dest_path, aqua_registry_aliases_code(&registries)?)?;
     fs::write(search_dest_path, aqua_registry_search_code(&registries))?;
 
-    let metadata = serde_yaml::from_str::<Value>(&fs::read_to_string(metadata_file)?)?;
-    let repository = yaml_string_field(&metadata, "repository").ok_or_else(|| {
+    #[derive(serde::Deserialize)]
+    struct AquaRegistryMetadata {
+        repository: Option<String>,
+        tag: Option<String>,
+    }
+    let metadata: AquaRegistryMetadata =
+        serde_saphyr::from_str(&fs::read_to_string(metadata_file)?)?;
+    let repository = metadata.repository.ok_or_else(|| {
         eyre!(
             "Aqua registry metadata file {} does not contain a repository",
             metadata_file.display()
         )
     })?;
-    let tag = yaml_string_field(&metadata, "tag").ok_or_else(|| {
+    let tag = metadata.tag.ok_or_else(|| {
         eyre!(
             "Aqua registry metadata file {} does not contain a tag",
             metadata_file.display()
@@ -960,10 +1041,6 @@ fn aqua_canonical_package_id(package: &AquaPackage) -> Option<String> {
             }
         })
         .or_else(|| package.path.clone())
-}
-
-fn yaml_string_field(value: &Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_string)
 }
 
 /// Validate the declarative parts of a daemon preset: named ports, version

@@ -29,7 +29,9 @@ use crate::config::env_directive::{
     AgeFormat, EnvDirective, EnvDirectiveOptions, EnvValue, RequiredValue,
 };
 use crate::config::settings::SettingsPartial;
-use crate::config::{Alias, AliasMap, CommandWrapper, Config, Settings};
+use crate::config::{
+    Alias, AliasMap, CommandWrapper, Config, Settings, safe_mode_ignores_bootstrap,
+};
 use crate::deps::{DepsConfig, DepsTemplateContext};
 use crate::env_diff::EnvMap;
 use crate::file::{create_dir_all, display_path};
@@ -47,6 +49,7 @@ use crate::{env, file};
 
 use super::diagnostic::toml_parse_error;
 use super::min_version::MinVersionSpec;
+use super::version_requires_trust;
 
 const LEGACY_ENV_KEYS_DEPRECATED_WARN_AT: &str = "2026.4.17";
 const LEGACY_ENV_KEYS_DEPRECATED_REMOVE_AT: &str = "2027.4.0";
@@ -559,7 +562,7 @@ pub struct MonorepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub projects: BTreeMap<String, WorkspaceProjectOverride>,
-    /// Experimental task defaults applied by task name across workspace projects.
+    /// Task defaults applied by task name across workspace projects.
     #[serde(default)]
     pub task_defaults: IndexMap<String, TaskTemplate>,
 }
@@ -647,7 +650,7 @@ impl MiseToml {
         if let Ok(toml::Value::Table(table)) = toml::from_str::<toml::Value>(body) {
             // Only what is resolved from the merged config. `[settings]` and the
             // monorepo keys are read before any include exists, tasks are
-            // discovered from files, and the system sections (dotfiles,
+            // discovered from files, and the other system sections (dotfiles,
             // daemons, ...) are loaded per file.
             const ALLOWED: &[&str] = &[
                 "_",
@@ -662,6 +665,7 @@ impl MiseToml {
                 "env",
                 "env_path",
                 "vars",
+                "bootstrap",
             ];
             for key in table.keys() {
                 if !ALLOWED.contains(&key.as_str()) {
@@ -724,6 +728,11 @@ impl MiseToml {
         }
         for (name, url) in fragment.plugins {
             self.plugins.entry(name).or_insert(url);
+        }
+        if let Some(shared) = fragment.bootstrap {
+            self.bootstrap
+                .get_or_insert_with(Default::default)
+                .merge_below(shared);
         }
         let mut tools = self.tools.lock().unwrap();
         fill(&mut tools, fragment.tools.into_inner().unwrap());
@@ -1431,9 +1440,7 @@ impl MiseToml {
                                 registry_opts.opts.entry(k).or_insert(v);
                             }
                         }
-                        for (k, v) in registry_opts.opts {
-                            ba_opts.opts.entry(k).or_insert(v);
-                        }
+                        crate::toolset::fill_registry_defaults(&mut ba_opts, registry_opts);
                     }
                     // Replace config-owned fields rather than merging them with cached values.
                     // This intentionally supersedes apply_overrides above so omitted values clear
@@ -2087,7 +2094,10 @@ impl ConfigFile for MiseToml {
     }
 
     fn bootstrap_config(&self) -> Option<BootstrapTomlConfig> {
-        self.bootstrap.clone()
+        self.bootstrap
+            .as_ref()
+            .filter(|_| !self.ignored_in_safe_mode("[bootstrap]"))
+            .cloned()
     }
 
     fn secrets_config(&self) -> Option<toml::Value> {
@@ -2095,17 +2105,37 @@ impl ConfigFile for MiseToml {
     }
 
     fn dotfiles_config(&self) -> Option<DotfilesTomlConfig> {
-        self.dotfiles.clone()
+        self.dotfiles
+            .as_ref()
+            .filter(|_| !self.ignored_in_safe_mode("[dotfiles]"))
+            .cloned()
     }
 
     fn dotfile_groups_config(
         &self,
     ) -> Option<crate::system::dotfile_groups::DotfileGroupsTomlConfig> {
-        self.dotfile_groups.clone()
+        self.dotfile_groups
+            .as_ref()
+            .filter(|_| !self.ignored_in_safe_mode("[dotfile_groups]"))
+            .cloned()
     }
 }
 
 impl MiseToml {
+    /// Whether safe mode drops `section` from this file; see
+    /// [`safe_mode_ignores_bootstrap`]. Safe mode loads project config without a
+    /// trust check, which makes all of it untrusted here.
+    fn ignored_in_safe_mode(&self, section: &str) -> bool {
+        let ignored = safe_mode_ignores_bootstrap(&self.path);
+        if ignored {
+            debug!(
+                "ignoring {section} in {}: safe mode (MISE_SAFE=1)",
+                display_path(&self.path)
+            );
+        }
+        ignored
+    }
+
     /// `[history]` as declared by this file.
     pub(crate) fn history_config(
         &self,
@@ -2751,6 +2781,7 @@ impl<'de> de::Deserialize<'de> for EnvList {
                                         redact: Some(false),
                                         required: RequiredValue::False,
                                         expand: false,
+                                        prompt: None,
                                     },
                                 });
                             }
@@ -3281,7 +3312,9 @@ impl<'de> de::Deserialize<'de> for Alias {
 ///   excluded because options like `postinstall` and `install_env` run code
 ///   or alter the install environment. Options can also ride in the key
 ///   (`"tool[postinstall=...]" = "1"`), so keys with inline options are
-///   excluded too.
+///   excluded too. A `path:` version is excluded as well: it needs no install,
+///   so it would put a directory of the repository on PATH as soon as the
+///   config loads.
 /// - `[tasks]` definitions are inert until the user explicitly runs one
 /// - no Tera template syntax anywhere — templates render while config and
 ///   tasks load and can run arbitrary commands via exec()
@@ -3314,10 +3347,10 @@ fn is_safe_config_body(body: &str) -> bool {
             tools.iter().all(|(tool, version)| {
                 !tool.contains('[')
                     && match version {
-                        toml::Value::String(_) => true,
-                        toml::Value::Array(versions) => {
-                            versions.iter().all(|v| matches!(v, toml::Value::String(_)))
-                        }
+                        toml::Value::String(v) => !version_requires_trust(v),
+                        toml::Value::Array(versions) => versions.iter().all(
+                            |v| matches!(v, toml::Value::String(v) if !version_requires_trust(v)),
+                        ),
                         _ => false,
                     }
             })
@@ -4123,6 +4156,8 @@ mod tests {
                         url: None,
                         sha256: None,
                         artifact: None,
+                        channel: None,
+                        classic: None,
                     });
                 cf.update_bootstrap_package_with_fallback(
                     "brew:tree",
@@ -4141,6 +4176,8 @@ mod tests {
                         url: None,
                         sha256: None,
                         artifact: None,
+                        channel: None,
+                        classic: None,
                     });
                 cf.update_bootstrap_package_with_fallback(
                     "brew-cask:1password",
@@ -5295,6 +5332,12 @@ run = "cargo build"
         run = ["cargo test"]
         "#}));
 
+        // a path: version puts a repository directory on PATH without an install
+        assert!(!is_safe_config_body("[tools]\nnode = \"path:./local\"\n"));
+        assert!(!is_safe_config_body(
+            "[tools]\nnode = [\"20\", \"path:./local\"]\n"
+        ));
+
         // templates can execute commands
         assert!(!is_safe_config_body(indoc! {r#"
         [tools]
@@ -5501,6 +5544,81 @@ run = "cargo build"
     fn test_secrets_section_is_never_trust_exempt() {
         assert!(!is_safe_config_body("[secrets.fnox]\n"));
         assert!(!is_safe_config_body("[secrets.fnox]\nprofile = \"dev\"\n"));
+    }
+
+    #[tokio::test]
+    async fn test_remote_fragments_merge_bootstrap_below_the_including_file() {
+        let _config = Config::get().await.unwrap();
+        let cf = parse(formatdoc! {r#"
+            [bootstrap.packages]
+            "brew:jq" = "1.7"
+
+            [bootstrap.brew.taps]
+            "own/tap" = "https://example.com/own.git"
+        "#});
+        let merged = cf
+            .with_remote_fragments(vec![(
+                PathBuf::from("/cache/a.toml"),
+                "[bootstrap.packages]\n\"brew:jq\" = \"latest\"\n\"brew:fd\" = \"latest\"\n\n[bootstrap.brew.taps]\n\"shared/tap\" = \"https://example.com/shared.git\"\n\n[bootstrap.user]\nlogin_shell = \"zsh\"\n"
+                    .to_string(),
+            )])
+            .unwrap();
+        let bootstrap = merged.bootstrap_config().unwrap();
+        assert_eq!(bootstrap.packages.get("brew:jq").unwrap().version(), "1.7");
+        assert_eq!(
+            bootstrap.packages.get("brew:fd").unwrap().version(),
+            "latest"
+        );
+        assert_eq!(bootstrap.brew.taps.len(), 2);
+        assert_eq!(bootstrap.user.login_shell.as_deref(), Some("zsh"));
+        // an including file without its own [bootstrap] still gets the shared one
+        let merged = parse(String::new())
+            .with_remote_fragments(vec![(
+                PathBuf::from("/cache/a.toml"),
+                "[bootstrap.packages]\n\"brew:fd\" = \"latest\"\n".to_string(),
+            )])
+            .unwrap();
+        assert!(
+            merged
+                .bootstrap_config()
+                .unwrap()
+                .packages
+                .contains_key("brew:fd")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remote_fragments_merge_bootstrap_hooks_defaults_and_copy_links() {
+        let _config = Config::get().await.unwrap();
+        let cf = parse(formatdoc! {r#"
+            [bootstrap.hooks]
+            post-tools = "echo own"
+
+            [bootstrap.remote]
+            copy_links = false
+
+            [bootstrap.macos.defaults."com.apple.finder"]
+            ShowPathbar = true
+        "#});
+        let merged = cf
+            .with_remote_fragments(vec![(
+                PathBuf::from("/cache/a.toml"),
+                "[bootstrap.hooks]\npost-tools = \"echo shared\"\n\n[bootstrap.remote]\ncopy_links = true\n\n[bootstrap.macos.defaults.\"com.apple.finder\"]\nAppleShowAllFiles = true\nShowPathbar = false\n\n[[bootstrap.macos.defaults_entries]]\ndomain = \"com.apple.finder\"\nkey = \"ShowPathbar\"\nvalue = false\n"
+                    .to_string(),
+            )])
+            .unwrap();
+        let bootstrap = merged.bootstrap_config().unwrap();
+        assert_eq!(
+            bootstrap.hooks["post-tools"],
+            toml::Value::Array(vec!["echo shared".into(), "echo own".into()])
+        );
+        assert_eq!(bootstrap.remote.copy_links, Some(false));
+        let finder = bootstrap.macos.defaults["com.apple.finder"]
+            .as_table()
+            .unwrap();
+        assert_eq!(finder["ShowPathbar"].as_bool(), Some(true));
+        assert_eq!(finder["AppleShowAllFiles"].as_bool(), Some(true));
+        assert!(bootstrap.macos.defaults_entries.is_empty());
     }
 
     #[tokio::test]

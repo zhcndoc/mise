@@ -242,7 +242,7 @@ impl ToolVersion {
         opts.defer_missing_lazy_tools
             && !opts.latest_versions
             && request.options().lazy == Some(true)
-            && Settings::get().prefer_offline()
+            && (opts.defer_missing_lazy_online || Settings::get().prefer_offline())
             && !matches!(request.source(), ToolSource::Argument)
     }
 
@@ -266,6 +266,11 @@ impl ToolVersion {
                 request.ba().short.clone(),
                 Some(backend_full.clone()),
             ));
+            // The registry's options are for the backend it chose; the lock's
+            // backend would read them as its own settings and record them.
+            if request.registry_options_are_not_for(backend_full) {
+                request = request.without_registry_options();
+            }
             match &mut request {
                 ToolRequest::Version { backend: b, .. }
                 | ToolRequest::Prefix { backend: b, .. }
@@ -343,7 +348,23 @@ impl ToolVersion {
     /// version it stands for. Lockfiles and dependency resolvers must only
     /// ever see the logical version; the digest is a private path identity.
     pub fn strip_install_path_identity(&mut self) {
-        let version = if self.aube_lock.is_none() {
+        if let Some(version) = self.install_path_identity_version().map(str::to_string) {
+            // Keep pointing at the directory that was found. In the identity
+            // layout that name is a compatibility link, and the version it
+            // carries would otherwise be hashed into an identity nothing has.
+            self.install_path = Some(
+                crate::install_layout::resolver::physical_dir(self.ba(), &self.version)
+                    .unwrap_or_else(|| self.install_path()),
+            );
+            self.version = version;
+        }
+    }
+
+    /// The logical version of a version named by an install directory with a
+    /// private dependency-graph suffix that this version's own graph does not
+    /// account for.
+    fn install_path_identity_version(&self) -> Option<&str> {
+        if self.aube_lock.is_none() {
             self.aube_install_path_version()
                 .or_else(|| self.legacy_aube_install_path_version())
         } else {
@@ -354,12 +375,25 @@ impl ToolVersion {
                 .is_none()
                 .then(|| self.uv_install_path_version())
                 .flatten()
-        });
-        if let Some(version) = version.map(str::to_string) {
-            // Keep pointing at the directory that was found.
-            self.install_path = Some(self.install_path());
-            self.version = version;
+        })
+    }
+
+    /// A version chosen from the installed versions of the request's tool. A
+    /// graph install made from a lockfile lists as `<version>~aube~<digest>`
+    /// (or `~uv~`), which is never the version itself. The identity layout
+    /// keeps that installation to the lockfile that made it: a request without
+    /// the graph stands for the version, and gets its own installation of it.
+    /// The legacy layout keeps using the directory that was found.
+    fn from_installed(request: ToolRequest, name: String) -> Self {
+        let mut tv = Self::new(request, name);
+        let Some(version) = tv.install_path_identity_version().map(str::to_string) else {
+            return tv;
+        };
+        if crate::install_layout::resolver::applies_to(&tv) {
+            return Self::new(tv.request, version);
         }
+        tv.strip_install_path_identity();
+        tv
     }
 
     pub(crate) fn aube_install_path_version(&self) -> Option<&str> {
@@ -558,6 +592,7 @@ impl ToolVersion {
             inactive: base_opts.inactive,
             warn_not_in_lockfile: base_opts.warn_not_in_lockfile,
             defer_missing_lazy_tools: false,
+            defer_missing_lazy_online: false,
         };
         let tv = self.request.resolve(config, &opts).await?;
         Ok(tv.version)
@@ -826,16 +861,17 @@ impl ToolVersion {
                 && !should_filter_installed_versions
                 && let Some(v) = backend.latest_installed_version(None)?
             {
-                return build(v);
+                return Ok(Self::from_installed(request, v));
             }
             if defer_missing_lazy {
                 return build(v);
             }
             if !is_offline
                 && let Some(v) = backend
-                    .latest_version_with_refresh(
+                    .latest_version_with_selection_options(
                         config,
                         None,
+                        &request.options(),
                         opts.before_date,
                         opts.refresh_remote_versions,
                     )
@@ -900,7 +936,7 @@ impl ToolVersion {
                 .as_ref()
                 .and_then(|matches| matches.last())
         {
-            return build(v.clone());
+            return Ok(Self::from_installed(request, v.clone()));
         }
         if defer_missing_lazy {
             return build(v);
@@ -917,7 +953,7 @@ impl ToolVersion {
                     crate::semver::npm_semver_range_filter(&installed_versions, &v)
                     && let Some(v) = matches.last()
                 {
-                    return build(v.clone());
+                    return Ok(Self::from_installed(request, v.clone()));
                 }
             }
             if !is_offline {
@@ -958,16 +994,50 @@ impl ToolVersion {
         if prefer_offline && !opts.latest_versions && v.matches('.').count() >= 2 {
             return build(v);
         }
+        // A fully-qualified version usually names itself, so prefer-offline
+        // commands install it as written when the remote lookup cannot reach
+        // its server (e.g. `mise x tool@1.2.3` hitting the short prefer-offline
+        // timeout) rather than leaving it unresolved. The installer reports a
+        // missing release. Other errors, such as invalid settings, still fail.
+        let fall_back_to_literal = settings.prefer_offline()
+            && !opts.latest_versions
+            && (v.matches('.').count() >= 2 || backend.is_exact_version(&v));
+        match Self::resolve_remote_version(config, &backend, &v, opts, pin_remote_matches).await {
+            Ok(v) => build(v),
+            Err(err) if fall_back_to_literal && crate::http::is_unreachable(&err) => {
+                // Keyed without the error: a command can resolve more than once,
+                // and a retry fails with different text for the same cause.
+                let key = format!("version list fallback {backend}@{v}");
+                if crate::output::WARNED_ONCE.lock().unwrap().insert(key) {
+                    warn!(
+                        "failed to fetch versions for {backend}, installing {v} as written: {err:#}"
+                    );
+                }
+                build(v)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// The remote half of [`Self::resolve_version`]: resolves `v` against the
+    /// backend's upstream versions.
+    async fn resolve_remote_version(
+        config: &Arc<Config>,
+        backend: &ABackend,
+        v: &str,
+        opts: &ResolveOptions,
+        pin_remote_matches: Option<Vec<String>>,
+    ) -> Result<String> {
         // Exact pinned versions do not need the full versions list when the
         // backend can validate them directly or defer validation to its
         // installer. This also keeps explicit pins outside release-age
         // filtering. If the backend returns None, fall through to normal
         // prefix resolution so requests like "1.2.3" can still resolve to
         // "1.2.3.4" when that is the latest matching version.
-        if (v.matches('.').count() >= 2 || backend.is_exact_version(&v))
-            && let Some(v) = backend.resolve_exact_version(config, &v).await?
+        if (v.matches('.').count() >= 2 || backend.is_exact_version(v))
+            && let Some(v) = backend.resolve_exact_version(config, v).await?
         {
-            return build(v);
+            return Ok(v);
         }
         // First try with date filter (common case)
         let matches = match pin_remote_matches {
@@ -976,29 +1046,29 @@ impl ToolVersion {
                 backend
                     .list_versions_matching_with_opts(
                         config,
-                        &v,
+                        v,
                         opts.before_date,
                         opts.refresh_remote_versions,
                     )
                     .await?
             }
         };
-        if matches.contains(&v) {
-            return build(v);
+        if matches.iter().any(|m| m == v) {
+            return Ok(v.to_string());
         }
         if let Some(v) = matches.last() {
-            return build(v.clone());
+            return Ok(v.clone());
         }
         // If date filter is active and exact version not found, check without filter.
         // Explicit pinned versions like "22.5.0" should not be filtered by date.
         if opts.before_date.is_some() {
-            let all_versions = backend.list_versions_matching(config, &v).await?;
-            if all_versions.contains(&v) {
+            let all_versions = backend.list_versions_matching(config, v).await?;
+            if all_versions.iter().any(|m| m == v) {
                 // Exact match exists but was filtered by date - use it anyway
-                return build(v);
+                return Ok(v.to_string());
             }
         }
-        build(v)
+        Ok(v.to_string())
     }
 
     /// resolve a version like `sub-1:12.0.0` which becomes `11.0.0`, `sub-0.1:12.1.0` becomes `12.0.0`
@@ -1062,7 +1132,7 @@ impl ToolVersion {
             && !should_filter_installed_versions
             && let Some(v) = backend.list_installed_versions_matching(prefix).last()
         {
-            return Ok(Self::new(request, v.to_string()));
+            return Ok(Self::from_installed(request, v.to_string()));
         }
         if opts.offline {
             return Ok(Self::new(request, prefix.to_string()));
@@ -1244,6 +1314,9 @@ pub struct ResolveOptions {
     /// requested version instead of listing remote versions. Installing it through its
     /// shim resolves the request then.
     pub defer_missing_lazy_tools: bool,
+    /// Defer those lazy tools even when not under `prefer_offline`. For a command that
+    /// manages one tool's versions and so resolves the others only to look them up.
+    pub defer_missing_lazy_online: bool,
 }
 
 impl Default for ResolveOptions {
@@ -1263,6 +1336,7 @@ impl Default for ResolveOptions {
             inactive: false,
             warn_not_in_lockfile: true,
             defer_missing_lazy_tools: false,
+            defer_missing_lazy_online: false,
         }
     }
 }
@@ -1551,6 +1625,91 @@ mod tests {
         assert!(
             !ToolVersion::new(request, "ref:main".to_string()).request_pinned_this_version(),
             "a ref names a moving target, not a release"
+        );
+    }
+
+    #[test]
+    fn from_lockfile_drops_registry_options_when_the_lock_binds_another_backend() {
+        let restore = |backend: &str| {
+            let request = ToolRequest::new_with_options(
+                Arc::new(BackendArg::new("hk".to_string(), None)),
+                "latest",
+                ToolVersionOptions::default(),
+                ToolSource::Argument,
+            )
+            .unwrap();
+            assert!(
+                request.options().opts.contains_key("workflow"),
+                "the registry pins hk's signing workflow"
+            );
+            let lt = LockfileTool {
+                version: "1.58.1".to_string(),
+                backend: Some(backend.to_string()),
+                specifiers: Default::default(),
+                options: Default::default(),
+                platforms: Default::default(),
+                aube: None,
+                uv: None,
+            };
+            ToolVersion::from_lockfile(request, lt).request.options()
+        };
+        assert!(!restore("aqua:jdx/hk").opts.contains_key("workflow"));
+        // An entry pinned below the registry's `min_version` for Packslip still
+        // binds a request made with `latest`, which carries Packslip's options.
+        let older = {
+            let request = ToolRequest::new_with_options(
+                Arc::new(BackendArg::new("hk".to_string(), None)),
+                "latest",
+                ToolVersionOptions::default(),
+                ToolSource::Argument,
+            )
+            .unwrap();
+            let lt = LockfileTool {
+                version: "1.57.0".to_string(),
+                backend: Some("aqua:jdx/hk".to_string()),
+                specifiers: Default::default(),
+                options: Default::default(),
+                platforms: Default::default(),
+                aube: None,
+                uv: None,
+            };
+            ToolVersion::from_lockfile(request, lt).request.options()
+        };
+        assert!(!older.opts.contains_key("workflow"));
+        // Options a non-first registry backend supplied stay with that backend:
+        // below github's `min_version` the registry picks npm for nub.
+        let nub = |backend: &str| {
+            let request = ToolRequest::new_with_options(
+                Arc::new(BackendArg::new("nub".to_string(), None)),
+                "0.9.0",
+                ToolVersionOptions::default(),
+                ToolSource::Argument,
+            )
+            .unwrap();
+            assert!(request.options().opts.contains_key("allow_builds"));
+            let lt = LockfileTool {
+                version: "0.9.0".to_string(),
+                backend: Some(backend.to_string()),
+                specifiers: Default::default(),
+                options: Default::default(),
+                platforms: Default::default(),
+                aube: None,
+                uv: None,
+            };
+            ToolVersion::from_lockfile(request, lt).request.options()
+        };
+        assert!(nub("npm:@nubjs/nub").opts.contains_key("allow_builds"));
+        assert!(!nub("github:nubjs/nub").opts.contains_key("allow_builds"));
+        assert!(
+            restore("packslip:github.com/jdx/hk")
+                .opts
+                .contains_key("workflow")
+        );
+        // Another project of the same backend type is not the registry's choice.
+        assert!(
+            !restore("packslip:github.com/other/hk")
+                .opts
+                .contains_key("workflow")
         );
     }
 

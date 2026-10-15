@@ -568,6 +568,11 @@ fn aube_install_tree_health(install_path: &Path) -> AubeTreeHealth {
                 .file_type()
                 .is_ok_and(|file_type| !file_type.is_symlink())
             {
+                // Windows junctions do not survive a tar round trip (CI caches of the
+                // installs dir), leaving the package dir without its dependency links.
+                if cfg!(windows) && !virtual_store_entry_links_dependencies(&entry.path()) {
+                    return AubeTreeHealth::Broken;
+                }
                 continue;
             }
             if !entry.path().try_exists().unwrap_or(false) {
@@ -577,6 +582,70 @@ fn aube_install_tree_health(install_path: &Path) -> AubeTreeHealth {
         }
     }
     health
+}
+
+/// Whether every runtime dependency of the package in a virtual-store entry
+/// (`<entry>/node_modules/<name>`) is linked beside it or bundled inside it.
+/// The package is the one real directory there; its dependencies are links.
+fn virtual_store_entry_links_dependencies(entry: &Path) -> bool {
+    let modules = entry.join("node_modules");
+    let Ok(children) = std::fs::read_dir(&modules) else {
+        // Every package entry holds `node_modules`; only the hoisted-deps dir
+        // (`.mise/node_modules`) legitimately lacks one.
+        return entry.file_name().is_some_and(|name| name == "node_modules");
+    };
+    for child in children.flatten() {
+        let mut package = child.path();
+        let is_real_dir = |path: &Path| {
+            path.symlink_metadata()
+                .is_ok_and(|meta| meta.is_dir() && !meta.is_symlink())
+        };
+        if child.file_name().to_string_lossy().starts_with('@') {
+            // A scope dir holds the real package when it is not a link itself.
+            let Ok(scoped) = std::fs::read_dir(&package) else {
+                continue;
+            };
+            let Some(inner) = scoped.flatten().map(|e| e.path()).find(|p| is_real_dir(p)) else {
+                continue;
+            };
+            package = inner;
+        } else if !is_real_dir(&package) {
+            continue;
+        }
+        let Ok(manifest) = std::fs::read(package.join("package.json")) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&manifest) else {
+            continue;
+        };
+        let Some(deps) = manifest.get("dependencies").and_then(|d| d.as_object()) else {
+            continue;
+        };
+        let optional = manifest
+            .get("optionalDependencies")
+            .and_then(|d| d.as_object());
+        for dep in deps.keys() {
+            if optional.is_some_and(|o| o.contains_key(dep)) {
+                continue;
+            }
+            // An empty dir left where a link was lost does not count.
+            let present = modules
+                .join(dep)
+                .join("package.json")
+                .try_exists()
+                .unwrap_or(false)
+                || package
+                    .join("node_modules")
+                    .join(dep)
+                    .join("package.json")
+                    .try_exists()
+                    .unwrap_or(false);
+            if !present {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Whether `path` is the running mise binary: a symlink to it, or a hard link that shares
@@ -946,11 +1015,9 @@ impl Backend for NPMBackend {
         {
             tv.version = version;
         }
-        let source_lockfile_version = if tv.resolved_from_lockfile() {
-            crate::lockfile::version_for_request(&ctx.config, &tv.request)?
-        } else {
-            None
-        };
+        // An upgrade resolves a new version outside the lockfile, but must
+        // still satisfy the graph requirements of the entry it will replace.
+        let source_lockfile_version = self.aube_lockfile_version(&ctx.config, &tv)?;
         if tv.aube_lock.is_some() && package_manager != NpmPackageManager::Aube {
             eyre::bail!(
                 "npm:{} is locked with an embedded-aube dependency graph, but npm.package_manager is set to {}; use the embedded aube package manager or refresh the lockfile",
@@ -998,11 +1065,7 @@ impl Backend for NPMBackend {
             return Ok(false);
         }
         if Self::uses_embedded_aube() && tv.aube_lock.is_none() {
-            let source_lockfile_version = if tv.resolved_from_lockfile() {
-                crate::lockfile::version_for_request(config, &tv.request)?
-            } else {
-                None
-            };
+            let source_lockfile_version = self.aube_lockfile_version(config, tv)?;
             if source_lockfile_version.is_some_and(|version| version >= 2)
                 || Self::aube_lock_creation_enabled(tv)
             {
@@ -1173,6 +1236,20 @@ impl Backend for NPMBackend {
         Ok(tv)
     }
 
+    async fn verify_install(&self, _ctx: &InstallContext, tv: &ToolVersion) -> Result<()> {
+        // A library such as `npm:lodash` installs cleanly but puts nothing on PATH, which
+        // leaves a configured tool that does nothing. Warn rather than fail: `bin` can
+        // change between versions, and a package may be installed only for its files.
+        if !Self::install_has_executables(&tv.install_path()) {
+            warn!(
+                "{}@{} installed no executables, so mise created no shims for it. npm: tools are for command-line programs; add a library to your project's package.json instead.",
+                self.display_backend_name(),
+                tv.version,
+            );
+        }
+        Ok(())
+    }
+
     #[cfg(windows)]
     async fn list_bin_paths(
         &self,
@@ -1199,6 +1276,101 @@ impl Backend for NPMBackend {
 }
 
 impl NPMBackend {
+    /// The lockfile revision that governs this tool version's dependency graph.
+    ///
+    /// A version resolved from the lockfile answers to its entry, graph or not.
+    /// An upgrade resolves outside the lockfile, so it only inherits the
+    /// requirement from a recorded graph: version-only entries (which an
+    /// upgrade of a graphless global tool writes) must stay version-only. A
+    /// bump rewrites the selector itself, which needs `bumped_lockfile_version`.
+    fn aube_lockfile_version(&self, config: &Config, tv: &ToolVersion) -> Result<Option<u32>> {
+        if tv.resolved_from_lockfile() {
+            return crate::lockfile::version_for_request(config, &tv.request);
+        }
+        match Self::graph_lockfile_version(config, &tv.request)? {
+            Some(revision) => Ok(Some(revision)),
+            None => self.bumped_lockfile_version(config, &tv.request),
+        }
+    }
+
+    /// The lockfile revision of the entry matching `request`, if that entry
+    /// records a dependency graph.
+    fn graph_lockfile_version(config: &Config, request: &ToolRequest) -> Result<Option<u32>> {
+        if !Settings::get().lockfile_enabled() {
+            return Ok(None);
+        }
+        match request.lockfile_resolve(config)? {
+            Some(entry) if entry.aube.is_some() => {
+                crate::lockfile::version_for_request(config, request)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The revision of the global request that `request` was bumped from.
+    ///
+    /// `upgrade --bump` replaces the selector (`1.0.0` -> `2.0.0`) before the
+    /// install, so no lockfile entry matches it. The owning global config still
+    /// holds the original request, and a request with the same owner, backend
+    /// and options is that original. Anything other than exactly one such
+    /// request stays version-only; graph creation for global tools is never
+    /// implicit.
+    fn bumped_lockfile_version(
+        &self,
+        config: &Config,
+        request: &ToolRequest,
+    ) -> Result<Option<u32>> {
+        if !Settings::get().lockfile_enabled() {
+            return Ok(None);
+        }
+        let Some(owner) = request.lockfile_source() else {
+            return Ok(None);
+        };
+        let Some(path) = owner
+            .path()
+            .filter(|path| crate::config::is_global_config(path))
+        else {
+            return Ok(None);
+        };
+        // Cheap exit before parsing the config: only a tool the lockfile
+        // already records can have had a graph.
+        if !request
+            .read_lockfile(config)?
+            .tools()
+            .contains_key(&request.ba().short)
+        {
+            return Ok(None);
+        }
+        let Some(cf) = config.config_files.get(path) else {
+            return Ok(None);
+        };
+        // Read the owner itself, not the effective requests: project or
+        // environment overrides can hide the original during `upgrade --global`.
+        let requests = cf.to_tool_request_set()?;
+        let target = PlatformTarget::from_current();
+        let options = self.resolve_lockfile_options(request, &target)?;
+        let full = request.ba().full();
+        let mut original = None;
+        for candidate in requests.tools.values().flatten() {
+            if !candidate.is_os_supported()
+                || candidate.source() != owner
+                || candidate.ba().short != request.ba().short
+                || candidate.ba().full() != full
+                || self.resolve_lockfile_options(candidate, &target)? != options
+            {
+                continue;
+            }
+            if original.is_some() {
+                return Ok(None);
+            }
+            original = Some(candidate);
+        }
+        match original {
+            Some(original) => Self::graph_lockfile_version(config, original),
+            None => Ok(None),
+        }
+    }
+
     /// A credential-safe identifier for diagnostics. Keep `tool_name()` for
     /// install and Git operations, which need the original source URL.
     fn display_tool_name(&self) -> String {
@@ -2243,6 +2415,14 @@ impl NPMBackend {
     /// legacy `aube add --global` installs — use `bin/`. Whichever exists is
     /// returned; the bare install path is the last-resort fallback (some npm
     /// global layouts drop executables at the root on Windows).
+    /// Whether shim generation would find anything to link in this install. An
+    /// unreadable directory counts as having executables, so it cannot cause a warning.
+    fn install_has_executables(install_path: &Path) -> bool {
+        Self::bin_paths_for_install_path(install_path)
+            .iter()
+            .any(|dir| !matches!(crate::shims::list_executables_in_dir(dir), Ok(bins) if bins.is_empty()))
+    }
+
     fn bin_paths_for_install_path(install_path: &Path) -> Vec<std::path::PathBuf> {
         let node_bin = install_path.join("node_modules").join(".bin");
         let bin_dir = install_path.join("bin");
@@ -2739,6 +2919,28 @@ mod tests {
     use super::*;
     use crate::args::{BackendArg, BackendResolution};
     use crate::toolset::{ToolRequest, ToolSource, ToolVersion};
+
+    #[test]
+    fn install_has_executables_matches_what_shims_link() {
+        let install = tempfile::tempdir().unwrap();
+        let node_bin = install.path().join("node_modules").join(".bin");
+
+        // a library install: package files but nothing to link
+        std::fs::create_dir_all(install.path().join("node_modules").join("lodash")).unwrap();
+        std::fs::write(install.path().join("package.json"), "{}").unwrap();
+        assert!(!NPMBackend::install_has_executables(install.path()));
+        std::fs::create_dir_all(&node_bin).unwrap();
+        assert!(!NPMBackend::install_has_executables(install.path()));
+
+        let name = if cfg!(windows) {
+            "prettier.cmd"
+        } else {
+            "prettier"
+        };
+        std::fs::write(node_bin.join(name), "").unwrap();
+        crate::file::make_executable(node_bin.join(name)).unwrap();
+        assert!(NPMBackend::install_has_executables(install.path()));
+    }
 
     #[cfg(unix)]
     fn npm_view_env(dirs: &[&Path]) -> BTreeMap<String, String> {
@@ -4271,7 +4473,7 @@ pkg@1.2.0 '1.2.0'
     fn forgetting_a_cached_aube_tree_checks_it_again() {
         let tmp = tempfile::tempdir().unwrap();
         let virtual_store = tmp.path().join("node_modules/.mise");
-        std::fs::create_dir_all(virtual_store.join("pkg@1.0.0")).unwrap();
+        std::fs::create_dir_all(virtual_store.join("pkg@1.0.0/node_modules/pkg")).unwrap();
         assert!(aube_install_tree_is_healthy_cached(tmp.path()));
 
         // A reinstall replaces the prefix with a tree that links to a missing store.
@@ -4286,9 +4488,61 @@ pkg@1.2.0 '1.2.0'
     }
 
     #[test]
+    fn virtual_store_entry_without_dependency_links_is_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let modules = tmp.path().join("pkg@1.0.0/node_modules");
+        std::fs::create_dir_all(modules.join("@scope/pkg")).unwrap();
+        std::fs::write(
+            modules.join("@scope/pkg/package.json"),
+            r#"{"dependencies":{"dep":"1","opt":"1"},"optionalDependencies":{"opt":"1"}}"#,
+        )
+        .unwrap();
+        let entry = tmp.path().join("pkg@1.0.0");
+        assert!(!virtual_store_entry_links_dependencies(&entry));
+        std::fs::create_dir_all(modules.join("dep")).unwrap();
+        assert!(!virtual_store_entry_links_dependencies(&entry));
+        std::fs::write(modules.join("dep/package.json"), "{}").unwrap();
+        assert!(virtual_store_entry_links_dependencies(&entry));
+
+        let empty = tmp.path().join("empty@1.0.0");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(!virtual_store_entry_links_dependencies(&empty));
+        let hoisted = tmp.path().join("node_modules");
+        std::fs::create_dir_all(&hoisted).unwrap();
+        assert!(virtual_store_entry_links_dependencies(&hoisted));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lost_dependency_junction_makes_aube_tree_broken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("node_modules/.mise");
+        let pkg = store.join("pkg@1.0.0/node_modules");
+        let dep = store.join("dep@1.0.0/node_modules/dep");
+        std::fs::create_dir_all(pkg.join("pkg")).unwrap();
+        std::fs::create_dir_all(&dep).unwrap();
+        std::fs::write(dep.join("package.json"), "{}").unwrap();
+        std::fs::write(
+            pkg.join("pkg/package.json"),
+            r#"{"dependencies":{"dep":"1"}}"#,
+        )
+        .unwrap();
+        junction::create(&dep, pkg.join("dep")).unwrap();
+        assert_ne!(aube_install_tree_health(tmp.path()), AubeTreeHealth::Broken);
+
+        // A tar round trip drops the junction.
+        std::fs::remove_dir(pkg.join("dep")).unwrap();
+        assert_eq!(aube_install_tree_health(tmp.path()), AubeTreeHealth::Broken);
+    }
+
+    #[test]
     fn self_contained_aube_trees_are_cached() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("node_modules/.mise/pkg@1.0.0")).unwrap();
+        std::fs::create_dir_all(
+            tmp.path()
+                .join("node_modules/.mise/pkg@1.0.0/node_modules/pkg"),
+        )
+        .unwrap();
 
         assert_eq!(
             aube_install_tree_health(tmp.path()),

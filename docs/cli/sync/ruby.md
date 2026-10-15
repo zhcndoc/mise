@@ -11,22 +11,29 @@ description: "将 Homebrew 安装的 Ruby 版本符号链接到 mise"
 
 将 Homebrew 安装的 Ruby 版本符号链接到 mise
 
-## 标志
-- **`--brew`** — 从 Homebrew 获取工具版本
-- **`-h --help`** — 打印帮助
+Use this to make versions installed by another version manager available to
+mise. It does not overwrite managed installs, runtime aliases, or links from
+other providers. Homebrew is the only source, so --brew is required. mise
+links each <ruby@X.Y> directory under Homebrew's opt directory, not opt/ruby.
+
+## Flags
+- **`--brew`** — Get tool versions from Homebrew
+- **`-h --help`** — Print help
 
 ## 示例
 
+Link the Homebrew ruby@3.4, then list it with the other installed versions
+
 ```
-brew install ruby
+brew install ruby@3.4
 mise sync ruby --brew
-mise ls ruby --installed # inspect linked versions, then select one with mise use
+mise ls ruby --installed
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [Ruby](/lang/ruby.html)。
-- [`mise sync <SUBCOMMAND>`](/cli/sync.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Ruby](/lang/ruby.html#migrating-from-other-ruby-managers).
+- [`mise sync <SUBCOMMAND>`](/cli/sync.html).
+- [Global flags and argument syntax](/cli/#global-flags).

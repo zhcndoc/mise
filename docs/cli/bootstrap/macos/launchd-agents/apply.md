@@ -11,10 +11,10 @@ description: "从 `[bootstrap.macos.launchd.agents]` 安装并加载 LaunchAgent
 
 从 `[bootstrap.macos.launchd.agents]` 安装并加载 LaunchAgents
 
-## 标志
-- **`-n --dry-run`** — 打印将要运行的命令，但不实际运行
-- **`-y --yes`** — 跳过确认提示
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-n --dry-run`** — Show what would change without changing anything
+- **`-y --yes`** — Skip the confirmation prompt
+- **`-h --help`** — Print help
 
 <!-- 生成的参考文档导航 -->
 

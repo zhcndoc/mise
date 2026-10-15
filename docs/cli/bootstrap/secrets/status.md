@@ -11,15 +11,15 @@ description: "显示已声明的引导密钥输入是否可用"
 
 显示已声明的引导密钥输入是否可用
 
-## 标志
-- **`-J --json`** — 以 JSON 格式输出
-- **`--missing`** — 如果声明的密钥输入不可用，则以代码 1 退出
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-J --json`** — Output in JSON format
+- **`--missing`** — Exit with status 1 if a declared secret input is unset, empty, or not valid Unicode
+- **`-h --help`** — Print help
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [引导密钥](/bootstrap/secrets.html)。
-- [`mise bootstrap secrets <SUBCOMMAND>`](/cli/bootstrap/secrets.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Secret inputs](/bootstrap/secrets.html).
+- [`mise bootstrap secrets <SUBCOMMAND>`](/cli/bootstrap/secrets.html).
+- [Global flags and argument syntax](/cli/#global-flags).

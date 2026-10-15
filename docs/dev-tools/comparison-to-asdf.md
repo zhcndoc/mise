@@ -1,101 +1,138 @@
 ---
-description: "mise 读取 .tool-versions 并支持 legacy asdf 插件"
+description: "Move projects and personal defaults from asdf to mise, with command equivalents and the differences to expect."
 ---
 
-# 与 asdf 的比较
+# Migrating from asdf
 
-mise 读取 `.tool-versions` 并支持 [legacy asdf 插件](/dev-tools/backends/asdf.html)。
-你可以从现有项目的版本声明开始，然后采用 `mise.toml` 来配置[环境变量](/environments/)和[任务](/tasks/)。
-CLI 和插件兼容性尽力而为；mise 有自己的命令、安装目录和后端选择。
+mise reads `.tool-versions` files and can run
+[asdf plugins](/dev-tools/backends/asdf.html), so you can move one project at
+a time while teammates keep using asdf. mise has its own commands, install
+directories, and backends, so check each project after you switch.
 
-## 从 asdf 迁移到 mise
+## Migrate a project {#migrate-from-asdf-to-mise}
 
-在更改 shell 默认设置之前，先从一个项目开始：
+Start in one project before you change your shell setup:
 
-1. [安装 mise](/installing-mise.html)。
-2. 在项目目录中运行 `mise config ls` 和 `mise ls --current`，检查 mise 如何读取现有的 `.tool-versions`。
-3. 运行 `mise install`，然后通过 mise 验证项目命令：
+1. [Install mise](/installing-mise.html).
+2. In the project directory, run `mise config ls` and `mise ls --current` to
+   see how mise reads the existing `.tool-versions`.
+3. Run `mise install`, then check a tool through mise:
 
    ```sh
    mise exec -- node --version
    ```
 
-   将 `node --version` 替换为项目工具中的命令。mise 使用自己的安装目录；不会自动复用 asdf 的安装目录。
+   Use a command from your project's tools in place of `node --version`. mise
+   installs its own copies of each tool. It does not reuse asdf's install
+   directories, and the two managers must not share one.
 
-4. 项目正常运行后，从 shell 启动文件中移除 asdf 激活配置和 shim `PATH` 条目，并[激活 mise](/getting-started.html#activate-mise)。
-   启动新的 shell，然后检查 `mise doctor` 和 `command -v node`。
+4. Once the project works, remove asdf's activation and its shim directory
+   from your shell startup files, and [activate mise](/shell-setup.html). Start
+   a new shell and check `mise doctor` and `command -v node`.
 
-如果团队成员仍在使用 asdf，请保留共享的 `.tool-versions` 文件。要使用 mise 更新该文件，请指定文件并固定一个具体版本：
+To move the project to `mise.toml`, preview the conversion, then write it:
+
+```sh
+mise generate config --tool-versions .tool-versions --dry-run
+mise generate config --tool-versions .tool-versions
+```
+
+Delete `.tool-versions` afterwards unless asdf users still need it. Once every
+project works, you can
+[uninstall asdf](https://asdf-vm.com/manage/core.html#uninstall).
+
+## Command equivalents {#command-compatibility}
+
+| Task                         | asdf                                                     | mise                                                                             |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Install a version            | `asdf install nodejs 24.0.0`                             | `mise install node@24.0.0`                                                       |
+| Select a project version     | `asdf set nodejs 24.0.0` (before 0.16: `asdf local`)     | `mise use node@24.0.0` (also installs)                                           |
+| Select a personal default    | `asdf set -u nodejs 24.0.0` (before 0.16: `asdf global`) | `mise use -g node@24.0.0`                                                        |
+| Add a plugin                 | `asdf plugin add nodejs`                                 | Not needed for registry tools; otherwise `mise plugins install <name> <git-url>` |
+| List installed versions      | `asdf list nodejs`                                       | `mise ls node`                                                                   |
+| List available versions      | `asdf list all nodejs`                                   | `mise ls-remote node`                                                            |
+| Show the latest version      | `asdf latest nodejs`                                     | `mise latest node`                                                               |
+| Inspect selected versions    | `asdf current`                                           | `mise ls --current`                                                              |
+| Find the selected executable | `asdf which node`                                        | `mise which node`                                                                |
+| Show an install directory    | `asdf where nodejs`                                      | `mise where node`                                                                |
+| Run with selected versions   | `asdf exec node -v`                                      | `mise exec -- node -v`                                                           |
+| Uninstall a version          | `asdf uninstall nodejs 24.0.0`                           | `mise uninstall node@24.0.0`                                                     |
+| Rebuild shims                | `asdf reshim`                                            | `mise reshim`                                                                    |
+
+asdf 0.16 rewrote asdf in Go and replaced `asdf local` and `asdf global` with
+[`asdf set`](https://asdf-vm.com/manage/versions.html). `mise set` is
+unrelated: it sets environment variables. Use `mise use` for tool versions.
+
+mise accepts some asdf spellings, such as `mise install node 24.0.0` and the
+tool names `nodejs` and `golang`, but it does not emulate asdf completely. Use
+mise's own syntax in scripts, and the names `node` and `go` in `mise.toml`.
+
+## Share `.tool-versions` with asdf users {#share-tool-versions}
+
+Keep a shared `.tool-versions` while teammates still use asdf. To update it
+with mise, name the file and pin a concrete version that asdf accepts:
 
 ```sh
 mise use --path .tool-versions --pin node@24
 ```
 
-避免在 asdf 必须读取的文件中使用 mise 专用前缀或后端标识符。
-同一目录中的 `mise.toml` 会优先于它声明的工具，因此在同时保留这两个文件之前，请检查是否存在冲突的声明。
+Keep [mise-only requests](/dev-tools/versions.html#request-syntax) such as
+`prefix:`, `sub-`, and backend names like `aqua:jqlang/jq` out of a file that
+asdf reads. A `mise.toml` in the same directory takes precedence for the tools
+it declares, so check for conflicting declarations before you keep both files.
+Tools listed only in `.tool-versions` are not written to
+[`mise.lock`](/dev-tools/mise-lock.html), and `--locked` does not check them.
 
-对于个人默认设置，请使用 `mise use -g node@24` 或编辑
-`~/.config/mise/config.toml`。在项目之外运行 `mise config ls`，查看哪些 home／全局文件正在为你的环境提供配置。请明确复制所需的版本，而不要移动或重写 asdf 的安装。
+## Personal defaults {#personal-defaults}
 
-## go 版 asdf（0.16+）
-
-asdf 0.16 使用 Go 替代了旧的 Bash 实现，并更改了部分 CLI。特别是，当前的 asdf 使用 `asdf set` 写入版本。请参阅
-[asdf 的版本命令](https://asdf-vm.com/manage/versions.html)。
-`mise set` 的用途不同：它用于写入环境变量。工具版本请使用 `mise use`。
-
-## 用户体验
-
-`mise use` 会合并安装和配置。例如：
+mise keeps personal defaults in `~/.config/mise/config.toml`. Choose the
+versions you want and set them with `mise use -g`:
 
 ```sh
-mise use node@24 python@3.14
-mise exec -- node --version
+mise use -g node@24 python@3.14
 ```
 
-这会记录两个工具的版本请求，并在必要时安装它们。
-克隆已配置的项目后，`mise install` 会安装其中的工具，而不会更改声明。通常不需要单独安装插件：
-注册表会选择一个后端，许多工具使用内置后端。
+mise also reads `~/.tool-versions`, because it looks for `.tool-versions` in
+every parent directory. asdf's global versions therefore keep applying to
+projects under your home directory until you move them into
+`~/.config/mise/config.toml` and delete or trim that file. Run `mise config ls`
+from your home directory to see both files.
 
-## 命令兼容性
+Copy versions one by one rather than converting the file wholesale. Check
+entries that list several versions or use aliases, and keep the old file until
+every tool works.
 
-在脚本中优先使用 mise 文档中的命令语法。某些旧版 asdf 写法可以使用，但兼容性别名并不能完整模拟 asdf。
+## What works differently {#what-works-differently}
 
-| 目标                         | asdf 命令                    | mise 命令                              |
-| ---------------------------- | ---------------------------- | -------------------------------------- |
-| 安装特定版本                 | `asdf install nodejs 24.0.0` | `mise install node@24.0.0`             |
-| 选择项目版本                 | `asdf set nodejs 24.0.0`     | `mise use node@24.0.0`（也会安装）    |
-| 选择个人默认版本             | `asdf set -u nodejs 24.0.0`  | `mise use -g node@24.0.0`              |
-| 列出可用版本                 | `asdf list all nodejs`       | `mise ls-remote node`                  |
-| 检查已选择的版本             | `asdf current`               | `mise ls --current`                    |
-| 查找已选择的可执行文件       | `asdf which node`            | `mise which node`                      |
-| 重建 shims                   | `asdf reshim`                | `mise reshim`                          |
+### When versions are selected {#performance}
 
-mise 可识别旧版工具名称 `nodejs` 和 `golang`，而其 TOML 配置使用规范名称 `node` 和 `go`。
+With `mise activate`, mise updates `PATH` and environment variables at the
+shell prompt and when you change directories, and later commands run the tool
+executables directly. asdf resolves a tool through a shim each time you call
+it. mise also has [shims](/dev-tools/shims.html#overview) for programs that
+need a stable executable path; they resolve the version on every call, as
+asdf's do.
 
-## 性能
+### Plugins and security {#security}
 
-主要区别在于版本选择运行的时机。使用正常的 `mise activate` 时，mise 会在 shell 提示符处或受支持的目录变更钩子中更新 `PATH` 和环境变量。后续工具调用会直接使用这些可执行文件路径。
-asdf 则会在工具被调用时通过 shim 解析工具。
+An asdf plugin is a shell script that runs on your machine whenever you
+install a tool, so you trust its maintainer as well as the tool's publisher.
+mise installs most registry tools through built-in backends with no plugin.
+Some backends also verify what they download: packslip checks a signed release
+manifest, and aqua applies the checksum, cosign, SLSA, or attestation checks
+its registry declares. Verification depends on the tool, so check
+`mise tool <name>`. See [Security](/security.html).
 
-mise 还会为需要稳定可执行文件路径的程序提供 shims。其开销取决于命令通过 mise 的频率；使用 `mise exec -- <script>` 可以为脚本及其子进程准备一次环境。基于 Bash 的旧版 asdf 的历史基准不能反映当前 asdf 的性能。请参阅
-[shims](/dev-tools/shims.html) 了解行为上的权衡。
+### Windows {#windows-support}
 
-## Windows 支持
+mise runs natively on Windows for tools and backends that publish Windows
+builds. asdf plugins are shell scripts and need a Unix environment; mise does
+not make them work natively on Windows. See
+[Installing mise](/installing-mise.html) for Windows setup.
 
-mise 为兼容的工具和后端提供原生 Windows 支持。可用性仍取决于工具的发布产物和安装逻辑。旧版 asdf shell 插件通常需要 Unix 环境；使用 mise 不会使这些插件变成原生 Windows 安装程序。请参阅
-[Windows](/installing-mise.html#windows-scoop)。
+### Tools without an asdf plugin {#extra-backends}
 
-## 供应链安全
-
-asdf 插件会在工具管理期间执行 shell 代码。通过任一管理器使用插件时，除了信任工具发布者之外，还需要信任插件维护者。mise 可以通过内置下载后端安装许多工具，而无需外部插件。
-
-## 安全性
-
-验证方式因发行版而异。例如，packslip 会验证签名清单，aqua 支持其注册表条目中描述的验证方法。仅凭工具或后端名称，不能保证特定产物带有签名。请参阅[安全指南](/security.html)，了解信任、验证和配置控制。
-
-## 额外的后端
-
-如果注册表提供了简写，请使用注册表简写，或者明确选择软件包源：
+Use a registry name when one exists, or choose a package source explicitly:
 
 ```toml [mise.toml]
 [tools]
@@ -104,4 +141,6 @@ ripgrep = "latest"
 "npm:prettier" = "3"
 ```
 
-这里的 npm 后端需要 Node.js，因此两者都进行了声明。其他后端可以安装发布的二进制文件、Python CLI、Rust crate 或私有工具。请参阅[后端参考](/dev-tools/backends/)，了解前置条件和选项。
+Prettier needs Node.js at runtime, so both are declared. Other
+[backends](/dev-tools/backends/) install release binaries, Python CLIs, Rust
+crates, and private tools.

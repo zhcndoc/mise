@@ -11,18 +11,23 @@ description: "向数组设置项追加一个值"
 
 向数组设置项追加一个值
 
-将值添加到数组设置项（例如 `disable_hints`）中，同时保留现有条目  
-默认情况下，这会修改 ~/.config/mise/config.toml，或使用 `--local` 修改本地配置
+Adds the value to an array setting such as `disable_hints`, keeping existing
+entries. Writes ~/.config/mise/config.toml, or the nearest project config
+with `--local`.
 
-## 参数
-- **`<SETTING>`** — 要设置的设置项
-- **`[VALUE]`** — 要设置的值（如果以 KEY=VALUE 的形式提供，则可选）
+## Arguments
+- **`<SETTING>`** — The array setting to append to
+- **`[VALUE]`** — The value to append (or pass SETTING=VALUE)
 
-## 标志
-- **`-l --local`** — 使用本地配置文件而不是全局配置文件
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-l --local`** — Write to the nearest project config instead of the global config
+
+  The nearest project config is the lowest-precedence TOML file in the nearest directory that has one, or ./mise.toml.
+- **`-h --help`** — Print help
 
 ## 示例
+
+Stop showing the python_multi hint
 
 ```
 mise settings add disable_hints python_multi

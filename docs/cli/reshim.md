@@ -11,24 +11,29 @@ description: "为已安装的工具提供的可执行文件创建 shim"
 
 为已安装的工具提供的可执行文件创建 shim
 
-当某个可执行文件是在 mise 外部添加到现有安装中的时运行此命令，
-例如语言包管理器全局安装 CLI 后。默认情况下，它会重建用户 shim 目录；`--system` 选择共享系统 shim farm。
+Run this when an executable was added to an existing installation outside
+mise, for example after a language package manager installed a CLI globally.
+It rebuilds your shim directory (~/.local/share/mise/shims by default).
+`--system` rebuilds the system shim directory used by `mise install --system`.
 
-为所有已安装的版本创建 shim。调用时，shim 根据当前配置解析要运行的版本。`--force` 会重建由 mise
-拥有的 shim；它不会将无关文件转换为由 mise 拥有的 shim。
+Shims are created for all installed versions. When invoked, a shim picks the
+version to run from the current config. `--force` rebuilds mise-owned shims;
+it does not turn unrelated files into mise-owned shims.
+See <https://mise.jdx.dev/dev-tools/shims.html>
 
-## 标志
-- **`-f --force`** — 重建所有由 mise 拥有的 shim
-- **`--system`** — 重建系统 shim farm
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-f --force`** — Rebuild all mise-owned shims
+- **`--system`** — Rebuild the system shims, for tools installed with `mise install --system`
+- **`-h --help`** — Print help
 
 ## 示例
 
-重建 shim，然后检查 node。示例输出：`v20.0.0`。
+Rebuild shims, then run node through its shim
 
 ```
 mise reshim
 ~/.local/share/mise/shims/node -v
+v24.11.0
 ```
 
 <!-- generated reference navigation -->

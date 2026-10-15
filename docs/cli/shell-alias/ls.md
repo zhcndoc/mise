@@ -12,14 +12,16 @@ description: "列出 shell 别名"
 
 列出 shell 别名
 
-显示当前目录中设置的 shell 别名。
-这些别名在 `mise.toml` 的 `[shell_alias]` 部分中定义。
+Lists the shell aliases configured for the current directory: the
+`[shell_alias]` entries of every config file mise loads here.
 
-## 选项
-- **`--no-header`** — 不显示表头
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--no-header`** — Do not print the table header
+- **`-h --help`** — Print help
 
 ## 示例
+
+List the aliases set in this directory
 
 ```
 mise shell-alias ls

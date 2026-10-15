@@ -2,7 +2,8 @@
   <input
     class="filter"
     type="text"
-    placeholder="按简写或完整名称筛选"
+    placeholder="按工具、别名或后端筛选"
+    aria-label="筛选工具"
     v-model="filter"
     autofocus="autofocus"
   />
@@ -13,9 +14,9 @@
   <table class="full-width">
     <thead>
       <tr>
-        <th>简写</th>
-        <th>完整名称</th>
-        <th>操作系统</th>
+        <th>工具</th>
+        <th>后端（首选在前）</th>
+        <th>平台</th>
       </tr>
     </thead>
     <tbody>
@@ -34,6 +35,11 @@
             v-html="highlightMatches(entry.short)"
           ></a>
           <span v-else v-html="highlightMatches(entry.short)"></span>
+          <span
+            v-if="entry.aliases.length > 0"
+            class="aliases"
+            v-html="`另有别名：${highlightMatches(entry.aliases.join(', '))}`"
+          ></span>
           <a
             class="mise-versions"
             :href="`https://mise-versions.jdx.dev/tools/${encodeURIComponent(entry.short)}`"
@@ -44,9 +50,11 @@
         <td>
           <span v-for="(backend, index) in entry.backends">
             <a
-              :href="`${backend.url}`"
+              v-if="backend.url"
+              :href="backend.url"
               v-html="highlightMatches(backend.name)"
             ></a>
+            <span v-else v-html="highlightMatches(backend.name)"></span>
             <span
               v-for="feature in backend.verification"
               :key="feature"
@@ -58,8 +66,9 @@
           </span>
         </td>
         <td>
+          <span v-if="entry.os.length === 0">任何平台</span>
           <span v-for="(os, index) in entry.os"
-            >{{ os }}<span v-if="index < entry.os.length - 1">, </span>
+            >{{ os }}<span v-if="index < entry.os.length - 1">、</span>
           </span>
         </td>
       </tr>
@@ -108,6 +117,7 @@ export default {
 
         return (
           short.includes(searchTerm) ||
+          entry.aliases.some((a) => a.toLowerCase().includes(searchTerm)) ||
           entry.backends.some((b) => b.name.toLowerCase().includes(searchTerm))
         );
       });
@@ -153,7 +163,11 @@ export default {
         .includes(this.filter.toLowerCase());
       if (!matchExists) return text;
 
-      const re = new RegExp(this.filter, "ig");
+      // Escape the filter: names contain regex metacharacters such as ".".
+      const re = new RegExp(
+        this.filter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "ig",
+      );
       return text.replace(
         re,
         (matchedText) =>
@@ -207,6 +221,12 @@ export default {
   display: block;
   margin-bottom: 10px;
   font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+
+.aliases {
+  display: block;
+  font-size: 12px;
   color: var(--vp-c-text-2);
 }
 

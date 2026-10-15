@@ -1,38 +1,55 @@
 ---
-description: "设置一台使用 mise 的机器"
+description: "Track your dotfiles, declare tools and packages, and bring a second machine to the same setup through a private Git repository."
+socialDescription: "Track dotfiles, declare tools and packages, and set up a second machine from Git."
 ---
 
-# 使用 mise 设置一台机器
+# Set up a machine
 
-在原来的位置继续编辑你的 dotfiles。本指南介绍如何保存本地历史记录、恢复文件，以及如何选择通过 Git 仓库共享你的设置。从一个文件开始；尝试恢复一次更改后，再添加更多文件。
+This tutorial takes one machine from a single tracked file to a declared setup,
+then brings a second machine to the same state with one command. You keep
+editing your files where they are. mise saves their history locally and shares
+it through a private Git repository.
 
-## 安装 mise
+You need Git on each machine (on macOS, the Xcode Command Line Tools) and an
+empty private repository on GitHub or another Git host. The examples use zsh;
+[Shell activation](/bootstrap/shell.html) has the Bash and fish equivalents.
 
-如果已经安装了 mise，可以跳过前两条命令
+## On your first machine
+
+### Install mise
+
+Skip this step if `mise --version` already works.
 
 ```sh
-curl https://mise.run | sh
+curl -fsSL https://mise.run | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## 跟踪文件
+The installer puts `mise` in `~/.local/bin`. The `export` line affects only the
+current shell; a later step puts that directory on `PATH` for new shells. See
+[Installing mise](/installing-mise.html) for other methods.
 
-在使用 zsh 的 macOS 上：
+### Track a file
+
+Track your shell's startup file:
 
 ```sh
 mise dot track ~/.zshrc
 ```
 
-在使用 Bash 的 Omarchy 上，改用 `~/.bashrc`。选择一个已经存在的文件；下面的示例使用 `~/.zshrc`。
+Pick a file that already exists. If you use Bash, track `~/.bashrc` instead;
+the rest of this tutorial uses `~/.zshrc`.
 
-跟踪会将文件当前的内容保存为**检查点**，这是一个之后可以恢复的版本。它会保留文件原来的位置，并将以下条目添加到 `~/.config/mise/config.toml`：
+Tracking saves the file's current contents as a checkpoint, a version you can
+restore later. The file stays where it is, and mise adds this entry to
+`~/.config/mise/config.toml`:
 
 ```toml
 [dotfiles]
 "~/.zshrc" = { mode = "track" }
 ```
 
-## 自动保存编辑内容
+### Save edits automatically
 
 将此表添加到 `~/.config/mise/config.toml`：
 
@@ -48,128 +65,193 @@ mise bootstrap services apply
 mise dot status
 ```
 
-监视器会将编辑内容保存到本地 Git 历史记录中。在 Linux 上，它作为 systemd 用户服务运行；在 macOS 上作为 LaunchAgent 运行；在 Windows 上作为计划任务运行。历史记录仓库与所编辑的文件分开存储。
+The watcher saves your edits to local Git history, kept apart from the files
+themselves. It runs as a systemd user service on Linux, a LaunchAgent on macOS,
+or a Scheduled Task on Windows. If you would rather save by hand, skip the
+service and run `mise dot save` after editing.
 
-如果你更希望手动保存，可以跳过服务，并在编辑后运行 `mise dot save`。
+### Declare tools, packages, and shell activation
 
-## 检查并恢复更改
+Add the rest of this machine's setup to `~/.config/mise/config.toml`, merging
+the `[dotfiles]` table with the one already there:
 
-编辑已跟踪的文件，然后立即保存一个检查点，这样无需等待监视器即可检查它：
+```toml
+[tools]
+node = "24"
+
+[bootstrap.packages]
+"brew:tmux" = { os = "macos" }
+"apt:tmux" = "latest"
+
+[dotfiles]
+"~/.zshrc" = { mode = "track" }
+"~/.zshenv/local-bin" = { line = 'export PATH="$HOME/.local/bin:$PATH"' }
+
+[bootstrap.mise_shell_activate]
+zprofile = "shims"
+```
+
+Each part does one job:
+
+- `[tools]` installs Node.js with mise.
+- `[bootstrap.packages]` installs tmux with Homebrew on macOS and with apt on
+  Debian or Ubuntu. An entry whose package manager is missing on a machine is
+  skipped, so one config can list both.
+- The `[dotfiles]` line entry adds `~/.local/bin` to `PATH` in `~/.zshenv`,
+  which zsh reads first, so new shells find `mise`. Leave it out if you
+  installed mise with a package manager that puts it on `PATH`.
+- `zprofile = "shims"` puts tool shims on `PATH` for login shells, including
+  the ones editors start without a prompt.
+
+For interactive shells, add `eval "$(mise activate zsh)"` to your tracked
+`~/.zshrc` if it is not there yet. The tracked file carries the line to your
+other machines. This config sets only `zprofile`, so mise leaves `~/.zshrc` to
+you; with `zsh = true`, mise would add its own activation block to the tracked
+file as well. See [Shell activation](/bootstrap/shell.html) for both modes.
+
+Preview the changes, then apply them:
+
+```sh
+mise bootstrap --dry-run
+mise bootstrap
+```
+
+Open a new shell and run `mise doctor` to check that activation works.
+
+### Inspect and restore a change
+
+Edit your tracked file, then save a checkpoint now so you can inspect it without
+waiting for the watcher:
 
 ```sh
 mise dot save ~/.zshrc
 mise dot history --path ~/.zshrc
 ```
 
-要查看某个检查点的更改，请将 `CHECKPOINT_ID` 替换为列表中的 ID：
+To see what a checkpoint changed, replace `CHECKPOINT_ID` with an ID from that
+list:
 
 ```sh
 mise dot history diff CHECKPOINT_ID --path ~/.zshrc --patch
 ```
 
-要恢复到上一个版本：
+To go back to the previous version:
 
 ```sh
 mise dot rollback ~/.zshrc
 ```
 
-回滚会选择与当前文件不同的最新已保存版本。确认前请检查建议的更改。它会先保存当前内容，因此你可以撤销回滚：
+Rollback picks the latest saved version that differs from the current file,
+shows the change, and applies it. It saves the current contents first, so you
+can reverse the rollback:
 
 ```sh
 mise dot undo
 ```
 
-回滚会创建一个新的提交，并保留你之前留下的版本。如果启用了下面介绍的共享功能，恢复的版本可以到达你的其他机器。
+A rollback is a new commit, so the versions you left behind stay in history.
+Once you share your setup, the restored version reaches your other machines
+too.
 
-## 共享你的设置（可选）
+### Connect a private repository {#share-your-setup-optional}
 
-要在多台计算机之间共享更改，请连接一个私有 Git 仓库，称为 **origin**。首先，跟踪你的 mise 配置，这样下一台机器也可以安装你的工具并启动监视器：
+To share your setup, connect a private Git repository, called an origin. First,
+track your mise configuration, so the next machine also gets your tools,
+packages, shell activation, and the watcher:
 
 ```sh
 mise dot track ~/.config/mise/config.toml
 ```
 
-创建一个空的私有 GitHub 仓库，然后在此机器上进行身份验证：
+Authenticate with your repository host. For GitHub:
 
 ```sh
 mise use -g gh
-mise x gh -- gh auth login --hostname github.com --git-protocol https --web
-mise x gh -- gh auth setup-git --hostname github.com
+mise exec gh -- gh auth login --hostname github.com --git-protocol https --web
+mise exec gh -- gh auth setup-git --hostname github.com
 ```
 
-凭据助手允许后台同步在无需交互式提示的情况下进行身份验证。你也可以使用凭据可供监视器使用的 SSH 远程仓库。
+The Git credential helper lets the watcher authenticate in the background
+without a prompt. An SSH remote with credentials available to the watcher works
+too.
 
-连接之前，请检查已跟踪的文件及其历史记录。每个已保存的版本都会被共享，包括之前的本地编辑内容。之后从文件中删除凭据，也不会将其从旧提交中删除。对于需要加密的文件，请在首次保存之前配置[加密跟踪](/history.html#encrypted-shared-files)，并将私有解密密钥保存在跟踪范围之外。
+::: warning Everything you saved gets shared
+Connecting an origin pushes every saved version, including earlier edits. A
+credential you later delete from a file stays in old commits. Set up
+[encrypted files](/dotfiles/encryption.html) before a file's first save if it
+needs encryption, and keep private decryption keys out of tracking.
+:::
 
-将 `you/setup` 替换为你的仓库。此示例启用自动共享：
+Replace `you/setup` with your repository and connect it:
 
 ```sh
 mise dot origin set https://github.com/you/setup.git --sync sync
 ```
 
-确认前请检查连接预览。监视器运行时，默认情况下，已保存的编辑会在五分钟内推送。它每十五分钟检查一次其他机器上的更改，并将其应用到你的文件中。在下面设置第二台机器后，编辑内容可以双向传递。
+mise prints a preview of the connection, then connects. With the watcher
+running, `--sync sync`
+pushes your saved edits shortly after each save
+([`history.sync_interval`](/configuration/settings.html#history.sync_interval))
+and checks for changes from other machines on a schedule
+([`history.fetch_interval`](/configuration/settings.html#history.fetch_interval)).
+To exchange changes only when you ask, connect with `--sync manual` or
+`--sync fetch-only` instead; see
+[Choose a sync mode](/dotfiles/sync.html#choose-a-sync-mode).
 
-### 选择同步时机
+## On a new machine {#set-up-another-machine}
 
-如果你希望决定何时交换更改，请在连接时使用 `--sync manual`。之后可以使用 `mise settings set history.sync MODE` 更改模式：
+### Install and authenticate
 
-| 模式         | 监视器行为                                                   |
-| ------------ | ------------------------------------------------------------ |
-| `sync`       | 发布已保存的更改，获取并应用传入的更改                       |
-| `manual`     | 在本地保存；等待你运行网络命令                             |
-| `fetch-only` | 获取远程更改，供你检查和应用                             |
-
-在手动模式下，mise 会继续在本地保存。运行以下命令来保存最新编辑、推送所有累积的提交、获取远程更改并应用它们：
+Install Git, then install mise and authenticate with your repository host:
 
 ```sh
-mise dot save
-mise dot sync
-mise dot pull
+curl -fsSL https://mise.run | sh
+export PATH="$HOME/.local/bin:$PATH"
+mise exec gh@latest -- gh auth login --hostname github.com --git-protocol https --web
+mise exec gh@latest -- gh auth setup-git --hostname github.com
 ```
 
-这些命令在你想立即同步时也适用于自动模式。拉取只会恢复文件，不会运行设置。当共享更改更新工具、服务、模板源或 `bootstrap` 任务时，请运行 `mise bootstrap` 应用该配置、渲染模板并运行任务。在完整 bootstrap 运行前，`mise dot status` 会持续提醒你。
+`mise exec gh@latest` runs `gh` without writing it to your global config, which
+your shared configuration is about to provide.
 
-## 设置另一台机器
-
-先安装 Git。然后安装 mise，并使用同一个仓库主机进行身份验证：
+### Adopt your setup
 
 ```sh
-curl https://mise.run | sh
-export PATH="$HOME/.local/bin:$PATH"
-mise use -g gh
-mise x gh -- gh auth login --hostname github.com --git-protocol https --web
-mise x gh -- gh auth setup-git --hostname github.com
 mise bootstrap --adopt you/setup
 ```
 
-确认前请检查建议的文件。Bootstrap 会恢复已跟踪的文件，并应用已保存的 mise 配置，包括监视器服务。如果历史记录中缺少配置或必需的模板源，bootstrap 会报告你需要在第一台机器上跟踪并共享哪些文件。
+`you/setup` is shorthand for a GitHub repository. For another host, pass the
+full URL, such as `git@gitea.example.com:you/setup.git`.
 
-将文件无法覆盖的设置步骤（例如安装 shell 插件或修复权限）放在共享配置的 tasks.bootstrap 中：
+mise lists the files it will restore, restores them, and then runs bootstrap
+from the restored configuration: it installs the packages
+and tools, writes the `PATH` line and shell activation, and starts the watcher.
+If the configuration or a template source it needs is missing from history,
+bootstrap names the files to track and share from the first machine.
+
+Put setup that files do not cover, such as installing shell plugins or fixing
+permissions, in the shared configuration's `[tasks.bootstrap]`:
 
 ~~~toml
 [tasks.bootstrap]
 run = "install -d -m 700 ~/.ssh"
 ~~~
 
-采用时会在文件恢复后运行一次该任务；之后每次 mise bootstrap 也会再次运行，因此请确保它可以安全重复。[history.reload] 不能替代它：mise 会在恢复文件前读取 reload 命令，因此随采用一起到达的配置表不会被执行。
+Adoption runs the task once the files are restored, and every later
+`mise bootstrap` runs it again, so make it safe to repeat.
 
-任何 Git 主机都可以使用。OWNER/REPO 是 GitHub 的简写，其他主机请传入完整 URL：
+### If the machine already has these files {#when-the-machine-already-has-these-files}
 
-~~~sh
-mise bootstrap --adopt git@gitea.example.com:you/setup.git
-~~~
+A new machine often already has a `~/.zshrc`. mise never overwrites it during
+adoption. Files that match the repository are accepted silently, but a file
+that differs is held for a decision, and adoption stops before it bootstraps
+anything:
 
-URL 不得嵌入凭据。请使用 SSH agent，或为 HTTPS 使用 Git credential helper。
-
-### 机器已经存在这些文件时
-
-第二台机器通常已经有 ~/.bashrc 或 ~/.config/mise/config.toml。mise 从不覆盖它们。与仓库匹配的文件会静默接受；每个有差异的文件都会等待决定，并暂停采用：
-
-~~~
+```text
 the setup from <url> is paused; nothing was bootstrapped.
-~~~
+```
 
-这是采用流程的预期行为，不代表失败。请先列出等待处理的内容，然后接收仓库中的所有版本：
+List what is waiting, then take the repository's version of everything:
 
 ~~~sh
 mise dot status
@@ -182,131 +264,100 @@ mise dot pull --take-remote-all
 mise bootstrap --adopt you/setup --take-remote-all
 ~~~
 
---take-remote-all 会先保存将被替换的版本，因此 mise dot undo 可以撤销整个拉取。最后一个路径决定后，同一次 pull 会写入其余受跟踪文件。随后运行 mise bootstrap，完成点文件以外的部分，例如工具和服务。
+mise saves each version it replaces first, so `mise dot undo` reverses the whole
+pull. Once the last file is decided, the same `pull` writes the remaining
+tracked files. Then run `mise bootstrap` to finish the parts that are not
+dotfiles, such as tools and services.
 
-如果想逐个决定路径，请指定路径：
-
-~~~sh
-mise dot pull --take-remote ~/.bashrc
-~~~
-
-若要保留此机器的文件版本，请先保存它。--keep-local 会通过发布此机器保存的版本来解决冲突；新机器还没有可保存的版本：
-
-~~~sh
-mise dot save ~/.bashrc
-mise dot pull --keep-local ~/.bashrc
-~~~
-
---keep-local 也可以指定整批选择中的例外。下面的命令会接收除 ~/.bashrc 外的所有仓库版本：
-
-~~~sh
-mise dot pull --take-remote-all --keep-local ~/.bashrc
-~~~
-
-::: tip
-在采用前将冲突文件移开，可以完全避免这些决定：不存在的路径会直接写入。
-:::
-
-如果此机器已经保存了自己的历史记录，例如在共享它们之前跟踪过相同文件，采用时会因为两个历史记录无关而停止。--replace-history 会丢弃此机器的历史并采用仓库的历史。现有的差异文件仍需要选择，因此请将它与 --take-remote-all 结合使用：
-
-~~~sh
-mise bootstrap --adopt you/setup --replace-history --take-remote-all
-~~~
-
-被替换的版本会先保存在采用后的历史顶部，因此 `mise dot undo` 可以恢复它们。--force-dotfiles 无关：它适用于 [dotfiles] 的 link 和 copy 目标，而不是共享历史。
-
-在此机器上启用自动共享并检查其状态：
-```sh
-mise settings set history.sync sync
-mise dot status
-```
-
-如果希望此机器使用其他模式，请在这里选择 `manual` 或 `fetch-only`。
-
-有关通过 SSH 进行设置的信息，请参阅[远程 bootstrap](/bootstrap/remote.html)。对于私有 GitHub 仓库，可以从此机器借用只读访问权限：
-
-```sh
-mise bootstrap remote --host devbox --install-mise --adopt you/setup \
-  --github-relay-read-only --github-relay-repo you/setup
-```
-
-本次运行只读借用 GitHub 访问权限。目标机器需要拥有自己的凭据才能持续同步。
-
-## 解决冲突
-
-如果两台机器更改了相同的行，mise 会保留两个版本，并暂停为所有已跟踪文件推送和应用传入的更改。它会继续在本地保存并获取更新。在受支持的 Linux 和 macOS 安装上，桌面通知默认启用。`status` 和 `mise doctor` 也会报告暂停状态，包括在 Windows 或无头机器上。
-
-检查冲突：
-
-```sh
-mise dot status
-mise dot conflicts ~/.zshrc
-```
-
-第二条命令会显示已保存的本地版本与获取的仓库版本之间的差异。传入 `--difftool` 可使用 Git 配置的差异工具；如果未设置差异工具，则使用其配置的合并工具。检查不会更改或解决任一方。
-
-选择仓库中的文件版本：
+To decide one file at a time, name it:
 
 ```sh
 mise dot pull --take-remote ~/.zshrc
 ```
 
-或者保留此机器上的版本：
+To keep this machine's version of a file, save it first. `--keep-local`
+publishes this machine's saved version, and a new machine has not saved one
+yet:
 
 ```sh
+mise dot save ~/.zshrc
 mise dot pull --keep-local ~/.zshrc
 ```
 
-在共享恢复之前，先解决所有报告的冲突。在手动模式下，运行 `mise dot sync` 来发布你的解决结果。
-
-## 使用模板（可选）
-
-对于直接编辑的文件，请使用跟踪。当你希望 mise 根据配置值渲染文件时，请使用模板。
-
-将以下条目添加到 `~/.config/mise/config.toml`，并将它们合并到现有的 `[vars]` 和 `[dotfiles]` 表中。此示例使用一个未占用的目标路径：
-
-```toml
-[vars]
-email = "you@example.com"
-
-[dotfiles]
-"~/templates" = { mode = "track" }
-"~/.config/mise-template-example.ini" = { source = "~/templates/example.ini.tera", mode = "template" }
-```
-
-创建 `~/templates/example.ini.tera`（如果需要，请先创建 `~/templates`）：
-
-```ini
-[user]
-    email = {{ vars.email }}
-```
-
-运行 `mise bootstrap` 以渲染 `~/.config/mise-template-example.ini`。它将包含 `[vars]` 中的电子邮件地址。之后如需更改，请编辑模板或其变量。跟踪 `~/templates` 会保存并共享这些源文件。若还要保存渲染文件的历史记录，请为它添加跟踪条目。
-
-请参阅[dotfiles](/dotfiles.html)了解模板和特定操作系统的变体。
-
-## 添加更多文件
-
-在 Omarchy 上，从你编辑的单个配置文件开始。在跟踪目录之前，请先检查该目录：主题、插件、背景和应用程序状态可能不适合放入 dotfile 历史记录。对于嵌套的 Git 仓库，历史记录会记录它所指向的提交；请单独备份该仓库。
-
-更新之前，保存当前已跟踪的文件：
+`--keep-local` also names exceptions to a blanket choice. This takes the
+repository's version of everything except `~/.zshrc`:
 
 ```sh
-mise dot save --best-effort
+mise dot pull --take-remote-all --keep-local ~/.zshrc
 ```
 
-这会保存你已跟踪的 dotfiles。对于软件包和其他系统状态，请使用操作系统的备份工具。
+Moving the conflicting files aside before `mise bootstrap --adopt` avoids these
+decisions, because mise writes a missing file directly.
 
-在 macOS 上，你可以将已跟踪的文件与其 Linux 对应文件分开：
+If this machine already saved history of its own, for example because it
+tracked the same files before you shared them, adoption stops because the two
+histories are unrelated. `--replace-history` discards this machine's history
+and adopts the repository's. Files that differ still need a decision, so
+combine it with `--take-remote-all`:
 
 ```sh
-mise dot track ~/.zshrc --os macos
+mise bootstrap --adopt you/setup --replace-history --take-remote-all
 ```
 
-在任一平台上，都可以使用以下命令检查跟踪和监视器状态：
+mise saves the versions it replaces first, on top of the adopted history, so
+`mise dot undo` restores them. `--force-dotfiles` is unrelated: it applies to
+`[dotfiles]` link and copy targets, not to shared history.
+
+### Check the connection
 
 ```sh
 mise dot status
 ```
 
-有关目录排除和保存选项，请参阅[dotfiles](/dotfiles.html)。有关服务管理和其他平台的信息，请参阅[用户服务](/bootstrap/services.html)。
+The new machine shares changes in the mode set by
+[`history.sync`](/configuration/settings.html#history.sync). From here, edits
+on either machine reach the other. A pull restores files but runs no setup, so
+after a shared change to tools, packages, services, or the `bootstrap` task, run
+`mise bootstrap` to apply it. `mise dot status` reminds you until you do.
+
+To set up a machine over SSH from this one, see
+[Remote hosts](/bootstrap/remote.html#private-configuration-repositories). mise
+fetches your private repository here, using this machine's Git credentials, and
+sends it to the host. The host needs its own credentials only for later
+synchronization.
+
+## Add more files
+
+Track configuration files you edit by hand. Preview a directory before you
+track it with `mise dot track --dry-run <dir>`: themes, plugins, caches, and
+application state usually do not belong in history. mise skips a nested Git
+repository and records nothing for it; track its root as a separate entry, or
+back it up separately. See
+[nested repositories](/dotfiles/history.html#nested-repositories).
+
+Before a system upgrade, save everything once:
+
+```sh
+mise dot save --best-effort
+```
+
+This saves your tracked dotfiles only. Use your operating system's backup tools
+for packages and other system state.
+
+To keep a different version of a file on another operating system, track it
+for that OS, for example `mise dot track ~/.zshrc --os macos`. See
+[History](/dotfiles/history.html) for variants, exclusions, and save options.
+
+## Next steps
+
+- If two machines change the same lines, mise pauses sharing and keeps both
+  versions. `mise dot status` and `mise doctor` report it; follow
+  [Resolve a conflict](/dotfiles/sync.html#resolve-a-conflict) to pick a
+  version.
+- To create a file from variables, such as a `~/.gitconfig` with a different
+  email on each machine, use a template; see
+  [Templates](/dotfiles/managed.html#templates).
+- To give each machine a different combination of setup, see
+  [Machine modules](/bootstrap/modules.html).
+- For the watcher on other platforms and service management, see
+  [Services](/bootstrap/services.html).

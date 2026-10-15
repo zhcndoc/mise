@@ -18,7 +18,7 @@ members = [
 
 [package]
 name = "mise"
-version = "2026.10.4"
+version = "2026.10.9"
 edition = "2024"
 description = "Dev tools, env vars, and tasks in one CLI"
 authors = ["Jeff Dickey (@jdx)"]
@@ -46,6 +46,8 @@ include = [
   "/src/**/*.rs",
   "/src/system/history/notify/macos.m",
   "/src/system/history/notify/macos.plist",
+  "/src/enclave/macos.swift",
+  "/src/enclave/macos.plist",
   "/src/assets/**",
   "/src/plugins/core/assets/**",
   "/src/system/packages/brew/*.rb",
@@ -112,13 +114,13 @@ chrono = { version = "0.4", default-features = false, features = [
   "clock",
 ] }
 ci_info = "0.14"
-usage_rs = { package = "usage-rs", version = "6.11", features = [
+usage_rs = { package = "usage-rs", version = "7.0", features = [
   "completions",
   "config",
   "diagnostics",
   "validation",
 ] }
-usage-cli = "6.11"
+usage-cli = "7.0"
 color-eyre = { version = "0.6", default-features = false, features = [
   "track-caller",
 ] }
@@ -187,7 +189,7 @@ pathdiff = "0.2"
 petgraph = "0.8"
 phf = "0.14"
 rand = "0.10"
-rattler = { version = "0.52", default-features = false }
+rattler = { version = "0.53", default-features = false }
 rattler_conda_types = { version = "0.56", default-features = false }
 rattler_repodata_gateway = { version = "0.36", default-features = false, features = [
   "gateway",
@@ -232,7 +234,6 @@ same-file = "1"
 serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1"
 serde_json = "1"
-serde_yaml = "0.9"
 semver = "1"
 sha2 = "0.11"
 blake3 = "1"
@@ -258,7 +259,7 @@ unicode-normalization = "0.1"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["v7"] }
-usage-lib = { version = "6.11", features = ["docs"] }
+usage-lib = { version = "7.0", features = ["docs"] }
 versions = { version = "8", features = ["serde"] }
 vfox = { path = "crates/vfox", default-features = false }
 aqua-registry = { path = "crates/aqua-registry" }
@@ -299,6 +300,7 @@ nix = { version = "0.31", features = [
   "feature",
   "fs",
   "hostname",
+  "resource",
   "signal",
   "term",
   "user",
@@ -334,8 +336,8 @@ eyre = "0.6"
 phf_codegen = "0.14"
 regex = "1"
 semver = "1"
-serde = "1"
-serde_yaml = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde-saphyr = "1"
 toml = "1"
 
 [dev-dependencies]
@@ -407,12 +409,7 @@ ignored = [
   "openssl",
   "phf_codegen",
   "rust-embed",
-]
-
-[package.metadata.release]
-pre-release-replacements = [
-  { file = "docs/installing-mise.md", search = "MISE_VERSION=v[0-9]+\\.[0-9]+\\.[0-9]+", replace = "MISE_VERSION=v{{version}}" },
-  { file = "docs/installing-mise.md", search = "/download/v[0-9]+\\.[0-9]+\\.[0-9]+/mise-v[0-9]+\\.[0-9]+\\.[0-9]+-linux-x64", replace = "/download/v{{version}}/mise-v{{version}}-linux-x64" },
+  "serde-saphyr", # Used by build.rs to read the aqua registry metadata.
 ]
 
 [lints.rust]

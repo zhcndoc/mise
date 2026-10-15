@@ -12,27 +12,35 @@ description: "列出工具版本别名"
 
 列出工具版本别名
 
-别名可以在用户配置中定义，也可以由插件通过 `bin/list-aliases` 提供。
-
-在用户配置中，可以在 `~/.config/mise/config.toml` 中按如下方式定义别名：
+Lists version aliases from `[tool_alias.<tool>.versions]` in any loaded
+config file and the aliases that tool backends provide, such as node's
+`lts-*` names or an asdf plugin's `bin/list-aliases`. For example:
 
 ```
 [tool_alias.node.versions]
 project = "20"
 ```
 
-## 参数
-- **`[TOOL]`** — 显示 &lt;TOOL> 的别名
+Backend aliases (`[tool_alias] tool = "backend"`) are not listed; run
+`mise tool <TOOL>` to see the backend a tool uses.
 
-## 标志
-- **`--no-header`** — 不显示表头
-- **`-h --help`** — 打印帮助
+## Arguments
+- **`[TOOL]`** — Only show aliases for this tool
+
+## Flags
+- **`--no-header`** — Do not print the table header
+- **`-h --help`** — Print help
 
 ## 示例
 
+List node's version aliases
+
 ```
-mise tool-alias ls
-node  lts-jod      22
+mise tool-alias ls node
+tool  alias      version
+node  lts        24
+node  lts-jod    22
+node  project    20
 ```
 
 <!-- generated reference navigation -->

@@ -1,20 +1,28 @@
 ---
-description: "直接从 GitLab 发布资产安装预构建工具。"
+description: "Install prebuilt tools from GitLab release links on gitlab.com or a self-managed instance."
 ---
 
-# GitLab 后端
+# gitlab backend
 
-`gitlab` 后端直接从 GitLab 仓库安装发布资产。它非常适合通过 GitLab releases 分发预构建二进制文件的工具。
+The `gitlab` backend installs a tool from the files linked in a GitLab project's
+releases, on gitlab.com or a self-managed instance. It shares its implementation
+with the [github backend](/dev-tools/backends/github.html) and accepts the same
+[tool options](/dev-tools/backends/github.html#tool-options); this page covers
+what is different.
 
-此后端的代码位于 mise 仓库中的 [`./src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs)。
+<a id="usage"></a>
 
 ## 用法
 
-GitLab release 链接同时具有显示名称和下载 URL。
-`asset_pattern` 匹配的是**显示名称**，它可能与文件名不同。
-例如，GitLab Runner 将其 Linux 二进制文件命名为 `binary: Linux amd64`。
+List a project's versions:
 
-将以下内容添加到项目的 `mise.toml` 中，以用于 Linux x64 或 macOS arm64：
+```sh
+mise ls-remote gitlab:gitlab-org/gitlab-runner
+```
+
+GitLab Runner names its release links after the platform, such as
+`binary: Linux amd64`, not after the file. This configuration matches each
+platform's link by that name and names the downloaded executable:
 
 ```toml
 [tools."gitlab:gitlab-org/gitlab-runner"]
@@ -25,430 +33,92 @@ bin = "gitlab-runner"
 linux-x64 = { asset_pattern = "binary: Linux amd64" }
 macos-arm64 = { asset_pattern = "binary: macOS arm64" }
 ```
+
+Install it and run it:
 
 ```sh
 mise install
 mise exec -- gitlab-runner --version
 ```
 
-这会安装可执行文件，但不会注册 runner 或创建服务。
-对于其他平台或发布版本，请检查项目的发布链接并调整模式。版本列表使用带有附加链接的发布版本，而不是任意 Git 标签或 GitLab 生成的源代码归档。
+This installs the executable; it does not register a runner or start a service.
+For another platform, look up the link names on the project's Releases page and
+add a `platforms` entry.
+
+## Differences from the github backend
+
+| Behavior                                                                       | github                                                       | gitlab                                                                                     |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Name tested by `asset_pattern`, `matching`, `matching_regex` and autodetection | The asset's file name                                        | The release link's display name, such as `binary: Linux amd64`                             |
+| Releases that `mise ls-remote` lists                                           | Releases with assets, from up to three pages of 100          | Releases with at least one link, from the newest 100 only                                  |
+| `latest`                                                                       | The release GitHub marks as Latest                           | The newest listed release                                                                  |
+| `prerelease`                                                                   | Uses GitHub's prerelease flag                                | GitLab has no prerelease flag, so every release is listed; see [Prereleases](#prereleases) |
+| Checksums found automatically                                                  | The digest GitHub reports, or a checksum file in the release | A checksum file among the release links                                                    |
+| GitHub artifact attestations and SLSA provenance                               | Checked                                                      | Not available; pin artifacts with `checksum` or [mise.lock](/dev-tools/mise-lock.html)     |
+| Default `api_url`                                                              | `https://api.github.com`                                     | `https://gitlab.com/api/v4`                                                                |
+
+### Link names
+
+Because mise matches release links by display name, write `asset_pattern` and
+`matching` against the names shown on the Releases page. mise names the
+downloaded file after the link too, so when a link's name has no file
+extension, set [`bin`](/dev-tools/backends/github.html#bin) for a single
+binary, as in the example above, or
+[`format`](/dev-tools/backends/github.html#format) for an archive.
+
+### Version listing
+
+mise reads only the newest 100 releases, so `mise ls-remote` and version
+prefixes do not see older ones. Set `MISE_LIST_ALL_VERSIONS=1` to list every
+release. An exact version, such as `@16.8.0`, installs even when it is not
+listed. mise lists only releases that have at least one link, never Git tags or
+GitLab's generated source archives.
+
+### Prereleases
+
+GitLab releases carry no prerelease flag, so `mise ls-remote` lists every
+release. `latest` and version prefixes still skip versions whose names look like
+prereleases, such as `2.0.0-rc1`. Set
+[`prerelease = true`](/dev-tools/backends/github.html#prerelease) on the tool to
+include them.
+
+<a id="authentication"></a>
 
 ## 身份验证
 
-对于私有仓库或更高的 API 限额，mise 支持多种 GitLab 令牌来源。
+Public projects need no token. For a private project, a self-managed instance
+or rate limits, set `MISE_GITLAB_TOKEN` or another token source; see
+[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html). Run
+`mise token gitlab` to see which token mise uses.
 
-### 令牌优先级
+## Self-managed GitLab
 
-mise 按以下顺序检查这些来源，并使用找到的第一个令牌：
+Set `api_url` to your instance's API and provide a token for that host, for
+example with `MISE_GITLAB_ENTERPRISE_TOKEN`; see
+[self-managed hosts](/dev-tools/github-tokens.html#github-enterprise). mise
+lists releases through that API and downloads each release link from the URL it
+names.
 
-1. `MISE_GITLAB_ENTERPRISE_TOKEN`（适用于非 `gitlab.com` 主机）
-2. `MISE_GITLAB_TOKEN`
-3. `GITLAB_TOKEN`
-4. `credential_command`（如果已设置）
-5. `gitlab_tokens.toml`（按主机）
-6. glab CLI 配置（`config.yml`，如果启用）
-7. `git credential fill`（如果 `gitlab.use_git_credentials=true`）
+### `api_url` {#api-url}
 
-### 环境变量
-
-```sh
-export MISE_GITLAB_TOKEN="glpat-xxxxxxxx"
-```
-
-对于自托管的 GitLab 实例：
-
-```sh
-export MISE_GITLAB_ENTERPRISE_TOKEN="glpat-yyyyyyyy"
-```
-
-### 令牌文件（`gitlab_tokens.toml`）
-
-```toml
-# ~/.config/mise/gitlab_tokens.toml
-[tokens."gitlab.com"]
-token = "glpat-xxxxxxxx"
-
-[tokens."gitlab.mycompany.com"]
-token = "glpat-yyyyyyyy"
-```
-
-### `credential_command`
-
-在**全局** `~/.config/mise/config.toml` 中设置此项。项目配置不能设置 `credential_command`。该命令必须只将令牌输出到 stdout：
-
-```toml
-[settings.gitlab]
-credential_command = "op read 'op://Private/GitLab Token/credential'"
-```
-
-mise 使用已配置的默认内联 shell 执行此命令。目标主机名可通过 `MISE_CREDENTIAL_HOST` 获取，提供程序名称（`gitlab`）可通过 `MISE_CREDENTIAL_PROVIDER` 获取。为兼容起见，支持 `sh` 兼容的 shell（`ash`、`bash`、`dash`、`ksh`、`sh` 和 `zsh`）也会将主机名作为 `$1`/`${1}` 传递。
-
-:::: warning 计划弃用
-旧的 `$1`/`${1}` 主机名参数已被弃用。请改用 `MISE_CREDENTIAL_HOST`。mise 将在 `2026.11.0` 开始发出警告，并且 `$1` 兼容性将在 `2027.11.0` 中移除。
-::::
-
-### glab CLI 集成
-
-mise 可以从 [glab](https://gitlab.com/gitlab-org/cli) 配置中读取令牌作为回退方案。它会检查：
-
-1. `$GLAB_CONFIG_DIR/config.yml`
-2. `~/.config/glab-cli/config.yml` — glab 在所有平台上的旧位置，只要该文件存在，glab 仍会优先使用此位置
-3. `$XDG_CONFIG_HOME/glab-cli/config.yml`
-4. `~/Library/Application Support/glab-cli/config.yml`（macOS）
-5. `%LOCALAPPDATA%\glab-cli\config.yml`（Windows — glab 会将 `XDG_CONFIG_HOME` 解析为 `%LOCALAPPDATA%`，不同于使用 `%APPDATA%` 的 `gh`）
-
-使用以下配置禁用此回退方案：
-
-```toml
-[settings.gitlab]
-glab_cli_tokens = false
-```
-
-### `git credential fill` 回退
-
-作为最后的手段，mise 可以查询 git 凭据 helper：
-
-```toml
-[settings.gitlab]
-use_git_credentials = true
-```
-
-这会使用 `git credential fill`，并支持由诸如 macOS 钥匙串之类的 helper 存储的凭据。
-
-### 调试令牌解析
-
-使用 `mise token gitlab` 查看 mise 在给定主机上会使用哪个令牌：
-
-```sh
-mise token gitlab
-mise token gitlab gitlab.mycompany.com
-```
-
-令牌诊断信息默认会被遮蔽。`--unmask` 会打印实际凭据；仅在需要获取密钥本身时使用，并避免将其写入共享日志。
-
-## 工具选项
-
-特定平台的下载 URL 支持与 [GitHub 后端](/dev-tools/backends/github.html#platform-specific-urls)相同的版本模板。
-
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `gitlab` 后端——这些选项应放在 `mise.toml` 中的 `[tools]` 里。
-
-### 资产自动检测
-
-当未指定 `asset_pattern` 时，mise 会自动为你的平台选择最佳资产。它会根据以下因素为资产评分：
-
-- **操作系统兼容性**（linux、macos、windows）
-- **架构兼容性**（x64、arm64、x86、arm）
-- **Libc 变体**（Linux 使用 gnu 或 musl，Windows 使用 msvc）
-- **归档格式偏好**（tar.gz、zip 等）
-- **构建类型**（避免调试/测试构建）
-
-对于大多数工具，无需指定模式即可安装：
-
-```sh
-mise install gitlab:user/repo
-```
-
-::: tip
-自动检测逻辑实现在 [`src/backend/asset_matcher.rs`](https://github.com/jdx/mise/blob/main/src/backend/asset_matcher.rs) 中，它被 GitHub、GitLab 和 Forgejo 后端共享。
-:::
-
-### `asset_pattern`
-
-指定一个用于匹配发布链接显示名称的 glob。当你的操作系统/架构组合存在多个资产，或者需要覆盖自动检测时，此选项非常有用。
-
-```toml
-[tools."gitlab:gitlab-org/gitlab-runner"]
-version = "latest"
-bin = "gitlab-runner"
-asset_pattern = "binary: Linux amd64"
-```
-
-### `matching`
-
-将资产选择范围缩小到名称中包含给定子字符串的资产，同时**保留平台自动检测**。与 [`asset_pattern`](/dev-tools/backends/gitlab.html#asset-pattern)（会完全取代自动检测）不同，`matching` 只会细化候选集——自动检测仍会从缩小后的列表中选择正确的操作系统/架构，因此同一份配置可以跨平台使用。
-
-当仓库发布了**多个二进制文件，作为按平台分别提供的资产**，而自动检测无法判断你想要哪一个时，就应使用这个选项。
-
-```toml
-[tools]
-# 当一次发布为每个平台提供了多个二进制文件（例如 `mytool-cli` 和
-# `mytool-server`），matching 会在所有操作系统/架构上选择一个，
-# 而无需硬编码平台专属的 asset_pattern。
-"gitlab:owner/repo" = { version = "latest", matching = "mytool-cli" }
-```
-
-也可以使用 `[key=value]` 语法在命令行中内联传入工具选项：
-
-```sh
-mise use "gitlab:owner/repo[matching=mytool-cli]"
-```
-
-`matching` 是区分大小写的子字符串测试，因此当某个值同时也是另一个资产名称的子字符串时（例如同时发布了 `tool-*` 和 `tool-extras-*`，却设置 `matching = "tool"`），它无法唯一选择你的二进制文件。需要精确匹配时，请使用带锚点的 [`matching_regex`](/dev-tools/backends/gitlab.html#matching-regex)。
-
-如果同时设置了 [`asset_pattern`](/dev-tools/backends/gitlab.html#asset-pattern)，则它具有优先级，`matching`/`matching_regex` 会被忽略——`asset_pattern` 会完全取代自动检测，因此不再存在可供它们缩小范围的候选集。它们会被静默忽略：设置了 `asset_pattern` 时，mise 永远不会检查 `matching_regex`，无效的正则表达式也不会被报告，因为 mise 不会针对已被取代的选项报错。
-
-### `matching_regex`
-
-类似于 [`matching`](#matching)，但资产名称必须匹配给定的正则表达式。当子字符串不够精确时，请使用此选项。匹配区分大小写；如需不区分大小写的匹配，请使用内联 `(?i)` 标志。
-
-```toml
-[tools]
-"gitlab:owner/repo" = { version = "latest", matching_regex = "^mytool-cli-" }
-```
-
-如果同时设置了 `matching` 和 `matching_regex`，那么资产必须同时满足**两者**（逻辑 AND）
-才能保持为候选项。
-
-::: warning
-`matching`/`matching_regex` **不是**安装路径的一部分——它由工具名称（`owner/repo` 或 `tool_alias`）和版本作为键。若要从同一个发布版本安装两个二进制文件，请为每个文件分别提供一个 [`tool_alias`](/dev-tools/backends/github.html#multiple-assets-from-the-same-release)，这样它们就会获得不同的安装目录；如果重复使用相同的 `gitlab:owner/repo` 字符串并搭配不同的 `matching` 值，它们会解析到同一个目录，第二次安装会覆盖第一次。
-:::
-
-### `version_prefix`
-
-指定发布标签的自定义版本前缀。默认情况下，mise 会处理常见的 `v` 前缀（例如 `v1.0.0`），但有些仓库使用不同的前缀，比如 `release-`、`version-`，或者根本不使用前缀。
-
-当配置了 `version_prefix` 时，mise 将会：
-
-- 过滤带有该前缀的可用版本，并去除该前缀
-- 在搜索发布版本时添加该前缀
-- 在安装期间同时尝试带前缀和不带前缀的版本
-
-```toml
-[tools]
-"gitlab:user/repo" = { version = "latest", version_prefix = "release-" }
-```
-
-**示例：**
-
-- 使用 `version_prefix = "release-"` 时：
-  - 用户指定 `1.0.0` → mise 搜索 `release-1.0.0` 标签
-  - 可用版本显示为 `1.0.0`（去除了前缀）
-- 使用 `version_prefix = ""`（空字符串）时：
-  - 用户指定 `1.0.0` → mise 搜索 `1.0.0` 标签（无前缀）
-  - 适用于不使用任何前缀的仓库
-
-### 各平台特定的资源模式
-
-要为每个平台使用不同的资产模式：
-
-```toml
-[tools."gitlab:gitlab-org/gitlab-runner"]
-version = "latest"
-bin = "gitlab-runner"
-
-[tools."gitlab:gitlab-org/gitlab-runner".platforms]
-linux-x64 = { asset_pattern = "binary: Linux amd64" }
-macos-arm64 = { asset_pattern = "binary: macOS arm64" }
-```
-
-### `checksum`
-
-为**特定版本和构件**设置预期摘要。将下面的占位符替换为从可信来源获取的完整 SHA-256 摘要：
-
-```toml
-[tools."gitlab:owner/repo"]
-version = "1.0.0"
-asset_pattern = "tool-1.0.0-x64.tar.gz"
-checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST"
-```
-
-_与其在这里指定校验和，不如使用 [mise.lock](/dev-tools/mise-lock) 来管理校验和。_
-
-### 特定平台校验和
-
-每个平台都需要自己的摘要。以下值是占位符；请在安装前从发布者处获取这些值，或生成 [mise.lock](/dev-tools/mise-lock.html)。
-
-```toml
-[tools."gitlab:gitlab-org/gitlab-runner"]
-version = "19.3.1"
-bin = "gitlab-runner"
-
-[tools."gitlab:gitlab-org/gitlab-runner".platforms]
-linux-x64 = {
-  asset_pattern = "binary: Linux amd64",
-  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
-}
-macos-arm64 = {
-  asset_pattern = "binary: macOS arm64",
-  checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST",
-}
-```
-
-### `size`
-
-可选地检查预期字节数。下面的数字仅用于说明；请使用所选构件的实际大小，并固定其版本。大小检查不会验证发布者身份，也不能替代校验和：
-
-```toml
-[tools]
-"gitlab:owner/repo" = { version = "1.0.0", size = "12345678" }
-```
-
-### 特定平台大小
-
-使用每个构件的实际字节数；以下数字用于说明语法：
-
-```toml
-[tools."gitlab:gitlab-org/gitlab-runner"]
-version = "19.3.1"
-bin = "gitlab-runner"
-
-[tools."gitlab:gitlab-org/gitlab-runner".platforms]
-linux-x64 = { asset_pattern = "binary: Linux amd64", size = "12345678" }
-macos-arm64 = { asset_pattern = "binary: macOS arm64", size = "9876543" }
-```
-
-### `strip_components`
-
-提取归档时要剥离的目录组件数：
-
-```toml
-[tools]
-"gitlab:owner/repo" = { version = "1.0.0", strip_components = 1 }
-```
-
-::: info
-当 `strip_components` 和 `bin_path` 均未设置时，如果提取的归档在根级别恰好包含一个目录且不包含文件，mise 会自动应用 `strip_components = 1`。这在 ripgrep 等工具中很常见，它们会将二进制文件打包在带版本号的目录中（例如 `ripgrep-14.1.0-x86_64-unknown-linux-musl/rg`）。自动检测会将二进制文件直接放入安装路径中，也就是 mise 预期的位置。
-:::
-
-### `bin`
-
-将下载的二进制文件重命名为指定名称。这对于平台特定名称的单二进制文件下载很有用：
-
-```toml
-[tools."gitlab:myorg/mytool"]
-version = "1.0.0"
-asset_pattern = "mytool-linux-x86_64"
-bin = "mytool"  # 将 mytool-linux-x86_64 重命名为 mytool
-```
-
-::: info
-下载单个二进制文件（而非归档）时，mise 会自动从文件名中移除操作系统/架构后缀。例如，`mytool-linux-x86_64` 会变为 `mytool`。只有在需要特定自定义名称时，才使用 `bin` 选项。
-:::
-
-### `rename_exe`
-
-从归档中提取可执行文件后重命名。归档包含平台特定名称的二进制文件时，此选项非常有用：
-
-```toml
-[tools."gitlab:myorg/mytool"]
-version = "latest"
-asset_pattern = "mytool_linux.zip"
-rename_exe = "mytool"  # 将解压后的二进制文件重命名为 mytool
-```
-
-::: tip
-对于二进制文件名称与你需要的名称不同的归档，请使用 `rename_exe`。对于单二进制文件下载（非归档），请使用 `bin`。
-:::
-
-### `no_app`
-
-在自动检测期间跳过 macOS .app 捆绑包资产，并优先选择独立 CLI 二进制文件。当仓库同时提供 macOS .app 捆绑包（通常是 Xcode 扩展或 GUI 应用程序）和独立命令行工具时，此选项非常有用：
-
-```toml
-[tools."gitlab:myorg/mytool"]
-version = "latest"
-no_app = true
-```
-
-当 `no_app = true` 时：
-
-- 包含 `.app.` 的资产（例如 `Tool.app.zip`、`Tool.for.Xcode.app.zip`）会在自动检测期间被降低优先级
-- 独立归档会被优先选择
-- 此选项主要用于 macOS 资产选择；非 macOS 的 `.app.` 资产已经会因平台匹配而被降低优先级
-- 它只会影响自动检测；显式的 `asset_pattern` 值会按原样使用
-
-### `bin_path`
-
-路径是相对于应用 `strip_components` 后的安装目录而言的。设置 `bin_path` 会禁用自动根目录剥离。对于形如 `tool-VERSION/bin/tool` 的归档，可以保留外层目录并使用 `bin_path = "tool-{{ version }}/bin"`，或者同时设置 `strip_components = 1` 和 `bin_path = "bin"`。
-
-::: v-pre
-指定解压归档中包含二进制文件的目录，或指定下载文件的放置位置。此选项支持使用 `{{ version }}` 以及 `{{ os() }}` / `{{ arch() }}` 函数进行 Tera 模板化：
-:::
-
-```toml
-[tools."gitlab:owner/repo"]
-version = "1.0.0"
-strip_components = 1
-bin_path = "bin" # for an archive shaped like tool-VERSION/bin/tool
-```
-
-这两个函数都接受关键字参数，用于重新映射 mise 将要输出的值（`os()` 使用 `linux`、`macos`、`windows`；`arch()` 使用 `x64`、`arm64`），以适应上游项目使用不同目录名称的情况：
-
-```toml
-[tools."gitlab:owner/repo"]
-version = "latest"
-# expands to tool-1.0.0-linux-x86_64/bin
-strip_components = 0
-bin_path = 'tool-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/bin'
-```
-
-::: tip
-如上所示，当模板包含双引号时，请使用单引号括起来的 TOML 字符串。
-:::
-
-::: v-pre
-不存在单独的 `{{ os }}` / `{{ arch }}` 变量，也不存在 `{{ x86_64_arch }}` 风格的别名——要获取这些名称，应使用 `{{ arch(x64="x86_64", arm64="aarch64") }}`。
-:::
-
-**二进制文件路径查找顺序：**
-
-1. 如果指定了 `bin_path`，则使用该目录
-2. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
-3. 如果安装路径根目录包含可执行文件，则使用安装路径根目录
-4. 如果不存在 `bin/` 目录，则在子目录中搜索 `bin/` 目录
-5. 如果未找到 `bin/` 目录，则在直接子目录中搜索可执行文件。如果在某个子目录中直接找到可执行文件，则该子目录会被视为二进制文件路径
-6. 如果未找到可执行文件，则使用提取目录的根目录
-
-### `filter_bins`
-
-要链接到筛选后的 `.mise-bins` 目录中的二进制文件列表。当工具附带你不希望暴露在 PATH 中的额外二进制文件时，这很有用。
-
-```toml
-[tools]
-"gitlab:myorg/mytool" = { version = "1.0.0", filter_bins = "mybin" }
-"gitlab:myorg/other-tool" = { version = "1.0.0", filter_bins = ["mybin", "helper"] }
-```
-
-启用后：
-
-- 会创建一个 `.mise-bins` 子目录，其中只包含指向指定二进制文件的符号链接
-- 其他二进制文件不会暴露在 PATH 中
-
-### `api_url`
-
-对于自托管的 GitLab 实例，请指定 API URL。mise 使用此 URL 列出发布版本并查找发布资产；当浏览器下载 URL 无法访问，或实例是自定义或私有实例时，也可能使用此 URL 下载资产：
+The base URL of the GitLab API. It defaults to `https://gitlab.com/api/v4`.
 
 ```toml
 [tools]
 "gitlab:myorg/mytool" = { version = "latest", api_url = "https://gitlab.mycompany.com/api/v4" }
 ```
 
-## 私有 GitLab 仓库
+## Tool options
 
-要从 `gitlab.com` 上的私有仓库安装工具，请设置 `MISE_GITLAB_TOKEN` 环境变量进行身份验证：
-
-```sh
-export MISE_GITLAB_TOKEN="your-token"
-```
-
-## 自托管 GitLab
-
-对于自托管的 GitLab 实例，请设置 `api_url` 工具选项，并可选择设置 `MISE_GITLAB_ENTERPRISE_TOKEN` 环境变量进行身份验证：
-
-```sh
-export MISE_GITLAB_ENTERPRISE_TOKEN="your-token"
-```
-
-## 支持的 GitLab 语法
-
-- **最新发布版本的 GitLab 简写：** `gitlab:gitlab-org/gitlab-runner`
-- **特定发布版本的 GitLab 简写：** `gitlab:gitlab-org/gitlab-runner@16.8.0`
+The `gitlab` backend accepts the
+[github backend's tool options](/dev-tools/backends/github.html#tool-options)
+for selecting assets, choosing versions, extracting files and verifying
+downloads, with the differences listed above. The GitHub-only options
+`github_attestations`, `slsa_signer_identity` and `slsa_signer_issuer` have no
+effect here.
 
 ## 设置
 
-<script setup>
-import Settings from '/components/settings.vue';
-</script>
-
-<Settings child="gitlab" :level="3" />
+The [`gitlab` settings](/configuration/settings.html#gitlab) choose the token
+mise sends; see
+[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html).

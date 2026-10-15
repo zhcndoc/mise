@@ -194,7 +194,7 @@ impl SystemPackageManager for AurManager {
         if crate::system::sudo::is_root() {
             bail!("AUR packages cannot be built as root; run mise as a non-root user");
         }
-        crate::system::sudo::ensure_elevation_available(&shell_words::join(&command))?;
+        crate::system::sudo::ensure_sudo_available(&shell_words::join(&command))?;
         let mut runner = CmdLineRunner::new(helper);
         for arg in &args {
             runner = runner.arg(arg);
@@ -223,6 +223,7 @@ impl SystemPackageManager for AurManager {
             &InstallOpts {
                 dry_run: opts.dry_run,
                 update: true,
+                ask: false,
             },
         )
         .await
@@ -270,6 +271,7 @@ mod tests {
             &InstallOpts {
                 dry_run: false,
                 update: true,
+                ask: false,
             },
         );
         assert_eq!(

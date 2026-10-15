@@ -1,10 +1,18 @@
 ---
-description: "`[bootstrap.groups]` 和 `[bootstrap.users]` 以声明方式管理本地 Linux 账户。"
+description: "Create, update, and remove local Linux users and groups with mise bootstrap."
 ---
 
 # Linux 用户和组
 
-`[bootstrap.groups]` 和 `[bootstrap.users]` 以声明方式管理本地 Linux 账户。mise 会先应用组，再应用用户，并在应用受管理的文件之前应用账户，因此受管理的文件可以安全地引用在同一配置中创建的账户。
+`[bootstrap.groups]` and `[bootstrap.users]` declare local Linux accounts, such
+as a service user and its groups. mise applies them before it writes
+[system files](/bootstrap/files.html), so a file can name an account from the
+same config as its owner.
+
+## Example
+
+This creates a system user for a cache service, with its own group and read
+access to container logs through a second group:
 
 ```toml
 [bootstrap.groups.mise-cache]
@@ -23,29 +31,63 @@ comment = "mise cache service"
 create_home = true
 ```
 
-现有用户必须显式指定主 `group`。该组可以在同一配置中管理，也可以已存在于主机上。可选的 `uid` 和 `gid` 字段用于固定数字 ID；如果请求的 ID 属于其他账户，mise 会报告 `unknown` 并拒绝应用。创建账户时，`system = true` 会选择平台的系统账户范围，但不会重新归类现有账户。更改现有的数字 UID 或 GID 只会更新账户数据库；mise 不会递归改写现有文件的所有权。
+Preview the changes, then apply them:
 
-用户字段在指定时会收敛管理，省略时则不受管理：
+```sh
+mise bootstrap accounts apply --dry-run
+mise bootstrap accounts apply
+```
 
-- `uid`、`group`、`home`、`shell` 和 `comment` 管理相应的 passwd 字段。
-- `groups` 管理附加组。默认情况下，mise 只添加缺失的成员关系，并保留配置中未列出的成员关系。
-- `exclusive_groups = true` 会使 `groups` 成为精确配置。此时显式设置 `groups = []` 会移除所有附加组成员关系。
-- `create_home` 控制新用户主目录的创建。普通用户默认为 `true`，系统用户默认为 `false`。
-- `move_home = true` 会在更改 `home` 时移动现有主目录；不设置时，只会更改 passwd 条目。
+## Before you apply
 
-名称会作为经过类型处理的进程参数传递，绝不会通过 shell 传递。mise 在其范围严格受限的提权辅助程序中使用标准的 shadow-utils 命令（`groupadd`、`groupmod`、`groupdel`、`useradd`、`usermod` 和 `userdel`）。此功能仅适用于 Linux。
+Applying changes needs root. Unless you are already root, mise starts a
+privileged copy of itself with sudo, and that copy runs the shadow-utils
+commands `groupadd`, `groupmod`, `groupdel`, `useradd`, `usermod`, and
+`userdel`. sudo can prompt for a password in an interactive terminal; otherwise
+mise needs passwordless sudo.
+[`system_packages.sudo = false`](/configuration/settings.html#system_packages.sudo)
+forbids elevation, so only root can apply. Names reach these commands as
+arguments, never through a shell.
 
-在非 Linux 主机上，诸如 `mise bootstrap`、`mise bootstrap status` 和 `mise bootstrap plan` 之类的聚合命令会在发出警告后忽略这些声明，以便同一配置可以跨平台共享。显式执行 `mise bootstrap accounts` 命令时则会失败，而不是静默地不执行任何操作。当托管文件或目录将这些被忽略的声明之一指定为其所有者或组时，该所有权字段也会在发出警告后被忽略。其内容、模式以及任何不相关的本地所有者或组仍会正常收敛。
+Minimal images may lack those commands, and mise then stops with
+`required account command 'useradd' was not found`. Install the package that
+provides them, such as `shadow` on Alpine.
 
-## 预览和应用
+## Change existing accounts
 
-在更改现有用户之前，运行 `mise bootstrap accounts apply --dry-run`。检查任何 UID/GID 和附加组变更：即使用户的文件位于此配置之外，这些变更也会影响账户数据库。若要将新账户用作文件所有者，请应用完整的 bootstrap，或在 `--only` 中同时包含 `accounts` 和 `files`。
+mise manages only the fields you set and leaves the rest of an account as it
+is. Inspect the dry run before you change an account that already exists: UID,
+GID, and group changes affect the account database even for files outside this
+config.
 
-移除账户声明会保留该账户。需要删除账户时，请使用下面的显式移除状态。
+- `uid` and `gid` pin numeric IDs. If the requested ID belongs to another
+  account, mise reports the resource as `unknown` and does not apply it.
+- Changing an existing user's `uid` or primary `group` runs `usermod`, which
+  also re-owns that user's files inside the home directory and mail spool.
+  Files elsewhere keep the old IDs, and mise does not rewrite them.
+- Changing a group's `gid` updates the group database only.
+- `system = true` picks the system ID range when mise creates an account. It
+  does not reclassify an account that already exists.
+- `groups` adds missing supplementary groups and keeps memberships that are not
+  listed. With `exclusive_groups = true`, the list is exact, and
+  `groups = []` removes every supplementary membership.
+- Changing `home` updates only the account entry, unless you also set
+  `move_home = true` to move the existing directory.
 
-## 删除
+## How configs combine
 
-删除操作是显式的，并按先用户、后组的顺序执行：
+When several config files declare the same user or group, the most local
+declaration is used as a whole; mise does not merge fields across files.
+
+Within a run, mise creates and updates groups before users, and accounts before
+the [system files and directories](/bootstrap/files.html) that name them as
+owner or group. Removals run in the other order: users before the groups they
+depend on. `mise bootstrap plan` shows these dependencies.
+
+## Remove users and groups
+
+Deleting a declaration leaves the account in place. To remove an account,
+declare it absent:
 
 ```toml
 [bootstrap.users.old-service]
@@ -56,9 +98,12 @@ remove_home = true
 state = "absent"
 ```
 
-用户主目录默认会被保留。仅当还应删除账户的主目录和邮件队列时，才设置 `remove_home = true`。mise 拒绝删除 UID 0、GID 0 或运行 mise 的用户。它还会保留操作系统的正常安全保护；例如，`groupdel` 会拒绝删除仍是其他用户主组的组。
+mise keeps a user's home directory unless you set `remove_home = true`, which
+also deletes the mail spool. mise refuses to remove UID 0, GID 0, or the user
+running mise, and the operating system's own checks still apply; for example,
+`groupdel` rejects a group that is still another user's primary group.
 
-## 命令
+## Preview and apply
 
 ```sh
 mise bootstrap accounts status
@@ -67,5 +112,53 @@ mise bootstrap accounts apply --dry-run
 mise bootstrap accounts apply --yes
 ```
 
-`mise bootstrap plan` 包含账户资源及其依赖项。
-受管理的组排在引用它们的用户之前，受管理的账户排在将其指定为所有者或组的现有文件和目录之前，而不存在的用户排在移除受管理组之前。
+`mise bootstrap` applies accounts first, before every other part. To use a new
+account as a file owner with `--only`, include both parts:
+`mise bootstrap --only accounts,files`.
+
+## Reference
+
+Account names use at most 32 ASCII letters, digits, `_`, or `-`, start with a
+letter or `_`, and may end with `$`.
+
+User fields:
+
+| Field              | Default                                 | Effect                                                                    |
+| ------------------ | --------------------------------------- | ------------------------------------------------------------------------- |
+| `group`            | Required, unless `state = "absent"`     | Primary group. Declare it in the same config or have it exist on the host |
+| `groups`           | Not managed                             | Supplementary groups to add                                               |
+| `exclusive_groups` | `false`                                 | Remove supplementary groups that `groups` does not list; needs `groups`   |
+| `uid`              | Not managed                             | Numeric user ID                                                           |
+| `home`             | Not managed                             | Home directory, as an absolute path                                       |
+| `create_home`      | `true`, or `false` with `system = true` | Create the home directory for a new user                                  |
+| `move_home`        | `false`                                 | Move the existing home directory when `home` changes; needs `home`        |
+| `shell`            | Not managed                             | Login shell, as an absolute path                                          |
+| `comment`          | Not managed                             | Comment (GECOS) field, without `:` or line breaks                         |
+| `system`           | `false`                                 | Create the user in the system ID range                                    |
+| `state`            | `"present"`                             | `"absent"` removes the user; it then takes only `remove_home`             |
+| `remove_home`      | `false`                                 | With `state = "absent"`, also delete the home directory and mail spool    |
+
+Group fields:
+
+| Field    | Default     | Effect                                                             |
+| -------- | ----------- | ------------------------------------------------------------------ |
+| `gid`    | Not managed | Numeric group ID                                                   |
+| `system` | `false`     | Create the group in the system ID range                            |
+| `state`  | `"present"` | `"absent"` removes the group; it then cannot set `gid` or `system` |
+
+## On macOS and Windows
+
+Accounts are Linux-only. On another platform, `mise bootstrap`,
+`mise bootstrap status`, and `mise bootstrap plan` ignore these declarations
+with a warning, so one config can serve several platforms, while the explicit
+`mise bootstrap accounts` commands fail instead of doing nothing. When a
+[system file or directory](/bootstrap/files.html) names one of the ignored
+accounts as its owner or group, that field is ignored with a warning too; the
+file's content, mode, and any other owner or group are still applied.
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where accounts fall in the run
+  order.
+- [System files and directories](/bootstrap/files.html) for files owned by these
+  accounts.

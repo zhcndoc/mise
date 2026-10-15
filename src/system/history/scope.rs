@@ -420,17 +420,20 @@ impl OperationScope {
             .and_then(|shared| lock_unpoisoned(&shared).before.clone())
     }
 
-    pub(crate) fn validate_starting_head(&self, expected: Option<&str>) -> Result<()> {
+    /// The id reserved for this operation's outcome checkpoint.
+    pub(crate) fn outcome_id(&self) -> Option<u64> {
+        self.writer()
+            .map(|shared| lock_unpoisoned(&shared).pending.id)
+    }
+
+    /// Whether local history is still at `expected`, the head the caller
+    /// planned against, as this operation began.
+    pub(crate) fn starting_head_is(&self, expected: Option<&str>) -> Result<bool> {
         let Some(shared) = self.writer() else {
             eyre::bail!("incoming application requires an active recovery operation");
         };
         let writer = lock_unpoisoned(&shared);
-        if writer.starting_head.as_deref() != expected {
-            eyre::bail!(
-                "local saved history changed since planning; nothing was applied; run pull again"
-            );
-        }
-        Ok(())
+        Ok(writer.starting_head.as_deref() == expected)
     }
 
     /// Retakes the protective checkpoint, replacing the earlier one, when
@@ -476,6 +479,12 @@ impl OperationScope {
         self.finish_with_writes(error, summary, true);
     }
 
+    /// [`Self::finish`], saying whether the outcome was recorded. A failure
+    /// to record it is warned about, never returned.
+    pub(crate) fn finish_recorded(self, error: Option<String>, summary: Option<Summary>) -> bool {
+        self.finish_with_writes(error, summary, true)
+    }
+
     /// The failed batch could not be safely recovered. Keep its journal until
     /// recovery succeeds; an ordinary failed command does not imply this.
     pub(crate) fn finish_incomplete(self, error: Option<String>, summary: Option<Summary>) {
@@ -487,13 +496,15 @@ impl OperationScope {
         error: Option<String>,
         summary: Option<Summary>,
         writes_finished: bool,
-    ) {
+    ) -> bool {
         let Some(shared) = self.close() else {
-            return;
+            return false;
         };
         if let Err(err) = lock_unpoisoned(&shared).finish(error, summary, writes_finished) {
             warn!("history: could not finish the operation record: {err:#}");
+            return false;
         }
+        true
     }
 
     /// Ends this scope's hold on the process-wide operation, returning the
@@ -903,6 +914,23 @@ pub(crate) fn try_operation_lock(
     };
     recover_stale(store, tracked)?;
     Ok(Some(lock))
+}
+
+/// Closes the records of operations that died, before a pull plans.
+///
+/// **Recovery records a dead operation's outcome as a commit**, and taking
+/// the lock to start the pull's own operation is what ran it: after the
+/// plan was made. The pull then saw that commit as saved history changing
+/// since planning and refused, so every pull after an interrupted one failed
+/// with "local saved history changed since planning". Recovering first puts
+/// the commit under the plan. A process already inside an operation, or one
+/// that cannot take the lock, has nothing it may recover; starting the
+/// operation reports a held lock as before.
+pub(crate) fn recover_before_planning(store: &Store, tracked: &TrackedSet) -> Result<()> {
+    if std::env::var_os(ENV_VAR).is_some() || lock_unpoisoned(&CURRENT).is_some() {
+        return Ok(());
+    }
+    try_operation_lock(store, tracked).map(drop)
 }
 
 fn take_operation_lock_with_wait(
@@ -1323,8 +1351,8 @@ mod tests {
             shared: Some(Arc::new(Mutex::new(writer))),
             lazy: false,
         };
-        assert!(scope.validate_starting_head(Some(&planned)).is_err());
-        assert!(scope.validate_starting_head(Some(&saved)).is_ok());
+        assert!(!scope.starting_head_is(Some(&planned))?);
+        assert!(scope.starting_head_is(Some(&saved))?);
         assert_ne!(
             repo.ref_oid(super::super::shadow::HistoryRepo::HISTORY_REF)?
                 .as_deref(),

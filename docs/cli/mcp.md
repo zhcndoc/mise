@@ -10,43 +10,45 @@ description: "通过 stdin/stdout 运行 Model Context Protocol 服务器"
 
 通过 stdin/stdout 运行 Model Context Protocol 服务器
 
-向 MCP 客户端公开项目工具、任务、环境和配置。
-资源使用 `mise://tools`、`mise://tasks`、`mise://env` 和 `mise://config`。
-`mise://tools?include_inactive=true` 还会包含未激活的安装。
+Exposes project tools, tasks, environment, and configuration to an MCP client.
+The client, such as an AI coding assistant, starts this command and exchanges
+messages with it. Start it in the project directory or pass `--cd`: the
+resources describe that project.
 
-`list_commands` 工具描述命令及其声明的影响。`run_task`
-使用用户的权限执行项目任务，并且可以修改文件或调用外部服务。`install_tool` 已公开，但目前会返回错误。
-环境资源包含真实值，包括机密信息。
+Resources (JSON):
+- mise://tools: active tool versions (?include_inactive=true adds the rest)
+- mise://tasks: task definitions, including monorepo subproject tasks
+- mise://env: environment variables
+- mise://config: loaded config files and the project root
 
-可用资源：
-- mise://tools - 列出所有工具（使用 ?include_inactive=true 包含未激活的工具）
-- mise://tasks - 列出所有任务及其配置
-- mise://env - 列出所有环境变量
-- mise://config - 显示配置文件和项目根目录
+Environment resources contain real values, including secrets.
 
-可用工具：
-- list_commands - 每个 mise 命令及其声明的对世界的影响
-- install_tool - 安装一个可选版本的工具（尚未实现）
-- run_task - 执行一个可选带参数的 mise 任务
+Tools:
+- list_commands: every mise command and its declared effect
+- run_task: run a task with your permissions; it can change files and call
+  external services
+- install_tool: install a tool version, as `mise install` does
 
-注意：这主要用于与 Claude、Cursor 或其他支持 Model Context Protocol 的工具等 AI 助手集成。
-请参阅 <https://mise.jdx.dev/mcp.html>，了解客户端配置和访问控制。
+run_task and install_tool refuse a project whose config files are not
+trusted; run `mise trust` there after reviewing them.
+
+See <https://mise.jdx.dev/mcp.html> for client configuration and access controls.
 
 ## 标志
 - **`-h --help`** — 打印帮助
 
 ## 示例
 
-从项目目录启动；MCP 客户端会处理协议交换
+Serve a project from another directory, as an MCP client config does
 
 ```
-mise -C /path/to/project mcp
+mise --cd /path/to/project mcp
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [MCP 集成](/mcp.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [AI assistants (MCP)](/mcp.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

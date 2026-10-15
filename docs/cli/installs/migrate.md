@@ -34,7 +34,7 @@ description: "将旧布局的安装重新安装到 identity 安装布局"
 mise installs migrate --dry-run
 ```
 
-移动所有已安装的 node，以及一个 python 版本
+Move every installed node and one python version
 
 ```
 mise installs migrate node python@3.12.1
@@ -44,6 +44,6 @@ mise installs migrate node python@3.12.1
 
 ## Related documentation
 
-- [Install layout](/dev-tools/install-layout.html).
+- [Identity install layout](/dev-tools/install-layout.html).
 - [`mise installs [SUBCOMMAND]`](/cli/installs.html).
 - [Global flags and argument syntax](/cli/#global-flags).

@@ -1,101 +1,124 @@
 ---
-description: "直接安装 Conda 软件包及其依赖项，无需单独安装 Conda"
+description: "Install conda packages and their dependencies from conda-forge or another channel, without conda."
 ---
 
-# Conda 后端
+# conda backend
 
-`conda` 后端会从 [conda-forge](https://conda-forge.org/) 或其他 Anaconda 频道直接安装命令行软件包及其传递依赖项。它会解析依赖项并直接下载软件包，因此无需安装 conda、mamba 或 micromamba。
+The `conda` backend installs command-line packages and their dependencies from
+[conda-forge](https://conda-forge.org/) or another conda channel. mise solves
+and downloads the packages itself, so you do not need conda, mamba or
+micromamba.
 
-每个软件包都会安装到自己的隔离 conda 前缀中。当软件包需要激活该前缀（它包含 `etc/conda/activate.d` 脚本、前缀包含其依赖项的可执行文件，或其中一个命令是脚本）时，mise 会通过启动器运行命令，设置 `CONDA_PREFIX`，让前缀的可执行文件目录可用，并应用激活脚本。这使命令能够使用其打包的运行时依赖项，而无需将依赖项命令添加到交互式 shell 的 `PATH` 中。
+## Requirements
 
-如果软件包不满足这些条件（例如 `conda:ripgrep` 这样的单二进制工具），就没有需要激活的内容，因此在 Unix 上会直接为其命令建立符号链接。它们启动时不会多一个 shell 进程，命令及其派生进程也不会设置 `CONDA_PREFIX` 或前缀的可执行文件目录。
+<span id="dependencies"></span>
+<span id="platform-support"></span>
 
-相关代码位于 mise 仓库的 [`./src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs) 中。
+Nothing beyond mise. The package must be built for your platform, or be a
+`noarch` package; mise picks the platform's conda subdirectory:
 
-## 依赖项
+| Platform    | Conda subdir    |
+| ----------- | --------------- |
+| Linux x64   | `linux-64`      |
+| Linux ARM64 | `linux-aarch64` |
+| macOS x64   | `osx-64`        |
+| macOS ARM64 | `osx-arm64`     |
+| Windows x64 | `win-64`        |
 
-无需单独的 conda 软件包管理器。所选软件包仍必须支持你的操作系统、架构和本机运行时环境。
+The solver also considers `noarch` packages. A `noarch` package can still
+depend on platform-specific packages, so it is not guaranteed to install on
+every host. Native requirements such as a compatible libc or GPU driver still
+come from the host.
 
 ## 用法
 
-在当前项目中安装 ruff 并验证其可执行文件：
+Install FFmpeg in the current project and run it:
 
 ```sh
-mise use conda:ruff
-mise exec -- ruff --version
+mise use conda:ffmpeg
+mise exec -- ffmpeg -version
 ```
 
-这会将以下内容写入 `mise.toml`。添加 `-g` 可进行全局配置。
+This writes the following to `mise.toml`. Add `-g` for your global config.
 
 ```toml
 [tools]
-"conda:ruff" = "latest"
+"conda:ffmpeg" = "latest"
 ```
 
-### 指定版本
+<span id="specifying-a-version"></span>
 
-使用 `mise ls-remote conda:ruff` 列出版本，然后使用
-`mise use conda:ruff@VERSION` 选择一个版本。将 `VERSION` 替换为列出的版本。
+Run `mise ls-remote conda:ffmpeg` to list versions, and pin one with
+`mise use conda:ffmpeg@8.1.2`.
 
-### 使用不同的频道
+## How commands run
 
-默认频道为 `conda-forge`。对于发布在团队频道中的软件包，将以下占位符替换为其软件包名称和频道名称：
+<span id="limitations"></span>
+
+Each package is installed into its own conda prefix with its dependencies. Only
+the requested package's commands reach your `PATH`; its dependencies' commands
+do not.
+
+If the prefix needs activating (the package ships `etc/conda/activate.d`
+scripts, the prefix's `bin` directory holds executables from its dependencies,
+or one of its commands is a script), mise starts its commands through a
+launcher. The launcher sets `CONDA_PREFIX`, puts the prefix's executables ahead
+of your `PATH`, and runs the activation scripts. Programs the command starts
+inherit that `PATH`.
+
+A single-binary package such as `conda:ripgrep` needs no activation, so on Unix
+mise symlinks its commands directly. They start without an extra shell process
+but do not see `CONDA_PREFIX`. On Windows every command goes through a launcher.
+
+mise solves one package per tool in an isolated prefix. It does not read or
+maintain an `environment.yml`.
+
+## Mirrors
+
+To fetch conda-forge or another channel through a mirror, map its URL with
+[`url_replacements`](/url-replacements.html). mise applies the replacements to
+channel metadata and package downloads, and refuses a replacement that would
+send credentials from an `https://` URL to an `http://` one.
+
+## Tool options
+
+Set these on the tool's entry in `[tools]`, or inline, as in
+`'conda:my-tool[channel=my-team]'`. Options every backend accepts are described
+under [tool options](/dev-tools/#tool-options).
+
+### `channel`
+
+<span id="using-a-different-channel"></span>
+<span id="common-channels"></span>
+
+Install one package from a channel other than [`conda.channel`](/dev-tools/backends/conda.html#conda.channel),
+which defaults to `conda-forge`:
 
 ```toml
 [tools]
 "conda:my-tool" = { version = "latest", channel = "my-team" }
 ```
 
-解析器会使用所选频道来获取软件包及其依赖项。完整的依赖项集合必须在该频道中可用；这不是多频道 conda 环境规范。
+The value can be a channel name on anaconda.org or a full channel URL, such as
+`https://conda.example.com/my-team`, for a private or mirrored conda server.
 
-## 平台支持
-
-conda 后端会自动为你的平台选择合适的软件包：
-
-| 平台        | Conda 子目录    |
-| ----------- | --------------- |
-| Linux x64   | linux-64        |
-| Linux ARM64 | linux-aarch64   |
-| macOS x64   | osx-64          |
-| macOS ARM64 | osx-arm64       |
-| Windows x64 | win-64          |
-
-解析器会同时考虑平台子目录和 `noarch`。`noarch` 软件包仍可能依赖于特定平台的软件包，因此不能保证安装在每台主机上都能正常工作。
+mise solves against that one channel, so the package and all of its
+dependencies must come from it. Channels that build on conda-forge, such as
+bioconda, usually cannot be used on their own for this reason.
 
 ## 设置
-
-使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置所列出的环境变量来设置这些项。
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="conda" :level="3" />
 
-## 工具选项
+## Troubleshooting
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `conda` 后端——这些
-应写入 `mise.toml` 中的 `[tools]`。
+| Symptom                  | What to check                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Command not found        | Check that the package itself provides that command. Commands from its dependencies are not put on your `PATH`. |
+| Solving fails            | Check that the package and every dependency exist in the selected channel for the platform named in the error.  |
+| Package is not available | It may not be built for your platform; look for your subdir in the package's files on anaconda.org.             |
 
-### `channel`
-
-为特定包覆盖 conda 通道：
-
-```toml
-[tools]
-"conda:my-tool" = { version = "latest", channel = "my-team" }
-```
-
-## 常见渠道
-
-- `conda-forge` - 社区维护的软件包（默认）
-- `bioconda` - 生物信息学软件包
-- `nvidia` - NVIDIA CUDA 软件包
-
-## 限制
-
-- mise 会在每个工具的隔离前缀中解析并安装传递依赖项。它不会导入或维护通用的 `environment.yml`。
-- 只有属于所请求软件包的命令会暴露给你的 shell。依赖项的可执行文件仍可在该工具的启动器环境中使用。
-- 解析器为每个工具使用一个频道。来自 bioconda 等频道的软件包可能需要另一个频道中的依赖项，而此配置无法提供这些依赖项。
-- 兼容的 libc 或 GPU 驱动程序等本机要求仍由主机负责。
-
-如果找不到某个命令，请检查所请求的软件包是否确实提供 CLI。如果解析失败，请在更改版本之前检查软件包是否可用、所选频道以及错误中报告的平台。
+Implementation: [`src/backend/conda.rs`](https://github.com/jdx/mise/blob/main/src/backend/conda.rs).

@@ -1,271 +1,318 @@
 ---
-description: "关于日常命令、shell 集成和配置的快速解答。"
+description: "Get short answers about mise commands, version requests, shell activation, config trust, and related tools."
+socialDescription: "Short answers about mise commands, version requests, activation, and config trust."
 outline: [2, 3]
 ---
 
-# 常见问题
+# FAQ
 
-关于日常命令、shell 集成和配置的快速解答。对于失败的命令，请从[故障排除](/troubleshooting.html)或[错误](/errors.html)开始。
+If a command fails, see [Troubleshooting](/troubleshooting.html), or look up
+the message in [Error messages](/errors.html).
 
 ## 日常命令
 
 ### `mise install` 和 `mise use` 有什么区别？
 
-`mise install` 会安装请求的工具，但不会向配置中添加工具声明。`mise use` 会安装工具，并将其版本请求写入配置文件。
+`mise install` installs tools. `mise use` installs a tool and also writes its
+version request to a config file:
 
 ```sh
-mise use node@24       # select Node 24 for the project and install it
-mise install          # install tools already declared by the project
-mise install node@24  # install Node 24 without adding a declaration
+mise use node@24      # add Node 24 to mise.toml and install it
+mise install          # install every tool the project declares
+mise install node@24  # install Node 24 without changing config
 ```
 
-仅安装不会改变父 shell 的环境。使用激活、shims、`mise exec` 或 `mise run` 来运行选定的工具。要记录具体版本，请将 `--pin` 添加到 `mise use`；要复现项目的 lockfile，请使用 `mise install --locked`。
-
-`mise install node` 会在存在配置请求时使用该请求，否则使用 `latest`。不带工具参数的 `mise install` 会安装已配置的工具集。
+Neither command changes the environment of the shell you run it from. With
+shell activation, the next prompt picks up the change; otherwise, run the tools
+with `mise exec` or `mise run`. Given no version, `mise install node`
+installs the version the project asks for, or `latest` if it asks for none.
+Without arguments, `mise install` skips tools marked `lazy = true`; add
+`--include-lazy` to install those too.
 
 ### `mise use` 会写入哪里？
 
-默认情况下，mise 会选择最近适用配置目录中优先级最低的配置文件。这可能是父目录中的文件或 `.tool-versions` 文件，不一定是当前目录中的 `mise.toml`。如果该目录中同时存在 `mise.toml` 和 `mise.local.toml`，则优先使用共享配置。请参阅[写入目标选择](/configuration.html#target-file-for-write-operations)。
+`mise use` writes to the nearest config file that applies to the current
+directory. That can be a `mise.toml` in a parent directory, or a
+`.tool-versions` file. When a directory has both `mise.toml` and
+`mise.local.toml`, mise writes to `mise.toml`. See
+[Which file mise writes to](/configuration.html#target-file-for-write-operations).
 
-位置很重要时，请使用明确的目标：
+To choose the file yourself:
 
 ```sh
 mise use --path mise.toml node@24  # this file
-mise use --global node@24          # global configuration
-mise use --env local node@24       # personal local environment
+mise use --global node@24          # your global config
+mise use --env local node@24       # mise.local.toml, for personal versions
 ```
 
-`mise use --dry-run node@24` 可以预览操作。`mise config` 会显示当前目录加载的文件。
+`mise use --dry-run node@24` shows what would change, and `mise config ls`
+lists the config files mise loads in the current directory.
 
-### 不完整的版本会选择最新发布版本吗？ {#does-node20-mean-the-newest-available-version-of-node}
+### Does `node@20` use the newest Node 20 release? {#does-node20-mean-the-newest-available-version-of-node}
 
-诸如 `node@20` 这样的不完整请求会限制匹配的版本。对于普通执行，mise 可以重复使用满足请求的已安装版本。安装和升级命令可以解析出更新的可用匹配版本。lockfile 可以固定解析后的结果。
+Not automatically. When a project asks for `node = "20"`, mise uses the newest
+Node 20 release you already have installed. It picks from the available
+releases only when no 20.x is installed, or when you run
+`mise install node@20` or `mise upgrade node`:
 
 ```sh
-mise latest --installed node@20  # inspect an installed match
-mise latest node@20              # inspect an available match
-mise install node@20             # install a matching release
+mise latest --installed node@20  # the installed 20.x that mise uses
+mise latest node@20              # the newest 20.x available
+mise upgrade node                # install that release and use it
 ```
 
-使用 `mise ls --current node` 和 `mise which node` 检查此项目实际使用的内容。不要根据目录名称推断选定的版本，也不要假设每个工具都遵循 Node 的版本方案。请参阅[版本选择](/dev-tools/)和[lockfiles](/dev-tools/mise-lock.html)。
+With a [lockfile](/dev-tools/mise-lock.html), mise uses the version recorded
+there. See [How a request resolves](/dev-tools/versions.html#how-requests-resolve).
 
-### `latest` 是指远程端的最新版本吗？
+### Does `latest` mean the newest release? {#does-latest-mean-the-newest-remote-version}
 
-`latest` 由工具的后端解析。对于普通执行，它可以重复使用已安装的版本，因此新发布的版本不会自动改变你的环境。lockfile 可以进一步限制选择范围。
+Not in a config file. `node = "latest"` uses the newest version you have
+installed, so a new upstream release does not change your environment until you
+run `mise upgrade node`. On the command line, `mise install node@latest`,
+`mise exec node@latest -- node -v`, and `mise latest node` ask the backend for
+its newest release.
 
-要查询可用的发布版本，请运行 `mise latest node`。诸如 `mise install node@latest` 或 `mise exec node@latest -- node --version` 这样的显式请求，会在锁定策略允许的情况下请求可用版本，而不是仅重复使用当前已安装的匹配版本。
-
-要在已配置的请求范围内升级，请使用 `mise upgrade node`。要同时更改配置中的请求，请使用 `mise upgrade --bump node`。请参阅[升级工具](/dev-tools/)和[lockfiles](/dev-tools/mise-lock.html)。不同后端对“latest”的定义不同；它并不普遍表示最大的语义版本，也不一定包含预发布版本。
+Each backend decides what `latest` means. It is not always the highest version
+number, and most backends leave out prereleases. See
+[Version requests and version files](/dev-tools/versions.html) and
+[Upgrade tools](/dev-tools/#upgrade-tools).
 
 ### `mise exec` 如何工作？
 
-`mise exec` 会读取配置，解析并按需安装缺失的请求工具，计算环境，然后运行 `--` 后的命令：
+[`mise exec`](/cli/exec.html) reads the config for the current directory,
+installs any missing tools, and runs the command after `--` with the project's
+tools and environment variables:
 
 ```sh
-mise exec -- node --version
-mise exec node@24 -- node --version
+mise exec -- node --version          # the Node version the project selects
+mise exec node@24 -- node --version  # Node 24 for this one command
 ```
 
-第一条命令使用项目配置的 Node 版本。第二条命令为本次调用提供覆盖值。如果 `mise.toml` 中已经有 `node@24` 请求，就不需要重复输入。子进程会接收 mise 的环境；父 shell 不会改变。
+The command and its children get the environment; your shell does not change.
 
 ## Shell 和编辑器
 
 ### `mise activate` 会做什么？
 
-`mise activate` 会输出 shell 脚本。在 shell 中执行该脚本会安装 mise 函数和钩子，用于刷新工具路径和环境变量。提示符钩子会注意配置变化；支持的 shell 还具有目录变更钩子。
+`mise activate` prints a script for your shell. When your startup file runs it,
+mise sets `PATH` and your `[env]` variables for the current directory, then
+adds a hook that runs before each prompt and, in most shells, after each `cd`.
+The hook updates the environment for the directory you are in and removes the
+previous project's values. Activation also defines a `mise` shell function so
+that `mise shell` and `mise deactivate` can change the current session.
 
-`mise hook-env` 会计算当前目录所需的赋值，包括移除上一个项目中的值。如果没有任何相关内容发生变化，它可以提前退出。它会输出 shell 代码；单独运行可执行文件不会修改其父 shell。
-
-该 shell 函数允许 `mise shell` 和 `mise deactivate` 等命令更新当前会话。将激活配置放入你的[shell 启动文件](/getting-started.html#activate-mise)中。对于脚本或 CI 作业，请使用 `mise exec -- command` 或 `mise run task`，这样执行就不会依赖提示符钩子。请参阅[shell 集成选项](#how-do-mise-activate-shims-mise-exec-and-mise-env-relate)。
+Set it up from [Shell setup](/shell-setup.html). Scripts and CI jobs never show
+a prompt, so use `mise exec` or `mise run` there.
 
 ### `mise activate`、shims、`mise exec` 和 `mise env` 有什么关系？
 
-每种方法都会在不同边界上提供 mise 工具：
+They make mise tools available in different places. `mise activate` updates
+your interactive shell, shims serve editors and other programs that find tools
+through `PATH`, `mise exec` and `mise run` set up one command or task, and
+`mise env` prints the variables for another program to load. See
+[Choose how to use mise tools](/dev-tools/shims.html#overview) for a comparison.
 
-| 方法                    | 环境应用于                                      | 典型用途                   |
-| ----------------------- | ----------------------------------------------- | -------------------------- |
-| `mise activate`         | 当前 shell，由钩子刷新                          | 交互式终端                 |
-| `mise activate --shims` | 向当前 shell 的 PATH 添加 shim 目录             | 编辑器和简单的 shell 设置  |
-| 工具 shim               | 启动的工具及其子进程                            | 通过 PATH 找到的命令       |
-| `mise exec` / `mise x`  | 一个命令及其子进程                              | 脚本和 CI                  |
-| `mise env`              | 输出供其他程序使用的赋值                        | 环境集成                   |
-| `mise run`              | 一个任务及其依赖                                | 命名的项目命令             |
+### Does mise work on Windows? {#windows-support}
 
-Shims 会为它们启动的工具加载 `[env]`，但不会将其导出到父 shell，也不会在那里安装提示符钩子。要使用 shell 钩子和自动 shell 变量更新，请使用常规激活。请参阅[Shims 与 PATH](/dev-tools/shims.html#shims-vs-path)。
+Yes. mise runs natively on Windows, with PowerShell activation, shims,
+`mise exec`, and `mise run`. Install it with `winget install jdx.mise`, or see
+[Windows](/installing-mise.html#windows) for Scoop and Chocolatey. To set up
+PowerShell, Git Bash, or `cmd.exe`, see [Shell setup](/shell-setup.html#windows).
 
-### 支持 Windows 吗？
+Tools from asdf plugins do not run on native Windows, because the plugins are
+shell scripts. Core tools and backends such as aqua, github, http, npm, and
+vfox work when the tool itself supports Windows. `mise registry <tool>` lists the
+backends a tool can use. In WSL, install the Linux build of mise and manage
+Linux tools there. For Windows problems, see
+[Troubleshooting](/troubleshooting.html#windows-problems).
 
-mise 支持原生 Windows，包括 PowerShell 激活。请遵循[Windows 安装说明](/installing-mise.html#windows-winget)和[shell 兼容性表](/getting-started.html#shell-feature-compatibility)。
+### How do I turn color output off or force it on? {#how-do-i-disable-force-cli-color-output}
 
-Shims、`mise exec` 和 `mise run` 同样可用。shim 会为它启动的工具加载 mise 环境；它不会更新父 PowerShell 会话。
-
-后端和工具的支持因平台而异。asdf shell 插件要求 Unix；在 Windows 上请使用兼容的 core、binary-download 或 vfox 实现。WSL 使用 Linux 工具，并且应有自己独立的 Linux mise 安装。请参阅[Windows 故障排除](/troubleshooting.html#windows-problems)。
-
-### 为什么 Windows 编辑器会报告 `spawn EINVAL`？ {#vscode-for-windows-extension-with-error-spawn-einval}
-
-如果扩展尝试直接启动 `.cmd` shim，则在 [Node.js 安全修复](https://nodejs.org/en/blog/vulnerability/april-2024-security-releases-2#command-injection-via-args-parameter-of-child_processspawn-without-shell-option-enabled-on-windows-cve-2024-27980---high)之后，可能会出现 `spawn EINVAL`。
-
-使用默认的 [`windows_shim_mode = "exe"`](/configuration/settings.html#windows_shim_mode)，运行 `mise reshim`，然后重启受影响的扩展或语言服务器。如果它仍然解析旧的 shim 路径，请参阅[IDE 集成](/ide-integration.html)。
-
-### 如何禁用或强制 CLI 颜色输出？
-
-使用 `NO_COLOR=1` 或 `MISE_COLOR=0` 禁用 ANSI 颜色，使用 `CLICOLOR_FORCE=1` 强制启用颜色，包括在管道传输输出时。`NO_COLOR=1` 和 `MISE_COLOR=0` 的优先级高于 `CLICOLOR_FORCE=1`；强制启用颜色时，请取消设置这些禁用覆盖项。
+Set `NO_COLOR=1` or `MISE_COLOR=0` to turn color off, and `CLICOLOR_FORCE=1` to
+keep it on when output goes to a pipe:
 
 ```sh
 NO_COLOR=1 mise ls
-CLICOLOR_FORCE=1 mise ls
+CLICOLOR_FORCE=1 mise ls | less -R
 ```
 
-这些设置控制 mise 的输出。子工具可能有自己的颜色选项。
+`NO_COLOR=1` and `MISE_COLOR=0` win over `CLICOLOR_FORCE=1`. These variables
+control mise's own output; tools that mise runs have their own color options.
 
 ## 配置和网络
 
 ### 如何不将个人配置放入 Git？ {#i-don-t-want-to-put-a-mise-toml-tool-versions-file-into-my-project-since-git-shows-it-as-an-untracked-file}
 
-使用 `mise.local.toml` 保存个人项目设置。将其添加到 `.git/info/exclude`，即可只在当前检出中忽略它；或者将其添加到全局 Git 忽略文件，以便在所有项目中忽略它。将共享的工具版本和任务保存在已提交的 `mise.toml` 中。
+Put personal settings in `mise.local.toml` and keep shared tools and tasks in a
+committed `mise.toml`. To ignore `mise.local.toml` in one checkout, add it to
+`.git/info/exclude`; to ignore it in every project, add it to your global Git
+ignore file.
 
-如果需要将 `mise.toml` 本身对当前检出保持私有，也可以使用相同的忽略机制。如果团队同意此策略，项目的 `.gitignore` 也是一种选择。忽略规则只会影响未跟踪文件；不会隐藏 Git 中已有文件的更改。
+The same works for keeping `mise.toml` itself private, or the team can list it
+in the project's `.gitignore`. Ignore rules apply only to untracked files, so
+they do not hide changes to a file that is already in Git.
+
+<a id="what-is-the-difference-between-nodejs-and-node-or-golang-and-go"></a>
 
 ### “nodejs”和“node”（或“golang”和“go”）有什么区别？
 
-它们是别名。例如，`mise install nodejs@24` 与 `mise install node@24` 相同。这意味着它们不能是不同的插件。
+They are the same tool. mise accepts `nodejs` and `golang` as aliases for
+`node` and `go` on the command line, in `mise.toml`, and in `.tool-versions`.
+When `mise use` changes a `mise.toml` entry written as `nodejs`, it renames the
+entry to `node` and keeps its comments. In `.tool-versions`, mise writes
+`nodejs` and `golang`, the names asdf reads.
 
-这样做是为了方便，因此你不必记住哪个是“官方”名称。如果别名行为异常，请使用规范名称 `node` 和 `go`，并[报告不匹配](/contact.html)。在底层，当 mise 读取配置文件或 CLI 输入时，它会将“nodejs”和“golang”替换掉。
+### Why does mise ask me to trust a config file? {#my-config-file-is-being-ignored-mise-trust-issues}
 
-当 mise _写入_ `mise.toml`（`mise use`、`mise unuse`）时，它会写入规范名称——`nodejs` 条目会变成 `node`，同时保留其注释。`.tool-versions` 文件不受影响，仍然使用 asdf 的拼写方式。
+A project's config file can run code: templates can run commands, `[env]`
+directives and hooks run scripts, and tool options such as `postinstall` run
+during installs. mise loads a file that only lists tool versions,
+`min_version`, and plain tasks without asking. Anything else waits until you
+trust it, so cloning a repository and entering its directory does not run its
+code. Read the file, then run [`mise trust`](/cli/trust.html).
 
-### 我的配置文件被忽略了／遇到了 `mise trust` 问题
+`mise run`, `mise install`, `mise exec`, `mise watch`, and
+`mise daemons start`, `restart`, and `register` trust the project's config
+themselves, because running them is already a decision to run its code. In CI,
+mise treats config as trusted. Outside CI, `--yes` or `MISE_YES=1` answers the
+trust prompt with yes, so use them only for configs you have reviewed.
+[Paranoid mode](/paranoid.html) turns off this automatic trust. Your global
+config, `~/.config/mise/config.toml`, never needs trust.
 
-信任取决于配置内容和命令，而不是文件作者。安全配置文件——只包含 `min_version`、值为纯版本字符串
-或字符串数组的 `[tools]` 条目，以及不含模板的 `[tasks]`——无需信任即可加载。工具选项表、工具名称中的
-内联选项（`"tool[opt=value]"`，`.tool-versions` 中同样适用）以及其他顶层设置需要信任。在正常模式且不在
-CI 中时，`mise run`、裸任务调用（例如 `mise <TASK>`）、`mise install`、`mise exec` 和 `mise watch` 会自动
-信任活动配置，因为它们会明确执行项目定义的行为。其他不安全配置需要信任。常见问题包括：
+If mise seems to ignore a config file:
 
-- **意外拒绝信任**：如果 mise 提示你信任某个文件，而你选择了否，该文件会被加入忽略列表。检查 `mise trust --show`，然后运行 `mise trust path/to/mise.toml`，再次信任经过审查的文件。
-- **符号链接配置**：如果你的配置是符号链接（例如通过 GNU Stow），mise 可能会跟踪符号链接目标路径。尝试让 `mise trust` 指向实际文件路径。
-- **CI**：在检测到 CI 时，除非启用了 paranoid 模式，否则 mise 会假设配置已受信任。
-- **非交互模式**：在非交互式 shell 中，例如 IDE 扩展或没有 TTY 的脚本中，mise 无法提示你信任配置。在正常模式下的 `mise run`、`mise <TASK>`、`mise install`、`mise exec` 和 `mise watch` 之外，直接加载不受信任的 `mise.toml` 的命令可能会因不受信任的配置错误而失败。发现之前已跟踪的配置的命令可能会改为跳过不受信任的条目。请提前运行 `mise trust`，或在全局设置中配置你信任的配置文件路径 [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)。
-- **全局配置**由操作者管理，不需要项目级信任。如果你认为某个文件是全局配置，但它却被发现为项目配置，请检查 `mise config`。
+- Run `mise trust --show` to see the trust status of each config directory from
+  the current one up. `mise doctor` reports an untrusted file only as
+  `failed to load config: error parsing config file: <path>`.
+- If you answered No at the trust prompt, mise skips that config without asking
+  again. Run `mise trust path/to/mise.toml` after you review it.
+- Without a terminal, such as in an editor extension, mise cannot ask, and the
+  command fails with
+  [`Config files in <path> are not trusted`](/errors.html#untrusted-config).
+  Trust the file from a terminal first.
+- A `mise.<env>.toml` file loads only when that
+  [config environment](/configuration/environments.html) is selected.
 
-运行 `mise doctor`（`mise dr`）可以查看是否有配置文件不受信任——它会在“problems”下列出这些文件。
+See [Configuration trust](/security.html#configuration-trust) for the full
+rules, including symlinked configs and trusting every project under a
+directory.
 
-另外，请检查当前目录以及选定的[配置环境](/configuration/environments.html)。未选中的配置文件不是信任失败。
+### Does mise read `.nvmrc` or `.python-version`? {#how-do-idiomatic-version-files-python-version-node-version-etc-work}
 
-### 习惯用法版本文件（`.python-version`、`.node-version` 等）如何工作？
-
-习惯用法版本文件（`.python-version`、`.node-version`、`.ruby-version` 等）在 mise 中**默认是禁用的**。只有当你通过 [`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools) 为每个工具显式启用时，才会读取它们：
+Only for tools you enable. mise reads other version managers' files, such as
+`.nvmrc`, `.node-version`, `.python-version`, and `.ruby-version`, only after
+you turn them on for a tool:
 
 ```sh
-# 启用读取 .node-version 文件
-mise settings add idiomatic_version_file_enable_tools node
+mise settings add idiomatic_version_file_enable_tools node  # read .nvmrc, .node-version, package.json
+mise settings unset idiomatic_version_file_enable_tools     # stop reading them for every tool
 ```
 
-如果你之前启用了习惯用法文件，现在想让 mise 停止读取它们（例如因为 `uv` 管理 `.python-version`），请从已配置列表中移除该工具。完全取消设置该选项即可恢复其空默认值。
+To keep one file off while the tool's other files stay on, add a `tool:file`
+pair to
+[`idiomatic_version_file_disable_files`](/configuration/settings.html#idiomatic_version_file_disable_files),
+such as `node:package.json`. See
+[Idiomatic version files](/dev-tools/versions.html#idiomatic-version-files) for
+the files each tool reads.
 
-更多信息请参见[习惯用法版本文件](/configuration.html#idiomatic-version-files)。
+### How does mise map a short tool name to a source? {#how-do-the-shorthand-plugin-names-map-to-repositories}
 
-### 简写插件名称如何映射到仓库？
+The [registry](/registry.html), which ships with mise, maps short names such as
+`ripgrep` to backend identifiers such as `aqua:BurntSushi/ripgrep`. Its source
+is the [`registry/`](https://github.com/jdx/mise/tree/main/registry) directory
+of the mise repository. Most tools need no plugin.
 
-内置的[注册表](/registry.html)会将短名称映射到后端规范，例如 `aqua:owner/repo` 或 `vfox:owner/plugin`。它维护在仓库的[`registry/`](https://github.com/jdx/mise/tree/main/registry)目录中，并随 mise 一起发布。
+`mise registry ripgrep` lists the backends a tool can use, and
+`mise tool ripgrep` shows the one mise selected. See
+[How mise picks a backend](/dev-tools/backends/#how-backend-selection-works).
 
-大多数工具不需要外部插件。使用 `mise tool ripgrep` 检查工具选定的后端，或使用 `mise registry ripgrep` 查看可用选项。对于由插件支持的工具，后端规范会标识插件仓库。请参阅[后端选择](/dev-tools/backend_architecture.html#how-backend-selection-works)。
+<a id="how-do-i-use-mise-with-http-proxies"></a>
 
 ### 如何通过 HTTP 代理使用 mise？
 
-在启动 mise 的环境中设置 `http_proxy` 和 `https_proxy`。例如，将下面的代理主机和端口替换为你所在组织的代理：
+mise reads the standard `https_proxy`, `http_proxy`, `all_proxy`, and
+`no_proxy` variables, in lowercase or uppercase:
 
 ```sh
-https_proxy=http://proxy.example.com:8080 mise install
+export https_proxy=http://proxy.example.com:8080
+mise install
 ```
 
-插件脚本和包管理器可能有单独的代理或证书设置。如果只有某个后端失败，请在详细输出中确定子进程或 URL，并检查该工具的代理配置。网络和身份验证失败请参阅[错误](/errors.html)。
+To route downloads through an internal mirror instead, use
+[URL replacements](/url-replacements.html). Package managers and plugins that
+mise runs, such as npm, pip, cargo, and asdf plugins, read their own proxy and
+certificate settings.
 
-## 迁移
+## Coming from asdf {#migration}
 
-### 如何从 asdf 迁移？
+### How do I switch from asdf? {#how-do-i-migrate-from-asdf}
 
-1. 安装 mise 并[配置 shell 激活](/getting-started.html#activate-mise)。
-2. 从 shell 启动文件中移除 asdf 激活，然后打开一个新 shell。
-3. 在包含 `.tool-versions` 的项目中运行 `mise install`，然后使用 `mise exec -- node --version` 验证已配置的工具（替换为项目中的工具）。
+<a id="how-compatible-is-mise-with-asdf"></a>
 
-mise 会读取 `.tool-versions`，但其全局配置通常位于 `~/.config/mise/config.toml`。检查 `~/.tool-versions`，并使用 `mise use --global` 添加你需要的默认值。例如，在选择所需版本后：
-
-```sh
-mise use --global node@24 python@3.14
-```
-
-此示例会选择新的默认值；它不是对任意 asdf 文件的无损转换。在检查每个工具之前，请保留旧文件，包括包含多个版本或别名的条目。不要在 asdf 和 mise 之间共享安装目录。确认无误后，你可以[卸载 asdf](https://asdf-vm.com/manage/core.html#uninstall)。
-
-### mise 与 asdf 的兼容性如何？
-
-mise 在 Unix 上支持 `.tool-versions` 和 asdf shell-plugin 接口。不保证与每个 asdf 命令或插件兼容。请优先使用每个命令帮助中显示的 mise 语法，例如 `mise install node@24`。
-
-asdf 的 Go 重写版引入了 `asdf set` 等命令。`mise set` 用途不同：它用于设置环境变量。请使用 `mise use` 选择工具版本。
-
-如果团队在两个工具之间共享 `.tool-versions`，请使用 asdf 接受的具体版本。`mise use --pin` 会写入解析后的版本，而不是模糊请求。你也可以将 `mise.toml` 与 `.tool-versions` 放在一起；对于同一级目录中同时声明的工具，mise 文件优先。请参阅[asdf 兼容性](/asdf-legacy-plugins.html)和[插件使用](/plugin-usage.html)。
+mise reads `.tool-versions` files, so you can try it in one project before you
+change your shell setup, and teammates can keep using asdf.
+[Migrating from asdf](/dev-tools/comparison-to-asdf.html) gives the steps, the
+command equivalents, and how to share `.tool-versions` with asdf users. One
+difference to know up front: `mise set` sets environment variables, while
+`mise use` chooses tool versions.
 
 ## 范围和相关工具
 
-### mise 可以管理系统包和桌面应用程序吗？ {#mise-is-for-dev-tools-not-applications-or-system-packages}
+### Can mise install system packages, or tools that work without mise? {#mise-is-for-dev-tools-not-applications-or-system-packages}
 
-`[tools]` 管理有版本的开发工具和运行时。主机软件包、桌面应用程序和系统库应放在[`[bootstrap.packages]`](/bootstrap/packages/)中。
+<a id="how-do-i-install-tools-other-users-can-run-without-mise"></a>
 
-例如，编译器可能需要操作系统开发库软件包才能构建工具。请使用适当的管理器声明该软件包，并通过 `mise bootstrap` 应用它。大多数管理器会委托给操作系统包管理器；mise 内置的 Homebrew 安装器可以处理 `brew:` 和 `brew-cask:` 条目，而不要求安装 Homebrew 本身。
+`[tools]` is for per-project versions that mise switches as you change
+directories. For something installed once for the whole machine, such as a
+system library, a desktop app, or a command other users run without mise, use
+one of these:
 
-主机软件包共享计算机的软件包数据库或前缀。仅仅因为它们在 `mise.toml` 中声明，并不会获得按项目切换版本的能力。
+- [`[bootstrap.packages]`](/bootstrap/packages/) declares packages for apt,
+  dnf, Homebrew, WinGet, and other package managers, and `mise bootstrap`
+  installs them. mise installs `brew:` and `brew-cask:` entries itself, so
+  Homebrew does not need to be installed; see
+  [Homebrew formulae](/bootstrap/packages/brew.html).
+- [`mise install-into`](/cli/install-into.html) installs one version of any
+  tool mise supports into a directory you choose:
 
-### 如何安装其他用户无需 mise 即可运行的工具？
+  ```sh
+  mise install-into node@24 ~/standalone-node
+  ~/standalone-node/bin/node --version
+  ```
 
-有两项功能可以安装运行时无需 mise、且能在 `PATH` 上使用的二进制文件。
+  Use a new or empty directory: `install-into` deletes what is already there
+  after asking, or without asking under `--yes`. Add its `bin` directory to
+  `PATH`, and set variables such as `JAVA_HOME` yourself.
 
-对于有 Homebrew formula 的工具，请使用带有 `brew:` 条目的 [`[bootstrap.packages]`](/bootstrap/packages/)：
-
-```toml
-[bootstrap.packages]
-"brew:ffmpeg" = "latest"
-"brew:jq" = "latest"
-```
-
-mise 会将 bottles 写入规范前缀（Linux 上为 `/home/linuxbrew/.linuxbrew`，arm64 macOS 上为 `/opt/homebrew`），并创建常规的 `<prefix>/bin` 链接，同时不要求安装 Homebrew 本身。一旦将 `<prefix>/bin` 添加到 `PATH`，这些二进制文件的行为就与其他 Homebrew 安装的程序一样。[Keg-only](https://docs.brew.sh/FAQ#what-does-keg-only-mean) formula 是例外：与 brew 一样，mise 不会将它们放入前缀目录，因此它们的二进制文件会保留在 `<prefix>/opt/<name>/bin`。
-
-在 arm64 macOS 以及运行 mise brew 管理器的 x86_64/arm64 Linux 上，`mise bootstrap packages import --manager brew` 会将现有的 Homebrew 或 Linuxbrew 设置快照保存到你的配置中——可以保存你按需安装的 formula，也可以通过 `--all` 保存所有已链接的 formula。
-
-对于 mise 支持的任何后端，请使用 [`mise install-into`](/cli/install-into.html)。它会将一个工具版本安装到你选择的目录中，以便在 mise 之外使用：
-
-```sh
-mise install-into node@24 "$HOME/standalone-node"
-"$HOME/standalone-node/bin/node" --version
-```
-
-请将其指向新的或空的目录：`install-into` 会在确认提示后删除目标位置中已有的内容；确认提示默认为否，或者在 `--yes` 下不询问。工具安装会进入该目录；后端也可能使用 mise 缓存并安装依赖项。请像上面的 brew 前缀一样，自行将其 `bin` 添加到 `PATH`。对于需要环境变量（例如 `JAVA_HOME`）或其他 mise 通常在运行时应用的配置的工具，仍然需要手动设置这些内容。
-
-这两种方式都与 Homebrew 做出了相同的取舍：为所有人提供 `PATH` 上的一个版本，而不支持按项目选择版本。如果你需要按项目选择版本，请将工具保留在 `[tools]` 中，并让 [`mise bootstrap`](/bootstrap.html) 通过一条命令统一配置每个用户的激活状态、配置和工具——或者通过 [`mise bootstrap remote`](/bootstrap/remote.html) 在多台主机上完成。
+Both give every user one version, with no switching per project. To give each
+user mise-managed tools instead, keep them in `[tools]` and let
+[`mise bootstrap`](/bootstrap.html) set up each user's activation and tools.
 
 ### mise 安全吗？
 
-mise 支持下载验证、配置文件信任，以及安全模式和 paranoid 模式等可选限制。它们提供的保障取决于后端和操作。请从[安全性](/security.html)开始，了解威胁模型和可用控制措施。请通过 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md) 报告漏洞。
+mise checks downloads where the backend supports it, asks before it runs code
+from a project's config, and has safe and paranoid modes for stricter limits.
+What each check covers depends on the backend. See [Security](/security.html),
+and report vulnerabilities as described in
+[Reporting a vulnerability](/security.html#reporting-a-vulnerability).
 
 ### usage 是什么？
 
-[usage](https://usage.jdx.dev/) 是用于定义 CLI 工具的规范和 CLI。
-
-参数、标志、环境变量和配置文件都可以在 usage 规范中定义。单个定义可以驱动帮助文本、参数解析和补全。
-
-mise 将 usage 集成用于任务参数解析、帮助和自动补全，因此不需要单独的 `usage` CLI。请参阅[自动补全](/installing-mise.html#autocompletion)。
-
-你可以在文件任务中使用 usage 来实现自动补全；请参阅[文件任务参数](/tasks/file-tasks.html#arguments)。
+[usage](https://usage.jdx.dev/) is a spec for describing a command's arguments,
+flags, and completions. mise has it built in: task arguments,
+`mise run <task> --help`, and completions for mise and its tasks all come from
+usage specs, so you do not need the separate `usage` CLI. See
+[Task arguments](/tasks/task-arguments.html).
 
 ### pitchfork 是什么？
 
-[pitchfork](https://pitchfork.jdx.dev/) 是面向开发者的进程管理器。Mise 可以通过实验性的[守护进程集成](/daemons)管理自定义进程和数据库预设。
-
-它提供守护进程管理功能，例如失败时自动重启、智能就绪检查、进入项目目录时基于 shell 的自动启动或停止，以及按 cron 风格为周期性任务安排计划。
-
-对于命令和依赖排序，请使用[mise 任务](/tasks/)；当服务需要独立于任务调用持续运行时，请使用进程监管器。
+[pitchfork](https://pitchfork.jdx.dev/) is a process supervisor for development
+services. mise's experimental [daemons](/daemons.html) feature uses it to run
+the databases and development servers declared in `mise.toml`, check that they
+are ready, and restart them. Use [tasks](/tasks/) for commands that finish, and
+daemons for processes that keep running.
 
 ### mise 的版本控制如何工作？
 
-mise 使用日历版本，格式为 `YYYY.MONTH.RELEASE`，例如 `2026.9.1`。最后一个数字是当月的发布计数，不代表月份中的某一天，也不是兼容性指标。
-
-新功能可能会在 `experimental = true` 等设置后启用。弃用警告和[发行说明](https://github.com/jdx/mise/releases)会描述行为变化；不要根据类似 SemVer 的主版本推断兼容性。对于团队所需的 mise 版本，请使用 [`min_version`](/configuration.html)。
+mise uses calendar versions such as `2026.10.4`, and the numbers say nothing
+about compatibility. See [Version numbers](/releases.html#versioning).

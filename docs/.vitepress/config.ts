@@ -1,11 +1,18 @@
 import { socialCard, writeSocialCard } from "./social-images.mjs";
 import { pageDescription } from "./social-descriptions.mjs";
 import { showreelFiles } from "./showreel.data";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
 import { sidebar } from "./sidebar";
+import { pageRedirects, redirectStub, stubFile } from "./redirects.mjs";
 import { releaseNotesPlugin } from "@jdxcode/docs-releases/vitepress";
 import {
   groupIconMdPlugin,
@@ -30,7 +37,7 @@ const siteUrl = "https://mise.zhcndoc.com";
 // public/site.webmanifest so browser chrome matches the installed-app chrome.
 const brandColor = "#8B2252";
 const siteDescription =
-  "mise 在一个项目配置中管理 macOS、Linux 和 Windows 上的开发者工具、环境变量、任务、软件包和点文件。";
+  "mise 从一台 mise.toml 安装项目工具、设置其环境变量并运行其任务，并且可以使用包和点文件设置整台机器。";
 
 // `foo/index.md` publishes as `foo/`, everything else as `foo/bar.html`. Anchor
 // the index match on the leading slash so `guide/myindex.md` keeps its name.
@@ -113,13 +120,26 @@ function assertNoEmptyDocPages(outDir: string) {
   }
 }
 
+/** Write a stub at each removed page's URL that sends readers to its new home. */
+function writeRedirectStubs(outDir: string) {
+  for (const [from, redirect] of Object.entries(pageRedirects)) {
+    const file = join(outDir, stubFile(from));
+    if (existsSync(file)) {
+      throw new Error(`${from} is both a documentation page and a redirect`);
+    }
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, redirectStub(redirect, siteUrl));
+  }
+}
+
 // https://vitepress.dev/reference/site-config
 export default withMermaid(
   defineConfig({
     title: "Mise 中文文档",
     description: siteDescription,
-    lang: "zh-CN",
-    titleTemplate: ":title - Mise 中文文档",
+    lang: "en-US",
+    // The contributor guide in docs/README.md is for GitHub, not the site.
+    srcExclude: ["README.md"],
     lastUpdated: true,
     appearance: true,
     mermaid: {},
@@ -131,10 +151,51 @@ export default withMermaid(
       logo: { light: "/logo-light.svg", dark: "/logo-dark.svg" },
       outline: { level: "deep", label: "本页目录" },
       nav: [
-        { text: "mise 版本", link: "https://mise-versions.jdx.dev/" },
-        { text: "开发工具", link: "/dev-tools/" },
-        { text: "环境变量", link: "/environments/" },
-        { text: "任务", link: "/tasks/" },
+        {
+          text: "开发工具",
+          link: "/dev-tools/",
+          activeMatch: "^/(dev-tools|lang|core-tools|registry)",
+        },
+        {
+          text: "环境",
+          link: "/environments/",
+          activeMatch: "^/(environments|shell-aliases|hooks|direnv)",
+        },
+        { text: "任务", link: "/tasks/", activeMatch: "^/(tasks|daemons)" },
+        {
+          text: "引导程序",
+          link: "/bootstrap",
+          activeMatch: "^/(bootstrap|dotfiles)",
+        },
+        {
+          text: "参考",
+          items: [
+            {
+              items: [
+                { text: "CLI命令", link: "/cli/" },
+                { text: "mise.toml", link: "/configuration" },
+                { text: "设置", link: "/configuration/settings" },
+                {
+                  text: "MISE_ *变量",
+                  link: "/configuration/environment-variables",
+                },
+                {
+                  text: "任务配置",
+                  link: "/tasks/task-configuration",
+                },
+                { text: "工具注册表", link: "/registry" },
+              ],
+            },
+            {
+              items: [
+                { text: "故障排除", link: "/troubleshooting" },
+                { text: "错误信息", link: "/errors" },
+                { text: "词汇表", link: "/glossary" },
+              ],
+            },
+          ],
+        },
+        { text: "mise-版本", link: "https://mise-versions.jdx.dev/" },
         {
           text: `v${latestVersion}`,
           // The releases page opens the release named in the hash.
@@ -146,7 +207,7 @@ export default withMermaid(
 
       socialLinks: [
         { icon: "github", link: "https://github.com/jdx/mise" },
-        { icon: "discord", link: "https://discord.gg/UBa7pJUN7Z" },
+        { icon: "discord", link: "https://discord.gg/mABnUDvP57" },
       ],
 
       editLink: {
@@ -361,7 +422,19 @@ export default withMermaid(
           sizes: "180x180",
         },
       ],
-      // Google Fonts
+      // Body text on every page; the other self-hosted faces load when used.
+      [
+        "link",
+        {
+          rel: "preload",
+          href: "/fonts/dmsans-latin.woff2",
+          as: "font",
+          type: "font/woff2",
+          crossorigin: "",
+        },
+      ],
+      // Google Fonts (Cormorant Garamond only; see custom.css for why the
+      // others are self-hosted)
       [
         "link",
         {
@@ -380,7 +453,7 @@ export default withMermaid(
       [
         "link",
         {
-          href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600;700&display=swap",
+          href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&display=swap",
           rel: "stylesheet",
         },
       ],
@@ -405,7 +478,7 @@ export default withMermaid(
     transformHead({ pageData, title, description, siteConfig }) {
       const heading =
         pageData.relativePath === "index.md"
-          ? "Dev tools, environments, and tasks"
+          ? "Dev tools, env vars, and tasks in one CLI"
           : pageData.title || "mise";
       const card = socialCard(
         heading,
@@ -489,6 +562,7 @@ export default withMermaid(
     },
     buildEnd(siteConfig) {
       assertNoEmptyDocPages(siteConfig.outDir);
+      writeRedirectStubs(siteConfig.outDir);
     },
   }),
 );

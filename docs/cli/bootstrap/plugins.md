@@ -11,7 +11,11 @@ description: "管理在 `[bootstrap.plugins]` 中声明的包管理器插件"
 
 管理在 `[bootstrap.plugins]` 中声明的包管理器插件
 
-在应用这些插件所管理的软件包之前安装它们。安装插件本身不会安装 `[bootstrap.packages]` 中的主机软件包。
+A package plugin adds a package manager, such as one for VS Code extensions,
+that `[bootstrap.packages]` entries can use. `mise bootstrap` installs
+plugins before packages; when you run the narrower commands, run
+`plugins apply` before `packages apply`. Installing a plugin does not
+install its packages.
 
 ## 标志
 - **`-h --help`** — 打印帮助
@@ -25,6 +29,6 @@ description: "管理在 `[bootstrap.plugins]` 中声明的包管理器插件"
 
 ## 相关文档
 
-- [包插件](/bootstrap/packages/plugins.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Package manager plugins](/bootstrap/packages/plugins.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

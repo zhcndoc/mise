@@ -16,17 +16,33 @@ description: "列出检查点，最新的在前"
 - **`-J --json`** — 以 JSON 格式输出
 - **`-n --limit <LIMIT>`** — 最多显示这么多检查点（0 表示全部）
 
-  **默认值：** `20`
-- **`--path <PATH>`** — 仅显示此路径（或其下的内容）发生更改的检查点
-- **`--trigger <TRIGGER>`** — 仅显示具有此触发器的检查点（edit、save、bootstrap、…）
-- **`--label <LABEL>`** — 仅显示具有此标签的检查点
-- **`--pending`** — 仅显示由未完成操作记录的检查点
-- **`-h --help`** — 打印帮助
+  **Default:** `20`
+- **`--path <PATH>`** — Only checkpoints where this path (or something under it) changed
+- **`--trigger <TRIGGER>`** — Only checkpoints with this trigger, such as edit, save, agent, bootstrap, apply, rollback, or undo
+
+  `bootstrap` covers `mise bootstrap`, its `packages` commands, and `mise dot add`, `apply`, `edit`, and `unapply`. `apply` covers incoming changes written by `mise dot pull` or the watcher.
+- **`--label <LABEL>`** — Only checkpoints with this label
+- **`--pending`** — Only checkpoints recorded by operations that did not finish
+- **`-h --help`** — Print help
+
+## Examples
+
+List every checkpoint
+
+```
+mise dot history ls -n 0
+```
+
+List operations that did not finish
+
+```
+mise dot history ls --pending
+```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles history [FLAGS] [SUBCOMMAND]`](/cli/dotfiles/history.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles history [FLAGS] [SUBCOMMAND]`](/cli/dotfiles/history.html).
+- [Global flags and argument syntax](/cli/#global-flags).

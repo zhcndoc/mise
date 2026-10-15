@@ -1,190 +1,99 @@
 ---
-description: "使用 Aqua 注册表配方和受支持的验证检查安装发布二进制文件"
+description: "Install prebuilt release binaries from aqua registry recipes, with signature and provenance checks."
 ---
 
-# Aqua 后端
+# aqua backend
 
-[Aqua](https://aquaproj.github.io/) 工具可以在 mise 中原生使用。对于没有 [packslip manifests](/dev-tools/backends/packslip.html) 的工具，aqua 是 Tier 2 后端：它不需要插件，可以在 Windows 上运行，并且提供超出校验和的安全功能。验证取决于每个软件包提供的元数据。
+The `aqua` backend installs prebuilt release binaries using package recipes from
+the [aqua registry](https://github.com/aquaproj/aqua-registry), for example
+[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml).
+The backend works on Windows and can verify checksums, signatures, attestations
+and SLSA provenance when a recipe declares them.
 
-你不需要单独安装 aqua。mise 完全不使用 aqua CLI；它使用 [aqua registry](https://github.com/aquaproj/aqua-registry)，该注册表会在发布时编译到 mise 二进制文件中。下面是一个软件包条目示例：[`aqua:hashicorp/terraform`](https://github.com/aquaproj/aqua-registry/blob/main/pkgs/hashicorp/terraform/registry.yaml)。mise 自己重新实现了 aqua，会读取这些文件来安装工具。
+## Requirements
 
-默认情况下，使用内置的快照。启用
-[`registry_floating`](/configuration/settings.html#registry_floating) 设置后，会先检查当前的
-官方 aqua registry，同时保留内置快照作为备用。它还会让 mise 的简写 registry 跟随更新；
-有关其中的权衡和缓存行为，请参阅[浮动 registry](/registry.html#floating-registries)。
-
-如果某个条目包含错误的平台名称、URL 或验证元数据，请向 aqua registry 报告，或贡献修正内容。mise 发布版本包含一个快照，因此上游修复可能需要更新的 mise 发布版本或自定义注册表。
-
-Aqua 配方主要用于下载和提取已发布的构件。需要自定义安装步骤或环境设置的工具可能需要使用其他后端。
-
-此后端的代码位于 mise 仓库中的 [`./src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs)。
-
-## 自定义注册表
-
-设置 [`aqua.registries`](/configuration/settings.html#aqua.registries)，以便在内置注册表之前检查自定义 aqua
-注册表源：
-
-```toml
-[settings]
-aqua.registries = ["https://github.com/my-org/aqua-registry"]
-```
-
-要在内置注册表之前检查多个注册表，请按顺序列出它们：
-
-```toml
-[settings]
-aqua.registries = [
-  "https://github.com/my-org/internal-aqua-registry",
-  "https://github.com/partner/aqua-registry",
-]
-```
-
-每个源可以是仓库 URL、直接指向 `registry.yaml` 或 `registry.yml` 文件的 URL，或者使用绝对路径
-`file://` URL 指定的本地目录或注册表文件：
-
-```toml
-[settings]
-aqua.registries = [
-  "file:///absolute/path/to/aqua-registry",
-  "file:///absolute/path/to/registry.yaml",
-  "https://example.com/registry.yaml",
-]
-```
-
-对于仓库和目录源，mise 会从源根目录加载 `registry.yaml`，必要时回退到 `registry.yml`。远程注册表源会在
-`MISE_CACHE_DIR` 下缓存，缓存时间由 [`aqua.registry_cache_ttl`](/configuration/settings.html#aqua.registry_cache_ttl) 指定，默认
-为一周。本地 `file://` 源会绕过下载源缓存，因此下次加载注册表时会读取更改。在 `MISE_AQUA_REGISTRIES` 中，使用
-逗号分隔多个注册表 URL。
-
-当刷新后的注册表源被下载后，mise 会对该源进行哈希处理，并使用该哈希作为编译后注册表缓存路径的一部分。
-当新的编译缓存成功加载或写入时，会清理同一注册表 URL 的旧编译缓存。
-
-包的解析会按配置的注册表顺序进行检查。当启用 `aqua.baked_registry` 时，内置注册表仍会作为所有已配置注册表中缺失包的回退。
-Aqua 注册表别名仅在定义它们的注册表内有效；当你希望 mise 的简写或别名指向来自其他注册表的 aqua
-包时，请使用 [`[tool_alias]`](/dev-tools/aliases)。
-
-旧版 [`aqua.registry_url`](/configuration/settings.html#aqua.registry_url) 设置仍支持单个注册表 URL，但当两者同时设置时，
-`aqua.registries` 优先。
+Nothing beyond mise. mise reads the recipes and runs the
+[verification](#security-verification) itself, so you need neither the aqua CLI
+nor the signing tools. The recipe must list your platform in `supported_envs`
+(see [no asset for your platform](#no-asset-for-your-platform)) and download a
+published artifact. A recipe that builds from source instead (type `cargo`,
+`go_install` or `go_build`) fails with an error that points to the
+[cargo](/dev-tools/backends/cargo.html) or [go](/dev-tools/backends/go.html)
+backend.
 
 ## 使用
 
-在项目中安装 ripgrep，并在不需要 shell 激活的情况下验证可执行文件：
+Install ripgrep in your project and run it without shell activation:
 
 ```sh
 mise use aqua:BurntSushi/ripgrep
 mise exec -- rg --version
 ```
 
-这会将以下内容写入 `mise.toml`。为 `mise use` 添加 `-g` 可安装全局工具。
+This writes the following to `mise.toml`. Add `-g` to `mise use` for a global
+tool.
 
 ```toml
 [tools]
 "aqua:BurntSushi/ripgrep" = "latest"
 ```
 
-使用 `mise ls-remote aqua:BurntSushi/ripgrep` 查看可用版本。
-`mise registry ripgrep` 显示为其简写配置的后端。
+Run `mise ls-remote aqua:BurntSushi/ripgrep` to list available versions.
+`mise registry ripgrep` shows the backends its short name uses.
 
-## 工具选项
+Recipes download and extract published artifacts. A tool that needs custom
+install steps or environment setup needs another backend.
 
-### `slsa_signer_identity` 和 `slsa_signer_issuer`
+## The bundled registry {#bundled-registry}
 
-某些注册表条目配置了 `slsa_provenance`，但没有配置预期的签名者，因此 mise 会跳过这些条目的 SLSA，
-要求 SLSA 的现有锁定文件也会失败。设置预期的 Fulcio 证书 URI subject 和 OIDC issuer，即可自行提供签名者：
+Each mise release bundles a snapshot of the aqua registry and uses it by
+default. The opt-in [`registry_floating`](/configuration/settings.html#registry_floating)
+setting checks the current official aqua registry first and keeps the bundled
+snapshot as a fallback. It also floats mise's own registry; see
+[floating registries](/registry.html#floating-registries) for the tradeoffs and
+cache behavior.
 
-```toml
-[tools]
-"aqua:google/osv-scanner" = { version = "2.6.0", slsa_signer_identity = "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0", slsa_signer_issuer = "https://token.actions.githubusercontent.com" }
-```
+If a recipe has wrong platform names, URLs or verification metadata, report it
+to the [aqua registry](https://github.com/aquaproj/aqua-registry/issues). A fix
+upstream reaches you through a later mise release, `registry_floating`, or a
+custom registry.
 
-两个选项必须同时设置，并且必须与证书完全匹配；它们会替换注册表条目中的任何签名者。
-两个值中都可以使用 <span v-pre>`{{.Version}}`</span> aqua 模板。请从项目的发布来源证明中查找签名者，
-不要从未经审查的来源复制。此选项只提供签名者：如果软件包的注册表条目没有 `slsa_provenance`，它不会启用 SLSA。
+## Custom registries {#custom-registry}
 
-### `symlink_bins`
-
-有些工具会捆绑额外的可执行文件，这些文件你可能不希望暴露在 PATH 上。例如，`aws-cli` 会捆绑
-Python，这可能会与你期望使用的 Python 版本冲突。
-
-设置 `symlink_bins = true` 会创建经过筛选的 `.mise-bins` 目录，并且只暴露属于该 aqua 软件包的二进制文件，
-而不是安装中发现的所有可执行文件。
+List your own aqua registries in [`aqua.registries`](/dev-tools/backends/aqua.html#aqua.registries). mise
+checks them in order, then the bundled registry:
 
 ```toml
-[tools]
-aws-cli = { version = "latest", symlink_bins = true }
+[settings]
+aqua.registries = [
+  "https://github.com/my-org/aqua-registry",
+  "registry.yaml",
+]
 ```
 
-启用后：
+Each source can be a repository URL, a direct URL to a `registry.yaml` or
+`registry.yml` file, an absolute `file://` URL, or, in a config file, a plain
+path resolved against that config file's root, as `registry.yaml` is above.
+Paths given through `MISE_AQUA_REGISTRIES` must be absolute `file://` URLs. For
+a repository or directory, mise reads `registry.yaml` at its root, or
+`registry.yml` if that is missing.
 
-- 如果 aqua registry 定义了 `files` 字段，则只会暴露那些二进制文件（例如 aws-cli 的 `aws` 和 `aws_completer`）
-- 否则，mise 会回退为暴露该包推断出的主二进制文件
-- 会创建一个 `.mise-bins` 子目录，并为暴露的二进制文件创建符号链接
-- 捆绑的依赖项和其他额外可执行文件，例如 `aws-cli` 中的 Python，不会被添加到 PATH
+Remote sources are cached for
+[`aqua.registry_cache_ttl`](/dev-tools/backends/aqua.html#aqua.registry_cache_ttl). Local sources are read
+again each time mise loads the registry, so edits take effect immediately.
 
-### `vars`
+With [`aqua.baked_registry`](/dev-tools/backends/aqua.html#aqua.baked_registry) on (the default), the bundled
+registry is the fallback for packages that none of your registries define. Aqua
+registry aliases apply only inside the registry that defines them. To point a
+mise name at a package in another registry, use a
+[tool alias](/dev-tools/aliases.html).
 
-某些 aqua registry 条目定义了模板变量（例如 <span v-pre>`{{.Vars.channel}}`</span>）。
-可通过工具选项来设置它们，既可以使用顶层键，也可以使用嵌套的 `vars` 表：
+[`aqua.registry_url`](/dev-tools/backends/aqua.html#aqua.registry_url) is deprecated; use `aqua.registries`.
+mise 2026.12.0 and later warn when it is set, and mise 2027.12.0 removes it.
+Until then it is read as a one-entry `aqua.registries` when `aqua.registries` is
+unset.
 
-```toml
-[tools]
-"aqua:flutter/flutter" = { version = "3.32.8", channel = "stable" }
-"aqua:scenarigo/scenarigo" = { version = "0.21.0", vars = { go_version = "1.24" } }
-```
-
-带默认值的变量会自动填充。aqua registry 中标记为必需的变量必须设置，
-除非该 registry 也提供了默认值。
-
-A registry var named `libc` must be set as `vars.libc`, because a top-level `libc` key is the
-[`libc`](#libc) tool option.
-
-### `libc`
-
-On a glibc Linux host, mise prefers a release's glibc build even when the aqua registry names the
-musl one. It uses the musl build only when no glibc build is published. Set `libc` to choose the
-build for one tool:
-
-```toml
-[tools]
-"aqua:domcyrus/rustnet" = { version = "latest", libc = "musl" }
-```
-
-`libc` accepts `glibc` (or `gnu`) and `musl`. Like the [`libc`](/configuration/settings.html#libc)
-setting, it makes selection strict: mise never falls back to a build for the other libc. It
-overrides `libc = "glibc"` in settings. It does not override a platform that names a libc, such as
-a musl host or a `linux-x64-musl` lockfile platform, because a glibc build cannot run there. Setting
-`libc = "musl"` in settings makes the host a musl platform (for example `linux-arm64-musl`), so
-under that setting a tool's `libc = "glibc"` has no effect. The value is recorded in the lockfile,
-so changing it resolves the tool again. A version that is already installed keeps its
-build until you reinstall it with `mise install --force`, as with other install options.
-
-在没有通过工具的 `libc = "musl"` 或设置中的 `libc = "musl"` 请求 musl 构建的 musl 平台上（例如 Alpine 主机），
-mise 不会主动寻找 musl 构建。它会安装 aqua 注册表指定的构件，无论这是 glibc 还是 musl 构建；因此，注册表条目
-只指定 glibc 构建的工具也会安装该构建。要在 Alpine 上运行 glibc 构建，需要 glibc 或 gcompat 等兼容运行时。
-
-`libc` affects install, lock, and resolving `latest` from the release GitHub marks as latest. The
-full version list (`mise ls-remote`) is shared by every configuration of a tool, so it still uses the
-host's libc.
-
-### `prerelease`
-
-默认情况下，GitHub 上标记为 `prerelease: true` 的发布不会被包含在 `mise ls-remote` 和 `latest` 解析中。设置 `prerelease = true` 以包含它们：
-
-```toml
-[tools]
-"aqua:owner/tool" = { version = "latest", prerelease = true }
-```
-
-设置后，预发布标签（例如 `v1.0.0-rc1`、`v0.1.2-dev.86`）会出现在 `mise ls-remote` 中，`latest` 会根据包含预发布版本的完整列表进行解析，并且模糊版本查询会匹配预发布标签。当软件包使用 `github_tag` 版本源时，此选项不起作用（git 标签不携带预发布标志）。草稿发布始终会被排除。有关更多详细信息，请参阅 [github backend docs](/dev-tools/backends/github.html#prerelease)。
-
-## 设置
-
-<script setup>
-import Settings from '/components/settings.vue';
-</script>
-<Settings child="aqua" :level="3" />
-
-## 安全验证
+## Security verification {#security-verification}
 
 <span id="github-artifact-attestations"></span>
 <span id="cosign-verification"></span>
@@ -192,7 +101,9 @@ import Settings from '/components/settings.vue';
 <span id="other-security-methods"></span>
 <span id="verification-process"></span>
 
-mise 原生实现了校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign 验证。你不需要单独安装它们的 CLI 工具。**后端支持这些验证方式，并不意味着每个软件包都提供所有这些检查。**
+mise implements checksum, GitHub artifact attestation, Cosign, SLSA and
+Minisign verification itself, so you do not need their CLI tools. Which checks
+run depends on what each package's recipe declares.
 
 | 方法                         | 所需的发布者或注册表元数据                                                                    |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -203,18 +114,149 @@ mise 原生实现了校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign
 | Minisign                     | 签名和预期公钥。                                                                   |
 | SLSA                         | 注册表来源证明配置（包含 `signer_identity` 和 `signer_issuer`），以及发布者的来源证明构件。 |
 
-相应的 `aqua.*` 验证设置默认处于启用状态。某些检查还具有全局设置，例如
-`github_attestations` 或 `slsa`。完整配置请参阅[设置](#settings)。
+The `aqua.*` verification [settings](#settings) are on by default. Some checks
+also have a global setting, such as
+[`github_attestations`](/configuration/settings.html#github_attestations) or
+[`slsa`](/configuration/settings.html#slsa).
 
-签名者字段分别是 Fulcio 证书 URI subject 和 OIDC issuer 的准确值。没有这些字段的注册表软件包会跳过
-SLSA，并可能使用其他验证方式。若要让 `mise lock` 为注册表条目声明了来源证明构件但未声明签名者的软件包
-验证并记录 SLSA，请在工具选项中设置签名者；请参阅[`slsa_signer_identity` 和 `slsa_signer_issuer`](#slsa_signer_identity-and-slsa_signer_issuer)。
+The SLSA signer fields are the exact Fulcio certificate URI subject and OIDC
+issuer. Packages whose recipe has no signer skip SLSA and may use another check.
+To supply one, see
+[`slsa_signer_identity` and `slsa_signer_issuer`](/dev-tools/backends/aqua.html#slsa-signer-identity-and-slsa-signer-issuer).
 
-经过验证的[锁定文件](/dev-tools/mise-lock.html)是可信的：当其中记录了校验和和来源证明（包括 SLSA）时，
-mise 会检查构件摘要，但不会再次验证来源证明，因此从其中安装时不需要签名者。设置
-[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)，可要求在锁定安装期间再次进行来源证明验证。
+A verified [lockfile](/dev-tools/mise-lock.html) is trusted. When it records a
+checksum and provenance, including SLSA, mise checks the artifact digest and
+does not verify the provenance again, so installing from it needs no signer.
+Set [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)
+to verify provenance again during locked installs.
 
-### 故障排查
+## Tool options
+
+Set these on the tool's entry in `[tools]`. Options every backend accepts, such
+as `install_env` and `depends`, are described under
+[tool options](/dev-tools/#tool-options).
+
+### `symlink_bins`
+
+Some tools bundle executables you may not want on `PATH`. For example,
+`aws-cli` bundles Python, which can shadow the Python you meant to use. With
+`symlink_bins = true`, mise creates a `.mise-bins` directory that links only the
+package's own executables, and puts that directory on `PATH` instead of every
+executable in the install:
+
+```toml
+[tools]
+"aqua:aws/aws-cli" = { version = "latest", symlink_bins = true }
+```
+
+The `aws-cli` registry short name already sets this option. mise links the
+executables listed in the recipe's `files` field (`aws` and `aws_completer` for
+aws-cli), or the package's main executable when the recipe lists none.
+
+On Windows the entries in `.mise-bins` are copies. A program that finds its DLLs
+or data next to its own executable would look in `.mise-bins`, so `mise x`, and
+shims, which run through it, start the installed file instead. A shell that
+finds the copy on `PATH` by itself, as with `mise activate`, still runs the
+copy. Each copy records which file it came from when it is installed, so
+reinstall a tool installed by an older mise (`mise install --force`) to get
+this.
+
+### `vars`
+
+Some recipes use template variables, such as
+<span v-pre>`{{.Vars.channel}}`</span>. Set them as top-level options or in a
+nested `vars` table:
+
+```toml
+[tools]
+"aqua:flutter/flutter" = { version = "3.32.8", channel = "stable" }
+"aqua:scenarigo/scenarigo" = { version = "0.21.0", vars = { go_version = "1.24" } }
+```
+
+Variables with defaults are filled in automatically. A variable the recipe marks
+as required must be set unless the recipe also gives it a default. A recipe
+variable named `libc` must be set as `vars.libc`, because a top-level `libc` key
+is the [`libc`](#libc) option.
+
+### `libc`
+
+On glibc Linux, mise installs a release's glibc build even when the recipe names
+the musl build, and uses the musl build only when no glibc build is published.
+Set `libc` to choose for one tool:
+
+```toml
+[tools]
+"aqua:domcyrus/rustnet" = { version = "latest", libc = "musl" }
+```
+
+Accepted values are `glibc` (or `gnu`) and `musl`. When set, mise never falls
+back to a build for the other libc, and the value overrides
+[`libc = "glibc"`](/configuration/settings.html#libc) in settings. It cannot
+select glibc on a musl platform: an Alpine host, `libc = "musl"` in settings, or
+a `linux-*-musl` lockfile platform.
+
+On a musl host where neither the tool nor settings ask for musl, mise installs
+the asset the recipe names. If that is a glibc build, it needs glibc or a
+compatibility layer such as gcompat to run.
+
+The value is recorded in the lockfile, so changing it resolves the tool again.
+Run `mise install --force` to switch a version that is already installed.
+`latest` resolves with the option applied, but `mise ls-remote` lists versions
+for the host's libc, because one version list serves every configuration of a
+tool.
+
+### `prerelease`
+
+By default, releases marked as prereleases on GitHub are left out of
+`mise ls-remote` and `latest`. Set `prerelease = true` to include them:
+
+```toml
+[tools]
+"aqua:owner/tool" = { version = "latest", prerelease = true }
+```
+
+With it, prerelease tags such as `v1.0.0-rc1` appear in `mise ls-remote`, and
+`latest` and prefix requests can match them. Draft releases are always
+excluded. To include prereleases for every tool, set the
+[`prereleases`](/configuration/settings.html#prereleases) setting.
+
+For packages that use the `github_tag` version source, tags carry no prerelease
+flag. `mise ls-remote` lists every tag, while `latest` and prefix requests skip
+tags that look like prereleases (such as `-rc1` or `-beta`) unless
+`prerelease = true` is set.
+
+### `slsa_signer_identity` and `slsa_signer_issuer`
+
+Some recipes configure `slsa_provenance` without the expected signer. mise then
+skips SLSA for them, and an existing lockfile that requires SLSA fails. Set the
+expected Fulcio certificate URI subject and OIDC issuer to supply the signer
+yourself:
+
+```toml
+[tools."aqua:google/osv-scanner"]
+version = "2.6.0"
+slsa_signer_identity = "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0"
+slsa_signer_issuer = "https://token.actions.githubusercontent.com"
+```
+
+Set both options together. They must match the certificate exactly and replace
+any signer in the recipe. The <span v-pre>`{{.Version}}`</span> template is
+available in both values. Copy the signer from the project's release provenance,
+not from an unreviewed source. These options only supply the signer: they do not
+turn on SLSA for a package whose recipe has no `slsa_provenance`.
+
+## Settings
+
+<script setup>
+import Settings from '/components/settings.vue';
+</script>
+<Settings child="aqua" :level="3" />
+
+## Troubleshooting
+
+<span id="common-aqua-issues"></span>
+
+### Verification fails
 
 从失败的命令及其验证错误开始：
 
@@ -222,24 +264,36 @@ mise 会检查构件摘要，但不会再次验证来源证明，因此从其中
 MISE_DEBUG=1 mise install aqua:cli/cli
 ```
 
-检查发布是否提供了预期的签名或证明，注册表是否列出了正确的构件和签名者，以及你的时钟和网络是否允许进行证书和透明日志验证。对于私有资产或 API 限制，请检查 [GitHub authentication](/dev-tools/github-tokens.html)。
+Check that the release publishes the expected signature or attestation, that the
+recipe names the correct artifact and signer, and that your clock and network
+allow certificate and transparency-log checks. For private assets or API rate
+limits, set up [GitHub authentication](/dev-tools/github-tokens.html).
 
-摘要不匹配需要调查构件或预期摘要。缺少或无效的签名需要检查发布者和注册表元数据。禁用验证会改变你信任的构件；它无法修复上述任一问题。报告受影响的版本、平台和验证器错误时，请删除凭据。
+A digest mismatch means the artifact or the expected digest is wrong. A missing
+or invalid signature means the publisher's release or the recipe's metadata is
+wrong. Turning verification off changes which artifacts you trust; it does not
+fix either problem. Report recipe problems to the
+[aqua registry](https://github.com/aquaproj/aqua-registry/issues) and mise
+problems to [mise issues](https://github.com/jdx/mise/issues), with credentials
+removed.
 
-## 常见 aqua 问题
+### No asset for your platform
 
-这些问题通常需要修正 aqua registry 中的软件包条目。
+<span id="supported-env-missing"></span>
 
-### 缺少受支持的环境
+The recipe's `supported_envs` lists the platforms it covers. If the publisher
+ships a build for your OS and architecture but the recipe leaves it out, report
+it to the aqua registry. Until a fix lands, use the [github](/dev-tools/backends/github.html)
+backend for that tool.
 
-将注册表条目的 `supported_envs` 与发布者的发布资产进行比较。如果存在匹配的构件，但其平台不在注册表中，请更新该条目。仅添加平台名称无法让不兼容的二进制文件运行。
+### Versions have an unexpected prefix
 
-### 使用 `version_filter` 而不是 `version_prefix`
+<span id="using-version-filter-instead-of-version-prefix"></span>
 
-使用 `version_prefix` 从展示给用户的版本中移除已知的标签前缀，使用 `version_filter` 排除无关发布。保留发布者有意义的版本标识符；版本不必是三段式语义版本。
+If `mise ls-remote aqua:...` shows versions such as `atlascli/1.2.3`, the recipe
+filters tags with `version_filter` instead of stripping the prefix with
+`version_prefix`. Report it to the aqua registry; mise strips and restores a
+`version_prefix` automatically. Recipe authors can find these fixes in
+[aqua registry recipes](/contributing/registry.html#aqua-registry-recipes).
 
-例如，某个条目可能使用类似 `Version startsWith "atlascli/"` 的 `version_filter` 表达式。
-
-这会使版本变成 `atlascli/1.2.3`，而这不是我们想要的结果。修复方法是使用
-`version_prefix` 而不是 `version_filter`，并将前缀（本例中的 `atlascli/`）放入
-`version_prefix` 字段。mise 会自动移除前缀，并在需要时将其加回；使用 `version_filter` 时无法做到这一点。
+Implementation: [`src/backend/aqua.rs`](https://github.com/jdx/mise/blob/main/src/backend/aqua.rs).

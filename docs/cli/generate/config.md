@@ -5,29 +5,39 @@ description: "生成一个 mise.toml 文件"
 <!-- 由 usage-cli 根据 usage 规范生成 -->
 # `mise generate config`
 
-- **用法：** `mise generate config [FLAGS] [PATH]`
-- **效果：** 修改状态
-- **源代码：** [`src/cli/generate/config.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/config.rs)
+- **Usage:** `mise generate config [FLAGS] [PATH]`
+- **Effect:** destructive — may delete or irreversibly overwrite
+- **Source code:** [`src/cli/generate/config.rs`](https://github.com/jdx/mise/blob/main/src/cli/generate/config.rs)
 
 生成一个 mise.toml 文件。
 
-## 参数
-- **`[PATH]`** — 要创建的配置文件路径
+Same as `mise edit`, which has the details. It opens the interactive editor, or
+without an interactive terminal (or with --yes) writes a commented starter
+template. If PATH already exists it stops with an error rather than replace
+the file; pass --force to replace it.
 
-## 选项
-- **`-g --global`** — 生成全局配置文件（~/.config/mise/config.toml）
-- **`-n --dry-run`** — 显示将要生成的内容，但不写入文件
-- **`-t --tool-versions <TOOL_VERSIONS>`** — 要从中导入工具的 .tool-versions 文件路径
-- **`-h --help`** — 打印帮助
+## Arguments
+- **`[PATH]`** — Config file to edit or create; defaults to mise.toml
+
+## Flags
+- **`-g --global`** — Generate the global config file (~/.config/mise/config.toml)
+- **`-n --dry-run`** — Print the result instead of writing it to the file
+- **`-f --force`** — Replace an existing file with the starter template when not opening the editor
+- **`-t --tool-versions <FILE>`** — Copy the tools from this .tool-versions file into the config, without opening the editor
+- **`-h --help`** — Print help
 
 ## 示例
 
+Edit mise.toml in the current directory
+
 ```
-mise generate config             # 交互式生成 mise.toml
-mise generate config .mise.toml  # 生成指定文件
-mise generate config -g          # 生成全局配置文件
-mise generate config -y          # 跳过交互式编辑器
-mise generate config -n          # 预览而不写入
+mise generate config
+```
+
+Print the result instead of writing it
+
+```
+mise generate config -n
 ```
 
 <!-- 已生成引用导航 -->

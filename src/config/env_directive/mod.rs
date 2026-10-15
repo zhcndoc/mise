@@ -23,7 +23,9 @@ pub(crate) use mise_util::env_value::EnvValue;
 
 mod file;
 mod module;
+pub use module::skipped_env_modules;
 mod path;
+pub mod prompt;
 mod source;
 pub(crate) mod venv;
 
@@ -118,6 +120,9 @@ pub struct EnvDirectiveOptions {
     pub(crate) required: RequiredValue,
     #[serde(default)]
     pub(crate) expand: bool,
+    /// `[vars]` only: ask for this value once and remember the answer on this machine.
+    #[serde(default)]
+    pub(crate) prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -426,10 +431,8 @@ impl EnvResults {
         // is operator-owned and still applies, mirroring the trust model. `_.source`
         // runs a shell script (code execution rather than env injection), so it is
         // ignored regardless of source, including operator-owned global config.
-        let dropped_in_safe_mode = |directive: &EnvDirective, source: &Path| -> bool {
-            safe_mode
-                && (!crate::config::is_global_config(source)
-                    || matches!(directive, EnvDirective::Source(..)))
+        let dropped_in_safe_mode = |directive: &EnvDirective, source: &Path| {
+            safe_mode && dropped_in_safe_mode(directive, source)
         };
         // Choose the last venv among directives that survive the safe-mode filter,
         // so a dropped project venv can't cause an operator's global venv to be
@@ -477,6 +480,17 @@ impl EnvResults {
             initial
         };
 
+        if resolve_opts.vars {
+            // A saved value is an ordinary var, below every config value and visible to
+            // templates from the start. A name the process environment sets is skipped,
+            // because the environment ranks higher.
+            for (key, value) in prompt::saved_all() {
+                if !value.is_empty() && env::PRISTINE_ENV.get(&key).is_none_or(|v| v.is_empty()) {
+                    r.vars.insert(key, (value, prompt::answers_path()));
+                }
+            }
+        }
+
         for (directive, source) in filtered_input {
             let mut tera = None;
             // trace!(
@@ -504,6 +518,18 @@ impl EnvResults {
 
             ctx.insert("vars", &vars);
             let redact = directive.options().redact;
+            if !resolve_opts.vars && directive.options().prompt.is_some() {
+                eyre::bail!("`prompt` is only supported in [vars], not [env]");
+            }
+            if resolve_opts.vars
+                && directive.options().prompt.is_some()
+                && !matches!(
+                    directive,
+                    EnvDirective::Default(..) | EnvDirective::Required(..)
+                )
+            {
+                eyre::bail!("`prompt` needs a `default` or `required` on the same var");
+            }
             // trace!("resolve: ctx.get('env'): {:#?}", &ctx.get("env"));
             match directive {
                 EnvDirective::Val(k, v, _opts) => {
@@ -531,7 +557,10 @@ impl EnvResults {
                         env.insert(k, (v, Some(source.clone())));
                     }
                 }
-                EnvDirective::Default(k, v, _opts) => {
+                EnvDirective::Default(k, v, opts) => {
+                    if resolve_opts.vars && opts.prompt.is_some() {
+                        prompt::note_declared(&k);
+                    }
                     // Same fold as `Val` above, and for the same reason.
                     let k = if resolve_opts.vars {
                         k
@@ -539,11 +568,11 @@ impl EnvResults {
                         crate::env::normalize_path_key(k)
                     };
                     if resolve_opts.vars {
-                        if let Some((v, _)) = r.vars.get(&k).filter(|(v, _)| !v.is_empty()) {
+                        if r.vars.get(&k).is_some_and(|(v, _)| !v.is_empty()) {
+                            // The value stays with the file (or the saved answer) that set it.
                             if redact.unwrap_or(false) {
                                 r.redactions.push(k.clone());
                             }
-                            r.vars.insert(k, (v.clone(), source.clone()));
                             continue;
                         }
                         if let Some(v) = env::PRISTINE_ENV.get(&k).filter(|v| !v.is_empty()) {
@@ -561,6 +590,19 @@ impl EnvResults {
                         continue;
                     }
 
+                    // A saved answer wins over the default, so render the default only
+                    // when there is none.
+                    if resolve_opts.vars
+                        && let Some(a) = prompt::saved(&k)
+                    {
+                        if redact.unwrap_or(false) {
+                            r.redactions.push(k.clone());
+                        }
+                        r.track_redaction_override(&k, redact);
+                        r.vars.insert(k, (a, prompt::answers_path()));
+                        continue;
+                    }
+
                     r.track_redaction_override(&k, redact);
                     r.rendered_defaults.insert(k.clone());
                     let v = r.parse_template(&ctx, &mut tera, &source, &env_vars, &k, &v)?;
@@ -569,7 +611,14 @@ impl EnvResults {
                         if redact.unwrap_or(false) {
                             r.redactions.push(k.clone());
                         }
-                        r.vars.insert(k, (v, source.clone()));
+                        let answer = match &opts.prompt {
+                            Some(p) => prompt::answer(&k, p, Some(&v))?,
+                            None => None,
+                        };
+                        match answer {
+                            Some(a) => r.vars.insert(k, (a, prompt::answers_path())),
+                            None => r.vars.insert(k, (v, source.clone())),
+                        };
                     } else {
                         r.env_remove.remove(&k);
                         if redact.unwrap_or(false) {
@@ -594,7 +643,10 @@ impl EnvResults {
                     r.caller_env_keys.remove(&k);
                     r.env_remove.insert(k);
                 }
-                EnvDirective::Required(k, _opts) => {
+                EnvDirective::Required(k, opts) => {
+                    if resolve_opts.vars && opts.prompt.is_some() {
+                        prompt::note_declared(&k);
+                    }
                     // Required directives only validate; they never assign. Record the key so
                     // redaction can resolve it against the caller environment.
                     r.caller_env_keys.insert(k.clone());
@@ -614,6 +666,15 @@ impl EnvResults {
                         && let Some(v) = required_env.get(&k)
                     {
                         r.vars.insert(k, (v.clone(), source.clone()));
+                    } else if resolve_opts.vars
+                        && !vars.contains_key(&k)
+                        && !r.vars.contains_key(&k)
+                        && let Some(a) = match &opts.prompt {
+                            Some(p) => prompt::answer(&k, p, None)?,
+                            None => prompt::saved(&k),
+                        }
+                    {
+                        r.vars.insert(k, (a, prompt::answers_path()));
                     }
                 }
                 EnvDirective::Age {
@@ -890,7 +951,8 @@ impl EnvResults {
             &r,
             &context_vars_for_validation,
             &oci_env_keys,
-            resolve_opts.warn_on_missing_required,
+            resolve_opts.warn_on_missing_required
+                || (resolve_opts.vars && prompt::tolerates_missing()),
             resolve_opts.vars,
         )?;
 
@@ -1276,6 +1338,12 @@ impl Debug for EnvResults {
         }
         ds.finish()
     }
+}
+
+/// Whether safe mode ignores `directive` from `source` (see `resolve_with_toolset`): any
+/// directive from project config, and `_.source` from any config.
+pub(super) fn dropped_in_safe_mode(directive: &EnvDirective, source: &Path) -> bool {
+    !crate::config::is_global_config(source) || matches!(directive, EnvDirective::Source(..))
 }
 
 #[cfg(test)]

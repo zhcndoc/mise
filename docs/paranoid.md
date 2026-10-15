@@ -1,68 +1,115 @@
 ---
-description: "偏执模式会禁用自动信任和 CI 信任，将直接文件批准绑定到配置内容，并在安装期间重新检查受支持的溯源信息。"
+description: "Require content-bound trust for every project config, turn off automatic trust, and re-verify provenance on each install."
+socialDescription: "Require content-bound trust for project config and re-verify provenance on every install."
 ---
 
-# 偏执模式
+# Paranoid mode
 
-偏执模式会禁用自动信任和 CI 信任，将直接文件批准绑定到配置内容，并在安装期间重新检查受支持的溯源信息。通过 `trusted_config_paths` 接受的配置，或继承自 monorepo 根目录的信任，仍然属于基于路径的例外。批准命令后，它不会对命令进行沙箱隔离；请参阅[安全性](/security.html)了解每项控制措施的范围。
+Paranoid mode requires your approval before mise loads any project config file,
+and again whenever that file changes. It also turns off automatic trust, including
+in CI, and re-verifies provenance on every install. It does not sandbox the
+commands you approve; see [Sandboxing](/sandboxing.html).
 
-使用 `MISE_PARANOID=1` 为单次调用启用，或将其全局持久化：
+Turn it on for one command with `MISE_PARANOID=1`, or for every command:
 
 ```sh
-mise settings set paranoid true
+mise settings paranoid=true
 ```
 
-要恢复正常模式，请运行 `mise settings set paranoid false`。该设置仅适用于全局；项目无法为自身启用或禁用此设置。
+`mise settings paranoid=false` turns it off. The
+[`paranoid`](/configuration/settings.html#paranoid) setting is global-only, so a
+project cannot change it.
 
 ## 配置文件
 
-在正常模式下，简单配置可以在无需信任的情况下加载，并且 `mise run`、`mise install` 和 `mise exec` 等执行命令会自动信任其活动配置。其他命令可能会根据其发现文件的方式，提示、失败或跳过不受信任的文件。请参阅[`mise trust`](/cli/trust.html)了解正常模式规则。
+Paranoid mode changes the [normal trust rules](/security.html#configuration-trust)
+in these ways:
 
-偏执模式要求对非全局配置文件进行明确的信任，包括通常不需要信任的格式。直接文件批准会对内容进行哈希，因此编辑文件后需要重新获得信任。执行命令的自动信任和通常的 CI 信任豁免都会被禁用。在此模式下，Git worktree 之间不会共享信任。
+- Every config file outside global and system config needs trust, including
+  files that normally load without it: `.tool-versions`, idiomatic version files
+  such as `.nvmrc`, task files, and a `mise.toml` that only lists tools. The
+  exception is `.miserc.toml`, which still loads without trust: it can only
+  choose which config files load, and those files need trust.
+- Trust is bound to content. `mise trust` stores a hash of the file, and any edit
+  makes it untrusted again.
+- Each file is trusted on its own. Trusting `mise.toml` does not trust
+  `mise.local.toml` beside it.
+- `mise run`, `mise install`, `mise exec`, `mise watch` and the `mise daemons`
+  start, restart and register commands do not trust the config they load.
+- CI does not make config trusted, and `--yes`, `MISE_YES=1` and `CI` do not
+  answer the trust prompt. In a terminal, mise still asks.
+- Trust is not shared between git worktrees.
+- Trusting a monorepo root trusts only that file. Trust each subproject's config
+  separately.
 
-在偏执模式下，`--yes`、`MISE_YES=1` 和 CI 自动确认不会批准配置的信任。对于无人值守运行，请先审核配置，再明确运行 `mise trust`，然后加载它。
-
-在接受文件之前检查它：
+Read each file, then approve it. `mise trust --show` lists the config files from
+the current directory up and whether each is trusted:
 
 ```sh
 mise trust --show
 mise trust path/to/mise.toml
 ```
 
-将路径替换为你检查过的配置。全局 `trusted_config_paths` 设置允许的路径，以及受信任 monorepo 根目录覆盖的后代路径，会绕过内容哈希检查，因此其中的更改不需要重新批准。全局和系统配置由操作员拥有，仍然不受此限制，因此可以全局设置偏执模式。
+For unattended runs, review the config and run `mise trust` before the job loads
+it.
 
-如果两种模式同时启用，[安全模式](/security.html#safe-mode)优先。它会抑制项目执行和环境注入，因此配置可以在无需信任提示的情况下加载；语法错误和被拒绝的操作仍会失败。在安全模式下加载不会授予后续正常模式或偏执模式调用所需的信任。
+These stay trusted by path, without a hash, so editing them needs no new
+approval:
+
+- configs under [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)
+- global and system config, which is where you turn paranoid mode on
+
+If [safe mode](/security.html#safe-mode) is also on, it takes precedence: project
+config loads without a trust prompt because it cannot run code, and nothing is
+marked trusted.
+
+### Remote includes
+
+A remote [`include`](/configuration.html#include) must be pinned to a full
+lowercase commit sha (`?ref=` followed by 40 or 64 hex digits) or to an OCI
+digest (`@sha256:` followed by 64 lowercase hex digits), so that the hash of the
+trusted file covers what it pulls in. A branch, a tag or a missing ref fails to
+load:
+
+```toml
+include = [
+  "git::https://github.com/myorg/platform.git//mise.toml?ref=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+]
+```
 
 ## 社区插件
 
-偏执模式拒绝通过短名称安装不受信任的社区插件，除非通过 `--yes` 或 `MISE_YES=1` 启用了自动确认、mise 正在 CI 中运行，或安装使用了 `--force`。当短名称插件解析出的 URL 与 mise 内置注册表中的 asdf 或 vfox 远程仓库匹配，或该插件由 `mise-plugins` GitHub 组织维护时，该短名称插件会被信任。
+In normal mode, installing a community plugin by short name asks for
+confirmation. Paranoid mode refuses instead. Unlike config trust, `--yes`,
+`MISE_YES=1`, CI and `--force` still allow the install.
 
-要安装其他社区插件，请在命令行或 `[plugins]` 配置中指定其完整的 Git 仓库 URL。明确提供 URL 会绕过注册表信任检查，因为这是你主动选择并信任的来源：
+A short name counts as trusted when its URL matches an asdf or vfox plugin in
+mise's registry, or when the plugin is in the `mise-plugins` GitHub
+organization. To install any other plugin, give its full Git URL on the command
+line or in `[plugins]`. Naming the URL is your decision to trust that source:
 
 ```sh
-mise plugin install example https://github.com/example/asdf-example
+mise plugins install example https://github.com/example/asdf-example
 ```
 
-在正常模式下，mise 可能会改为在通过短名称安装不受信任的社区插件前发出警告并请求确认。
+## Provenance re-verification
 
-## 溯源重新验证
-
-受支持的后端可以在安装校验和匹配的构件时，重复使用锁定文件中记录的溯源信息。这可以避免重复检查和 API 调用，但依赖于锁定文件已被正确生成。
-
-在偏执模式下，受支持且已启用的溯源方法（例如 SLSA、Cosign、Minisign 和 GitHub 证明）会在安装期间再次运行，而不会因为存在溯源条目而被跳过。这可能需要网络访问。它不会添加后端不支持的验证，也不会重新扫描 mise 跳过安装的工具。
-
-此行为也可以通过
-[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 设置单独启用。
+Paranoid mode turns on
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance).
+Each install runs the backend's provenance checks again, such as SLSA, Cosign,
+Minisign and GitHub attestations, instead of reusing the result recorded in
+[`mise.lock`](/dev-tools/mise-lock.html#provenance-and-security). This can need
+network access. It adds no check the backend does not support, and it does not
+re-check a tool that is already installed.
 
 ## 来自 mise-versions 的证明
 
-mise 会询问 [mise-versions](/configuration/settings.html#use_versions_host) 公共 GitHub 发布构件是否有 GitHub 证明，从而避免安装过程消耗 GitHub API 配额。它返回的证明会经过加密验证，并且必须标明构件所属仓库，因此 mise-versions 不能单独为构件背书；但它可以回答构件没有证明。普通模式会信任这一回答，之后写入的锁文件不会记录来源证明。
+mise asks [mise-versions](/configuration/settings.html#use_versions_host)
+whether a public GitHub release artifact has GitHub attestations, so installs do
+not spend your GitHub API rate limit. mise verifies any attestation it returns
+and requires it to name the artifact's repository, so mise-versions cannot vouch
+for an artifact. It can, however, answer that an artifact has none. Normal mode
+accepts that answer, and a lockfile written afterwards records no provenance.
 
-在 paranoid 模式下，mise 会在跳过验证前向 GitHub 确认该回答。每个没有证明的构件会额外消耗一次 GitHub API 请求。
-
-## 另请参阅
-
-- [安全模式](/security.html#safe-mode)，用于处理不受信任的项目元数据。
-- [沙箱隔离](/sandboxing.html)，用于限制执行的命令。
-- [锁定文件](/dev-tools/mise-lock.html)，用于了解校验和、溯源信息和后端覆盖范围。
-- [联系](/contact.html)，用于提出改进建议或报告异常行为。
+Paranoid mode confirms a "none" answer with GitHub before it skips verification.
+This costs one GitHub API request per artifact without attestations.

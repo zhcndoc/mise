@@ -1,19 +1,44 @@
 ---
-description: "声明和管理长期运行的 Docker Compose 项目"
-socialDescription: "声明和管理长期运行的 Docker Compose 项目"
+description: "Keep Docker Compose projects running, stopped, or removed on a host, after mise bootstrap installs Docker and writes their files."
+socialDescription: "Keep Docker Compose projects running, stopped, or removed on a host."
 ---
 
 # Docker Compose 项目
 
-`[bootstrap.compose]` 以声明方式管理长期运行的 Docker Compose
-项目，此过程发生在软件包、特权文件、目录和系统服务完成收敛之后。因此，它适用于自托管服务：其 Compose 文件、环境文件、Docker 安装以及守护进程生命周期均由同一份 bootstrap 配置管理。
+Use `[bootstrap.compose]` to keep a Docker Compose project running, stopped, or
+removed on a host. The same config can install Docker and write the project's
+files, which suits self-hosted services.
 
-下面的示例针对 Debian/Ubuntu 主机，其软件仓库提供所列出的 Docker 软件包。使用服务的 Compose 模型创建 `infra/mise-cache/compose.yaml`，并在应用前提供两个已声明的机密输入。环境文件模板假设使用符合 Compose `.env` 格式的单行值；其他值请按该格式进行编码。
+## Example
+
+```toml
+[bootstrap.compose.app]
+project_dir = "/opt/app"
+```
+
+```sh
+mise bootstrap compose apply --dry-run
+mise bootstrap compose apply
+```
+
+[`mise bootstrap compose apply`](/cli/bootstrap/compose/apply.html) runs
+`docker compose up --detach --wait` for the Compose file in `/opt/app` and
+waits until its services are running and, where they define a health check,
+healthy. Later runs change nothing until the project drifts from its Compose
+model.
+
+## Install Docker and run a project
+
+[`mise bootstrap`](/bootstrap.html) applies Compose projects after packages,
+files, system services, and the firewall, so one config can install Docker,
+write the Compose file and its secrets, and start the project. This example
+targets an Ubuntu host, whose repositories provide the `docker.io` and
+`docker-compose-v2` packages:
 
 ```toml
 [bootstrap.secrets]
-s3_access_key = "EXAMPLE_S3_ACCESS_KEY"
-s3_secret_key = "EXAMPLE_S3_SECRET_KEY"
+s3_access_key = "S3_ACCESS_KEY" # read from $S3_ACCESS_KEY
+s3_secret_key = "S3_SECRET_KEY"
 
 [bootstrap.packages]
 "apt:docker.io" = "latest"
@@ -45,87 +70,73 @@ project_dir = "/opt/mise-cache"
 files = ["compose.yaml"]
 env_files = [".env"]
 project_name = "mise-cache"
-state = "running"
-sudo = true
+sudo = true # the bootstrap user cannot reach the Docker socket
 depends_on = ["package:apt:docker.io", "service:docker"]
 ```
 
-`project_dir` 是必需项，且必须是绝对路径。`files` 和 `env_files` 中的相对路径将以它为基准解析。如果没有指定 `files`，Compose 将执行其正常的项目目录发现。mise 按声明顺序传递多个文件和环境文件，因此后面的条目会保留 Compose 的覆盖语义。
+Create `infra/mise-cache/compose.yaml` next to this `mise.toml`, set both
+[secret inputs](/bootstrap/secrets.html), and run `mise bootstrap`. The
+environment file template assumes single-line values that are valid in
+Compose's `.env` format.
 
-## 模板
+The project depends on the files in `/opt/mise-cache` without saying so,
+because mise links a project to managed entries for its `project_dir`,
+`files`, and `env_files`. `depends_on` adds the Docker package and service.
 
-Compose 项目值会在 mise 验证 `project_dir` 或解析 `files` 和 `env_files` 之前，作为
-[Tera 模板](/templates.html)渲染。这样，可移植配置可以使用声明它的配置目录或环境变量：
+## Choose the project's state {#lifecycle-and-convergence}
+
+| `state`               | Command               | Converged when                                                                                  |
+| --------------------- | --------------------- | ----------------------------------------------------------------------------------------------- |
+| `"running"` (default) | `compose up --detach` | Every selected service runs, is healthy if it has a health check, and matches the Compose model |
+| `"stopped"`           | `compose stop`        | No selected container is running; containers and data are kept                                  |
+| `"absent"`            | `compose down`        | No container of the project remains                                                             |
+
+For a running project, mise compares Compose's config hash for each service
+with the `com.docker.compose.config-hash` label on its containers. Editing a
+Compose file, an interpolated variable, a profile, or a service definition
+therefore shows up as an update even while the old containers keep running.
+
+List services that run once and exit in `oneshot`. They count as converged
+after they exit with code 0, so a migration or setup job does not keep the
+project out of date.
+
+With `remove_orphans = true`, the default, mise also removes containers for
+services that are no longer in the Compose model: `up` and `down` pass
+`--remove-orphans`, and a stopped project removes them with the container
+engine.
+
+## Select files, profiles, and services {#project-selection}
+
+`project_dir` is required and must be an absolute path. mise passes it to
+Compose as `--project-directory`, and relative entries in `files` and
+`env_files` are resolved from it. Without `files`, Compose finds the project's
+Compose file the usual way. mise passes several files and environment files in
+the order you list them, so later files override earlier ones as Compose
+defines.
 
 ```toml
-[bootstrap.compose.mise-cache]
-project_dir = "{{ config_root }}/compose"
-files = ["{{ env.COMPOSE_FILE }}"]
-env_files = ["{{ config_root }}/compose/.env"]
+[bootstrap.compose.edge]
+project_dir = "/srv/edge"
+files = ["compose.yaml", "compose.prod.yaml"]
+env_files = [".env"]
+profiles = ["monitoring"]
+services = ["proxy", "grafana"]
 ```
 
-支持渲染文本和文本数组字段，包括路径、命令、服务、配置文件和依赖数组中的条目。
-`state`、`pull`、`build`、`recreate` 和 `down_images` 等枚举字段必须使用字面量 TOML 值。
-模板使用声明该项目的配置文件上下文渲染，因此 <code v-pre>{{ config_root }}</code> 不会随你运行
-`mise bootstrap` 的目录改变。没有模板语法的值保持不变。由于 `status`、`plan`、
-`apply --dry-run` 和 `apply` 必须渲染相同的声明，因此不能使用 <code v-pre>{{ exec(...) }}</code>。
-模板失败会停止命令，并报告声明它的配置文件。
+`services` limits `up` and `stop` to those services; without it, mise manages
+every service that the files and profiles enable. Put secret values in an
+environment file that a [`[bootstrap.files]`](/bootstrap/files.html) template
+writes with mode `0600`, not in `mise.toml`.
 
-## 预览完整设置
+## Use Podman or another engine {#engines-and-privileges}
 
-```sh
-mise bootstrap plan
-mise bootstrap --only packages,files,services,compose --dry-run
-```
-
-当 mise 必须先创建文件并安装 Docker 时，请使用完整 bootstrap，或像上面一样包含所需阶段。`mise bootstrap compose apply` 只会使 Compose 项目收敛；它不会应用项目所需的软件包和文件前置条件。试运行无法证明镜像将在目标主机上成功启动或通过其健康检查。
-
-## 生命周期和收敛
-
-`state` 控制项目生命周期：
-
-- `"running"`（默认）运行 `compose up --detach`，检查每个选定服务的运行状态和健康状态，并将 Compose 的规范配置哈希与每个容器的 `com.docker.compose.config-hash` 标签进行比较。
-- `"stopped"` 运行 `compose stop`，保留已配置的容器和项目数据。当 `remove_orphans = true` 时，从 Compose 模型中移除的容器将通过已配置的容器引擎移除。
-- `"absent"` 运行 `compose down`，并可选择移除卷和镜像。
-
-只有在容器状态和渲染后的 Compose 模型均匹配时，状态才会保持收敛。
-对 Compose 文件、插值输入、配置文件或服务配置的更改会作为更新显示，而不会被仅仅处于运行状态的容器所掩盖。
-
-`oneshot` 列出成功退出且退出代码为 0 后已收敛的选定服务。其他选定服务必须处于运行状态，并且在存在健康检查时必须处于健康状态。
-
-## 项目选择
-
-- `project_name`：显式指定的 Compose 项目名称。必须以小写字母或数字开头，且只能包含小写字母、数字、短横线和下划线。
-- `files`：通过 `--file` 传入的有序 Compose 文件。
-- `env_files`：通过 `--env-file` 传入的有序插值环境文件。请将机密值放入权限模式为 `0600` 的受管文件中，而不要放入引导配置。
-- `profiles`：通过 `--profile` 启用的配置文件。
-- `services`：可选的服务子集。为空表示启用所选文件和配置文件中的每个服务。
-- `oneshot`：允许保持退出状态的成功完成服务。当设置了 `services` 时，每个一次性服务也必须在其中被选中。
-- `depends_on`：必须先完成收敛的其他引导资源 ID，例如 `"package:apt:docker.io"` 或 `"service:docker"`。与 `project_dir`、`files` 和 `env_files` 匹配的受管条目会自动关联。
-  显式依赖项必须存在，因此拼写错误会在规划阶段失败。
-
-## 应用策略
-
-- `pull`：`"missing"`（默认）、`"always"` 或 `"never"`。
-- `build`：`"auto"`（默认）、`"always"`（`--build`）或 `"never"`
-  （`--no-build`）。
-- `recreate`：`"auto"`（默认）、`"always"`（`--force-recreate`）或
-  `"never"`（`--no-recreate`）。
-- `wait`：在 `up` 后等待正在运行/健康的服务（默认值为 `true`）。
-- `wait_timeout`：最长等待时间（以秒为单位）。
-- `timeout`：停止/关闭超时时间（以秒为单位）。
-- `remove_orphans`：移除模型中不再存在的项目容器
-  （默认值为 `true`）。
-- `renew_anonymous_volumes`：在 `up` 期间更新匿名卷（默认值为
-  `false`）。
-- `down_volumes`：在 `down` 期间移除命名卷和匿名卷（默认值为
-  `false`）。此操作具有破坏性，应谨慎启用。
-- `down_images`：在 `down` 期间可选择移除项目的 `"local"` 或 `"all"` 镜像。
-  此操作同样具有破坏性。
-
-## 引擎和权限
-
-mise 在可用时使用 `docker compose`，并回退到独立的 Docker Compose v2 `docker-compose` 命令。不支持旧版 Compose v1，因为它缺少安全收敛所需的结构化检查和生命周期标志。`command` 和 `engine_command` 接受用于 Podman、远程 Docker 上下文或其他兼容前端的 argv 数组，且不会调用 shell：
+mise uses `docker compose` when it is available, and otherwise a standalone
+Docker Compose v2 `docker-compose`. Compose v1 is not supported, because it
+lacks the inspection and lifecycle flags that mise relies on. Set `command` to
+use another Compose frontend, such as Podman or a remote Docker context, and
+`engine_command` for the container engine that mise uses to read container
+labels and remove orphaned containers. Both are argument lists, run without a
+shell:
 
 ```toml
 [bootstrap.compose.edge]
@@ -134,21 +145,148 @@ command = ["podman", "compose"]
 engine_command = ["podman"]
 ```
 
-引擎命令会在收敛已停止且 `remove_orphans = true` 的项目时检查容器配置哈希标签，并移除孤立容器。当项目属于系统 Docker 守护进程且 bootstrap 用户没有套接字访问权限时，请设置 `sudo = true`。mise 会在捕获状态输出前进行身份验证，从不隐藏交互式 sudo 提示，并遵循现有的 `system_packages.sudo` 策略。
+When `command` contains a `compose` argument, the engine defaults to the
+arguments before it, so `engine_command` above only makes the default explicit.
+Otherwise the engine is `docker`.
 
-```sh
-mise bootstrap compose status
-mise bootstrap compose status --json
-mise bootstrap compose apply --dry-run
-mise bootstrap compose apply --yes
+Set `sudo = true` when the project belongs to the system Docker daemon and the
+bootstrap user cannot reach its socket. mise then runs every Compose and engine
+command, including the ones `status` uses, through `sudo`, and follows
+[`system_packages.sudo`](/configuration/settings.html#system_packages.sudo). It
+authenticates before it captures command output, so a `sudo` password prompt
+is never hidden.
+
+## Use templates {#templates}
+
+Project values are [Tera templates](/templates.html), rendered before mise
+checks `project_dir` or resolves `files` and `env_files`. That lets a portable
+config use values from `[vars]`, the environment, or its own location:
+
+```toml
+[vars]
+site = "prod"
+
+[bootstrap.compose.app]
+project_dir = "{{ config_root }}/compose"
+files = ["compose.yaml", "compose.{{ vars.site }}.yaml"]
+env_files = ["{{ config_root }}/compose/.env"]
 ```
 
-聚合的 `mise bootstrap plan` 会在软件包、文件、目录和系统服务资源之后安排
-Compose 项目。聚合应用会在这些依赖完成后重新检查项目，因此，同一次运行中
-创建的 Compose 文件或 Docker 安装无需在执行期间进行猜测即可得到处理。
+Here <code v-pre>{{ config_root }}</code> is the declaring config's root: the
+project directory for a project config, or `MISE_GLOBAL_CONFIG_ROOT` (default
+`$HOME`) for the global config. It does not change with the directory you run
+mise from.
 
-有关底层生命周期语义，请参阅 Docker 关于
-[`docker compose`](https://docs.docker.com/reference/cli/docker/compose/)、
-[`up`](https://docs.docker.com/reference/cli/docker/compose/up/) 和
-[`down`](https://docs.docker.com/reference/cli/docker/compose/down/) 的
-参考文档。
+Text values and lists of text are rendered, including entries in `files`,
+`env_files`, `command`, `services`, `profiles`, and `depends_on`. Fields with a
+fixed set of values, such as `state`, `pull`, `build`, `recreate`, and
+`down_images`, must be written literally. A value without template syntax is
+used unchanged. `exec()` is not available, because `status`, `plan`,
+`apply --dry-run`, and `apply` must render the same declaration; see
+[templates in bootstrap](/bootstrap.html#templates). A template error stops the
+command and names the declaring config file.
+
+## How configs combine
+
+Projects merge by name across the
+[config hierarchy](/configuration.html#configuration-hierarchy). A more local
+config replaces the whole declaration for that name; mise does not merge keys
+across files.
+
+## Remove a project
+
+Deleting a declaration leaves the project as it is. To stop and remove it, set
+`state = "absent"` and apply, then delete the entry:
+
+```toml
+[bootstrap.compose.mise-cache]
+project_dir = "/opt/mise-cache"
+state = "absent"
+down_volumes = true
+```
+
+`down_volumes = true` also deletes the project's named and anonymous volumes,
+and `down_images` removes its `"local"` or `"all"` images. Both destroy data
+that `compose up` cannot recreate, so set them only when you mean to.
+[`mise bootstrap unapply`](/bootstrap/modules.html#remove-a-module-s-resources)
+does not remove Compose projects; declare them absent instead.
+
+## Preview and apply
+
+Check each project's state with
+[`mise bootstrap compose status`](/cli/bootstrap/compose/status.html), and
+preview the commands before you apply them:
+
+```sh
+mise bootstrap compose status            # state of each project
+mise bootstrap compose status --json     # the same, as JSON
+mise bootstrap compose status --missing  # exit 1 if any project would change
+mise bootstrap compose apply --dry-run   # print the Compose commands
+mise bootstrap compose apply             # apply after a confirmation prompt
+mise bootstrap compose apply --yes       # apply without prompting
+```
+
+`mise bootstrap compose apply` changes only Compose projects. It does not
+install Docker or write the project's files, and a project whose Compose file
+does not exist yet is reported as `unknown`. When the same config provides
+those, preview and apply them together:
+
+```sh
+mise bootstrap plan
+mise bootstrap --only packages,files,services,compose --dry-run
+```
+
+`mise bootstrap` inspects projects again after the earlier steps finish, so a
+Compose file or Docker installation created in the same run is picked up. A dry
+run cannot show whether an image starts or passes its health check.
+
+## Reference
+
+| Key                       | Values                                                                                                                         | Default                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| `project_dir`             | Absolute path                                                                                                                  | Required                                 |
+| `project_name`            | Lowercase letters, digits, `-`, and `_`, starting with a letter or digit                                                       | Chosen by Compose                        |
+| `files`                   | Compose files, passed with `--file`                                                                                            | Compose's own discovery                  |
+| `env_files`               | Interpolation files, passed with `--env-file`                                                                                  | `[]`                                     |
+| `profiles`                | Profiles, passed with `--profile`                                                                                              | `[]`                                     |
+| `services`                | Services to manage                                                                                                             | Every enabled service                    |
+| `oneshot`                 | Services that may stay exited after code 0; must also be in `services` when it is set                                          | `[]`                                     |
+| `depends_on`              | Bootstrap resources to apply first, as `<kind>:<name>` with kind `package`, `file`, `directory`, `service`, `user`, or `group` | `[]`                                     |
+| `state`                   | `"running"`, `"stopped"`, `"absent"`                                                                                           | `"running"`                              |
+| `pull`                    | `"missing"`, `"always"`, `"never"`                                                                                             | `"missing"`                              |
+| `build`                   | `"auto"`, `"always"` (`--build`), `"never"` (`--no-build`)                                                                     | `"auto"`                                 |
+| `recreate`                | `"auto"`, `"always"` (`--force-recreate`), `"never"` (`--no-recreate`)                                                         | `"auto"`                                 |
+| `wait`                    | `true` passes `--wait` to `up`                                                                                                 | `true`                                   |
+| `wait_timeout`            | Seconds for `--wait-timeout`                                                                                                   | None                                     |
+| `timeout`                 | Seconds for `--timeout` on `up`, `stop`, and `down`                                                                            | None                                     |
+| `remove_orphans`          | `true` removes containers no longer in the model                                                                               | `true`                                   |
+| `renew_anonymous_volumes` | `true` passes `--renew-anon-volumes` to `up`                                                                                   | `false`                                  |
+| `down_volumes`            | `true` passes `--volumes` to `down`                                                                                            | `false`                                  |
+| `down_images`             | `"local"` or `"all"`, passed as `--rmi`                                                                                        | None                                     |
+| `sudo`                    | `true` runs Compose and engine commands through `sudo`                                                                         | `false`                                  |
+| `command`                 | Compose command as an argument list                                                                                            | `docker compose`, or `docker-compose` v2 |
+| `engine_command`          | Engine command as an argument list                                                                                             | Derived from `command`, or `docker`      |
+
+Some combinations are rejected while mise plans the run:
+
+- `services` cannot be combined with `state = "absent"`, because `compose down`
+  removes the whole project.
+- `down_volumes` and `down_images` require `state = "absent"`.
+- `renew_anonymous_volumes` requires `state = "running"`.
+- `wait_timeout` requires `wait = true` and a value above zero.
+- Each `depends_on` entry must name a declared resource, so a misspelling fails
+  during planning.
+
+See Docker's references for
+[`docker compose`](https://docs.docker.com/reference/cli/docker/compose/),
+[`up`](https://docs.docker.com/reference/cli/docker/compose/up/), and
+[`down`](https://docs.docker.com/reference/cli/docker/compose/down/).
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where Compose projects fall in
+  the run order.
+- [Linux firewall](/bootstrap/firewall.html), which does not filter ports that
+  Docker publishes.
+- [Daemons](/daemons.html) for development services that run per project rather
+  than per host.

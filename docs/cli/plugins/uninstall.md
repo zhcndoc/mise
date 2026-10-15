@@ -12,26 +12,37 @@ description: "移除已安装的插件"
 
 移除已安装的插件
 
-默认情况下会保留工具安装内容。传递 `--purge` 可同时移除与所选插件相关的安装内容、下载内容和缓存。
+Installed tool versions are kept unless you pass `--purge`, which also
+removes a tool plugin's installs, downloads, and cache. `--purge` does not
+remove the tools of a backend plugin (`<plugin>:<tool>`); uninstall those
+first with `mise uninstall --all <plugin>:<tool>`.
 
-## 参数
-- **`[PLUGIN]…`** — 要移除的插件
+## Arguments
+- **`[PLUGIN]…`** — Plugins to remove
 
-## 标志
-- **`-a --all`** — 移除所有插件
-- **`-p --purge`** — 同时移除插件的安装内容、下载内容和缓存
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-a --all`** — Remove all plugins
+- **`-p --purge`** — Also remove a tool plugin's installs, downloads, and cache
+- **`-h --help`** — Print help
 
 ## 示例
 
+Remove the plugin and keep the versions it installed
+
 ```
 mise plugins uninstall my-tool
+```
+
+Also delete the versions it installed
+
+```
+mise plugins uninstall --purge my-tool
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [插件选择和维护](/plugin-usage.html)。
-- [`mise plugins [FLAGS] [SUBCOMMAND]`](/cli/plugins.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Removing plugins](/plugins.html#remove-plugins).
+- [`mise plugins [FLAGS] [SUBCOMMAND]`](/cli/plugins.html).
+- [Global flags and argument syntax](/cli/#global-flags).

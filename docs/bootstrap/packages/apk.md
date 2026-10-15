@@ -1,10 +1,11 @@
 ---
-description: "Alpine Linux 的系统包。"
+description: "Install Alpine Linux packages with apk from mise.toml, including version pins."
 ---
 
 # Alpine 软件包（apk）
 
-Alpine Linux 的系统包。
+The `apk` manager installs Alpine Linux packages with `apk add`. It uses
+[sudo](/bootstrap/packages/#sudo) when mise is not running as root.
 
 ```toml
 [bootstrap.packages]
@@ -12,26 +13,38 @@ Alpine Linux 的系统包。
 "apk:zlib-dev" = "1.3.1-r2" # 版本固定
 ```
 
-## 预览并应用
-
 ```sh
-mise bootstrap packages status
 mise bootstrap packages apply --manager apk --dry-run
 mise bootstrap packages apply --manager apk
 ```
 
-这些命令使用当前启用的 `[bootstrap.packages]` 声明。若要同时添加并安装软件包，请使用 `mise bootstrap packages use apk:build-base`。主机上必须提供相应的管理器；当管理器不可用时，显式使用 `--manager apk` 会失败。
+## Prerequisites
 
-## 行为
+The manager is available on Linux when `apk` is on `PATH`. On other machines,
+its entries show as [`skipped`](/bootstrap/packages/#choose-platforms).
 
-- 使用 `apk info -e -v` 检查包状态（只读，绝不提升权限）。
-- 缺失的包使用 `apk add` 安装，在必要时通过 sudo 提权（参见 [sudo](/bootstrap/packages/#sudo)）。
-- 版本锁定以 apk 原生的 `name=version` 语法传递给 apk。
-- `mise bootstrap packages apply --update` 会添加 `--update-cache` 以刷新 apk 元数据。
-- `mise bootstrap packages upgrade` 会对已安装的、已配置的包运行 `apk upgrade --available --update-cache`。
+## Package names
+
+Use the package name as `apk add` takes it, such as `build-base` or
+`zlib-dev`. Run `apk search <name>` to find one.
 
 ## 版本固定
 
-上面的固定版本仅作示例。请在目标系统上检查 `apk policy zlib-dev`，并选择其已配置的软件仓库中可用的版本。固定版本不会添加旧版 Alpine 软件仓库，也不会获取已归档的软件包。
+mise passes a pin to apk as `name=version`. The `1.3.1-r2` pin above is only an
+example. Run `apk policy zlib-dev` on the target to list the versions its
+repositories offer. A pin cannot reach a version that is no longer in those
+repositories, and mise does not add an older Alpine repository.
 
-固定条目（`"apk:zlib-dev" = "1.3.1-r2"`）在已安装的是其他版本时，会在 `mise bootstrap packages status` 中显示为“版本不匹配”，而 `mise bootstrap packages apply` 会将该固定版本传递给 apk 以进行修正。`"latest"` 条目在任意版本已安装时都会被视为满足要求——使用 `mise bootstrap packages upgrade` 将其升级到最新可用版本。
+## What mise runs
+
+| Operation                       | Command                                                |
+| ------------------------------- | ------------------------------------------------------ |
+| Check installed state (no sudo) | `apk info -e -v <packages>`                            |
+| Install                         | `apk add -- <packages>`                                |
+| `apply --update`                | `apk add --update-cache -- <packages>`                 |
+| Upgrade                         | `apk upgrade --available --update-cache -- <packages>` |
+
+## Remove packages
+
+mise does not remove apk packages. Deleting an entry leaves the package
+installed; run `apk del` yourself.

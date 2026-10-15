@@ -1,239 +1,283 @@
 ---
-description: "查找并运行项目任务、传递参数以及控制执行"
+description: "Run tasks with mise run, select them by name or pattern, pass arguments, and control parallelism and output."
+socialDescription: "Run tasks with mise run, select them by pattern, and control parallelism and output."
 ---
 
-# 运行任务
+# Running tasks
+
+Run a task with [`mise run`](/cli/run.html). mise loads the task's tools and
+environment, runs its dependencies first, and runs independent tasks in
+parallel. [Dependencies and execution order](/tasks/architecture.html) explains
+how mise orders the tasks in a run.
 
 ## 查找并运行任务
 
-使用 `mise tasks` 列出可用任务。要包含使用 `hide=true` 隐藏的任务，请传递
-`--hidden`。
+`mise tasks` lists the tasks available in the current directory. Add `--hidden`
+to include tasks with `hide = true`, or `--extended` to see where each task is
+defined. Run a task by name:
+
+```sh
+mise run build
+```
 
 ### `mise run` 简写形式 {#mise-run-shorthand}
 
-使用 `mise tasks run <task>`、`mise run <task>`、`mise r <task>` 或
-`mise <task>` 运行命名任务。在脚本和文档中使用 `mise run <task>`。未来的
-mise 命令可能会遮蔽直接形式。
-
-对于交互式使用，可以使用类似 `alias mr='mise run'` 的别名来减少输入。
-
-## 传递参数和选择任务
-
-在任务名称后传递参数：
-
-```bash
-mise run build --release
-```
-
-如需精确且经过验证的任务接口，请使用
-[`usage` 字段](/tasks/task-arguments#usage-field)定义参数和标志。如果没有
-`usage` 规范，mise 会根据任务的形式转发额外参数：
-
-- 如果 `run` 是数组，参数只会传递给其最后一个条目
-- 对于常规内联命令，参数会作为字面参数追加（使用 shell 时会进行 shell 引号处理）
-- [shebang 任务](/tasks/toml-tasks#shell-shebang)作为脚本文件运行，因此其解释器会像通常一样提供参数——例如，在 Bash 中使用 `$1` 和 `$@`
-
-将 mise 标志放在任务名称之前：`mise run --silent build`。任务名称后的标志属于任务，因此 `mise run build --silent` 会因
-`unexpected word: --silent` 而失败，除非任务定义了该标志。任务可以定义与 mise 标志同名的标志，例如 `--env`。
-
-::: tip
-任务参数和标志提供验证、解析、自动补全和文档。
-
-- [文件任务中的参数](/tasks/file-tasks#arguments)
-- [TOML 任务中的参数](/tasks/toml-tasks#arguments)
-
-当 mise 的 shell 补全已安装并启用时，自动补全即可使用。
-使用 [`mise generate task-docs`](/cli/generate/task-docs) 生成 Markdown 文档。
-:::
-
-### 运行多个任务
-
-使用 `:::` 分隔任务及其参数：
-
-```bash
-mise run build arg1 arg2 ::: test arg3 arg4
-```
+`mise run build`, `mise r build`, `mise tasks run build`, and `mise build` all
+run the `build` task. The last form works only while the task name does not
+match a mise command, and a later mise release can add a command with that
+name, so write `mise run build` in scripts and documentation. For interactive
+use, a shell alias such as `alias mr='mise run'` saves typing.
 
 ### 运行默认任务
 
-未指定任务时，如果定义了 `default` 任务，mise 会运行该任务。
-否则，会打开交互式终端中的任务选择器。你也可以将其他任务别名为
-`default`：
+`mise run` with no task name runs the task named or aliased `default`:
 
-```bash
-mise run
+```mise-toml [mise.toml]
+[tasks.dev]
+alias = "default"
+run = "npm run dev"
 ```
 
-## 控制执行
+With this config, `mise run` runs `dev`. When no `default` task exists, an
+interactive terminal opens a task selector, and a non-interactive run fails with
+`no task default found`.
 
-### 并行度和输出
+### Run several tasks
 
-默认情况下，任务最多并行运行八个作业。设置 `--jobs`、`jobs` 设置项或 `MISE_JOBS` 来选择其他限制。输出通常会逐行打印，并带有任务标签，从而使并行输出更易读。使用 `--jobs 1` 时，mise 会使用 `interleave` 输出。
+Separate tasks, each with its own arguments, with `:::`:
 
-要直接打印 stdout 和 stderr，请使用 `--output interleave`、`task.output`
-设置项或 `MISE_TASK_OUTPUT=interleave`。
+```sh
+mise run build arg1 arg2 ::: test arg3 arg4
+```
 
-输出 _样式_（`prefix`、`interleave`、`keep-order` 等）与
-_详细程度_（`--quiet`／`--silent`、`quiet`／`silent` 设置项或每个任务的
-`quiet`／`silent` 字段）是分开的。例如，`MISE_TASK_OUTPUT=prefix` 配合
-`--quiet` 会保留任务名称前缀并隐藏 mise 的消息。使用
-`--output interleave --quiet` 可获得无前缀的安静输出。要让每个任务都保持安静，
-而不改变其他 mise 命令，请在 `[settings]` 下设置
-`task.output = "interleave"` 和 `task.quiet = true`。
+The tasks run in parallel unless one depends on another.
 
-::: warning 已弃用
-`quiet` 输出值已弃用。mise `2026.9.3` 开始发出警告，并将在
-`2027.9.3` 中移除支持。请将 `interleave` 与任务范围或命令行的 quiet 选项结合使用
-:::
+## Select tasks by name
 
-### 交互式输入
+Name related tasks with `:`-separated groups, such as `test:unit` and
+`test:e2e`, so one pattern can select them. A TOML key that contains `:` needs
+quotes:
 
-默认情况下不会连接 stdin。对于需要终端的任务，请设置 `interactive = true`；
-在任务持续期间，该任务会独占终端。`raw = true` 则改为让每个命令独占终端。
-两者都会绕过输出脱敏和构建产物缓存。请参阅[终端 I/O 选项](./task-configuration.html#interactive)。
-
-### Shell 执行
-
-在 Unix 上，mise 可以直接执行诸如 `node build.js` 这样的简单内联命令，而无需启动默认的 `sh`。
-Shell 语法、引号、展开、内置命令、含糊的可执行文件查找，以及包含 `ENV` 或 `BASH_ENV`
-的环境仍会使用 shell。沙盒化和经过审计的任务也会保留其 shell。
-Windows 的执行方式不变。
-
-:::warning 自定义 shell 包装器
-显式任务 `shell`、`mise run --shell` 或 `unix_default_inline_shell_args`
-设置始终会强制使用 shell 执行，即使它指定的是默认 shell。
-名为 `sh` 且位于 `PATH` 中的包装器可能会被绕过；如果必须运行它，请显式配置。
-:::
-
-相同的优化也适用于 mise 管理的内联钩子、模板、依赖项命令、安装命令、凭据和任务缓存输入。
-
-## 任务分组
-
-可以使用由 `:` 分隔的名称前缀对任务进行语义分组。
-例如，所有与测试相关的任务都可以以 `test:` 开头。嵌套组可以进一步细化分组并简化模式匹配。
-例如，`mise run test:**:local` 会匹配 `test:units:local`、
-`test:integration:local` 和 `test:e2e:happy:local`
-（更多信息请参阅[通配符](#wildcards)）。
-
-::: tip
-由于 TOML 键在不加引号的情况下不能包含冒号，因此在 `mise.toml` 中使用带引号的键：
-
-```toml
+```mise-toml [mise.toml]
 [tasks."test:unit"]
-run = 'cargo test --lib'
+run = "cargo test --lib"
 ```
 
-:::
+File tasks get their groups from subdirectories; see
+[File tasks](/tasks/file-tasks.html#task-grouping).
 
-## 通配符
+### Wildcards
 
-运行任务或指定任务依赖项时支持 Glob 风格的通配符。
+`mise run` and task dependencies such as `depends` accept glob patterns:
 
-可用的通配符模式：
+| Pattern          | Matches                                       |
+| ---------------- | --------------------------------------------- |
+| `?`              | One character                                 |
+| `*`              | Any characters within one `:`-separated group |
+| `**`             | Any number of whole groups                    |
+| `{a,b}`          | Either pattern                                |
+| `[abc]`, `[a-z]` | One character from the set or range           |
+| `[!abc]`         | One character that is not in the set or range |
 
-- `?` 匹配任意单个字符
-- `*` 匹配单个以 `:` 分隔的组中的 0 个或多个字符
-- `**` 匹配 0 个或多个完整的以 `:` 分隔的组
-- `{glob1,glob2,...}` 匹配逗号分隔的 glob 模式中的任意一个
-- `[ab,...]` 匹配指定字符或范围 `[a-z]` 中的任意字符
-- `[!ab,...]` 匹配不在字符集中的任意字符
+Quote a pattern so your shell does not expand it:
 
-### 示例
-
-`mise run 'generate:{completions,docs:*}'`
-
-对于分组任务，当只有一个组可能发生变化时使用 `*`，当匹配可能跨越多个组时使用 `**`：
-
-```bash
-# 匹配 test:units:local，但不匹配 test:e2e:happy:local
-mise run 'test:*:local'
-
-# 同时匹配 test:units:local 和 test:e2e:happy:local
-mise run 'test:**:local'
+```sh
+mise run 'test:*:local'                   # test:units:local, not test:e2e:happy:local
+mise run 'test:**:local'                  # test:units:local and test:e2e:happy:local
+mise run 'generate:{completions,docs:*}'  # generate:completions and every generate:docs:* task
 ```
 
-如果某个模式依赖于旧版本 mise 中 `*` 匹配嵌套任务组的行为，请将其替换为 `**` 以保留递归行为。
+Patterns also work in `depends`:
 
-对于依赖项也是如此：
-
-```toml
-[tasks."lint:eslint"] # 使用 ":" 时，我们需要加上引号
+```mise-toml [mise.toml]
+[tasks."lint:eslint"]
 run = "eslint ."
+
 [tasks."lint:prettier"]
 run = "prettier --check ."
+
 [tasks.lint]
 depends = ["lint:*"]
-wait_for = ["render"] # 不会添加为依赖项，但如果它已经在运行，则等待它完成
 ```
 
-## 在文件变更时运行
+In a monorepo, patterns can also select projects, such as `//...:test`; see
+[Monorepo tasks](/tasks/monorepo.html).
 
-通常，只有任务所使用的文件发生变化时才执行任务会很方便。例如，你可能只希望在 `.rs` 文件发生变化时运行
-`cargo build`。可以使用以下配置实现：
+## Pass arguments
 
-```toml
+Arguments after the task name go to the task:
+
+```sh
+mise run build --release
+```
+
+To give a task a validated interface, define its arguments with a
+[usage spec](/tasks/task-arguments.html). The spec also gives the task
+`--help`, [shell completions](/shell-setup.html), and
+[generated documentation](/cli/generate/task-docs.html). Without a spec, mise
+forwards extra arguments according to the task's form:
+
+- If `run` is an array, the arguments go only to its last entry.
+- For an inline command, mise appends the arguments to the command, quoted for
+  the shell.
+- A [shebang script](/tasks/toml-tasks.html#shell-shebang) or a file task
+  receives them as script arguments, such as `$1` and `$@` in Bash.
+
+Put mise's own flags before the task name: `mise run --silent build`.
+Everything after the task name belongs to the task. A task without a usage spec
+receives `--silent` as an argument, and a task with one fails with
+`unexpected word: --silent` unless its spec defines that flag. A task can define
+flags that share a name with a mise flag, such as `--env`.
+
+## Control a run
+
+These [`mise run`](/cli/run.html) flags change how a run proceeds:
+
+| Flag                          | Effect                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-j`, `--jobs <N>`            | Run up to N tasks at once. Defaults to the [`jobs`](/configuration/settings.html#jobs) setting (`MISE_JOBS`).                                                                                                       |
+| `-f`, `--force`               | Run tasks even when their [outputs are up to date](#skip-tasks-that-are-up-to-date).                                                                                                                                |
+| `-n`, `--dry-run`             | Print each task's command in execution order without running anything.                                                                                                                                              |
+| `-c`, `--continue-on-error`   | Keep running after a task fails. See [When a task fails](#when-a-task-fails).                                                                                                                                       |
+| `--skip-deps`                 | Run only the named tasks, without their dependencies.                                                                                                                                                               |
+| `--timeout <DURATION>`        | Stop the whole run after a duration such as `30s` or `5m`. Overrides the [`task.timeout`](/configuration/settings.html#task.timeout) setting.                                                                       |
+| `-C`, `--cd <DIR>`            | Run as if mise started in another directory.                                                                                                                                                                        |
+| `-t`, `--tool <TOOL@VERSION>` | Add a tool to the run, such as `--tool node@24`.                                                                                                                                                                    |
+| `--skip-tools`                | Do not install missing tools before the tasks start.                                                                                                                                                                |
+| `-r`, `--raw`                 | Connect stdin, stdout, and stderr directly to each task and run one task at a time. Redaction does not apply, except to tasks that receive [secrets](/tasks/task-configuration.html#secrets), which ignore `--raw`. |
+
+A task's own [`timeout`](/tasks/task-configuration.html#timeout) still limits
+its commands when you pass `--timeout`.
+
+### When a task fails
+
+By default, a failing task stops the run. mise stops the tasks that are still
+running (with SIGTERM on Unix) and starts no new tasks, except the
+[`depends_post`](/tasks/architecture.html#depends-post) tasks of tasks that
+already started. The run exits with the failed task's status.
+
+With `--continue-on-error`, running tasks finish and the remaining tasks still
+start, including tasks that depend on the failed one. At the end, mise lists the
+failed tasks and exits with a non-zero status.
+
+## Output
+
+When tasks run in parallel, mise labels each output line with the task name
+(`prefix`). When only one task can run at a time (a single task, a chain of
+dependencies, or `--jobs 1`), it prints output directly (`interleave`). Choose a
+style with `--output`, `MISE_TASK_OUTPUT`, the
+[`task.output`](/configuration/settings.html#task.output) setting, or a task's
+[`output`](/tasks/task-configuration.html#output) property:
+
+| Style        | Output                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `prefix`     | Each line, labelled with the task name.                                                                                                   |
+| `interleave` | Output as it arrives, without labels.                                                                                                     |
+| `keep-order` | Labelled lines; one task streams live while the others are buffered and printed in order.                                                 |
+| `replacing`  | Each new stdout line replaces the previous one; stderr is printed as is.                                                                  |
+| `timed`      | Labelled stdout lines that stay the task's latest line for at least a second; lines replaced sooner are dropped. Stderr is printed as is. |
+| `silent`     | Nothing from tasks or mise except errors.                                                                                                 |
+
+Verbosity is separate from style. `--quiet` hides mise's own messages, such as
+`[build] $ cargo build`, and `--silent` also hides the tasks' output. For
+example, `mise run --output prefix --quiet test` keeps the labels and hides
+mise's messages. To make every task quiet without changing other mise commands,
+set [`task.quiet`](/configuration/settings.html#task.quiet) under `[settings]`.
+A task can also set its own `quiet` or `silent` property. The `quiet` output
+style is deprecated; use `--output interleave --quiet` instead.
+
+## Interactive input
+
+Unless a task is `interactive` or `raw`, stdin is connected only with
+`interleave` output: the default for a single task, a sequential chain, or
+`--jobs 1`, or when you pass `--output interleave`. With other output styles,
+including `prefix`, the default when tasks run in parallel, stdin is not
+connected. It is also not connected when output must be redacted: when the task
+receives [secrets](/tasks/task-configuration.html#secrets), or when the config
+marks a value for [redaction](/environments/secrets/#redaction) with
+`redact = true` or `redactions`.
+
+Set `interactive = true` on a task that needs the terminal, such as one that
+prompts. It has exclusive terminal access while it runs. `raw = true` takes
+exclusive access for each command instead. Both bypass output redaction and the
+artifact cache. See [`interactive`](/tasks/task-configuration.html#interactive)
+and [`raw`](/tasks/task-configuration.html#raw).
+
+## Skip tasks that are up to date
+
+Give a task `sources` and `outputs`, and mise skips it while its outputs are up
+to date:
+
+```mise-toml [mise.toml]
 [tasks.build]
-description = '构建 CLI'
+description = "Build the CLI"
 run = "cargo build"
-sources = ['Cargo.toml', 'src/**/*.rs'] # 如果这些文件没有变化则跳过运行
-outputs = ['target/debug/mycli']
+sources = ["Cargo.toml", "src/**/*.rs"]
+outputs = ["target/debug/mycli"]
 ```
 
-现在，如果 `target/debug/mycli` 存在且比 `Cargo.toml` 以及每个匹配的 `.rs` 文件更新，则会跳过该任务。这使用最后修改时间戳。
-任务定义本身也是一个输入。缺失已声明的输出会导致任务再次运行。有关可以恢复已删除输出的基于内容的复用，请参阅
-[任务缓存](./caching.html)。
+While the outputs are newer than the sources and nothing has changed since the
+last successful run, mise prints `[build] sources up-to-date, skipping` instead
+of running the task.
+[What makes a task stale](/tasks/caching.html#what-makes-a-task-stale) lists the
+exact checks. Use `mise run --force build` to run it anyway.
+[Task caching](/tasks/caching.html) also covers the artifact cache, which can
+restore deleted outputs.
 
-## 监视文件
+## Rerun tasks when files change
 
-使用 [`mise watch`](/cli/watch.html) 在源文件发生变化时运行任务：
+[`mise watch`](/cli/watch.html) runs a task and runs it again when its sources
+change:
 
-```bash
+```sh
 mise watch build
 ```
 
-`mise watch` 使用 `watchexec`。使用 `mise use watchexec` 将其添加到项目中，
-或单独将其安装到 `PATH` 中。声明任务的 `sources` 以限制监视的文件。
-不指定任务名称时，mise 会监视 `default` 任务。
+mise watches the `sources` of the task and of its dependencies. A task without
+`sources` watches the current directory. For a process that keeps running, such
+as a development server, restart it on each change:
 
-## 执行顺序
-
-你可以使用 [depends](/tasks/task-configuration.html#depends)、[wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post) 来控制执行顺序。
-
-使用 `mise tasks deps [tasks]...` 列出已声明的图。它包含
-`depends`、`wait_for` 和 `depends_post`。`run` 数组中的任务引用
-（`{ task = "..." }`／`{ tasks = [...] }`）是执行步骤，因此不会出现在图中。
-
-```toml
-[tasks.build]
-run = "echo 'build'"
-
-[tasks.test]
-run = "echo 'test'"
-depends = ["build"]
+```sh
+mise watch --restart dev
 ```
 
-这可以确保 `build` 任务在 `test` 任务之前运行。
+Separate several tasks with `:::`, as with `mise run`. Without a task name,
+`mise watch` runs the `default` task. `mise watch` uses
+[watchexec](https://github.com/watchexec/watchexec); install it with
+`mise use watchexec` or put it on `PATH` yourself.
 
-你也可以定义一个 mise 任务，以并行或串行方式运行其他任务：
+`mise watch` passes its watchexec flags, such as `--debounce`, `--clear` and
+`--shell`, on to watchexec. watchexec's `--env` and `--quiet` are spelled
+`--watchexec-env` and `--watchexec-quiet` there, because `-E` and `-q` stay
+mise's own `--env` and `--quiet`:
 
-```toml
-[tasks.example1]
-run = "echo 'example1'"
-
-[tasks.example2]
-run = "echo 'example2'"
-
-[tasks.example3]
-run = "echo 'example3'"
-
-[tasks.one_by_one]
-run = [
-    { task = "example1" }, # 将等待 example1 完成后再运行下一步
-    { tasks = ["example2", "example3"] }, # 这两个任务并行运行
-]
+```sh
+mise watch -E dev --watchexec-env LOG_LEVEL=debug build
 ```
 
-`mise run one_by_one` 会运行该流水线，但 `mise tasks deps one_by_one` 仍会将其显示为叶节点。这些
-`{ task }`／`{ tasks }` 条目是此任务自身的 `run` 步骤，而不是图边。嵌套任务仍会运行，包括它们自己的
-`depends`。如果将它们重写为 `depends = ["example1", "example2", "example3"]`，就会把它们放入图中，但也会丢失上述串行／并行顺序：
-`depends` 只要求这些任务先完成，而不规定它们之间的顺序。
+## Task environment {#task-environment}
+
+Tasks run with the project's [environment variables](/environments/) and tools,
+plus these variables:
+
+| Variable                    | Value                                                                                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MISE_ORIGINAL_CWD`         | The directory where you ran mise.                                                                                                                                                                      |
+| `MISE_CONFIG_ROOT`          | The [config root](/configuration.html#config-root) of the file that defines the task, such as `~/proj` for both `~/proj/mise.toml` and `~/proj/.config/mise.toml`.                                     |
+| `MISE_PROJECT_ROOT`         | The root of the project that defines the task, whichever directory you run it from. In a monorepo, the subproject's directory. For a global or remote task, the project you run it in.                 |
+| `MISE_MONOREPO_ROOT`        | The directory whose config sets `monorepo_root = true`. Set only in a [monorepo](/tasks/monorepo.html).                                                                                                |
+| `MISE_TASK_NAME`            | The task's name as `mise tasks ls` shows it. A file task's name has no script extension unless another task already has the shorter name; see [file task names](/tasks/file-tasks.html#task-grouping). |
+| `MISE_TASK_FILE`            | The task's script: the file task itself, or the file named by a TOML task's `file`. For a TOML task with an inline `run`, the config file that defines it.                                             |
+| `MISE_TASK_DIR`             | The directory that contains `MISE_TASK_FILE`.                                                                                                                                                          |
+| `MISE_TASK_COLOR`           | The ANSI sequence for the task's label color. Empty when colors are off, the task is quiet, or the output style shows no label (`interleave`, `silent`).                                               |
+| `MISE_ENV`                  | The active [config environments](/configuration/environments.html), comma-separated, when any are set.                                                                                                 |
+| `TRACEPARENT`, `TRACESTATE` | The task's trace context, when [OpenTelemetry](/tasks/opentelemetry.html#trace-propagation) export is on.                                                                                              |
+| `usage_*`                   | The values of the task's [arguments and flags](/tasks/task-arguments.html).                                                                                                                            |
+
+For a TOML task in `~/proj/.config/mise.toml`, `MISE_TASK_DIR` is
+`~/proj/.config`, while `MISE_CONFIG_ROOT` is `~/proj`. When you print with
+`MISE_TASK_COLOR`, reset the color after your text:
+
+```sh
+printf '%smessage\033[0m\n' "$MISE_TASK_COLOR"
+```

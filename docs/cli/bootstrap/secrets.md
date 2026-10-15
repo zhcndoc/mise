@@ -11,8 +11,12 @@ description: "检查 bootstrap 密钥输入，但不会泄露其值"
 
 检查 bootstrap 密钥输入，但不会泄露其值
 
-## 标志
-- **`-h --help`** — 打印帮助
+Secret inputs are values declared in `[bootstrap.secrets]` that file and
+dotfile templates read with `secret()`. mise reads them from environment
+variables, or prompts for missing ones with `--prompt-secrets`.
+
+## Flags
+- **`-h --help`** — Print help
 
 ## 子命令
 
@@ -22,6 +26,6 @@ description: "检查 bootstrap 密钥输入，但不会泄露其值"
 
 ## 相关文档
 
-- [Bootstrap 密钥](/bootstrap/secrets.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Secret inputs](/bootstrap/secrets.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

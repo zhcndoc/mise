@@ -12,32 +12,30 @@ description: "将工具版本符号链接到 mise"
 
 将工具版本符号链接到 mise
 
-使用此命令注册手动编译或使用其他工具构建的安装。
+Use this to register an install that was compiled by hand or built with another
+tool. mise uses the version exactly as written, such as `node@24.11.0` or a name
+of your own like `node@brew`; `latest`, aliases, and channels are rejected.
 
-## 参数
-- **`<TOOL@VERSION>`** — 要为其创建符号链接的工具名称和版本
-- **`<PATH>`** — 工具版本的本地路径
-  例如：~/.nvm/versions/node/v20.0.0
+## Arguments
+- **`<TOOL@VERSION>`** — Tool and version to create a symlink for
+- **`<PATH>`** — Directory of the existing installation, such as `~/.nvm/versions/node/v24.11.0`
 
-## 选项
-- **`-f --force`** — 如果现有工具版本存在，则覆盖它
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-f --force`** — Replace an existing installation of this version
+- **`-h --help`** — Print help
 
 ## 示例
 
-使用 node-build 构建 node-20.0.0，并将其链接到 mise
+Link a node that node-build built into ~/.nodes/24.11.0
 
 ```
-node-build 20.0.0 ~/.nodes/20.0.0
-mise link node@20.0.0 ~/.nodes/20.0.0
+mise link node@24.11.0 ~/.nodes/24.11.0
 ```
 
-让 mise 使用 Homebrew 提供的 node 版本
+Register Homebrew's node as node@brew; then run `mise use node@brew`
 
 ```
-brew install node
 mise link node@brew "$(brew --prefix node)"
-mise use node@brew
 ```
 
 <!-- generated reference navigation -->

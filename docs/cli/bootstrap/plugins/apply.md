@@ -11,14 +11,16 @@ description: "安装在 `[bootstrap.plugins]` 中声明的包管理器插件"
 
 安装在 `[bootstrap.plugins]` 中声明的包管理器插件
 
-## 标志
-- **`-n --dry-run`** — 在不安装插件的情况下打印将执行的操作
-- **`-h --help`** — 打印帮助
+It does not ask for confirmation.
+
+## Flags
+- **`-n --dry-run`** — Show which plugins would be installed without installing them
+- **`-h --help`** — Print help
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [包插件](/bootstrap/packages/plugins.html)。
-- [`mise bootstrap plugins <SUBCOMMAND>`](/cli/bootstrap/plugins.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Package manager plugins](/bootstrap/packages/plugins.html).
+- [`mise bootstrap plugins <SUBCOMMAND>`](/cli/bootstrap/plugins.html).
+- [Global flags and argument syntax](/cli/#global-flags).

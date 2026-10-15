@@ -1,17 +1,25 @@
 ---
-description: "[bootstrap.linux.firewall] 以声明方式管理 Linux 主机防火墙。"
+description: "Manage a Linux host firewall with nftables, firewalld, or UFW from mise.toml, alongside rules that other tools add."
+socialDescription: "Manage a Linux host firewall with nftables, firewalld, or UFW from mise.toml."
 ---
 
-# Linux 主机防火墙
+# Linux firewall
 
-`[bootstrap.linux.firewall]` 以声明方式管理 Linux 主机防火墙。它支持原生 nftables、firewalld 策略和 UFW，同时将 mise 管理的规则与无关的主机规则分开。
+Declare a Linux host firewall in `[bootstrap.linux.firewall]` and mise applies
+it with nftables, firewalld, or UFW. mise keeps its rules apart from rules that
+other tools or people added, so you can adopt it on a host that already has a
+firewall.
 
-此示例允许 HTTPS，并限制来自一个管理员地址的 SSH。应用之前，请将 `203.0.113.10/32` 替换为实际的管理网络，并使用主机的真实 SSH 端口。确保所选的防火墙命令已安装；`backend = "auto"` 会选择可用的后端，而不会安装后端。
+## Example
+
+This example denies incoming traffic except HTTPS from anywhere and SSH from
+one administration address. Replace `203.0.113.10/32` with your network and
+`22` with your SSH port before you apply it. `backend = "auto"` uses a firewall
+that is already installed; it does not install one.
 
 ```toml
 [bootstrap.linux.firewall]
 backend = "auto"
-state = "enabled"
 default_incoming = "deny"
 default_outgoing = "allow"
 
@@ -19,7 +27,6 @@ default_outgoing = "allow"
 name = "https"
 port = 443
 protocol = "tcp"
-action = "allow"
 
 [[bootstrap.linux.firewall.rules]]
 name = "ssh-admin"
@@ -29,83 +36,214 @@ source = "203.0.113.10/32"
 action = "limit"
 ```
 
-防火墙配置收敛在软件包、特权文件和系统服务之后运行，但在 Compose 项目之前运行。这样，配置就能在应用策略之前安装并启动所选的防火墙后端。
-
-## 后端
-
-`backend` 接受：
-
-- `"auto"`（默认）：重用之前一次 mise 运行所记录的后端，然后优先使用已处于活动状态的 firewalld 或 UFW 安装；如果可用，则按 nftables、firewalld、UFW 的顺序使用。
-- `"nftables"`：维护一个隔离的 `inet mise_bootstrap` 表和持久化的 `mise-bootstrap-firewall.service`。运行时替换通过经过语法检查的原子 nft 事务完成。
-- `"firewalld"`：维护永久的 `mise-bootstrap-in` 和 `mise-bootstrap-out` 策略，并且仅在其永久配置验证通过后重新加载 firewalld。
-- `"ufw"`：按声明顺序维护带有 `mise:<name>` 注释的规则，在默认策略之前应用这些规则，并在所有规则安装完成后启用 UFW。
-
-显式选择的后端在其命令不可用时会安全失败。
-所选后端和实际生效的状态可在 `status` 和 `plan` 中查看。
-
-## 策略和规则
-
-`state` 接受 `"enabled"`（默认值）、`"disabled"` 或 `"absent"`。
-从配置中移除防火墙部分不会执行任何操作：必须明确请求
-`state = "absent"` 才会删除。`disabled` 会保留 mise 保存的规则
-模型，但会从运行时移除 nftables/firewalld 策略；对于 UFW，
-则会全局禁用 UFW。`absent` 只会移除由 mise 管理的规则和
-元数据。禁用和删除会被视为破坏性更改。
-
-`default_incoming` 和 `default_outgoing` 接受 `"allow"`、`"deny"` 或
-`"reject"`。默认情况下，传入流量被拒绝，传出流量被允许。
-
-每个 `[[bootstrap.linux.firewall.rules]]` 支持：
-
-- `name`（必需）：用于协调规则的稳定 ASCII 标识符
-- `state`：`"present"`（默认值）或 `"absent"`
-- `direction`：`"incoming"`（默认值）或 `"outgoing"`
-- `action`：`"allow"`（默认值）、`"limit"`、`"deny"` 或 `"reject"`
-- `protocol`：`"tcp"`、`"udp"`、`"sctp"` 或 `"dccp"`
-- `port`：数字或包含边界的字符串范围，例如 `"8000-8010"`
-- `source` 和 `destination`：IPv4 或 IPv6 CIDR 网络
-- `interface`：接口名称（仅 nftables 和 UFW）
-
-端口必须指定协议。一条规则不能混用 IPv4 和 IPv6 的源网络及
-目标网络。UFW 仅支持 TCP 和 UDP；firewalld 策略规则不安全地支持
-按规则匹配接口，因此对于这些组合，mise 会要求你选择
-nftables 或 UFW，而不会悄悄弱化规则。
-
-`action = "limit"` 会根据源地址限制新的传入 TCP 连接速率。
-UFW 使用其原生的限制操作，在 30 秒内尝试连接六次后拒绝某个地址。
-nftables 后端使用独立且有界的 IPv4 和 IPv6 计量器，速率为每分钟 12 个令牌，突发容量为五个数据包。
-这些算法有意采用各后端的原生实现，而不是完全等效的实现。firewalld 只能限制整条规则，因此 mise 会拒绝该后端上的 limit 规则，而不是允许单个源耗尽共享的速率预算。
-
-## 所有权和删除
-
-默认情况下，后续配置会保留之前管理但自身未提及的规则。要显式移除某条规则，请使用同名规则并设置 `state = "absent"`。
-这样，移除配置不会造成破坏，并允许分别分层的配置共存。
-
-仅当配置拥有完整防火墙时，才设置 `exclusive = true`。
-它会删除未声明的 mise 规则。对于 UFW，独占模式会执行 `ufw reset`，这也会删除无关的 UFW 规则，因此始终会被确认为破坏性操作。
-
-## 预览目标的策略
-
-```sh
-mise bootstrap firewall status --json
-mise bootstrap firewall apply --dry-run
-```
-
-检查所选后端、默认策略、规则顺序和删除操作。其他防火墙系统和容器网络可能会影响同一主机；请从使用该服务的网络验证最终的可达性。计划描述的是 mise 请求的更改，而不是端到端的连接测试。
-
-## SSH 锁定保护
-
-当 bootstrap 通过 SSH 运行且传入策略为 deny 或 reject 时，mise 会在进行更改前检查
-`SSH_CONNECTION`。至少有一条现存的传入 TCP allow 或 limit 规则必须覆盖已连接的对等地址、服务器地址和服务器端口，且不能带有 `interface` 限制。否则，apply 会在提权前失败。明确的带外部署可以将 `allow_lockout = true` 作为显式的应急开关。
-
-对于 UFW，规则会在 deny 策略之前按声明顺序安装。nftables 会以原子方式安装完整规则集，firewalld 会在单次经过验证的重新加载之前更改永久策略，因此中间状态不会丢弃活动的 SSH 连接。非独占的 UFW 更新会先暂存一个带有唯一标签的替换规则集，然后再移除之前的 mise 规则；只有在稳定规则生效后，才会替换暂存标签。后续运行会安全地清理因更新中断而遗留的暂存规则。
+Check the policy with
+[`mise bootstrap firewall status`](/cli/bootstrap/firewall/status.html),
+preview the commands with `--dry-run`, then apply them with
+[`mise bootstrap firewall apply`](/cli/bootstrap/firewall/apply.html):
 
 ```sh
 mise bootstrap firewall status
-mise bootstrap firewall status --json
-mise bootstrap firewall status --missing
 mise bootstrap firewall apply --dry-run
-mise bootstrap firewall apply --yes
+mise bootstrap firewall apply
 ```
 
-防火墙管理仅支持 Linux，并使用与 bootstrap 账户、文件和服务相同的受限特权辅助程序协议。类型化计划通过标准输入传递；配置值绝不会插入 root shell 命令中。
+The full [`mise bootstrap`](/bootstrap.html) applies the firewall after
+packages, files, and system services, and before Compose projects.
+
+## Avoid locking yourself out {#ssh-lockout-protection}
+
+When you run mise over SSH with an incoming policy of `deny` or `reject`, mise
+reads `SSH_CONNECTION` and refuses the configuration unless a present incoming
+TCP `allow` or `limit` rule covers your client address, the server address, and
+the SSH port, without an `interface`. The rule in the example above does that
+for a client at `203.0.113.10` connecting to port 22.
+
+Until a covering rule exists, `mise bootstrap firewall apply` and
+`mise bootstrap` refuse before they change anything. The read-only commands,
+`mise bootstrap firewall status`, `apply --dry-run`, `mise bootstrap status`,
+`mise bootstrap plan`, and `mise bootstrap --dry-run`, report the firewall as
+`unknown` with the reason instead. A dry run then warns that the change needs
+manual action and still exits 0, so a CI check on `mise bootstrap --dry-run`
+does not catch the lockout. mise also refuses when:
+
+- `SSH_CONNECTION` is missing, for example because `sudo` removed it, and mise
+  finds an `sshd` parent process or cannot inspect its process ancestry.
+- A `deny` or `reject` rule that covers the connection comes before the allow
+  rule (nftables and UFW), or covers it at all (firewalld, which cannot
+  guarantee that the allow wins).
+
+Set `allow_lockout = true` only when you have another way into the host, such
+as a provider console.
+
+Each backend switches to the new ruleset without a gap: nftables replaces its
+table in one transaction, firewalld changes its permanent policies and then
+reloads once, and UFW adds the new rules before it removes the old ones and
+applies the default policy last. A half-applied ruleset does not drop your
+session.
+
+## Choose a backend {#backends}
+
+| `backend`          | What mise manages                                                                                                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"auto"` (default) | The backend an earlier mise run used, if still installed; else an active firewalld or UFW; else nftables, firewalld, or UFW, whichever is installed first in that order |
+| `"nftables"`       | Its own `inet mise_bootstrap` table, saved to `/etc/mise/bootstrap/firewall.nft` and loaded at boot by `mise-bootstrap-firewall.service`                                |
+| `"firewalld"`      | Permanent policies `mise-bootstrap-in` and `mise-bootstrap-out`; mise starts firewalld if it is not running                                                             |
+| `"ufw"`            | Rules whose comment is `mise:<name>`, in declared order; mise enables UFW after the rules are in place                                                                  |
+
+The nftables input chain always accepts established and related connections,
+loopback traffic, and ICMP and ICMPv6 before the declared rules, whatever
+`default_incoming` says. mise checks the generated ruleset before it loads it,
+and firewalld validates its permanent configuration before mise reloads it.
+
+If you name a backend and its command is not installed, apply fails instead of
+falling back to another backend. `status` and `plan` show which backend is in
+use. When the backend changes, for example from UFW to nftables, mise removes
+its rules from the old backend as part of the apply.
+
+### Install the backend in the same run
+
+Because the firewall comes after packages and system services in
+`mise bootstrap`, one config can install the backend and then apply the policy:
+
+```toml
+[bootstrap.packages]
+"apt:nftables" = "latest"
+
+[bootstrap.linux.firewall]
+backend = "nftables"
+default_incoming = "deny"
+# plus rules, such as the SSH rule from the example above
+```
+
+`mise bootstrap firewall apply` on its own does not install packages, so run
+the full `mise bootstrap` the first time.
+
+## Write rules
+
+Each `[[bootstrap.linux.firewall.rules]]` entry is one rule. mise identifies a
+rule by its `name`, so keep names stable.
+
+| Field         | Values                                     | Default      | Notes                                                          |
+| ------------- | ------------------------------------------ | ------------ | -------------------------------------------------------------- |
+| `name`        | Up to 64 ASCII letters, digits, `-`, `_`   | Required     | Unique within the firewall                                     |
+| `state`       | `"present"`, `"absent"`                    | `"present"`  | `"absent"` removes a rule mise added earlier                   |
+| `direction`   | `"incoming"`, `"outgoing"`                 | `"incoming"` |                                                                |
+| `action`      | `"allow"`, `"limit"`, `"deny"`, `"reject"` | `"allow"`    | `"limit"` needs incoming TCP and is not available on firewalld |
+| `protocol`    | `"tcp"`, `"udp"`, `"sctp"`, `"dccp"`       | Any          | UFW supports only `"tcp"` and `"udp"`                          |
+| `port`        | Number, or a range such as `"8000-8010"`   | Any          | Needs `protocol`                                               |
+| `source`      | IPv4 or IPv6 CIDR, such as `"10.0.0.0/8"`  | Any          |                                                                |
+| `destination` | IPv4 or IPv6 CIDR                          | Any          | Same address family as `source`                                |
+| `interface`   | Interface name, such as `"eth0"`           | Any          | nftables and UFW only                                          |
+
+With nftables and UFW, rules apply in the order you declare them; firewalld
+orders the rules in a policy itself. When a rule needs a feature the chosen
+backend lacks, mise asks you to pick another backend instead of applying a
+weaker rule.
+
+`action = "limit"` rate-limits new incoming TCP connections from each source
+address. UFW uses its own limit, which rejects an address after six connection
+attempts within 30 seconds. The nftables backend drops new connections from an
+address that exceeds 12 a minute, after a burst of five. The two backends'
+limits are not identical. firewalld can only limit a rule as a whole, which
+would let one address use up everyone's budget, so mise refuses `limit` rules
+there.
+
+## How configs combine
+
+When several config files declare `[bootstrap.linux.firewall]`, the most local
+value of each top-level key wins, and rules merge by `name`: a more local rule
+replaces an inherited rule with the same name. Declaring the same name twice in
+one file is an error.
+
+## Remove rules or the firewall {#ownership-and-deletion}
+
+Deleting a rule, or the whole section, from your configuration changes nothing
+on the host. mise keeps the rules it applied until you remove them explicitly,
+so several config files can each add rules without removing each other's.
+
+- To remove one rule, keep its `name` and set `state = "absent"`.
+- `state = "disabled"` removes mise's policy from the running firewall but
+  keeps its rules on record. With UFW it disables UFW for the whole host.
+- `state = "absent"` deletes mise's rules and its record of them, and leaves
+  other rules alone.
+- `exclusive = true` drops any mise rule that the current configuration does
+  not declare. With UFW it runs `ufw reset`, which also deletes rules that mise
+  did not create.
+
+Status shows `coexisting` or `exclusive` for the last choice. Disabling or
+deleting the firewall, removing a rule, and exclusive mode are flagged as
+destructive changes in the confirmation prompt. `--yes` and non-interactive
+runs skip that prompt, so check `exclusive` before you apply. With UFW, the
+`apply --dry-run` preview lists the `ufw --force reset` that exclusive mode
+runs and the `ufw default` policy commands.
+
+## Preview and apply
+
+```sh
+mise bootstrap firewall status            # backend, policy, and each rule
+mise bootstrap firewall status --json     # the same, as JSON
+mise bootstrap firewall status --missing  # exit 1 if anything would change
+mise bootstrap firewall apply --dry-run   # print the backend commands
+mise bootstrap firewall apply             # apply after a confirmation prompt
+mise bootstrap firewall apply --yes       # apply without prompting
+```
+
+A plan describes the changes mise makes, not whether a service is reachable.
+mise's rules filter traffic to and from the host itself. Forwarded
+traffic, such as connections to ports that Docker publishes for containers,
+does not pass through them, and other firewall tools on the host can still
+block or allow traffic. Test reachability from the networks that use each
+service.
+
+## Reference
+
+| Key                | Values                                                        | Default     |
+| ------------------ | ------------------------------------------------------------- | ----------- |
+| `backend`          | `"auto"`, `"nftables"`, `"firewalld"`, `"ufw"`                | `"auto"`    |
+| `state`            | `"enabled"`, `"disabled"`, `"absent"`                         | `"enabled"` |
+| `default_incoming` | `"allow"`, `"deny"`, `"reject"`                               | `"deny"`    |
+| `default_outgoing` | `"allow"`, `"deny"`, `"reject"`                               | `"allow"`   |
+| `exclusive`        | `true` drops mise rules this configuration does not declare   | `false`     |
+| `allow_lockout`    | `true` skips the [SSH lockout check](#ssh-lockout-protection) | `false`     |
+| `rules`            | Array of [rules](#write-rules)                                | `[]`        |
+
+### Privileges
+
+Firewall management needs root, even to read the current state. When you are
+not root, mise runs its firewall helper through `sudo` for `status`, `plan`,
+and `apply`, and passes the plan to it on standard input rather than through a
+shell. Set
+[`system_packages.sudo = false`](/configuration/settings.html#system_packages.sudo)
+to forbid elevation. mise records what it applied in
+`/var/lib/mise/bootstrap/firewall.json`.
+
+## On macOS and Windows
+
+Firewall management is Linux-only. On macOS and Windows, `mise bootstrap` and
+`mise bootstrap plan` skip the section with the warning
+`ignoring [bootstrap.linux.firewall] on non-Linux host`.
+`mise bootstrap firewall apply` fails there, and
+`mise bootstrap firewall status` reports an unsupported platform.
+
+To avoid the warning, keep the section in a config that only Linux machines
+load, such as a [machine module](/bootstrap/modules.html) that only Linux
+machines select, or a `mise.linux.toml` file with
+[platform environments](/configuration/environments.html#platform-environments)
+turned on.
+
+## Troubleshooting
+
+| Problem                                                     | What to do                                                                                                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| "refusing firewall default incoming deny over SSH"          | Add an incoming TCP rule that covers your address and SSH port, or see [lockout](#ssh-lockout-protection)                                    |
+| "firewall backend 'ufw' requires command 'ufw'"             | Install that backend, or use `backend = "auto"`                                                                                              |
+| A rule fails with "select backend"                          | The rule uses `limit`, `interface`, or a protocol the backend lacks; change the rule or backend                                              |
+| A container port is reachable although the policy denies it | Docker forwards published ports past these rules; publish the port on `127.0.0.1` in the Compose file, or restrict it in Docker              |
+| "only supported on Linux" on a Mac                          | `mise bootstrap firewall apply` runs only on Linux; `mise bootstrap` skips the section there. See [macOS and Windows](#on-macos-and-windows) |
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where the firewall falls in the
+  run order.
+- [Docker Compose projects](/bootstrap/compose.html) for services the firewall
+  exposes.

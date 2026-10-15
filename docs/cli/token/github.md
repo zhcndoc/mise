@@ -1,5 +1,5 @@
 ---
-description: "显示 mise 将使用的 GitHub token"
+description: "Show the GitHub token mise uses for a host"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -9,45 +9,60 @@ description: "显示 mise 将使用的 GitHub token"
 - **Effect：** 只读
 - **Source code：** [`src/cli/token/github.rs`](https://github.com/jdx/mise/blob/main/src/cli/token/github.rs)
 
-显示 mise 将用于指定主机的 GitHub token
+Show the GitHub token mise uses for a host
 
-显示 mise 将使用的 token 来源，有助于调试身份验证问题。默认情况下会遮盖 token。
+Shows the token and where it came from, to debug authentication. The token
+is masked unless you pass --unmask or --raw.
 
 ## 参数
 - **`[HOST]`** — GitHub 主机名
 
   **默认值：** `github.com`
 
-## 标志
-- **`--oauth`** — 仅通过原生 GitHub OAuth 来源（缓存、刷新或设备代码流程）进行解析，绕过其他 token 来源
-- **`--raw`** — 仅打印 token 值
-- **`--refresh`** — 即使缓存的 token 尚未过期，也通过 refresh-token grant 或新的设备代码流程生成新的 OAuth token。在更改 GitHub App 的安装或权限后使用：缓存的 token 会保留其原始访问权限，直到过期
-- **`--unmask`** — 显示完整的未遮盖 token
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--oauth`** — Use only native GitHub OAuth (a cached token, a refresh, or the device-code flow), ignoring other token sources
+- **`--raw`** — Print only the token, unmasked, for use in scripts
+- **`--refresh`** — With --oauth, get a new OAuth token even if the cached one has not expired, through the refresh-token grant or a new device-code flow. Use it after changing the GitHub App's installations or permissions: cached tokens keep their original access until they expire.
+- **`--unmask`** — Show the full unmasked token
+- **`-h --help`** — Print help
 
 ## Examples
+
+Show the token for github.com
 
 ```
 mise token github
 github.com: ghp_…xxxx (source: GITHUB_TOKEN)
 ```
 
+Show the whole token
+
 ```
 mise token github --unmask
 github.com: ghp_xxxxxxxxxxxx (source: GITHUB_TOKEN)
 ```
+
+Check a GitHub Enterprise host
 
 ```
 mise token github github.mycompany.com
 github.mycompany.com: (none)
 ```
 
+Get a new token through native GitHub OAuth
+
 ```
 mise token github --oauth --refresh
 github.com: gho_…xxxx (source: GitHub OAuth)
 ```
 
-<!-- 生成的参考导航 -->
+Pass the resolved token to another tool
+
+```
+GH_TOKEN=$(mise token github --raw) gh api user
+```
+
+<!-- generated reference navigation -->
 
 ## 相关文档
 

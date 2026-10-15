@@ -1,21 +1,14 @@
 ---
-description: "使用 mise 元数据将项目任务定义为独立脚本"
-socialDescription: "使用 mise 元数据将项目任务定义为独立脚本"
+description: "Write tasks as executable scripts in a task directory and configure them with #MISE comments."
 ---
 
-# 文件任务
+# File tasks
 
-除了在配置文件中定义任务外，还可以将任务定义为以下目录中的独立脚本文件：
+A file task is an executable script in a task directory. Its path is the task
+name, and `#MISE` comments at the top hold its configuration. Use one when a
+script is long enough to benefit from your editor's highlighting and linting.
 
-- `mise-tasks/:task_name`
-- `.mise-tasks/:task_name`
-- `mise/tasks/:task_name`
-- `.mise/tasks/:task_name`
-- `.config/mise/tasks/:task_name`
-
-这些是默认的文件任务目录。如果为当前配置范围设置了 [`task_config.includes`](/tasks/task-configuration.html#task_config.includes)，mise 将只搜索其中列出的路径。
-
-下面是一个构建 Rust CLI 的文件任务示例：
+Save this as `mise-tasks/build`:
 
 ```bash [mise-tasks/build]
 #!/usr/bin/env bash
@@ -23,41 +16,98 @@ socialDescription: "使用 mise 元数据将项目任务定义为独立脚本"
 cargo build
 ```
 
-::: tip 重要
-请确保文件具有可执行权限，否则 mise 无法检测到它。
+On Linux and macOS, make the script executable:
 
-```shell
+```sh
 chmod +x mise-tasks/build
 ```
 
-在 Windows 上没有可设置的权限位，`chmod` 也不是解决方案——请参阅[Windows](#windows)，了解文件任务需要满足什么条件才能被检测到
-:::
+`mise run build` now runs the script with the tools and environment from your
+config. mise lists only executable scripts as tasks. When you run a script that
+is not executable, mise asks whether to mark it executable, and fails if you
+decline. Windows has no execute bit; see [Windows](#windows).
 
-与 TOML 相比，将代码保存在 bash 文件中对编辑器更友好，因为编辑器可以更轻松地应用语法高亮和代码检查。
+You can still run the script without mise, but its `#MISE` and `#USAGE`
+comments then have no effect, so the caller must supply its tools, environment,
+and any `usage_*` variables.
 
-脚本也可以在 mise 外部运行，但其中的 `#MISE` 和 `#USAGE` 注释不会生效。直接调用方必须自行提供其工具、环境以及所有解析出的 `usage_*` 变量。使用 `mise run <task>` 可以应用这些配置。
+`mise-tasks/` is one of several
+[default task directories](/tasks/task-discovery.html#default-task-directories).
+Setting [`task_config.includes`](/tasks/task-configuration.html#task_config.includes)
+replaces them with the paths you list.
 
-## 任务配置
+## Name and group file tasks {#task-grouping}
 
-所有配置选项都列在[任务配置](/tasks/task-configuration)中。可以在文件顶部添加 `#MISE` 注释，为文件任务提供额外配置。
+A file's path below the task directory is its task name, with `/` replaced by
+`:`. `mise-tasks/db/migrate.sh` is `db:migrate`, and you can run it as
+`mise run db:migrate` or `mise run db:migrate.sh`. mise shows the name without
+a script extension, such as `.sh`, `.py`, `.js` or `.ps1`, unless another task
+already has that name. Any other extension stays in the name, so
+`mise-tasks/gen.proto` is the task `gen.proto`. A file named
+`_default` takes its directory's name, so `mise-tasks/test/_default` is `test`.
 
-```bash
-#MISE description="构建 CLI"
+For this layout:
+
+```text
+mise-tasks
+├── build
+├── db
+│   └── migrate.sh
+└── test
+    ├── _default
+    ├── integration
+    └── units
+```
+
+`mise tasks --extended` lists:
+
+```text
+Name              Aliases  Source                         Description
+build                      ./mise-tasks/build
+db:migrate                 ./mise-tasks/db/migrate.sh
+test                       ./mise-tasks/test/_default
+test:integration           ./mise-tasks/test/integration
+test:units                 ./mise-tasks/test/units
+```
+
+`mise run 'test:*'` runs `test:integration` and `test:units`; see
+[Wildcards](/tasks/running-tasks.html#wildcards).
+
+## Configure with `#MISE` comments
+
+Add `#MISE` comments near the top of the script to set
+[task properties](/tasks/task-configuration.html):
+
+```bash [mise-tasks/build]
+#!/usr/bin/env bash
+#MISE description="Build the CLI"
 #MISE alias="b"
 #MISE sources=["Cargo.toml", "src/**/*.rs"]
 #MISE outputs=["target/debug/mycli"]
 #MISE env={RUST_BACKTRACE = "1"}
 #MISE depends=["lint", "test"]
-#MISE tools={rust="1.50.0"}
+#MISE tools={rust="1.90"}
+cargo build
 ```
 
-假设该文件位于 `mise-tasks/build`，那么可以使用 `mise run build`（或其别名：`mise run b`）来运行。
+`mise run build` or its alias `mise run b` runs this file.
 
-你也可以从 `mise.toml` 配置脚本。对于名为 `build.sh` 的脚本，`[tasks.build]` 或 `[tasks."build.sh"]` 都可以添加描述、环境变量或依赖项。示例和命名规则请参阅[从 TOML 配置文件任务](/tasks/task-configuration.html#configuring-file-tasks-from-toml)。
+The comment marker can be `#`, `//` (for JavaScript, TypeScript, or Go) or `::`
+(for batch files), and whitespace may follow it. The keyword can also be
+bracketed. `#MISE`, `# MISE`, `// MISE`, and `# [MISE]` all work, so a
+formatter that adds a space after `#` does not break the header. To disable a
+header line, change the keyword, for example to `# NOMISE`.
+
+Each `#MISE` line holds TOML. Headers accept most task properties, but not
+`timeout`, `vars`, or the sandbox keys (`deny_*` and `allow_*`); mise warns
+about those and ignores them. To set one of them, or to configure a script you
+cannot edit, add a `[tasks.<name>]` block for the script to `mise.toml`; see
+[Configuring file tasks from TOML](/tasks/task-discovery.html#configuring-file-tasks-from-toml).
 
 ### 多行值
 
-每个 `#MISE` 行都是 TOML。只要每一行都保留 `#MISE` 前缀，数组或内联表就可以拆分到多行，这样可以让较长的 `depends`/`sources` 列表更易于阅读：
+An array or inline table can span several lines as long as every line keeps the
+`#MISE` prefix, which keeps long `depends` and `sources` lists readable:
 
 ```bash [mise-tasks/build]
 #!/usr/bin/env bash
@@ -73,16 +123,17 @@ chmod +x mise-tasks/build
 cargo build
 ```
 
-还可以通过使用带点号的键重复此前缀来逐步构建表，这样可以完全省略外层大括号：
+Dotted keys build a table one line at a time, without braces:
 
 ```bash
-#MISE tools.node="20"
-#MISE tools.python="3.11"
+#MISE tools.node="24"
+#MISE tools.python="3.13"
 ```
 
-### 扩展任务模板
+### Extend a task template
 
-`extends` 指定一个[任务模板](/tasks/templates)，因此多个文件任务可以共享工具、环境变量和参数：
+`extends` names a [task template](/tasks/templates.html), so several file tasks
+can share one set of tools, environment variables, and arguments:
 
 ~~~toml [mise.toml]
 [task_templates.rust]
@@ -97,17 +148,15 @@ env = { RUST_BACKTRACE = "1" }
 cargo build
 ~~~
 
-脚本文件就是任务命令，因此模板的 `run` 对文件任务会被忽略；其他内容都会按照[模板文档描述的规则](/tasks/templates#merge-semantics)继承。
-
-mise 为文件任务提供项目上下文变量，例如 `MISE_PROJECT_ROOT`，无论从哪个目录调用任务，该变量都能标识项目根目录。完整的变量列表请参阅[任务](/tasks/#environment-variables-passed-to-tasks)。
-
-:::tip
-请注意格式化工具可能会将 `#MISE` 更改为 `# MISE`。mise 会有意忽略 `# MISE`，以避免意外配置。要解决此问题，请使用替代形式 `# [MISE]`。
-:::
+The script is the task's command, so a file task ignores the template's `run`.
+It inherits everything else by the template
+[merge rules](/tasks/templates.html#merge-semantics).
 
 ## Shebang
 
-shebang 行是可选的，但如果存在，mise 会使用它来确定运行脚本的 shell。也可以使用它通过其他编程语言运行脚本。
+The shebang selects the interpreter. It is optional on Linux and macOS, but
+Windows needs it for files without an executable extension (see
+[Windows](#windows)). Use it to write tasks in any language:
 
 ::: code-group
 
@@ -126,10 +175,10 @@ print('Hello, World!')
 ```
 
 ```ts [deno]
-#!/usr/bin/env -S deno run --allow-env
-//MISE description="Deno 中的你好，世界"
+#!/usr/bin/env -S deno run
+//MISE description="Hello, World in Deno"
 
-console.log(`PATH, ${Deno.env.get("PATH")}`);
+console.log("Hello, World!");
 ```
 
 ```powershell [powershell]
@@ -144,114 +193,88 @@ Write-Host "Hello from PowerShell, current directory is $current_directory"
 
 ## Windows
 
-Windows 没有供 mise 检查的执行权限，因此它会以另一种方式判断一个文件是否为任务。满足以下**任一**条件的文件都是任务：
-
-- 其扩展名属于 [`windows_executable_extensions`](/configuration/settings.html#windows_executable_extensions) 之一——默认包括 `exe`、`bat`、`cmd`、`com`、`ps1`、`vbs`
-- 以 **shebang** 开头
-
-这两者回答的是不同的问题。扩展名意味着 Windows 自身可以运行该文件；shebang 意味着 mise 可以确定用于运行它的解释器。Windows 不实现 shebang——mise 会读取这一行并自行启动解释器——这就是为什么 `.sh` 脚本或完全没有扩展名的文件，只要包含 shebang，在 Windows 上仍然会被视为任务。
-
-实际结果是，在 Windows 上，**两者都没有**的文件将不可见，即使它在 Linux 和 macOS 上可以正常工作：
+Windows has no execute bit. A file there is a task if its extension is listed in
+[`windows_executable_extensions`](/configuration/settings.html#windows_executable_extensions),
+such as `.cmd` or `.ps1`, or if it starts with a shebang. Windows does not
+implement shebangs itself: mise reads the line and starts the interpreter. A
+file with neither is not a task on Windows, even though it works on Linux and
+macOS:
 
 ```bash [mise-tasks/build]
-# no shebang, no extension -> not a task on Windows
+# no shebang and no extension: not a task on Windows
 cargo build
 ```
 
-通常只需添加 `#!/usr/bin/env bash` 即可，并且不会对其他平台造成任何影响。
+Add `#!/usr/bin/env bash` to scripts you share. It changes nothing on the other
+platforms.
 
-### 没有 `.ps1` 扩展名的 PowerShell 任务
+### PowerShell scripts without `.ps1`
 
-Windows PowerShell 拒绝打开名称不以 `.ps1` 结尾的脚本——Linux 和 macOS 版本没有这项限制。因此，为了让 `#!/usr/bin/env pwsh` 任务在各个平台上的行为一致，mise 会在临时目录中从 `.ps1` 副本运行它，并在任务完成后删除该副本。
+Windows PowerShell runs only files whose names end in `.ps1`, so mise runs a
+`#!/usr/bin/env pwsh` task from a temporary `.ps1` copy and removes the copy
+when the task finishes. `$PSScriptRoot` and `$PSCommandPath` name the copy;
+the working directory, `$args`, and the environment are unchanged.
 
-只有脚本对自身位置的认知会发生变化：`$PSScriptRoot` 和 `$PSCommandPath` 指向的是副本，而不是任务文件。工作目录、`$args` 和环境变量都不会改变。
+To find files next to the task, read `$env:MISE_TASK_DIR`, which names the
+directory of the task file on every platform (see
+[Task environment](/tasks/running-tasks.html#task-environment)). Or give the
+task a `.ps1` extension, which runs in place.
 
-需要查找自身旁边文件的任务有两种解决方法，第一种在所有平台上都适用：
+### One task, two scripts
 
-- 读取 [`MISE_TASK_DIR`](/tasks/#environment-variables-passed-to-tasks)，它指明任务文件所在的目录。mise 会根据任务文件设置它，而不是根据实际执行的文件设置，因此副本不会改变该值——在完全不会创建副本的 Linux 和 macOS 上读取到的值也相同。
-- 为任务指定 `.ps1` 扩展名，这样它就会在原位置运行。
+A file task has no equivalent of a TOML task's
+[`run_windows`](/tasks/task-configuration.html#run-windows). Instead, put a
+POSIX script and a Windows script with the same stem in the same directory:
 
-### 为两个平台编写一个任务
-
-文件任务没有等同于 TOML 任务 [`run_windows`](/tasks/task-configuration.html#run-windows) 的机制——脚本**就是**命令，因此没有地方放置第二个命令。只需将两个脚本并排放置，并为 Windows 版本指定一个可执行扩展名：
-
-```
+```text
 mise-tasks/
   build.sh       #!/usr/bin/env bash
   build.ps1      # the Windows version
 ```
 
-两个文件必须共享同一个目录和文件名主体——正是这种配对关系使它们成为一个任务，而不是两个碰巧名称相同的任务。
+On Windows, mise runs `build.ps1` as `build` and drops the POSIX script. On
+Linux and macOS, the `.ps1` has no execute bit, so only `build.sh` is a task.
+`mise run build` picks the right script on each platform. The POSIX script is
+any file without one of the `windows_executable_extensions`, so a script with
+no extension, such as `build`, pairs the same way.
 
-在 Windows 上，mise 会优先使用原生脚本：`build.ps1` 会响应 `build`，而 POSIX 版本会被舍弃。在 Linux 和 macOS 上，`.ps1` 没有执行权限，因此只会找到 `build.sh`。`mise run build` 会在每个平台上执行正确的版本。
+Keep the `.ps1` non-executable on Linux and macOS. If it is executable, it is a
+task there too: next to `build.sh` it also answers to `build`, so
+`mise run build` runs both scripts. When there is more than one Windows
+candidate, such as `build.ps1` and `build.cmd`, mise does not choose between
+them on Windows and keeps all three files as tasks; run one by its full name,
+such as `mise run build.cmd`.
 
-POSIX 版本是指**不带有** [`windows_executable_extensions`](/configuration/settings.html#windows_executable_extensions) 中任何扩展名的文件，因此完全没有扩展名的文件也能以相同方式工作：
+To give the scripts unrelated names, or to choose explicitly, use a
+[TOML task](/tasks/toml-tasks.html) that calls them:
 
-```
-mise-tasks/
-  build          #!/usr/bin/env bash
-  build.ps1      # the Windows version
-```
-
-在 Linux 或 macOS 上将 `.ps1` 标记为可执行并不会破坏这一机制——它只会作为一个名为 `build.ps1` 的独立任务出现在那里，因为只有在 Windows 上才会将其重命名为 `build`。
-
-如果你希望为两个文件使用完全无关的名称，或者明确指定哪个文件对应哪个平台，可以使用一个调用它们的 [TOML 任务](/tasks/toml-tasks.html)：
-
-```toml
+```mise-toml [mise.toml]
 [tasks.build]
 run = "./scripts/build.sh"
 run_windows = "pwsh -File ./scripts/windows-build.ps1"
 ```
 
-之所以明确写出该命令，而不是写成 `./scripts/windows-build.ps1`，是因为 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args) 默认为 `cmd /c`，而 cmd 不会自行启动 `.ps1`。
+The Windows command calls `pwsh` explicitly because
+[`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)
+is `cmd /c` by default, and cmd does not start a `.ps1` file by itself.
 
-如果 Windows 候选文件不止一个——例如同时存在 `build.ps1` **和** `build.cmd`——mise 无法在它们之间进行选择，因此会保持原样：三个文件都会保留，并分别列为 `build.sh`、`build.ps1` 和 `build.cmd`。
+## Create or edit a file task
 
-## 编辑任务
+`mise tasks edit build` opens `build` in `$EDITOR`. If the task does not exist,
+mise first creates an executable script with a Bash shebang in the first task
+directory that exists, or in `mise-tasks/` when there is none.
+[`mise tasks add --file`](/cli/tasks/add.html) creates a file task from a
+command:
 
-运行 `mise tasks edit build` 编辑文件任务（该命令会在 `$EDITOR` 中打开它）。如果文件不存在，则会创建该文件。这对于快速编辑或创建脚本很方便。
-
-## 任务分组
-
-`mise-tasks`、`.mise-tasks`、`.mise/tasks`、`mise/tasks` 或 `.config/mise/tasks` 中的文件任务可以分组到子目录中，加载时任务名称会自动添加前缀。
-
-**示例**：给定以下文件夹结构：
-
-```text
-mise-tasks
-├── build
-└── test
-    ├── _default
-    ├── integration
-    └── units
+```sh
+mise tasks add --file hello -- echo hello
 ```
 
-运行 `mise tasks` 会得到以下输出：
+## Arguments {#arguments}
 
-```shellsession
-$ mise tasks
-Name              Description Source
-build                         ./mise-tasks/build
-test                          ./mise-tasks/test/_default
-test:integration              ./mise-tasks/test/integration
-test:units                    ./mise-tasks/test/units
-```
-
-## 参数
-
-::: tip
-有关任务参数的全面信息，请参阅专门的 [任务参数](/tasks/task-arguments) 页面。
-:::
-
-可以在这些文件中使用 [usage](https://usage.jdx.dev) 规范，以便在运行 mise 时提供参数解析、自动补全和文档，并且可以将其导出为 markdown。这样可以将任务变成完整的 CLI。
-
-:::tip
-不需要单独安装 `usage` CLI，即可使用 usage 规范执行或补全 mise 任务。安装并启用 mise 的 shell 补全脚本后，任务补全即可正常工作。
-:::
-
-### 带参数的文件任务示例
-
-下面是一个文件任务示例，它使用 usage 的一些特性来构建一个 Rust CLI：
+Declare arguments with `#USAGE` comments. mise parses them, passes each value
+to the script as a `usage_*` environment variable, and provides `--help` and
+shell completions:
 
 ```bash [mise-tasks/build]
 #!/usr/bin/env bash
@@ -272,53 +295,37 @@ fi
 cargo build --profile "${usage_profile?}" --target "${usage_target?}"
 ```
 
-::: tip
-有关 Bash 参数展开模式（如 `${var?}`、`${var:-default}` 和 `${var:+value}`）的详细信息，请参阅 [Bash Variable Expansion for Usage Variables](/tasks/task-arguments#bash-variable-expansion)。
-:::
+With mise's [shell completions](/shell-setup.html) enabled,
+`mise run build --profile <Tab>` offers `dev` and `release`, and
+`mise run build --user <Tab>` offers the output of `mycli users`. The separate
+`usage` CLI is not needed. `mise run build --help` prints help for the task,
+and [`mise generate task-docs`](/cli/generate/task-docs.html) renders Markdown
+documentation from the same spec.
 
-启用 mise 的 shell 补全后，此示例会提供以下任务补全：
+Put mise's own flags before the task name, as in
+`mise run --dry-run build --profile release x86_64-unknown-linux-gnu`.
+Everything after the task name goes to the task.
 
-- `mise run -- build --profile <tab><tab>` 会显示 `dev` 和 `release` 作为选项。
-- `--user` 标志也会显示由 `mycli users` 输出生成的补全。
-- 使用 `--` 将 mise 标志与任务参数分隔开：`mise run -- build --profile release <target>`
+[Task arguments](/tasks/task-arguments.html) covers the spec syntax,
+[reading values in Bash](/tasks/task-arguments.html#bash-variable-expansion), and
+[environment variable backing](/tasks/task-arguments.html#environment-variable-backing).
 
-相同的规范还会驱动 `mise run build --help`，该命令会输出任务的 CLI 帮助，以及 [`mise generate task-docs`](/cli/generate/task-docs)，该命令会为你的任务生成 markdown 文档。
+If completions or `--help` do not reflect your spec, run
+`mise tasks validate` or the task itself. An invalid spec produces a warning
+such as `invalid usage spec in task file mise-tasks/build`, followed by the line
+that failed to parse.
 
-:::tip
-如果没有得到任何自动补全建议，请使用 `-v`（详细）标志查看发生了什么。例如，如果使用无效的 `usage` 规范运行 `mise run -v build`，你会看到类似 `DEBUG failed to parse task file with usage` 的错误消息。
-:::
+### A Node.js task with arguments
 
-### 环境变量支持
-
-参数和标志可以通过 `env="..."` 使用环境变量提供值。优先级顺序为 CLI 参数、环境变量，然后是默认值：
-
-```bash [.mise/tasks/deploy]
-#!/usr/bin/env bash
-#MISE description="Deploy application"
-#USAGE arg "[environment]" env="DEPLOY_ENV" default="development"
-#USAGE flag "--region <region>" env="AWS_REGION" default="us-east-1"
-
-echo "Deploying to ${usage_environment} in ${usage_region}"
-```
-
-这样，同一个文件任务既可以使用显式参数，也可以使用调用该任务的 shell 环境：
-
-```shell
-DEPLOY_ENV=staging AWS_REGION=us-west-2 mise run deploy
-```
-
-有关更多详细信息，请参阅[环境变量支持](https://mise.jdx.dev/tasks/task-arguments.html#environment-variable-backing)。
-
-### 带参数的 Node.js 文件任务示例
-
-下面是如何在 Node.js 脚本中使用 [usage](https://usage.jdx.dev/cli/scripts#usage-scripts) 来解析参数：
+`//USAGE` comments declare arguments in JavaScript; mise parses them the same
+way as `#USAGE` lines:
 
 ```js [mise-tasks/greet]
-#!/usr/bin/env -S node
-//MISE description="将问候写入文件"
-//USAGE flag "-f --force" help="覆盖现有的 <file>"
-//USAGE flag "-u --user <user>" help="以该用户身份运行"
-//USAGE arg "<output_file>" help="要写入的文件" default="file.txt" {
+#!/usr/bin/env node
+//MISE description="Write a greeting to a file"
+//USAGE flag "-f --force" help="Overwrite existing <file>"
+//USAGE flag "-u --user <user>" help="User to run as"
+//USAGE arg "<output_file>" help="The file to write" default="file.txt" {
 //USAGE   choices "greeting.txt" "file.txt"
 //USAGE }
 
@@ -335,51 +342,61 @@ fs.appendFileSync(usage_output_file, `Hello, ${user}\n`);
 console.log(`Greeting written to ${usage_output_file}`);
 ```
 
-运行方式：
-
-```shell
+```sh
 mise run greet greeting.txt --user Alice
 # Greeting written to greeting.txt
 ```
 
-如果你传入了无效参数，你会收到一条错误消息：
+mise rejects a value outside the choices before the script starts:
 
-```shell
+```sh
 mise run greet invalid.txt --user Alice
-# [greet] ERROR
-#   0: Invalid choice for arg output_file: invalid.txt, expected one of greeting.txt, file.txt
 ```
 
-启用 mise 的 shell 补全后，自动补全会显示 `output_file` 参数的可用选项。
-
-```shell
-mise run greet <TAB>
-# > greeting.txt
-#   file.txt
+```text
+mise ERROR failed to validate task greet
+mise ERROR Invalid choice for arg output_file: invalid.txt, expected one of greeting.txt, file.txt
 ```
 
-## CWD
+With completions enabled, `mise run greet <Tab>` offers `greeting.txt` and
+`file.txt`.
 
-mise 会在运行任务前将当前工作目录设置为 `mise.toml` 所在的目录。通过在任务标头中设置 <span v-pre>`dir="{{cwd}}"`</span> 可以覆盖此行为：
+## Working directory
+
+File tasks run from the [config root](/configuration.html#config-root), the
+project directory, such as `~/proj` for both `~/proj/mise.toml` and
+`~/proj/.config/mise.toml`. Add <span v-pre>`#MISE dir="{{cwd}}"`</span> to run
+from the directory where you called mise:
 
 ```bash
 #!/usr/bin/env bash
 #MISE dir="{{cwd}}"
 ```
 
-原始工作目录也可通过 `MISE_ORIGINAL_CWD` 环境变量获取：
+The directory where you called mise is also in `MISE_ORIGINAL_CWD`, and
+`MISE_PROJECT_ROOT` and the other [task variables](/tasks/running-tasks.html#task-environment)
+locate the project from any directory:
 
 ```bash
 #!/usr/bin/env bash
 cd "$MISE_ORIGINAL_CWD"
 ```
 
-## 直接运行任务
+## Run a script by path
 
-任务不必属于某个配置；可以直接将脚本路径传递给命令来运行：
+`mise run ./scripts/build.sh` runs any executable script as a task, with its
+`#MISE` and `#USAGE` headers, even outside a task directory:
 
-```bash
+```sh
 mise run ./path/to/script.sh
 ```
 
-路径必须以 `/` 或 `./` 开头，才能被视为文件路径（在 Windows 上则为 `C:\` 或 `.\`）。
+The path must start with `/`, `./`, or `../` (on Windows, backslash forms such
+as `.\`, `..\`, or `C:\` also work) and the file must exist. Otherwise mise
+looks the argument up as a task name. On Linux and macOS the file must also be
+executable. In a terminal mise offers to mark it executable; otherwise it stops
+with `` `./build.sh` is not executable. Run: chmod +x ./build.sh ``.
+
+A relative path resolves from the current directory, as in a shell, so
+`mise run ./build.sh` in a subdirectory runs that subdirectory's `build.sh`.
+The script still runs in the config root, like other tasks.

@@ -21,6 +21,7 @@ use crate::path::PathExt;
 use crate::system::managed_files::{ManagedDirectoryRequest, ManagedFileRequest, ManagedState};
 use crate::system::resources::ResourceAction;
 use crate::system::services_common::ServiceState;
+use crate::system::systemd::{self, SystemdRequest, SystemdState};
 use crate::system::{edits, files, managed_files, secrets, user_services};
 
 #[derive(Debug, Default)]
@@ -59,6 +60,7 @@ pub struct Unapply {
     files: Vec<ManagedFileRequest>,
     directories: Vec<ManagedDirectoryRequest>,
     user_services: Vec<String>,
+    systemd_units: Vec<SystemdRequest>,
     dotfiles: Vec<files::FileRequest>,
     edits: Vec<edits::EditRequest>,
     pub removals: Vec<Removal>,
@@ -211,6 +213,79 @@ pub async fn plan(
             name: status.name.clone(),
         });
         unapply.user_services.push(status.name);
+    }
+
+    let base_units = crate::system::systemd_from_config(&base)
+        .into_iter()
+        .filter(|request| !request.is_absent())
+        .map(|request| request.name)
+        .collect::<HashSet<_>>();
+    let units_available = systemd::is_available();
+    for request in crate::system::systemd_from_config(config) {
+        if base_units.contains(&request.name) {
+            continue;
+        }
+        if request.is_absent() {
+            if opts.verbose {
+                for unit in systemd::resolve_absent(std::slice::from_ref(&request)) {
+                    unapply.skipped.push(Skip {
+                        kind: "systemd-unit",
+                        name: unit.unit,
+                        reason: DECLARED_ABSENT.into(),
+                    });
+                }
+            }
+            continue;
+        }
+        let name = request.unit.clone();
+        if !units_available {
+            unapply.skipped.push(Skip {
+                kind: "systemd-unit",
+                name,
+                reason: systemd::unavailable_reason(),
+            });
+            continue;
+        }
+        let status = match systemd::status(std::slice::from_ref(&request)).await {
+            Ok(mut statuses) => statuses.pop(),
+            Err(error) => {
+                unapply.skipped.push(Skip {
+                    kind: "systemd-unit",
+                    name,
+                    reason: format!("{error}"),
+                });
+                continue;
+            }
+        };
+        let Some(status) = status else {
+            continue;
+        };
+        match status.state {
+            SystemdState::Missing => {
+                if opts.verbose {
+                    unapply.skipped.push(Skip {
+                        kind: "systemd-unit",
+                        name,
+                        reason: "already absent".into(),
+                    });
+                }
+                continue;
+            }
+            SystemdState::Differs if !opts.force => {
+                unapply.skipped.push(Skip {
+                    kind: "systemd-unit",
+                    name,
+                    reason: "installed, differs; use --force to remove it".into(),
+                });
+                continue;
+            }
+            _ => {}
+        }
+        unapply.removals.push(Removal {
+            kind: "systemd-unit",
+            name,
+        });
+        unapply.systemd_units.push(request);
     }
 
     let base_dotfiles = paths(
@@ -503,6 +578,8 @@ fn uncovered_sections(config: &Config, environments: &[String]) -> Vec<Uncovered
     let mut packages = 0;
     let mut repos = 0;
     let mut compose = 0;
+    let mut apt_sources = 0;
+    let mut dnf_repos = 0;
     // Independent bootstrap roots keep their own config maps, and a module can
     // declare all of its packages in one of them.
     for config_files in config.bootstrap_config_maps() {
@@ -519,6 +596,8 @@ fn uncovered_sections(config: &Config, environments: &[String]) -> Vec<Uncovered
             packages += bootstrap.packages.len();
             repos += bootstrap.repos.len();
             compose += bootstrap.compose.len();
+            apt_sources += bootstrap.apt.sources.len();
+            dnf_repos += bootstrap.dnf.repos.len();
         }
     }
     [
@@ -528,6 +607,16 @@ fn uncovered_sections(config: &Config, environments: &[String]) -> Vec<Uncovered
             "mise bootstrap packages prune --manager <manager>",
         ),
         ("bootstrap.repos", repos, "remove the checkout"),
+        (
+            "bootstrap.apt.sources",
+            apt_sources,
+            "delete /etc/apt/sources.list.d/mise-<name>.sources",
+        ),
+        (
+            "bootstrap.dnf.repos",
+            dnf_repos,
+            "delete /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:<owner>:<project>.repo",
+        ),
         (
             "bootstrap.compose",
             compose,
@@ -594,5 +683,38 @@ pub async fn execute(
             info!("user service {name}: removed its {manager}");
         }
     }
+    let units = still_removable_units(&unapply.systemd_units, opts.force).await;
+    systemd::remove(&units, opts.dry_run).await?;
     Ok(())
+}
+
+/// Check each planned unit again, since the confirmation prompt can stay open
+/// for a while: a unit changed since the plan is kept unless --force is given,
+/// and a unit that can no longer be inspected is kept without stopping the rest.
+async fn still_removable_units(requests: &[SystemdRequest], force: bool) -> Vec<SystemdRequest> {
+    if force {
+        return requests.to_vec();
+    }
+    let mut keep = vec![];
+    for request in requests {
+        let status = match systemd::status(std::slice::from_ref(request)).await {
+            Ok(mut statuses) => statuses.pop(),
+            Err(error) => {
+                warn!("systemd unit {}: kept, {error}", request.unit);
+                continue;
+            }
+        };
+        let Some(status) = status else {
+            continue;
+        };
+        if status.state == SystemdState::Differs {
+            warn!(
+                "systemd unit {}: changed since the plan; use --force to remove it",
+                status.request.unit
+            );
+            continue;
+        }
+        keep.push(status.request);
+    }
+    keep
 }

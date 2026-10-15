@@ -1,26 +1,20 @@
 ---
-description: "发现版本、验证发布者并强制执行 Packslip 安装策略。"
-socialDescription: "发现版本、验证发布者并强制执行 Packslip 安装策略。"
+description: Understand how mise finds packslip releases, verifies their publishers, enforces trust policies, and picks a build for your platform.
+socialDescription: How mise finds, verifies, and selects packslip releases.
 ---
 
-# Packslip 验证与策略
+# Verification and policy
 
-mise 使用 Packslip 的签名元数据来发现版本、验证发布者并选择兼容的构建版本。本指南介绍 [Packslip 后端](/dev-tools/backends/packslip.html) 背后的发现和策略规则。有关安装示例和工具选项，请从该页面开始。
+The [packslip backend](/dev-tools/backends/packslip.html) uses signed metadata
+to find releases, verify the publisher, and pick a build for your platform, and
+[`mise self-update`](#self-update) uses the same checks for mise itself. For
+tool options and term definitions, see the backend page; for fixes to specific
+errors, see [troubleshooting](/dev-tools/backends/packslip.html#troubleshooting).
 
-**manifest** 描述一个版本，**bundle** 包含该 manifest 及其签名证据，**artifact** 是由 manifest 命名的可下载构建版本。**signed release list** 为版本建立索引，并可以推荐或撤回版本。
+A **signed release list** is a publisher-signed index of a project's versions.
+It can recommend or withdraw versions and point at their bundles.
 
-## 检查工具和已接受的签名者
-
-在调查验证错误之前，先确认正在使用的后端和版本，然后在不更改状态的情况下检查签名者状态：
-
-```sh
-mise tool hk
-mise ls --current
-mise packslip pins
-mise packslip pins --json
-```
-
-将 `hk` 替换为受影响的工具。pins 命令会列出以前接受的身份；它们不会重新验证已安装的可执行文件，也不会授予新签名者信任。在执行签名者轮换流程之前，请将相关项目与其锁定文件条目及错误信息进行比较。
+<a id="project-discovery"></a>
 
 ## 项目发现
 
@@ -31,39 +25,71 @@ mise packslip pins --json
 | `tool.example.com`                 | `https://tool.example.com/.well-known/packslip.json`。                 |
 | `example.com/tools/mytool`         | `https://example.com/.well-known/packslip/tools/mytool.json`。         |
 
-GitHub monorepo 子路径标识一个工具，但签名身份仍固定到该仓库。无论 bundle 的文件名是什么，签名项目和版本都必须与请求的工具和版本匹配。
+A GitHub monorepo subpath identifies one tool, but the signing identity is still
+pinned to the repository. The signed project and version must match the tool
+and release you requested, whatever the bundle's filename.
 
-对于域名项目，签名列表提供 bundle URL；artifact 可以位于其他下载主机上。没有签名列表的域名无法安装。识别某个 forge 的签名颁发者并不能提供版本发现功能：GitHub 集成了 release API；其他主机需要签名列表位置。
+For a domain project, the signed list supplies the bundle URLs, and artifacts
+can live on another download host. A domain without a signed list cannot be
+installed. Recognizing a forge's signing issuer does not provide release
+discovery: GitHub has a release-API integration, and other hosts need a signed
+list.
+
+<a id="version-resolution"></a>
 
 ## 版本解析
 
-Packslip 版本使用语义化版本，包括诸如 `2026.9.1` 的兼容日期版本。版本决定排序和预发布状态；GitHub 的 release 顺序和可编辑的预发布标记都不决定这两者。
+The packslip format requires semantic versions, which include date versions
+such as `2026.9.1`. The version decides ordering and prerelease status; GitHub's
+release order and its editable prerelease flag decide neither.
 
-对于 GitHub 发现，mise 从诸如 `v1.2.3`、`mytool-v1.2.3` 或 `v4.1`（规范化为 `4.1.0`）这样的标签中读取版本。无法映射到版本的标签需要在签名列表中进行显式映射。在安装时，manifest 的版本必须与标签或列表条目一致。
+For GitHub discovery, mise reads versions from tags such as `v1.2.3`,
+`mytool-v1.2.3`, or `v4.1` (read as `4.1.0`). A tag that does not map to a
+version needs an explicit mapping in a signed list. At installation, the
+manifest's version must agree with the tag or list entry.
+
+<a id="signed-release-lists"></a>
 
 ### 签名版本列表
 
-GitHub 仓库可以在其默认分支的 `.well-known/packslip.json` 发布补充签名列表；对于 monorepo 工具，则发布在 `.well-known/packslip/<tool>.json`。该列表可以撤回某个版本、提供 bundle URL 和摘要，或添加 release API 未公开的版本。
+A GitHub repository can publish a supplementary signed list on its default
+branch at `.well-known/packslip.json`, or `.well-known/packslip/<tool>.json` for
+a monorepo tool. The list can withdraw a version, supply a bundle URL and
+digest, or add a version that the release API does not show.
 
-省略的版本仍然可以来自 GitHub releases：省略并不会撤回这些版本。对于域名项目，签名列表提供完整的版本索引。即使受信任的 stamper 已批准某个版本，供应商撤回仍会排除该版本。
-
-### 版本列表连续性和最短期限
-
-mise 会拒绝已过期的签名列表，以及低于其已接受的该项目最高版本的列表序列。一旦它接受了补充 GitHub 列表，该列表消失就会被视为错误。这可以防止列表缺失悄悄撤销某次撤回。记住的列表状态与[签名者固定](#signer-continuity)状态存储在一起。
-
-启用[最短版本期限](/configuration/settings.html#minimum_release_age)后，发现时间戳有助于筛选候选版本。在下载 artifact 之前，mise 会根据有效截止时间检查已验证的透明日志时间戳。只有明确允许的未记录 bundle 才会改用签名发布日期。
-
-### 推荐和回退
+Versions the list omits can still come from GitHub releases; omission does not
+withdraw them. For a domain project, the signed list is the entire release
+index. A vendor withdrawal excludes a version even if a trusted stamper approved
+it.
 
 对于不受约束的 `latest` 请求，mise 会先考虑供应商的签名推荐；如果没有签名指针，则考虑 GitHub 的最新 release。如果没有符合条件的推荐，mise 会选择最高的符合条件的语义化版本。前缀和 channel 请求继续使用其正常的匹配规则；推荐不会改变它们的排序。
 
-推荐必须通过签名、身份、摘要、版本期限、stamp 和主机检查。策略排除会发出警告并尝试另一个候选版本。不符合条件的签名推荐会直接回退到语义化版本选择，而不会查询 GitHub 的指针。签名或摘要失败，以及无效、过期、回滚或意外缺失的列表，都会停止解析。
+For an unconstrained `latest` request, mise tries the vendor's signed
+recommendation first, then GitHub's latest release if there is no signed
+pointer. Without an eligible recommendation, mise selects the highest eligible
+semantic version. Prefix and channel requests keep their normal matching rules;
+the recommendation does not reorder them.
 
-对于带 stamp 的版本，mise 会从 stamp 的 URL 获取 bundle，并检查供应商的列表以确认撤回状态和任何记录的摘要。解析和安装使用相同的来源与验证策略。
+A publisher can recommend an older supported release even when a newer major
+version exists, so `latest` is not always the highest version listed.
 
-### 缓存和离线使用
+A recommendation must pass the signature, identity, digest, release-age, stamp,
+and host checks. A policy exclusion warns and tries the next candidate. An
+ineligible signed recommendation falls straight back to semantic-version
+selection, without consulting GitHub's pointer. Signature or digest failures,
+and lists that are invalid, expired, rolled back, or unexpectedly missing, stop
+resolution.
 
 在线版本列表和 `latest` 解析会重新读取策略，以便撤回和信任变更生效。它们会将结果写入 mise 的远程版本缓存。离线时，两者都会使用该缓存；如果缓存为空，则返回没有版本。安装仍会重新检查验证策略。仅有缓存的版本列表不足以进行离线安装：所需的 bundle、artifact 和信任证据也必须可用。
+
+Online version listing and `latest` resolution read policy afresh, so
+withdrawals and trust changes take effect, and they write the results to mise's
+remote-version cache. Offline, both use that cache, or return no versions if it
+is empty. Installation still rechecks verification policy, so a cached version
+list is not enough for an offline install: the bundles, artifacts, and trust
+evidence it needs must also be available.
+
+<a id="verification-checks"></a>
 
 ## 验证检查
 
@@ -74,69 +100,128 @@ mise 会拒绝已过期的签名列表，以及低于其已接受的该项目最
 3. 验证签名者连续性、锁定文件承诺以及适用的版本期限策略。
 4. 验证所选 artifact 的摘要和大小，以及任何现有的锁定文件校验和。
 
-经过验证的 manifest 会作为 `.mise-packslip.json` 保留在安装目录中。它为资源提供可执行文件路径和元数据。
+1. The bundle's signature, and its certificate and transparency-log evidence
+   where they apply, against the expected repository identity or configured key.
+2. The manifest's structure, the requested project and version, and any bundle
+   digest recorded by a vendor list or trusted stamper.
+3. Signer continuity, lockfile commitments, and the release-age policy that
+   applies.
+4. The selected artifact's digest and size, plus any checksum in the lockfile.
 
-验证会对签名者和下载的字节进行认证。manifest 中的 provenance 链接是独立的证据：mise 会记录其存在以进行连续性检查，但不会获取和验证所链接的构建 provenance。
+The verified manifest is kept as `.mise-packslip.json` in the install directory.
+It supplies executable paths and the metadata for
+[man pages, completions, and skills](/dev-tools/packslip-resources.html).
+
+Verification authenticates the signer and the downloaded bytes. A provenance
+link in the manifest is separate evidence: mise records whether one is present
+for continuity checks, but it does not fetch or verify the linked build
+provenance.
+
+<a id="signer-continuity"></a>
 
 ## 签名者连续性
 
 mise 会在两个位置保留信任：
 
-| 状态                                                                                  | 记录内容                                                                                                                                 |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| [状态目录](/directories.html#local-state-mise)下的 `packslip/pins.toml` | 以前接受的签名者、签名方案、供应商与重新打包者状态、provenance 链接是否存在，以及版本列表连续性。            |
-| `mise.lock`                                                                           | 项目的签名者和证明者承诺，以及每个平台的 artifact URL 和校验和，包括在另一台机器上首次安装时的情况。 |
+mise keeps trust decisions in two places:
 
-对于无密钥签名者，连续性比较不包含标签或分支引用的工作流路径。同一工作流的新版本标签仍属于同一签名者。新的工作流路径或密钥需要显式信任决策。签名方案变更、从供应商变为重新打包者，或 provenance 链接丢失，也可能被拒绝。
+| State                                                                             | What it records                                                                                                                                                  |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packslip/pins.toml` in the [state directory](/directories.html#local-state-mise) | Signers accepted before, signing scheme, vendor or repackager status, whether provenance links were present, forge repository IDs, and release-list state.       |
+| `mise.lock`                                                                       | The project's signer, attestor, and forge-ID commitment beside each platform's artifact URL and checksum, which also applies on another machine's first install. |
 
-删除 `pins.toml` 会重置每个已记录项目的本地连续性。这不是安装失败时的常规补救措施，也不会从项目锁定文件中移除签名者承诺。
+For a keyless signer, continuity compares the workflow path without its tag or
+branch ref, so a new release tag of the same workflow is the same signer. A new
+workflow path or key needs an explicit trust decision. A
+[`workflow`](/dev-tools/backends/packslip.html#workflow) list is one: a release
+may move between the workflows it names. A change of signing
+scheme, a change from vendor to repackager, or provenance links that disappear
+can also be refused.
 
-请参阅[签名者变更](/dev-tools/backends/packslip.html#pinned-signers)，了解检查和重置命令，包括显式选项和锁定文件承诺如何影响轮换。
+Deleting `pins.toml` resets local continuity for every recorded project. It is
+not a routine fix for an installation failure, and it does not remove signer
+commitments from a project's lockfile. To accept a rotation for one project,
+follow [signer changes](/dev-tools/backends/packslip.html#pinned-signers).
+
+<a id="renamed-transferred-and-re-created-repositories"></a>
 
 ### 重命名、转移和重新创建的仓库
 
 GitHub 或 GitLab 项目的名称用于定位仓库，但 forge 的仓库 ID 才能标识它。GitHub Actions 和 GitLab CI 的签名证书会记录仓库 ID，
 仓库重命名或转移给其他所有者时该 ID 不会改变。mise 会将它与签名者一起固定，并比较每个发布版本的 ID：
 
-| 名称发生的变化                         | 结果                                                                                                      |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 重命名，或在同一所有者下移动            | 安装。mise 会警告一次项目有新名称，固定会跟随到该名称。                                                    |
-| 转移给其他所有者                       | 安装。mise 会警告一次项目有新名称，固定会跟随到该名称。                                                    |
-| 任何人删除后以同名重新创建             | 原仓库已固定时拒绝，即使名称和工作流路径相同，因为新仓库具有不同的 ID。                                    |
+A GitHub or GitLab project's name locates it, but the forge's repository ID
+identifies it. GitHub Actions and GitLab CI signing certificates record that ID,
+and it does not change when a repository is renamed or transferred to another
+owner. mise pins the ID with the signer and compares each release's ID with the
+pin:
 
-所有者不属于身份的一部分：只有仓库的当前所有者才能转移它，并且该所有者已经为其发布版本签名。旧版 mise 写入的固定和锁定文件条目仍可读取，所有者 ID 会被忽略。
+| What happened to the name                          | Result                                                                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Renamed, or transferred to another owner           | Installs. mise warns once that the project has a new name, and the pin follows it to that name.                           |
+| Deleted and re-created, by anyone, under that name | Refused once the original is pinned, even though the name and workflow path match: the new repository has a different ID. |
+
+The owner is not part of the identity: only a repository's current owner can
+transfer it, and that owner already signs its releases.
 
 Signer continuity then compares the workflow's path inside the repository, so
 `github.com/old/tool/.github/workflows/release.yml` continues as
 `github.com/new/tool/.github/workflows/release.yml`. Releases published before a
-rename are signed under the old name and still install when the config names the
-new one.
+rename are signed under the old name and still install when the configuration
+names the new one.
 
-The pin is found by the repository ID in the release's certificate, whichever
-name changed first. A config switched to the new name before any release signed
-under it was accepted, or a pins file from a machine that never saw the rename,
-still holds the release to the pin recorded under the old name: its signer,
-provenance, and attestor, as if the name had not changed. Once the release
-is accepted, the pin and its release-list state move to the new name, so a
-repository keeps one pin. A refusal names the pin as it is recorded, which is the
-name to give `mise packslip forget`.
+mise finds the pin by the repository ID in the release's certificate, not by
+name. So if your configuration already uses the new name, or this machine never
+saw the rename, the old name's pin still applies: the release must match its
+signer, provenance, and attestor. After mise accepts the release, it moves the
+pin and its release-list state to the new name, so each repository keeps one
+pin. Errors name the pin as it is recorded; pass that name to
+`mise packslip forget`.
 
-With no pin for the project yet, and a release signed under another name, mise
-asks the forge what the requested name resolves to. GitHub's
-`GET /repos/{owner}/{repo}` answers a renamed repository's old name with its new
-name and unchanged ID. If the forge cannot be asked, for example offline or when
-rate-limited, mise compares names only, as before, and refuses the release.
+With no pin yet and a release signed under another name, mise asks the forge
+which repository the requested name now belongs to. If it cannot ask, for
+example offline or when rate-limited, it compares names only and refuses the
+release.
 
 This is still trust on first use. The first install on a machine with no pin and
-no lockfile entry accepts whichever repository the name belongs to at that
-moment, so a name taken over before that install is not detected. Commit
-`mise.lock` so every machine starts from the IDs the project accepted.
-Pins and lockfile entries written before mise recorded the IDs keep working and
-gain them from the next successful install.
+no lockfile entry accepts whichever repository owns the name at that moment, so
+a name taken over before that install is not detected. Commit `mise.lock` so
+every machine starts from the IDs the project accepted.
+
+## Release-list continuity {#release-list-continuity-and-minimum-age}
+
+mise rejects an expired signed list, and a list whose sequence is below the
+highest it has accepted for the project. Once it has accepted a supplementary
+GitHub list, that list disappearing is an error, so a missing list cannot
+silently undo a withdrawal. The list state is stored with the
+[signer pin](#signer-continuity), and for a GitHub or GitLab project it follows
+the repository ID through a
+[rename](#renamed-transferred-and-re-created-repositories) the way the pin does:
+a list accepted under the old name still sets the lowest sequence, and still may
+not disappear, under the new one.
+
+## Minimum release age
+
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age)
+applies to packslip tools as to other backends; see
+[Minimum release age](/security.html#minimum-release-age) for the setting
+itself. Discovery timestamps filter candidates first. Before downloading an
+artifact, mise checks the verified transparency-log timestamp against the
+cutoff; only an explicitly allowed unlogged bundle uses the signed publication
+timestamp instead.
+
+The cutoff decides which release a version request may pick, so it does not
+apply to a release that is already chosen. An exact pin such as
+`"packslip:github.com/jdx/hk" = "2.0.1"` and a version recorded in `mise.lock`
+both install and lock while the release is still within the cutoff. Requests
+such as `latest` or `2` wait until a release is old enough.
 
 ## Stamps
 
-stamper 是一种注册表、镜像或审核服务，用于发布其批准的版本签名列表。默认不要求 stamp。若要强制要求，请配置所信任的主机，以及允许为每个主机的列表签名的密钥或身份：
+A stamper is a registry, mirror, or review service that publishes a signed list
+of the releases it approves. No stamps are required by default. To require them,
+set [`packslip.stampers`](/configuration/settings.html#packslip.stampers) to the
+hosts you trust and the key or identity allowed to sign each host's lists:
 
 ```toml
 [settings.packslip]
@@ -146,51 +231,64 @@ stampers = [
 ]
 ```
 
-每个条目都是 `host=PIN`。pin 可以是 minisign 格式的公钥行、公钥文件路径或 GitHub 身份前缀。请将示例主机和密钥路径替换为你信任的服务和 pin。
+Each entry is `host=PIN`. The pin can be a minisign-format public-key line, the
+path of a public-key file, or a GitHub identity prefix. Replace the example
+hosts and key path with a service and pin you trust.
 
 主机会在
 `https://<host>/.well-known/packslip/<project>.json` 发布每个项目的一个列表。配置 stamper 后：
 
-- 一个版本需要至少获得一个受信任主机的非 yanked 批准，才能被列出或安装。一个主机的撤回不会否决另一个主机的批准。
-- 供应商撤回仍会排除该版本，与 stamp 无关。
-- mise 会检查带 stamp 的 bundle 摘要和供应商列表摘要（如果存在），然后验证供应商签名。stamp 永远不会取代该签名。
-- 没有摘要的 stamp 会被拒绝：批准必须标识 bundle 的内容，而不仅仅是其 URL。
-- 过期、回滚、无效，或以前接受但现在缺失的 stamper 列表会导致错误。
+- A version needs a non-yanked approval from at least one trusted host to be
+  listed or installed. One host's withdrawal does not veto another's approval.
+- A vendor withdrawal still excludes the release, regardless of stamps.
+- mise checks the stamped bundle digest and the vendor-list digest, when
+  present, then verifies the vendor signature. A stamp never replaces that
+  signature.
+- A stamp without a digest is refused: the approval must identify the bundle's
+  contents, not just its URL.
+- Expired, rolled-back, or invalid stamper lists, and lists accepted before that
+  are now missing, cause errors.
 
-若要在保留供应商验证的同时豁免某个工具，请设置其
-[`trust = "vendor"`](/dev-tools/backends/packslip.html#trust) 工具选项。
+To exempt one tool while keeping vendor verification, set its
+[`trust = "vendor"`](/dev-tools/backends/packslip.html#trust) tool option.
 
 ### 镜像
 
-stamper 可以镜像完全相同的供应商签名 bundle。mise 会从 stamp 的 URL 获取它，并检查供应商的列表以确认撤回状态和任何记录的摘要。删除 GitHub release asset 不会阻止已批准的版本镜像，只要供应商没有撤回该版本。此处不支持需要单独身份策略的重新签名重新打包者 bundle。
+A stamper can mirror the exact vendor-signed bundle. mise fetches a stamped
+release from the stamp's URL and checks the vendor's list for withdrawals and
+any recorded digest; resolution and installation use the same source and
+policy. Deleting a GitHub release asset does not block an approved mirror of a
+release the vendor has not withdrawn. Re-signed repackager bundles, which would
+need a separate identity policy, are not supported.
 
-## 解读策略失败
-
-| 失败情况                                         | 下一步                                                                                               |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| 签名者或签名方案发生变化                         | 将旧 pin 和锁定文件承诺与发布者公布的轮换信息进行比较                                      |
-| 签名列表已过期、回滚或消失                       | 检查发布者或 stamper 的当前列表；移除本地状态会丢弃连续性检查 |
-| 版本已撤回或缺少所需 stamp                       | 选择符合已配置策略的版本                                                                     |
-| Bundle 或 artifact 摘要不匹配                    | 检查版本来源或镜像；不要仅仅为了清除错误而接受新的字节                  |
-| 没有匹配的 artifact 或无法解决的平局             | 检查平台和变体，或要求发布者区分其构建版本                         |
-| 主机要求失败                                     | 安装所需条件或使用受支持的主机；绕过检查并不能提供该条件                |
-
-这些错误对应不同阶段。更改 artifact 选项无法修复无效签名，忘记签名者 pin 也无法修复摘要不匹配。
+<a id="artifact-selection"></a>
 
 ## Artifact 选择
 
-mise 使用签名元数据选择一个 artifact：
+mise uses the signed metadata to select one artifact:
 
-1. 匹配操作系统、架构和 libc。缺失字段只会使相应维度不受限制：通用 macOS 构建版本仍然要求 macOS。
-2. 存在 `variant` 时，只考虑该变体。没有 `variant` 时，只考虑没有变体的 artifact。
-3. 保留 mise 可以安装的格式，优先选择最具体的平台匹配，然后按照其归档／压缩格式偏好选择，而不是选择裸可执行文件。
-4. 拒绝无法解决的平局，而不是在构建版本之间猜测。
+1. Match OS, architecture, and libc. An absent field leaves only that dimension
+   unrestricted: a universal macOS build still requires macOS.
+2. With a `variant`, consider only that variant. Without one, consider only
+   artifacts that have no variant.
+3. Drop formats mise cannot install. Prefer the most specific platform match;
+   between equally specific builds, prefer an archive over a bare executable.
+4. Refuse an unresolved tie instead of guessing between builds.
 
-不会选择 `deb`、`dmg` 和 `msi` 等安装器格式。当没有 GNU artifact，或所选 GNU artifact 声明的 `glibc_min` 高于主机检测到的版本时，glibc 主机可以使用匹配的静态 musl artifact。mise 会在调试日志中报告该回退。发布者必须使用变体区分替代构建版本。客户端选项无法解决两个描述完全相同的 artifact。
+Installer formats such as `deb`, `dmg`, and `msi` are never selected. A glibc
+host can use a matching static musl artifact when there is no GNU artifact, or
+when the selected GNU artifact declares a `glibc_min` above the host's detected
+version; mise reports that fallback in the debug log. Publishers distinguish
+alternative builds with variants, and no client option can choose between two
+identically described artifacts.
+
+<a id="host-requirements"></a>
 
 ## 主机要求
 
-选择 artifact 后，mise 会在下载之前检查其声明的要求。要求不会打破选择平局。确认 `glibc_min` 不兼容时，可以按照上文所述选择匹配的静态 musl 构建版本；其他要求不会选择另一个构建版本。
+After selecting an artifact, mise checks its declared requirements before
+downloading it. Requirements do not break a selection tie, and apart from the
+musl fallback above they never select another build.
 
 | 要求结果                                                                                   | mise 行为                       |
 | -------------------------------------------------------------------------------------------- | ------------------------------- |
@@ -199,8 +297,42 @@ mise 使用签名元数据选择一个 artifact：
 | 所需命令缺失或版本过旧                                                                      | 发出警告并继续。                 |
 | 无法完成某项检查                                                                            | 发出警告，而不是假设主机不兼容。 |
 
-命令检查优先使用活跃的 mise 工具，而不是环境中的 PATH。mise 会检查操作系统可以执行的路径：在 Windows 上，`git.exe` 或 `node.cmd` 计入，但只有 shebang 的脚本不计入。
+Command checks prefer active mise tools over the ambient `PATH`. mise looks for
+a path the OS can execute: on Windows, `git.exe` or `node.cmd` counts, but a
+shebang-only script does not.
 
-库检测取决于平台。例如，macOS 缺失的库文件可能仍存在于 dyld 共享缓存中，因此 mise 会将该缺失报告为未知。在 Linux 上，操作系统版本是 `uname -r` 返回的内核版本，读取到发行版后缀之前：`6.8.0-31-generic` 会按 `6.8.0` 进行比较。
+Library detection depends on the platform. For example, a macOS library that is
+absent from disk can still exist in the dyld shared cache, so mise reports that
+absence as unknown. On Linux, the OS version is the kernel release from
+`uname -r`, read up to the distribution's suffix: `6.8.0-31-generic` is compared
+as `6.8.0`.
 
-[`ignore_requirements`](/dev-tools/backends/packslip.html#ignore-requirements) 工具选项允许在确认失败的情况下继续安装。它还会绕过 glibc 到 musl 的回退，并保留所选的 GNU artifact。它不会提供缺失的库，也不会让不兼容的可执行文件运行。
+The [`ignore_requirements`](/dev-tools/backends/packslip.html#ignore-requirements)
+tool option installs despite confirmed failures and keeps the GNU build instead
+of falling back to musl.
+
+## How mise verifies its own updates {#self-update}
+
+[`mise self-update`](/cli/self-update.html) and automatic updates check mise's
+own releases with packslip before replacing the running binary. Every release
+from 2026.9.3 on must carry a `packslip.sigstore.json` bundle. If it is missing
+or fails any check below, the update stops and the installed mise stays as it
+is. mise checks that:
+
+- The bundle's Sigstore signature and transparency-log entry are valid.
+- The certificate names mise's GitHub repository by its built-in repository ID,
+  so renaming the repository or moving it to another organization does not change
+  what is trusted.
+- The bundle was signed by the repository's `.github/workflows/release.yml`
+  workflow, is the vendor's own, and is for the version being installed.
+- The downloaded archive matches the signed digest.
+- The transparency-log timestamp is older than
+  [`self_update.minimum_release_age`](/configuration/settings.html#self_update.minimum_release_age).
+  Naming a version, as in `mise self-update 2026.10.4`, skips this check.
+
+The archive's embedded signature is checked too, for every release; it is the
+only check for releases before 2026.9.3. A mirror configured with
+[`self_update.repository`](/configuration/settings.html#self_update.repository)
+must serve the original manifest and archive bytes, so it supplies files but
+cannot change what is trusted. To install mise itself with the `packslip` CLI,
+see [Installing mise](/installing-mise.html#packslip).

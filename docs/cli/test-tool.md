@@ -10,33 +10,56 @@ description: "测试工具是否能够安装并运行"
 
 测试工具是否能够安装并运行
 
-通过禁用全局最小发布版本年龄限制，使此命令包含最近发布的版本
+Installs each tool and runs the `test` command from its registry entry
+(registry/&lt;tool>.toml), checking the output. Use it when adding or changing
+a registry entry. The minimum release age is ignored so that new releases
+can be tested right away.
 
-## 参数
-- **`[TOOLS]…`** — 要测试的工具
+Warning: before testing, this deletes every installed version of each tested
+tool, along with its cache and downloads directories, so the test installs
+from scratch. To keep your installs and caches, run it with throwaway
+MISE_DATA_DIR and MISE_CACHE_DIR directories.
 
-## 选项
-- **`-a --all`** — 测试 registry/ 中指定的每个工具
-- **`-j --jobs <JOBS>`** — 并行运行的工具测试数量
-  小于 1 的值将按 1 处理
-  [默认值：4]
+Registry tools with no `test` entry, or that registry/ marks as unsupported
+on this OS, are skipped without output, and the command still exits 0. Pass
+--include-non-defined to run `<tool> --version` for tools with no `test`
+entry.
 
-  **环境变量：** `MISE_TEST_TOOL_JOBS`
-- **`--all-config`** — 测试配置文件中指定的所有工具
-- **`--include-non-defined`** — 同时测试 registry/ 中未定义的工具，并猜测如何测试它们
-- **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含 `--jobs=1`
-- **`-h --help`** — 打印帮助
+## Arguments
+- **`[TOOLS]…`** — Tools to test
+
+## Flags
+- **`-a --all`** — Test every registry tool that defines a `test` and supports this OS
+- **`-j --jobs <JOBS>`** — Number of tools to test in parallel (default 4)
+
+  **Environment Variable:** `MISE_TEST_TOOL_JOBS`
+- **`--all-config`** — Test all tools specified in config files
+- **`--include-non-defined`** — Also test registry tools that have no `test` entry by running `<tool> --version`
+
+  These always report a failure that shows the output, for use when writing a test.
+- **`--raw`** — Connect the install commands' stdin, stdout, and stderr to the terminal
+
+  Implies `--jobs=1`.
+- **`-h --help`** — Print help
 
 ## 示例
 
+Reinstall ripgrep and run its registry test
+
 ```
 mise test-tool ripgrep
+```
+
+Test every tool in the config without touching your installs
+
+```
+MISE_DATA_DIR=$(mktemp -d) MISE_CACHE_DIR=$(mktemp -d) mise test-tool --all-config
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [贡献和 registry 测试](/contributing.html#tool-testing)
-- [所有命令](/cli/)
-- [全局标志和参数语法](/cli/#global-flags)
+- [Testing registry tools](/contributing/registry.html#tool-testing).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

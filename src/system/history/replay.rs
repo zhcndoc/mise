@@ -206,17 +206,37 @@ pub async fn rollback(req: RollbackRequest) -> Result<()> {
         info!("history: nothing to roll back");
         return Ok(());
     }
-    let label = targets
-        .iter()
-        .map(|target| format!("checkpoint {}", target.entry.id))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let paths_label = targets
-        .iter()
-        .flat_map(|target| target.paths.iter().map(display_path))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let message = format!("rolled back {paths_label} to {label}");
+    // Without `--to`, the checkpoint picked is the newest one holding a
+    // different version, which is often an unrelated save that only carried
+    // that version along. The message names the checkpoint that saved it,
+    // the one `mise dot history --path` lists; what is restored is the same.
+    let mut versions: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    for target in &targets {
+        for path in &target.paths {
+            // spelled the way checkpoints record their changes (the portable
+            // root, not this machine's HOME), as `history --path` matches them
+            let portable = tree_path_to_display(&repository_path(repo, &live, path)?);
+            let id = match req.to {
+                Some(_) => target.entry.id,
+                None => saved_in(
+                    entries
+                        .iter()
+                        .map(|entry| (entry.id, &entry.checkpoint.changes)),
+                    target.entry.id,
+                    &portable,
+                ),
+            };
+            versions.entry(id).or_default().push(portable);
+        }
+    }
+    let message = format!(
+        "rolled back {}",
+        versions
+            .iter()
+            .map(|(id, paths)| format!("{} to checkpoint {id}", paths.join(", ")))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
     let command = format!(
         "bootstrap dotfiles rollback {}",
         shell_words::join(req.paths.iter().map(display_path))
@@ -484,11 +504,24 @@ async fn execute(
             },
         ),
     };
-    scope.finish(error, Some(summary));
+    let outcome = scope.outcome_id();
+    let before = scope.before().map(|(id, _)| id);
+    let recorded = scope.finish_recorded(error, Some(summary));
     let touched = result?;
     run_reload(&reload, &touched);
     config_hint(&touched);
-    info!("history: {}", exec.message);
+    // an operation takes two checkpoints, and only the ones that change a
+    // path show up under `mise dot history --path`; naming both accounts
+    // for the numbers a listing skips. An outcome that failed to record
+    // has no checkpoint to name.
+    let recorded = match (outcome.filter(|_| recorded), before) {
+        (Some(outcome), Some(before)) => format!(
+            "; recorded as checkpoint {outcome}, with checkpoint {before} holding the state before it"
+        ),
+        (Some(outcome), None) => format!("; recorded as checkpoint {outcome}"),
+        _ => String::new(),
+    };
+    info!("history: {}{recorded}", exec.message);
     Ok(())
 }
 
@@ -1624,6 +1657,118 @@ pub fn live_tree(repo: &HistoryRepo, tracked: &TrackedSet) -> Result<String> {
     Ok(captured.tree)
 }
 
+/// The tracked paths whose working-tree contents differ from `snapshot`,
+/// spelled the way checkpoints record their changes. `None` when the answer
+/// would be a guess: a file could not be read (a partial capture reports it
+/// as removed), or an encrypted file's contents could not be compared.
+/// Like `mise dot history diff`, this reads and hashes every tracked file.
+pub fn unsaved_paths(
+    repo: &HistoryRepo,
+    tracked: &TrackedSet,
+    walk: &super::tracked::Walk,
+    snapshot: &str,
+) -> Result<Option<Vec<String>>> {
+    // the walk leaves out a file it cannot read, and every file past the
+    // point where a scan stopped (`incomplete`); the guard's intentional
+    // omissions are not read failures
+    if !walk.incomplete.is_empty()
+        || walk
+            .omitted
+            .iter()
+            .any(|omitted| omitted.reason.starts_with("unreadable"))
+    {
+        return Ok(None);
+    }
+    let recipients = if walk.files.values().any(|(_, policy)| policy.encrypt) {
+        tracked.manifest.recipients.clone()
+    } else {
+        vec![]
+    };
+    // never prompts: a status report does not ask for a passphrase
+    let captured = repo.capture_live(walk, &recipients, false)?;
+    if !captured.omitted.is_empty() {
+        return Ok(None);
+    }
+    let live = without_local(repo, &captured.tree, &tracked.local)?;
+    let saved = without_local(repo, snapshot, &tracked.local)?;
+    let mut encrypted = super::sync::files::encrypted_paths(repo, Some(&saved))?;
+    encrypted.extend(super::sync::files::encrypted_paths(repo, Some(&live))?);
+    // a save carries a path the walk omitted (too large, a special file)
+    // rather than record it as removed, when the tracking rules still retain
+    // it (`retain_omitted`)
+    let carried: Vec<PathBuf> = tracked
+        .coverage(walk)
+        .omitted
+        .iter()
+        .map(|omitted| crate::file::replace_path(&omitted.path))
+        .collect();
+    // a stream another machine saved while it was not selected here is not
+    // an edit a save records (see `super::held`)
+    let unheld: Vec<String> = super::held::unheld_entries(repo, snapshot, walk)?
+        .into_iter()
+        .map(|(stream, _)| stream)
+        .collect();
+    let roots = super::sync::layout::Roots::current();
+    let mut unsaved = vec![];
+    for change in repo.changes(Some(&saved), &live)? {
+        if change.path.starts_with(".mise-history/")
+            || unheld.iter().any(|stream| {
+                change.path == *stream || change.path.starts_with(&format!("{stream}/"))
+            })
+        {
+            continue;
+        }
+        if change.status == 'D'
+            && let Some(path) = roots.locate(&change.path).path()
+            && carried.iter().any(|omitted| path.starts_with(omitted))
+            && tracked.would_retain(path)?
+        {
+            continue;
+        }
+        // encrypting unchanged contents again (the encryption cache is only
+        // a cache) gives a new ciphertext, so two envelopes are compared by
+        // what they decrypt to. One envelope and one plain file is a change of
+        // `encrypt` the next save records, whatever the contents.
+        if change.status == 'M' && encrypted.contains(&change.path) {
+            let envelope = |tree: &str| -> Result<Option<(String, String)>> {
+                Ok(repo.object_at(tree, &change.path)?.filter(|object| {
+                    repo.blob_starts_with(&object.1, b"mise-encrypted-file-v1\n")
+                        .unwrap_or(false)
+                }))
+            };
+            if let (Some(saved), Some(live)) = (envelope(&saved)?, envelope(&live)?) {
+                let decrypt =
+                    |object| super::sync::files::decrypt(repo, &change.path, &object, false).ok();
+                match (decrypt(saved), decrypt(live)) {
+                    (Some(saved), Some(live)) if saved == live => continue,
+                    (Some(_), Some(_)) => {}
+                    _ => return Ok(None),
+                }
+            }
+        }
+        unsaved.push(tree_path_to_display(&change.path));
+    }
+    Ok(Some(unsaved))
+}
+
+/// The checkpoint that saved the version of `path` that checkpoint `id`
+/// holds: the newest one at or before it that changed the path, or `id`
+/// itself when none did. A truncated change list cannot say whether it
+/// changed the path, so reaching one also answers `id`, which does hold
+/// the version.
+fn saved_in<'a>(
+    changes: impl DoubleEndedIterator<Item = (u64, &'a super::store::Changes)>,
+    id: u64,
+    path: &str,
+) -> u64 {
+    changes
+        .rev()
+        .filter(|(entry, _)| *entry <= id)
+        .find(|(_, changes)| changes.truncated || changes.touches(path))
+        .filter(|(_, changes)| changes.touches(path))
+        .map_or(id, |(entry, _)| entry)
+}
+
 /// The newest checkpoint whose captured content for `path` differs from the
 /// working tree, if any.
 fn newest_differing(
@@ -2021,6 +2166,34 @@ fn config_hint(touched: &[PathBuf]) {
 #[cfg(test)]
 mod reload_tests {
     use super::*;
+
+    /// A rollback names the checkpoint that changed the path, and falls back
+    /// to the one it restores from when a truncated change list in between
+    /// leaves that unknown.
+    #[test]
+    fn saved_in_names_the_checkpoint_that_changed_the_path() {
+        use super::super::store::Changes;
+        let touching = Changes {
+            modified: vec!["~/.zshrc".into()],
+            ..Default::default()
+        };
+        let other = Changes {
+            modified: vec!["~/.other".into()],
+            ..Default::default()
+        };
+        let truncated = Changes {
+            modified: vec!["~/.other".into()],
+            truncated: true,
+            ..Default::default()
+        };
+        let versions = [(1, &touching), (2, &other), (3, &other), (4, &touching)];
+        assert_eq!(saved_in(versions.into_iter(), 3, "~/.zshrc"), 1);
+        assert_eq!(saved_in(versions.into_iter(), 4, "~/.zshrc"), 4);
+        // nothing at or before it changed the path
+        assert_eq!(saved_in(versions.into_iter(), 3, "~/.none"), 3);
+        let versions = [(1, &touching), (2, &truncated), (3, &other)];
+        assert_eq!(saved_in(versions.into_iter(), 3, "~/.zshrc"), 3);
+    }
 
     #[test]
     fn excluded_empty_directories_require_removal_approval() -> Result<()> {

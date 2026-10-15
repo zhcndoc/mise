@@ -4,9 +4,12 @@ description: "声明具有可操作失败信息的项目检查，并使用 mise 
 
 # 项目诊断
 
-`mise doctor project` 会运行项目配置中的命名检查并报告每项结果。使用它来检查仅凭工具版本无法确定的要求，例如编译器是否能发现原生库，或数据库是否接受连接。
+`mise doctor project` runs the checks a project declares in `[doctor.checks]`
+and reports every result. Use it for requirements that tool versions alone do
+not cover, such as whether a compiler can find a native library or whether a
+database accepts connections.
 
-```toml
+```mise-toml [mise.toml]
 [doctor.checks.openssl]
 description = "OpenSSL development files are discoverable"
 run = "pkg-config --exists openssl"
@@ -17,61 +20,135 @@ os = ["linux", "macos"]
 [doctor.checks.database]
 description = "PostgreSQL accepts connections"
 run = "pg_isready --quiet"
-hint = "Start the project's services with pitchfork."
+hint = "Start PostgreSQL, for example with `mise daemons start postgres`."
 timeout = "5s"
+
+[doctor.checks.signtool]
+description = "The Windows SDK signing tool is installed"
+run = "where signtool"
+os = "windows"
 ```
+
+On Linux, with PostgreSQL running and the OpenSSL headers missing:
 
 ```sh
 mise doctor project
-mise doctor project --json
 ```
-
-示例输出：
 
 ```text
 PASS database: PostgreSQL accepts connections
 FAIL openssl: OpenSSL development files are discoverable
   Command exited with exit status: 1
   Run `mise bootstrap packages apply` to install the declared build dependencies.
+SKIP signtool: The Windows SDK signing tool is installed
+  Check does not apply to this operating system
 ```
 
-普通的 `mise doctor` 会继续诊断 mise 本身；它不会运行这些检查。进入目录或运行任务时不会自动运行检查。不存在隐式项目检查：声明你需要的要求。
+Results are listed by check name. One failing check does not stop the others.
+Checks never run on their own: not when you `cd` into the project and not
+before tasks. Plain [`mise doctor`](/cli/doctor.html) checks mise's own
+installation and does not run them.
 
-## 检查配置
+## Check fields
 
-每个 `[doctor.checks.<name>]` 表支持：
+Each `[doctor.checks.<name>]` table accepts:
 
-| 字段          | 含义                                                                                                                                               |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`         | 必需的 shell 命令；退出状态为零表示通过。                                                                                                          |
-| `description` | 面向用户的要求描述。文本输出中默认为检查名称。                                                                                                     |
-| `hint`        | 失败或执行错误后显示的指导信息。永远不会执行。                                                                                                     |
-| `timeout`     | 正时长，例如 `500ms` 或 `5s`；默认为 `10s`。                                                                                                      |
-| `dir`         | 工作目录。相对路径从声明配置的根目录解析；`~/` 和绝对路径按给定值使用。默认为该根目录。                                                            |
-| `shell`       | 可执行文件及其参数，包括命令标志，例如 `"bash -c"` 或 `"pwsh -Command"`。默认为 mise 的内联任务 shell。                                           |
-| `os`          | OS 或 OS/架构选择器，或非空列表，例如 `"linux/arm64"` 或 `["linux", "darwin"]`。省略则在所有平台运行。                                          |
+| Field         | Meaning                                                                                                                                                                                                                                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run`         | Required. Shell command; exit status 0 passes.                                                                                                                                                                                                                                                                     |
+| `description` | The requirement in words. Text output shows the check name when it is missing.                                                                                                                                                                                                                                     |
+| `hint`        | What to do after a failure or error. mise prints it and never runs it.                                                                                                                                                                                                                                             |
+| `timeout`     | A duration such as `500ms` or `5s`. Defaults to `10s`.                                                                                                                                                                                                                                                             |
+| `dir`         | Working directory. Defaults to the [config root](/configuration.html#config-root) of the declaring file, and relative paths resolve from it; `~/` and absolute paths are used as given. In global or system config, the directory mise runs in takes the place of the config root.                                 |
+| `shell`       | Program and arguments, including the command flag, such as `"bash -c"` or `"pwsh -Command"`. Defaults to [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args). |
+| `os`          | An OS or OS/architecture selector, or a list of them, such as `"linux/arm64"` or `["linux", "macos"]`. Omit it to run everywhere.                                                                                                                                                                                  |
 
-检查使用活动配置层级，包括特定环境的配置。更高优先级的定义会替换同名检查的全部内容，包括其提示信息和工作目录。检查会并发运行，并受 `jobs` 设置（`MISE_JOBS`）限制，因此运行缓慢的探测可以共享等待时间。结果仍按名称排序，检查失败不会停止其他检查。设置 `jobs = 1` 可按顺序执行。
+`os` accepts the same aliases as tool filters, such as `darwin`, `win`, and
+`amd64`; an empty list is rejected. `dir` can point outside the project, such as
+a sibling checkout, and is not rendered as a template. A `shell` override follows
+task quoting rules and honors
+[`windows_powershell_no_profile`](/configuration/settings.html#windows_powershell_no_profile).
 
-命令会接收项目环境和已安装工具的路径，包括环境移除配置。诊断不会安装工具，也不会运行任务依赖项或任务钩子。环境指令仍会正常求值，因此应将检查编写为检查命令，并使用正常的 mise 配置信任机制。在安全模式下，适用于当前平台的项目检查会报告错误。空的或全部被平台排除的检查列表仍会成功。检查不会在沙箱中运行。
+Checks follow the [config hierarchy](/configuration.html#configuration-hierarchy),
+including [config environments](/configuration/environments.html). A check with
+the same name in a higher-precedence file replaces the whole check, including
+its hint and `dir`.
 
-每个命令都有截止时间，以及合计 64 KiB 的标准输出／标准错误限制。超时和输出限制失败会终止所拥有的进程树。命令输出会被捕获并丢弃，而不是包含在报告中，因此探测命令不会意外地将凭据打印到报告中。使用 `description` 和 `hint` 解释要求及解决方法；直接运行命令以获取详细输出。
+Checks run in parallel, up to [`jobs`](/configuration/settings.html#jobs) at a
+time. Set `jobs = 1` to run them one at a time.
 
-`dir` 中允许使用绝对路径、以 `~/` 开头的路径以及 `..` 组件，这与任务工作目录相同；不会渲染模板。配置根目录用于确定相对路径；它不是文件系统边界。检查可以有意检查同级检出目录或共享的本地服务目录。全局或系统配置中声明的检查使用调用目录作为其根目录，与任务相同；直接位于主目录中的 `mise.toml` 属于项目配置，并以主目录作为根目录。Shell 覆盖使用任务的引号约定，并遵循 `windows_powershell_no_profile`。OS 选择器接受与工具过滤器相同的别名（`darwin`、`win`、`amd64` 以及其他别名）；`os = []` 会被拒绝。未知的 `[doctor]` 容器选项会被忽略，以实现前向兼容性（JSON schema 也允许这些选项），而未知的检查字段会被拒绝，以便发现拼写错误。
+## What a check sees
 
-在 Unix 上，Ctrl-C、SIGTERM 和 SIGHUP 会取消正在运行的检查，并关闭其所拥有的进程组，包括 doctor 在 mise 任务中运行时的情况。父进程忽略的信号（例如在 `nohup` 下的 SIGHUP）仍会保持忽略状态。与任何需要监督程序运行才能完成的清理一样，SIGKILL 会阻止清理；请先使用 SIGTERM 停止 doctor，再升级为 SIGKILL。
+A check runs with the project's environment and tool `PATH`, as
+[`mise exec`](/cli/exec.html) would set them. `mise doctor project` does not
+install missing tools, and it does not run task dependencies or hooks. Checks
+are not sandboxed and `[env]` directives run as usual, so write checks that only
+inspect state. In [safe mode](/security.html#safe-mode), checks that apply to
+the current platform report `error` instead of running.
 
-## 结果与自动化
+An unknown field inside a check is an error, which catches typos. An unknown
+key directly under `[doctor]` produces a warning.
 
-JSON 报告包含 `checks` 和 `errors` 数组。顶层的 `errors` 包含配置加载错误；在这种情况下，`checks` 为空。否则 `errors` 为空，并且每个声明的检查在 `checks` 中都有一个结果。每个条目包含 `name`、`description`、`source`（声明该检查的配置文件）、`status`、`message` 和 `hint`。不存在的可选字段值为 `null`。
+## Results
 
-- `pass`：命令成功退出
-- `fail`：命令未成功退出
-- `error`：mise 无法执行或完成检查，包括超时、无效的检查选项或不可用的项目环境
-- `skipped`：检查的 `os` 选择排除了当前系统
+Each check ends with one of these statuses:
 
-Shell 可以将缺少命令报告为非零退出；这属于 `fail`，而无法启动 shell 本身属于 `error`。
+| Status    | Meaning                                                                                                                                                   |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pass`    | The command exited with status 0.                                                                                                                         |
+| `fail`    | The command exited with another status. A shell that reports a missing command this way also counts as `fail`.                                            |
+| `error`   | mise could not run or finish the check: a timeout, too much output, invalid options, a shell that failed to start, or an unavailable project environment. |
+| `skipped` | The check's `os` selection excludes this machine.                                                                                                         |
 
-如果任意检查失败或无法完成，命令会以状态 1 退出。空检查列表或只有被跳过的检查会成功退出。配置加载失败（包括阻止加载的必需环境值）会在顶层 `errors` 数组中报告。如果配置加载成功，但准备工具环境失败，则受影响的检查各自报告错误，而被平台排除的检查仍保持跳过状态。
+`mise doctor project` exits with status 1 when any check fails or errors. With
+no checks, or only skipped ones, it exits with status 0.
 
-这是对当前计算机的兼容性检查。通过并不能证明整个环境具有可复现性。请为环境中所覆盖的部分保留工具和应用程序锁定文件。
+`--json` prints the whole report. `errors` lists config loading errors; when it
+is not empty, `checks` is empty. Otherwise each declared check has an entry in
+`checks`, and optional fields are `null` when absent:
+
+```json
+{
+  "errors": [],
+  "checks": [
+    {
+      "name": "openssl",
+      "description": "OpenSSL development files are discoverable",
+      "source": "/home/user/src/app/mise.toml",
+      "status": "fail",
+      "message": "Command exited with exit status: 1",
+      "hint": "Run `mise bootstrap packages apply` to install the declared build dependencies."
+    }
+  ]
+}
+```
+
+When config loads but the tool environment cannot be prepared, each check that
+applies to the machine reports `error`, and checks excluded by `os` stay
+`skipped`.
+
+## Run checks in CI
+
+```yaml
+- run: mise install
+- run: mise doctor project
+```
+
+The step fails when any check fails or errors.
+
+## Limits
+
+mise stops a check when it reaches its `timeout` or writes more than 64 KiB of
+combined stdout and stderr, and ends the processes the check started. Command
+output is discarded, so a probe cannot leak a credential into the report. To see
+why a check failed, run its command yourself:
+
+```sh
+mise exec -- pkg-config --exists openssl
+```
+
+Interrupting `mise doctor project` stops every running check.
+
+A passing report says that this machine meets the declared requirements. It
+does not make the environment reproducible; keep tool and application
+lockfiles for that.

@@ -13,25 +13,33 @@ description: "在一个 mise TOML 文件中设置值"
 
 默认编辑优先级最高的已加载 TOML 文件，该文件可能是特定环境的覆盖文件。使用 `--file` 选择现有项目文件，或使用 `--global`/`--system` 编辑或创建这些配置文件
 
-此命令会编辑配置，但不会安装工具。使用 `mise use` 可同时安装并选择版本。已知设置使用其声明的类型；除非指定 `--type`，否则其他值将作为字符串或布尔值处理。当某个值（例如 `true`）应保持为字面文本时，请使用 `--type string`
+This edits configuration without installing tools. Use `mise use` to install and
+select a version together. For environment variables and settings, `mise set`
+and `mise settings set` are shorter, but they choose their file differently:
+`mise set` writes the nearest `mise.toml`, and `mise settings set` writes the
+global config unless you pass `--local`.
 
-## 参数
-- **`<KEY>`** — 要设置的点号分隔键路径，例如 `tools.python`
-- **`[VALUE]`** — 要设置的键值（如果以 KEY=VALUE 的形式提供，则可选）
+Known settings use their declared type; boolean settings accept `true`,
+`false`, `yes`, `no`, `1`, and `0`. For other keys, `true` and `false` become
+booleans and every other value is stored as a string. Use `--type bool` to
+store `yes`, `no`, `1` or `0` as a boolean, `--type string` to store `true`
+or `false` as text, and `--type integer` for a number.
 
-## 选项
-- **`-f --file <FILE>`** — 要编辑的 mise.toml 文件路径
+## Arguments
+- **`<KEY>`** — Dotted key path to set, such as `tools.python`
+- **`[VALUE]`** — The value to set the key to (optional if provided as KEY=VALUE)
 
-  可以是文件路径或目录。如果提供的是目录，则使用该目录中的配置文件。
+## Flags
+- **`-f --file <FILE>`** — Config file to edit, or a directory whose config file to edit
 
-  如果未提供，则使用优先级最高的已加载 TOML 文件
+  For a directory, mise edits the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest-precedence loaded TOML file.
 
-  **别名：** `--path`
-- **`-g --global`** — 编辑全局配置文件
-- **`--system`** — 编辑系统配置文件
-- **`--append`** — 添加值，但不重复已有条目
-- **`--remove`** — 从现有集合中移除值
-- **`-t --type <TYPE>`** — 要将值存储为的 TOML 类型；默认根据值推断
+  **Aliases:** `--path`
+- **`-g --global`** — Edit the global config file
+- **`--system`** — Edit the system config file
+- **`--append`** — Append the value to a list without duplicating an existing entry
+- **`--remove`** — Remove the value from an existing list
+- **`-t --type <TYPE>`** — TOML type to store the value as; inferred from the value by default
 
   **可选值：** `infer`、`string`、`integer`、`float`、`bool`、`list`、`set`
 
@@ -40,19 +48,46 @@ description: "在一个 mise TOML 文件中设置值"
 
 ## 示例
 
+Request python 3.13
+
 ```
-mise config set tools.python 3.12
-mise config set settings.always_keep_download true
-mise config set env.TEST_ENV_VAR ABC
-mise config set settings.disable_tools node,rust
-mise config set --append env._.path ~/.local/bin
-mise config set --remove env._.path ~/.local/bin
+mise config set tools.python 3.13
 ```
 
-`settings` 的类型会自动推断
+Set an environment variable
+
+```
+mise config set env.NODE_ENV production
+```
+
+Settings get their declared type, here an integer
 
 ```
 mise config set settings.jobs 4
+```
+
+List settings take comma-separated values
+
+```
+mise config set settings.disable_tools node,rust
+```
+
+Add a PATH entry unless it is already there
+
+```
+mise config set --append env._.path ~/.local/bin
+```
+
+Remove that PATH entry
+
+```
+mise config set --remove env._.path ~/.local/bin
+```
+
+Edit the global config
+
+```
+mise config set -g settings.experimental true
 ```
 
 <!-- generated reference navigation -->

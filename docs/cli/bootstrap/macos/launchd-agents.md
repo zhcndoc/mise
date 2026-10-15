@@ -12,7 +12,11 @@ description: "从 `[bootstrap.macos.launchd.agents]` 管理 macOS LaunchAgents"
 
 从 `[bootstrap.macos.launchd.agents]` 管理 macOS LaunchAgents。
 
-安装 plist 文件，并协调当前 GUI 登录域中的代理。从目标用户会话运行；仅 SSH 会话可能没有该域。
+Writes each agent to ~/Library/LaunchAgents/dev.mise.&lt;name>.plist and loads
+it into your GUI login session. Run it as the user who owns the agents; an
+SSH session without a GUI login may not be able to load them. For a user
+service that also works on Linux and Windows, use `[bootstrap.services]`
+with `scope = "user"`.
 
 ## 标志
 - **`-h --help`** — 显示帮助

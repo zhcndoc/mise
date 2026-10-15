@@ -11,44 +11,50 @@ description: "探索用于管理工具、环境、任务和机器设置的 mise 
 
 使用 `mise COMMAND --help` 查看随已安装版本提供的帮助。将 mise 标志放在任务名称之前；名称之后的参数会传递给该任务。方括号表示可选输入，尖括号表示必需输入，`…` 表示参数可以重复。不要输入这些表示法字符。
 
-## 参数
-- **`[TASK]`** — 要运行的任务
+## Arguments
+- **`[TASK]`** — Task to run
 
-  `mise tasks run <TASK>` 的简写形式
+  Shorthand for `mise run <TASK>`.
+
+<a id="global-flags"></a>
 
 ## 全局标志
 
 这些标志提供共享上下文。命令可以定义同名标志，因此请参阅该命令的页面以了解其位置和含义。效果标签描述命令预期执行的操作；配置评估、缓存和所需工具安装仍可能产生副作用。它们不保证提供沙箱隔离。
 
-- **`-C --cd <DIR>`** — 运行命令前切换目录
-- **`-E --env <ENV>`** — 设置用于加载 `mise.<ENV>.toml` 的环境
-- **`-j --jobs <JOBS>`** — 并行运行的任务数；小于 1 的值按 1 处理 [默认值：8]
+- **`-C --cd <DIR>`** — Run as if mise were started in DIR
+- **`-E --env <ENV>`** — Load the `mise.<ENV>.toml` config files (same as MISE_ENV)
+
+  Repeat the flag or separate names with commas to load several environments.
+- **`-j --jobs <JOBS>`** — How many jobs to run in parallel; defaults to the `jobs` setting
+
+  Values below 1 are treated as 1.
 
   **环境变量：** `MISE_JOBS`
 - **`-q --quiet`** — 抑制非错误消息
 
-  **环境变量：** `MISE_QUIET`
-- **`-v --verbose`** — 显示额外输出（使用 -vv 可显示更多）
-- **`-y --yes`** — 对所有确认提示回答 yes
-- **`--raw`** — 直接从 stdin/stdout/stderr 读取或写入，而不是按行处理
-- **`--locked`** — 安装期间要求 lockfile 中存在 URL
+  **Environment Variable:** `MISE_QUIET`
+- **`-v --verbose`** — Show extra output (use -vv for even more)
+- **`-y --yes`** — Answer yes to all confirmation prompts
+- **`--raw`** — Connect tasks and install commands directly to the terminal
 
-  如果当前平台的工具在 lockfile 中没有预解析的 URL，则失败
-  这可以防止向 GitHub、aqua registry 等发起 API 调用
-  也可以通过 MISE_LOCKED=1 或 settings.locked=true 启用
-- **`--silent`** — 抑制所有任务输出和 mise 非错误消息
+  Commands then run one at a time. Same as `MISE_RAW=1` or the `raw` setting.
+- **`--locked`** — Require download URLs from the lockfile when installing
+
+  Installing fails when the lockfile has no pre-resolved URL for a tool on the current platform, so mise does not call the GitHub or aqua registry APIs to find one. Same as `MISE_LOCKED=1` or the `locked` setting.
+- **`--silent`** — Suppress all task output and mise non-error messages
 
 ## 标志
 - **`--no-config`** — 不加载任何配置文件
 
-  也可以使用 `MISE_NO_CONFIG=1`
-- **`--no-env`** — 不从配置文件加载环境变量
+  Same as `MISE_NO_CONFIG=1`.
+- **`--no-env`** — Do not load environment variables from config files
 
-  也可以使用 `MISE_NO_ENV=1`
-- **`--no-hooks`** — 不执行配置文件中的 hook
+  Same as `MISE_NO_ENV=1`.
+- **`--no-hooks`** — Do not run hooks from config files
 
-  也可以使用 `MISE_NO_HOOKS=1`
-- **`-h --help`** — 打印帮助
+  Same as `MISE_NO_HOOKS=1`.
+- **`-h --help`** — Print help
 
 ## 子命令
 
@@ -56,86 +62,87 @@ description: "探索用于管理工具、环境、任务和机器设置的 mise 
 
 ### 安装和检查工具
 
-- [`mise use`](/cli/use.html) — 安装工具并将其添加到配置中
-- [`mise install`](/cli/install.html) — 安装工具版本
-- [`mise install-into`](/cli/install-into.html) — 将工具版本安装到特定路径
-- [`mise installs`](/cli/installs.html) — [实验性] 检查并选择 identity 安装布局中的安装
-- [`mise uninstall`](/cli/uninstall.html) — 移除已安装的工具版本
-- [`mise unuse`](/cli/unuse.html) — 从配置中移除工具请求并清理未使用的安装
-- [`mise upgrade`](/cli/upgrade.html) — 升级过时的工具
-- [`mise outdated`](/cli/outdated.html) — 显示过时的工具版本
-- [`mise lock`](/cli/lock.html) — 创建或刷新 lockfile 版本、校验和及下载 URL
-- [`mise latest`](/cli/latest.html) — 解析工具请求所匹配的最新版本
-- [`mise ls`](/cli/ls.html) — 列出已安装和活动的工具版本
-- [`mise ls-remote`](/cli/ls-remote.html) — 列出可供安装的工具版本
-- [`mise tool`](/cli/tool.html) — 显示工具信息
-- [`mise where`](/cli/where.html) — 显示工具的安装路径
-- [`mise which`](/cli/which.html) — 显示工具可执行文件解析到的路径
-- [`mise bin-paths`](/cli/bin-paths.html) — 列出所有活动运行时 bin 路径
-- [`mise registry`](/cli/registry.html) — 列出 registry 简写名称及其后端
-- [`mise search`](/cli/search.html) — 搜索可用工具
-- [`mise backends`](/cli/backends.html) — 管理后端
-- [`mise link`](/cli/link.html) — 将工具版本符号链接到 mise 中
-- [`mise sync`](/cli/sync.html) — 将其他版本管理器中的工具与 mise 同步
-- [`mise prune`](/cli/prune.html) — 删除工具的未使用版本
-- [`mise reshim`](/cli/reshim.html) — 为已安装工具提供的可执行文件创建 shim
-- [`mise tool-stub`](/cli/tool-stub.html) — 执行工具 stub
-- [`mise packslip`](/cli/packslip.html) — mise 接受哪些签名者提供的 packslip
+- [`mise use`](/cli/use.html) — Install a tool and add it to configuration
+- [`mise install`](/cli/install.html) — Install the tools in your config, or specific tool versions
+- [`mise install-into`](/cli/install-into.html) — Install a tool version into a directory outside mise
+- [`mise installs`](/cli/installs.html) — [experimental] Inspect and choose identity-layout installations
+- [`mise uninstall`](/cli/uninstall.html) — Remove installed tool versions
+- [`mise unuse`](/cli/unuse.html) — Remove tool requests from config files and prune unused installations
+- [`mise upgrade`](/cli/upgrade.html) — Upgrade outdated tools
+- [`mise outdated`](/cli/outdated.html) — Show outdated tool versions
+- [`mise lock`](/cli/lock.html) — Create or refresh lockfile versions, checksums, and download URLs
+- [`mise latest`](/cli/latest.html) — Print the latest version that matches a version request
+- [`mise ls`](/cli/ls.html) — List installed and active tool versions
+- [`mise ls-remote`](/cli/ls-remote.html) — List tool versions available to install
+- [`mise tool`](/cli/tool.html) — Show information about a tool
+- [`mise where`](/cli/where.html) — Show the install directory of a tool version
+- [`mise which`](/cli/which.html) — Show the path a tool's executable resolves to
+- [`mise bin-paths`](/cli/bin-paths.html) — List the bin directories of the active tools
+- [`mise registry`](/cli/registry.html) — List registry shorthand names and their backends
+- [`mise search`](/cli/search.html) — Search for available tools
+- [`mise backends`](/cli/backends.html) — Manage backends
+- [`mise link`](/cli/link.html) — Symlink a tool version into mise
+- [`mise sync`](/cli/sync.html) — Use tool versions installed by other version managers
+- [`mise prune`](/cli/prune.html) — Delete tool versions that nothing uses
+- [`mise reshim`](/cli/reshim.html) — Create shims for executables provided by installed tools
+- [`mise tool-stub`](/cli/tool-stub.html) — Run a tool stub file
+- [`mise packslip`](/cli/packslip.html) — Inspect and reset the signers mise has pinned for packslip tools
 
 ### Shell 和环境
 
-- [`mise activate`](/cli/activate.html) — 输出用于在交互式 Shell 中激活 mise 的脚本
-- [`mise deactivate`](/cli/deactivate.html) — 输出用于在当前 Shell 会话中停用 mise 的脚本
-- [`mise completion`](/cli/completion.html) — 生成 Shell 补全
-- [`mise en`](/cli/en.html) — 使用根据当前配置构建的 mise 环境启动新的 Shell
-- [`mise env`](/cli/env.html) — 输出当前配置的环境
-- [`mise exec`](/cli/exec.html) — 使用已设置的工具执行命令
-- [`mise shell`](/cli/shell.html) — 为当前 Shell 会话设置工具版本
-- [`mise set`](/cli/set.html) — 在 mise.toml 中设置环境变量
-- [`mise unset`](/cli/unset.html) — 从配置文件中移除环境变量
-- [`mise shell-alias`](/cli/shell-alias.html) — 管理 Shell 别名
-- [`mise tool-alias`](/cli/tool-alias.html) — 管理工具版本别名
-- [`mise ssh`](/cli/ssh.html) — 打开 SSH 会话，可选择借用只读 GitHub 访问权限
+- [`mise activate`](/cli/activate.html) — Print the script to activate mise in an interactive shell
+- [`mise deactivate`](/cli/deactivate.html) — Print the script to disable mise in the current shell session
+- [`mise completion`](/cli/completion.html) — Generate shell completions
+- [`mise en`](/cli/en.html) — Start a subshell with mise's tools and environment
+- [`mise env`](/cli/env.html) — Print the environment for the current configuration
+- [`mise exec`](/cli/exec.html) — Run a command with mise's tools and environment
+- [`mise shell`](/cli/shell.html) — Set a tool version for the current shell session
+- [`mise set`](/cli/set.html) — Set, show, or list environment variables in mise.toml
+- [`mise unset`](/cli/unset.html) — Remove environment variables from mise.toml
+- [`mise vars`](/cli/vars.html) — List, set, and ask for config vars
+- [`mise shell-alias`](/cli/shell-alias.html) — Manage shell aliases
+- [`mise tool-alias`](/cli/tool-alias.html) — Manage tool backend and version aliases
+- [`mise secrets`](/cli/secrets.html) — [experimental] Inspect the project's secrets source
+- [`mise token`](/cli/token.html) — Show which Git provider token mise uses
+- [`mise ssh`](/cli/ssh.html) — Open an SSH session, optionally borrowing read-only GitHub access
 
 ### 任务和项目自动化
 
-- [`mise run`](/cli/run.html) — 运行任务及其依赖项
-- [`mise tasks`](/cli/tasks.html) — 管理任务
-- [`mise watch`](/cli/watch.html) — 运行任务，并在文件发生变化时重新运行
-- [`mise deps`](/cli/deps.html) — [实验性] 管理项目依赖项
-- [`mise generate`](/cli/generate.html) — 为各种工具／服务生成文件
+- [`mise run`](/cli/run.html) — Run tasks and their dependencies
+- [`mise tasks`](/cli/tasks.html) — Manage tasks
+- [`mise watch`](/cli/watch.html) — Run tasks and rerun them when files change
+- [`mise deps`](/cli/deps.html) — [experimental] Manage project dependencies
+- [`mise daemons`](/cli/daemons.html) — [experimental] Manage project daemons with pitchfork
+- [`mise generate`](/cli/generate.html) — Generate project files such as CI workflows, git hooks, and scripts
 
 ### 机器设置和镜像
 
-- [`mise bootstrap`](/cli/bootstrap.html) — 根据当前配置设置机器
-- [`mise oci`](/cli/oci.html) — [实验性] 根据 mise.toml 构建 OCI 容器镜像
+- [`mise bootstrap`](/cli/bootstrap.html) — Set up this machine from your mise config
+- [`mise dotfiles`](/cli/dotfiles.html) — Deploy, track, and sync dotfiles
+- [`mise oci`](/cli/oci.html) — [experimental] Build, push, and run OCI images of a project's tools
 
 ### 配置和诊断
 
-- [`mise config`](/cli/config.html) — 管理配置文件
-- [`mise edit`](/cli/edit.html) — 交互式编辑 mise.toml
-- [`mise fmt`](/cli/fmt.html) — 格式化 mise TOML 配置
-- [`mise settings`](/cli/settings.html) — 管理设置
-- [`mise trust`](/cli/trust.html) — 将配置文件标记为受信任
-- [`mise untrust`](/cli/untrust.html) — 移除对配置的显式信任
-- [`mise doctor`](/cli/doctor.html) — 检查 mise 安装是否存在潜在问题
-- [`mise cache`](/cli/cache.html) — 管理 mise 缓存
-- [`mise version`](/cli/version.html) — 显示 mise 的版本
-- [`mise self-update`](/cli/self-update.html) — 更新 mise 本身
-- [`mise implode`](/cli/implode.html) — 移除 mise CLI 及其所有相关数据
+- [`mise config`](/cli/config.html) — Manage config files
+- [`mise edit`](/cli/edit.html) — Edit mise.toml interactively
+- [`mise fmt`](/cli/fmt.html) — Format mise TOML configuration
+- [`mise settings`](/cli/settings.html) — Manage settings
+- [`mise trust`](/cli/trust.html) — Mark a config file as trusted
+- [`mise untrust`](/cli/untrust.html) — Remove explicit trust for a config
+- [`mise doctor`](/cli/doctor.html) — Check your mise setup for problems
+- [`mise cache`](/cli/cache.html) — Manage the mise cache
+- [`mise version`](/cli/version.html) — Show the version of mise
+- [`mise self-update`](/cli/self-update.html) — Update mise itself
+- [`mise implode`](/cli/implode.html) — Remove the mise CLI and all related data
 
-### 集成和社区
+### Plugins
 
-- [`mise mcp`](/cli/mcp.html) — 通过 stdin/stdout 运行 Model Context Protocol 服务器
-- [`mise skills`](/cli/skills.html) — 活动工具提供的代理技能，来自其 packslip
-- [`mise patrons`](/cli/patrons.html) — 显示作为 Patron-tier 成员支持 mise 的个人
-- [`mise sponsors`](/cli/sponsors.html) — 显示赞助 mise 和 jdx.dev 开源工具的公司
+- [`mise plugins`](/cli/plugins.html) — Manage plugins
+- [`mise test-tool`](/cli/test-tool.html) — Test that a tool installs and runs
 
-### 其他命令
+### Integrations and community
 
-- [`mise daemons`](/cli/daemons.html) — [实验性] 使用 pitchfork 管理项目守护进程
-- [`mise dotfiles`](/cli/dotfiles.html) — 管理来自 `[dotfiles]` 的 dotfiles
-- [`mise plugins`](/cli/plugins.html) — 管理插件
-- [`mise secrets`](/cli/secrets.html) — [实验性] 列出项目密钥源提供的密钥名称，不显示值
-- [`mise test-tool`](/cli/test-tool.html) — 测试工具是否能够安装和运行
-- [`mise token`](/cli/token.html) — 显示 mise 将使用的 git 提供商令牌
+- [`mise mcp`](/cli/mcp.html) — Run the Model Context Protocol server over stdin/stdout
+- [`mise skills`](/cli/skills.html) — List and link the agent skills that active tools ship
+- [`mise patrons`](/cli/patrons.html) — Show the individuals supporting mise as Patron-tier members
+- [`mise sponsors`](/cli/sponsors.html) — Show the companies sponsoring mise and the jdx.dev open source tools

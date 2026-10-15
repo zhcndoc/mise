@@ -12,24 +12,41 @@ description: "列出已配置的设置及其来源"
 
 列出已配置的设置及其来源
 
-默认情况下，列出从已加载的 TOML 文件中显式设置的设置。`--all` 还会包含有效的默认值。使用 `--local` 将输出限制为选定的本地文件，并使用 `--json-extended` 在机器可读的输出中包含来源信息。当你需要某个有效值时，请使用 `mise settings get KEY`。
+By default, lists the settings set in loaded TOML config files. `--all` also
+includes the effective value of every other setting. `--local` lists only the
+nearest project config, and `--json-extended` adds source information to
+JSON output. Use `mise settings get SETTING` for one effective value.
 
-## 参数
-- **`[SETTING]`** — 设置名称
+## Arguments
+- **`[SETTING]`** — Only show this setting, or the settings under this prefix such as `python`
 
-## 选项
-- **`-a --all`** — 列出所有设置
-- **`-J --json`** — 以 JSON 格式输出
-- **`-l --local`** — 使用本地配置文件而不是全局配置文件
-- **`-T --toml`** — 以 TOML 格式输出
-- **`--json-extended`** — 以包含来源的 JSON 格式输出
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-a --all`** — List all settings
+- **`-J --json`** — Output in JSON format
+- **`-l --local`** — Use only the nearest project config
+
+  Reads only its explicit settings, or writes to it instead of the global config.
+- **`-T --toml`** — Output in TOML format
+- **`--json-extended`** — Output in JSON format with sources
+- **`-h --help`** — Print help
 
 ## 示例
 
+List settings set in config files
+
 ```
 mise settings ls
+```
+
+Include settings left at their defaults
+
+```
 mise settings ls --all
+```
+
+Show the python settings as JSON with their sources
+
+```
 mise settings ls python --json-extended
 ```
 

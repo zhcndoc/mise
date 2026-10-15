@@ -10,6 +10,7 @@ use xx::regex;
 
 use crate::args::BackendArg;
 use crate::backend::platform_target::PlatformTarget;
+use crate::backend::static_helpers::lock_checksum;
 use crate::backend::{Backend, VersionInfo, normalize_idiomatic_contents, strict_metadata};
 use crate::cmd::CmdLineRunner;
 use crate::config::{CompilePurpose, Config, Settings, SettingsExt};
@@ -511,7 +512,19 @@ impl RubyPlugin {
 
     /// Render URL template with version and platform variables
     fn render_precompiled_url(&self, template: &str, version: &str, platform: &str) -> String {
-        let (arch, os) = platform.split_once('_').unwrap_or((platform, ""));
+        let settings = Settings::get();
+        let (arch, os) = match (
+            settings.ruby.precompiled_arch.as_deref(),
+            settings.ruby.precompiled_os.as_deref(),
+        ) {
+            // The overrides form the platform verbatim and either one can
+            // contain an underscore, so use them as given.
+            (Some(arch), Some(os)) => (arch, os),
+            // Built-in platforms are "{arch}_{os}" and the arch can itself
+            // contain an underscore (x86_64), so split on the last one. The
+            // arm64-only macOS build is named plain "macos".
+            _ => platform.rsplit_once('_').unwrap_or(("arm64", platform)),
+        };
         template
             .replace("{version}", version)
             .replace("{platform}", platform)
@@ -823,8 +836,13 @@ impl RubyPlugin {
         let tarball_path = tv.download_path().join(&filename);
 
         ctx.pr.set_message(format!("download {}", filename));
-        HTTP.download_file(&url, &tarball_path, Some(ctx.pr.as_ref()))
-            .await?;
+        HTTP.download_file_stored(
+            &url,
+            &tarball_path,
+            lock_checksum(tv, &self.get_platform_key(), &url).as_deref(),
+            Some(ctx.pr.as_ref()),
+        )
+        .await?;
 
         if let Some(hash_str) = checksum.as_ref().and_then(|c| c.strip_prefix("sha256:")) {
             ctx.pr.set_message(format!("checksum {}", filename));
@@ -1409,6 +1427,47 @@ mod tests {
         assert!(!RubyPlugin::use_versions_host_for_precompiled_source(
             "acme/ruby"
         ));
+    }
+
+    #[test]
+    fn test_ruby_render_precompiled_url_splits_arch_and_os() {
+        let template = "https://example.com/{version}/ruby-{arch}-{os}-{platform}.tar.gz";
+        with_ruby_settings(
+            |_| {},
+            |plugin| {
+                assert_eq!(
+                    plugin.render_precompiled_url(template, "3.3.0", "x86_64_linux"),
+                    "https://example.com/3.3.0/ruby-x86_64-linux-x86_64_linux.tar.gz"
+                );
+                assert_eq!(
+                    plugin.render_precompiled_url(template, "3.3.0", "arm64_linux"),
+                    "https://example.com/3.3.0/ruby-arm64-linux-arm64_linux.tar.gz"
+                );
+                assert_eq!(
+                    plugin.render_precompiled_url(template, "3.3.0", "macos"),
+                    "https://example.com/3.3.0/ruby-arm64-macos-macos.tar.gz"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_ruby_render_precompiled_url_keeps_override_arch_and_os() {
+        let template = "https://example.com/{version}/ruby-{arch}-{os}-{platform}.tar.gz";
+        let url = with_ruby_settings(
+            |settings| {
+                settings.ruby.precompiled_arch = Some("arm64".to_string());
+                settings.ruby.precompiled_os = Some("linux_musl".to_string());
+            },
+            |plugin| {
+                let platform = plugin.precompiled_platform().unwrap();
+                plugin.render_precompiled_url(template, "3.3.0", &platform)
+            },
+        );
+        assert_eq!(
+            url,
+            "https://example.com/3.3.0/ruby-arm64-linux_musl-arm64_linux_musl.tar.gz"
+        );
     }
 
     #[test]

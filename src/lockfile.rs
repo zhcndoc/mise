@@ -19,6 +19,7 @@ use crate::toolset::{ToolRequest, ToolSource, ToolVersion, ToolVersionOptions, T
 use eyre::{Report, Result, bail, eyre};
 use indexmap::IndexSet;
 use itertools::Itertools;
+use mise_util::yaml;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -212,7 +213,7 @@ impl Eq for AubeLock {}
 
 impl AubeLock {
     pub(crate) fn from_yaml(contents: &str) -> Result<Self> {
-        let value: serde_yaml::Value = serde_yaml::from_str(contents)?;
+        let value: yaml::Value = yaml::from_str(contents)?;
         let toml::Value::Table(graph) = yaml_to_toml(value)? else {
             bail!("aube lockfile must contain a mapping");
         };
@@ -228,7 +229,7 @@ impl AubeLock {
             return Ok(self.graph_text.clone());
         }
         let value = toml_to_yaml(toml::Value::Table(self.graph.clone()));
-        Ok(serde_yaml::to_string(&value)?)
+        Ok(yaml::to_string(&value)?)
     }
 
     pub(crate) fn legacy_identity(&self) -> Result<String> {
@@ -286,20 +287,19 @@ fn hash_canonical_toml(hasher: &mut impl sha2::Digest, value: &toml::Value) {
     }
 }
 
-fn yaml_to_toml(value: serde_yaml::Value) -> Result<toml::Value> {
-    use serde_yaml::Value;
+fn yaml_to_toml(value: yaml::Value) -> Result<toml::Value> {
+    use yaml::Value;
     Ok(match value {
         Value::Bool(value) => toml::Value::Boolean(value),
         Value::Number(value) => {
             if let Some(value) = value.as_i64() {
                 toml::Value::Integer(value)
-            } else if let Some(value) = value.as_f64() {
+            } else {
+                let value = value.as_f64();
                 if !value.is_finite() {
                     bail!("non-finite numbers cannot be represented in mise.lock")
                 }
                 toml::Value::Float(value)
-            } else {
-                bail!("unsupported number in aube lockfile")
             }
         }
         Value::String(value) => toml::Value::String(value),
@@ -320,12 +320,11 @@ fn yaml_to_toml(value: serde_yaml::Value) -> Result<toml::Value> {
             toml::Value::Table(table)
         }
         Value::Null => bail!("null values cannot be represented in mise.lock"),
-        Value::Tagged(value) => yaml_to_toml(value.value)?,
     })
 }
 
-fn toml_to_yaml(value: toml::Value) -> serde_yaml::Value {
-    use serde_yaml::{Mapping, Number, Value};
+fn toml_to_yaml(value: toml::Value) -> yaml::Value {
+    use yaml::{Mapping, Number, Value};
     match value {
         toml::Value::String(value) => Value::String(value),
         toml::Value::Integer(value) => Value::Number(Number::from(value)),
@@ -3408,7 +3407,7 @@ where
     let backend = tv.request.backend()?;
 
     for platform in target_platforms {
-        for variant in backend.platform_variants(platform) {
+        for variant in backend.platform_variants_for(tv, platform) {
             let target = PlatformTarget::new(variant.clone());
             let options = backend.resolve_lockfile_options(&tv.request, &target)?;
             let platform_key = variant.to_key();
@@ -3707,7 +3706,7 @@ pub(crate) async fn auto_lock_new_versions(
             for platform in &target_platforms {
                 // Expand platform variants from the backend
                 let variants = if let Some(ref backend) = backend {
-                    backend.platform_variants(platform)
+                    backend.platform_variants_for(tv, platform)
                 } else {
                     vec![platform.clone()]
                 };
@@ -4573,8 +4572,18 @@ pub(crate) fn get_locked_version(
             if backend::is_disabled_backend_type(&backend.get_type()) {
                 return Ok(None);
             }
+            // The registry's options are for the backend it chose. Another
+            // backend would read them as its own settings and never match.
+            let options = if !request.registry_options_are_not_for(full) {
+                backend.resolve_lockfile_options(request, &PlatformTarget::from_current())?
+            } else {
+                backend.resolve_lockfile_options(
+                    &request.without_registry_options(),
+                    &PlatformTarget::from_current(),
+                )?
+            };
             return Ok(Some((
-                backend.resolve_lockfile_options(request, &PlatformTarget::from_current())?,
+                options,
                 backend.lockfile_options_are_host_specific(),
             )));
         }
@@ -4925,8 +4934,16 @@ fn dotted_numbers_agree(a: &str, b: &str) -> bool {
 ///   downloaded rather than for the route to it
 ///
 /// Everything between the host and those positions is ignored.
-fn release_identifiers(path: &str) -> Vec<&str> {
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+fn release_identifiers(path: &str) -> Vec<String> {
+    // Decode each segment on its own, after splitting: a tag is stored
+    // percent-encoded (`cli%400.46.0`), and an encoded slash inside one
+    // (`cli%2Fv1.2.3`) must stay part of that tag, not become a separator.
+    let decoded: Vec<String> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| urlencoding::decode(s).map_or_else(|_| s.to_string(), |d| d.into_owned()))
+        .collect();
+    let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
     let mut found = Vec::new();
     let tag = segments
         .iter()
@@ -4950,7 +4967,7 @@ fn release_identifiers(path: &str) -> Vec<&str> {
     if let Some(name) = segments.last() {
         found.extend(dotted_number_runs(name));
     }
-    found
+    found.into_iter().map(str::to_string).collect()
 }
 
 /// The releases a download URL names when they provably contradict `version`.
@@ -4988,7 +5005,7 @@ pub(crate) fn url_contradicts_version(version: &str, url: &str) -> Option<Vec<St
     {
         return None;
     }
-    Some(identifiers.into_iter().map(str::to_string).collect())
+    Some(identifiers)
 }
 
 /// Refuse to install a tool whose locked download URL belongs to a different
@@ -5499,6 +5516,13 @@ mod tests {
 
     #[test]
     fn test_url_contradicts_version_reports_a_different_release() {
+        assert_eq!(
+            url_contradicts_version(
+                "2.0.0",
+                "https://github.com/o/r/releases/download/cli%2Fv1.2.3/tool-linux",
+            ),
+            Some(vec!["1.2.3".to_string()])
+        );
         // A `version` rewritten without refreshing the platform block.
         assert_eq!(
             url_contradicts_version(
@@ -5520,6 +5544,16 @@ mod tests {
     #[test]
     fn test_url_contradicts_version_accepts_matching_releases() {
         for (version, url) in [
+            // A percent-encoded `@` in the tag is decoded before comparing.
+            (
+                "0.46.0",
+                "https://github.com/getsentry/toolkit/releases/download/cli%400.46.0/sentry-darwin-arm64",
+            ),
+            // An encoded slash stays inside the tag.
+            (
+                "1.2.3",
+                "https://github.com/o/r/releases/download/cli%2Fv1.2.3/tool-linux",
+            ),
             // The plain case: the tag names the version.
             (
                 "1.56.1",

@@ -125,6 +125,9 @@ pub(crate) async fn apply_locked_with_scope(
         .repo()
         .ok_or_else(|| eyre::eyre!("applying requires git"))?;
     let state_dir = store.state_dir();
+    if operation_scope.is_none() && !req.dry_run {
+        crate::system::history::scope::recover_before_planning(store, tracked)?;
+    }
     let planned_head = repo.ref_oid(crate::system::history::shadow::HistoryRepo::HISTORY_REF)?;
     let incoming = run::incoming_tracking(repo, tracked)?;
     let tracked = &incoming;
@@ -185,7 +188,8 @@ pub(crate) async fn apply_locked_with_scope(
 
     // Store choices without publishing or applying any part of the setup.
     let mut sync_state = state::load(repo)?;
-    let shared = super::share::current(repo, tracked)?.objects();
+    let shared_report = super::share::current(repo, tracked)?;
+    let shared = shared_report.objects();
     let encrypted = super::files::encrypted_paths(repo, status.upstream_commit.as_deref())?;
     for conflict in &status.conflicts {
         let Some(local) = roots
@@ -221,6 +225,56 @@ pub(crate) async fn apply_locked_with_scope(
                 }
                 Err(err) => return Err(err),
             };
+            // a repository choice withdraws an earlier keep-local one
+            if take_remote.contains(&local)
+                && !req.dry_run
+                && shared_report.unheld.contains_key(&conflict.branch_path)
+                && let Some(entry) = tracked.entry_for(&local)
+            {
+                let _store_lock = store.lock()?;
+                let mut held = crate::system::history::held::Held::load(repo)?;
+                held.unkeep(&entry.tree_path(&entry.path)?);
+                held.save(repo)?;
+            }
+            // **Keeping this machine's version of a stream it never held
+            // means saving it.** Its saved version is another machine's, so
+            // there is nothing of this machine's to publish yet: hold the
+            // stream, and the next save records the live files over it.
+            if keep_local.contains(&local)
+                && shared_report.unheld.contains_key(&conflict.branch_path)
+            {
+                let entry = tracked
+                    .entry_for(&local)
+                    .ok_or_else(|| eyre::eyre!("{} is not tracked here", display_path(&local)))?;
+                // Holding a directory holds every file in it: a sibling
+                // missing here would be saved as a deletion, and a stale one
+                // over the newer shared version. Only a tracked file is
+                // kept on its own.
+                let advice = if entry.path != local {
+                    format!(
+                        "{path} is in a directory another machine saved while it was not selected here, so it cannot be kept on its own: take the repository's version with `mise dot pull --take-remote {path}`, then copy yours back and save it",
+                        path = display_path(&local)
+                    )
+                } else {
+                    if !req.dry_run {
+                        // captures update the same record under the store lock
+                        let _store_lock = store.lock()?;
+                        let mut held = crate::system::history::held::Held::load(repo)?;
+                        held.keep(&entry.tree_path(&entry.path)?);
+                        held.save(repo)?;
+                    }
+                    format!(
+                        "{path} keeps this machine's version once it is saved: run `mise dot save {path}`, then `mise dot sync` publishes it",
+                        path = display_path(&local)
+                    )
+                };
+                if blanket_chosen.contains(&local) {
+                    blanket_held.push(advice);
+                    keep_local.remove(&local);
+                    continue;
+                }
+                bail!("{advice}");
+            }
             let saved = shared.get(&conflict.branch_path).cloned();
             let saved_mode = permissions_at(
                 repo,
@@ -305,10 +359,20 @@ pub(crate) async fn apply_locked_with_scope(
         }
     }
     for path in take_remote.iter().chain(keep_local.iter()) {
-        if !status
-            .conflicts
-            .iter()
-            .any(|conflict| roots.locate(&conflict.branch_path).path() == Some(path.as_path()))
+        let located = |branch_path: &String| roots.locate(branch_path).path() == Some(path);
+        // **A choice an earlier pull recorded stands, and naming it again
+        // is not an error.** Taking the repository's version exempts the
+        // path from the conflict check, so when that pull then failed for
+        // another reason the path was no longer listed, and repeating the
+        // command that decided it said it "is not a conflict".
+        let decided = status.resolutions.iter().any(|(branch_path, choice)| {
+            located(branch_path) && choice.take_remote == take_remote.contains(path)
+        });
+        if !decided
+            && !status
+                .conflicts
+                .iter()
+                .any(|conflict| located(&conflict.branch_path))
         {
             bail!("{} is not a conflict", display_path(path));
         }
@@ -597,7 +661,11 @@ pub(crate) async fn apply_locked_with_scope(
     // the repository's head, once a fresh adoption made it this machine's
     let mut adopted_head: Option<String> = None;
     let result = (|| -> Result<()> {
-        scope.validate_starting_head(planned_head.as_deref())?;
+        if !scope.starting_head_is(planned_head.as_deref())? {
+            return Err(stale(
+                "local saved history changed since planning; nothing was applied; run pull again",
+            ));
+        }
         if let (Some(tree), Some(local)) = (&inventory_tree, &planned_head) {
             let heads = super::graph::Heads::read(repo)?;
             let current = heads
@@ -617,20 +685,50 @@ pub(crate) async fn apply_locked_with_scope(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if repo.compose(&repo.output_tree_of(current)?, &restore_planned)?
-                != repo.output_tree_of(local)?
+            let planned_tree = repo.output_tree_of(local)?;
+            let mut restored = repo.compose(&repo.output_tree_of(current)?, &restore_planned)?;
+            // It records those paths' modes as well, in the manifest. Two are
+            // not a later save, so restore them too: the live mode this pull
+            // preflighted, which its own protective commit just saved (an
+            // unsaved mode `--take-remote` replaces), and the mode the
+            // incoming write sets anyway (a file an interrupted apply already
+            // wrote). Any other saved mode is one, and must still stop it.
+            if restored != planned_tree
+                && let (Some(mut saved), Some(planned)) = (
+                    crate::system::history::manifest::Manifest::read(repo, current)?,
+                    crate::system::history::manifest::Manifest::read(repo, local)?,
+                )
             {
-                bail!("local files were saved after enrollment planning; retry pull");
+                for step in &ready {
+                    let path = &step.pending.branch_path;
+                    let incoming = saved.file_permissions(path, step.pending.object.as_ref())
+                        == step.desired_mode;
+                    let preflighted =
+                        saved.file_permissions(path, step.before.as_ref()) == step.before_mode;
+                    if !incoming && !preflighted {
+                        continue;
+                    }
+                    match planned.permissions.get(path) {
+                        Some(bits) => saved.permissions.insert(path.clone(), *bits),
+                        None => saved.permissions.remove(path),
+                    };
+                }
+                restored = saved.write(repo, &restored)?;
+            }
+            if restored != planned_tree {
+                return Err(stale(
+                    "local files were saved after enrollment planning; retry pull",
+                ));
             }
             // Do not let a divergent text merge or a stale resolution differ
             // from the complete tree that will be adopted.
             for step in &ready {
                 if repo.restored_object_at(tree, &step.pending.branch_path)? != step.pending.object
                 {
-                    bail!(
+                    return Err(stale(format!(
                         "{} changed in the complete repository merge; reconcile again",
                         display_path(&step.path)
-                    );
+                    )));
                 }
             }
             let candidate = heads
@@ -788,6 +886,25 @@ pub(crate) async fn apply_locked_with_scope(
         }
         Ok(())
     })();
+    if let Err(error) = &result
+        && !fresh_adoption
+        && touched.is_empty()
+        && error.downcast_ref::<StalePlan>().is_some()
+    {
+        // **A plan that went stale before its first write is planned again,
+        // not a failed application.** Nothing was written, so there is
+        // nothing to restore and nothing to pause sharing over. Recording it
+        // as a failure stopped the watcher's automatic applies until someone
+        // pulled by hand, though all it had hit was a save landing while it
+        // planned.
+        scope.finish(
+            Some(format!("{error:#}")),
+            Some(Summary {
+                message: Some("apply planned again: history changed while planning".into()),
+            }),
+        );
+        return result.map(|()| ApplyOutcome::default());
+    }
     if let Err(error) = &result {
         let mut recovery_errors = vec![];
         for step in ready
@@ -984,11 +1101,13 @@ fn hold_reason(
         ));
     }
     let live = live_object(repo, &step.path)?;
-    let identical_adoption = repo
-        .ref_oid(crate::system::history::shadow::HistoryRepo::HISTORY_REF)?
-        .is_none()
-        && live == step.pending.object;
     let local_head = repo.ref_oid(crate::system::history::shadow::HistoryRepo::HISTORY_REF)?;
+    // A live file that already is the incoming version has nothing for the
+    // write to lose: a fresh adoption of files this machine already has,
+    // or an apply interrupted after its write but before it was recorded.
+    // Outside an adoption its mode must match too, or the write changes it.
+    let already_incoming = live == step.pending.object
+        && (local_head.is_none() || live_permissions(&step.path)? == step.desired_mode);
     let expected_mode = permissions_at(
         repo,
         local_head.as_deref(),
@@ -997,7 +1116,7 @@ fn hold_reason(
     )?;
     if !take_remote
         && (live != expected || live_permissions(&step.path)? != expected_mode)
-        && !identical_adoption
+        && !already_incoming
     {
         return Ok(Some(
             "local file changed since planning; save or resolve it first".into(),
@@ -1031,7 +1150,7 @@ fn hold_reason(
     Ok(None)
 }
 
-fn permissions_at(
+pub(super) fn permissions_at(
     repo: &crate::system::history::shadow::HistoryRepo,
     commit: Option<&str>,
     path: &str,
@@ -1077,13 +1196,30 @@ impl std::fmt::Display for UnusableLive {
 
 impl std::error::Error for UnusableLive {}
 
+/// The plan no longer matches local history, found before anything was
+/// written: planning again is the whole remedy.
+#[derive(Debug)]
+pub(super) struct StalePlan(String);
+
+impl std::fmt::Display for StalePlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StalePlan {}
+
+fn stale(reason: impl Into<String>) -> eyre::Report {
+    eyre::Report::new(StalePlan(reason.into()))
+}
+
 /// Each of these names the path, because a blanket resolution repeats the
 /// reason it could not decide one and by then the path is all it still has.
 fn unusable(path: &Path, what: impl std::fmt::Display) -> eyre::Report {
     eyre::Report::new(UnusableLive(format!("{} {what}", display_path(path))))
 }
 
-pub(super) fn live_object(
+pub(crate) fn live_object(
     repo: &crate::system::history::shadow::HistoryRepo,
     path: &Path,
 ) -> Result<Option<Object>> {
@@ -1129,6 +1265,15 @@ fn saved_object(
     let Some(entry) = tracked.entry_for(path) else {
         return Ok(None);
     };
+    // the saved side as planning read it: see `super::share::current`
+    let stream = entry.tree_path(&entry.path)?;
+    let held = crate::system::history::held::Held::load(repo)?;
+    if !held.always_holds(&stream)
+        && !held.holds(&stream, repo.object_at(&head, &stream)?.as_ref())
+        && let Some(live) = super::share::usable_live(repo, path)?
+    {
+        return Ok(live);
+    }
     repo.restored_object_at(&head, &entry.tree_path(path)?)
 }
 

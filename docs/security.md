@@ -1,112 +1,388 @@
 ---
-description: "控制配置信任、工具验证、机密信息和命令执行。"
+description: "Control which project config can run code, verify downloads, hold back new releases, and restrict the commands mise starts."
+socialDescription: "Control config trust, verify downloads, delay new releases, and restrict commands."
 ---
 
-# 安全
+# Security overview
 
-mise 为开发工作流的不同部分提供控制措施。请选择适用于你正在执行的操作的控制措施：
+Each mise security control covers one stage, from loading a project's config to
+running the commands it starts. The one you meet first is
+[configuration trust](#configuration-trust): mise asks before it lets a
+repository's config run code.
 
-| 控制措施                               | 适用范围                                      | 目的                                                               |
-| -------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
-| 下载验证                               | 受支持的工具安装                              | 检查构件完整性以及可用的签名或来源证明。                           |
-| [配置信任](/cli/trust.html)            | 加载项目配置                                  | 决定 mise 可以执行或应用哪些配置。                                 |
-| [安全模式](#safe-mode)                 | 处理不受信任的项目配置                        | 禁用项目代码执行和环境注入。                                       |
-| [偏执模式](/paranoid.html)             | 信任和受支持的安装验证                        | 将直接文件信任绑定到内容，并重新检查来源。                         |
-| [沙箱](/sandboxing.html)               | `mise exec` 和 `mise run` 启动的命令          | 在受支持的平台上限制子进程访问。                                   |
+## What mise protects against
 
-这些控制措施的作用范围不同。例如，信任配置不会验证上游版本，而将任务置于沙箱中也不会将 mise 的配置评估置于沙箱中。请通过 [SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md) 报告漏洞。
+| Risk                                                                     | Control                                         | Default                                                      |
+| ------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
+| A repository's config runs code when you enter it or run mise there      | [Configuration trust](#configuration-trust)     | On                                                           |
+| Automation has to read config that someone else wrote                    | [Safe mode](#safe-mode)                         | Off; set `MISE_SAFE=1`                                       |
+| A trusted config changes after you reviewed it                           | [Paranoid mode](/paranoid.html)                 | Off                                                          |
+| A download was tampered with or replaced                                 | [Download verification](#download-verification) | On, where the backend and the upstream project support it    |
+| A newly published release is malicious                                   | [Minimum release age](#minimum-release-age)     | 24 hours for [most backends](#which-backends-have-a-default) |
+| A task or command reads, writes or reaches more than it needs            | [Sandboxing](/sandboxing.html)                  | Off; Linux and macOS only                                    |
+| A secret ends up in your shell, a log or a process that does not need it | [Secrets](#secrets)                             | Opt in                                                       |
 
-## 软件验证
+Each control has its own scope. Trusting a config does not verify an upstream
+release, and sandboxing a task does not sandbox mise while it evaluates config.
 
-验证取决于后端和上游元数据。校验和可以检测字节是否与预期摘要匹配；签名或来源检查还会将构件与签名者或构建身份关联起来。预期的校验和、密钥或身份必须来自你信任的来源。
+These controls do not review the software you choose to install. A tool, a
+package or an asdf or vfox plugin runs with your permissions once you install
+it. Global and system config, such as `~/.config/mise/config.toml`, belongs to
+you, so mise trusts it without asking. mise itself runs as your user with no
+sandbox.
 
-对于具有相应注册表元数据的 aqua 工具，mise 内置支持 Cosign 和 Minisign 签名、SLSA 来源证明以及 GitHub 构件证明。Node.js 和 Swift 的 OpenPGP 验证也已内置；不需要外部的 `gpg` 可执行文件。[packslip](/dev-tools/backends/packslip.html) 会验证已签名的清单和构件摘要。
+## Configuration trust
 
-Aqua 的验证方法默认启用。有关各项控制措施，请参阅 [aqua 设置](/dev-tools/backends/aqua.html#settings)。如果验证失败，请先检查所选构件和底层错误，再更改这些设置；请参阅[校验和错误](/errors.html)。
+Project config can run code. Templates can call `exec()`, hooks and `[env]`
+directives run commands or change variables such as `PATH`, and tool options
+such as `postinstall` run scripts. mise loads a config that can do any of this
+only after it is trusted.
 
-[锁定文件](/dev-tools/mise-lock.html)可以记录校验和和来源证明。默认情况下，当目标平台的锁定文件条目同时包含校验和和已验证的来源证明时，受支持的安装可以复用已记录的来源证明，而无需重复验证。需要在安装时重新检查时，请使用 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 或[偏执模式](/paranoid.html#provenance-re-verification)。这不会审计已安装且被跳过的工具的内容。
+### What needs trust
+
+A `mise.toml` loads without trust when it has no template syntax
+(<span v-pre>`{{`</span>, `{%` or `{#`) and contains only:
+
+- `min_version`
+- `[tools]` entries whose values are version strings or arrays of version
+  strings, with no options in the tool name (`"tool[opt=value]"`)
+- `[tasks]`, as long as no task lists `secrets`
+
+Anything else needs trust, including tool option tables, `[env]`, `[hooks]`,
+`[settings]`, `[tool_alias]` and `include`. Other files follow the same idea:
+
+- `.tool-versions` needs trust only when it contains template syntax or inline
+  tool options such as `node[postinstall=...] 24`.
+- Idiomatic version files such as `.nvmrc` never need trust.
+- Task files, including TOML files from
+  [`task_config.includes`](/tasks/task-discovery.html), need trust only when they
+  contain template syntax or list `secrets`.
+- A [`.miserc.toml`](/configuration.html#miserc) never needs trust. It only
+  holds early settings that choose which config files load, and its templates
+  cannot call `exec()` or `read_file()`.
+
+[Paranoid mode](/paranoid.html) removes these exemptions apart from
+`.miserc.toml`: every other config file outside global and system config needs
+trust.
+
+### When mise asks
+
+When a command needs a config that is not trusted:
+
+- In a terminal, mise asks
+  `mise config files in <dir> are not trusted. Trust them?` with Yes, No and
+  All, where All answers yes to every prompt in that command. No adds the
+  directory to an ignore list, and mise skips that config without asking again
+  until you run `mise trust` on it.
+- Without a terminal, such as in a script or an editor extension, mise cannot
+  ask, so the command fails with
+  [`Config files in <path> are not trusted`](/errors.html#untrusted-config).
+- Shell activation never asks. It skips the untrusted config, warns
+  `<path> is not trusted, run mise trust to enable it`, and still applies the
+  trusted ones.
+- Commands that read every tracked config, such as `mise prune`, skip untrusted
+  ones.
+
+`mise trust --show` lists the trust status of the config directories from the
+current directory up. A config that needs no trust still shows as `untrusted`.
+
+### Implicit trust
+
+Some commands trust the config they load without asking, because running them
+is already a decision to run the project's code. In normal mode outside CI,
+these are `mise run`, task shorthand such as `mise build`, `mise install`,
+`mise exec`, `mise watch`, and `mise daemons start`, `restart` and `register`.
+They record trust for every non-global config they load, including configs in
+parent directories, as if you had run `mise trust`. A config on the ignore list
+stays ignored.
+
+mise also trusts a config file when it writes one, for example with
+[`mise use`](/cli/use.html) or [`mise set`](/cli/set.html).
+
+### CI and `--yes`
+
+When mise detects CI, for example because `CI` is set, it treats every config as
+trusted and records nothing. Configs on the ignore list or under
+[`ignored_config_paths`](/configuration/settings.html#ignored_config_paths) still
+do not load. `CI` also turns on [`yes`](/configuration/settings.html#yes).
+
+Outside CI, `--yes` or `MISE_YES=1` answers the trust prompt with yes, which
+records trust. Paranoid mode turns off both the CI exemption and `--yes` for
+trust.
+
+### Manage trust
+
+```sh
+mise trust --show              # trust status from here up
+mise trust                     # trust the nearest untrusted config
+mise trust path/to/mise.toml   # trust a reviewed file
+mise trust --all               # trust configs here, above and below
+mise trust --untrust           # remove trust
+mise trust --ignore            # never load this config
+```
+
+In normal mode, trust belongs to a config root, usually the directory that holds
+`mise.toml`, so it covers every config file there, such as `mise.local.toml`.
+`mise trust --all` walks subdirectories, skipping hidden and gitignored ones and
+`node_modules`, `vendor`, `target`, `dist` and `build`. Trust records are kept in
+the [state directory](/directories.html). See [`mise trust`](/cli/trust.html)
+for every flag.
+
+Trust records use resolved paths. If a symlinked config, such as one installed
+with GNU Stow, still reports untrusted after `mise trust`, trust the real file
+path.
+
+### Trust by path
+
+Two settings decide trust by location:
+
+- [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)
+  trusts configs under these paths without a prompt, including projects you
+  create there later. It overrides the ignore list, and `["/"]` trusts
+  everything. It is global-only.
+- [`ignored_config_paths`](/configuration/settings.html#ignored_config_paths)
+  stops configs under these paths from loading. It overrides
+  `trusted_config_paths` and `mise trust`. mise reads it before it looks for
+  config files, so set it in a [`.miserc.toml`](/configuration.html#miserc) or
+  in `MISE_IGNORED_CONFIG_PATHS`.
+
+```toml
+# ~/.config/mise/config.toml
+[settings]
+trusted_config_paths = ["~/src/work"]
+```
+
+### Monorepo roots
+
+In normal mode, trusting a config with `monorepo_root = true` also trusts every
+config file below its directory, so review the subprojects' config as part of
+the repository. See [Monorepo tasks](/tasks/monorepo.html). In paranoid mode,
+trusting the root trusts only that file.
+
+### Git worktrees
+
+A config in a linked git worktree is trusted when the same path in the main
+checkout is trusted. `mise trust --untrust` in the worktree warns that the file
+stays trusted for that reason; use `mise trust --ignore` there to stop it
+loading. Paranoid mode does not share trust between worktrees.
+
+<a id="safe-mode"></a>
 
 ## 安全模式
 
-当自动化必须处理你无法控制的配置时，请设置 `MISE_SAFE=1`，例如从拉取请求中解析工具版本。例如：
+Set `MISE_SAFE=1` when automation has to read config it does not control, such
+as a bot that resolves tool versions on pull request branches. Safe mode loads
+project config without asking for trust, because it stops that config from
+running code or changing the environment while mise resolves versions:
 
 ```sh
 MISE_SAFE=1 mise lock --bump --dry-run --json
 ```
 
-当命令应更新锁定文件时，请移除 `--dry-run`。安全模式本身不会使命令变为只读。
+Remove `--dry-run` to update the lockfile. Safe mode does not make a command
+read-only. The [`safe`](/configuration/settings.html#safe) setting is
+global-only, so a project cannot turn it off for itself.
+
+Safe mode is meant for resolution and metadata commands such as `mise lock`,
+`mise ls`, `mise env` and `mise outdated`.
+
+::: warning
+Safe mode does not make other commands safe to run on config you have not
+reviewed. `mise install` can build a tool from source, which runs the tool's
+build scripts, such as a `cargo:` crate's `build.rs`.
+:::
 
 ### 拒绝的操作
 
-对于会执行项目所选代码的操作，安全模式会返回错误：
+These fail with `<operation> is disabled in safe mode (MISE_SAFE=1)`:
 
-- 模板中的 `exec()` 和 `read_file()` 调用。
-- 任务执行。
-- 安装期间工具级别的 `postinstall` 钩子和 `install_env`。
-- asdf 插件脚本和插件安装。
+- `exec()` and `read_file()` in templates, in any config.
+- Running tasks.
+- The tool options `postinstall` and `install_env`.
+- asdf plugin scripts, so tools from the `asdf:` backend cannot list or install
+  versions.
+- Installing plugins. vfox plugins that are already installed or built in still
+  run, because the operator chose them.
+- mise secrets: `[secrets]` sources, `mise secrets ls`, tasks that list
+  `secrets`, and `--secrets` and `--secrets-all` on `mise run` and `mise exec`.
+- `mise daemons` commands and task daemons.
+- The diagnostic commands in `[doctor.checks]` that `mise doctor project` runs.
 
 ### 忽略的配置
 
-为了使元数据查询仍可运行，某些行为会被抑制：
+These are skipped without an error, so resolution commands keep working:
 
-- 跳过 Shell 和安装钩子，类似于 `--no-hooks`。
-- 项目的 `[env]`、环境指令和 `[shell_alias]` 不会影响环境。
-- 忽略项目的 `[settings]`，防止仓库通过设置禁用验证或重定向后端。
-- `_.source` 在任何位置都会被忽略，包括全局配置。
+- Hooks and `[[watch_files]]` entries from every config, including global
+  config, and bootstrap hooks, as with `--no-hooks`.
+- Project `[env]`, `[vars]` and environment directives such as `_.path` and
+  `_.file`.
+- `_.source` in every config, including global config.
+- Project `[shell_alias]`.
+- Project `[wrappers]` and the `rust` tool's `mr_boxington` option.
+- Project `[settings]`, so a repository cannot turn off verification or redirect
+  a backend.
+- Remote `include` entries in project config, which mise does not fetch.
+- Project daemon declarations. Daemons also do not start or stop when you change
+  directories.
+- Project `[bootstrap]`, `[dotfiles]` and `[dotfile_groups]`, and the
+  `[bootstrap] config_roots` a project selects, because applying them writes
+  files into your home directory, clones repositories and installs packages.
+  [`mise bootstrap`](/cli/bootstrap.html) and
+  [`mise dotfiles`](/cli/dotfiles.html) name the skipped files, still apply the
+  ones in global and system config, and refuse `mise dotfiles apply --prune`
+  while a project declares dotfiles they ignore.
 
-除这些明确限制外，操作员拥有的全局配置和系统配置仍会生效。请检查这些配置以及运行 mise 的进程环境。 [`safe`](/configuration/settings.html#safe) 设置仅限全局配置，因此项目无法为自身关闭该设置。
+Global and system config still applies, apart from these rules. Review it and the
+environment of the process that runs mise.
 
-### 信任和后端支持
+### What still works
 
-安全模式会加载原本不受信任的配置，而不会显示信任提示或返回不受信任配置错误，因为上述项目执行和环境功能已被禁用。启用偏执模式时同样如此。语法错误和不受支持的操作仍会失败；成功加载并不意味着该配置已被标记为受信任，以供之后的正常使用。
+Version resolution keeps working for backends that query HTTP APIs, such as core
+tools, `aqua:`, `github:`, `gitlab:`, `http:`, `cargo:`, `pypi:`, `gem:`,
+`dotnet:` and `npm:`. The `go:` backend runs `go list` with
+`GOTOOLCHAIN=local`, so a project's `go.mod` cannot make Go download another
+toolchain. Listing installed tools and refreshing `mise.lock` work as usual.
 
-基于 HTTP 的版本解析仍可用于受支持的后端。Go 后端使用 `GOTOOLCHAIN=local`，防止项目的 `go.mod` 在元数据查询期间触发工具链下载。已安装或内置的 vfox 插件代码仍可能运行；在安全模式下无法安装缺失的插件。
+Safe mode loads untrusted config without a prompt or an error, in paranoid mode
+too. It does not mark the config trusted for later runs without safe mode. Syntax
+errors and refused operations still fail.
 
-安全模式控制 mise 处理项目配置的方式。它不是针对 mise 进程、其网络请求或操作员安装的插件的操作系统沙箱。对于子进程限制，请使用[沙箱](/sandboxing.html)，同时注意平台限制。
+Safe mode limits what project config can do. It is not an operating-system
+sandbox for mise, its network requests or the plugins the operator installed.
+Use [sandboxing](/sandboxing.html) to restrict the commands mise starts.
+
+## Download verification
+
+<a id="software-verification"></a>
+
+What mise checks depends on the backend and on what the upstream project
+publishes. A checksum shows that the bytes match an expected digest. A signature
+or provenance check also ties the artifact to a signer or a build. The expected
+checksum, key or identity has to come from a source you trust.
+
+To see which checks apply to a tool, run [`mise tool`](/cli/tool.html) and read
+the `Security` line:
+
+```sh
+mise tool jq
+# Security: checksum (sha256), github_attestations
+```
+
+| Backend or tool             | Checks                                                                                                                                       | Settings and options                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aqua:`                     | Checksums, Cosign and Minisign signatures, SLSA provenance and GitHub artifact attestations, as the aqua registry declares them for the tool | [`aqua.cosign`](/configuration/settings.html#aqua.cosign), [`aqua.minisign`](/configuration/settings.html#aqua.minisign), [`aqua.slsa`](/configuration/settings.html#aqua.slsa), [`aqua.github_attestations`](/configuration/settings.html#aqua.github_attestations)                                                                                            |
+| `github:`                   | GitHub artifact attestations when a github.com release publishes them; SLSA provenance when the tool names its signer                        | [`github.github_attestations`](/configuration/settings.html#github.github_attestations), [`github.slsa`](/configuration/settings.html#github.slsa), and the [`github_attestations`](/dev-tools/backends/github.html#github-attestations) and [`slsa_signer_identity`](/dev-tools/backends/github.html#slsa-signer-identity-and-slsa-signer-issuer) tool options |
+| `packslip:`                 | A signed release manifest, artifact digests and a pinned signer; see [verification and policy](/dev-tools/packslip-verification.html)        | [Tool options](/dev-tools/backends/packslip.html#tool-options)                                                                                                                                                                                                                                                                                                  |
+| Node.js                     | Checksums from `SHASUMS256.txt`, and its OpenPGP signature when the release publishes one                                                    | [`node.verify`](/configuration/settings.html#node.verify), [`node.gpg_verify`](/configuration/settings.html#node.gpg_verify)                                                                                                                                                                                                                                    |
+| Swift on Linux              | OpenPGP signatures                                                                                                                           | [`swift.gpg_verify`](/configuration/settings.html#swift.gpg_verify)                                                                                                                                                                                                                                                                                             |
+| Zig                         | Minisign signatures, always                                                                                                                  | None                                                                                                                                                                                                                                                                                                                                                            |
+| Precompiled Ruby and Python | GitHub artifact attestations                                                                                                                 | [`ruby.github_attestations`](/configuration/settings.html#ruby.github_attestations), [`python.github_attestations`](/configuration/settings.html#python.github_attestations)                                                                                                                                                                                    |
+
+These checks are on by default. Setting the global
+[`github_attestations`](/configuration/settings.html#github_attestations) or
+[`slsa`](/configuration/settings.html#slsa) setting to `false` turns that check
+off for the `aqua:` and `github:` backends. For precompiled Python and Ruby,
+`github_attestations` is only the default, and an explicit
+`python.github_attestations` or `ruby.github_attestations` overrides it.
+
+mise verifies OpenPGP, Cosign, Minisign, SLSA and attestations itself, so it
+needs no `gpg`, `cosign` or `gh` executable. If a check fails, read the
+underlying error before you turn a setting off; see
+[checksum errors](/errors.html#checksum-mismatch).
+
+A [lockfile](/dev-tools/mise-lock.html#provenance-and-security) records checksums
+and the provenance mise verified, and later installs reuse that result instead
+of checking again. Set
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)
+or turn on [paranoid mode](/paranoid.html) to re-verify on every install.
+Neither re-checks a tool that is already installed.
+
+mise checks its own releases too: `mise self-update` verifies each release's
+signature before it replaces the binary. See
+[self-update verification](/dev-tools/packslip-verification.html#self-update)
+for the checks and [Updating mise](/installing-mise.html#updating) for the
+commands.
+
+<a id="minimum-release-age"></a>
 
 ## 最低发布时长
 
-为了限制供应链风险，你可以限制 mise 仅安装在某个日期或时长之前发布的版本。新发布的版本可以延迟一段可配置的时间。此延迟为发现问题留出时间；它并不能证明较早的版本值得信任。
+mise skips versions published more recently than a cutoff when it picks a
+version for a request such as `node@24` or `latest`. The default cutoff is 24
+hours. The delay gives the community time to notice a compromised release; it
+does not make an older release trustworthy.
 
 ```toml
-# mise.toml
 [settings]
-minimum_release_age = "7d"  # 只安装发布超过 7 天的版本
+minimum_release_age = "7d" # raise the default 24h delay to 7 days
 ```
 
-该设置支持相对时长（`7d`、`6mo`、`1y`）和绝对日期（`2024-06-01`）。对于大多数后端，它只影响模糊版本解析，例如 `node@24` 或 `latest`。明确固定的版本（如 `node@24.0.0`）会绕过此过滤器。
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age)
+accepts relative durations (`7d`, `6mo`, `1y`) and dates (`2024-06-01`,
+`2024-06-01T12:00:00Z`). Set `0s` to turn the delay off.
 
-从 `mise.lock` 中选择的版本也会绕过该过滤器：锁定文件记录了已经审查过的选择，只要该版本仍处于冷却期，就必须保持可复现。此豁免仅适用于锁定的顶层版本。`npm:` 和 `pipx:` 后端会继续对安装期间解析的未固定传递依赖应用截止时间。
+### Which backends have a default
 
-在普通工具集解析期间，已安装的模糊匹配版本仍然符合条件：`minimum_release_age` 会限制远程版本选择，但不会使已安装的版本失效。生成锁定文件时，可能会根据发布元数据重新检查已安装的模糊匹配版本。
+Without a configured value, mise applies the 24-hour default to `aqua:`,
+`cargo:`, core tools, `forgejo:`, `gem:`, `github:`, `gitlab:`, `go:`, `npm:`,
+`packslip:`, `pypi:`, `spm:` and `ubi:` tools. Other backends, such as `http:`,
+`s3:`, `conda:`, `dotnet:`, `asdf:` and `vfox:`, apply a cutoff only when you
+set one.
 
-具体能力取决于后端：
+A backend can filter only versions it knows a release date for:
 
-| 能力                                           | 后端                                                                                                                                   |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| 顶层版本过滤                                   | 提供发布时间的后端，例如 `aqua:`、`cargo:`、`github:`、`gitlab:`、`go:`、`npm:`、`pipx:` 以及许多核心工具 |
-| 安装期间的传递依赖过滤                         | `npm:` 和 `pipx:`                                                                                                                     |
+| Capability                                       | Backends                                                                                                                        |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Filter the tool's own versions                   | Backends that report release dates, such as `aqua:`, `cargo:`, `github:`, `gitlab:`, `go:`, `npm:`, `pypi:` and most core tools |
+| Filter dependencies resolved during installation | `npm:` and `pypi:` (`pipx:` is an alias)                                                                                        |
 
-没有时间戳的版本默认会被包含。没有传递依赖支持的后端仍然可以选择较旧的顶层工具版本，但不会限制其安装器或编译器获取的依赖项。
+Versions without a release date are not filtered. Other backends can hold back
+the tool's own version, but not the dependencies its installer or compiler
+fetches. See the [npm](/dev-tools/backends/npm.html) and
+[PyPI](/dev-tools/backends/pypi.html) backend pages for how they pass the cutoff
+to their package managers.
 
-有关 `npm:` 和 `pipx:` 传递依赖支持的详细信息，请参阅 [npm 后端文档](/dev-tools/backends/npm.html) 和 [pipx 后端文档](/dev-tools/backends/pipx.html)。
+### What the cutoff applies to
 
-你还可以按工具设置 `minimum_release_age`，以覆盖全局设置：
+The cutoff applies when mise has to choose a version, for a prefix such as
+`node@24` or for `latest`. These are not filtered:
+
+- An exact version such as `node@24.0.0`.
+- A version recorded in [`mise.lock`](/dev-tools/mise-lock.html), so a reviewed
+  selection stays reproducible while the release is inside the window. `npm:`
+  and `pypi:` still apply the cutoff to transitive dependencies that the lockfile
+  does not record.
+- An installed version that matches the request. The cutoff limits which new
+  versions mise downloads; it does not deactivate one you have. `mise lock` with
+  a configured cutoff, rather than the default, re-checks installed matches.
+
+For `packslip:` tools, mise compares the cutoff with the release's verified
+transparency-log time; see
+[packslip verification](/dev-tools/packslip-verification.html#minimum-release-age).
+The installer script and `mise self-update` apply their own delay to mise
+releases; see [Installer options](/installing-mise.html#installer-options) and
+[Updating mise](/installing-mise.html#updating).
+
+### Per-tool cutoffs and exclusions
+
+Set `minimum_release_age` as a tool option to override the global value for one
+tool:
 
 ```toml
-# mise.toml
 [settings]
-minimum_release_age = "7d"  # 所有工具的默认值
+minimum_release_age = "7d"
 
 [tools.trivy]
 version = "latest"
-minimum_release_age = "1d"  # trivy 更新对时效性要求较高，使用较短的时间窗口
+minimum_release_age = "1d" # security scanner updates are time-sensitive
 ```
 
-优先级：`--minimum-release-age` CLI 标志 > 工具级 `minimum_release_age` > 全局
-`minimum_release_age` 设置。
+The `--minimum-release-age` flag on commands such as `mise install`, `mise use`,
+`mise upgrade` and `mise lock` overrides both. The order is: the flag, then the
+tool option, then the setting or the built-in default.
 
-使用 `minimum_release_age_excludes` 可将工具或后端排除在全局／默认设置之外：
+To exempt tools from the setting and the default, list them in
+[`minimum_release_age_excludes`](/configuration/settings.html#minimum_release_age_excludes):
 
 ```toml
 [settings]
@@ -114,7 +390,29 @@ minimum_release_age = "7d"
 minimum_release_age_excludes = ["trivy", "npm:*"]
 ```
 
-排除项可以匹配类似 `npm:*` 的后端通配符、类似 `trivy` 的工具简写，或类似 `npm:prettier` 的完整后端 ID。匹配的工具会跳过全局设置和内置默认值。即使工具匹配排除列表，按工具设置的 `minimum_release_age` 选项和 CLI 标志仍然适用。多个配置文件中的排除项会合并并去重，因此项目配置可以添加排除项，而无需重复全局配置中的排除项。
+An entry can be a backend wildcard (`npm:*`), a tool short name (`trivy`) or a
+full backend ID (`npm:prettier`). A tool option or the flag still applies to an
+excluded tool. Exclusions from several config files are merged, so a project can
+add to the global list without repeating it.
 
-请参阅
-[`minimum_release_age`](/configuration/settings.html#minimum_release_age)了解设置参考。
+## Secrets
+
+Keep secret values out of `mise.toml` and out of your shell where you can.
+[mise secrets](/environments/secrets/fnox.html) (experimental) fetch values from a
+secret manager and pass them only to the tasks that list them. sops and age
+values are decrypted into the environment like any other `[env]` value. See
+[Secrets](/environments/secrets/) to choose an approach, and
+[redaction](/environments/secrets/#redaction) to mask values in task output and
+CI logs.
+
+A config whose tasks list `secrets` always needs trust, and safe mode refuses
+mise secrets. The [environment cache](/configuration/settings.html#env_cache)
+never stores an environment that includes age values, sops files or redacted
+values.
+
+## Reporting a vulnerability
+
+Report vulnerabilities privately by email, as described in
+[SECURITY.md](https://github.com/jdx/mise/blob/main/SECURITY.md), not in a public
+issue or discussion. SECURITY.md also has a PGP key for encrypting the report.
+Fixes go into the latest release only.

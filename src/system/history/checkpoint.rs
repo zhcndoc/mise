@@ -61,6 +61,10 @@ pub struct Draft {
     /// even though the draft carries metadata: re-tracking a path that is
     /// already tracked has something to say only if it changed.
     pub skip_unchanged: bool,
+    /// Re-encrypt to the current recipients every encrypted file the
+    /// checkpoint holds under other recipients, including the saved
+    /// versions it carries forward rather than reads live.
+    pub re_encrypt: bool,
 }
 
 impl Draft {
@@ -288,12 +292,47 @@ impl Store {
             })
             .unwrap_or_default();
         let manual = manual_plan(&walk, &draft, &promoted);
-        if !manual.carry.is_empty() {
-            let carried: BTreeSet<usize> = manual.carry.iter().copied().collect();
+        // a selected stream whose saved version this machine never held is
+        // carried like a manual one, not captured: see `super::held`
+        let parent_commit = match &self.repo {
+            Some(repo) => repo.ref_oid(HistoryRepo::HISTORY_REF)?,
+            None => None,
+        };
+        let mut held = match &self.repo {
+            Some(repo) => Some(super::held::Held::load(repo)?),
+            None => None,
+        };
+        let streams = match (&self.repo, &held) {
+            (Some(repo), Some(held)) => {
+                super::held::streams(repo, held, parent_commit.as_deref(), &walk)?
+            }
+            _ => super::held::Streams::default(),
+        };
+        // said to a save the user ran; a pull's own protective capture is
+        // about to apply these, and the watcher's would repeat it on every
+        // edit
+        if !streams.carry.is_empty() && !draft.protective && heard(&draft) {
+            let notices: Vec<String> = streams
+                .carry
+                .iter()
+                .map(|index| {
+                    format!(
+                        "history: {} has a version saved by another machine while it was not selected here; `mise dot pull` applies it, and saves resume after that",
+                        walk.entries[*index].display()
+                    )
+                })
+                .collect();
+            self.deliver_capture_notices(&notices, true);
+        }
+        let carried: Vec<usize> = manual.carry.iter().chain(&streams.carry).copied().collect();
+        // a carried entry's live files are neither read nor recorded: its
+        // content and modes come from the parent
+        if !carried.is_empty() {
+            let owners: BTreeSet<usize> = carried.iter().copied().collect();
             let dropped: BTreeSet<PathBuf> = walk
                 .files
                 .iter()
-                .filter(|(_, (owner, _))| carried.contains(owner))
+                .filter(|(_, (owner, _))| owners.contains(owner))
                 .map(|(path, _)| path.clone())
                 .collect();
             for path in &dropped {
@@ -316,9 +355,8 @@ impl Store {
             .flat_map(|(path, (owner, _))| mode_ancestors(path, &walk.entries[*owner].path, &roots))
             .map(display_path)
             .collect();
-        if !manual.carry.is_empty() {
-            let carried: Vec<String> = manual
-                .carry
+        if !carried.is_empty() {
+            let carried: Vec<String> = carried
                 .iter()
                 .map(|index| walk.entries[*index].display())
                 .collect();
@@ -342,15 +380,18 @@ impl Store {
             }
         }
         let mut coverage = tracked.coverage(&walk);
-        let parent_commit = match &self.repo {
-            Some(repo) => repo.ref_oid(HistoryRepo::HISTORY_REF)?,
-            None => None,
-        };
-        let recipients = if walk.files.values().any(|(_, policy)| policy.encrypt) {
-            tracked.manifest.recipients.clone()
-        } else {
-            vec![]
-        };
+        // a re-encryption records the current recipients even when every
+        // encrypted file is carried forward
+        let recipients =
+            if draft.re_encrypt || walk.files.values().any(|(_, policy)| policy.encrypt) {
+                tracked.manifest.recipients.clone()
+            } else {
+                vec![]
+            };
+        let mut re_encrypted = vec![];
+        // the snapshot before re-encryption: the description names content
+        // changes, and re-encrypting a file changes no contents
+        let mut content_tree = None;
         let (snapshot, roots, available, reason) = match (&self.repo, walk_error) {
             (_, Some(reason)) => (None, vec![], false, Some(reason)),
             (Some(repo), None) => {
@@ -369,6 +410,13 @@ impl Store {
                                 parent_commit: parent_commit.as_deref(),
                                 draft: &draft,
                             },
+                        )?;
+                        let composed = carry_streams(
+                            repo,
+                            &composed,
+                            parent_commit.as_deref(),
+                            &walk.entries,
+                            &streams.carry,
                         )?;
                         // a subtree promotion keeps the saved modes of the
                         // siblings it did not name, like their content
@@ -422,7 +470,16 @@ impl Store {
                                 eyre::eyre!("captured tree is missing enrollment metadata")
                             })?;
                         manifest.capture_permissions(&walk.entries, &modes)?;
-                        let composed = manifest.write(repo, &composed)?;
+                        let mut composed = manifest.write(repo, &composed)?;
+                        if draft.re_encrypt {
+                            content_tree = Some(composed.clone());
+                            (composed, re_encrypted) = super::sync::files::re_encrypt(
+                                repo,
+                                &composed,
+                                previous_tree.as_ref().map(|(_, tree)| tree.as_str()),
+                                console::user_attended_stderr(),
+                            )?;
+                        }
                         (Some(composed), result.roots, true, None)
                     }
                     Err(err) => {
@@ -462,6 +519,12 @@ impl Store {
             if let Some(repo) = &self.repo {
                 super::enrollment::confirm(&self.state_dir, repo, tracked)?;
             }
+            if let (Some(repo), Some(held)) = (&self.repo, &mut held) {
+                observe_held(repo, held, streams, parent_commit.as_deref())?;
+            }
+            if draft.re_encrypt {
+                info!("history: {}", re_encrypt_report(&re_encrypted));
+            }
             return Ok(Outcome::Unchanged);
         }
         if !draft.has_metadata() && snapshot.is_none() {
@@ -483,7 +546,8 @@ impl Store {
                     .as_ref()
                     .map(|(checkpoint, _)| checkpoint.uuid.clone());
                 let from = previous_tree.as_ref().map(|(_, tree)| tree.as_str());
-                changes_from(repo, from, tree, since)?
+                let to = content_tree.as_deref().unwrap_or(tree);
+                changes_from(repo, from, to, since)?
             }
             _ => Changes::default(),
         };
@@ -503,27 +567,46 @@ impl Store {
         }
         // a manual-save entry carried forward holds its saved version by
         // definition: a difference against a protective capture of its live
-        // contents is not a change this checkpoint made
-        if !manual.carry.is_empty() {
-            let carried: Vec<String> = manual
-                .carry
+        // contents is not a change this checkpoint made, and neither is an
+        // unheld stream's
+        if !carried.is_empty() {
+            let under = |path: &str, entry: &str| {
+                path == entry
+                    || path
+                        .strip_prefix(entry)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            };
+            // an entry nested in a carried one and captured itself keeps
+            // its changes (see `carry_streams`)
+            let captured: Vec<String> = walk
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !carried.contains(index))
+                .map(|(_, entry)| entry.display())
+                .collect();
+            let carried: Vec<String> = carried
                 .iter()
                 .map(|index| walk.entries[*index].display())
                 .collect();
             let keep = |path: &String| {
-                !carried.iter().any(|entry| {
-                    path == entry
-                        || path
-                            .strip_prefix(entry.as_str())
-                            .is_some_and(|rest| rest.starts_with('/'))
-                })
+                !carried.iter().any(|entry| under(path, entry))
+                    || captured.iter().any(|nested| {
+                        under(path, nested)
+                            && carried
+                                .iter()
+                                .any(|entry| under(nested, entry) && nested != entry)
+                    })
             };
             changes.added.retain(keep);
             changes.modified.retain(keep);
             changes.removed.retain(keep);
         }
         let total_files: u64 = roots.iter().map(|root| root.files).sum();
-        let summary = describe(&draft, &changes, previous_tree.is_some(), total_files);
+        let mut summary = describe(&draft, &changes, previous_tree.is_some(), total_files);
+        if changes.is_empty() && !re_encrypted.is_empty() && previous_tree.is_some() {
+            summary = re_encrypt_report(&re_encrypted);
+        }
         let (description, description_source) = match &draft.description {
             Some(text) => (
                 text.clone(),
@@ -640,6 +723,12 @@ impl Store {
             && let Some(repo) = &self.repo
         {
             super::enrollment::confirm(&self.state_dir, repo, tracked)?;
+            if let Some(held) = &mut held {
+                observe_held(repo, held, streams, parent_commit.as_deref())?;
+            }
+        }
+        if draft.re_encrypt && snapshot.is_some() {
+            info!("history: {}", re_encrypt_report(&re_encrypted));
         }
         Ok(Outcome::Created(entry))
     }
@@ -897,6 +986,8 @@ impl Store {
                     .push(annotation.clone());
             }
         }
+        let gix = repo.gix()?;
+        let mut caches = store::CacheBatch::new(&self.state_dir);
         for (commit, annotation) in commits {
             // Annotation commits remain in Git ancestry, but are not new file
             // checkpoints and must not move `latest` in the history browser.
@@ -906,8 +997,8 @@ impl Store {
             let mut checkpoint = match store::read_commit_meta_cache_in(&self.state_dir, &commit)? {
                 Some(checkpoint) => checkpoint,
                 None => {
-                    let checkpoint = repo.read_meta(&commit)?;
-                    store::write_commit_meta_cache_in(&self.state_dir, &commit, &checkpoint)?;
+                    let checkpoint = HistoryRepo::read_meta_in(&gix, &commit)?;
+                    caches.write_commit_meta(&commit, &checkpoint)?;
                     checkpoint
                 }
             };
@@ -916,10 +1007,11 @@ impl Store {
                     annotation.apply_to(&mut checkpoint);
                 }
             }
-            store::write_meta_cache_in(&self.state_dir, &checkpoint)?;
+            caches.write_meta(&checkpoint)?;
             let id = existing.by_uuid(&commit).map(|entry| entry.id);
             entries.push((id, checkpoint, commit));
         }
+        caches.finish()?;
         let mut next_id = existing.next_id.max(1);
         let mut index = Index {
             next_id,
@@ -1039,6 +1131,55 @@ fn report_omissions(walk: &super::tracked::Walk, draft: &Draft) {
     }
 }
 
+/// Each carried stream keeps its saved version from the parent.
+fn carry_streams(
+    repo: &HistoryRepo,
+    tree: &str,
+    parent: Option<&str>,
+    entries: &[TrackedEntry],
+    carry: &[usize],
+) -> Result<String> {
+    let mut overlays = vec![];
+    for index in carry {
+        let entry = &entries[*index];
+        let path = entry.tree_path(&entry.path)?;
+        let object = parent
+            .map(|head| repo.object_at(head, &path))
+            .transpose()?
+            .flatten();
+        // an entry nested in the carried one, and captured itself, keeps
+        // what this capture saved for it; overlays apply in order
+        let mut nested = vec![];
+        for (other, child) in entries.iter().enumerate() {
+            let child_path = child.tree_path(&child.path)?;
+            if !carry.contains(&other) && child_path.starts_with(&format!("{path}/")) {
+                nested.push(Overlay {
+                    object: repo.object_at(tree, &child_path)?,
+                    path: child_path,
+                });
+            }
+        }
+        overlays.push(Overlay { path, object });
+        overlays.extend(nested);
+    }
+    repo.compose(tree, &overlays)
+}
+
+fn observe_held(
+    repo: &HistoryRepo,
+    held: &mut super::held::Held,
+    streams: super::held::Streams,
+    parent: Option<&str>,
+) -> Result<()> {
+    held.observe(streams.held, |stream| {
+        Ok(parent
+            .map(|head| repo.object_at(head, stream))
+            .transpose()?
+            .flatten())
+    })?;
+    held.save(repo)
+}
+
 fn manual_plan(
     walk: &super::tracked::Walk,
     draft: &Draft,
@@ -1063,6 +1204,15 @@ fn manual_plan(
         }
     }
     plan
+}
+
+/// What a re-encrypting capture did, for the user and a computed description.
+fn re_encrypt_report(paths: &[String]) -> String {
+    match paths.len() {
+        0 => "every encrypted file already uses the current recipients".into(),
+        1 => "re-encrypted 1 file to the current recipients".into(),
+        n => format!("re-encrypted {n} files to the current recipients"),
+    }
 }
 
 /// Whether `path` is the entry itself or below it.

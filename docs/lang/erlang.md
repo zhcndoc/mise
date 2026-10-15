@@ -1,61 +1,127 @@
 ---
-description: "在同一系统上安装和管理多个 Erlang 版本。"
-socialDescription: "在同一系统上安装和管理多个 Erlang 版本。"
+description: "Install Erlang/OTP with mise from precompiled builds where available, or from source with kerl."
 ---
 
 # Erlang
 
-`mise` 可用于在同一系统上安装和管理 [erlang](https://www.erlang.org/) 的多个版本。
+mise installs Erlang/OTP from a precompiled build when one exists for your
+platform and compiles it from source with [kerl](https://github.com/kerl/kerl)
+otherwise.
 
-## 用法
+## Quick start
 
-为项目安装 Erlang，然后检查 OTP 发布版本，而不启动交互式 Erlang shell：
+Install Erlang for the project, then print the OTP release without starting an
+interactive shell:
 
 ```sh
-mise use erlang@latest
+mise use erlang@29
 mise exec -- erl -noshell -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+# 29
 ```
 
-使用 `mise use -g erlang@latest` 设置个人默认版本，或者将 `latest` 替换为应用程序所需的发布系列。
+Use `mise use -g erlang@29` for a personal default. For Elixir, see
+[Elixir](/lang/elixir.html), which explains how to pick an Elixir build for
+your OTP major.
 
-使用 `mise ls-remote erlang` 查看可用版本。
+## Choosing a version
 
-这些说明使用 mise 内置的 erlang 支持。已安装的同名外部插件可能会更改行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/erlang.rs)。
+`erlang@29` selects the newest 29.x release, `erlang@29.1.1` selects that
+release, and `erlang@latest` selects the newest release. List the available
+versions with `mise ls-remote erlang`. See
+[version requests](/dev-tools/versions.html) for the full syntax.
 
-## kerl
+## Version files
 
-mise 默认会尝试使用兼容的预编译构建，并在需要时回退到源代码构建。源代码构建使用 [kerl](https://github.com/kerl/kerl)，并需要其平台构建依赖项。设置 `erlang.compile = true` 以请求源代码构建，或设置为 `false`，以便在预编译构建不可用时失败。
+mise reads no Erlang-specific version file. Set the version in `mise.toml` or
+`.tool-versions`.
 
-有关构建依赖项和配置，请参阅 kerl 的文档。
+## How mise installs Erlang {#kerl}
 
-在 GitHub Actions Linux runners 上，`ImageOS=ubuntu24`、`ImageOS=ubuntu22` 和 `ImageOS=ubuntu20` 分别对应预编译 Erlang 构建目标。在默认的 `erlang.compile` 模式下，不受支持的值会将 Erlang/OTP 源代码归档记录为平台的锁定输入，以便安装过程可以复现 kerl 回退行为。
+By default mise tries a precompiled build for your platform and compiles from
+source with kerl when none is available:
 
-由 [Bob](https://github.com/hexpm/bob#erlang-builds) 发布的构建以 Ubuntu 为目标，但也可能在其他具有兼容系统库的基于 glibc 的 Linux 发行版上运行。设置 `erlang.precompiled_os` 以选择 Bob 的某个 Ubuntu 目标：
+| Platform                                                             | Default source                                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| macOS (x64, arm64)                                                   | Precompiled, from [erlef/otp_builds](https://github.com/erlef/otp_builds)                  |
+| Windows (x64, x86)                                                   | Precompiled, from the [Erlang/OTP GitHub releases](https://github.com/erlang/otp/releases) |
+| Ubuntu 20.04, 22.04 and 24.04 (x64, arm64), including GitHub Actions | Precompiled, from [Bob](https://github.com/hexpm/bob#erlang-builds) on `builds.hex.pm`     |
+| Other Linux distributions, and musl systems such as Alpine           | Compiled from source with kerl                                                             |
 
-```toml
+Set [`erlang.compile`](/lang/erlang.html#erlang.compile) to `true` to always build from source,
+or to `false` to fail instead of compiling when no precompiled build exists.
+mise sets no Erlang environment variables; the install's `bin` directory goes
+on `PATH`.
+
+On Linux, mise reads `/etc/os-release` to find the Ubuntu release. On GitHub
+Actions Ubuntu runners it reads the runner's `ImageOS` instead (`ubuntu20`,
+`ubuntu22` or `ubuntu24`). Where no precompiled build applies,
+[`mise lock`](/cli/lock.html) records the Erlang/OTP source archive, so every
+machine that uses the lockfile compiles the same release. When `mise lock`
+runs on macOS or Windows and resolves a Linux platform, it records Bob's
+Ubuntu 24.04 build.
+
+On Alpine and NixOS, [`all_compile`](/configuration/settings.html#all_compile)
+currently defaults to `true`, so mise compiles Erlang without trying a
+precompiled build. This default is deprecated and changes in mise 2027.8.0, but
+the change does little for Erlang. mise has no precompiled Erlang for musl, so
+Alpine always compiles. mise does not detect NixOS as an Ubuntu release, so
+even after the change NixOS compiles unless you choose one of Bob's targets. On
+NixOS with [nix-ld](https://github.com/Mic92/nix-ld), set `all_compile = false`
+and [`erlang.precompiled_os`](/lang/erlang.html#erlang.precompiled_os) to use one of Bob's
+builds (see the next section). With `erlang.compile = false`, an install with no
+applicable precompiled build fails instead of compiling, so do not set it on
+Alpine, or on NixOS without `erlang.precompiled_os`. To keep compiling, set
+`all_compile = true` explicitly.
+
+An installed plugin named `erlang` takes precedence over the built-in
+installer. If mise behaves differently from this page, check
+[`mise plugins ls`](/cli/plugins/ls.html) and see
+[selecting another implementation](/core-tools.html#selecting-another-implementation).
+
+### Bob's Ubuntu builds on other distributions
+
+Bob's builds target Ubuntu but may also run on other glibc-based Linux
+distributions with compatible system libraries. Ubuntu 26.04 is not detected
+automatically. Set [`erlang.precompiled_os`](/lang/erlang.html#erlang.precompiled_os) to
+use one of Bob's targets:
+
+```toml [mise.toml]
 [settings.erlang]
-precompiled_os = "ubuntu-22.04"
+precompiled_os = "ubuntu-24.04"
 ```
 
-可接受的目标包括 `ubuntu-20.04`、`ubuntu-22.04`、`ubuntu-24.04` 和 `ubuntu-26.04`。
+Accepted targets are `ubuntu-20.04`, `ubuntu-22.04`, `ubuntu-24.04` and
+`ubuntu-26.04`.
 
-预编译构建版本会链接到 OpenSSL、ncurses、ODBC 和 wxWidgets 等系统库。仅具有兼容的 glibc 版本并不能保证每个可选的 Erlang 应用都能正常运行。所选目标会记录在 `mise.lock` 中；请使用与所有使用该锁定文件的机器兼容的目标。
+Precompiled builds link to system libraries such as OpenSSL, ncurses, ODBC and
+wxWidgets. A compatible glibc alone does not guarantee that every optional
+Erlang application works. `mise.lock` records the selected target, so choose
+one that works on every machine that uses the lockfile.
 
-## 工具选项
+### Source builds with kerl
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `erlang` 后端。
-这些选项放在 `mise.toml` 的 `[tools]` 部分中。
+Source builds need kerl's
+[build dependencies](https://github.com/kerl/kerl#building-erlangotp). mise
+downloads kerl itself, fetches the Erlang/OTP source archive, and runs
+`kerl build-install` with one make job per CPU. To pass configure flags, set
+`KERL_CONFIGURE_OPTIONS` with `install_env`:
 
-### `install_env`
-
-为 kerl 构建/安装命令以及由核心 `erlang` 后端运行的其他安装时命令设置环境变量：
-
-```toml
+```toml [mise.toml]
 [tools]
-erlang = { version = "latest", install_env = { KERL_CONFIGURE_OPTIONS = "--without-javac" } }
+erlang = { version = "29", install_env = { KERL_CONFIGURE_OPTIONS = "--without-javac" } }
 ```
 
-## 设置
+mise sets `KERL_BASE_DIR`, `KERL_DOWNLOAD_DIR` and `KERL_BUILD_BACKEND` itself,
+so values for those in `install_env` are ignored.
+
+## Tool options
+
+Erlang has no Erlang-specific options. `install_env` reaches kerl source
+builds, the install step of precompiled Linux builds, and `postinstall`
+commands. Other generic options are described in
+[tool options](/dev-tools/#tool-options).
+
+## Settings
 
 <script setup>
 import Settings from '/components/settings.vue';

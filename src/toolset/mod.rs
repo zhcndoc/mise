@@ -44,6 +44,7 @@ pub use tool_source::ToolSource;
 pub use tool_version::resolve_sub_base;
 pub use tool_version::{ResolveOptions, ToolVersion};
 pub(crate) use tool_version_list::ToolVersionList;
+pub(crate) use tool_version_options::fill_registry_defaults;
 pub use tool_version_options::{
     CoreToolOptions, EPHEMERAL_OPT_KEYS, RawBackendOptions, ResolvedToolOptions, ToolOptionSource,
     ToolOptions, ToolVersionOptions, parse_tool_options, scalar_value_to_string,
@@ -221,7 +222,7 @@ impl Toolset {
     }
 
     /// Lists missing install markers without invoking backend-specific checks.
-    pub(crate) async fn list_missing_versions(&self, config: &Arc<Config>) -> Vec<ToolVersion> {
+    pub async fn list_missing_versions(&self, config: &Arc<Config>) -> Vec<ToolVersion> {
         trace!("list_missing_versions");
         measure!("toolset::list_missing_versions", {
             self.list_current_versions()
@@ -938,17 +939,20 @@ pub(crate) async fn get_versions_needed_by_tracked_configs(
         use_locked_version,
         offline,
         &HashSet::new(),
+        false,
     )
     .await
 }
 
 /// Like [`get_versions_needed_by_tracked_configs`], but ignores lockfile pins
-/// for the provided config paths.
+/// for the provided config paths. With `defer_missing_lazy`, lazy tools that are
+/// not installed stay unresolved: there is nothing of theirs to keep or remove.
 pub async fn get_versions_needed_by_tracked_configs_excluding_locks(
     config: &Arc<Config>,
     use_locked_version: bool,
     offline: bool,
     exclude_locked_config_paths: &HashSet<PathBuf>,
+    defer_missing_lazy: bool,
 ) -> Result<NeededVersions> {
     let mut needed = NeededVersions::new();
     // `mise prune` should keep versions pinned by lockfiles. `mise upgrade`
@@ -956,11 +960,14 @@ pub async fn get_versions_needed_by_tracked_configs_excluding_locks(
     // it just upgraded so stale locks there do not keep the old version alive.
     // Prune also passes offline=true: it only protects installed versions, so
     // remote resolution can never affect the outcome and just adds latency.
-    for (path, cf) in config.get_tracked_config_files().await? {
+    let tracked = config.get_tracked_config_files().await?;
+    for (path, cf) in tracked.clone() {
         let use_locked_version = use_locked_version && !exclude_locked_config_paths.contains(&path);
         let opts = ResolveOptions {
             use_locked_version,
             offline,
+            defer_missing_lazy_tools: defer_missing_lazy,
+            defer_missing_lazy_online: defer_missing_lazy,
             ..Default::default()
         };
         if use_locked_version && Settings::get().lockfile_enabled() {
@@ -1020,27 +1027,50 @@ pub async fn get_versions_needed_by_tracked_configs_excluding_locks(
         // to where the project is used; a global prune cannot render them the way
         // the project does, so it reads the snapshot. With no current snapshot it
         // keeps every installation of those tools until the project is used again.
-        let mut requests =
-            if crate::install_layout::resolver::enabled() && cf.has_templated_tool_versions() {
-                let mut requests = cf.to_tool_request_set_skipping_templated()?;
-                let current = crate::install_layout::snapshots::current(&path, &cf.source());
-                for request in current.requests {
-                    requests.add_version(request, &cf.source());
+        let templated =
+            crate::install_layout::resolver::enabled() && cf.has_templated_tool_versions();
+        let requests = if templated {
+            cf.to_tool_request_set_skipping_templated()
+        } else {
+            cf.to_tool_request_set()
+        };
+        // A tool version that no longer parses is skipped like a config that no
+        // longer parses, so one broken project does not stop the whole prune.
+        let mut requests = match requests {
+            Ok(requests) => requests,
+            Err(err) => {
+                warn!(
+                    "error loading tracked config file {}: {err:#}",
+                    display_path(&path)
+                );
+                continue;
+            }
+        };
+        if templated {
+            let current = crate::install_layout::snapshots::current(&path, &cf.source());
+            for request in current.requests {
+                requests.add_version(request, &cf.source());
+            }
+            if current.keep_all {
+                for short in cf.templated_tool_backends() {
+                    keep_every_installation(&short, &path, &mut needed);
                 }
-                if current.keep_all {
-                    for short in cf.templated_tool_backends() {
-                        keep_every_installation(&short, &path, &mut needed);
-                    }
-                }
-                for short in &current.keep_tools {
-                    keep_every_installation(short, &path, &mut needed);
-                }
-                requests
-            } else {
-                cf.to_tool_request_set()?
-            };
+            }
+            for short in &current.keep_tools {
+                keep_every_installation(short, &path, &mut needed);
+            }
+        }
         let files = [(path.clone(), cf.clone())].into_iter().collect();
         crate::daemons::load(&files)?.add_tool_requests(&mut requests)?;
+        // Tools scoped to a task are still referenced by the config.
+        let (task_requests, task_templated) =
+            crate::config::task_tool_requests(config, &tracked, &cf);
+        for tvr in task_requests {
+            requests.add_version(tvr, &cf.source());
+        }
+        for short in &task_templated {
+            keep_every_installation(short, &path, &mut needed);
+        }
         let mut ts = Toolset::from(requests);
         ts.resolve_with_opts(config, &opts).await?;
         collect_needed_versions(&ts, offline, &path, &mut needed);
@@ -1232,6 +1262,37 @@ fn is_named_in(names: &std::collections::BTreeSet<String>, ba: &BackendArg) -> b
     })
 }
 
+/// A `pipx:`/`pypi:` install made from a uv lock is named by a digest that includes
+/// the Python it was built with, and that Python comes from the directory the
+/// toolset is resolved in. A global tool therefore resolves to a different
+/// directory per project, so keep the installs of the same version built with
+/// any other Python as well.
+fn keep_uv_python_variants(tv: &ToolVersion, source: &Path, needed: &mut NeededVersions) {
+    if tv.uv_install_identity().is_none() {
+        return;
+    }
+    let prefix = format!("{}~uv~", tv.logical_pathname());
+    let Ok(backend) = tv.backend() else { return };
+    for v in backend.list_installed_versions() {
+        if v.starts_with(&prefix) {
+            needed
+                .entry((tv.ba().short.to_string(), v))
+                .or_default()
+                .insert(source.to_path_buf());
+        }
+    }
+    for (name, dir) in crate::install_layout::resolver::installs_of(tv.ba()) {
+        if name.starts_with(&prefix)
+            && let Some(dir) = crate::install_layout::resolver::dir_name_of(&dir)
+        {
+            needed
+                .entry((String::new(), dir))
+                .or_default()
+                .insert(source.to_path_buf());
+        }
+    }
+}
+
 fn collect_needed_versions(
     ts: &Toolset,
     offline: bool,
@@ -1243,6 +1304,7 @@ fn collect_needed_versions(
             .entry(needed_key(&tv))
             .or_default()
             .insert(source.to_path_buf());
+        keep_uv_python_variants(&tv, source, needed);
         // Offline can't resolve `sub-N:latest` to a concrete version
         // (no remote latest available). Conservatively protect every
         // installed version of this backend so we don't delete the

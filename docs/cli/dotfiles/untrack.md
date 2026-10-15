@@ -11,7 +11,9 @@ description: "停止跟踪文件或目录"
 
 停止跟踪文件或目录
 
-移除 `[dotfiles]` 跟踪条目（或在 config.local.toml 中关闭继承的条目），并停止未来的捕获。文件本身及其现有检查点将完全保持原样。
+Removes the path's `mode = "track"` entry from your global config. When a project or system config declares the entry, mise turns it off on this machine in `config.local.toml` next to your global config instead.
+
+A path inside a tracked directory has no entry of its own: mise adds a rule for it to `[history] exclude` in the global config, and `mise dot include <path>` removes that rule. The file itself and its existing checkpoints are not changed.
 
 ## 参数
 - **`<PATH>…`** — 要停止跟踪的路径
@@ -19,16 +21,24 @@ description: "停止跟踪文件或目录"
 ## 标志
 - **`-h --help`** — 打印帮助
 
-示例：
+## Examples
+
+Stop saving ~/.zshrc
 
 ```
 mise dot untrack ~/.zshrc
+```
+
+Exclude one directory inside a tracked directory
+
+```
+mise dot untrack ~/.config/hypr/plugins
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

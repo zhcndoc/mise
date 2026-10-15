@@ -11,7 +11,8 @@ use regex::Regex;
 use reqwest::StatusCode;
 use reqwest::header::{
     ACCEPT_ENCODING, AUTHORIZATION, CONTENT_RANGE, CONTENT_TYPE, COOKIE, DATE, ETAG, HeaderMap,
-    HeaderName, HeaderValue, IF_RANGE, LAST_MODIFIED, PROXY_AUTHORIZATION, RANGE,
+    HeaderName, HeaderValue, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_RANGE, LAST_MODIFIED,
+    PROXY_AUTHORIZATION, RANGE,
 };
 use reqwest::{ClientBuilder, IntoUrl, Method, Response};
 use serde::{Deserialize, Serialize};
@@ -23,9 +24,12 @@ use url::Url;
 use crate::file::display_path;
 use crate::netrc;
 use crate::progress::SingleReport;
+use crate::redactions::redact_url_userinfo;
 use crate::time::format_duration;
 use crate::{env, file};
 use mise_settings::Settings;
+
+mod cas;
 
 pub static HTTP: Lazy<Client> = Lazy::new(|| {
     Client::new_shared(
@@ -74,7 +78,7 @@ static HTTP_CHECKSUM_PINNED: Lazy<Client> = Lazy::new(|| {
 /// during a single operation (e.g., fetching SHASUMS256.txt for multiple platforms).
 /// Each URL gets its own OnceCell to ensure concurrent requests for the same URL
 /// wait for the first fetch to complete rather than all fetching simultaneously.
-type CachedResult = Arc<OnceCell<Result<String, String>>>;
+type CachedResult = Arc<OnceCell<Result<String, CachedFailure>>>;
 static HTTP_CACHE: Lazy<Mutex<HashMap<String, CachedResult>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 /// Origins that returned a hard connection failure during a prefer-offline
@@ -83,6 +87,23 @@ static HTTP_CACHE: Lazy<Mutex<HashMap<String, CachedResult>>> =
 static UNAVAILABLE_HTTP_HOSTS: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 type RetryStateHandle = Arc<Mutex<RetryState>>;
+
+/// A failed [`HttpClient::get_text_cached`] request, kept as text so every
+/// caller of the URL can share it, along with whether it ever reached the
+/// server so [`is_unreachable`] still recognizes it.
+#[derive(Clone, Debug)]
+struct CachedFailure {
+    message: String,
+    unreachable: bool,
+}
+
+impl std::fmt::Display for CachedFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CachedFailure {}
 
 #[derive(Debug)]
 struct UnavailableHttpHost {
@@ -105,6 +126,42 @@ impl std::error::Error for UnavailableHttpHost {}
 struct RetryState {
     headers: HeaderMap,
     use_netrc: bool,
+}
+
+fn new_retry_state(headers: &HeaderMap) -> RetryStateHandle {
+    Arc::new(Mutex::new(RetryState {
+        headers: headers.clone(),
+        use_netrc: true,
+    }))
+}
+
+/// The headers and send options for the next attempt, which an earlier attempt
+/// may have changed (a refreshed token, netrc turned off).
+fn attempt_options(
+    retry_state: &RetryStateHandle,
+    error_for_status: bool,
+) -> (HeaderMap, SendOnceOptions) {
+    let (headers, use_netrc) = {
+        let state = retry_state.lock().unwrap();
+        (state.headers.clone(), state.use_netrc)
+    };
+    let options = SendOnceOptions::new(Some(retry_state.clone()), use_netrc);
+    let options = if error_for_status {
+        options
+    } else {
+        options.allow_error_status()
+    };
+    (headers, options)
+}
+
+/// The parts of a request that stay fixed across retry attempts.
+struct RetryableRequest<'a> {
+    method: Method,
+    url: Url,
+    headers: &'a HeaderMap,
+    verb_label: &'a str,
+    retries: i64,
+    error_for_status: bool,
 }
 
 #[derive(Clone)]
@@ -202,6 +259,45 @@ impl DownloadValidator {
             } => is_strong_last_modified(value, response_date),
         }
     }
+}
+
+/// Whether a download may use the store. With `locked` or `paranoid` only a
+/// pinned one may: the checksum is checked after the download, so a store that
+/// was restored or shared can't change what gets installed, while an unpinned
+/// download has nothing to check a kept file against.
+fn cache_allowed(pin: Option<&str>) -> bool {
+    let settings = Settings::get();
+    settings.download_cache && (pin.is_some() || !(settings.locked || settings.paranoid))
+}
+
+/// How a download may use the store of finished downloads.
+#[derive(Clone, Copy)]
+struct CacheMode<'a> {
+    /// The checksum the tool pinned, as `algo:hex`.
+    pin: Option<&'a str>,
+    enabled: bool,
+}
+
+/// How a download was satisfied.
+struct Fetched {
+    metadata: DownloadFileMetadata,
+    /// A stored file answered the request, so nothing was written to the
+    /// destination.
+    stored: Option<PathBuf>,
+    /// The validator that came with a complete response, for keeping it.
+    validator: Option<DownloadValidator>,
+    request_hash: String,
+}
+
+/// What an attempt learned beyond the bytes it wrote.
+#[derive(Default)]
+struct AttemptOutcome {
+    /// The validator of the stored copy, sent so the server can confirm it.
+    cond: Option<DownloadValidator>,
+    /// The server confirmed the stored copy is current; nothing was written.
+    not_modified: std::sync::atomic::AtomicBool,
+    /// The validator that came with a complete response, for keeping it.
+    validator: Mutex<Option<DownloadValidator>>,
 }
 
 #[derive(Debug)]
@@ -943,9 +1039,24 @@ impl Client {
     }
 
     pub async fn get_bytes<U: IntoUrl>(&self, url: U) -> Result<impl AsRef<[u8]>> {
+        ensure!(
+            !crate::network::offline(&Settings::get()),
+            "offline mode is enabled"
+        );
         let url = url.into_url()?;
-        let resp = self.get_async(url.clone()).await?;
-        Ok(resp.bytes().await?)
+        let headers = host_auth_headers(&url)?;
+        self.send_with_retries(
+            RetryableRequest {
+                method: Method::GET,
+                url,
+                headers: &headers,
+                verb_label: "GET",
+                retries: crate::network::http_retries(&Settings::get()),
+                error_for_status: true,
+            },
+            |resp| async move { Ok(resp.bytes().await?) },
+        )
+        .await
     }
 
     pub async fn get_async<U: IntoUrl>(&self, url: U) -> Result<Response> {
@@ -1020,6 +1131,7 @@ impl Client {
             url: url.into_url().map_err(|e| e.to_string()),
             extra_headers: HeaderMap::new(),
             retries: crate::network::http_retries(&Settings::get()),
+            allow_html: false,
         }
     }
 
@@ -1062,7 +1174,10 @@ impl Client {
                 async move {
                     match self.get_text_request(url).headers(headers).send().await {
                         Ok(text) => Ok(text),
-                        Err(err) => Err(err.to_string()),
+                        Err(err) => Err(CachedFailure {
+                            message: err.to_string(),
+                            unreachable: is_unreachable(&err),
+                        }),
                     }
                 }
             })
@@ -1070,7 +1185,7 @@ impl Client {
 
         match result {
             Ok(text) => Ok(text.clone()),
-            Err(err) => bail!("{}", err),
+            Err(err) => Err(err.clone().into()),
         }
     }
 
@@ -1089,7 +1204,7 @@ impl Client {
                     .eq_ignore_ascii_case("text/html")
             });
         if !is_html {
-            bail!("Got non-HTML text from {}", url);
+            bail!("Got non-HTML text from {}", log_url(&url));
         }
         let html = resp.text().await?;
         Ok(html)
@@ -1100,10 +1215,8 @@ impl Client {
         T: serde::de::DeserializeOwned,
     {
         let url = url.into_url()?;
-        let resp = self.get_async(url).await?;
-        let headers = resp.headers().clone();
-        let json = resp.json().await?;
-        Ok((json, headers))
+        let headers = host_auth_headers(&url)?;
+        self.json_headers_with_headers(url, &headers).await
     }
 
     pub async fn json_headers_with_headers<T, U: IntoUrl>(
@@ -1114,11 +1227,26 @@ impl Client {
     where
         T: serde::de::DeserializeOwned,
     {
+        ensure!(
+            !crate::network::offline(&Settings::get()),
+            "offline mode is enabled"
+        );
         let url = url.into_url()?;
-        let resp = self.get_async_with_headers(url, headers).await?;
-        let headers = resp.headers().clone();
-        let json = resp.json().await?;
-        Ok((json, headers))
+        self.send_with_retries(
+            RetryableRequest {
+                method: Method::GET,
+                url,
+                headers,
+                verb_label: "GET",
+                retries: crate::network::http_retries(&Settings::get()),
+                error_for_status: true,
+            },
+            |resp| async move {
+                let headers = resp.headers().clone();
+                Ok((resp.json().await?, headers))
+            },
+        )
+        .await
     }
 
     pub async fn json<T, U: IntoUrl>(&self, url: U) -> Result<T>
@@ -1173,7 +1301,7 @@ impl Client {
             "offline mode is enabled"
         );
         let url = url.into_url()?;
-        debug!("POST {}", url);
+        debug!("POST {}", log_url(&url));
         let resp = self
             .reqwest()?
             .post(url)
@@ -1227,6 +1355,35 @@ impl Client {
         headers: &HeaderMap,
         pr: Option<&dyn SingleReport>,
     ) -> Result<DownloadFileMetadata> {
+        self.download_file_with_pin(url, path, headers, None, pr)
+            .await
+    }
+
+    /// Like [`Client::download_file`], for a tool that pinned `pin`
+    /// (`algo:hex`). A download kept earlier under that checksum is used
+    /// without a request once it hashes to the pin again. The caller still
+    /// verifies the result.
+    pub async fn download_file_pinned<U: IntoUrl>(
+        &self,
+        url: U,
+        path: &Path,
+        pin: Option<&str>,
+        pr: Option<&dyn SingleReport>,
+    ) -> Result<DownloadFileMetadata> {
+        let url = url.into_url()?;
+        let headers = host_auth_headers(&url)?;
+        self.download_file_with_pin(url, path, &headers, pin, pr)
+            .await
+    }
+
+    pub async fn download_file_with_pin<U: IntoUrl>(
+        &self,
+        url: U,
+        path: &Path,
+        headers: &HeaderMap,
+        pin: Option<&str>,
+        pr: Option<&dyn SingleReport>,
+    ) -> Result<DownloadFileMetadata> {
         let url = url.into_url()?;
         if Settings::get().generate_lockfiles() {
             let key = format!("{:p}:{}", self, download_request_hash(&url, headers));
@@ -1244,6 +1401,7 @@ impl Client {
                             url.clone(),
                             &directory.path().join("artifact"),
                             headers,
+                            pin,
                             pr,
                             crate::network::http_download_timeout(&Settings::get()),
                         )
@@ -1276,6 +1434,7 @@ impl Client {
             url,
             path,
             headers,
+            pin,
             pr,
             crate::network::http_download_timeout(&Settings::get()),
         )
@@ -1287,15 +1446,178 @@ impl Client {
         url: U,
         path: &Path,
         headers: &HeaderMap,
+        pin: Option<&str>,
         pr: Option<&dyn SingleReport>,
         total_timeout: Duration,
     ) -> Result<DownloadFileMetadata> {
+        let use_cache = cache_allowed(pin);
+        let cache = CacheMode {
+            pin,
+            enabled: use_cache,
+        };
+        let fetched = self
+            .download_file_inner(url, path, headers, cache, pr, total_timeout)
+            .await?;
+        if let Some(blob) = fetched.stored {
+            let dest = path.to_path_buf();
+            tokio::task::spawn_blocking(move || cas::place(&blob, &dest, false)).await??;
+            return Ok(fetched.metadata);
+        }
+        if use_cache {
+            // Best effort: a download that can't be kept is still a download.
+            let path = path.to_path_buf();
+            let pin = pin.map(str::to_string);
+            let effective_filename = fetched.metadata.effective_filename.clone();
+            let kept = tokio::task::spawn_blocking(move || {
+                cas::store(
+                    &path,
+                    cas::Keep {
+                        request_hash: &fetched.request_hash,
+                        pin: pin.as_deref(),
+                        validator: fetched.validator.as_ref(),
+                        effective_filename,
+                    },
+                )
+            })
+            .await;
+            if let Ok(Err(err)) | Err(err) = kept.map_err(Report::from) {
+                debug!("could not keep the download: {err:#}");
+            }
+        }
+        Ok(fetched.metadata)
+    }
+
+    /// [`Client::download_file_linked`] with the automatic host credentials, for
+    /// callers that send no headers of their own.
+    pub async fn download_file_stored<U: IntoUrl>(
+        &self,
+        url: U,
+        dest: &Path,
+        pin: Option<&str>,
+        pr: Option<&dyn SingleReport>,
+    ) -> Result<DownloadFileMetadata> {
+        let url = url.into_url()?;
+        let headers = host_auth_headers(&url)?;
+        self.download_file_linked(url, dest, &headers, pin, pr)
+            .await
+    }
+
+    /// Like [`Client::download_file_pinned`], but the download is kept in the
+    /// store first and `dest` is a link to it where the filesystem allows one,
+    /// so the bytes exist once. Across devices, or without a store, it is a
+    /// copy. For callers that only read the file: a change through the link
+    /// would change the stored file, which is hashed again before it is reused.
+    pub async fn download_file_linked<U: IntoUrl>(
+        &self,
+        url: U,
+        dest: &Path,
+        headers: &HeaderMap,
+        pin: Option<&str>,
+        pr: Option<&dyn SingleReport>,
+    ) -> Result<DownloadFileMetadata> {
+        let url = url.into_url()?;
+        let name = dest
+            .file_name()
+            .ok_or_else(|| eyre!("download destination has no filename: {}", dest.display()))?
+            .to_string_lossy()
+            .to_string();
+        let request_hash = download_request_hash(&url, headers);
+        let staging = (cache_allowed(pin) && !Settings::get().generate_lockfiles())
+            .then(|| cas::staging_path(&request_hash, &name))
+            .flatten();
+        let Some(staging) = staging else {
+            return self
+                .download_file_with_pin(url, dest, headers, pin, pr)
+                .await;
+        };
+        let cache = CacheMode { pin, enabled: true };
+        let fetched = self
+            .download_file_inner(
+                url,
+                &staging,
+                headers,
+                cache,
+                pr,
+                crate::network::http_download_timeout(&Settings::get()),
+            )
+            .await?;
+        let blob = match fetched.stored {
+            Some(blob) => Some(blob),
+            None => {
+                let staged = staging.clone();
+                let pin = pin.map(str::to_string);
+                let effective_filename = fetched.metadata.effective_filename.clone();
+                let validator = fetched.validator.clone();
+                let hash = fetched.request_hash.clone();
+                tokio::task::spawn_blocking(move || {
+                    cas::ingest(
+                        &staged,
+                        cas::Keep {
+                            request_hash: &hash,
+                            pin: pin.as_deref(),
+                            validator: validator.as_ref(),
+                            effective_filename,
+                        },
+                    )
+                })
+                .await??
+            }
+        };
+        let dest = dest.to_path_buf();
+        // With nothing to index it by (no validator, no pin) the staged file is
+        // the download itself.
+        let (source, link) = match &blob {
+            Some(blob) => (blob.clone(), true),
+            None => (staging.clone(), false),
+        };
+        tokio::task::spawn_blocking(move || cas::place(&source, &dest, link)).await??;
+        if blob.is_none() {
+            let _ = file::remove_file(&staging);
+        }
+        Ok(fetched.metadata)
+    }
+
+    /// With `use_cache`, a download kept under `pin` is reused outright, and one
+    /// kept for the same request is offered to the server for revalidation and
+    /// reused on `304 Not Modified`.
+    async fn download_file_inner<U: IntoUrl>(
+        &self,
+        url: U,
+        path: &Path,
+        headers: &HeaderMap,
+        cache: CacheMode<'_>,
+        pr: Option<&dyn SingleReport>,
+        total_timeout: Duration,
+    ) -> Result<Fetched> {
+        let CacheMode {
+            pin,
+            enabled: use_cache,
+        } = cache;
+        let started = Instant::now();
+        let url = url.into_url()?;
+        let request_hash = download_request_hash(&url, headers);
+        // A pinned download kept earlier needs no request, so this comes before
+        // the offline check.
+        if use_cache && let Some(hit) = pin.and_then(cas::lookup_pin) {
+            let effective_filename = hit.effective_filename.clone();
+            if let Some(blob) = tokio::task::spawn_blocking(move || hit.verified()).await? {
+                return Ok(Fetched {
+                    metadata: DownloadFileMetadata { effective_filename },
+                    stored: Some(blob),
+                    validator: None,
+                    request_hash,
+                });
+            }
+        }
         ensure!(
             !crate::network::offline(&Settings::get()),
             "offline mode is enabled"
         );
-        let url = url.into_url()?;
-        debug!("GET Downloading {} to {}", url, display_path(path));
+        debug!(
+            "GET Downloading {} to {}",
+            log_url(&url),
+            display_path(path)
+        );
         let parent = path.parent().unwrap();
         file::create_dir_all(parent)?;
         let partial = PartialDownload::new(path, download_request_hash(&url, headers))?;
@@ -1309,6 +1631,15 @@ impl Client {
                 .await??;
         let attempt = Arc::new(AtomicUsize::new(0));
         let progress = Arc::new(DownloadProgress::default());
+        let cached = if use_cache {
+            cas::lookup_url(&request_hash)
+        } else {
+            None
+        };
+        let outcome = Arc::new(AttemptOutcome {
+            cond: cached.as_ref().map(|c| c.validator.clone()),
+            ..Default::default()
+        });
 
         // Retry the whole transfer, resuming a validated partial response when
         // possible. send_once_with_https_fallback_allow_416 (not
@@ -1318,10 +1649,11 @@ impl Client {
             let progress = progress.clone();
             let request_url = url.clone();
             let partial = partial.clone();
+            let outcome = outcome.clone();
             async move {
                 attempt.fetch_add(1, Ordering::Relaxed);
                 progress.start_attempt();
-                self.download_file_attempt(request_url, headers, &partial, pr, &progress)
+                self.download_file_attempt(request_url, headers, &partial, pr, &progress, &outcome)
                     .await
             }
         });
@@ -1349,7 +1681,7 @@ impl Client {
                 bail!(
                     "HTTP download timed out after {} for {} (attempt {}, {} bytes received; change with `http_download_timeout` or env `MISE_HTTP_DOWNLOAD_TIMEOUT`)",
                     format_duration(total_timeout),
-                    url,
+                    log_url(&url),
                     attempt.load(Ordering::Relaxed),
                     progress.attempt.load(Ordering::Relaxed),
                 )
@@ -1361,8 +1693,48 @@ impl Client {
         // of `timeout` prevents us from returning an error while it can still
         // install the destination in the background.
         let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || partial.persist(&path)).await??;
-        Ok(metadata)
+        if outcome.not_modified.load(Ordering::Relaxed)
+            && let Some(cached) = cached
+        {
+            let effective_filename = cached.effective_filename();
+            let hit = cached.into_hit();
+            if let Some(blob) = tokio::task::spawn_blocking(move || hit.verified()).await? {
+                return Ok(Fetched {
+                    metadata: DownloadFileMetadata { effective_filename },
+                    stored: Some(blob),
+                    validator: None,
+                    request_hash,
+                });
+            }
+            // The stored file no longer matches what was recorded: fetch it again.
+            drop(_download_lock);
+            let cache = CacheMode {
+                pin,
+                enabled: false,
+            };
+            // What is left of the budget, not a fresh one.
+            let remaining = total_timeout
+                .checked_sub(started.elapsed())
+                .filter(|left| !left.is_zero())
+                .ok_or_else(|| {
+                    eyre!(
+                        "HTTP download timed out after {} for {}",
+                        format_duration(total_timeout),
+                        log_url(&url)
+                    )
+                })?;
+            return Box::pin(self.download_file_inner(url, &path, headers, cache, pr, remaining))
+                .await;
+        }
+        let persist_path = path.clone();
+        tokio::task::spawn_blocking(move || partial.persist(&persist_path)).await??;
+        let validator = outcome.validator.lock().unwrap().take();
+        Ok(Fetched {
+            metadata,
+            stored: None,
+            validator,
+            request_hash,
+        })
     }
 
     async fn download_file_attempt(
@@ -1372,6 +1744,7 @@ impl Client {
         partial: &PartialDownload,
         pr: Option<&dyn SingleReport>,
         progress: &DownloadProgress,
+        outcome: &AttemptOutcome,
     ) -> Result<DownloadFileMetadata> {
         let mut restarted_without_resume = false;
         loop {
@@ -1395,6 +1768,20 @@ impl Client {
             let offset = resume.as_ref().map(|(_, size)| *size).unwrap_or(0);
             let mut request_headers = headers.clone();
             request_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+            let mut conditional = false;
+            if resume.is_none()
+                && let Some(cond) = &outcome.cond
+            {
+                conditional = true;
+                match cond {
+                    DownloadValidator::Etag(value) => {
+                        request_headers.insert(IF_NONE_MATCH, HeaderValue::from_str(value)?);
+                    }
+                    DownloadValidator::LastModified { value, .. } => {
+                        request_headers.insert(IF_MODIFIED_SINCE, HeaderValue::from_str(value)?);
+                    }
+                }
+            }
             if let Some((state, _)) = &resume {
                 request_headers.insert(RANGE, HeaderValue::from_str(&format!("bytes={offset}-"))?);
                 request_headers.insert(
@@ -1423,6 +1810,14 @@ impl Client {
             #[cfg(not(unix))]
             let served_by = resp.url();
             progress.served_by(served_by);
+
+            if conditional && resp.status() == StatusCode::NOT_MODIFIED {
+                outcome.not_modified.store(true, Ordering::Relaxed);
+                return Ok(DownloadFileMetadata::default());
+            }
+            *outcome.validator.lock().unwrap() = (resp.status() != StatusCode::PARTIAL_CONTENT)
+                .then(|| response_validator(resp.headers()))
+                .flatten();
 
             if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE {
                 if let Some(ParsedContentRange::Unsatisfied { total }) = resp
@@ -1636,21 +2031,9 @@ impl Client {
         retries: i64,
         error_for_status: bool,
     ) -> Result<Response> {
-        let retry_state = Arc::new(Mutex::new(RetryState {
-            headers: headers.clone(),
-            use_netrc: true,
-        }));
+        let retry_state = new_retry_state(headers);
         retry_async_with_retries(verb_label, &url, retries, || async {
-            let (headers, use_netrc) = {
-                let state = retry_state.lock().unwrap();
-                (state.headers.clone(), state.use_netrc)
-            };
-            let options = SendOnceOptions::new(Some(retry_state.clone()), use_netrc);
-            let options = if error_for_status {
-                options
-            } else {
-                options.allow_error_status()
-            };
+            let (headers, options) = attempt_options(&retry_state, error_for_status);
             self.send_once_with_https_fallback_with_retry_headers(
                 method.clone(),
                 url.clone(),
@@ -1659,6 +2042,31 @@ impl Client {
                 options,
             )
             .await
+        })
+        .await
+    }
+
+    /// Send with retries, turning the response into `T` inside the retried unit.
+    /// reqwest resolves a request once the headers arrive, so reading the body
+    /// after the retry loop leaves a mid-body connection drop unretried.
+    async fn send_with_retries<T, F, Fut>(&self, req: RetryableRequest<'_>, read: F) -> Result<T>
+    where
+        F: Fn(Response) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let retry_state = new_retry_state(req.headers);
+        retry_async_with_retries(req.verb_label, &req.url, req.retries, || async {
+            let (headers, options) = attempt_options(&retry_state, req.error_for_status);
+            let resp = self
+                .send_once_with_https_fallback_with_retry_headers(
+                    req.method.clone(),
+                    req.url.clone(),
+                    &headers,
+                    req.verb_label,
+                    options,
+                )
+                .await?;
+            read(resp).await
         })
         .await
     }
@@ -1706,10 +2114,7 @@ impl Client {
             .await
         {
             Ok(resp) => Ok(resp),
-            Err(err)
-                if url.scheme() == "http"
-                    && (is_connection_error(&err) || is_unavailable_http_host_error(&err)) =>
-            {
+            Err(err) if url.scheme() == "http" && is_unreachable(&err) => {
                 let mut url = url;
                 url.set_scheme("https").unwrap();
                 self.send_once_with_retry_headers(method, url, headers, verb_label, options)
@@ -1792,7 +2197,7 @@ impl Client {
             }
             .into());
         }
-        debug!("{} {}", verb_label, url);
+        debug!("{} {}", verb_label, log_url(&url));
 
         // Apply netrc credentials after URL replacement.
         //
@@ -1851,7 +2256,7 @@ impl Client {
                     let hint = format!(
                         "HTTP timed out after {} for {} (change with `{}` or env `{}`).",
                         format_duration(request_timeout),
-                        url,
+                        log_url(&url),
                         setting,
                         env_var
                     );
@@ -1863,9 +2268,9 @@ impl Client {
             }
         };
         if *env::MISE_LOG_HTTP {
-            eprintln!("{} {url} {}", verb_label, resp.status());
+            eprintln!("{} {} {}", verb_label, log_url(&url), resp.status());
         }
-        debug!("{} {url} {}", verb_label, resp.status());
+        debug!("{} {} {}", verb_label, log_url(&url), resp.status());
         display_github_rate_limit(&resp);
         if options.retry_github_oauth_401
             && let Some(stale_access_token) =
@@ -1893,7 +2298,8 @@ impl Client {
                         }
                         debug!(
                             "{} {} retrying with refreshed GitHub OAuth token after 401",
-                            verb_label, url
+                            verb_label,
+                            log_url(&url)
                         );
                         return Box::pin(self.send_once_inner(
                             method,
@@ -1965,7 +2371,9 @@ impl Client {
                 forward_rules.attach_to(&mut headers);
                 debug!(
                     "{} {} retrying without GitHub auth after {}",
-                    verb_label, url, status
+                    verb_label,
+                    log_url(&url),
+                    status
                 );
                 return Box::pin(self.send_once_inner(
                     method,
@@ -1995,6 +2403,7 @@ pub struct TextRequest<'a> {
     url: Result<Url, String>,
     extra_headers: HeaderMap,
     retries: i64,
+    allow_html: bool,
 }
 
 impl TextRequest<'_> {
@@ -2008,6 +2417,13 @@ impl TextRequest<'_> {
         self
     }
 
+    /// Accept an HTML body instead of rejecting it, for callers that parse
+    /// arbitrary content such as directory listings.
+    pub fn allow_html(mut self) -> Self {
+        self.allow_html = true;
+        self
+    }
+
     pub async fn send(mut self) -> Result<String> {
         ensure!(
             !crate::network::offline(&Settings::get()),
@@ -2017,26 +2433,28 @@ impl TextRequest<'_> {
         // Merge GitHub headers with any extra headers provided
         let mut headers = host_auth_headers(&url)?;
         headers.extend(self.extra_headers.clone());
-        let resp = self
+        let text = self
             .client
-            .send_with_https_fallback_with_retries(
-                Method::GET,
-                url.clone(),
-                &headers,
-                "GET",
-                self.retries,
-                true,
+            .send_with_retries(
+                RetryableRequest {
+                    method: Method::GET,
+                    url: url.clone(),
+                    headers: &headers,
+                    verb_label: "GET",
+                    retries: self.retries,
+                    error_for_status: true,
+                },
+                |resp| async move { Ok(resp.text().await?) },
             )
             .await?;
-        let text = resp.text().await?;
-        if text.starts_with("<!DOCTYPE html>") {
+        if !self.allow_html && text.starts_with("<!DOCTYPE html>") {
             if url.scheme() == "http" {
                 // try with https since http may be blocked
                 url.set_scheme("https").unwrap();
                 self.url = Ok(url);
                 return Box::pin(self.send()).await;
             }
-            bail!("Got HTML instead of text from {}", url);
+            bail!("Got HTML instead of text from {}", log_url(&url));
         }
         Ok(text)
     }
@@ -2240,7 +2658,7 @@ pub fn with_host_auth(url: &Url, headers: &HeaderMap) -> Result<HeaderMap> {
     Ok(merged)
 }
 
-fn host_auth_headers(url: &Url) -> Result<HeaderMap> {
+pub fn host_auth_headers(url: &Url) -> Result<HeaderMap> {
     // raw.githubusercontent.com is not an API host, but a private repository's
     // files are a 404 without the token, so it is routed here too. `get_headers`
     // decides what each host actually gets.
@@ -2572,8 +2990,8 @@ pub fn apply_url_replacements(url: &mut Url) {
                         trace!(
                             "Replaced URL using regex '{}': {} -> {}",
                             pattern_without_prefix,
-                            url_string,
-                            url.as_str()
+                            redact_url_userinfo(&url_string),
+                            log_url(url)
                         );
                         return; // Apply only the first matching replacement
                     }
@@ -2595,8 +3013,8 @@ pub fn apply_url_replacements(url: &mut Url) {
                         trace!(
                             "Replaced URL using string replacement '{}': {} -> {}",
                             pattern,
-                            url_string,
-                            url.as_str()
+                            redact_url_userinfo(&url_string),
+                            log_url(url)
                         );
                         return; // Apply only the first matching replacement
                     }
@@ -2604,6 +3022,11 @@ pub fn apply_url_replacements(url: &mut Url) {
             }
         }
     }
+}
+
+/// `url` for a log line or error message, without the credentials it may embed.
+fn log_url(url: &Url) -> std::borrow::Cow<'_, str> {
+    redact_url_userinfo(url.as_str())
 }
 
 fn display_github_rate_limit(resp: &Response) {
@@ -2682,6 +3105,18 @@ fn is_connection_error(err: &Report) -> bool {
         };
         (reqwest_err.is_connect() || reqwest_err.is_timeout()) && reqwest_err.status().is_none()
     })
+}
+
+/// True if a request failed without reaching the server: a connection failure,
+/// a timeout, or a host already marked unavailable. Unlike [`is_transient`],
+/// HTTP statuses and other errors from the server or the caller never match.
+pub fn is_unreachable(err: &Report) -> bool {
+    is_connection_error(err)
+        || is_unavailable_http_host_error(err)
+        || err.chain().any(|err| {
+            err.downcast_ref::<CachedFailure>()
+                .is_some_and(|failure| failure.unreachable)
+        })
 }
 
 fn http_host_key(url: &Url) -> Option<String> {
@@ -2790,18 +3225,17 @@ pub fn is_transient(err: &Report) -> bool {
 /// infrastructure as it's happening, instead of waiting through the backoff
 /// schedule. Successful rescues and final exhaustion don't get extra warnings
 /// — the caller surfaces the outcome.
+///
+/// Uses the configured `http_retries` rather than `network::http_retries`: the
+/// prefer-offline zero-retry budget bounds remote-version lookups, but an
+/// artifact download that `mise exec`/a shim triggered is an install and must
+/// retry like `mise install` does.
 pub async fn retry_async<F, Fut, T>(verb_label: &str, url: &Url, f: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    retry_async_with_retries(
-        verb_label,
-        url,
-        crate::network::http_retries(&Settings::get()),
-        f,
-    )
-    .await
+    retry_async_with_retries(verb_label, url, Settings::get().http_retries, f).await
 }
 
 pub async fn retry_async_with_retries<F, Fut, T>(
@@ -2831,7 +3265,7 @@ where
                 warn!(
                     "HTTP {} {} attempt {} failed after {} (transient): {}; retrying in {:?}",
                     verb_label,
-                    url,
+                    log_url(url),
                     attempt,
                     format_duration(started_at.elapsed()),
                     err,

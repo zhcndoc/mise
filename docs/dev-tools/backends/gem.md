@@ -1,14 +1,21 @@
 ---
-description: "从 RubyGems 将 Ruby 命令行应用安装到独立的工具目录中。"
+description: "Install Ruby command-line applications from RubyGems, each in its own directory and GEM_HOME."
 ---
 
-# gem 后端
+# gem backend
 
-`gem` 后端从 RubyGems 将 Ruby 命令行应用安装到独立的工具目录中。将应用 gem 保留在项目的 `Gemfile` 中，并使用 Bundler 安装它们。相关代码位于 mise 仓库中的 [`./src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs)。
+The `gem` backend installs Ruby command-line applications from
+[RubyGems](https://rubygems.org/), or another gem registry, with `gem install`.
+Each tool gets its own directory. Keep your application's gems in its `Gemfile`
+and install them with Bundler.
 
-## 依赖
+## Requirements
 
-此后端需要 Ruby 及其 `gem` 命令。带有原生扩展的 Gems 还需要该 gem 所需的编译器和库。
+<span id="dependencies"></span>
+
+Install Ruby, which provides the `gem` command. When `ruby` is in your config,
+mise installs it before your gems. Gems with native extensions also need a
+compiler and the libraries the gem builds against.
 
 ## 用法
 
@@ -19,7 +26,8 @@ mise use ruby@3.4 gem:rubocop
 mise exec -- rubocop --version
 ```
 
-这会将两个条目写入 `mise.toml`。添加 `-g` 以进行全局配置。
+This writes both entries to `mise.toml`. Add `-g` to `mise use` for your global
+config.
 
 ```toml
 [tools]
@@ -27,34 +35,35 @@ ruby = "3.4"
 "gem:rubocop" = "latest"
 ```
 
-mise 的包装器会为所选工具设置 `GEM_HOME`。对于使用项目专属插件的 RuboCop 配置，最好在声明这些插件的 Gemfile 中使用 `bundle exec rubocop` 运行。
+mise sets `GEM_HOME` to the tool's own directory, so a `gem:` install cannot
+see your bundle's gems. If your `.rubocop.yml` loads plugins such as
+`rubocop-rails`, declare RuboCop and its plugins in your `Gemfile` and run
+`bundle exec rubocop` instead.
 
-## Ruby 升级
+## After a Ruby upgrade {#ruby-upgrades}
 
-如果 gem 软件包使用的 Ruby 版本发生变化（无论该版本由 mise 还是系统管理），你可能需要重新安装该 gem。可以使用以下命令完成：
+A gem is installed against one Ruby. After switching to another Ruby minor
+version (for example 3.3 to 3.4), or when the gem has native extensions,
+reinstall it with the new Ruby selected:
 
 ```sh
-mise install -f gem:rubocop
+mise install --force gem:rubocop
 ```
 
-在你打算使用的 Ruby 版本下重新安装。在 Unix 上，mise 管理的 Ruby shebang 会遵循次版本路径，因此补丁版本升级可以继续工作；切换到另一个次版本或更改原生扩展兼容性仍可能需要重新安装。
+Patch upgrades of a mise-managed Ruby keep working on Unix, because mise points
+the gem's executables at Ruby's minor-version path (for example
+`.../ruby/3.4/bin/ruby`). Gems installed with a system Ruby run whichever
+`ruby` is first on `PATH`.
 
-## 设置
+## Tool options
 
-使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置下方列出的环境变量来进行配置。
-
-<script setup>
-import Settings from '/components/settings.vue';
-</script>
-<Settings child="gem" :level="3" />
-
-## 工具选项
-
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `gem` 后端——这些内容应放在 `mise.toml` 的 `[tools]` 中。
+Set these on the tool's entry in `[tools]`. Options every backend accepts are
+described under [tool options](/dev-tools/#tool-options).
 
 ### `install_env`
 
-为 `gem install` 命令设置环境变量。对于构建原生扩展的 gem，`MAKEFLAGS` 控制并行 make 任务数：
+Set environment variables for `gem install`. For gems that build native
+extensions, `MAKEFLAGS` controls parallel make jobs:
 
 ```toml
 [tools]
@@ -63,7 +72,7 @@ import Settings from '/components/settings.vue';
 
 ### `source`
 
-Install and resolve versions of one gem from a specific registry, without
+Install one gem, and list its versions, from a specific registry without
 changing the machine's `gem sources`:
 
 ```toml
@@ -72,20 +81,32 @@ changing the machine's `gem sources`:
 ```
 
 Private registries take credentials as basic auth in the URL (`token@host` or
-`user:token@host`, per your registry). mise redacts them from output and install
-metadata. A source with credentials must use `https` unless it is on
+`user:token@host`, depending on the registry). mise redacts them from output and
+install metadata. A source with credentials must use `https` unless it is on
 `localhost`.
 
-An `https` source on `rubygems.pkg.github.com` without credentials uses
-mise's GitHub token (see `mise token github`). It needs `read:packages`, which
-a default `gh auth login` lacks (`gh auth refresh -s read:packages`). GitHub
-Packages can't list versions, so pin one:
+An `https` source on `rubygems.pkg.github.com` without credentials uses mise's
+GitHub token (see [`mise token github`](/cli/token/github.html)). The token
+needs the `read:packages` scope, which a default `gh auth login` lacks
+(`gh auth refresh -s read:packages`). GitHub Packages cannot list versions, so
+pin one:
 
 ```toml
 [tools]
 "gem:internal-cli" = { version = "1.4.2", source = "https://rubygems.pkg.github.com/acme" }
 ```
 
-The source is added to the other sources rather than replacing them, so
-dependencies still resolve from rubygems.org, and so can a public gem with the
-same name. Prefer a registry that proxies rubygems.org, or pin an exact version.
+mise adds this source alongside rubygems.org; it does not replace it.
+Dependencies still come from rubygems.org, and so can a public gem that has the
+same name as your private one. To rule that out, pin an exact version or use a
+registry that proxies rubygems.org.
+
+## Troubleshooting
+
+| Symptom                                          | What to do                                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| A gem stops working after a Ruby upgrade         | Reinstall it with `mise install --force`; see [after a Ruby upgrade](#ruby-upgrades). |
+| A native extension fails to build                | Install the compiler and libraries the gem needs, then install again.                 |
+| RuboCop cannot load a plugin from your `Gemfile` | Run it with `bundle exec` from your project; a `gem:` install has its own `GEM_HOME`. |
+
+Implementation: [`src/backend/gem.rs`](https://github.com/jdx/mise/blob/main/src/backend/gem.rs).

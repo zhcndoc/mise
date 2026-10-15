@@ -12,53 +12,63 @@ description: "列出已安装和已激活的工具版本"
 
 列出已安装和已激活的工具版本
 
-列出 mise 了解的工具：已安装的版本，以及配置文件请求的版本（已激活），无论这些版本是否已安装。
+Lists the tools mise knows about: versions that are installed, and versions
+requested by a config file (active) whether or not they are installed. Each row
+shows the tool, the version (marked `(missing)` when it is not installed), the
+config file that requests it, and the request as written.
 
-## 参数
-- **`[INSTALLED_TOOL]…`** — 仅显示来自 [TOOL] 的工具版本
+## Arguments
+- **`[INSTALLED_TOOL]…`** — Only show these tools
 
 ## 标志
 - **`--truncate`** — 截断过长的终端输出以适应可用宽度
 
-  **默认值：** `true`
-- **`-b --backend <BACKEND>`** — 仅显示此后端中的工具，例如 aqua、cargo、core、go
+  **Default:** `true`
+- **`-b --backend <BACKEND>`** — Only show tools from this backend, such as aqua, cargo, core, or go
 
-  注册表简写会按其解析到的后端计数，因此 `jq` 会列在 aqua 下。重复传入此标志可显示多个后端。
-- **`-c --current`** — 仅显示当前在 mise.toml 中指定的工具版本
-- **`-g --global`** — 仅显示当前在全局 mise.toml 中指定的工具版本
-- **`-i --installed`** — 仅显示已安装的工具版本（隐藏 mise.toml 中定义但未安装的工具）
-- **`-J --json`** — 以 JSON 格式输出
-- **`-l --local`** — 仅显示当前在本地 mise.toml 中指定的工具版本
-- **`-m --missing`** — 显示缺失的工具版本
-- **`--all-sources`** — 显示工具的所有已跟踪配置源
-- **`--monorepo`** — 列出每个 [monorepo].config_roots 配置根中的工具
-- **`--grouped`** — 按后端分别列出工具。不能与 `--json` 组合；请使用 `--backend` 过滤 JSON 输出。
+  Registry shorthands count as the backend they resolve to, so `jq` is listed
+  under aqua. Repeat the flag to show several backends.
+- **`-c --current`** — Only show versions the loaded config files request
+- **`-g --global`** — Only show versions the global config requests
+- **`-i --installed`** — Only show installed versions
 
-  使用活动的 MISE_ENV，并要求设置 monorepo_root = true，且在 monorepo 根配置中显式设置
-  [monorepo].config_roots。
+  Hides requested versions that are not installed.
+- **`--grouped`** — List tools in a separate section for each backend
 
-  **环境变量：** `MISE_MONOREPO`
-- **`--no-header`** — 不显示标题
-- **`--outdated`** — 显示版本是否已过时
-- **`--prefix <PREFIX>`** — 显示匹配此前缀的版本
-- **`--prunable`** — 仅列出可使用 `mise prune` 清理的工具
-- **`-h --help`** — 打印帮助
+  Cannot be combined with --json; use --backend to filter JSON output.
+- **`-J --json`** — Output in JSON format
+- **`-l --local`** — Only show versions the local config requests
+- **`-m --missing`** — Only show requested versions that are not installed
+- **`--all-sources`** — Show requests from every config file mise has seen, not only loaded ones
 
-## 示例
+  mise tracks the config files it loads so `mise prune` keeps the versions they use.
+- **`--monorepo`** — Also list tools from every config root in `[monorepo].config_roots`
 
-显示已安装的版本和活动配置中的请求
+  Requires `monorepo_root = true` and an explicit `config_roots` list in the
+  monorepo root's config. Uses the active MISE_ENV.
+
+  **Environment Variable:** `MISE_MONOREPO`
+- **`--no-header`** — Do not print the header row
+- **`--outdated`** — Show whether each version is outdated
+- **`--prefix <PREFIX>`** — Only show versions starting with PREFIX (requires a tool argument)
+- **`--prunable`** — List only tools that can be pruned with `mise prune`
+- **`-h --help`** — Print help
+
+## Examples
+
+Show installed versions and the requests from the loaded config files
 
 ```
 mise ls
 ```
 
-仅显示当前配置请求的版本
+Show only versions the loaded config files request
 
 ```
 mise ls --current
 ```
 
-查找需要安装的已配置版本
+Find requested versions that are not installed
 
 ```
 mise ls --missing
@@ -76,7 +86,7 @@ mise ls --json
 mise ls node --json
 ```
 
-包含每个已跟踪配置文件中的引用
+Include requests from every config file mise has seen
 
 ```
 mise ls --all-sources

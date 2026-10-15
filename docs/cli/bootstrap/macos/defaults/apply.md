@@ -1,5 +1,5 @@
 ---
-description: "从 `[bootstrap.macos.defaults]` 写入 macOS defaults"
+description: "Write the configured macOS preferences"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -9,12 +9,12 @@ description: "从 `[bootstrap.macos.defaults]` 写入 macOS defaults"
 - **效果：** 修改状态
 - **源代码：** [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-从 `[bootstrap.macos.defaults]` 写入 macOS defaults
+Write the configured macOS preferences
 
-## 标志
-- **`-n --dry-run`** — 打印将运行的命令，但不运行这些命令
-- **`-y --yes`** — 跳过确认提示
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-n --dry-run`** — Show what would change without changing anything
+- **`-y --yes`** — Skip the confirmation prompt
+- **`-h --help`** — Print help
 
 <!-- 生成的参考导航 -->
 

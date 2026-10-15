@@ -12,13 +12,37 @@ description: "[实验性] 使用 pitchfork 管理项目守护进程"
 
 [实验性] 使用 pitchfork 管理项目守护进程
 
-在 [daemons] 中定义命令或受管理的服务预设：cockroachdb、nats、postgres、redis、spicedb。不带子命令时，列出已配置和之前管理的守护进程。
+Declare long-running processes in `[daemons]`, either as commands or as service presets such as `postgres` and `redis`, and mise runs them under pitchfork with the project's tools and environment. Requires `experimental = true`.
 
-## 标志
-- **`--json`**
-- **`-h --help`** — 打印帮助
+With no subcommand, lists the project's daemons like `mise daemons ls`.
 
-## 子命令
+See <https://mise.jdx.dev/daemons.html>
+
+## Flags
+- **`--json`** — Output in JSON format, including ports, URLs, and data directories
+- **`-h --help`** — Print help
+
+## Examples
+
+Start the default group, or every project daemon
+
+```
+mise daemons start
+```
+
+Show the last 50 lines of api's output
+
+```
+mise daemons logs api -n 50
+```
+
+Stop every registered project daemon
+
+```
+mise daemons stop
+```
+
+## Subcommands
 
 - [`mise daemons logs [ARGS]…`](/cli/daemons/logs.html)
 - [`mise daemons ls [--json]`](/cli/daemons/ls.html)
@@ -36,6 +60,6 @@ description: "[实验性] 使用 pitchfork 管理项目守护进程"
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Daemons](/daemons.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

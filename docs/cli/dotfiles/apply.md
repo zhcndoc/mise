@@ -1,37 +1,60 @@
 ---
-description: "应用来自 `[dotfiles]` 的 dotfiles"
+description: "Link, copy, and render `[dotfiles]` entries into place"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
 # `mise dotfiles apply`
 
-- **Usage：** `mise dotfiles apply [FLAGS] [TARGET]…`
-- **Effect：** 修改状态
-- **Source code：** [`src/cli/dotfiles/apply.rs`](https://github.com/jdx/mise/blob/main/src/cli/dotfiles/apply.rs)
+- **Usage:** `mise dotfiles apply [FLAGS] [TARGET]…`
+- **Effect:** destructive — may delete or irreversibly overwrite
+- **Source code:** [`src/cli/dotfiles/apply.rs`](https://github.com/jdx/mise/blob/main/src/cli/dotfiles/apply.rs)
 
-应用来自 `[dotfiles]` 的 dotfiles
+Link, copy, and render `[dotfiles]` entries into place
 
-应用已配置的整文件条目和不处于其期望状态的编辑项。整文件条目可以创建符号链接、复制文件或渲染模板。编辑项用于管理文件中由标记分隔的代码块或单行内容，这些文件并非由 mise 以其他方式管理。
+Applies the whole-file entries and edits that are not in their desired state. Whole-file entries symlink, copy, render templates, write inline `content`, set `permissions`, or remove targets declared `mode = "absent"`. Edit entries manage a marker-delimited block, a single line, or merged keys in a file mise does not otherwise own.
 
-使用 `--prune` 时，也会删除不再选中或声明的点文件组部署的文件。
+Entries that deploy mise's own configuration are applied first and the configuration is read again, so a rule the new file adds applies in the same run.
+
+`apply` works from the files on this machine. It never fetches or pulls: to bring in changes from other machines, run `mise dot sync`, `mise dot pull`, then `mise dot apply`.
+
+The `pre-dotfiles` and `post-dotfiles` bootstrap hooks run before and after the apply (with `--dry-run` they are printed, not run), and the matching `[history.reload]` commands run for the targets it wrote.
+
+With `--prune`, also removes files that dotfile groups deployed but no active entry deploys now: files of a group that is no longer selected or declared, and files a group stopped deploying because of a new `exclude` or a deleted source.
 
 ## 参数
 - **`[TARGET]…`** — 仅应用这些目标
 
-## 标志
-- **`-f --force`** — 覆盖与整文件 dotfile 条目冲突的现有文件
-- **`-n --dry-run`** — 输出将执行的操作，但不写入任何内容
-- **`-y --yes`** — 跳过确认提示
-- **`--prune`** — 同时删除不再选中或声明的点文件组部署的文件
-- **`--prompt-secrets`** — 安全地提示输入缺失的引导 secret
-- **`-h --help`** — 输出帮助信息
+## Flags
+- **`-f --force`** — Overwrite existing files that conflict with whole-file dotfile entries
+- **`-n --dry-run`** — Print the actions that would run without writing anything
+- **`-y --yes`** — Skip the confirmation prompt
+- **`--prune`** — Also remove files that dotfile groups deployed but no active entry deploys now
+- **`--prompt-secrets`** — Prompt for `[bootstrap.secrets]` values that templates need and the environment does not set
+- **`-h --help`** — Print help
 
 ## 示例
 
+Deploy every entry that is out of date
+
 ```
 mise dot apply
+```
+
+Print what would change
+
+```
 mise dot apply --dry-run
+```
+
+Also remove files left by dotfile groups
+
+```
 mise dot apply --prune
+```
+
+Overwrite conflicting files without prompting
+
+```
 mise dot apply --force --yes
 ```
 
@@ -39,6 +62,6 @@ mise dot apply --force --yes
 
 ## 相关文档
 
-- [开始使用](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles](/dotfiles.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

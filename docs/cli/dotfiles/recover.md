@@ -11,20 +11,34 @@ description: "恢复中断的点文件操作"
 
 恢复中断的点文件操作
 
-在不覆盖后续编辑的情况下重试安全恢复。如果恢复无法确定哪些内容是安全的，请先检查列出的文件。`--keep-current` 会明确接受这些文件的当前内容，并仅丢弃所选操作的临时恢复副本；它不会删除 Git 历史记录。
+Finishes recovering from an operation that was interrupted, for example by a crash or Ctrl-C. With no argument, recovers every interrupted operation. mise restores files from the operation's recovery copies unless you have edited them since. When it cannot tell which version is safe, it lists the files: check them, then rerun with `--keep-current` to keep what is on disk and discard the operation's recovery copies. When several operations were interrupted, `--keep-current` needs the ID of one. Git history is not changed.
 
-## 参数
-- **`[OPERATION]`** — 待处理的数字 ID 或无歧义的操作 UUID 前缀
+## Arguments
+- **`[OPERATION]`** — The operation's checkpoint ID (see `mise dot history --pending`) or a unique prefix of its UUID
 
-## 标志
-- **`--keep-current`** — 接受当前文件，而不是恢复临时恢复副本
-- **`-y --yes`** — 确认丢弃所选操作的临时恢复副本
-- **`-h --help`** — 显示帮助
+## Flags
+- **`--keep-current`** — Keep the files on disk instead of restoring the recovery copies
+- **`-y --yes`** — Discard the operation's recovery copies without prompting
+- **`-h --help`** — Print help
 
-<!-- 生成的参考导航 -->
+## Examples
+
+Recover every interrupted operation
+
+```
+mise dot recover
+```
+
+Keep the files on disk for operation 42
+
+```
+mise dot recover 42 --keep-current --yes
+```
+
+<!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

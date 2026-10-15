@@ -11,14 +11,16 @@ description: "发送测试桌面通知"
 
 发送测试桌面通知。
 
-检查 `history.notify` 是否能向你发送通知。在 macOS 上第一次通知会请求权限，建议先运行一次，以免首次同步冲突时才弹出请求。如果当前构建或机器无法显示通知（例如 Homebrew 的非官方 macOS 构建、Linux 缺少 `notify-send`、权限被拒绝或设置了 `history.notify = false`），命令会说明原因并失败。
+Checks that `history.notify` can reach you. On macOS the first notification asks for permission, so run this once to be prompted now instead of at the first sync conflict. Fails with the reason when this build or machine cannot show notifications: a macOS build that is not mise's signed release (such as Homebrew's), a missing `notify-send` on Linux, denied permission, or `history.notify = false`.
 
-只有冲突暂停设置共享时才会发送通知。其他问题（例如监视器无法保存）会显示在 `mise doctor` 和 `mise dot status` 中。
+mise notifies you only when a sync conflict pauses syncing. Other problems, such as a watcher that cannot save, appear in `mise doctor` and `mise dot status`.
 
 ## Flags
 - **`-h --help`** — 显示帮助
 
 ## Examples
+
+Send a test notification
 
 ```
 mise dot notify
@@ -28,6 +30,6 @@ mise dot notify
 
 ## Related documentation
 
-- [Getting started](/getting-started.html).
+- [Dotfiles history](/dotfiles/history.html).
 - [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
 - [Global flags and argument syntax](/cli/#global-flags).

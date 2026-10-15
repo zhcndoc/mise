@@ -1,41 +1,36 @@
 ---
-description: "使用 url_replacements 将 mise 的 HTTP 客户端发出的请求路由到内部镜像或代理。"
+description: "Rewrite the URLs mise requests with url_replacements to send downloads and release metadata through a mirror or proxy."
+socialDescription: "Rewrite the URLs mise requests to send downloads and metadata through a mirror or proxy."
 ---
 
-# URL 替换
+# URL replacements
 
-使用 `url_replacements` 将 mise 的 HTTP 客户端发出的请求路由到内部镜像或代理。这可以涵盖发布元数据和构件下载，包括 Conda 频道元数据。它不会重写由插件脚本、Git 或外部包管理器独立发出的请求；请分别配置这些客户端。
+The [`url_replacements`](/configuration/settings.html#url_replacements) setting
+rewrites the URLs that mise's HTTP client requests, so release metadata and
+artifact downloads can go through an internal mirror or proxy. It also covers
+Conda channel metadata and the HTTP requests that vfox plugins make through
+their `http` module. It does not rewrite requests made by asdf plugin scripts,
+commands a plugin runs (such as `curl`), Git, or an external package manager;
+configure those clients separately.
 
-替换会更改请求发送的位置。它不会更改后端选择的资源、创建镜像或生成新的校验和。对于 Conda，锁定文件会保留逻辑上的上游 URL，并在发送请求时应用替换。
+A replacement changes where a request is sent. It does not change which asset a
+backend selects, create a mirror, or produce new checksums. For Conda,
+lockfiles keep the upstream URLs, and the replacement applies when the request
+is sent.
 
-## 配置示例
-
-将特定于机器的镜像设置放在全局配置中，或者在每个项目用户都能访问该镜像时，将其共享在 `mise.toml` 中。对于精确的 URL 前缀：
-
-```toml
-[settings]
-url_replacements = { "https://example.com/" = "https://mirror.example.com/" }
-```
-
-表格形式便于配置多条规则：
-
-```toml
+```toml [~/.config/mise/config.toml]
 [settings.url_replacements]
-"https://example.com/" = "https://mirror.example.com/"
-"https://releases.hashicorp.com/" = "https://hashicorp.example.com/"
+"https://releases.hashicorp.com/" = "https://hashicorp-mirror.example.com/"
 ```
 
-将示例镜像主机替换为你运营或信任的服务器。它们必须提供原始后端所需的路径和元数据。检查 `mise settings ls` 以确认生效的设置；在失败的命令上启用调试日志，以检查其请求 URL。
+Put machine-specific mirrors in global config, or in `mise.toml` when everyone
+on the project can reach the mirror. Replace the example hosts with servers you
+operate or trust; they must serve the same paths and metadata as the original.
 
-## 简单主机名替换
+## Route GitHub through a proxy
 
-尽管通常用于主机名，但普通键是对完整 URL 的**子字符串匹配**。它既可以匹配路径或查询字符串，也可以匹配主机名。诸如 `github.com` 的键也会匹配 `api.github.com` 和 `github.com.example.org`。
-
-包含协议和末尾 `/`，例如 `https://github.com/`，可以避免匹配这些主机名。对于必须仅在 URL 开头匹配的规则，请使用带锚点的正则表达式。
-
-### 通过 Package Proxy 路由 GitHub
-
-普通前缀键会保留 URL 的其余部分，因此将 GitHub 映射到带路径前缀的代理无需正则表达式或捕获组：
+A plain key keeps the rest of the URL, so a proxy that mirrors GitHub under a
+path prefix needs no regular expression:
 
 ```toml
 [settings.url_replacements]
@@ -43,97 +38,129 @@ url_replacements = { "https://example.com/" = "https://mirror.example.com/" }
 "https://api.github.com/" = "http://pkgproxy.internal:8080/generic/github-api/"
 ```
 
-第一条规则会将 `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz` 路由到
-`http://pkgproxy.internal:8080/generic/github/owner/repo/releases/download/v1.0.0/file.tar.gz`；第二条将 GitHub API 请求（例如发布查询）路由到代理的 API 路径。`https://github.com/` 不会匹配 `https://api.github.com/`，两条规则不会重叠。
+| Original request                                                       | Sent to                                                                                  |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz`   | `http://pkgproxy.internal:8080/generic/github/owner/repo/releases/download/v1.0.0/file.tar.gz` |
+| `https://api.github.com/repos/owner/repo/releases`                     | `http://pkgproxy.internal:8080/generic/github-api/repos/owner/repo/releases`             |
 
-只有代理提供 GitHub API 时才应重定向 API；否则 mise 将无法使用
-[`mise-versions`](/configuration/settings.html#use_versions_host) 获取发布和证明元数据。如果代理只镜像发布下载，请只保留第一条规则。只有代理路径无法用前缀表示时才需要正则规则。
+`https://github.com/` does not match `https://api.github.com/`, so the two rules
+do not overlap. Reroute the API only if the proxy serves it: doing so also stops
+mise from using [mise-versions](/configuration/settings.html#use_versions_host)
+for GitHub release and attestation metadata. If the proxy mirrors only release
+downloads, keep only the first rule.
 
-## 高级正则替换
+## How rules match
 
-为键添加 `regex:` 前缀即可使用 Rust 正则表达式引擎。替换值中的捕获组使用 `$1`、`$2` 或命名捕获。以下示例对正则键使用 TOML 字面字符串，因此反斜杠不需要加倍。
+A plain key matches anywhere in the URL, including the path and query, and every
+occurrence is replaced. `github.com` also matches `api.github.com` and
+`github.com.example.org`. Include the scheme and a trailing slash, such as
+`https://github.com/`, to match one host.
 
-### 正则示例
+A key that starts with `regex:` is a regular expression; see
+[Regex rules](#regex-rules).
 
-#### 1. 协议转换（HTTP 到 HTTPS）
+Rules run in the order they appear. mise uses the first rule that turns the URL
+into a different valid URL, then stops, so replacements do not chain. A rule
+that leaves the URL unchanged or produces an invalid URL is skipped, and an
+invalid regular expression produces a warning and is skipped. When no rule
+changes the URL, mise sends the original request. Put specific rules before
+broad ones.
 
-```toml
-[settings]
-url_replacements = {
-  'regex:^http://(.+)' = "https://$1",
-}
-```
+URL replacements are routing rules, not an allow list. Use network policy
+outside mise when traffic must never reach an upstream host.
 
-仅当目标支持 HTTPS 时才使用此方式。更改协议并不会使不受信任的服务器变得可信。
+## Regex rules
 
-#### 2. 带路径重组的 GitHub Release 镜像
+The examples below use TOML literal strings (single quotes) for regex keys, so
+backslashes do not need doubling. In a double-quoted TOML string, write `\\.`
+instead of `\.`.
 
-```toml
-[settings]
-url_replacements = {
-  'regex:^https://github\.com/([^/]+)/([^/]+)/releases/download/(.+)' = "https://hub.example.com/artifactory/github/$1/$2/$3",
-}
-```
+Use `^` to anchor the start, `(.+)` to capture, and `[^/]+` for one path
+component. Refer to captures in the replacement as `$1`, `$2`, or by name. When
+a capture is followed by letters or digits, add braces, as in `${1}suffix`. The
+[Rust regex documentation](https://docs.rs/regex/latest/regex/#syntax) describes
+the syntax; backreferences inside the pattern and lookaround are not supported.
 
-这会将 `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz` 映射到 `https://hub.example.com/artifactory/github/owner/repo/v1.0.0/file.tar.gz`。它不会重写 `api.github.com` 请求；如果发布元数据也必须通过镜像传输，请添加单独的规则。
-
-#### 3. 从子域名转换为路径
-
-```toml
-[settings]
-url_replacements = {
-  'regex:^https://([^./]+)\.cdn\.example\.com/(.+)' = "https://unified-cdn.example.com/$1/$2",
-}
-```
-
-例如，`https://eu.cdn.example.com/tool.tar.gz` 会变为 `https://unified-cdn.example.com/eu/tool.tar.gz`。
-
-#### 4. 多个替换模式（按顺序处理）
-
-```toml
-[settings]
-url_replacements = {
-  # Put the specific rule before the general GitHub rule.
-  'regex:^https://github\.com/microsoft/(.+)' = "https://internal.example.org/microsoft/$1",
-  'regex:^https://github\.com/(.+)' = "https://public.example.org/github/$1",
-  "https://releases.hashicorp.com/" = "https://hashicorp.example.net/",
-}
-```
-
-这些示例使用 TOML 1.1 多行内联表，其中包含注释和末尾逗号。第一条规则处理 Microsoft 代码库，第二条处理其他 GitHub 路径，最后一条处理 HashiCorp 下载。
-
-## 正则语法
-
-使用 `^` 锚定开头，使用 `(.+)` 进行捕获，使用 `[^/]+` 表示路径组件。在 TOML 字面字符串中，使用 `\.` 转义字面点。在双引号 TOML 字符串中，应改为写成 `\\.`，因为 TOML 也会处理反斜杠转义。
-
-[Rust regex documentation](https://docs.rs/regex/latest/regex/#syntax) 描述了受支持的语法。不支持模式内的反向引用和环视。当捕获后面紧跟字母或数字时，请使用花括号分隔其名称，例如 `${1}suffix`。
-
-## 优先级与匹配
-
-规则按照配置插入顺序运行。mise 使用第一条能将 URL 更改为另一个有效 URL 的规则，然后停止；替换不会链式执行。请将具体规则放在宽泛规则之前。如果匹配的规则未更改 URL 或生成了无效 URL，mise 会继续处理后续规则。无效的正则模式会产生警告并被跳过。
-
-如果没有规则生成有效且发生变化的 URL，则使用原始请求。因此，URL 替换是路由规则，而不是出站主机允许列表。当流量绝不能到达上游主机时，请在 mise 之外使用网络策略。
-
-## 安全注意事项
-
-为原始 URL 准备的身份验证标头可能会发送到替换服务器。仅将请求路由到受信任、能够接收构件和这些凭据的服务器。更改主机的重写会移除作用域限定为原始主机的凭据——包括授权标头、Cookie、API 密钥、其他受识别的凭据标头，或从原始 URL 携带过来的用户信息——然后可以添加下文所述的来自 netrc 的镜像凭据。同主机重写会保留现有凭据。
-
-当 HTTPS 到 HTTP 的重写在该作用域下仍会发送凭据时，mise 会拒绝请求，而不是在没有传输加密的情况下暴露凭据。这涵盖同主机降级，以及写入替换规则本身的凭据。未进行身份验证的降级仍然允许，凭据来自替换主机的 netrc 条目的降级也允许：mise 会将这些凭据发送到普通的 `http://` URL，且不涉及重写，因此重写并不会更加严格。
-
-这两条规则适用于 mise 的 HTTP 客户端、GitHub 证明请求和 Conda 频道流量。对于 Sigstore TUF 元数据，不安全的携带凭据的降级会被忽略，并继续使用安全的默认 TUF URL。
-
-要精确匹配主机，请同时使用起始锚点和主机名边界：
+To match exactly one host, anchor the start and end the host with a slash:
 
 ```toml
 [settings.url_replacements]
 'regex:^https://github\.com/' = "https://mirror.example.com/"
 ```
 
-末尾的斜杠很重要：`^https://github\.com` 本身也会匹配 `https://github.com.example.org/`。避免直接将凭据放入替换 URL，因为它们可能出现在日志中。
+Without the trailing slash, `^https://github\.com` also matches
+`https://github.com.example.org/`.
 
-## 身份验证
+### Restructure GitHub release paths
 
-mise 会在重写 URL **之后**查找 netrc 凭据。在 `~/.netrc` 中使用替换后的主机名；在 Windows 上使用 `~/_netrc`（`~/.netrc` 是其备用文件）。[`netrc_file`](/configuration/settings.html#netrc_file) 设置可以选择其他文件。
+This rule sends `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz`
+to `https://hub.example.com/artifactory/github/owner/repo/v1.0.0/file.tar.gz`:
+
+```toml
+[settings.url_replacements]
+'regex:^https://github\.com/([^/]+)/([^/]+)/releases/download/(.+)' = "https://hub.example.com/artifactory/github/$1/$2/$3"
+```
+
+It does not rewrite `api.github.com` requests; add a separate rule if release
+metadata must also go through the mirror.
+
+### Subdomain to path
+
+This rule sends `https://eu.cdn.example.com/tool.tar.gz` to
+`https://unified-cdn.example.com/eu/tool.tar.gz`:
+
+```toml
+[settings.url_replacements]
+'regex:^https://([^./]+)\.cdn\.example\.com/(.+)' = "https://unified-cdn.example.com/$1/$2"
+```
+
+### Specific rule before a general one
+
+The first rule handles Microsoft repositories, the second handles every other
+GitHub path, and the third handles HashiCorp downloads:
+
+```toml
+[settings.url_replacements]
+'regex:^https://github\.com/microsoft/(.+)' = "https://internal.example.org/microsoft/$1"
+'regex:^https://github\.com/(.+)' = "https://public.example.org/github/$1"
+"https://releases.hashicorp.com/" = "https://hashicorp.example.net/"
+```
+
+### HTTP to HTTPS
+
+```toml
+[settings.url_replacements]
+'regex:^http://(.+)' = "https://$1"
+```
+
+Use this only when the destination supports HTTPS. Changing the scheme does not
+make an untrusted server trustworthy.
+
+## Credentials
+
+When a rule sends a request to a different host, mise drops the credentials
+meant for the original host: the `Authorization` header, cookies, API key
+headers, and any `user:password` in the URL. It then adds
+[netrc](#netrc) credentials for the new host, if there are any. A rule that
+keeps the host keeps the credentials.
+
+mise refuses to send credentials over plain HTTP after an HTTPS-to-HTTP rewrite,
+whether they came from the original request or are written into the rule. A
+downgrade without credentials is allowed, and so is one whose credentials come
+from a netrc entry for the new host. These rules also cover GitHub attestation
+requests and Conda channels. For Sigstore TUF metadata, mise ignores such a
+rewrite and keeps the default HTTPS URL.
+
+Avoid writing credentials into replacement URLs, where they can appear in logs.
+Only route requests to servers you trust with both the artifacts and the
+credentials.
+
+### netrc {#netrc}
+
+mise looks up netrc credentials after it rewrites the URL, so use the
+replacement host in `~/.netrc` (`~/_netrc` on Windows, with `~/.netrc` as a
+fallback). The [`netrc_file`](/configuration/settings.html#netrc_file) setting
+selects another file.
 
 ```netrc
 machine mirror.example.com
@@ -141,6 +168,37 @@ machine mirror.example.com
   password mypassword
 ```
 
-使用你的镜像凭据，并限制文件在 Unix 上的权限，例如 `chmod 600 ~/.netrc`。
+On Unix, restrict the file's permissions with `chmod 600 ~/.netrc`.
 
-Netrc 通常是备用方式：现有的 Authorization 标头优先。当替换更改主机名时，与新主机匹配的 netrc 凭据可以覆盖该标头。仅更改同一主机上的路径或查询的重写会保留现有 Authorization。有关上游令牌来源，请参阅 [GitHub Tokens](/dev-tools/github-tokens.html)。
+netrc credentials are a fallback: an existing `Authorization` header wins. When
+a rule changes the host, netrc credentials for the new host replace that header.
+A rule that changes only the path or query keeps the existing `Authorization`.
+See [GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html) for
+where upstream tokens come from.
+
+## Set rules from the environment
+
+`MISE_URL_REPLACEMENTS` takes the same rules as a JSON object, which suits a
+single command or a CI job:
+
+```sh
+MISE_URL_REPLACEMENTS='{"https://github.com/":"https://mirror.example.com/github/"}' mise install
+```
+
+## Check a rule
+
+Set `MISE_LOG_HTTP=1` to print each request mise sends, after rewriting, with its
+response status. With the rule from the previous example, installing jq prints
+lines such as:
+
+```sh
+export MISE_URL_REPLACEMENTS='{"https://github.com/":"https://mirror.example.com/github/"}'
+MISE_LOG_HTTP=1 mise install jq@1.8.1
+```
+
+```text
+GET https://mirror.example.com/github/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 200 OK
+```
+
+Version lists are cached, so run `mise cache clear <tool>` first when you test a
+rule for metadata requests.

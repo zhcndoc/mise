@@ -11,31 +11,37 @@ description: "为项目任务生成 Markdown 文档"
 
 为项目任务生成 Markdown 文档
 
-默认打印到 stdout。使用 `--output` 写入文件，使用 `--inject` 替换标记的部分，或使用 `--multi` 为每个任务生成一个文件。
+Documents the tasks defined for the current directory. Prints to stdout by
+default. Use `--output` to write a file, `--inject` to replace a marked section,
+or `--multi` for one file per task.
 
-## 选项
-- **`-i --inject`** — 将文档插入现有文件
+## Flags
+- **`-i --inject`** — Replace the marked section of the --output file
 
-  此选项会查找特殊注释 `<!-- mise-tasks -->`，并将其替换为生成的文档。它会替换此注释与下一个注释 `<!-- /mise-tasks -->` 之间的所有内容，因此可以在同一个文件上多次运行以更新文档。如果文件中缺少任一注释，mise 将报错，而不会修改文件。
-- **`-I --index`** — 仅写入任务索引，适用于与 `--multi` 搭配使用
-- **`-m --multi`** — 将每个任务渲染为单独的文档；要求 `--output` 指定一个目录
-- **`-o --output <OUTPUT>`** — 将生成的文档写入文件或目录
-- **`-r --root <ROOT>`** — 用于搜索任务的根目录
-- **`-s --style <STYLE>`** — 文档样式：`simple` 列出任务，`detailed` 记录每个任务的用法
-
-  **选项：** `simple`、`detailed`
-
-  **默认值：** `simple`
-- **`-h --help`** — 打印帮助
+  Replaces everything between `<!-- mise-tasks -->` and `<!-- /mise-tasks -->`
+  in the --output file, so you can rerun it to update the docs. The file must
+  already contain both markers; mise reports an error and leaves the file
+  unchanged if either is missing.
+- **`-I --index`** — Write only an index of tasks, intended for use with `--multi`
+- **`-m --multi`** — Render each task as a separate document; requires `--output` to be a directory
+- **`-o --output <PATH>`** — Write the generated docs to a file or directory
+- **`-h --help`** — Print help
 
 ## 示例
 
+Print the task documentation
+
 ```
-mise generate task-docs --style detailed
+mise generate task-docs
+```
+
+Write the task documentation to TASKS.md
+
+```
 mise generate task-docs --output TASKS.md
 ```
 
-README.md 必须已经包含 mise-tasks 标记注释
+Update the marked section of README.md
 
 ```
 mise generate task-docs --inject --output README.md

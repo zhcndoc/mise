@@ -12,25 +12,29 @@ description: "将本地插件目录链接到 mise 以进行开发"
 
 将本地插件目录链接到 mise 以进行开发
 
-源目录中的修改无需重新安装插件即可生效。传入名称和目录，或者仅传入目录，以便在移除已知前缀（例如 `mise-` 或 `vfox-`）后推断名称。这不会安装工具版本。
+Edits in the source directory take effect without reinstalling the plugin.
+Pass a name and a directory, or only a directory to name the plugin after it
+without an `asdf-`, `mise-`, or `vfox-` prefix. Use the bare name, without a
+`vfox:` or `package:` prefix: mise detects the plugin type from the
+directory. This does not install a tool version.
 
-## 参数
-- **`<NAME>`** — 插件的名称  
-  传入一个参数时，该参数为插件目录，并推断名称
-- **`[DIR]`** — 插件的本地路径  
-  例如：./mise-my-tool
+## Arguments
+- **`<NAME>`** — The plugin name, or the plugin directory when DIR is omitted
+- **`[DIR]`** — The local path to the plugin, such as ./mise-my-tool
 
-## 标志
-- **`-f --force`** — 覆盖现有插件
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-f --force`** — Replace an existing plugin with the same name
+- **`-h --help`** — Print help
 
 ## 示例
+
+Link ./mise-my-tool as the plugin my-tool
 
 ```
 mise plugins link my-tool ./mise-my-tool
 ```
 
-替代方式：推断名称“my-tool”
+Infer the name my-tool from the directory
 
 ```
 mise plugins link ./mise-my-tool
@@ -46,6 +50,6 @@ mise ls-remote my-tool
 
 ## 相关文档
 
-- [开发工具插件](/tool-plugin-development.html)。
-- [`mise plugins [FLAGS] [SUBCOMMAND]`](/cli/plugins.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Tool plugins](/tool-plugin-development.html).
+- [`mise plugins [FLAGS] [SUBCOMMAND]`](/cli/plugins.html).
+- [Global flags and argument syntax](/cli/#global-flags).

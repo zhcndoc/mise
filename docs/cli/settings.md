@@ -11,12 +11,21 @@ description: "管理设置"
 
 管理设置
 
-## 参数
-- **`[SETTING]`** — 设置名称
-- **`[VALUE]`** — 要设置的值
+With no arguments, lists the settings set in config files (same as
+`mise settings ls`). With SETTING, prints its effective value. With
+SETTING=VALUE or SETTING VALUE, writes it to the global config
+(~/.config/mise/config.toml), or to the nearest project config with
+`--local`. Every setting is described at
+<https://mise.jdx.dev/configuration/settings.html>
 
-## 全局标志
-- **`-l --local`** — 使用本地配置文件而不是全局配置文件
+## Arguments
+- **`[SETTING]`** — Only show this setting, or the settings under this prefix such as `python`
+- **`[VALUE]`** — The value to set
+
+## Global Flags
+- **`-l --local`** — Use only the nearest project config
+
+  Reads only its explicit settings, or writes to it instead of the global config.
 
 ## 标志
 - **`-a --all`** — 列出所有设置
@@ -27,28 +36,28 @@ description: "管理设置"
 
 ## 示例
 
-列出显式配置的设置
+List settings set in config files
 
 ```
 mise settings
 ```
 
-获取设置“always_keep_download”的值
+Show the effective value of one setting
 
 ```
-mise settings always_keep_download
+mise settings jobs
 ```
 
-将设置“always_keep_download”的值设置为“true”
+Set jobs in the global config
 
 ```
-mise settings always_keep_download=true
+mise settings jobs=4
 ```
 
-将设置“node.mirror_url”的值设置为“<https://npmmirror.com/mirrors/node/>”
+Set a setting in the project config
 
 ```
-mise settings node.mirror_url https://npmmirror.com/mirrors/node/
+mise settings --local node.mirror_url https://npmmirror.com/mirrors/node/
 ```
 
 ## 子命令

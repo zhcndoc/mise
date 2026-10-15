@@ -1,21 +1,29 @@
 ---
-description: "使用 [tool_alias] 为工具指定不同的后端，或为版本请求命名。"
+description: "Use [tool_alias] to point a tool name at a different backend or give a version request a stable name."
 ---
 
-# 工具别名
+# Tool aliases
 
-使用 [tool_alias] 为工具指定不同的后端，或为版本请求命名。
-将共享别名放在项目的 `mise.toml` 中；使用 `~/.config/mise/config.toml` 设置个人默认值。团队成员也需要别名定义以及工具声明。
+Use `[tool_alias]` to point a tool name at a different backend or to give a
+version request a name. Put shared aliases in the project's `mise.toml`, so
+teammates get the alias along with the tool declaration, and personal ones in
+`~/.config/mise/config.toml`.
 
-::: warning 重命名的配置键
-`[alias]` 已重命名为 `[tool_alias]`。旧键仍然有效，但已弃用。
-对于 `alias ll='ls -la'` 等命令快捷方式，请使用
-[Shell 别名](/shell-aliases.html)。
+Two other things in mise are called aliases. Registry aliases, such as `rg`
+for `ripgrep`, are alternate names built into the [registry](/registry.html);
+you do not define them. For command shortcuts such as `alias ll='ls -la'`, see
+[Shell aliases](/shell-aliases.html).
+
+::: warning Renamed configuration key
+`[alias]` was renamed to `[tool_alias]`. The old key still works but is
+deprecated and prints a warning.
 :::
 
-## 别名后端
+## Backend aliases {#aliased-backends}
 
-后端别名会更改 mise 获取工具的位置。例如，显式选择 mise 内置的 Node.js 后端：
+A backend alias changes where mise gets a tool. For example, keep mise's
+built-in Node.js even if someone has installed a `node` plugin, which would
+otherwise take precedence:
 
 ```toml [mise.toml]
 [tool_alias]
@@ -25,9 +33,13 @@ node = "core:node"
 node = "24"
 ```
 
-使用 `mise tool node` 检查结果，然后运行 `mise install` 安装所选版本。如果已安装的插件或环境覆盖项选择了与预期不同的源，请参阅[后端选择](/dev-tools/backend_architecture.html#how-backend-selection-works)。
+Check the result with `mise tool node`, then run `mise install`. See
+[how backend selection works](/dev-tools/backends/#how-backend-selection-works)
+when an installed plugin or an environment variable picks a different source
+than you expect.
 
-别名还可以从同一个 GitHub 仓库中选择不同的发布资产：
+Aliases can also install separate release assets from one GitHub repository
+as separate tools:
 
 ```toml [mise.toml]
 [tool_alias]
@@ -39,12 +51,14 @@ dhall-json = { version = "v1.42.2", matching = "dhall-json" }
 dhall-lsp = { version = "latest", matching = "dhall-lsp-server" }
 ```
 
-每个别名都有自己的版本请求和
-[GitHub 资产筛选器](/dev-tools/backends/github.html#matching)。对于独立发布多个工具的仓库，这一点很重要。
+Each alias has its own version request and
+[GitHub asset filter](/dev-tools/backends/github.html#matching), which helps
+with repositories that release several tools independently.
 
-## 别名版本
+## Version aliases {#aliased-versions}
 
-版本别名为版本请求提供一个稳定的名称。将团队的 Node.js 发布系列集中在一个位置：
+A version alias gives a name to a version request. This keeps a team's Node.js
+release series in one place:
 
 ```toml [mise.toml]
 [tool_alias.node.versions]
@@ -54,22 +68,52 @@ project-lts = "24"
 node = "project-lts"
 ```
 
-`project-lts` 会解析为对 Node.js 24 的请求。它不是精确的补丁版本锁定；使用 [mise.lock](/dev-tools/mise-lock.html) 记录解析后的版本。更改别名会更改所有使用该别名的声明的请求。
+`project-lts` resolves as the request `24`, so it selects a 24.x release, not
+an exact patch version; use [mise.lock](/dev-tools/mise-lock.html) to record
+the resolved version. Changing the alias changes the request for every
+declaration that uses it.
 
-内置的 Node.js 后端已经提供了 `lts` 和命名的 LTS 版本等别名。你无需重新定义这些别名。传统的 asdf 插件作者可以通过 `bin/list-aliases` 提供自己的别名，每行包含一个别名和版本：
+Some backends provide aliases of their own, such as Node.js `lts` and
+`lts-jod`, and Java `lts`. You do not need to redefine them. Legacy asdf
+plugins provide theirs through a `bin/list-aliases` script that prints one
+alias and version per line.
 
-```bash
-#!/usr/bin/env bash
-printf '%s\n' 'recommended 2.0' 'legacy 1.0'
+## Manage aliases from the command line {#manage-aliases}
+
+[`mise tool-alias ls`](/cli/tool-alias/ls.html) lists aliases, including the
+ones backends provide:
+
+```sh
+mise tool-alias ls node
 ```
 
-## 模板
+```text
+node  lts          24
+node  lts-argon    4
+node  lts-boron    6
+...
+```
 
-别名值支持[模板](/templates.html)。例如，允许使用默认发布系列的显式环境覆盖：
+[`mise tool-alias set`](/cli/tool-alias/set.html) and
+[`mise tool-alias unset`](/cli/tool-alias/unset.html) edit your global config.
+Edit `mise.toml` directly for project aliases.
 
-```toml
+```sh
+mise tool-alias set node project-lts 24  # version alias
+mise tool-alias set mytool github:owner/repo  # backend alias
+mise tool-alias unset node project-lts
+```
+
+## Templates {#templates}
+
+Alias values support [templates](/templates.html). For example, read the
+release series from an environment variable, with a default:
+
+```toml [mise.toml]
 [tool_alias.node.versions]
 project-lts = "{{ env.PROJECT_NODE_VERSION | default(value='24') }}"
 ```
 
-在调用 mise 之前设置 `PROJECT_NODE_VERSION`。避免通过在别名模板中调用同一个工具来计算工具的版本：版本解析可能发生在工具可用之前，或者通过 shim 重新进入 mise。
+Set `PROJECT_NODE_VERSION` before running mise. Do not compute a tool's
+version by running that same tool from its alias template: mise may resolve
+the version before the tool is installed, or re-enter itself through a shim.

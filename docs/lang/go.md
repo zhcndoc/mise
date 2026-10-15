@@ -1,119 +1,201 @@
 ---
-description: "mise 可用于在同一系统上安装和管理 go 的多个版本"
+description: "Install Go with mise, read toolchain lines from go.mod and go.work, and manage GOROOT and GOBIN."
 ---
 
 # Go
 
-`mise` 可用于在同一系统上安装和管理 [go](https://golang.org/) 的多个版本。
+mise installs the official [Go](https://go.dev/) distributions and sets
+`GOROOT` and `GOBIN` for the selected version.
 
-## 用法
+## Quick start
 
 为当前项目选择一个 Go 发布系列：
 
 ```sh
-mise use go@1.25
+mise use go@1.27
 mise exec -- go version
 ```
 
-使用 `mise use -g go@1.25` 设置个人默认版本。`mise ls-remote go` 列出可用版本；`mise upgrade go` 会在已配置的请求范围内更新。
+Use `mise use -g go@1.27` for a personal default. [`mise upgrade go`](/cli/upgrade.html)
+updates within the configured request.
 
-1.20 及以下的次要 go 版本需要在版本号前指定 `prefix`，因为每个系列的第一个版本发布时都没有 `.0` 后缀，这使得 1.20 成为了精确的版本匹配：
+## Choosing a version
+
+| Request          | Selects                                |
+| ---------------- | -------------------------------------- |
+| `go@1.27`        | The newest 1.27.x release              |
+| `go@1.27.1`      | That release                           |
+| `go@latest`      | The newest release                     |
+| `go@1.20`        | Exactly `1.20`, the first 1.20 release |
+| `go@prefix:1.20` | The newest 1.20.x release              |
+
+Go 1.20 and earlier published the first release of each series as `1.20`, not
+`1.20.0`, so `go@1.20` selects that exact first release. To get the newest
+1.20.x, use `prefix:`:
 
 ```sh
 mise use go@prefix:1.20
 ```
 
-这些说明使用 mise 内置的 go 支持。已安装的同名外部插件可能会改变行为；使用 `mise plugins ls` 检查是否存在覆盖。有关后端详细信息，请参阅[核心实现](https://github.com/jdx/mise/blob/main/src/plugins/core/go.rs)。
+From Go 1.21 on, the first release is `1.21.0`, so `go@1.21` already selects
+the newest 1.21.x. Betas and release candidates are not listed. Run
+`mise ls-remote go` to see every version.
 
-## Go 版本文件 {#go-version-file-support}
+## Version files {#go-version-file-support}
 
-启用 Go 的惯用版本文件，以从 `.go-version`、`go.mod` 或 `go.work` 中选择版本：
+mise can select Go from `.go-version`, `go.mod` or `go.work`. Enable them for
+Go:
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools go
 ```
 
-对于 `go.mod` 和 `go.work`，mise 会将 `toolchain goX.Y.Z` 指令读取为精确版本请求。例如，下面的 `go.work` 会为包含 `api` 和 `worker` 模块的工作区选择 Go 1.24.3：
+This changes your global config. Add `--local` to enable it in the project's
+`mise.toml` instead, so teammates get the same behavior. See
+[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
 
-~~~text
-go 1.24.0
+In `go.mod` and `go.work`, mise reads the module's toolchain as an exact
+version request. That is a `toolchain goX.Y.Z` directive or, when the file has
+no `toolchain` line, a `go X.Y.Z` directive with a patch version. Go reads
+`go 1.27.1` without a `toolchain` line as `toolchain go1.27.1`, and
+`go mod tidy` removes a `toolchain` line that matches the `go` line, so both of
+these select Go 1.27.1:
 
-toolchain go1.24.3
+```text [go.mod]
+go 1.27.1
+```
+
+```text [go.mod]
+go 1.27.0
+
+toolchain go1.27.1
+```
+
+Go itself treats these lines as minimums and runs a newer local toolchain when
+one is installed. mise reads them as exact versions because the `go` command
+writes the version it runs into them. For example, this `go.work` selects
+Go 1.27.1 for a workspace containing the `api` and `worker` modules:
+
+```text [go.work]
+go 1.27.0
+
+toolchain go1.27.1
 
 use (
     ./api
     ./worker
 )
-~~~
+```
 
-`go` 指令声明最低所需版本。mise 在 `go.work` 中忽略它；从 `go.mod` 读取它已被[弃用](/configuration.html#which-fields-mise-reads)。
+A `go X.Y` directive without a patch version names no Go release and only
+declares the minimum Go version that the module supports. mise ignores it in
+`go.work`. Reading it from `go.mod` is deprecated and stops in mise 2026.11.0;
+add a `toolchain` line instead, or set
+`idiomatic_version_file_ignore_minimum_versions` to ignore it now. See
+[which fields mise reads](/dev-tools/versions.html#which-fields-mise-reads).
 
 ### 工作区和 `GOWORK`
 
-工作区激活时，mise 会使用其中的 `go.work`，而不是下面的 `go.mod` 文件，即使你从模块子目录运行 mise 也是如此。如果工作区没有受支持的 `toolchain` 指令，两个文件都不会提供版本。请使用完整发布版本的 `toolchain goX.Y.Z`；mise 不读取 `toolchain default`、不完整版本或候选版本。
+When a workspace is active, mise uses its `go.work` instead of the `go.mod`
+files beneath it, including when you run mise from a module subdirectory. If
+`go.work` has neither a `toolchain goX.Y.Z` line nor, without a `toolchain`
+line, an exact `go X.Y.Z` line, neither file supplies a version. mise does not
+read `toolchain default`, partial versions or release candidates.
 
-`GOWORK` 环境变量控制工作区选择：
+The `GOWORK` environment variable controls which workspace mise uses:
 
-| `GOWORK` 值              | mise 行为                                                                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 未设置、为空或 `auto`    | 在当前目录及父目录的 mise 配置搜索路径中查找 `go.work`。                                                            |
-| `off`                   | 忽略 `go.work`，读取 `go.mod`。                                                                                      |
-| 绝对路径                 | 仅使用 mise 发现的指定工作区文件；忽略其他 `go.work`，也不回退到 `go.mod`。                                        |
+| `GOWORK` value          | mise behavior                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Unset, empty, or `auto` | Search the current directory and its parents for `go.work`, within mise's config search paths.                          |
+| `off`                   | Ignore `go.work` and read `go.mod`.                                                                                     |
+| Absolute path           | Use only the named workspace file, if mise discovers it; ignore other `go.work` files and do not fall back to `go.mod`. |
 
-::: tip 工作区发现限制
-设置 `GOWORK` 不会让 mise 读取配置搜索路径之外的文件。如果指定工作区不在这些路径中或不存在，它不会提供版本。对于这些工作区，请在 `mise.toml` 中设置 Go 版本。
+Setting `GOWORK` does not make mise read files outside its config search paths.
+If the named workspace is outside those paths or does not exist, it supplies no
+version; set the Go version in `mise.toml` for such a workspace. mise ignores a
+relative `GOWORK` path and uses its default search. Go itself rejects relative
+paths, so use an absolute path.
 
-mise 会忽略相对的 `GOWORK` 路径，并使用默认工作区搜索。Go 不接受相对路径，因此设置 `GOWORK` 时请使用绝对路径。
-:::
+### Go's own toolchain switching {#go-toolchain-selection}
 
-### Go 工具链选择
+Go has its own [toolchain selection](https://go.dev/doc/toolchain), controlled
+by `GOTOOLCHAIN` and the `go` and `toolchain` lines in `go.mod` and `go.work`.
+With Go's default `GOTOOLCHAIN=auto`, the `go` command that mise installed can
+download and run a newer toolchain when a module asks for one. Compare
+`mise exec -- go version` with `mise exec -- go env GOTOOLCHAIN` when the
+version you see is not the one mise selected. To make Go always run the
+toolchain mise selected, set `GOTOOLCHAIN` in `[env]`:
 
-Go 还有自己的[工具链选择](https://go.dev/doc/toolchain)机制，该机制由 `GOTOOLCHAIN` 以及模块／工作区声明控制。mise 启动 Go 后，它可能会使用不同的工具链。调查意外版本时，请比较 `mise exec -- go version` 和 `mise exec -- go env GOTOOLCHAIN`。
+```toml [mise.toml]
+[env]
+GOTOOLCHAIN = "local"
+```
 
-## 默认包
+## Binaries from `go install`
 
-::: warning 计划弃用
-默认包文件已被弃用。它们目前仍受支持，但 mise 将从 `2026.11.0` 开始发出警告，
-并将在 `2027.11.0` 移除支持。
+Unless `GOBIN` is already set in your shell, mise sets it to the selected Go
+version's `bin` directory, which is on `PATH`. A command installed with
+`go install` therefore belongs to that Go version and is gone after you switch
+or upgrade Go.
 
-对于 Go CLI，请直接使用 `go:` 后端安装工具：
+To keep a Go CLI across Go versions, install it as its own tool with the
+[`go:` backend](/dev-tools/backends/go.html), for example
+`mise use -g go:golang.org/x/tools/gopls`. To use Go's default location
+(`$GOPATH/bin`, or `~/go/bin`), set [`go.set_gobin`](/lang/go.html#go.set_gobin) to `false`
+and add that directory to your `PATH` yourself.
 
-```toml
+## Environment variables
+
+| Variable | Value                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| `GOROOT` | The selected version's install directory. Turn off with [`go.set_goroot`](/lang/go.html#go.set_goroot). |
+| `GOBIN`  | The selected version's `bin` directory, unless `GOBIN` is already set or `go.set_gobin` is `false`.     |
+
+mise does not set `GOPATH`. Set it in `[env]` if you need a specific value.
+
+## How mise installs Go
+
+mise lists Go versions from its
+[versions host](/configuration/settings.html#use_versions_host), or from the
+release tags of [`go.repo`](/lang/go.html#go.repo) when `use_versions_host` is off. mise
+downloads the archive for your platform from
+[`go.download_mirror`](/lang/go.html#go.download_mirror) (`https://dl.google.com/go` by
+default), checks it against the `.sha256` file published next to it, and runs
+`go version`. [`go.skip_checksum`](/lang/go.html#go.skip_checksum) turns the checksum check
+off.
+
+An installed plugin named `go` takes precedence over the built-in
+installer. If mise behaves differently from this page, check
+[`mise plugins ls`](/cli/plugins/ls.html) and see
+[selecting another implementation](/core-tools.html#selecting-another-implementation).
+
+## Tool options
+
+Go has no Go-specific options. `install_env` reaches the `go version` check,
+`go install` for default packages, and `postinstall` commands. For example, a
+`postinstall` that installs a private module needs `GOPRIVATE`:
+
+```toml [mise.toml]
 [tools]
-"go:github.com/jesseduffield/lazygit" = "latest"
+go = {
+  version = "1.27",
+  install_env = { GOPRIVATE = "github.com/acme/*" },
+  postinstall = "go install github.com/acme/tool@latest",
+}
 ```
 
-对于确实应该安装到每个 Go 版本中的包，请使用工具级别的 `postinstall`
-钩子：
+Other generic options are described in [tool options](/dev-tools/#tool-options).
 
-```toml
-[tools]
-go = { version = "1.25", postinstall = "go install github.com/daixiang0/gci@latest" }
-```
+## Default packages file <Badge type="danger" text="deprecated" /> {#default-packages}
 
-:::
-
-mise 可以在安装新的 go 版本后自动安装一组默认包。
-要使用此旧版功能，请提供一个 `$HOME/.default-go-packages` 文件，其中每行列出一个包，例如：
-
-```text
-github.com/daixiang0/gci # 允许注释
-github.com/jesseduffield/lazygit
-```
-
-## 工具选项
-
-以下[工具选项](/dev-tools/#tool-options)适用于 `go` 后端。
-这些选项位于 `mise.toml` 中的 `[tools]` 部分。
-
-### `install_env`
-
-为核心 `go` 后端运行的默认包安装和安装时验证命令设置环境变量：
-
-```toml
-[tools]
-go = { version = "latest", install_env = { GOPRIVATE = "github.com/acme/*" } }
-```
+mise installs the packages listed in `~/.default-go-packages`
+([`go.default_packages_file`](/lang/go.html#go.default_packages_file)), one per line, with
+`go install` into each new Go version. mise warns about this file from 2026.11.0
+and stops reading it in 2027.11.0. Install Go CLIs with the
+[`go:` backend](/dev-tools/backends/go.html) instead, for example
+`"go:github.com/jesseduffield/lazygit" = "latest"`, or use a
+[`postinstall`](/dev-tools/#tool-postinstall-commands) command for packages
+every Go version needs.
 
 ## 设置
 

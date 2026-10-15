@@ -11,9 +11,23 @@ description: "[实验性] 根据当前 mise.toml 构建一个 OCI 镜像"
 
 [实验性] 根据当前的 mise.toml 构建一个 OCI 镜像
 
-每个工具版本都会成为其自身的内容寻址 OCI 层。升级某个工具版本只会使该工具的层失效，其他工具、基础镜像和配置都会原样复用。输出目录符合 OCI image-layout 规范。使用 `skopeo inspect oci:./mise-oci` 检查它，或使用 `mise oci run --image-dir ./mise-oci -- command` 加载并运行它。
+Each tool version becomes its own content-addressable OCI layer. Bumping a
+tool version invalidates that tool's layer (a Python bump also invalidates
+pypi tool layers, which are relocated against it); other tool layers and the
+base image layers are reused, while the generated /etc/mise/config.toml
+layer, image config, and manifest are regenerated. The output directory
+follows the OCI image-layout spec.
 
-在 Linux 上使用目标架构构建：这会打包主机上的工具安装，并且默认会打包正在运行的 mise 二进制文件。`--no-mise` 会省略该二进制文件，但不会为其他操作系统交叉编译已安装的工具。不支持 asdf 工具。
+Only tools from project config files are packaged, including a monorepo
+root's config. The global and system configs and a config directly in your
+home directory, such as ~/mise.toml, are left out unless you pass
+`--include-global`.
+
+Build on a Linux host with the image's architecture. Tools are packaged as
+installed on the host, and so is the running mise binary, at
+/usr/local/bin/mise, unless you pass `--no-mise`. asdf plugins are not
+supported; use a vfox plugin or any other backend for each tool. vfox
+plugins are copied into the image next to the tools they install.
 
 需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）。
 
@@ -21,44 +35,52 @@ description: "[实验性] 根据当前 mise.toml 构建一个 OCI 镜像"
 - **`--copy <HOST_PATH:IMAGE_PATH>`** — 将主机文件、目录或符号链接复制到镜像中（可重复，HOST:IMAGE）
 - **`-o --output <OUTPUT>`** — OCI 镜像布局的输出目录
 
-  **默认值：** `./mise-oci`
-- **`--from <FROM>`** — 基础镜像引用（覆盖 [oci].from 和 oci.default_from 设置）
-- **`--include-global`** — 同时包含全局／系统配置中的工具（默认：仅项目）
+  **Default:** `./mise-oci`
+- **`--from <FROM>`** — Base image reference (overrides [oci].from and the oci.default_from setting)
+- **`--include-global`** — Also package tools from the global and system configs
 
-  默认情况下，`mise oci build` 只会打包项目 mise 配置中声明的工具（以及项目根目录及其以下的任何父级配置，例如单体仓库根目录配置）。`~/.config/mise/config.toml` 中的个人开发工具会被排除，因此不会被固化到项目镜像中。传入 `--include-global` 可恢复旧的“合并所有已加载配置”行为。
-- **`-t --tag <TAG>`** — 要记录在镜像索引中的标签（org.opencontainers.image.ref.name 注解）
-- **`--mount-point <MOUNT_POINT>`** — 在镜像中放置工具安装内容的位置（默认值：/mise）
-- **`--no-mise`** — 不要将当前运行的 mise 二进制文件嵌入到 /usr/local/bin/mise
-- **`--no-cache`** — 在不读取或写入本地层缓存的情况下重新构建工具层
-- **`--owner <UID[:GID]>`** — 为生成层中的每个 tar 条目分配的 UID[:GID]
+  By default `mise oci build` packages only project config files, including a monorepo root's config. With this flag it also includes the tools, `[oci]`, `[bootstrap.packages]`, and `[dotfiles]` of the global and system configs and of a config directly in your home directory, so personal tools from ~/.config/mise/config.toml end up in the image.
+- **`-t --tag <TAG>`** — Tag to record in the image index (the org.opencontainers.image.ref.name annotation)
+- **`--mount-point <MOUNT_POINT>`** — Where tools install inside the image
 
-  覆盖 [oci].user_id／[oci].group_id。默认为 0:0。如果省略 GID，则默认为 UID。这只影响文件所有权；[oci].user 控制镜像的 USER 指令。
-- **`-h --help`** — 打印帮助
+  Overrides [oci].mount_point and the oci.default_mount_point setting.
+- **`--no-mise`** — Do not embed the currently-running mise binary at /usr/local/bin/mise
+- **`--no-cache`** — Rebuild tool layers without reading or writing the local layer cache
+- **`--owner <UID[:GID]>`** — UID[:GID] to assign to every tar entry in generated layers
+
+  Overrides [oci].user_id and [oci].group_id. Defaults to 0:0. If GID is omitted, it defaults to UID. This affects file ownership only; [oci].user controls the image USER directive.
+- **`-h --help`** — Print help
 
 ## 示例
 
-在具有目标架构的 Linux 主机上运行
+Build the project's image into ./mise-oci
 
 ```
 mise oci build
+```
+
+Use another base image and record a tag
+
+```
 mise oci build --from ubuntu:24.04 --tag myorg/dev:latest -o ./img
+```
+
+Inspect the result
+
+```
 skopeo inspect oci:./img
+```
+
+Open a shell in it
+
+```
 mise oci run --image-dir ./img -- /bin/sh
-```
-
-注意事项：
-
-```
-- 镜像只包含项目 mise 配置中的工具（以及项目根目录及其以下的任何配置）。`~/.config/mise/config.toml` 中的工具不会被包含；传入 --include-global
-  也可将它们打包进去。
-- v1 不支持 asdf 插件；vfox 插件会复制到镜像中，并放在它们安装的工具旁边。请为每个工具使用不同的后端（core、aqua、github、cargo、npm、go、pipx、spm、http）。
-- 默认情况下，宿主机上的 mise 二进制会嵌入到 `/usr/local/bin/mise`；请在与目标镜像相同的 OS/架构上构建（或传入 --no-mise）。
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [构建和运行 OCI 镜像](/dev-tools/mise-oci.html)。
-- [`mise oci <SUBCOMMAND>`](/cli/oci.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [OCI images](/dev-tools/mise-oci.html).
+- [`mise oci <SUBCOMMAND>`](/cli/oci.html).
+- [Global flags and argument syntax](/cli/#global-flags).

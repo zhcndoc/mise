@@ -11,21 +11,32 @@ description: "显示设置的有效值"
 
 显示设置的有效值
 
-包括默认值、配置和环境覆盖。使用 `--local` 时，仅读取所选本地配置中的显式设置；未设置的键将报错
-使用 `mise config get settings.KEY --file path/to/mise.toml` 检查单个文件
+Includes defaults, config files, and environment overrides. With `--local`,
+reads only the explicit settings in the nearest project config, and a
+setting that is not set there is an error. An optional setting with no
+default that is not set anywhere, such as `python.compile`, is also reported
+as not set and exits with an error. To inspect one file, use
+`mise config get settings.KEY --file path/to/mise.toml`.
 
 ## 参数
 - **`<SETTING>`** — 要显示的设置
 
-## 标志
-- **`-l --local`** — 使用本地配置文件而不是全局配置文件
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-l --local`** — Read only the explicit settings in the nearest project config
+- **`-h --help`** — Print help
 
 ## 示例
 
+Show the effective number of parallel jobs
+
 ```
 mise settings get jobs
-mise settings get python.compile
+```
+
+Show the value set in the project config
+
+```
+mise settings get --local experimental
 ```
 
 <!-- 生成的参考导航 -->

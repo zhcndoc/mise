@@ -11,9 +11,9 @@ description: "撤销某项操作对受跟踪文件所做的更改"
 
 撤销某项操作对受跟踪文件所做的更改
 
-从该操作创建的保护性检查点中，准确恢复该操作更改过的路径，其他所有内容保持现状。不提供引用时，将撤销尚未撤销的最新操作。
-支持 Bootstrap、captured commands、rollback、undo 和 pull。
-不会撤销软件包安装、服务状态和未跟踪文件。
+Restores exactly the paths that an operation changed from the checkpoint it saved first, and leaves everything else as it is now. Without a reference, reverses the newest operation that has not been undone.
+
+Works for operations that changed tracked files: `mise bootstrap`, `mise dot add`, `apply`, `edit`, `unapply`, `capture`, `rollback`, `pull` (including changes the watcher applied), and `undo` itself. Package installations, service state, and untracked files are not reversed.
 
 ## 参数
 - **`[REF]`** — 操作的检查点：数字 ID、`latest`、`latest~N` 或 `commit:<sha>`
@@ -23,10 +23,30 @@ description: "撤销某项操作对受跟踪文件所做的更改"
 - **`-y --yes`** — 无需提示直接应用
 - **`-h --help`** — 打印帮助
 
+## Examples
+
+Reverse the newest operation
+
+```
+mise dot undo
+```
+
+Show what would be restored
+
+```
+mise dot undo --dry-run
+```
+
+Reverse the operation recorded as checkpoint 42
+
+```
+mise dot undo 42
+```
+
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

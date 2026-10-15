@@ -11,13 +11,23 @@ description: "将配置文件标记为受信任"
 
 将配置文件标记为受信任
 
-这意味着当 mise 需要读取可能执行代码或影响环境的配置时，mise 可以解析该文件。如果不信任，mise 可能会提示、在某些发现路径中跳过该配置，或在无法提示时因配置不受信任而失败。
+Trust lets mise load the parts of a config file that can run code or change
+your environment. Without it, mise prompts, skips the file, or fails with an
+untrusted-config error when it cannot prompt.
 
-在正常模式下，执行项目定义行为的命令（`mise run`、裸任务调用，例如 `mise <TASK>`、`mise install`、`mise exec` 和 `mise watch`）会自动信任其活动配置。偏执模式要求对每个非全局配置进行明确的、与内容绑定的信任。
+A file with no template syntax that contains only `min_version`, `[tools]`
+entries with plain version strings (or arrays of them), and `[tasks]` in
+which no task lists `secrets` does not need trust unless paranoid mode is on.
+Commands that run project code (`mise run`, task shorthand such as
+`mise build`, `mise install`, `mise exec`, `mise watch`, and
+`mise daemons start|restart|register`) trust their active config
+automatically.
 
-在正常模式下，安全配置文件不需要信任：仅包含 `min_version`、带有纯版本字符串（或其数组）的 `[tools]` 条目，以及不包含模板或工具选项的 `[tasks]` 的文件。
-
-信任状态会在 Git 工作树之间共享：当仓库主检出目录中的等效路径已受信任时，链接工作树中的配置文件也会被视为受信任。偏执模式会禁用此共享，因为工作树可能会检出包含不同配置内容的分支。
+Trusting a config file in a repository's main checkout also trusts the same
+path in its git worktrees. Paranoid mode (<https://mise.jdx.dev/paranoid.html>)
+turns off automatic and worktree trust and requires trust, tied to the
+file's contents, for every config outside the global and system config.
+See <https://mise.jdx.dev/security.html#configuration-trust>
 
 ## 参数
 - **`[CONFIG_FILE]`** — 要更改其信任状态的配置文件
@@ -25,30 +35,38 @@ description: "将配置文件标记为受信任"
 ## 标志
 - **`-a --all`** — 信任当前目录、其父目录及其子目录中的所有配置文件
 
-  遍历子目录时遵循 .gitignore，跳过隐藏目录和常见的构建／依赖目录（node_modules、vendor、target、dist、build）。
-- **`--ignore`** — 不信任此配置，并在将来忽略它
-- **`--show`** — 显示当前目录及其父目录中配置文件的受信任状态。不信任或取消信任任何文件。
-- **`--untrust`** — 移除此配置的明确受信任状态
-- **`-h --help`** — 打印帮助
+  Subdirectories are walked respecting .gitignore, skipping hidden directories and common build and dependency directories (node_modules, vendor, target, dist, build).
+- **`--ignore`** — Do not trust this config and ignore it in the future
+- **`--show`** — Show the trust status of config files in the current directory and its parents
+
+  Does not trust or untrust any files.
+- **`--untrust`** — Remove explicit trust for this config
+- **`-h --help`** — Print help
 
 ## 示例
 
-信任 ~/some_dir/mise.toml
-
-```
-mise trust ~/some_dir/mise.toml
-```
-
-信任当前目录或父目录中的 mise.toml
+Trust the nearest untrusted config in this directory or a parent
 
 ```
 mise trust
+```
+
+Trust a specific file
+
+```
+mise trust ~/src/app/mise.toml
+```
+
+List configs here and above with their trust status
+
+```
+mise trust --show
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [配置文件信任](/security.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Configuration trust](/security.html#configuration-trust).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

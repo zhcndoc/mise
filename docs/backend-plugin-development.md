@@ -1,492 +1,403 @@
 ---
-description: "mise 中的后端插件使用专用的后端钩子，通过 plugin:tool 格式管理多个工具"
+description: "Write a Lua plugin that installs a family of tools under its own prefix, such as acme:deploy."
 ---
 
-# 后端插件开发
+# Backend plugins
 
-::: tip
-[mise-backend-plugin-template](https://github.com/jdx/mise-backend-plugin-template) 提供了一个可直接使用的起点，预配置了 LuaCATS 类型定义、stylua 格式化和 hk 代码检查。
-:::
+A backend plugin is a set of Lua hooks that installs many tools under one
+prefix. Users write `my-backend:some-tool`, where `my-backend` is the name they
+installed the plugin under. Write one for a package registry or an artifact
+server that no built-in [backend](/dev-tools/backends/) supports.
 
-mise 中的后端插件使用专用的后端钩子，通过 `plugin:tool` 格式管理多个工具。它们非常适合用于管理多个相关工具的包管理器、工具系列和自定义安装。
+Backend plugins are Lua 5.1 scripts in a `hooks/` directory, like
+[tool plugins](/tool-plugin-development.html), but with their own hooks. A
+plugin directory that has `hooks/backend_install.lua` is a backend plugin.
 
-## 什么是后端插件？
+## Quick start {#quick-start}
 
-后端插件通过专用的后端钩子扩展标准的 vfox 插件系统。它们支持：
+Create a repository from the
+[backend plugin template](https://github.com/jdx/mise-backend-plugin-template),
+either with **Use this template** on GitHub or with the GitHub CLI:
 
-- **多个工具**：一个插件可以管理多个工具。例如，`vfox-npm` 可以安装 `prettier`、`eslint` 以及其他 npm 包
-- **跨平台支持**：Lua 可运行于 Windows、macOS 和 Linux；你的安装器必须支持每个目标平台
-- **灵活的架构**：具有专用后端方法的现代插件系统
+```sh
+gh repo create mise-acme --template jdx/mise-backend-plugin-template --public --clone
+```
 
-## 插件架构
+The template includes LuaCATS type definitions for editor completion, and runs
+stylua, lua-language-server and actionlint through hk. A backend plugin has
+this layout:
 
-后端插件通常是一个 git 仓库，但也可以是一个目录（通过 `mise plugin link`）。
+```text
+mise-acme/
+├── metadata.lua                  # name and version
+├── hooks/
+│   ├── backend_list_versions.lua # required
+│   ├── backend_install.lua       # required
+│   ├── backend_exec_env.lua      # required
+│   ├── backend_uninstall.lua     # optional
+│   ├── backend_list_tools.lua    # optional
+│   └── backend_search_tools.lua  # optional
+└── lib/                          # optional: modules for require()
+```
 
-后端插件使用 Lua 编写（当前版本为 5.1）。它们使用三个必需的后端方法，也可以选择性地公开工具目录，或在卸载时执行清理。每个方法都在自己的文件中实现：
+Link your working copy and try a tool:
 
-- `hooks/backend_list_tools.lua` - 可选地列出可发现的工具
-- `hooks/backend_search_tools.lua` - 可选地搜索大型工具目录
-- `hooks/backend_list_versions.lua` - 列出工具的可用版本
-- `hooks/backend_install.lua` - 安装工具的特定版本
-- `hooks/backend_exec_env.lua` - 为工具设置环境变量
-- `hooks/backend_uninstall.lua` - 可选地在 mise 移除已安装版本前执行清理
+```sh
+mise plugins link acme ./mise-acme
+mise ls-remote acme:deploy
+mise use acme:deploy@2.1.0
+mise exec -- deploy --version
+```
 
-## 后端方法
+The prefix is the name you linked or installed the plugin under. Pick one that
+does not clash with a built-in backend such as `npm` or `github`.
 
-### BackendListTools
+## Complete example {#complete-example}
 
-可选地列出此后端管理的工具。mise 会在每个返回的名称前加上已安装的插件名称，并将生成的 `plugin:tool` 标识符包含在 `mise search`、shell 补全和交互式 `mise use` 选择器中。
+This plugin installs tools from an internal artifact server that lists each
+tool's versions, oldest first, in `index.json` and puts each release's archives
+and a `SHA256SUMS` file in a directory named after the version:
 
-```lua
-function PLUGIN:BackendListTools(ctx)
+```text
+https://artifacts.example.com/deploy/index.json
+https://artifacts.example.com/deploy/2.1.0/deploy-2.1.0-linux-x64.tar.gz
+https://artifacts.example.com/deploy/2.1.0/SHA256SUMS
+```
+
+A `mirror` tool option replaces the server URL.
+
+```lua [metadata.lua]
+PLUGIN = {
+    name = "acme",
+    version = "0.1.0",
+    description = "Install tools from the ACME artifact server",
+}
+```
+
+```lua [lib/acme.lua]
+local M = {}
+
+function M.base_url(options)
+    return options.mirror or "https://artifacts.example.com"
+end
+
+-- The server builds for Linux and macOS only.
+function M.asset_name(tool, version)
+    local os_names = { darwin = "macos", linux = "linux" }
+    local arch_names = { amd64 = "x64", arm64 = "arm64" }
+    local os_name = os_names[RUNTIME.osType] or error("unsupported OS: " .. RUNTIME.osType)
+    local arch = arch_names[RUNTIME.archType] or error("unsupported architecture: " .. RUNTIME.archType)
+    return tool .. "-" .. version .. "-" .. os_name .. "-" .. arch .. ".tar.gz"
+end
+
+function M.find_checksum(body, filename)
+    for line in body:gmatch("[^\r\n]+") do
+        local digest, name = line:match("^(%x+)%s+%*?(.+)$")
+        if name == filename and #digest == 64 then
+            return digest
+        end
+    end
+    error("no SHA-256 for " .. filename)
+end
+
+-- The Lua modules have no hash function, so ask the system for one.
+function M.sha256(path)
+    local cmd = require("cmd")
+    local command = RUNTIME.osType == "darwin" and 'shasum -a 256 "$FILE"' or 'sha256sum "$FILE"'
+    return cmd.exec(command, { env = { FILE = path } }):match("^(%x+)")
+end
+
+return M
+```
+
+```lua [hooks/backend_list_versions.lua]
+local http = require("http")
+local json = require("json")
+local acme = require("acme")
+
+function PLUGIN:BackendListVersions(ctx)
+    local url = acme.base_url(ctx.options) .. "/" .. ctx.tool .. "/index.json"
+    local resp = http.get({ url = url })
+    if resp.status_code == 404 then
+        error("acme has no tool named " .. ctx.tool)
+    elseif resp.status_code ~= 200 then
+        error("fetching " .. url .. " failed: HTTP " .. resp.status_code)
+    end
+    -- index.json lists versions oldest first, the order mise expects
+    return { versions = json.decode(resp.body).versions }
+end
+```
+
+```lua [hooks/backend_install.lua]
+local archiver = require("archiver")
+local file = require("file")
+local http = require("http")
+local acme = require("acme")
+
+function PLUGIN:BackendInstall(ctx)
+    local dir = acme.base_url(ctx.options) .. "/" .. ctx.tool .. "/" .. ctx.version .. "/"
+    local filename = acme.asset_name(ctx.tool, ctx.version)
+    local archive = file.join_path(ctx.download_path, filename)
+
+    local sums = http.get({ url = dir .. "SHA256SUMS" })
+    if sums.status_code ~= 200 then
+        error("fetching SHA256SUMS failed: HTTP " .. sums.status_code)
+    end
+    local expected = acme.find_checksum(sums.body, filename)
+
+    http.download_file({ url = dir .. filename }, archive)
+    if acme.sha256(archive) ~= expected then
+        error("checksum mismatch for " .. filename)
+    end
+
+    archiver.decompress(archive, ctx.install_path, { strip_components = 1 })
+    return {}
+end
+```
+
+```lua [hooks/backend_exec_env.lua]
+local file = require("file")
+
+function PLUGIN:BackendExecEnv(ctx)
     return {
-        tools = {
-            {name = "formatter", description = "Formats source files"},
-            {name = "linter", description = "Checks source files"},
+        env_vars = {
+            { key = "PATH", value = file.join_path(ctx.install_path, "bin") },
         },
     }
 end
 ```
 
-`name` 是必需的，`description` 是可选的。返回一个有限且有用的目录；包管理器后端不应枚举整个生态系统。mise 会使用远程版本缓存时长缓存响应，并在刷新失败时使用过期的缓存结果。
+Configure a tool and its mirror, then install it:
 
-### BackendSearchTools
-
-可选地搜索大型或不断变化的目录，而无需完整枚举目录。当 `mise search` 或 shell 补全具有非空查询时，mise 会调用此钩子。插件可以实现此钩子、`BackendListTools`，或同时实现两者。
-
-```lua
-function PLUGIN:BackendSearchTools(ctx)
-    local results = search_registry(ctx.query)
-    return {
-        tools = results,
-    }
-end
+```toml [mise.toml]
+[tools]
+"acme:deploy" = { version = "2.1.0", mirror = "https://artifacts.internal.example.com" }
 ```
 
-响应格式与 `BackendListTools` 相同。例如，类似 npm 的后端可以使用 `ctx.query` 查询其注册表，同时使用 `BackendListTools` 提供一小组精选工具。搜索响应会针对每个查询单独缓存。
+```sh
+mise install
+mise exec -- deploy --version
+```
+
+`mise install` calls `BackendListVersions` to resolve `2.1.0` and
+`BackendInstall` to download, verify and extract the archive into
+`~/.local/share/mise/installs/acme-deploy/2.1.0`. `BackendExecEnv` then puts its
+`bin` directory on `PATH`. mise does not check what `BackendInstall` downloads,
+so the hook verifies the checksum itself before extracting.
+
+## Hooks {#backend-methods}
+
+| Hook                  | File                              | Required | mise calls it                                                    |
+| --------------------- | --------------------------------- | -------- | ---------------------------------------------------------------- |
+| `BackendListVersions` | `hooks/backend_list_versions.lua` | yes      | to list a tool's versions (`mise ls-remote`, resolving `latest`) |
+| `BackendInstall`      | `hooks/backend_install.lua`       | yes      | to install one version of a tool                                 |
+| `BackendExecEnv`      | `hooks/backend_exec_env.lua`      | yes      | to build the environment for an installed version                |
+| `BackendUninstall`    | `hooks/backend_uninstall.lua`     | no       | before mise removes an installed version                         |
+| `BackendListTools`    | `hooks/backend_list_tools.lua`    | no       | for `mise search`, shell completion and the `mise use` picker    |
+| `BackendSearchTools`  | `hooks/backend_search_tools.lua`  | no       | for `mise search` and shell completion with a query              |
+
+A hook fails by raising an error with `error()`; mise stops and shows the
+message. Hooks can use the `http`, `json`, `file`, `archiver`, `cmd` and other
+modules in the [Plugin Lua reference](/plugin-lua-modules.html), and the
+[`RUNTIME`](/plugin-lua-modules.html#runtime) global that describes the
+platform.
 
 ### BackendListVersions
 
-列出工具的可用版本：
+| `ctx` field | Value                                                 | Example                      |
+| ----------- | ----------------------------------------------------- | ---------------------------- |
+| `tool`      | The tool name after the prefix                        | `"deploy"`                   |
+| `options`   | The tool's options; see [Tool options](#tool-options) | `{ mirror = "https://..." }` |
 
-```lua
-function PLUGIN:BackendListVersions(ctx)
-    local tool = ctx.tool
-    local options = ctx.options
-    local versions = {}
-
-    -- 用于获取该工具版本的逻辑
-    -- 示例：查询 API、解析注册表等。
-    -- 通过 options["key"] 或 options.key 访问自定义选项
-
-    return {versions = versions}
-end
-```
-
-> [!WARNING]
-> 根据工具的发布策略，按**从旧到新**的顺序返回版本。mise 会保留该顺序。不要假设使用 SemVer：版本可能是日期、预发布版本或频道名称。这与工具插件的 `Available` 钩子相反，后者按从新到旧的顺序返回版本。
+Return `{ versions = { ... } }`, a list of version strings oldest first,
+according to the tool's release policy. mise keeps that order. Versions are not
+always SemVer: they can be dates, prereleases or channel names. A tool plugin's
+`Available` hook returns newest first instead.
 
 ### BackendInstall
 
-安装工具的特定版本：
+| `ctx` field     | Value                                                 | Example                                                      |
+| --------------- | ----------------------------------------------------- | ------------------------------------------------------------ |
+| `tool`          | The tool name                                         | `"deploy"`                                                   |
+| `version`       | The resolved version being installed                  | `"2.1.0"`                                                    |
+| `install_path`  | The directory to install into                         | `"/home/user/.local/share/mise/installs/acme-deploy/2.1.0"`  |
+| `download_path` | A directory for downloads                             | `"/home/user/.local/share/mise/downloads/acme-deploy/2.1.0"` |
+| `options`       | The tool's options; see [Tool options](#tool-options) | `{ mirror = "https://..." }`                                 |
 
-```lua
-function PLUGIN:BackendInstall(ctx)
-    local tool = ctx.tool
-    local version = ctx.version
-    local install_path = ctx.install_path
-    local download_path = ctx.download_path
-    local options = ctx.options
+Install the version into `install_path` and return a table, even an empty one;
+returning nothing fails the install. `http.download_file` and
+`archiver.decompress` create the directories they write into.
 
-    -- 用于安装该工具的逻辑
-    -- 示例：下载文件、解压归档等。
-    -- 通过 options["key"] 或 options.key 访问自定义选项
-
-    return {}
-end
-```
+mise does not verify what `BackendInstall` downloads, records no download URL
+or checksum for backend plugin tools in `mise.lock`, and does not support
+attestations here. Check a checksum before extracting, as the complete example
+does.
 
 ### BackendExecEnv
 
-返回所选安装的环境条目。即使没有要添加的条目，也要实现此钩子；在这种情况下返回 `{env_vars = {}}`：
+| `ctx` field    | Value                                                 | Example                                                     |
+| -------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
+| `tool`         | The tool name                                         | `"deploy"`                                                  |
+| `version`      | The installed version                                 | `"2.1.0"`                                                   |
+| `install_path` | The install directory                                 | `"/home/user/.local/share/mise/installs/acme-deploy/2.1.0"` |
+| `options`      | The tool's options; see [Tool options](#tool-options) | `{ mirror = "https://..." }`                                |
 
-```lua
-function PLUGIN:BackendExecEnv(ctx)
-    local install_path = ctx.install_path
-    local options = ctx.options
+Return `{ env_vars = { { key = ..., value = ... }, ... } }`. Implement this hook
+even when you have nothing to add, and return `{ env_vars = {} }`. Return each
+`PATH` directory as its own entry; mise joins repeated keys with the platform's
+path separator. If you return no `PATH` entry, mise adds `install_path`'s `bin`.
+mise caches the result for each version and set of options, so keep the hook
+fast.
 
-    -- 用于设置环境变量的逻辑
-    -- 示例：将 bin 目录添加到 PATH
-    -- 通过 options["key"] 或 options.key 访问自定义选项
+### BackendUninstall
 
+| `ctx` field     | Value                                      |
+| --------------- | ------------------------------------------ |
+| `tool`          | The tool name                              |
+| `version`       | The installed version                      |
+| `install_path`  | The install directory, which still exists  |
+| `download_path` | The download directory                     |
+| `options`       | The tool's options from the current config |
+
+Use this hook for cleanup that deleting the install directory cannot do, such
+as running a vendor uninstaller or removing entries created outside
+`install_path`:
+
+```lua [hooks/backend_uninstall.lua]
+function PLUGIN:BackendUninstall(ctx)
+    -- undo changes made outside ctx.install_path; files inside it can still be read
+end
+```
+
+mise calls this hook whenever it removes an installed version: `mise uninstall`,
+`mise upgrade`, `mise prune`, and delayed removal of old versions. It does not
+run for `--dry-run`. If the hook raises an error, mise stops and keeps the
+install directory so the uninstall can be retried.
+
+`ctx.options` comes from the current config. When the tool is no longer
+configured, for example during `mise prune`, it contains only defaults. Save
+anything the uninstaller needs in `install_path` during `BackendInstall` instead
+of relying on `ctx.options`.
+
+### BackendListTools
+
+`BackendListTools` receives an empty `ctx`, because no tool is selected yet.
+Return the tools the backend manages:
+
+```lua [hooks/backend_list_tools.lua]
+function PLUGIN:BackendListTools(ctx)
     return {
-        env_vars = {
-            {key = "PATH", value = install_path .. "/bin"}
-        }
+        tools = {
+            { name = "deploy", description = "Deploy services" },
+            { name = "lint", description = "Check configuration files" },
+        },
     }
 end
 ```
 
-### BackendUninstall
+`name` is required and `description` is optional. mise prefixes each name with
+the plugin's install name and shows the resulting `acme:deploy` identifiers in
+[`mise search`](/cli/search.html), shell completion and the interactive
+`mise use` picker. Return a short, finite catalog; a package-manager backend
+should not list a whole ecosystem. mise caches the response for the
+[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache)
+duration and uses the stale result when a refresh fails.
 
-可选地执行仅删除安装目录无法完成的清理操作，例如运行供应商卸载程序，或删除安装目录之外创建的注册表项：
+### BackendSearchTools
 
-```lua
-function PLUGIN:BackendUninstall(ctx)
-    local install_path = ctx.install_path
+| `ctx` field | Value                                    | Example |
+| ----------- | ---------------------------------------- | ------- |
+| `query`     | The text to search for, after any prefix | `"dep"` |
 
-    -- 撤销安装目录之外的更改
-    -- 安装目录仍然存在，因此可以读取其中安装的文件
+Return the same shape as `BackendListTools`. mise calls this hook when
+`mise search` or shell completion has a non-empty query, so a backend can search
+a large or changing catalog without listing all of it. `mise search acme:dep`
+sends `dep`. A plugin can implement this hook, `BackendListTools`, or both, for
+example a short list of featured tools plus a registry search. mise caches each
+query's response separately.
 
-    return {}
-end
-```
+## Tool options {#tool-options}
 
-每当 mise 移除已安装的版本时都会调用此钩子，包括 `mise uninstall`、`mise upgrade`、`mise prune` 和延迟移除旧版本。使用 `--dry-run` 时不会运行它。如果钩子抛出错误，mise 会停止并保留安装目录，以便重试卸载。
+`ctx.options` holds the options on a tool's entry in `mise.toml`, such as
+`"acme:deploy" = { version = "2.1.0", verify = false }`, in every hook except
+`BackendListTools` and `BackendSearchTools`. Backend plugins receive options as
+tool plugins do, so `verify = false` arrives as the string `"false"`, which is
+truthy in Lua; see [tool options](/tool-plugin-development.html#tool-options)
+for the conversion rules, the options mise keeps to itself and the
+`MISE_TOOL_OPTS__` environment variables.
 
-`ctx.options` 来自当前配置。当工具不再配置时（例如运行 `mise prune` 期间），它只包含默认值。请在 `BackendInstall` 中将卸载程序需要的内容保存到 `install_path`，不要依赖 `ctx.options`。
+## metadata.lua {#metadata-lua}
 
-## 创建后端插件
-### BackendUninstall
+`metadata.lua` sets the global `PLUGIN` table with at least `name` and
+`version`; the Lua reference lists [every field](/plugin-lua-modules.html#metadata).
+A backend plugin that needs another tool while it installs, such as `node` for
+an npm-based backend, lists it in `depends`:
 
-可选地执行仅删除安装目录无法完成的清理操作，例如运行供应商卸载程序，或删除安装目录之外创建的注册表项：
-
-```lua
-function PLUGIN:BackendUninstall(ctx)
-    local install_path = ctx.install_path
-
-    -- 撤销安装目录之外的更改
-    -- 安装目录仍然存在，因此可以读取其中安装的文件
-
-    return {}
-end
-```
-
-每当 mise 移除已安装的版本时都会调用此钩子，包括 `mise uninstall`、`mise upgrade`、`mise prune` 和延迟移除旧版本。使用 `--dry-run` 时不会运行它。如果钩子抛出错误，mise 会停止并保留安装目录，以便重试卸载。
-
-`ctx.options` 来自当前配置。当工具不再配置时（例如运行 `mise prune` 期间），它只包含默认值。请在 `BackendInstall` 中将卸载程序需要的内容保存到 `install_path`，不要依赖 `ctx.options`。
-
-## 创建后端插件
-
-### 使用模板仓库
-
-使用专用的 [mise-backend-plugin-template](https://github.com/jdx/mise-backend-plugin-template) 创建后端插件：
-
-```bash
-# 选项 1：使用 GitHub 的模板功能（推荐）
-# 访问 https://github.com/jdx/mise-backend-plugin-template
-# 点击 "Use this template" 创建你的仓库
-
-# 选项 2：克隆并修改
-git clone https://github.com/jdx/mise-backend-plugin-template my-backend-plugin
-cd my-backend-plugin
-rm -rf .git
-git init
-```
-
-该模板包含：
-
-- 完整的后端插件结构，包含所有必需的 hooks
-- 现代化开发工具（hk、stylua、luacheck、actionlint）
-- 全面的文档和示例
-- 基于 GitHub Actions 的 CI/CD 配置
-- 针对不同后端类型的多种实现模式
-
-### 1. 插件结构
-
-创建一个具有以下结构的目录：
-
-```
-my-backend-plugin/
-├── metadata.lua                    # 插件元数据
-├── hooks/
-│   ├── backend_list_versions.lua   # BackendListVersions hook
-│   ├── backend_install.lua         # BackendInstall hook
-│   ├── backend_exec_env.lua        # BackendExecEnv hook
-│   ├── backend_uninstall.lua       # Optional cleanup before removal
-│   ├── backend_list_tools.lua      # Optional finite tool catalog
-│   └── backend_search_tools.lua    # Optional query-driven tool search
-
-```
-
-### 2. 基本的 metadata.lua
-
-```lua
+```lua [metadata.lua]
 PLUGIN = {
-    name = "vfox-npm",
-    version = "1.0.0",
-    description = "npm 包的后端插件",
-    author = "Your Name"
-}
-```
-
-## 真实世界示例：vfox-npm
-
-这个小型教学实现使用 npm 安装包。它需要 POSIX shell，并且要求 Node/npm 位于 PATH 中；以下命令不是 Windows 实现。对于日常使用，建议优先使用内置的 [npm 后端](/dev-tools/backends/npm.html)，它可以处理平台集成和其他安装选项。
-
-以下代码片段应放入所示的三个钩子文件中。它们通过带引号的环境变量传递包值，而不是将其拼接到 shell 命令中。
-
-### metadata.lua
-
-```lua
-PLUGIN = {
-    name = "vfox-npm",
-    version = "1.0.0",
-    description = "Backend plugin for npm packages",
-    author = "Plugin Author",
+    name = "my-npm",
+    version = "0.1.0",
     depends = { "node" },
 }
 ```
 
-### hooks/backend_list_versions.lua
+If the user configured `node`, mise installs it before this plugin's tools and
+puts it on `PATH` for the commands the hooks run; see
+[depends](/tool-plugin-development.html#depends).
 
-```lua
-function PLUGIN:BackendListVersions(ctx)
-    if RUNTIME.osType == "windows" then
-        error("This example requires a POSIX shell")
-    end
-    local cmd = require("cmd")
-    local json = require("json")
-    local result = cmd.exec('npm view "$MISE_PLUGIN_PACKAGE" versions --json', {
-        env = {MISE_PLUGIN_PACKAGE = ctx.tool},
-    })
-    local versions = json.decode(result)
-    -- npm can return a single version as a string.
-    if type(versions) == "string" then
-        versions = {versions}
-    end
-    if type(versions) ~= "table" or #versions == 0 then
-        error("No versions returned for " .. ctx.tool)
-    end
-    return {versions = versions}
-end
+## Testing {#testing-your-plugin}
+
+```sh
+mise plugins link acme ./mise-acme
+mise ls-remote acme:deploy
+mise use acme:deploy@2.1.0
+mise exec -- deploy --version
 ```
 
-### hooks/backend_install.lua
+Run a failing command with debug output to see the hook's error and output, and
+clear a tool's cache when a cached version list or environment hides an edit to
+a hook:
 
-```lua
-function PLUGIN:BackendInstall(ctx)
-    if RUNTIME.osType == "windows" then
-        error("This example requires a POSIX shell")
-    end
-    local cmd = require("cmd")
-    cmd.exec('npm install --no-package-lock --no-save -- "$MISE_PLUGIN_SPEC"', {
-        cwd = ctx.install_path,
-        env = {MISE_PLUGIN_SPEC = ctx.tool .. "@" .. ctx.version},
-    })
-    return {}
-end
+```sh
+MISE_DEBUG=1 mise install acme:deploy@2.1.0
+mise cache clear acme:deploy
 ```
 
-### hooks/backend_exec_env.lua
+Test on every platform you support, including a path that contains spaces. The
+template's `mise run test` task runs the same checks. See
+[Publishing plugins](/plugin-publishing.html#testing-before-publication) for an
+isolated test setup.
 
-```lua
-function PLUGIN:BackendExecEnv(ctx)
-    local file = require("file")
-    return {
-        env_vars = {
-            {key = "PATH", value = file.join_path(ctx.install_path, "node_modules", ".bin")}
-        }
-    }
-end
-```
+## Common mistakes {#common-mistakes}
 
-## 使用示例
+- Returning two values from a helper. `gsub` returns the new string and a
+  count, so `return s:gsub("^v", "")` makes
+  `table.insert(versions, normalize(tag))` fail with
+  `bad argument #2 to 'insert'`. Wrap the call in parentheses:
 
-插件名称不必与仓库名称匹配。后端前缀就是插件安装时使用的名称。
+  ```lua
+  local function normalize(tag)
+      return (tag:gsub("^v", "")) -- the parentheses drop gsub's count
+  end
+  ```
 
-```bash
-# Link the example you created and configure its prerequisite
-mise plugin link vfox-npm /path/to/your/plugin
-mise use node@24
+- Stripping more than a prefix the publisher documents. Treat the rest of a
+  version as opaque, and do not sort versions with a SemVer parser.
+- Searching `cmd.exec` output for the word `error`. `cmd.exec` raises an error
+  with the command's stderr when it exits with a nonzero status.
+- Building shell commands from tool names, versions or options. Pass values in
+  `cmd.exec`'s `env` option and quote them, as the complete example does.
+- Shelling out to `mv`, `mkdir` or `cp`. Use `file.move` instead of `mv`.
+  `file.move`, `http.download_file` and `archiver.decompress` create the
+  directories they write into, so most plugins never need `mkdir`. The file
+  module has no copy or mkdir function; if you shell out for those, quote every
+  path and remember that the command differs on Windows.
+- Joining paths with `..` and `"/"`. Use `file.join_path`.
+- Expecting a Lua table to cache data between commands. Each mise command
+  starts a new Lua runtime; mise caches version lists and environments itself.
+  See [cache behavior](/cache-behavior.html) and the
+  [Lua reference](/plugin-lua-modules.html#caching).
 
-# 列出可用版本
-mise ls-remote vfox-npm:prettier
-
-# 安装特定版本
-mise install vfox-npm:prettier@3.0.0
-
-# 在项目中使用
-mise use vfox-npm:prettier@latest
-
-# 执行工具
-mise exec -- prettier --help
-```
-
-使用一个不会与内置后端冲突的名称。要测试不同的注册表或行为，请定义明确的工具选项并读取 `ctx.options`；已安装的名称不能替代选项契约。
-
-## 上下文变量
-
-后端插件通过传递给每个钩子函数的 `ctx` 参数接收上下文：
-
-### BackendListTools Context
-
-`BackendListTools` 当前接收一个空的上下文表。在选择工具之前，无法使用特定于工具的选项。
-
-### BackendSearchTools Context
-
-| Variable    | Description                     | Example   |
-| ----------- | ------------------------------- | --------- |
-| `ctx.query` | 要查找的工具名称或前缀 | `"prett"` |
-
-### BackendListVersions Context
-
-| 变量         | 描述               | 示例                     |
-| ------------ | ------------------ | ------------------------ |
-| `ctx.tool`    | 工具名称           | `"prettier"`             |
-| `ctx.options` | 来自 mise.toml 的工具选项 | `{channels = {"a", "b"}}` |
-
-### BackendInstall 上下文
-
-| 变量               | 描述               | 示例                                                             |
-| ------------------ | ------------------ | ---------------------------------------------------------------- |
-| `ctx.tool`          | 工具名称           | `"prettier"`                                                      |
-| `ctx.version`       | 请求的版本         | `"3.0.0"`                                                        |
-| `ctx.install_path`  | 安装目录           | `"/home/user/.local/share/mise/installs/vfox-npm-prettier/3.0.0"` |
-| `ctx.download_path` | 下载目录           | `"/home/user/.local/share/mise/downloads/vfox-npm-prettier/3.0.0"` |
-| `ctx.options`       | 来自 mise.toml 的工具选项 | `{exe = "rg"}`                                                    |
-
-### BackendUninstall 上下文
-
-| 变量               | 描述                 | 示例                                                               |
-| ------------------ | -------------------- | ------------------------------------------------------------------ |
-| `ctx.tool`          | 工具名称             | `"prettier"`                                                      |
-| `ctx.version`       | 已安装的版本         | `"3.0.0"`                                                         |
-| `ctx.install_path`  | 安装目录             | `"/home/user/.local/share/mise/installs/vfox-npm-prettier/3.0.0"`  |
-| `ctx.download_path` | 下载目录             | `"/home/user/.local/share/mise/downloads/vfox-npm-prettier/3.0.0"` |
-| `ctx.options`       | 当前配置中的工具选项 | `{exe = "rg"}`                                                     |
-
-### BackendExecEnv 上下文
-
-| 变量              | 描述               | 示例                                                             |
-| ----------------- | ------------------ | ---------------------------------------------------------------- |
-| `ctx.tool`         | 工具名称           | `"prettier"`                                                      |
-| `ctx.version`       | 请求的版本         | `"3.0.0"`                                                        |
-| `ctx.install_path` | 安装目录           | `"/home/user/.local/share/mise/installs/vfox-npm-prettier/3.0.0"` |
-| `ctx.options`     | 来自 mise.toml 的工具选项 | `{exe = "rg"}`                                                    |
-
-> [!TIP]
-> 选项值会将其 TOML 类型保留为原生 Lua 等价类型。字符串仍然是字符串，数组会变成 Lua 序列表，而嵌套表会变成 Lua 映射表。例如，`mise.toml` 中的 `channels = ["conda-forge", "robostack"]` 会变成一个 Lua 表，你可以使用 `ipairs(ctx.options.channels)` 进行迭代。
-
-## 测试你的插件
-
-### 本地开发
-
-```bash
-# 为开发链接你的插件
-mise plugin link my-plugin /path/to/my-plugin
-
-# 测试版本列表
-mise ls-remote my-plugin:some-tool
-
-# 测试安装
-mise use my-plugin:some-tool@1.0.0
-
-# 测试执行
-mise exec -- some-tool --version
-```
-
-### 调试模式
-
-使用调试模式查看插件执行的详细信息：
-
-```bash
-mise --debug install my-plugin:some-tool@1.0.0
-```
-
-## 最佳实践
-
-### 错误处理
-
-`cmd.exec` 在退出状态非零时会引发错误，并包含 stderr。不要隐藏 stderr，也不要在成功的 stdout 中搜索错误字符串。在解析响应正文之前检查 HTTP 状态码，验证必需的响应字段，并避免在错误信息中包含凭据。
-
-[Lua 模块参考](/plugin-lua-modules.html)解释了同步错误，以及用于可恢复传输失败的 HTTP `try_*` 方法。
-
-### 正则解析
-
-使用 Lua 模式解析版本（Lua 没有正则表达式；`string.match`／`string.gsub` 使用 Lua 自己的模式语法）：
-
-```lua
-local function parse_version(version_string)
-    -- 移除像 'v' 或 'release-' 这样的前缀
-    return version_string:gsub("^v", ""):gsub("^release%-", "")
-end
-```
-
-### 路径处理
-
-使用 `file.join_path` 构造路径，并使用 `cmd.exec` 的 `cwd` 选项设置命令的工作目录。优先使用文件操作，而不是通过 shell 执行 `mkdir`、`cp` 或 `mv`。如果安装器需要 shell 命令，请说明所使用的 shell，并为每个外部值加引号。
-
-```lua
-local file = require("file")
-local bin_path = file.join_path(ctx.install_path, "bin")
-```
-
-### 跨平台命令
-
-Lua 运行时不会在不同操作系统之间转换 shell 命令。POSIX 的 `mkdir -p`、`$VARIABLE` 或 `chmod` 示例在 Windows 上需要不同的实现。在你声称支持的每个平台上进行测试，包括包含空格的路径。
-
-## 高级功能
-
-### 条件安装
-
-使用 `ctx.tool`、`ctx.version` 和 `RUNTIME` 选择安装逻辑。在下载或运行安装器之前，验证工具和平台是否受支持。将共享逻辑放在 Lua 辅助模块中，而不是在每个分支中重复相同的命令。
-
-### 环境检测
-
-vfox 会自动将运行时信息注入到你的插件中：
-
-```lua
-function PLUGIN:BackendInstall(ctx)
-    -- 使用注入的 RUNTIME 对象进行平台特定安装
-    if RUNTIME.osType == "darwin" then
-        -- macOS 安装逻辑
-    elseif RUNTIME.osType == "linux" then
-        -- Linux 安装逻辑
-    elseif RUNTIME.osType == "windows" then
-        -- Windows 安装逻辑
-    end
-
-    return {}
-end
-```
-
-`RUNTIME` 对象提供：
-
-- `RUNTIME.osType`：操作系统类型（"windows"、"linux"、"darwin"）
-- `RUNTIME.archType`：架构（`"amd64"`、`"arm64"`、`"x86"` 等）
-- `RUNTIME.envType`：libc 环境类型（glibc Linux 上为 `"gnu"`，musl Linux 上为 `"musl"`，Windows／macOS 及未检测到的系统上为 `nil`）
-- `RUNTIME.version`：vfox 运行时版本
-- `RUNTIME.pluginDirPath`：插件目录路径
-
-### 多个环境变量
-
-设置多个环境变量：
-
-```lua
-function PLUGIN:BackendExecEnv(ctx)
-    -- 将 node_modules/.bin 添加到 PATH，以支持 npm 安装的二进制文件
-    local bin_path = ctx.install_path .. "/node_modules/.bin"
-    return {
-        env_vars = {
-            {key = "PATH", value = bin_path},
-            {key = "EXAMPLE_TOOL_HOME", value = ctx.install_path},
-            {key = "EXAMPLE_TOOL_VERSION", value = ctx.version}
-        }
-    }
-end
-```
-
-## 性能优化
-
-### 缓存
-
-mise 会缓存远程版本列表和工具环境结果。在开发期间，如果缓存结果掩盖了钩子更改，请使用 `mise cache clear my-plugin:some-tool`。Lua 表只会在当前 Lua 运行时中缓存；它不会在单独的 mise 调用之间持久化。请参阅[缓存行为](/cache-behavior.html)和 [Lua 模块参考](/plugin-lua-modules.html#caching)。
-
-## 下一步
-
-- [从后端插件模板开始](https://github.com/jdx/mise-backend-plugin-template)
-- [了解工具插件开发](tool-plugin-development.md)
-- [探索可用的 Lua 模块](plugin-lua-modules.md)
-- [发布你的插件](plugin-publishing.md)
-- [查看 vfox-npm 插件源代码](https://github.com/jdx/vfox-npm)
+To publish the plugin, see [Publishing plugins](/plugin-publishing.html). For
+another real backend plugin, see [vfox-npm](https://github.com/jdx/vfox-npm),
+which installs npm packages with the `npm` on `PATH`.

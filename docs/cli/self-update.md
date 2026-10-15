@@ -11,25 +11,55 @@ description: "更新 mise 本身"
 
 更新 mise 本身
 
-选择满足最短发布等待时间（默认 24 小时）的最新稳定版本。明确指定的版本会跳过该等待时间。二进制文件从 GitHub Releases 下载。默认情况下，这也会更新任何已安装的插件。对经过身份验证的请求使用 mise 的 GitHub 令牌解析链。
+Installs the newest stable release, or VERSION, from GitHub Releases and
+verifies its signature before replacing the running binary. Without VERSION,
+releases younger than the minimum release age are skipped: the
+`self_update.minimum_release_age` setting, then `minimum_release_age`, else
+24h. Installed plugins are updated too unless you pass `--no-plugins`. Set
+`self_update.auto` to update automatically.
 
-打包维护者可以禁用此命令，以便通过包管理器更新 mise。请参阅
-<https://mise.jdx.dev/contributing.html#packaging-and-self-update-instructions>。
+If a package manager such as Homebrew or apt installed mise, update it with
+that package manager instead: <https://mise.jdx.dev/installing-mise.html#updating>
+Packagers can disable this command: <https://mise.jdx.dev/packaging.html>
 
-## 参数
-- **`[VERSION]`** — 更新到特定版本
+## Arguments
+- **`[VERSION]`** — Update to a specific version, skipping the minimum release age
 
-## 标志
-- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 覆盖未固定版本更新的最短发布等待时间（默认：24h）
-- **`-f --force`** — 即使已是最新版本也更新
-- **`-y --yes`** — 跳过确认提示
-- **`--no-plugins`** — 禁用自动更新插件
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — Minimum release age for this update, such as 7d
+
+  Defaults to the self_update.minimum_release_age setting, then the minimum_release_age setting, else 24h.
+- **`-f --force`** — Update even if already up to date
+
+  Also updates when the package that installed mise has disabled self-update.
+- **`-y --yes`** — Skip confirmation prompt
+- **`--no-plugins`** — Do not update installed plugins
+- **`-h --help`** — Print help
+
+## Examples
+
+Update to the newest eligible release
+
+```
+mise self-update
+```
+
+Install a specific release
+
+```
+mise self-update 2026.10.4
+```
+
+Update without prompting or touching plugins
+
+```
+mise self-update -y --no-plugins
+```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [安装和更新 mise](/installing-mise.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Updating mise](/installing-mise.html#updating).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

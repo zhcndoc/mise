@@ -10,11 +10,29 @@ description: "运行项目的诊断检查"
 
 运行项目的诊断检查
 
-检查在 mise.toml 的 [doctor.checks.&lt;name>] 中声明。每个命令都会使用项目已安装的工具和环境运行。检查应检查状态；mise 不会对其进行沙箱隔离，也不会运行其建议的修复措施。
+Checks are declared in `[doctor.checks.<name>]` tables in mise.toml. Each command
+runs with the project's installed tools and environment. Checks should inspect
+state; mise does not sandbox them or run their suggested remedies. Exits with
+status 1 when a check fails. See
+<https://mise.jdx.dev/configuration/project-diagnostics.html>.
 
 ## 选项
 - **`-J --json`** — 以 JSON 格式输出完整报告
 - **`-h --help`** — 打印帮助
+
+## Examples
+
+Run every check and report pass or fail
+
+```
+mise doctor project
+```
+
+Print the report as JSON
+
+```
+mise doctor project --json
+```
 
 <!-- generated reference navigation -->
 

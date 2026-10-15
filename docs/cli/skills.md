@@ -1,5 +1,5 @@
 ---
-description: "当前工具随附的 Agent skills，来自其 packslips"
+description: "List and link the agent skills that active tools ship"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -10,13 +10,16 @@ description: "当前工具随附的 Agent skills，来自其 packslips"
 - **效果：** 只读
 - **源代码：** [`src/cli/skills/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/skills/mod.rs)
 
-当前工具随附的 Agent skills，来自其 packslips
+List and link the agent skills that active tools ship
 
 使用 `packslip:` backend 安装的工具可以声明一个 agent skill：一个包含
 `SKILL.md` 及其引用内容、采用 Agent Skills 格式的目录。mise 知道此处每个工具当前使用的版本，因此可以将完全对应于该版本的 skill 交给 agent。
 
-## 选项
-- **`-h --help`** — 打印帮助
+With no subcommand, lists the skills (same as `mise skills ls`).
+See <https://mise.jdx.dev/dev-tools/packslip-resources.html#skills>
+
+## Flags
+- **`-h --help`** — Print help
 
 ## 子命令
 

@@ -1,16 +1,24 @@
 ---
-description: "观看 mise 主题曲视频，阅读歌词，或下载 1080p、4K 视频和 MP3。"
+description: "Watch the mise run music video, the mise theme song, and read the lyrics. Download the video in 1080p or 4K, or the MP3."
+socialDescription: "Watch the mise run music video, read the lyrics, and download the video or the MP3."
 ---
 
-# mise-en-place：歌曲
+# mise run: the song
 
-mise 主题曲也提供音乐视频。播放器提供字幕；你也可以下载 [1080p](https://mise.jdx.dev/mise-run.mp4) 或 [4K（HEVC）](https://mise.jdx.dev/mise-run-4k.mp4) 视频（均为 120 fps），或[下载 MP3](/mise-run.mp3)。[歌词](#lyrics)也以文本形式提供。有关设置说明，请从[入门](/getting-started.html)开始。
+**mise run** is the mise theme song, and this is its music video. Captions are
+available from the player. You can also download the video in
+[1080p](https://mise.jdx.dev/mise-run.mp4) or
+[4K (HEVC)](https://mise.jdx.dev/mise-run-4k.mp4), both at 120 fps, or
+[download the MP3](/mise-run.mp3). The [lyrics](#lyrics) are also available as
+text. To set up mise, start with [Getting started](/getting-started.html).
 
 <video controls preload="metadata" playsinline poster="/mise-run.jpg" width="1920" height="1080" style="width: 100%; height: auto; border-radius: 8px;">
   <source src="https://mise.jdx.dev/mise-run.mp4" type="video/mp4">
   <track kind="captions" src="/mise-run.en.vtt" srclang="en" label="English">
   <a href="https://mise.jdx.dev/mise-run.mp4">下载 MP4</a>
 </video>
+
+<a id="lyrics"></a>
 
 ## 歌词
 

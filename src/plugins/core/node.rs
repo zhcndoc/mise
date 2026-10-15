@@ -269,16 +269,26 @@ impl NodePlugin {
         lockfile_install: Option<&str>,
     ) -> Result<()> {
         let settings = Settings::get();
+        let platform_key = self.get_platform_key();
         let tarball_name = local.file_name().unwrap().to_string_lossy().to_string();
         if local.exists() {
             ctx.pr.set_message(format!("cached {tarball_name}"));
         } else {
             ctx.pr.set_message(format!("download {tarball_name}"));
-            HTTP.download_file(url.clone(), local, Some(ctx.pr.as_ref()))
+            // The lock entry holds one artifact per platform, the binary or the
+            // source. Its checksum pins this download only if it describes it.
+            let pinned = tv
+                .lock_platforms
+                .get(&platform_key)
+                .filter(|info| {
+                    info.url.as_deref() == Some(url.as_str())
+                        && info.install.as_deref() == lockfile_install
+                })
+                .and_then(|info| info.checksum.clone());
+            HTTP.download_file_stored(url.clone(), local, pinned.as_deref(), Some(ctx.pr.as_ref()))
                 .await?;
         }
         ctx.pr.next_operation();
-        let platform_key = self.get_platform_key();
         let url = url.to_string();
         let needs_checksum = settings.node.verify
             && tv
@@ -370,7 +380,10 @@ impl NodePlugin {
             Some(ctx.pr.as_ref()),
         )
         .await?;
-        if Settings::get().node.gpg_verify != Some(false) && version.starts_with("2") {
+        // Node publishes SHASUMS256.txt.sig for releases on every line, not only 20 and later.
+        // Older releases that never published one are skipped by the 404 check in
+        // verify_with_gpg.
+        if Settings::get().node.gpg_verify != Some(false) {
             self.verify_with_gpg(ctx, tv, &shasums_file, version, &tarball_name)
                 .await?;
         }
@@ -586,7 +599,7 @@ impl NodePlugin {
                     }
                 }
                 msg.push_str("\nYou can try setting the flavor using:\n");
-                msg.push_str("  mise settings set node.flavor=<flavor>\n");
+                msg.push_str("  mise settings node.flavor=<flavor>\n");
                 return Ok(Some(msg));
             } else {
                 // Fallback: list all files for that version if no arch match
@@ -615,7 +628,7 @@ impl Backend for NodePlugin {
             algorithm: Some("sha256".to_string()),
         }];
 
-        // GPG verification is available for Node.js v20+ (built-in, no external gpg required)
+        // GPG verification is built in (no external gpg required)
         if Settings::get().node.gpg_verify != Some(false) {
             features.push(SecurityFeature::Gpg);
         }
@@ -1154,8 +1167,8 @@ fn node_flavor_not_found_message(opts: &BuildOpts) -> Option<String> {
     Some(format!(
         "precompiled node archive not found for node.flavor={flavor:?}: {}\n\
          Node flavors are published by the unofficial builds project. Try:\n  \
-         mise settings set node.mirror_url {UNOFFICIAL_NODE_MIRROR_URL}\n  \
-         mise settings set node.flavor {flavor}\n\
+         mise settings node.mirror_url={UNOFFICIAL_NODE_MIRROR_URL}\n  \
+         mise settings node.flavor={flavor}\n\
          or unset node.flavor to use official Node binaries.",
         opts.binary_tarball_url
     ))

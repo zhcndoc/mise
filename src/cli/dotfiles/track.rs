@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use eyre::{Result, bail};
@@ -18,18 +19,50 @@ use crate::system::history::tracked::{
 
 /// Track a file or directory in place
 ///
-/// Adds a `[dotfiles]` entry with `mode = "track"`: the file stays where it
-/// is, nothing is copied or linked, and history saves a checkpoint of it
-/// right away. With the history watcher service running, later edits are
-/// saved automatically; without it, `mise dot save` saves them.
+/// Adds a `[dotfiles]` entry with `mode = "track"` to your global config: the
+/// file stays where it is, nothing is copied or linked, and mise saves a
+/// checkpoint of it right away. While the watcher service runs, later edits are
+/// saved automatically; without it, `mise dot save` saves them. Use
+/// `--dry-run` to see what a large directory would add before tracking it.
 ///
-/// `--os` and `--profile` declare a variant: a separate shared stream for
-/// machines matching that platform or mise environment, so a Mac and a
-/// Linux box can share the same live path with different contents.
-/// `--machine` gives every machine its own stream instead, for files such
-/// as a monitor layout that should never be applied on another machine.
+/// `--os` and `--profile` declare a variant: machines that match the platform
+/// or config environment keep their own version of the file, so a Mac and a
+/// Linux machine can have different contents at the same path. `--machine`
+/// gives every machine its own version instead, for files such as a monitor
+/// layout that should never be applied on another machine.
+///
+/// See https://mise.jdx.dev/dotfiles/history.html
 #[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment, after_long_help = AFTER_LONG_HELP)]
+#[usage(
+    example(
+        "mise dot track ~/.zshrc ~/.config/hypr",
+        help = "Track a file and a directory"
+    ),
+    example(
+        "mise dot track --dry-run ~/.codex",
+        help = "Show what tracking a directory would save"
+    ),
+    example(
+        "mise dot track ~/.zshrc --os macos",
+        help = "Keep a separate version for macOS machines"
+    ),
+    example(
+        "mise dot track ~/.config/hypr/monitors.lua --machine",
+        help = "Keep a separate version on every machine"
+    ),
+    example(
+        "mise dot track ~/.config/app/state.json --local",
+        help = "Keep the file's history on this machine only"
+    ),
+    example(
+        "mise dot track ~/.config/app/credentials --encrypt",
+        help = "Encrypt the file before saving it"
+    ),
+    example(
+        "mise dot track ~/.config/app/state.json --no-autosave",
+        help = "Save the file only when you run mise dot save"
+    )
+)]
 pub(crate) struct DotfilesTrack {
     /// Paths to track (absolute or starting with ~/)
     #[usage(value_name = "PATH", required = true)]
@@ -39,7 +72,7 @@ pub(crate) struct DotfilesTrack {
     #[usage(long, value_name = "OS")]
     os: Option<String>,
 
-    /// Declare a variant for this mise environment
+    /// Declare a variant for this config environment (`MISE_ENV` or `-E`)
     #[usage(long, value_name = "PROFILE")]
     profile: Option<String>,
 
@@ -55,7 +88,8 @@ pub(crate) struct DotfilesTrack {
     #[usage(long)]
     no_autosave: bool,
 
-    /// Encrypt contents before saving them to history (requires `[history.encryption].recipients`)
+    /// Encrypt contents before saving them to history (requires
+    /// `[history.encryption] recipients`)
     #[usage(long)]
     encrypt: bool,
 
@@ -243,7 +277,10 @@ impl DotfilesTrack {
                 && !self.allow_plaintext
                 && !self.dry_run
             {
+                // asked only of a terminal: a piped stdin is usually the
+                // list a script is looping over, not an answer to this
                 if !console::user_attended_stderr()
+                    || !std::io::stdin().is_terminal()
                     || !crate::ui::prompt::confirm_with_default(
                         format!(
                             "dotfiles: {target_raw} looks like a credential store. Save it in plaintext history, including any connected origin?"
@@ -1052,18 +1089,6 @@ fn same_declaration(previous: &Item, entry: &InlineTable) -> bool {
 fn string(text: &str) -> Value {
     Value::String(toml_edit::Formatted::new(text.to_string()))
 }
-
-static AFTER_LONG_HELP: &str = color_print::cstr!(
-    r#"<bold><underline>Examples:</underline></bold>
-
-    $ <bold>mise dot track ~/.zshrc ~/.config/hypr</bold>
-    $ <bold>mise dot track --dry-run ~/.codex</bold>
-    $ <bold>mise dot track ~/.zshrc --os macos</bold>
-    $ <bold>mise dot track ~/.config/hypr/monitors.lua --machine</bold>
-    $ <bold>mise dot track ~/.config/app/credentials --encrypt</bold>
-    $ <bold>mise dot track ~/.config/app/state.json --no-autosave</bold>
-"#
-);
 
 /// Adds (or removes) a glob in `[history] exclude` of the global config.
 /// Returns whether the file changed.

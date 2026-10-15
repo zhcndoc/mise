@@ -1,18 +1,20 @@
 ---
-description: "了解 mise 的任务系统工作原理，有助于你编写更高效的任务并排查依赖问题。"
+description: "Order tasks with depends, wait_for, depends_post and run steps, and debug how mise schedules them."
 ---
 
-# 任务系统架构
+# Dependencies and execution order
 
-了解 mise 的任务系统如何工作，有助于你编写更高效的任务并排查依赖问题。
+When you run a task, mise builds a graph of that task and everything it depends
+on, then starts each task as soon as its prerequisites succeed, up to the job
+limit. Use this page to choose a dependency type and to debug ordering problems.
 
-## 任务依赖系统
+## How mise schedules a run
 
-mise 使用依赖图来管理任务执行顺序和并行性。这确保任务按正确顺序运行，同时最大限度地提高并行执行效率。
-
-### 依赖图解析
-
-当你运行任务时，mise 会构建由所选任务及其声明的依赖项组成的有向图，然后拒绝循环依赖。在此示例中，选择 `deploy` 会包含所示的所有前置条件；箭头从前置条件指向依赖项：
+When you run `mise run deploy`, mise loads tasks from every active config, finds
+`deploy` by name or alias (or expands a [wildcard pattern](/tasks/running-tasks.html#wildcards)),
+adds its dependencies to a graph, rejects cycles, and then starts each task once
+its prerequisites have succeeded. In this graph, arrows point from prerequisite
+to dependent:
 
 ```mermaid
 graph TD
@@ -24,254 +26,189 @@ graph TD
     E[package] --> G[deploy]
 ```
 
-该图确保：
+`lint`, `format`, `build`, and `docs` start together. `test` starts when `lint`,
+`format`, and `build` have succeeded, and `package` starts when `test` and
+`docs` have. The scheduling rules are:
 
-- 依赖项先于依赖它们的任务运行
-- 独立任务并行运行
-- 不存在循环依赖
-- 依赖失败会阻止后续任务运行
+- A task starts only after all of its prerequisites succeed.
+- Tasks with no path between them run in parallel, up to `--jobs` (the
+  [`jobs`](/configuration/settings.html#jobs) setting).
+- A task that several others depend on runs once.
+- A graph with a cycle is rejected before any task runs.
+- A failed task stops the run, so its dependents do not start, unless you pass
+  `--continue-on-error`. See
+  [When a task fails](/tasks/running-tasks.html#when-a-task-fails).
 
-### 依赖类型
+mise matches task names exactly, by alias, by wildcard pattern, or without an
+extension, so `mise run build` finds the file task `build.sh`. It does not match
+partial names: `mise run bui` fails with `no task bui found` even when `build`
+exists.
 
-mise 支持三种类型的任务依赖：
+[Task discovery and precedence](/tasks/task-discovery.html) explains where mise
+finds tasks and [which definition wins](/tasks/task-discovery.html#which-definition-wins)
+when two configs define the same name.
 
-#### `depends` - 前置条件
+## Choose a dependency type
 
-必须在此任务运行前成功完成的任务：
+| Mechanism                                 | Adds the task to the run | When it runs                                                          | In `mise tasks deps`        |
+| ----------------------------------------- | ------------------------ | --------------------------------------------------------------------- | --------------------------- |
+| [`depends`](#depends)                     | Yes                      | Before this task; this task does not start if it fails                | Yes                         |
+| [`wait_for`](#wait-for)                   | No                       | Before this task, only when the other task is already in the run      | Only when both are selected |
+| [`depends_post`](#depends-post)           | Yes                      | After this task, even if this task fails                              | As `<name> (post)`          |
+| [Run steps](#run-steps-in-order) in `run` | Yes, as a step           | In `run` order; a `{ tasks = [...] }` step runs its tasks in parallel | No                          |
 
-```toml
+`depends`, `wait_for`, and `depends_post` accept task names, aliases, and
+patterns, and each entry can pass arguments and environment variables to the
+task it names. See
+[`depends`](/tasks/task-configuration.html#depends) in the task configuration
+reference for the full syntax.
+
+### `depends`
+
+Prerequisites that must succeed before this task runs:
+
+```mise-toml [mise.toml]
 [tasks.test]
 depends = ["lint", "build"]
 run = "npm test"
 ```
 
-#### `depends_post` - 清理任务
+`lint` and `build` run in parallel; their order in the list does not matter.
 
-在此任务完成后运行的任务（无论此任务成功还是失败）：
+In a [monorepo](/tasks/monorepo.html#task-path-syntax), depend on another
+project's task by its path, such as `depends = ["//api:build"]`.
 
-```toml
+### `depends_post` {#depends-post}
+
+Tasks that run after this task finishes, whether it succeeded or failed:
+
+```mise-toml [mise.toml]
 [tasks.deploy]
 depends = ["build", "test"]
 depends_post = ["cleanup", "notify"]
 run = "kubectl apply -f deployment.yaml"
 ```
 
-清理任务的常规依赖属于同一个后置阶段子树，并且在父任务完成之前不会启动。如果父任务已经启动，即使父任务失败，mise 也会运行该子树；但如果常规依赖在父任务能够启动之前失败，则会跳过整个子树。一个同时作为常规依赖和后置依赖使用的任务，会在每个阶段分别执行一次。
+`cleanup`, `notify`, and their own dependencies run after `deploy` finishes,
+even if it failed. See [`depends_post`](/tasks/task-configuration.html#depends-post)
+for what happens when `deploy`'s own dependencies fail.
 
-#### `wait_for` - 软依赖
+### `wait_for` {#wait-for}
 
-如果这些任务已经被安排运行，则必须先完成它们。`wait_for` 不会安排这些任务运行。如果任务定义缺失，仍然会导致错误，除非引用设置了 `optional = true`；请参阅 [`wait_for`](./task-configuration.html#wait-for)。
+Tasks that must finish first, but only when something else already put them in
+the run. `wait_for` does not add them:
 
-```toml
+```mise-toml [mise.toml]
 [tasks.integration-test]
-wait_for = ["start-services"]  # 仅在 start-services 也正在运行时才等待
+wait_for = ["start-services"]
 run = "npm run test:integration"
 ```
 
-## 并行执行引擎
+`mise run integration-test` runs only `integration-test`.
+`mise run start-services ::: integration-test` runs `start-services` first. A
+name that matches no task is still an error unless the entry sets
+`optional = true`; see [`wait_for`](/tasks/task-configuration.html#wait-for).
 
-### 作业控制
+### Run steps in order {#run-steps-in-order}
 
-mise 会在配置的作业限制内并行执行任务：
+A `run` array can call other tasks as steps. Each step finishes before the next
+one starts, and a `{ tasks = [...] }` step runs its tasks in parallel:
 
-```bash
-mise run --jobs 8 test        # 使用 8 个并行作业
-mise run -j 1 test            # 强制顺序执行
+```mise-toml [mise.toml]
+[tasks.example1]
+run = "echo example1"
+
+[tasks.example2]
+run = "echo example2"
+
+[tasks.example3]
+run = "echo example3"
+
+[tasks.one_by_one]
+run = [
+  { task = "example1" },                # finishes before the next step starts
+  { tasks = ["example2", "example3"] }, # these two run in parallel
+]
 ```
 
-默认值为 8 个并行作业，但你可以全局配置它：
+Use run steps when the order matters. `depends = ["example1", "example2",
+"example3"]` would also run all three first, but in parallel, with no order
+among them.
 
-```toml
-# ~/.config/mise/config.toml
-[settings]
-jobs = 4
-```
+Run steps belong to this task, not to the graph, so
+`mise tasks deps one_by_one` shows `one_by_one` with no dependencies. The tasks
+in each step still run with their own `depends`. A step can pass arguments and
+environment variables, such as `{ task = "build", args = ["--release"] }`; see
+[`run`](/tasks/task-configuration.html#run).
 
-### 示例执行流程
+## Run a task from a script
 
-给定以下任务：
+A script can call `mise run` itself, for example to run a task only when a file
+is missing:
 
-```toml
-[tasks.lint]
-run = "eslint src/"
-
-[tasks.test-unit]
-depends = ["lint"]
-run = "npm run test:unit"
-
-[tasks.test-integration]
-depends = ["lint"]
-run = "npm run test:integration"
-
-[tasks.build]
-depends = ["test-unit", "test-integration"]
-run = "npm run build"
-```
-
-使用 `--jobs 2` 执行：
-
-```
-时间 →
-0s:   [lint]
-5s:   [test-unit] [test-integration]  # 在 lint 之后并行运行
-15s:  [build]                        # 等待两个测试都完成
-```
-
-## 任务发现与解析
-
-### 任务来源
-
-mise 会从活动配置层级中加载内联 TOML 任务、包含的任务文件以及可执行文件任务。子配置可以覆盖父配置。仅包含内联元数据的定义也可以向现有命令任务或文件任务添加属性。
-
-没有一种单一的来源类型顺序可以描述所有组合。请参阅 [`task_config.includes`](./task-configuration.html#task_config.includes)，了解包含顺序、命令替换和元数据覆盖。使用 `mise tasks info <task>` 检查选定的定义。
-
-### 任务解析过程
-
-当你运行 `mise run build` 时，mise 会：
-
-1. **从所有配置来源发现所有任务**
-2. **解析任务名称**（处理别名和部分匹配）
-3. **构建依赖图**，包括所有依赖项
-4. **验证依赖图**（检查循环依赖）
-5. **按依赖顺序并行执行**
-
-### 跨目录的任务解析
-
-父目录中的任务在子目录中可用，并且可以被覆盖：
-
-```
-project/
-├── mise.toml              # 定义：lint、test、build
-└── frontend/
-    └── mise.toml          # 覆盖：test，新增：bundle
-```
-
-在 `frontend/` 中，你可以使用 `lint`（来自父目录）、`test`（已覆盖）、`build`（来自父目录）以及 `bundle`（本地任务）。
-
-## 高级依赖特性
-
-### 条件依赖
-
-使用任务参数实现条件行为：
-
-```toml
-[tasks.test]
-depends = ["build"]
-run = '''
-#!/usr/bin/env bash
-if [ "$1" = "--with-lint" ]; then
-  mise run lint
-fi
-npm test
-'''
-```
-
-shebang 会选择 Bash，而 Bash 必须安装在主机上。如果没有安装，mise 会使用平台默认的内联 shell（Unix 上为 `sh -c`，Windows 上为 `cmd /c`），因此 Bash 的 `[ ... ]` 测试在 Windows 主机上会解析失败。对于更丰富的参数处理，建议使用 [`usage` 字段](/tasks/task-arguments#usage-field)，而不是位置参数。
-
-### 动态依赖
-
-脚本可以有条件地调用另一个任务。这些嵌套调用是独立的运行，不会添加到原始依赖图中，也不会显示在 `mise tasks deps` 中：
-
-```bash
+```bash [mise-tasks/start]
 #!/usr/bin/env bash
 #MISE depends=["setup"]
-
-# 额外的条件依赖
-if [ ! -f ".env" ]; then
+if [ ! -f .env ]; then
   mise run generate-env
 fi
-
 npm start
 ```
 
-### 跨项目依赖
+The nested `mise run` is a separate run. It does not join the current graph and
+does not appear in `mise tasks deps`. To choose behavior from a flag such as
+`--with-lint`, define the flag with a [usage spec](/tasks/task-arguments.html)
+instead of reading `$1`.
 
-启用 [monorepo 模式](./monorepo.html#configuration)，并在引用项目任务之前声明项目根目录。对于名为 `api` 和 `frontend` 的项目：
+## Inspect and debug
 
-```toml
-[tasks.deploy-all]
-depends = [
-  "//api:build",
-  "//frontend:build",
-  "deploy-infrastructure"
-]
-run = "echo '所有服务已部署'"
+### See the graph
+
+```sh
+mise tasks deps deploy             # tree of deploy's dependencies
+mise tasks deps --dot > deps.dot   # every task, in Graphviz format
+mise run --dry-run deploy          # each command, in execution order, without running it
 ```
 
-## 性能优化
+[`mise tasks deps`](/cli/tasks/deps.html) shows `depends`, `depends_post`, and
+`wait_for` edges, but not run steps. A `wait_for` edge appears only when both
+tasks are selected. A post-dependency appears as `<name> (post)`, including
+in the tree for a single task.
 
-### 源文件与输出跟踪
+### Why a task ran or was skipped
 
-如果源文件没有变化，任务可以跳过执行：
+A task with `sources` and `outputs` is skipped while its outputs are up to date.
+See [Skip tasks that are up to date](/tasks/running-tasks.html#skip-tasks-that-are-up-to-date)
+and [Task caching](/tasks/caching.html). `mise run --force` runs it anyway, and
+`mise run --verbose` prints debug logs, including each command mise starts.
 
-```toml
-[tasks.build]
-sources = ["src/**/*.ts", "package.json"]
-outputs = ["dist/**/*"]
-run = "npm run build"
+### `circular dependency detected`
+
+```text
+mise ERROR circular dependency detected: test -> build -> test
 ```
 
-mise 仅在以下情况下运行任务：
+The path after the colon is the cycle. Remove one of the edges, or move the
+shared work into a separate task that both depend on. `wait_for` also orders
+two tasks when both are in the run, so it does not break a cycle.
 
-- 源文件比输出文件更新
-- 任务从未运行过
-- 依赖项已更改
+### `task not found`
 
-### 增量执行
-
-使用 `mise run --force` 来忽略源文件/输出检查：
-
-```bash
-mise run --force build     # 始终运行，忽略源文件更改
+```text
+mise ERROR task not found: lint
 ```
 
-### 并行文件监视
+A `depends`, `depends_post`, or `wait_for` entry names a task that does not
+exist. Define the task, fix the name, or mark the entry
+`{ task = "lint", optional = true }`. A name you type on the command line that
+matches nothing fails with `no task <name> found` and lists the available
+tasks.
 
-使用 `mise watch` 进行持续开发：
+### Tasks run one at a time
 
-```bash
-mise watch              # Watch the default task
-mise watch build test   # Watch specific tasks
-```
-
-当其源文件发生更改时，这会自动重新运行任务。
-
-## 调试任务依赖
-
-### 可视化依赖关系
-
-```bash
-mise tasks deps build           # Show build's declared dependencies
-mise tasks deps --dot > deps.dot # Generate graphviz diagram
-```
-
-### 执行跟踪
-
-```bash
-mise run --verbose build       # 显示任务执行详情
-mise run --dry-run build       # 显示在不执行的情况下将会运行什么
-```
-
-### 常见问题
-
-**循环依赖**：
-
-```
-Error: Circular dependency detected: test → build → test
-```
-
-解决方案：移除循环，或将共享工作拆分为单独的前置条件。`wait_for` 也会在两个任务都被安排运行时创建顺序约束，因此它不是打破循环的一般方法。
-
-**缺少依赖**：
-
-```
-Error: Task 'build' depends on 'lint' but 'lint' was not found
-```
-
-解决方案：定义缺失的任务，或移除该依赖。
-
-**并行执行缓慢**：
-
-- 检查任务是否具有不必要的依赖
-- 使用 `mise tasks deps` 验证声明的依赖图（`depends`、`wait_for`、`depends_post`）
-- 如果有空闲的 CPU 核心，可以考虑增加 `--jobs`
+Run `mise tasks deps <task>` to find a chain where you expected siblings. Check
+the `--jobs` value and `MISE_JOBS`, and whether a task sets
+[`raw`](/tasks/task-configuration.html#raw) or
+[`interactive`](/tasks/task-configuration.html#interactive), which take
+exclusive access to the terminal. `mise run --raw` and the global
+[`raw`](/configuration/settings.html#raw) setting also run one command at a time.

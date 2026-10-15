@@ -1,5 +1,5 @@
 ---
-description: "创建一个新任务"
+description: "Add a task"
 ---
 
 <!-- @由 usage-cli 根据用法规范生成 -->
@@ -9,37 +9,52 @@ description: "创建一个新任务"
 - **效果：** 修改状态
 - **源代码：** [`src/cli/tasks/add.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/add.rs)
 
-创建一个新任务
+Add a task
 
-将任务添加到本地 mise.toml 文件中。
-参见 <https://mise.jdx.dev/configuration.html#target-file-for-write-operations>。
+Writes a `[tasks.<name>]` table to the nearest project config file and marks that file as trusted. See <https://mise.jdx.dev/configuration.html#target-file-for-write-operations> for how the file is chosen.
+
+With `--file`, creates an executable script in the project's task directory (for example `mise-tasks/`) instead, and does not change any config file.
 
 ## 参数
 - **`<TASK>`** — 要添加的任务名称
 - **`[-- RUN]…`** — 要运行的命令，在 `--` 后给出
 
-## 标志
-- **`-a --alias <ALIAS>`** — 任务的其他名称
-- **`-d --depends <DEPENDS>`** — 向任务添加依赖项
-- **`-D --dir <DIR>`** — 在特定目录中运行任务
-- **`-f --file`** — 创建文件任务而不是 toml 任务
-- **`-H --hide`** — 在 `mise tasks` 和补全中隐藏任务
-- **`-q --quiet`** — 运行前不打印命令
-- **`-r --raw`** — 直接连接 stdin/stdout/stderr
-- **`-s --sources <SOURCES>`** — 此任务用作输入的文件的 Glob 模式
-- **`-w --wait-for <WAIT_FOR>`** — 如果这些任务也正在运行，则等待它们完成
-- **`--depends-post <DEPENDS_POST>`** — 在任务运行后运行的依赖项
-- **`--description <DESCRIPTION>`** — 任务的描述
-- **`--outputs <OUTPUTS>`** — 此任务创建的文件的 Glob 模式，用于在这些文件为最新时跳过任务
-- **`--run-windows <RUN_WINDOWS>`** — 在 Windows 上运行的命令
-- **`--shell <SHELL>`** — 在特定 shell 中运行任务
-- **`--silent`** — 不打印命令或其输出
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-a --alias <ALIAS>`** — Other names for the task
+- **`-d --depends <TASK>`** — Tasks to run before this one
+- **`-D --dir <DIR>`** — Run the task in a specific directory
+- **`-f --file`** — Create a file task instead of a TOML task
+- **`-H --hide`** — Hide the task from `mise tasks` and completions
+- **`-q --quiet`** — Do not print the command before running
+- **`-r --raw`** — Connect the task directly to the terminal's stdin, stdout, and stderr
+- **`-s --sources <GLOB>`** — Glob patterns of files this task uses as input
+- **`-w --wait-for <TASK>`** — Wait for these tasks to finish if they are also being run
+- **`--depends-post <TASK>`** — Tasks to run after this one
+- **`--description <DESCRIPTION>`** — Description of the task
+- **`--outputs <GLOB>`** — Glob patterns of files this task creates, used to skip it when they are up to date
+- **`--run-windows <COMMAND>`** — Command to run on Windows (TOML tasks only; ignored with `--file`)
+- **`--shell <SHELL>`** — Run the task in a specific shell
+- **`--silent`** — Do not print the command or its output
+- **`-h --help`** — Print help
 
 ## 示例
 
+Add a TOML task that is skipped while its outputs are up to date
+
 ```
-mise tasks add pre-commit --depends "test" --depends "render" -- echo pre-commit
+mise tasks add build --description "Build the app" --sources 'src/**/*.ts' --outputs 'dist/**' -- npm run build
+```
+
+Create an executable lint script in the task directory
+
+```
+mise tasks add --file lint -- eslint .
+```
+
+Add a task that runs after lint and test
+
+```
+mise tasks add ci --depends lint --depends test -- echo done
 ```
 
 <!-- 生成的参考导航 -->

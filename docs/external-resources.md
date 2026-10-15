@@ -1,23 +1,25 @@
 ---
-description: "来自 mise 社区的文章、视频和相关工具。"
+description: "Find community articles, podcasts, and videos about mise, and other tools from its author that work alongside it."
 ---
 
-# 外部资源
+# External resources
 
-来自 mise 社区的文章、视频和相关工具。示例反映了发布时可用的版本；调整旧命令时，请查看当前的[配置](/configuration.html)和[CLI 参考](/cli/)。
+Older community posts about mise may use commands or options that have since
+changed; check the [configuration](/configuration.html) and
+[CLI reference](/cli/) when you adapt them.
 
 ## 文章和教程
 
-- 2026-03-02 - [你尚未使用的 Mise 十大功能](https://jdx.dev/posts/2026-03-02-10-mise-features/)
-- 2025-04-09 - [保护 Swift 应用的敏感数据](https://tuist.dev/blog/2025/04/09/secrets)
-- 2025-02-04 - [面向 Swift 开发者的 Mise 指南](https://tuist.dev/blog/2025/02/04/mise)
-- 2025-01-12 - [法语：Mise-En-Place：简化环境和任务管理](https://blog.stephane-robert.info/docs/outils/systeme/mise/)
-- 2024-11-20 - [从 nvm 迁移到 mise](https://dev.to/hverlin/migrating-from-nvm-to-mise-4mfp)
-- 2024-09-06 - [使用 Mise 替代 pyenv、nvm 和 direnv](https://arunmozhi.in/2024/09/06/replacing-pyenv-nvm-direnv-with-mise)
-- 2024-06-27 - [使用 mise 管理开发工具版本](https://haril.dev/en/blog/2024/06/27/Easy-devtools-version-management-mise)
-- 2024-04-13 - [Shims：它们在 mise-en-place 中的工作原理](https://jdx.dev/posts/2024-04-13-shims-how-they-work-in-mise-en-place/)
-- 2024-02-20 - [Mise 能替代 Volta 吗？](https://ricostacruz.com/posts/mise-vs-volta)
-- 2024-01-14 - [使用一个工具管理所有运行时版本（asdf、mise）](https://blog.andreyfadeev.com/p/manage-all-your-runtime-versions)
+- 2026-03-02 - [Top 10 Features in Mise You're Not Using](https://jdx.dev/posts/2026-03-02-10-mise-features/)
+- 2025-04-09 - [Keeping your Swift apps' sensitive data secret](https://tuist.dev/blog/2025/04/09/secrets)
+- 2025-02-04 - [A Mise guide for Swift developers](https://tuist.dev/blog/2025/02/04/mise)
+- 2025-01-12 - [Mise-En-Place: Simplifiez la Gestion de vos Environnements et Tâches](https://blog.stephane-robert.info/docs/outils/systeme/mise/) (in French)
+- 2024-11-20 - [Migrating from nvm to mise](https://dev.to/hverlin/migrating-from-nvm-to-mise-4mfp)
+- 2024-09-06 - [Replacing pyenv, nvm, direnv with Mise](https://arunmozhi.in/2024/09/06/replacing-pyenv-nvm-direnv-with-mise)
+- 2024-06-27 - [Managing Development Tool Versions with mise](https://haril.dev/en/blog/2024/06/27/Easy-devtools-version-management-mise)
+- 2024-04-13 - [Shims: How they work in mise-en-place](https://jdx.dev/posts/2024-04-13-shims-how-they-work-in-mise-en-place/)
+- 2024-02-20 - [Can Mise replace Volta?](https://ricostacruz.com/posts/mise-vs-volta)
+- 2024-01-14 - [Manage all your runtime versions with one tool (asdf, mise)](https://blog.andreyfadeev.com/p/manage-all-your-runtime-versions)
 
 ## 播客和视频
 
@@ -26,8 +28,18 @@ description: "来自 mise 社区的文章、视频和相关工具。"
 
 ## 相关工具
 
-- [hk](https://hk.jdx.dev/)：运行 Git hooks 和项目 lint 检查
-- [pitchfork](https://pitchfork.jdx.dev/)：监控长时间运行的开发进程
-- [usage](https://usage.jdx.dev/)：定义 CLI 参数、帮助信息和补全；mise 将其用于[任务参数](/tasks/task-arguments.html)
+These tools come from mise's author and work alongside it:
+
+- [aube](https://aube.sh/): a JavaScript package manager; mise embeds it to
+  install tools for the [npm backend](/dev-tools/backends/npm.html).
+- [fnox](https://fnox.jdx.dev/): store and load secrets; mise can use it as a
+  [secrets source](/environments/secrets/fnox.html).
+- [hk](https://hk.jdx.dev/): run Git hooks and project lint checks.
+- [Mr Boxington](https://mr-boxington.jdx.dev/): share one Cargo build cache
+  across checkouts and CI.
+- [pitchfork](https://pitchfork.jdx.dev/): supervise long-running development
+  processes.
+- [usage](https://usage.jdx.dev/): define CLI arguments, help, and completions;
+  mise uses it for [task arguments](/tasks/task-arguments.html).
 
 如需建议添加资源或更正链接，请参阅[贡献](/contributing.html)。

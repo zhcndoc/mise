@@ -1,86 +1,156 @@
 ---
-description: "任务模板让你能够定义可复用的任务定义，多个任务可以对其进行扩展。"
+description: "Share commands, tools, environment variables, and dependencies across tasks by extending a named task template."
+socialDescription: "Share commands, tools, and dependencies across tasks with task templates."
 ---
 
-# 任务模板
+# Task templates
 
-任务模板让你能够定义可复用的任务定义，多个任务可以对其进行扩展。它们对于单仓库或各组件间具有相似任务模式的项目尤其有用。
+Define a task template when several tasks share commands, tools, environment
+variables, or dependencies. Each task names its template with `extends` and
+sets only what differs. A template is not a task: declaring one does not create
+anything you can run.
 
-下面的 Python 示例假设使用一个 uv 项目，其开发依赖包括 `pytest`，以及用于覆盖率的 `pytest-cov`。将 Python 声明为工具并不会安装这些项目包。
+Task templates are different from [Tera templates](/templates.html). A task
+template supplies whole task properties that a task inherits; Tera renders
+expressions inside a value, including values that come from a task template.
 
-## 定义模板
+The Python examples assume a uv project with `pytest` and `pytest-cov` in its
+dev dependencies.
 
-模板在你的 `mise.toml` 的 `[task_templates.*]` 部分中定义：
+## Defining templates
 
-```toml
+Add a named template under `[task_templates.<name>]` in `mise.toml`. A template
+accepts the same properties as a task, with the exceptions listed under
+[merge semantics](#merge-semantics):
+
+```mise-toml
 [task_templates."python:build"]
 description = "构建 Python 项目"
 run = "uv build"
-tools = { python = "3.12", uv = "latest" }
+tools = { python = "3.14", uv = "latest" }
 env = { PYTHONPATH = "src" }
 
 [task_templates."python:test"]
 description = "Run Python tests"
 run = "uv run pytest"
-tools = { python = "3.12", uv = "latest" }
+tools = { python = "3.14", uv = "latest" }
 depends = ["build"]
 ```
 
-## 扩展模板
+Template names are free-form. Group them with `:` the way you group task names,
+for example `python:build` or `rust:cargo:build`.
 
-任务可以使用 `extends` 字段来扩展模板：
+## Extending templates
 
-```toml
+Set `extends` to the template name. Properties the task omits come from the
+template; properties set on both follow the [merge rules](#merge-semantics):
+
+```mise-toml
 [tasks.build]
 extends = "python:build"
 
 [tasks.test]
 extends = "python:test"
-run = "uv run pytest --cov"  # Override run while keeping tools, depends
+run = "uv run pytest --cov" # replaces run, keeps tools and depends
 ```
 
-## 模板命名
+[File tasks](/tasks/file-tasks.html) extend a template from their `#MISE`
+header:
 
-模板使用冒号（`:`）分隔符进行命名空间划分，类似于单体仓库中的任务命名约定：
+```bash [mise-tasks/build]
+#!/usr/bin/env bash
+#MISE extends="python:build"
+uv build
+```
 
-- `python:build`
-- `python:test`
-- `rust:cargo:build`
-- `node:npm:test`
+Run [`mise tasks info <task>`](/cli/tasks/info.html) to see the task that
+results from the merge.
 
-## 合并语义
+## Template scope
 
-当一个任务扩展一个模板时，字段会按照以下规则进行合并：
+mise collects templates from every config file it loads, including global and
+parent configs, into one set of names. When several config files define a
+template with the same name, the one from the highest-precedence config, the
+one nearest the current directory, wins. Every task that names it uses that
+definition, including tasks defined in a parent or global config.
 
-| 字段                                               | 行为                                                              |
-| ------------------------------------------------- | ----------------------------------------------------------------- |
-| `run`, `run_windows`                              | 本地设置完全覆盖                                                  |
-| `tools`                                           | 深度合并（本地工具会添加到模板的值中，或覆盖模板的值）            |
-| `env`                                             | 深度合并（本地环境变量会添加到模板的值中，或覆盖模板的值）        |
-| `depends`, `depends_post`, `wait_for`             | 本地设置完全覆盖（不合并）                                        |
-| `dir`                                             | 本地设置覆盖；如果模板中没有设置，则默认为 config_root            |
-| `sources`, `outputs`, `cache`                     | 本地设置完全覆盖                                                  |
-| `output`                                          | 本地设置覆盖模板（如果已设置）                                    |
-| Sandbox deny fields                               | 与任务本地设置组合                                                |
-| Sandbox allow fields                              | 模板值和任务本地值合并                                            |
-| `description`, `shell`, `timeout`, etc.           | 本地设置覆盖模板（如果已设置）                                    |
-| `quiet`, `hide`, `raw`, `interactive`, `raw_args` | 模板不支持（在每个任务上单独显式设置）                            |
+Keep templates that teammates and CI need in the repository. A template in your
+global config works for personal tasks, but another machine needs the same
+definition to resolve `extends`.
 
-对于 `run`、`run_windows`、`depends`、`depends_post`、`wait_for` 和 `sources`，空的本地列表目前会继承模板的值。特别是，`depends = []` 不会清除模板依赖项。如果任务必须省略这些前置条件，请使用单独的模板。`outputs = []` 是显式的无文件输出声明；`cache = { enabled = false }` 会显式禁用继承的缓存。
+## Parameterizing a template with vars
 
-### 示例：Tools 的深度合并
+Put a shared command in the template's `run` and use `vars` for the values that
+differ between tasks. mise merges the template into each task before it renders
+the task, so the inherited command sees that task's vars.
+
+```mise-toml
+[task_templates.e2e]
+vars = { mode = "headless" }
+run = "echo --mode={{ vars.mode }}"
+
+[tasks.test]
+extends = "e2e"
+vars = { mode = "headed" }
+
+[tasks."test:ci"]
+extends = "e2e"
+```
+
+`mise run test` prints `--mode=headed`. `mise run test:ci` inherits the
+template's default and prints `--mode=headless`.
+
+Template vars and task-local vars are combined, and the task's value wins for
+the same name. Use a Tera fallback in `run`, such as
+<code v-pre>{{ vars.mode | default(value='headless') }}</code>, when the var is
+optional.
+
+Keep expressions that depend on task-local vars in the task or its template. A
+top-level `[vars]` entry is resolved during config loading, and task-local
+overrides do not recalculate that stored value. See
+[when vars are resolved](/configuration/vars.html#when-vars-are-resolved).
+
+## Merge semantics
+
+The task inherits every property it omits. When both the template and the task
+set a property, these rules apply:
+
+| Property                                                                                      | Result                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `run`, `run_windows`                                                                          | The task's value replaces the template's. Ignored when the task or the template sets `file`.                                    |
+| `file`                                                                                        | The task's value, else the template's.                                                                                          |
+| `tools`, `env`, `vars`                                                                        | Merged by key. The task's entries add to the template's and win for the same key.                                               |
+| `depends`, `depends_post`, `wait_for`                                                         | The task's list replaces the template's.                                                                                        |
+| `alias`, `sources`, `outputs`                                                                 | The task's value replaces the template's.                                                                                       |
+| `dir`                                                                                         | The task's value, else the template's, else `task_config.dir`, else the task's config root.                                     |
+| `usage`                                                                                       | Both specs, the template's first.                                                                                               |
+| `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`                                 | On when either sets it. A task cannot turn off a template's restriction.                                                        |
+| `allow_read`, `allow_write`, `allow_net`, `allow_env`, `pass_through_env`                     | The template's entries followed by the task's.                                                                                  |
+| `description`, `shell`, `timeout`, `output`, `silent`, `confirm`, `cache`, `watch`, `daemons` | The task's value if set, else the template's.                                                                                   |
+| `quiet`, `hide`, `raw`, `interactive`, `raw_args`, `extends`                                  | Not accepted in templates; mise warns about an unknown field. Set them on each task. A template cannot extend another template. |
+| `secrets`                                                                                     | Not allowed in templates; mise reports a config error.                                                                          |
+
+### Empty lists {#empty-lists-and-file-tasks}
+
+An empty list on the task inherits the template's value for `run`,
+`run_windows`, `depends`, `depends_post`, `wait_for`, and `sources`, so
+`depends = []` does not clear the template's dependencies. Use a separate
+template for tasks that need none. `outputs = []` does declare that the task
+writes no files, and `cache = { enabled = false }` turns off inherited caching.
+
+### Example: deep merge for tools
 
 ```toml
 [task_templates."fullstack:build"]
-tools = { python = "3.12", node = "18" }
+tools = { python = "3.14", node = "22" }
 
 [tasks.build]
 extends = "fullstack:build"
-tools = { node = "20" }  # 覆盖 node，保留模板中的 python
-# 结果：tools = { python = "3.12", node = "20" }
+tools = { node = "24" } # overrides node, keeps python
+# Result: tools = { python = "3.14", node = "24" }
 ```
 
-### 示例：Env 的深度合并
+### Example: deep merge for env
 
 ```toml
 [task_templates."python:build"]
@@ -88,11 +158,33 @@ env = { PYTHONPATH = "src", DEBUG = "0" }
 
 [tasks.build]
 extends = "python:build"
-env = { DEBUG = "1" }  # 覆盖 DEBUG，保留模板中的 PYTHONPATH
-# 结果：env = { PYTHONPATH = "src", DEBUG = "1" }
+env = { DEBUG = "1" } # overrides DEBUG, keeps PYTHONPATH
+# Result: env = { PYTHONPATH = "src", DEBUG = "1" }
 ```
 
-### 示例：Depends 的完全覆盖
+### Example: shared arguments
+
+A template's `usage` spec holds the flags and arguments its tasks have in
+common. A task that extends it adds its own without repeating the shared ones:
+
+```mise-toml
+[task_templates.deploy]
+usage = """
+flag "--env <env>" help="Target environment"
+flag "--dry-run" help="Print what would happen"
+"""
+
+[tasks.deploy-api]
+extends = "deploy"
+usage = 'flag "--replicas <n>" help="How many to run"'
+run = 'echo "env=$usage_env replicas=$usage_replicas"'
+```
+
+`mise run deploy-api --help` lists `--env`, `--dry-run`, and `--replicas`, in
+that order. Declare each flag in one place: a flag written in both the template
+and the task is two declarations and appears twice in `--help`.
+
+### Example: complete override for depends
 
 ```toml
 [task_templates."python:test"]
@@ -100,34 +192,44 @@ depends = ["lint", "typecheck"]
 
 [tasks.test]
 extends = "python:test"
-depends = ["build"]  # 完全替换模板中的 depends
-# 结果：depends = ["build"]（不包含 lint 和 typecheck）
+depends = ["build"] # replaces the template's depends
+# Result: depends = ["build"]; lint and typecheck do not run
 ```
 
-## Tera 模板
+## Tera templating
 
-模板支持 Tera 模板化，并在**使用它们的项目上下文中**进行渲染：
+Tera expressions in a template render in the context of the task that extends
+it, even when the template is defined in a parent or global config.
+<code v-pre>{{ config_root }}</code> is the config root of that task, not of the
+file that defines the template:
 
-```toml
+```mise-toml
 [task_templates."python:build"]
-description = "构建 Python 项目"
-dir = "{{ config_root }}"  # 解析为 PROJECT 的目录
-run = "uv build"
+run = "uv build --out-dir {{ config_root }}/dist"
 env = { PROJECT = "{{ config_root | basename }}" }
 ```
 
-可用变量（与普通任务相同）：
+Templates use the same variables as regular tasks:
 
-- <code v-pre>{{ config_root }}</code> - 使用该模板的项目（而不是定义模板的位置）
-- <code v-pre>{{ env.VAR }}</code> - 环境变量
-- <code v-pre>{{ cwd }}</code> - 当前工作目录
-- <code v-pre>{{ vars.* }}</code> - 配置中的用户定义变量
+- <code v-pre>{{ config_root }}</code>: the config root of the task that uses
+  the template
+- <code v-pre>{{ env.VAR }}</code>: environment variables
+- <code v-pre>{{ cwd }}</code>: the current working directory
+- <code v-pre>{{ vars.NAME }}</code>: config vars, with template and task-local
+  overrides
 
-## 单仓库使用
+A task template supplies whole properties; it cannot insert a parameterized
+snippet into the middle of a task's `run` string. For repeated or nested
+snippets inside one script, use
+[Tera components](/templates.html#parameterized-snippets-with-components).
 
-任务模板在多个包共享类似构建模式的单仓库中尤其有用：
+## Monorepo usage
 
-```toml
+Define shared templates in the monorepo root, then extend them in each project.
+In this example, the API project adds coverage to its test command while the
+worker uses the inherited command:
+
+```mise-toml
 # Root mise.toml
 monorepo_root = true
 
@@ -136,26 +238,26 @@ config_roots = ["packages/api", "packages/worker"]
 
 [task_templates."python:build"]
 run = "uv build"
-tools = { python = "3.12", uv = "latest" }
+tools = { python = "3.14", uv = "latest" }
 
 [task_templates."python:test"]
 run = "uv run pytest"
-tools = { python = "3.12", uv = "latest" }
+tools = { python = "3.14", uv = "latest" }
 depends = ["build"]
 
 [task_templates."python:lint"]
 run = "ruff check ."
-tools = { python = "3.12", ruff = "latest" }
+tools = { python = "3.14", ruff = "latest" }
 ```
 
-```toml
+```mise-toml
 # packages/api/mise.toml
 [tasks.build]
 extends = "python:build"
 
 [tasks.test]
 extends = "python:test"
-run = "uv run pytest --cov"  # Add coverage
+run = "uv run pytest --cov" # adds coverage
 
 [tasks.lint]
 extends = "python:lint"
@@ -173,8 +275,7 @@ extends = "python:test"
 extends = "python:lint"
 ```
 
-## 模板作用域
-
-模板来自活动配置层级，包括全局配置和父级配置。任务使用 `extends` 按名称选择模板；声明模板不会创建可运行的任务。使用 `mise tasks info <task>` 检查继承后的任务。
-
-对于团队成员和 CI 需要共享的行为，优先使用由仓库维护的模板。全局模板适用于个人任务，但其他机器需要具有相同的模板定义才能解析 `extends`。
+To give every project's `build` task the same defaults without adding
+`extends` to each one, use `[monorepo.task_defaults.build]` from the
+[workspace project graph](/tasks/workspace-graph.html#root-task-defaults) instead. A
+template named by `extends` takes precedence over a root default.

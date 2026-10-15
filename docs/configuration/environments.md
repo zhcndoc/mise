@@ -1,16 +1,22 @@
 ---
-description: "配置环境会选择额外的文件，例如 mise.development.toml 和 mise.production.toml"
+description: "Load extra config files such as mise.production.toml by selecting a config environment with -E or MISE_ENV."
+socialDescription: "Load extra config files such as mise.production.toml with -E or MISE_ENV."
 ---
 
-# 配置环境
+# Config environments
 
-配置环境会选择额外的文件，例如 `mise.development.toml` 和 `mise.production.toml`。基础
-`mise.toml` 仍会被加载，所选文件会覆盖同一目录层级中的值。
+A config environment loads extra config files, such as `mise.development.toml`
+or `mise.production.toml`, on top of `mise.toml`. Select one with `-E` or
+`MISE_ENV`; the base `mise.toml` still loads, and the environment file overrides
+it in the same directory.
 
-对于传递给应用程序的变量，请使用 [`[env]`](/environments/)。选择 mise 配置环境不会设置
-`NODE_ENV` 等应用程序变量，除非你定义它们。
+Selecting a config environment does not set variables such as `NODE_ENV` for
+your application. Define those in [`[env]`](/environments/) in the environment
+file.
 
 ## 尝试使用环境
+
+::: code-group
 
 ```toml [mise.toml]
 [env]
@@ -22,142 +28,196 @@ APP_MODE = "development"
 APP_MODE = "production"
 ```
 
+:::
+
 ```sh
-mise exec -- sh -c 'echo "$APP_MODE"'                # development
-mise -E production exec -- sh -c 'echo "$APP_MODE"'  # production
-mise -E production config                          # inspect loaded files
+mise exec -- sh -c 'echo "$APP_MODE"'               # development
+mise -E production exec -- sh -c 'echo "$APP_MODE"' # production
+mise -E production config                           # list the loaded files
 ```
 
 ## 选择环境
 
-使用以下任一方法选择环境：
+You cannot select an environment in `mise.toml`, because the selection decides
+which config files load. Use one of these instead, listed from highest to
+lowest precedence:
 
-- CLI 标志：`-E development` 或 `--env development`
-- 环境变量：`MISE_ENV=development`
-- `.miserc.toml` 文件：`env = ["development"]`
+| Method               | Example                                                               |
+| -------------------- | --------------------------------------------------------------------- |
+| CLI flag             | `mise -E production run deploy` or `--env production`                 |
+| Environment variable | `MISE_ENV=production`                                                 |
+| `.miserc.toml`       | `env = ["production"]`; see [below](#setting-mise-env-in-miserc-toml) |
 
-mise 会在整个配置层级中查找匹配的文件。项目文件使用类似 `mise.production.toml` 的名称；全局配置在
-`MISE_CONFIG_DIR` 中使用 `config.production.toml`。
+To select several environments, separate them with commas:
+`mise -E ci,test run build` or `MISE_ENV=ci,test`. When two selected
+environments set the same value in one directory, the last one wins among files
+of the same kind, but a local file still overrides every shared one (see
+[File names and precedence](#file-names-and-precedence)): with `ci,test`,
+`mise.ci.local.toml` overrides `mise.test.toml`. Run `mise -E ci,test config` to
+see the combined selection.
 
-可以指定多个环境，例如 `mise -E ci,test run build`。在同一目录中，最后一个环境具有优先权。使用
-`mise -E ci,test config` 查看组合后的选择。
+### Set a default in .miserc.toml {#setting-mise-env-in-miserc-toml}
 
-## 在 .miserc.toml 中设置 MISE_ENV
+Commit a default selection in `.miserc.toml`, which mise reads before any other
+config file:
 
-你可以在 `.miserc.toml` 文件中设置 `MISE_ENV`，该文件会在发现其他配置文件之前较早加载。这样你就可以将环境
-配置提交到版本控制中：
-
-```toml
-# .miserc.toml
+```toml [.miserc.toml]
 env = ["development"]
 ```
 
-### .miserc.toml 中的模板
+Use `.miserc.local.toml` (not committed) for a personal choice, and
+`~/.config/mise/miserc.local.toml` for one machine. See
+[`.miserc.toml`](/configuration.html#miserc) for every location and how the
+files combine.
 
-`.miserc.toml` 支持 [Tera 模板](/templates#miserc-template-support)，这对于像 `ceiling_paths` 这样引用 home 或 XDG 目录的设置很有用：
+## File names and precedence {#file-names-and-precedence}
 
-<div v-pre>
+In a project directory, a file higher in this table overrides one lower down:
 
-```toml
-# .miserc.toml
+| File                    | Use                                                   |
+| ----------------------- | ----------------------------------------------------- |
+| `mise.<env>.local.toml` | Personal overrides for one environment, not committed |
+| `mise.local.toml`       | Personal overrides, not committed                     |
+| `mise.<env>.toml`       | Shared config for one environment                     |
+| `mise.toml`             | Shared config                                         |
 
-# 在 $HOME 处停止配置搜索
-ceiling_paths = ["{{ env.HOME }}"]
+So your `mise.local.toml` overrides a committed `mise.production.toml` when the
+`production` environment is selected. To override a value for one environment
+only, put it in `mise.production.local.toml`. Add `mise.local.toml` and
+`mise.*.local.toml` to `.gitignore`.
 
-# 或使用 XDG 配置主目录变量
-ignored_config_paths = ["{{ xdg_config_home }}/mise/shared.toml"]
+The other project locations take environment names the same way, such as
+`mise/config.<env>.toml`, `.mise/config.<env>.toml`, and
+`.config/mise.<env>.toml`; see [Config file locations](/configuration.html#mise-toml).
+In the same directory, environment files such as `mise/config.<env>.toml`
+override every shared file without an environment, local files such as
+`mise/config.local.toml` override both, and environment local files such as
+`mise/config.<env>.local.toml` override all of them. Within each of these
+layers, a later selected environment wins.
+
+The global config directory (`~/.config/mise`) uses `config.<env>.toml` and
+`config.<env>.local.toml` in the same order, so `config.local.toml` overrides
+`config.<env>.toml`.
+
+If [`override_config_filenames`](/configuration/settings.html#override_config_filenames)
+is set, its filenames replace `mise.toml`, `mise.local.toml`, and the other
+default names. Environment files such as `mise.<env>.toml` and
+`mise.<env>.local.toml` are still loaded.
+
+## Write to an environment file
+
+`mise use` and `mise set` write to the shared file unless you name an
+environment with the subcommand's own `--env` flag:
+
+```sh
+mise use --env staging node@24                             # writes mise.staging.toml
+mise set --env staging API_URL=https://staging.example.com # writes mise.staging.toml
 ```
 
-</div>
+The global `-E` placed before the subcommand, as in
+`mise -E staging set ...`, only selects which files load; the write still goes
+to the shared `mise.toml`. Both commands create the environment file if it does
+not exist. See
+[which file mise writes to](/configuration.html#target-file-for-write-operations)
+for the full rules.
 
-此时只能使用操作系统级别的上下文（环境变量、`cwd`、`arch()`、`os()` 等）；此阶段尚未加载
-`mise.toml` 中的设置。
+## Use the environment in tasks and templates
 
-搜索的文件位置（按优先级顺序）：
+mise exports the selected environments to tasks and other commands it runs as
+`MISE_ENV`, separated by commas. Templates read the same list as
+<code v-pre>{{ mise_env }}</code>:
 
-1. 当前目录及其父目录中的 `.miserc.toml` 和 `.config/miserc.toml`
-2. `~/.config/mise/miserc.toml`（全局）
-3. `/etc/mise/miserc.toml`（系统）
+```mise-toml [mise.toml]
+[tasks.deploy]
+run = """
+{% if mise_env is not defined %}echo "select an environment with -E" >&2; exit 1{% endif %}
+echo deploying to {{ mise_env | first }}
+"""
+```
 
-不能在 `mise.toml` 中设置 `MISE_ENV`，因为它首先决定要加载哪些配置文件。
+`mise -E staging run deploy` prints `deploying to staging`, and `mise run deploy`
+fails with `select an environment with -E`. When no environment is selected,
+`mise_env` is undefined. A bare <code v-pre>{{ mise_env }}</code> then fails to
+render, and so do filters such as `join`, but `first` returns an empty value
+without an error. Check `mise_env is defined` before you use it.
+[Platform environments](#platform-environments) are not included in `MISE_ENV`
+or `mise_env`.
 
-## 本地覆盖
-
-mise 还会在当前目录及其父目录中查找诸如 `mise.local.toml` 和 `mise.{MISE_ENV}.local.toml` 这样的“本地”文件。
-这些文件不应提交到版本控制中（将 `mise.local.toml` 和 `mise.*.local.toml` 添加到你的 `.gitignore` 文件中）。
-
-这些文件按以下顺序获取优先权（顶部覆盖底部）：
-
-- `mise.{MISE_ENV}.local.toml`
-- `mise.local.toml`
-- `mise.{MISE_ENV}.toml`
-- `mise.toml`
-
-如果设置了 `MISE_OVERRIDE_CONFIG_FILENAMES`，则会使用它，而不是上述所有文件。
-
-你也可以使用类似 `mise/config.{MISE_ENV}.toml` 或 `.config/mise.{MISE_ENV}.toml` 的路径。这些路径
-遵循[配置](/configuration)中所述的顺序。
+<a id="conf-d-environments"></a>
 
 ## conf.d 环境
 
-::: warning 迁移进行中
-特定环境的 `conf.d` 文件名在 mise 2027.8.10 之前需要选择启用。默认情况下，所有非隐藏的
-TOML 片段仍会无条件加载，包括 `node.tools.toml` 这样的名称。
+::: warning Migration in progress
+Environment-specific `conf.d` filenames are opt-in until mise 2027.8.10. By
+default, every non-hidden TOML fragment still loads, including names such as
+`node.tools.toml`.
 
-无条件片段名称中的点已弃用。请在 mise 2027.8.10 之前将其重命名为使用连字符的名称（例如
-`node-tools.toml`）。届时，第一个点之后的后缀将用于选择环境。
+Dots in fragment names are deprecated. Rename them to use hyphens, such as
+`node-tools.toml`, before mise 2027.8.10. From that release, the suffix after
+the first dot selects an environment.
 :::
 
-如需立即选择启用新行为，请在任意 `miserc.toml` 文件中设置 `env_conf_d = true`（请参阅上面列出的
-位置），或设置 `MISE_ENV_CONF_D=true`。此后，`mise/conf.d`、`.mise/conf.d` 和 `.config/mise/conf.d` 中的文件
-将使用与其他配置文件相同的环境后缀：
+To opt in now, set `env_conf_d = true` in a `miserc.toml` file or set
+`MISE_ENV_CONF_D=true`. Fragments in `mise/conf.d`, `.mise/conf.d`, and
+`.config/mise/conf.d` then use the same environment suffixes as other config
+files:
 
 ```text
 mise/conf.d/tools.toml                    # always loaded
 mise/conf.d/tools.local.toml              # always loaded, usually gitignored
 mise/conf.d/tools.development.toml        # MISE_ENV=development
 mise/conf.d/tools.development.local.toml  # MISE_ENV=development, usually gitignored
-.mise/conf.d/tools.toml                   # always loaded
-.mise/conf.d/tools.local.toml             # always loaded, usually gitignored
-.mise/conf.d/tools.development.toml       # MISE_ENV=development
-.mise/conf.d/tools.development.local.toml # MISE_ENV=development, usually gitignored
 ```
 
-由于此设置控制配置发现，因此必须在 `miserc.toml` 文件或环境中设置它；在 `mise.toml` 中设置已经太晚。要在迁移期间
-保留旧行为并避免弃用警告，请显式设置 `env_conf_d = false`。
+Because this setting controls config discovery, set it in `miserc.toml` or the
+environment; in `mise.toml` it is too late. To keep the old behavior without the
+deprecation warning during the migration, set `env_conf_d = false` explicitly.
 
-使用 `mise config` 查看正在使用哪些文件。
-
-实际写入哪个文件的规则有所不同，因为最终必须选择一个文件。更多信息请参阅 [`mise use`](/cli/use.html) 的文档。
+<a id="platform-environments"></a>
 
 ## 平台环境
 
-启用[`auto_env` 设置](/configuration/settings.html#auto_env)后，mise 会根据当前平台自动将以下内容视为活动的配置环境：
+With the [`auto_env`](/configuration/settings.html#auto_env) setting enabled,
+mise also treats these as active config environments, based on the current
+platform:
 
-| 环境         | 值                                             |
-| ------------ | ---------------------------------------------- |
-| `{os_family}` | `unix`（在 Windows 上未定义——请使用 `windows`） |
-| `{os}`        | `linux`, `macos`, `windows`                    |
-| `{os}-{arch}` | 例如 `linux-x64`, `macos-arm64`, `windows-x64` |
+| Environment   | Values                                               |
+| ------------- | ---------------------------------------------------- |
+| `{os_family}` | `unix` (not defined on Windows; use `windows`)       |
+| `{os}`        | `linux`, `macos`, `windows`                          |
+| `{os}-{arch}` | such as `linux-x64`, `macos-arm64`, or `windows-x64` |
 
-架构使用 mise 的重映射名称：`x86_64` → `x64`，`aarch64` → `arm64`。
+Architectures use mise's names: `x86_64` becomes `x64` and `aarch64` becomes
+`arm64`.
 
-这会使 `mise.windows.toml`、`mise.macos-arm64.toml` 或 `mise.unix.toml` 等配置文件自动加载，并选择匹配的锁文件，例如
-`mise.windows.lock`。所有常用的配置文件位置和 `.local.toml` 变体都有效。
+Files such as `mise.windows.toml`, `mise.macos-arm64.toml`, and
+`mise.unix.toml` then load automatically, in every config location and with
+their `.local.toml` variants, and mise selects matching lockfiles such as
+`mise.windows.lock`.
 
-平台环境的优先级低于显式的 `MISE_ENV` 条目。完整顺序为（后面的覆盖前面的）：`unix` < `{os}` < `{os}-{arch}` < 显式 `MISE_ENV` 条目。
-
-平台环境只影响配置文件的发现和锁文件的选择。它们不会被添加到 `MISE_ENV` 本身：`{{ mise_env }}` 模板变量以及传递给子进程和任务的 `MISE_ENV` 变量，只会反映显式环境。
+Platform environments have lower precedence than environments you select. From
+lowest to highest: `unix`, `{os}`, `{os}-{arch}`, then your `-E` or `MISE_ENV`
+entries. As with several selected environments, this order applies among files
+of the same kind, so `mise.linux.local.toml` still overrides `mise.ci.toml`.
+They affect only config file discovery and lockfile selection, so
+<code v-pre>{{ mise_env }}</code> and the `MISE_ENV` variable passed to tasks
+list only the environments you selected.
 
 ### 推出
 
-`auto_env` 目前**默认禁用**。从 mise `2027.6.0` 开始，它将默认启用；从 `2026.12.0` 到该版本之前，如果 mise 发现某个特定于平台的配置文件将被新加载，则会发出警告。要显式控制此行为：
+`auto_env` is off by default. mise 2027.6.0 turns it on by default, and from
+2026.12.0 until then mise warns when it finds a platform config file that the
+new default would load. To choose now, set it in `.miserc.toml`:
 
-```toml
-# .miserc.toml
+```toml [.miserc.toml]
 auto_env = false # keep the old behavior and silence the warning
 ```
 
-改为设置 `auto_env = true`，即可立即采用新行为。或者设置
-`MISE_AUTO_ENV=true` / `MISE_AUTO_ENV=false`。与 `MISE_ENV` 一样，这是一个早期初始化设置：必须在
-`.miserc.toml` 中设置，或通过环境变量设置——在 `mise.toml` 中设置不会生效，因为在读取 `mise.toml` 时配置文件发现已经完成。
+Set `auto_env = true` to adopt the new behavior, or use `MISE_AUTO_ENV=true` or
+`MISE_AUTO_ENV=false`. Like `env`, this setting controls config discovery, so it
+has no effect in `mise.toml`.
+
+## Related
+
+- [Bootstrap modules](/bootstrap/modules.html): one environment file per machine
+  role, selected on each machine

@@ -12,12 +12,18 @@ description: "管理插件"
 
 管理插件。
 
-## 标志
-- **`-c --core`** — 仅显示内置（核心）插件
-  默认隐藏这些插件
-- **`-u --urls`** — 显示每个插件的 git url
-  例如：<https://github.com/jdx/vfox-cmake.git>
-- **`--user`** — 列出已安装的插件
+Plugins add tools, backends, environment directives, or bootstrap package
+managers to mise. Most tools need no plugin because most registry tools use
+built-in backends, and mise installs a missing plugin when a configured tool
+needs it.
+
+With no subcommand, lists installed plugins (same as `mise plugins ls`; the
+flags below are passed to it). See <https://mise.jdx.dev/plugins.html>
+
+## Flags
+- **`-c --core`** — List the core tools built into mise instead of installed plugins
+- **`-u --urls`** — Show each plugin's Git URL, ref, and commit
+- **`--user`** — List installed plugins
 
   这是默认行为，但可以与 --core 一起使用
   以显示核心插件和用户插件
@@ -36,6 +42,6 @@ description: "管理插件"
 
 ## 相关文档
 
-- [插件选择和维护](/plugin-usage.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Plugins](/plugins.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

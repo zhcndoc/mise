@@ -1,5 +1,5 @@
 ---
-description: "为工具/后端添加或更新别名"
+description: "Set a backend alias or a version alias in the global config"
 ---
 
 <!-- 由 usage-cli 生成 -->
@@ -10,22 +10,33 @@ description: "为工具/后端添加或更新别名"
 - **效果：** 修改状态
 - **源代码：** [`src/cli/tool_alias/set.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_alias/set.rs)
 
-为工具/后端添加或更新别名
+Set a backend alias or a version alias in the global config
 
-这会修改 `~/.config/mise/config.toml` 的内容
+`mise tool-alias set TOOL BACKEND` makes TOOL install from BACKEND, written as
+`[tool_alias] TOOL = "BACKEND"`. `mise tool-alias set TOOL ALIAS VERSION` makes
+`TOOL@ALIAS` mean VERSION, written under `[tool_alias.TOOL.versions]`. Writes
+the global config (~/.config/mise/config.toml by default); add aliases to a
+project's mise.toml to share them.
 
-## 参数
-- **`<TOOL>`** — 要为其设置别名的工具/后端
-- **`<ALIAS>`** — 要设置的别名
-- **`[VALUE]`** — 要为别名设置的值
+## Arguments
+- **`<TOOL>`** — The tool to alias
+- **`<ALIAS>`** — The version alias to set, or the backend when VALUE is omitted
+- **`[VALUE]`** — The version request the alias stands for
 
 ## 标志
 - **`-h --help`** — 打印帮助
 
 ## 示例
 
+Install ripgrep from its aqua backend
+
 ```
 mise tool-alias set ripgrep aqua:BurntSushi/ripgrep
+```
+
+Make node@project mean node@20
+
+```
 mise tool-alias set node project 20
 ```
 

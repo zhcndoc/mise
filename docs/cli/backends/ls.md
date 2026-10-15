@@ -12,16 +12,17 @@ description: "列出内置后端"
 
 列出内置后端
 
-## 标志
-- **`-h --help`** — 打印帮助
+Backends that plugins add are listed by `mise plugins ls`.
+
+## Flags
+- **`-h --help`** — Print help
 
 ## 示例
 
-已安装插件的可用性和内置后端是两个独立的列表
+List the backends built into mise
 
 ```
 mise backends ls
-mise plugins ls
 ```
 
 <!-- generated reference navigation -->

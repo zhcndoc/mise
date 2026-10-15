@@ -1,12 +1,30 @@
 ---
-description: "管理系统文件和目录，包括需要 root 权限的路径。"
-socialDescription: "管理系统文件和目录，包括需要 root 权限的路径。"
+description: "Write system files and directories with exact content, owner, group, and mode, using sudo only where a change needs it."
+socialDescription: "Write system files and directories with exact content, owner, group, and mode."
 ---
 
 # 系统文件和目录
 
-`[bootstrap.files]` 和 `[bootstrap.directories]` 以声明方式管理可能需要 root
-权限的绝对路径。它们与管理用户主目录中文件的 `[dotfiles]` 相互独立。
+Use `[bootstrap.files]` and `[bootstrap.directories]` for paths that need
+specific content, an owner, a group, or a mode, such as configuration under
+`/etc` or a service's data directory. mise creates, updates, or removes each
+declared path and uses `sudo` only for the changes that need it.
+
+Both sections can also write files in your home directory. Use
+[`[dotfiles]`](/dotfiles.html) for files you edit and keep in a dotfiles
+repository, since mise can link them and save your edits back. Use
+`[bootstrap.files]` for files outside your home directory, files that need a
+particular owner or group, and files that should reload a service when they
+change.
+
+These sections work on Linux and macOS. On Windows, any entry that applies
+makes `mise bootstrap`, `mise bootstrap plan`, and
+[`mise bootstrap files`](/cli/bootstrap/files.html) fail, so give entries in a
+shared config an [`os` selector](#choose-platforms) such as `unix`.
+
+<a id="choose-platforms"></a>
+
+## Example
 
 ```toml
 [bootstrap.directories."/opt/example"]
@@ -21,19 +39,79 @@ group = "root"
 mode = "0644"
 ```
 
-在应用此示例之前，请在声明配置旁创建 `files/example.conf`。源文件由 mise
-读取；`/etc/example.conf` 是其目标路径。对于包含凭据的文件模板，请使用
-`"0600"` 模式，并设置仅允许目标服务账户或 root 读取的所有权。
+Create `files/example.conf` next to this `mise.toml`, then preview and apply
+with [`mise bootstrap files apply`](/cli/bootstrap/files/apply.html):
 
-文件内容可以来自 `source` 或内联的 `content`。相对源路径相对于声明它们的配置文件解析，以 `~/` 开头的源路径则相对于用户的主目录解析。文件最多只能声明一个内容源；如果文件没有内容源，则只管理其[权限](#permissions-without-content)。目标必须是绝对路径或以 `~/` 开头（它会解析为用户的主目录），并且 mise 拒绝管理 `/` 本身。
+```sh
+mise bootstrap files apply --dry-run
+mise bootstrap files apply
+```
 
-目录创建使用 `mkdir -p` 语义，因此会自动创建缺失的父目录。配置的所有权和模式应用于声明的目录；隐式创建的父目录使用操作系统默认值。当父目录需要特定的所有权或权限时，请单独声明它。
+mise creates `/opt/example`, copies the source to `/etc/example.conf`, and sets
+the declared owner, group, and mode on both. Because the entries name an owner,
+both changes need root, and mise runs them through `sudo`. The full
+[`mise bootstrap`](/bootstrap.html) applies these sections too.
 
-默认情况下，节点类型错误的目标会被报告为 `unknown`，apply 会拒绝销毁它。为该文件或目录设置 `replace = true`，即可替换冲突的类型。将目录替换为文件时，只会删除空目录；递归销毁仍需要显式声明一个包含 `recursive = true` 的 `state = "absent"` 目录。
+## Set a file's content
 
-设置 `template = true`，使用 mise 的模板引擎渲染文件内容。此设置是显式的，因此字面形式的 <span v-pre>`{{ ... }}`</span> 内容默认保持不变。模板可以使用已配置的 `vars`、声明配置所在的目录 <span v-pre>`{{ config_root }}`</span>，以及目标路径 <span v-pre>`{{ target }}`</span>。模板可以使用 <span v-pre>`{{ secret(name="logical_name") }}`</span> 获取已声明的 [bootstrap secret input](/bootstrap/secrets.html)。密钥值绝不会包含在计划、试运行描述、状态输出或特权辅助程序输出中。
+Content comes from `source`, a file mise reads, or from inline `content`. A
+file can use one of them, not both:
 
-`template = true` 旁设置 `remove_empty = true`，可以在模板渲染为空或仅包含空白时移除目标。这让同一个声明可以根据 `vars` 或环境变量切换文件的启用状态：
+```toml
+[bootstrap.files."/etc/sysctl.d/90-inotify.conf"]
+content = """
+fs.inotify.max_user_watches = 524288
+"""
+```
+
+A relative `source` is resolved from the directory that contains the declaring
+config file, and a `source` that starts with `~/` from your home directory.
+
+Targets must be absolute paths or start with `~/`. mise refuses to manage `/`
+itself. A file without `source` or `content` manages only its
+[permissions](#permissions-without-content).
+
+### Render content as a template
+
+Set `template = true` to render the content with mise's
+[template engine](/templates.html). Without it, a literal
+<code v-pre>{{ ... }}</code> in the content is written unchanged.
+
+```toml
+[vars]
+cache_dir = "/var/cache/example"
+
+[bootstrap.files."/etc/example.conf"]
+template = true
+content = """
+cache_dir = {{ vars.cache_dir }}
+written_to = {{ target }}
+"""
+```
+
+A file template can use `vars`, `env`, <code v-pre>{{ target }}</code> (the
+destination path), and <code v-pre>{{ config_root }}</code>. Here
+`config_root` is the directory that contains the declaring config file, for
+example `.mise/` for `.mise/config.toml` or `~/.config/mise` for the global
+config. This differs from [systemd units](/bootstrap/systemd.html),
+[LaunchAgents](/bootstrap/launchd.html), and
+[Compose projects](/bootstrap/compose.html), where `config_root` is the
+config's root: the project directory, or `MISE_GLOBAL_CONFIG_ROOT` (default
+`$HOME`) for the global config.
+
+A template can read a declared [secret input](/bootstrap/secrets.html) with
+<code v-pre>{{ secret(name="api_token") }}</code>. Secret values never appear
+in plans, dry runs, status output, or the output of mise's privileged helper.
+For a file that contains credentials, set `mode = "0600"` and an owner that
+only the service account or root can read. See
+[templates in bootstrap](/bootstrap.html#templates) for which bootstrap values
+are templates and where `exec()` works.
+
+### Remove the file when a template renders empty
+
+Set `remove_empty = true` with `template = true` to delete the target whenever
+the template renders to nothing but whitespace. One declaration can then turn a
+file on and off:
 
 ```toml
 [vars]
@@ -47,15 +125,61 @@ content = """
 {% endif %}"""
 ```
 
-设置 `proxy_host` 后，mise 会写入该文件。将其设为 `""` 后，下一次 apply 会移除 `/etc/apt/apt.conf.d/95proxy`；计划会将移除显示为 `absent (template rendered empty)`，并像其他移除一样触发 `notify` 服务。与 `state = "absent"` 一样，目标为目录时仍会拒绝操作。当模板所需的密钥不可用时，mise 无法判断模板是否为空，因此绝不会移除文件：status 会报告未检查，apply 则像其他模板一样失败。没有 `template = true` 的文件以及 `state = "absent"` 的文件不能使用 `remove_empty`。为便于验证，文件声明的状态仍为 present，因此其父目录必须允许创建 present 文件。
+With `proxy_host` set, mise writes the file. Set it to `""` and the next apply
+removes it: the plan shows `absent (template rendered empty)`, and `notify`
+fires as for any other change. mise still refuses to remove a directory at the
+target. If a secret the template uses is unavailable, mise cannot tell whether
+the template is empty, so status reports the file as `unknown` (not inspected),
+mise leaves the file in place, and apply fails. The entry is still validated as
+a present file, so its parent cannot be a directory declared absent.
 
-mise 会在应用更改之前比较内容、类型、模式、所有者和组。写入操作会先在目标目录中使用临时文件，然后执行原子重命名。系统首先尝试以当前用户身份进行更改。如果文件系统因权限错误拒绝某项操作，mise 会重试该操作，并在一次特权批处理中继续执行其余有序更改。因此，用户可写的目标不需要 `sudo`。如果当前用户无法检查目标或搜索其某个父目录，mise 会在一次特权批处理中比较其元数据和内容。计划和文件内容会通过标准输入发送给范围严格限定的 mise 辅助程序，因此文件内容不会出现在进程参数或日志中。
+## Create directories
 
-mise 如何解析文件路径取决于执行更改的用户。当前用户可以执行的更改会以该用户身份进行，父目录中的符号链接也会像它们打开的其他路径一样跟随，因此当 `~/.ssh` 是符号链接时，`~/.ssh/config` 仍然有效。以 root 身份执行的更改（例如声明了 `owner` 或 `group`，或写入用户无法修改的目录）会逐级解析父目录，然后相对于打开的目录检查、写入、重命名或移除文件。root 所有且其他用户不可写的目录中的符号链接会被跟随，macOS 上的 `/etc` 就是这种情况。其他符号链接父目录都会被拒绝，因为能够写入该目录的用户可能将 root 的更改重定向到 `/etc/shadow` 等文件。当 mise 自身以 root 身份运行时，每个文件都会以这种方式检查和更改。status 和 dry-run 会将此类文件报告为 `unknown`，并标出它跨越的符号链接；apply 也会因相同原因失败。请改为声明解析后的路径。
+A declared directory is created with any missing parents, like `mkdir -p`. The
+declared owner, group, and mode apply only to the declared directory; parents
+that mise creates on the way get the operating system defaults. Declare a
+parent separately when it needs its own owner or mode.
+
+Files are different: mise does not create a missing parent directory for a
+`[bootstrap.files]` target. Status and plan still show `create`, but apply
+fails because the parent does not exist. When the parent might not exist yet,
+declare it in `[bootstrap.directories]`, which creates any missing parents as
+well. mise creates declared directories before the files inside them.
 
 ## 无内容时管理权限
 
-省略 `source` 和 `content`，即可在由软件包、安装程序或用户等其他机制管理内容时，管理文件的模式、所有者或组：
+Set `os` on a file or directory to manage it only on matching machines. It
+takes one selector or a list. A selector is an operating system (`linux`,
+`macos`, or `windows`), or `unix` for every platform except Windows, optionally
+followed by an architecture, such as `linux/x64` or `macos/arm64`. It uses the
+same names as [OS-specific tools](/dev-tools/#os-specific-tools), so aliases
+such as `darwin`, `win`, and `aarch64` also work.
+
+```toml
+[bootstrap.files."/etc/docker/daemon.json"]
+os = "linux"
+source = "./files/docker-daemon.json"
+
+[bootstrap.directories."~/.colima/default"]
+os = "macos"
+
+[bootstrap.files."~/.colima/default/colima.yaml"]
+os = "macos"
+source = "./files/colima.yaml"
+```
+
+The Colima file declares its parent directory because `~/.colima/default` does
+not exist until Colima has run once.
+
+An entry whose selectors do not match the machine is skipped as if it were not
+declared: apply, status, and dry run ignore it, and mise does not touch the
+target.
+
+## Manage permissions only {#permissions-without-content}
+
+Leave out `source` and `content` to manage a file's mode, owner, or group while
+something else manages what it contains, such as a package, an installer, or
+you:
 
 ```toml
 [bootstrap.files."/etc/ssh/sshd_config"]
@@ -63,22 +187,38 @@ mode = "0600"
 owner = "root"
 ```
 
-至少声明 `mode`、`owner` 或 `group` 之一。只会比较和更改已声明的字段：未声明 `mode` 时保留现有模式，而不是重置为 `0644`。mise 会原地更改现有文件，因此其内容和 inode 不变，硬链接和打开的句柄仍指向它。更改所有者或组可能像 `chown` 一样清除 setuid 和 setgid 位；请声明 `mode` 以保留它们。
+Declare at least one of `mode`, `owner`, or `group`. mise compares and changes
+only the declared fields: without `mode`, the mode stays as it is rather than
+being reset to `0644`. The file is changed in place, so its content and inode
+are untouched, and hard links and open handles keep pointing at it. Changing
+the owner or group can clear setuid and setgid bits, as `chown` does; declare
+`mode` to keep them.
 
 这些条目绝不会创建、替换或移除文件：
 
-- 目标缺失时会显示警告并跳过，apply 仍然成功。
-- 符号链接、目录或其他非普通文件会报告为 `unknown`；apply 会发出警告并保持不变。更改通过不跟随符号链接打开的句柄进行，因此不会落到符号链接的目标上。在 Linux 和 macOS 上，即使无法读取文件，其所有者仍可以无需 `sudo` 更改模式；其他 Unix 系统可能会通过 `sudo` 重试。
-- `template`、`remove_empty` 和 `replace` 需要 `source` 或 `content`，在此处会被拒绝。
-- `mise bootstrap unapply` 会保留文件，因为 mise 从未管理其内容。
+- A missing target is skipped with a warning, and apply still succeeds.
+- A symlink, directory, or other non-regular file is reported as `unknown`, and
+  apply warns and leaves it alone. mise opens the file without following
+  symlinks, so a change never lands on a symlink's target.
+- `template`, `remove_empty`, and `replace` need `source` or `content`, so they
+  are rejected here.
+- [`mise bootstrap unapply`](/cli/bootstrap/unapply.html) keeps the file,
+  because mise never managed its content.
 
 当 mise 更改文件权限时会触发 `notify`。
 
-当前用户拥有的文件会以该用户身份更改模式；声明了 `owner` 或 `group`，或更改其他用户文件的模式时，会以 root 身份执行。父目录按照上文解析，但当 root 将跨越不受信任的符号链接时，apply 会发出警告并保持文件不变，而不是失败。
+A mode change to a file you own runs as you. A declared `owner` or `group`, or
+a mode change to another user's file, runs as root. On Linux and macOS, the
+owner of a file can change its mode without `sudo` even when they cannot read
+it; other Unix systems may retry that change through `sudo`. Where root would
+cross an untrusted symlink, as described in
+[How mise applies changes](#how-mise-applies-changes), apply warns and leaves a
+permissions-only file unchanged instead of failing.
 
-## 软件包之前的文件
+## Run files before packages {#files-before-packages}
 
-在软件包管理器需要的文件和目录上设置 `phase = "pre-packages"`，例如仓库定义和签名密钥：
+Set `phase = "pre-packages"` on files and directories the package manager
+needs, such as repository definitions and signing keys:
 
 ```toml
 [bootstrap.directories."/etc/apt/keyrings"]
@@ -97,50 +237,74 @@ phase = "pre-packages"
 "apt:vendor-tool" = "latest"
 ```
 
-在源文件中提供供应商的密钥和仓库定义。应用文件后运行
-`mise bootstrap --update`，以刷新软件包元数据；更改仓库文件不会自动刷新元数据。
+Put the vendor's key and repository definition in the source files. Changing
+repository files does not refresh package metadata, so run
+`mise bootstrap --update` to refresh it in the same run. For apt,
+[`[bootstrap.apt.sources]`](/bootstrap/packages/apt.html#sources) downloads and
+checks the key itself and refreshes the lists when a source changes. For dnf,
+[`[bootstrap.dnf.repos]`](/bootstrap/packages/dnf.html#copr) enables COPR
+repositories.
 
-早期文件会在账户和软件包管理器插件之后、`pre-packages` hook 之前运行。默认阶段为 `"post-packages"`，这会使文件位于内置软件包安装之后。每个文件在每次 bootstrap 运行中应用一次。两个阶段的服务通知都会为服务步骤收集。
+`mise bootstrap` applies files with `phase = "pre-packages"` after accounts and
+package manager plugins and before the `pre-packages` hook. Files with the
+default phase, `"post-packages"`, are applied after built-in package
+installation. Each file is applied once per run.
 
-声明的父目录必须不晚于其子项创建，并且不得早于其子项移除。冲突的阶段声明会在 bootstrap 更改之前导致验证失败。当早期文件需要声明的父目录时，将其阶段设置为
-`"pre-packages"`。
+A declared parent directory must be created no later than its children and
+removed no earlier than them, so a `pre-packages` file inside a declared
+directory needs that directory in the `pre-packages` phase too. Conflicting
+phases fail validation before bootstrap changes anything.
 
-`mise bootstrap files apply` 仍会应用所有已声明的文件和目录。
-`mise bootstrap --only files` 会运行两个文件阶段；`--skip files` 会跳过两个阶段。
-`--only packages` 不会应用文件。计划会包含每个文件的阶段。
+`mise bootstrap --only files` runs both phases and `--skip files` skips both.
+`--only packages` does not apply files. `mise bootstrap files apply` applies
+every file and directory regardless of phase. Plans show each entry's phase.
 
-## 选择平台
+## Restart a service after a change
 
-在文件或目录上设置 `os`，即可仅在匹配的机器上管理它。它可以是单个值或列表，使用与
-[`[bootstrap.packages]`](/bootstrap/packages/#choose-platforms)相同的名称和别名，例如
-`linux`、`macos`、`windows`、`unix`、`linux/x64` 和 `macos/arm64`。
+Add `notify` to a file or directory to reload or restart
+[system services](/bootstrap/services.html#system-services) when mise changes
+it:
 
 ```toml
 [bootstrap.files."/etc/docker/daemon.json"]
-os = "linux"
-source = "./files/docker-daemon.json"
+content = '{ "log-driver": "local" }'
+notify = ["docker"]
 
-[bootstrap.files."~/.colima/default/colima.yaml"]
-os = "macos"
-source = "./files/colima.yaml"
+[bootstrap.services.docker]
+state = "running"
 ```
 
-选择器与当前机器不匹配的条目会像未声明一样跳过：apply、status 和 dry-run 都会忽略它，
-mise 不会删除或触碰目标。
+Each name must be a system service declared in `[bootstrap.services]`; a user
+service or an undeclared name fails validation before anything changes. The
+service's `on_change` setting chooses whether to reload, restart, or do
+nothing, and a service declared `state = "stopped"` is never started by a
+notification.
 
-## 预览和检查
+Notifications run only after a change succeeds. `mise bootstrap` collects them
+from both file phases and runs them in its services step.
+`mise bootstrap files apply` runs them right after its own changes; it also
+offers any other pending changes to declared system services, behind a separate
+prompt that `--yes` answers. `mise bootstrap services apply` does not run
+notifications, because it makes no file changes to react to.
+`mise bootstrap status` and `mise bootstrap plan` show the reloads and restarts
+that pending file changes would cause.
 
-```sh
-mise bootstrap files status --json
-mise bootstrap files apply --dry-run
-```
+## How configs combine
 
-在应用之前检查源路径、所有权、模式以及任何 `unknown` 状态。
-检查可能需要提升权限才能读取受保护的目标。缺失的源必须在配置检出目录中修复；更改目标权限不会提供该源。
+Entries merge by target path across the
+[config hierarchy](/configuration.html#configuration-hierarchy). When several
+config files declare the same path, the most local declaration is used as a
+whole; mise does not merge keys across files. Within one file, two keys that
+resolve to the same path, such as `"~/.oldrc"` and `"/home/you/.oldrc"`, are
+an error.
 
-## 移除资源
+A path cannot be declared as both a file and a directory, and a path declared
+present cannot sit inside a directory declared absent.
 
-移除始终是显式的：
+## Remove files and directories {#removing-resources}
+
+Deleting a declaration leaves its target in place. To remove a path, declare it
+absent:
 
 ```toml
 [bootstrap.files."/etc/obsolete.conf"]
@@ -148,40 +312,126 @@ state = "absent"
 
 [bootstrap.directories."/opt/obsolete"]
 state = "absent"
-```
 
-主目录中的目标也以相同方式工作，这对于移除旧设置创建的文件很有用：
-
-```toml
 [bootstrap.files."~/.oldrc"]
 state = "absent"
 ```
 
-无论内容如何，状态为 absent 的文件都会被移除；文件消失后再次应用不会产生任何更改。移除主目录中由你拥有的文件时无需 `sudo`。
+An absent file is removed whatever its content, and once it is gone, applying
+again changes nothing. A file you own in your home directory is removed without
+`sudo`.
 
-目录在移除前必须为空。递归删除目录需要额外设置 `recursive = true`，并会在计划中显示为破坏性操作。
+A directory must be empty before mise removes it; apply fails otherwise. To
+delete a directory and everything in it, add `recursive = true`. The dry run
+shows this as `remove directory <path> recursively`, and mise runs it through
+`sudo` so that an unreadable entry cannot stop it halfway.
 
-从配置中移除声明不会移除其目标。
+To remove the files and directories a [machine module](/bootstrap/modules.html)
+contributed, run `mise bootstrap unapply <env>` before you delete its
+declarations. See
+[Remove a module's resources](/bootstrap/modules.html#remove-a-module-s-resources).
 
-## 命令
+## Preview and apply
 
 ```sh
-mise bootstrap files status
-mise bootstrap files status --json
-mise bootstrap files apply --dry-run
-mise bootstrap files apply --yes
+mise bootstrap files status            # state of each declared path
+mise bootstrap files status --json     # the same, with origin details
+mise bootstrap files status --missing  # exit 1 if anything would change
+mise bootstrap files apply --dry-run   # print the changes without making them
+mise bootstrap files apply             # apply after a confirmation prompt
+mise bootstrap files apply --yes       # apply without prompting
 ```
 
-文件和目录发生更改后，可能会通知已配置的 `[bootstrap.services]`：
+Status lists each path as `create`, `update`, `remove`, `unchanged`, or
+`unknown`, with its current and desired state and the config that declared it.
+`unknown` means mise cannot change the path safely: it has the wrong type, it
+crosses an untrusted symlink, or it cannot be read. The status line says why,
+and apply refuses it. Status may use `sudo` to read protected targets.
 
-```toml
-[bootstrap.files."/etc/example/config.toml"]
-content = "enabled = true"
-notify = ["example"]
-```
+`--prompt-secrets` on `status` and `apply` prompts for missing
+[secret inputs](/bootstrap/secrets.html) instead of failing.
+`mise bootstrap plan` orders each file after its managed parent directory, and
+removes children before their parents.
 
-在所有受管理的文件完成收敛后，完整的 `mise bootstrap` 流程会应用通知。专用的 `mise bootstrap files apply` 命令也会在文件更改成功后运行处理程序。`mise bootstrap services apply` 仅收敛生命周期状态，并且绝不会在产生因果关系的文件更改之前触发处理程序。
+## How mise applies changes
 
-`mise bootstrap plan` 会包含这些资源，并自动将受管理的文件排列在其受管理的父目录之后。移除操作会反转这一依赖关系，因此会先移除子项，再移除其父项。
+mise compares content, type, mode, owner, and group, and changes only what
+differs. A file is written to a temporary file in the target directory and then
+renamed over the target, so readers never see a partial file.
 
-`mise bootstrap plan`、`mise bootstrap status` 和 `mise bootstrap files status` 的 JSON 输出包含受管理文件和目录的 `origin` 对象。该对象会标识声明配置、该配置的 `config_root`、由其文件名编码的任何配置环境，以及文件使用 `source` 时解析后的源路径。路径有效 UTF-8 时会作为普通字符串输出。在 Unix 上，包含非 UTF-8 字节的路径会使用 `mise:path-bytes:<base64url>`，从而确保来源信息无损。
+Each change runs as you when it can, so paths you can write need no `sudo`.
+When the filesystem refuses a change with a permission error, mise retries it
+and the remaining changes in one batch through `sudo`. Some changes always use
+`sudo`: a declared `owner` or `group`, replacing a path of another type, and
+recursive removal. If you cannot read a target or search one of its parent
+directories, mise inspects it through `sudo` too. File content reaches the
+elevated helper on standard input, never on its command line. Set
+[`system_packages.sudo = false`](/configuration/settings.html#system_packages.sudo)
+to forbid elevation; changes that need root then fail unless mise already runs
+as root.
+
+When a change runs as you, symlinked parent directories are followed like any
+other path, so `~/.ssh/config` works when `~/.ssh` is a symlink. When a change
+runs as root, mise resolves the parent directories one at a time. It follows a
+symlink only inside a directory that root owns and no other user can write, as
+`/etc` is on macOS. Any other symlinked parent is refused, because a user who
+controls it could redirect root's write to a file such as `/etc/shadow`.
+Status and dry run report such a target as `unknown` with the symlink it
+crosses, and apply fails. Declare the resolved path instead. When mise itself
+runs as root, every change is handled this way.
+
+A target of the wrong type, such as a directory where a file is declared, is
+reported as `unknown`, and apply leaves it alone. Set `replace = true` to
+replace it. A file replaces only an empty directory; to delete a directory with
+contents, declare it absent with `recursive = true`.
+
+## Reference
+
+| Key            | Applies to  | Values                                                                      | Default                                                   |
+| -------------- | ----------- | --------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `source`       | files       | Path to read the content from                                               |                                                           |
+| `content`      | files       | Inline content                                                              |                                                           |
+| `template`     | files       | `true` renders the content as a template                                    | `false`                                                   |
+| `remove_empty` | files       | `true` removes the target when the template renders empty; needs `template` | `false`                                                   |
+| `owner`        | both        | User name                                                                   | Not managed                                               |
+| `group`        | both        | Group name                                                                  | Not managed                                               |
+| `mode`         | both        | Octal string, such as `"0640"`                                              | `"0644"` for files with content, `"0755"` for directories |
+| `state`        | both        | `"present"` or `"absent"`                                                   | `"present"`                                               |
+| `recursive`    | directories | `true` deletes contents; only with `state = "absent"`                       | `false`                                                   |
+| `replace`      | both        | `true` replaces a path of another type                                      | `false`                                                   |
+| `phase`        | both        | `"pre-packages"` or `"post-packages"`                                       | `"post-packages"`                                         |
+| `os`           | both        | Selector or list of selectors                                               | Every platform                                            |
+| `notify`       | both        | Names of system services in `[bootstrap.services]`                          | `[]`                                                      |
+
+An absent file cannot set `source`, `content`, or `remove_empty`. A file
+without `source` or `content` that sets no `mode`, `owner`, or `group` is an
+error.
+
+### JSON output
+
+The JSON output from `mise bootstrap plan`, `mise bootstrap status`, and
+[`mise bootstrap files status`](/cli/bootstrap/files/status.html) includes an
+`origin` object for each file and directory. It names the declaring config,
+that config's `config_root`, any
+[config environment](/configuration/environments.html) in its file name, and
+the resolved source path when the file uses `source`. Paths are plain strings
+when they are valid UTF-8. On Unix, a path that contains other bytes is written
+as `mise:path-bytes:<base64url>`, so no information is lost.
+
+## Troubleshooting
+
+| Problem                                                  | What to do                                                                                                                           |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Apply fails because a file's parent does not exist       | Declare the parent in `[bootstrap.directories]`; see [Create directories](#create-directories)                                       |
+| A path shows as `unknown`                                | Read the reason in `mise bootstrap files status`. Set `replace = true` for a wrong type, or declare the resolved path past a symlink |
+| A change that needs root fails without a terminal        | mise uses `sudo` there only when it needs no password. Run mise as root, allow passwordless `sudo`, or apply interactively           |
+| An entry is missing from status                          | Its `os` selector does not match this machine                                                                                        |
+| Bootstrap fails on Windows with "only supported on Unix" | Add `os = "unix"` to entries in configs that Windows machines load                                                                   |
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where files fall in the run
+  order.
+- [Secret inputs](/bootstrap/secrets.html) for credentials in file templates.
+- [Services](/bootstrap/services.html#system-services) for the services that
+  `notify` reloads.

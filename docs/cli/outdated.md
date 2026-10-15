@@ -11,52 +11,81 @@ description: "显示过期的工具版本"
 
 显示过期的工具版本
 
-请参阅 `mise upgrade` 以升级这些版本。
+Lists tools whose installed version is older than the newest version their
+config request allows. For `node = "20"`, that is the newest 20.x release;
+pass `--bump` to compare against the newest release overall instead. Run
+`mise upgrade` to install the newer versions.
 
-## 参数
-- **`[TOOL@VERSION]…`** — 要显示过期版本的工具
-  例如：node@20 python@3.10
-  如果未指定，将显示全局和本地配置中的所有工具
+## Arguments
+- **`[TOOL@VERSION]…`** — Tools to check, such as `node@20 python@3.10`
 
-## 标志
-- **`-b --bump`** — 与可用的最新版本进行比较，而不仅仅是与当前配置匹配的版本进行比较
+  Checks every tool in the global and project configs when omitted.
 
-  例如，如果配置中有 `node = "20"`，`mise outdated` 通常只会报告更新的 20.x 版本。使用此标志后，它会报告整体最新版本，例如 22.x。
-- **`-J --json`** — 以 JSON 格式输出
-- **`--inactive`** — 显示过期的工具，包括已安装但未激活且不在当前配置中的工具
+## Flags
+- **`-b --bump`** — Compare against the newest release overall, not only the configured range
 
-  默认情况下，`mise outdated` 只显示来自当前配置的工具。
-- **`--local`** — 仅显示本地配置文件中定义的过期工具
+  With `node = "20"` in your config, `mise outdated` reports the newest 20.x release. With this flag the `latest` column shows the newest release overall, such as 24.1.0, and a `bump` column shows the request `mise upgrade --bump` would write, such as `24`.
+- **`-J --json`** — Output in JSON format
+- **`--inactive`** — Also check installed tools that the current config does not request
 
-  这将仅显示项目本地 mise.toml 中定义的工具，并跳过全局配置（~/.config/mise/config.toml）中定义的工具。
-- **`--monorepo`** — 为未来的 monorepo 过期检查预留；`mise outdated --monorepo` 尚未实现。
-- **`--no-header`** — 不显示表头
-- **`-h --help`** — 输出帮助信息
+  By default, `mise outdated` checks only tools that come from the current config.
+- **`--global`** — Only check tools defined in the global config
+
+  Reports the requests in the global and system config (~/.config/mise/config.toml, /etc/mise/config.toml), even where a project config or a `MISE_<TOOL>_VERSION` environment variable sets its own version of the tool: what `mise upgrade --global` would install.
+- **`--local`** — Only check tools defined in project config files
+
+  Skips tools defined in the global config (~/.config/mise/config.toml) and tools set through `MISE_<TOOL>_VERSION` environment variables.
+- **`--no-header`** — Do not print the table header
+- **`-h --help`** — Print help
 
 ## 示例
 
-```
-mise outdated
-Plugin  Requested  Current  Latest
-python  3.11       3.11.0   3.11.1
-node    20         20.0.0   20.1.0
-```
+Show tools with a newer version inside their configured range
 
 ```
-mise outdated node
-Plugin  Requested  Current  Latest
-node    20         20.0.0   20.1.0
+mise outdated
+name    requested  current  latest  source
+node    20         20.0.0   20.1.0  ~/src/app/mise.toml
+python  3.11       3.11.0   3.11.1  ~/src/app/mise.toml
 ```
+
+Compare against the newest release overall and show the request for it
+
+```
+mise outdated --bump
+name  requested  current  bump  latest  source
+node  20         20.0.0   24    24.1.0  ~/src/app/mise.toml
+```
+
+Print the same information as JSON
 
 ```
 mise outdated --json
-{"python": {"requested": "3.11", "current": "3.11.0", "latest": "3.11.1"}, ...}
+{
+  "node": {
+    "name": "node",
+    "requested": "20",
+    "current": "20.0.0",
+    "bump": null,
+    "latest": "20.1.0",
+    "source": {
+      "type": "mise.toml",
+      "path": "/home/me/src/app/mise.toml"
+    }
+  }
+}
 ```
+
+Skip tools that only the global config requests
 
 ```
 mise outdated --local
-Plugin  Requested  Current  Latest
-node    20         20.0.0   20.1.0
+```
+
+Check the global config's request for claude, even inside a project that sets its own
+
+```
+mise outdated --global claude --json
 ```
 
 弃用：
@@ -67,6 +96,6 @@ node    20         20.0.0   20.1.0
 
 ## 相关文档
 
-- [升级工具](/dev-tools/)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Upgrading tools](/dev-tools/#upgrade-tools).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

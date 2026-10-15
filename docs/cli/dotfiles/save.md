@@ -11,25 +11,56 @@ description: "立即保存已跟踪文件的检查点"
 
 立即保存已跟踪文件的检查点
 
-当历史记录无法保存或请求的路径未被跟踪时失败，因此脚本或代理可以获得可信的结果；如果没有发现任何更改，保存操作将以无操作方式成功。`--best-effort` 会将保存错误转换为警告，以便 `set -e` 更新脚本继续运行。
+Exits non-zero when history cannot save or a named path is not tracked. With no changes since the latest checkpoint, nothing is saved unless you pass `--description`, `--label`, `--task`, or a `--trigger` other than `save`.
+
+`--best-effort` turns a failure to write the checkpoint, such as missing Git, into a warning for update scripts that run under `set -e`. A disabled history or an untracked path still fails.
+
+A save re-encrypts the files it captures to the current `[history.encryption] recipients`. `--re-encrypt` also re-encrypts the encrypted files it does not capture: files with `autosave = false` that it does not name, and variants for other platforms. It re-encrypts their saved versions and saves no unsaved edit. Run it after changing recipients so a machine added to the list can read every file. This machine must be able to unlock each one; otherwise nothing is saved and the error lists each file it cannot unlock.
 
 ## 参数
 - **`[PATH]`…** — 要保存的路径；每个路径都必须已被跟踪
 
-## 标志
-- **`-d --description <TEXT>`** — 检查点的描述
-- **`--trigger <TRIGGER>`** — 保存的触发者：save（默认）、agent 或 update
+## Flags
+- **`-d --description <TEXT>`** — A description for the checkpoint
+- **`--trigger <TRIGGER>`** — Record the checkpoint as a save, agent, or update checkpoint
 
-  **默认值：** `save`
-- **`--task <ID>`** — 代理正在处理的任务
-- **`--label <LABEL>`** — 用于之后查找检查点的标签
-- **`--best-effort`** — 当历史记录无法保存时发出警告而不是失败
-- **`-h --help`** — 打印帮助
+  **Default:** `save`
+- **`--task <ID>`** — The ID of the task an agent is working on, recorded with the checkpoint
+- **`--label <LABEL>`** — A label to find the checkpoint by later
+- **`--best-effort`** — Warn instead of failing when the checkpoint cannot be written
+- **`--re-encrypt`** — Re-encrypt every saved encrypted file to the current recipients
+- **`-h --help`** — Print help
+
+## Examples
+
+Save every tracked file that changed
+
+```
+mise dot save
+```
+
+Save one file with a description
+
+```
+mise dot save ~/.zshrc -d "before the theme change"
+```
+
+Warn instead of failing in a script
+
+```
+mise dot save --best-effort
+```
+
+Re-encrypt every encrypted file after changing recipients
+
+```
+mise dot save --re-encrypt
+```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

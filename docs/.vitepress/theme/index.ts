@@ -1,20 +1,42 @@
 import type { Theme } from "vitepress";
 import DefaultTheme from "vitepress/theme";
 import { enhanceAppWithTabs } from "vitepress-plugin-tabs/client";
-// import { initBanner } from "./banner";
+import { initBanner } from "./banner";
 import "virtual:group-icons.css";
 import "./custom.css";
 import "./landing.css";
 import Layout from "./Layout.vue";
-import { onMounted, onUnmounted } from "vue";
+import { nextTick, onMounted, onUnmounted } from "vue";
+import { anchorRedirectTarget } from "../redirects.mjs";
 import { data as starsData } from "../stars.data";
+
+// A link to a section that moved to another page lands on the old page with a
+// hash that matches nothing there; send the reader to the section's new home.
+async function followMovedSection() {
+  const { pathname, hash } = window.location;
+  if (!hash) return;
+  let id = hash.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // Keep the raw id.
+  }
+  if (document.getElementById(id)) return;
+  const { anchorRedirects } = await import("../anchor-redirects.mjs");
+  // The reader may have navigated while the map loaded.
+  if (window.location.pathname !== pathname || window.location.hash !== hash) {
+    return;
+  }
+  const target = anchorRedirectTarget(pathname, hash, anchorRedirects);
+  if (target) window.location.replace(target);
+}
 
 export default {
   extends: DefaultTheme,
   Layout,
   enhanceApp({ app, router }) {
     enhanceAppWithTabs(app);
-    // initBanner();
+    initBanner();
 
     const onBeforeRouteChange = router.onBeforeRouteChange;
     router.onBeforeRouteChange = async (to) => {
@@ -33,10 +55,20 @@ export default {
       }
       return onBeforeRouteChange?.(to);
     };
+
+    const onAfterRouteChange = router.onAfterRouteChange;
+    router.onAfterRouteChange = async (to) => {
+      await onAfterRouteChange?.(to);
+      if (typeof window === "undefined") return;
+      await nextTick();
+      await followMovedSection();
+    };
   },
   setup() {
     let observer: MutationObserver | undefined;
     onMounted(() => {
+      void followMovedSection();
+
       // The nav bar renders the GitHub link twice: inline, and inside the "..."
       // overflow menu that replaces it below 1280px. Both need their own badge.
       const addStarCount = () => {
@@ -49,7 +81,7 @@ export default {
           if (githubLink.querySelector(".star-count")) return;
           const starBadge = document.createElement("span");
           starBadge.className = "star-count";
-          starBadge.title = "GitHub 星标数";
+          starBadge.title = "GitHub Stars";
           const glyph = document.createElement("span");
           glyph.className = "star-glyph";
           glyph.textContent = "★";

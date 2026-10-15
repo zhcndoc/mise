@@ -1,5 +1,6 @@
 ---
-description: "mise 每个版本的时间线，包含每个版本的变更数量和已解决问题数。"
+description: "Browse every mise release with its number of changes and the issues resolved since September 2026, and learn how version numbers work."
+socialDescription: "Browse every mise release and learn how mise version numbers work."
 editLink: false
 ---
 
@@ -10,12 +11,35 @@ import Releases from '@jdxcode/docs-releases/Releases.vue';
 import { data } from './releases.data';
 </script>
 
-mise 几乎每天都会发布一个版本。下面的每个柱条代表一个版本，最早的在左侧，高度表示该版本
-[changelog](https://github.com/jdx/mise/blob/main/CHANGELOG.md) 中的变更数量。将鼠标悬停在柱条上或聚焦柱条
-即可阅读其内容；点击柱条或列表中的任何版本，即可打开该版本的说明。这些说明是随版本在
-[GitHub](https://github.com/jdx/mise/releases) 上发布的说明。
+mise ships several releases a week. To update, run `mise self-update` or use the
+package manager that installed mise; see
+[Updating mise](/installing-mise.html#updating).
 
-一次变更对应一条 changelog 条目：功能、修复、注册表新增、依赖项更新等。新贡献者致谢和 mise 所供应的
-上游 Aqua 注册表更新不计入其中。
+## Release timeline {#timeline}
+
+Each bar is one release, oldest on the left. Click a bar or a release in the
+list to read its notes.
 
 <Releases :data="data" />
+
+## Version numbers {#versioning}
+
+mise uses calendar versions in the form `YEAR.MONTH.RELEASE`, such as
+`2026.9.1`. The last number counts releases within the month, starting at 0;
+it is not the day of the month.
+
+The numbers say nothing about compatibility, so do not read the first number as
+a SemVer major version. New features can arrive behind settings such as
+`experimental = true`. A feature that is going away prints a deprecation
+warning that names the mise version that removes it, normally 12 months after
+the warning starts. The [release notes](https://github.com/jdx/mise/releases)
+describe each change in behavior. To require a minimum mise version for a
+project, set [`min_version`](/configuration.html#minimum-mise-version) in its
+`mise.toml`.
+
+## What the counts include {#counts}
+
+A change is one entry in the
+[changelog](https://github.com/jdx/mise/blob/main/CHANGELOG.md): a feature, fix,
+registry addition, or dependency update. The count leaves out the New
+Contributors section and updates to the aqua registry that mise bundles.

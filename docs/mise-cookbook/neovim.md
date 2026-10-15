@@ -1,10 +1,13 @@
 ---
-description: "高亮嵌入 mise.toml 中的脚本和文件任务中的元数据，然后通过 otter.nvim 添加语言服务器功能。"
+description: "Highlight scripts embedded in mise.toml and metadata in file tasks, then add language-server features with otter.nvim."
+socialDescription: "Highlight mise task scripts in Neovim and add language-server features with otter.nvim."
 ---
 
-# Neovim 使用手册
+# Neovim
 
-高亮嵌入 `mise.toml` 中的脚本和文件任务中的元数据，然后通过 otter.nvim 添加语言服务器功能。这些示例用于配置编辑器；不会改变 mise 执行任务的方式。
+Highlight the scripts embedded in `mise.toml` and the metadata comments in file
+tasks with Treesitter, then add language-server features to embedded scripts
+with otter.nvim.
 
 添加查询之前，请安装 `toml`、`bash` 以及你使用的任何注入语言的 Treesitter 解析器（例如用于 `#USAGE` 的 `kdl`）。通过你的 Neovim 配置启用 Treesitter 高亮。查询文件本身不会安装解析器或启动高亮；请参阅 [Neovim 的 Treesitter 文档](https://neovim.io/doc/user/treesitter.html)。
 
@@ -12,9 +15,13 @@ description: "高亮嵌入 mise.toml 中的脚本和文件任务中的元数据�
 
 ## 语法高亮
 
+<a id="run-commands"></a>
+
 ### 运行命令
 
-使用 [Treesitter](https://github.com/nvim-treesitter/nvim-treesitter) 为 mise 文件运行命令中的代码启用语法高亮。示例请见图片左侧：
+Use [Treesitter](https://github.com/nvim-treesitter/nvim-treesitter) to highlight
+the code in the `run` commands of your mise files. The screenshot shows the
+result:
 
 ![运行命令语法高亮演示](./run-cmd-syntax-hl.png)
 
@@ -65,9 +72,10 @@ description: "高亮嵌入 mise.toml 中的脚本和文件任务中的元数据�
 )
 ```
 
-`is-mise?` 谓词会将高亮限制在 mise 文件中，而不是所有 TOML 文件中。如果你不需要这种区分，请删除包含 `(#is-mise?)` 的行。否则，请确保也在 Neovim 配置中的某处定义该谓词。
-
-例如，使用 [`lazy.nvim`](https://github.com/folke/lazy.nvim)：
+The `is-mise?` predicate restricts the highlighting to mise files instead of all
+TOML files. If you do not need this distinction, remove the lines containing
+`(#is-mise?)`. Otherwise, define the predicate in your Neovim config, for
+example with [`lazy.nvim`](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -92,9 +100,10 @@ description: "高亮嵌入 mise.toml 中的脚本和文件任务中的元数据�
 
 shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取出的名称必须与已安装的 Treesitter 语言匹配；`env -S uv run` 之类的包装器以及 `python3` 之类的带版本名称需要自定义映射或查询。Bash 回退只控制高亮；mise 实际使用的默认 shell 在 [TOML tasks](/tasks/toml-tasks.html#shell-shebang) 中有说明。
 
-### 文件任务中的 MISE 和 USAGE 注释
+### `#MISE` and `#USAGE` comments in file tasks {#mise-and-usage-comments-in-file-tasks}
 
-你也可以使用 Treesitter 为文件任务中的 `#MISE` 和 `#USAGE` 注释启用语法高亮。示例请见图片左侧：
+Treesitter can also highlight the `#MISE` and `#USAGE` comments in file tasks.
+The screenshot shows the result:
 
 ![USAGE 规范语法高亮演示](./usage-spec-syntax-hl.png)
 
@@ -106,8 +115,9 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
 ; ============================================================================
 ; #MISE 注释 - TOML 注入
 ; ============================================================================
-; 此注入捕获以 "#MISE "、"#[MISE]" 或
-; "# [MISE]" 开头的注释行，并将它们作为 TOML 代码块进行语法高亮。
+; This injection captures comment lines starting with "#MISE ", "# MISE ",
+; "#[MISE] " or "# [MISE] " and treats them as TOML code blocks for syntax
+; highlighting.
 ;
 ; #MISE 格式
 ; (#offset!) 指令会从源码中跳过 "#MISE " 前缀（6 个字符）
@@ -116,7 +126,13 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
   (#offset! @injection.content 0 6 0 1)
   (#set! injection.language "toml"))
 
-; #[MISE] 格式
+; # MISE format
+((comment) @injection.content
+  (#lua-match? @injection.content "^# MISE ")
+  (#offset! @injection.content 0 7 0 1)
+  (#set! injection.language "toml"))
+
+; #[MISE] format
 ((comment) @injection.content
   (#lua-match? @injection.content "^#%[MISE%] ")
   (#offset! @injection.content 0 8 0 1)
@@ -131,9 +147,9 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
 ; ============================================================================
 ; #USAGE 注释 - KDL 注入
 ; ============================================================================
-; 此注入捕获以 "#USAGE "、"#[USAGE]" 或
-; "# [USAGE]" 开头的连续注释行，并将它们作为一个单独的 KDL 代码块
-; 进行语法高亮。
+; This injection captures consecutive comment lines starting with "#USAGE ",
+; "# USAGE ", "#[USAGE] " or "# [USAGE] " and treats them as a single KDL code
+; block for syntax highlighting.
 ;
 ; #USAGE 格式
 ((comment) @injection.content
@@ -144,7 +160,14 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
   (#set! injection.combined)
   (#set! injection.language "kdl"))
 
-; #[USAGE] 格式
+; # USAGE format
+((comment) @injection.content
+  (#lua-match? @injection.content "^# USAGE ")
+  (#offset! @injection.content 0 8 0 1)
+  (#set! injection.combined)
+  (#set! injection.language "kdl"))
+
+; #[USAGE] format
 ((comment) @injection.content
   (#lua-match? @injection.content "^#%[USAGE%] ")
   (#offset! @injection.content 0 9 0 1)
@@ -157,28 +180,34 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
   (#offset! @injection.content 0 10 0 1)
   (#set! injection.combined)
   (#set! injection.language "kdl"))
-
-; 注意：在 neovim >= 0.12 中，你可以使用多节点模式来代替
-; 合并注入：
-;
-; ((comment)+ @injection.content
-;   (#lua-match? @injection.content "^#USAGE ")
-;   (#offset! @injection.content 0 7 0 1)
-;   (#set! injection.language "kdl"))
-;
-; 这是更推荐的方式，因为合并注入有多个
-; 限制：
-; https://github.com/neovim/neovim/issues/32635
 ```
 
-这些查询也可以用于其他将 `#` 注释表示为 `comment` 节点的语法。使用 `:InspectTree` 检查解析器中的节点名称。由于 Treesitter 注入是按语言分别处理的，因此你需要将相同的查询添加到每种语言的查询文件中。例如，将它们放入 `after/queries/python/injections.scm`，即可为 `Python`（以及 `bash`）启用这些查询。
+These combined injections work on Neovim 0.11 and 0.12. Neovim 0.12 also accepts
+a multi-node pattern, `((comment)+ @injection.content ...)`, without
+`injection.combined`. That pattern requires every comment in a run of
+consecutive comments to match, so it does not highlight a `#USAGE` block that
+directly follows the shebang or a `#MISE` line, and Neovim 0.11 and earlier
+reject it with an `#offset!` error.
 
-对于使用 `//` 作为注释分隔符的语言，请对查询进行少量调整：
+The same queries work with other grammars that represent `#` comments as
+`comment` nodes. Use `:InspectTree` to check the node names in your parser.
+Treesitter injections are per language, so add the queries to each language's
+query file. For example, put them in `after/queries/python/injections.scm` to
+enable them for Python as well as Bash.
+
+For languages with `//` comments, such as JavaScript, create
+`after/queries/javascript/injections.scm` with:
 
 ```query
+; extends
+
 ((comment) @injection.content
   (#lua-match? @injection.content "^//MISE ")
   (#offset! @injection.content 0 7 0 1)
+  (#set! injection.language "toml"))
+((comment) @injection.content
+  (#lua-match? @injection.content "^// MISE ")
+  (#offset! @injection.content 0 8 0 1)
   (#set! injection.language "toml"))
 ((comment) @injection.content
   (#lua-match? @injection.content "^//%[MISE%] ")
@@ -194,6 +223,11 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
   (#set! injection.combined)
   (#set! injection.language "kdl"))
 ((comment) @injection.content
+  (#lua-match? @injection.content "^// USAGE ")
+  (#offset! @injection.content 0 9 0 1)
+  (#set! injection.combined)
+  (#set! injection.language "kdl"))
+((comment) @injection.content
   (#lua-match? @injection.content "^//%[USAGE%] ")
   (#offset! @injection.content 0 10 0 1)
   (#set! injection.combined)
@@ -205,11 +239,17 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
   (#set! injection.language "kdl"))
 ```
 
-## 为 run commands 中的嵌入语言启用 LSP
+Keep the `; extends` line. Without it, Neovim uses only the first
+`injections.scm` on `runtimepath`, and `after/` directories come last, so your
+file is ignored whenever Neovim or a plugin already provides injections for that
+language. To replace the bundled queries instead, put the file in
+`~/.config/nvim/queries/<lang>/` (not `after/`) and leave out `; extends`.
 
-使用 [`otter.nvim`](https://github.com/jmbuhr/otter.nvim) 为你的 mise 文件中嵌入的代码启用 LSP 功能和代码补全。
+## Add LSP features to embedded scripts {#enable-lsp-for-embedded-lang-in-run-commands}
 
-同样使用 [`lazy.nvim`](https://github.com/folke/lazy.nvim)：
+Use [`otter.nvim`](https://github.com/jmbuhr/otter.nvim) to enable LSP features
+and code completion for code embedded in your mise files. With
+[`lazy.nvim`](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -229,7 +269,14 @@ shebang 查询会处理直接解释器路径和 `/usr/bin/env <name>`。提取�
 },
 ```
 
-这要求同时具备[injection queries](#run-commands)以及为每种嵌入语言配置好的语言服务器。otter.nvim 会创建嵌入缓冲区并转发请求；它不会安装语言服务器。请参阅 [otter.nvim 的设置指南](https://github.com/jmbuhr/otter.nvim#how-do-i-use-otternvim)。
+This activates otter in every TOML buffer. To limit it to mise files, check the
+buffer name with the same patterns as the `is-mise?` predicate before calling
+`activate()`.
+
+otter.nvim needs both the [injection queries](#run-commands) and a configured
+language server for each embedded language. It creates the embedded buffers and
+routes requests; it does not install the language servers. See
+[otter.nvim's setup guide](https://github.com/jmbuhr/otter.nvim#how-do-i-use-otternvim).
 
 ## 故障排除
 

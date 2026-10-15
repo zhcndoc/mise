@@ -12,14 +12,19 @@ description: "管理配置文件"
 
 管理配置文件。
 
-## 标志
-- **`--truncate`** — 截断较长的终端输出，以适应可用宽度
+With no subcommand, lists the config files mise loads, from lowest to highest precedence, like `mise config ls`; the flags below apply to that listing.
 
-  **默认值：** `true`
-- **`-J --json`** — 以 JSON 格式输出
-- **`--no-header`** — 不打印表头
-- **`--tracked-configs`** — 列出所有已跟踪的配置文件
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--truncate`** — Truncate long terminal output to fit the available width
+
+  **Default:** `true`
+- **`-J --json`** — Output in JSON format
+- **`--no-header`** — Do not print the table header
+- **`--tracked-configs`** — List every config file mise has loaded, in any project
+
+  mise remembers the config files it loads so `mise prune` keeps the versions
+  they use.
+- **`-h --help`** — Print help
 
 ## 子命令
 

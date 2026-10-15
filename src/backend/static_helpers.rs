@@ -6,7 +6,7 @@ use crate::http::HTTP;
 use crate::toolset::ToolVersion;
 use crate::toolset::ToolVersionOptions;
 use crate::ui::progress_report::SingleReport;
-use eyre::{Result, bail};
+use eyre::{Result, WrapErr, bail};
 use indexmap::IndexSet;
 use reqwest::header::HeaderMap;
 use std::path::Path;
@@ -610,7 +610,12 @@ pub(crate) fn template_string_for_target(
     render_template(
         template,
         &tv.version,
-        crate::tera::get_tera_for_target(None, target.os_name(), target.arch_name()),
+        crate::tera::get_tera_for_target(
+            None,
+            target.os_name(),
+            target.arch_name(),
+            target.qualifier(),
+        ),
     )
 }
 
@@ -676,9 +681,39 @@ pub fn get_filename_from_url(url_str: &str) -> String {
             .unwrap_or(url_str)
             .to_string()
     };
-    urlencoding::decode(&filename)
-        .map(|s| s.to_string())
-        .unwrap_or(filename)
+    // Callers join this under a download directory. Decoding can turn `%2F` or
+    // `%2E%2E` into path syntax, so an unusable result keeps the encoded name,
+    // which stays a single inert component (as brew casks do). A raw name that
+    // would itself leave the directory, such as a literal `C:x` on Windows, is
+    // not used at all.
+    match urlencoding::decode(&filename) {
+        Ok(decoded) if !is_unusable_file_name(&decoded) => decoded.into_owned(),
+        _ if !escapes_directory(&filename) => filename,
+        _ => "download".to_string(),
+    }
+}
+
+/// Whether `name` joined under a directory would name something other than a
+/// file in it. On Windows a `:` makes it a drive or a stream.
+fn escapes_directory(name: &str) -> bool {
+    name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\0'])
+        || (cfg!(windows) && name.contains(['\\', ':']))
+}
+
+/// Whether `name` cannot stand as a single path component under a directory.
+/// The Windows-only rules are path syntax there and ordinary names elsewhere.
+fn is_unusable_file_name(name: &str) -> bool {
+    if escapes_directory(name) {
+        return true;
+    }
+    cfg!(windows)
+        && (name.ends_with([' ', '.'])
+            || name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*')))
 }
 
 /// Whether anything describes what is inside the archive.
@@ -932,6 +967,36 @@ fn make_configured_bin_executable(search_dir: &Path, bin_name: &str) -> Result<(
     Ok(())
 }
 
+/// The checksum the lockfile records for this platform, if the entry describes
+/// the download of `url`. It names a kept download that can be reused, and is
+/// still checked after the download. An entry written for another URL, such as
+/// before a setting changed where the tool is fetched from, pins nothing.
+pub(crate) fn lock_checksum(
+    tv: &crate::toolset::ToolVersion,
+    platform_key: &str,
+    url: &str,
+) -> Option<String> {
+    let info = tv.lock_platforms.get(platform_key)?;
+    if info.url.as_deref().is_some_and(|locked| locked != url) {
+        return None;
+    }
+    info.checksum.clone()
+}
+
+/// The checksum a tool pinned for this platform, in its options or in the
+/// lockfile.
+pub(crate) fn pinned_checksum(
+    tv: &crate::toolset::ToolVersion,
+    platform_key: &str,
+    opts: &crate::toolset::ToolVersionOptions,
+) -> Option<String> {
+    lookup_with_fallback(opts, "checksum").or_else(|| {
+        tv.lock_platforms
+            .get(platform_key)
+            .and_then(|platform| platform.checksum.clone())
+    })
+}
+
 pub(crate) fn verify_artifact(
     _tv: &crate::toolset::ToolVersion,
     file_path: &Path,
@@ -949,7 +1014,9 @@ pub(crate) fn verify_artifact(
     let size_str = lookup_with_fallback(opts, "size");
 
     if let Some(size_str) = size_str {
-        let expected_size: u64 = size_str.parse()?;
+        let expected_size: u64 = size_str
+            .parse()
+            .wrap_err_with(|| format!("invalid size option: {size_str}"))?;
         let actual_size = file_path.metadata()?.len();
         if actual_size != expected_size {
             bail!(
@@ -1998,7 +2065,35 @@ mod tests {
             ("https://example.com/muse.tar.gz?token=value", "muse.tar.gz"),
             ("https://example.com/my%20tool.zip", "my tool.zip"),
             ("tool.tar.gz", "tool.tar.gz"),
+            // Decoding that would leave the download directory keeps the
+            // encoded segment, which is a single inert path component.
+            (
+                "https://example.com/tool%2F..%2Fpwned.tar.gz",
+                "tool%2F..%2Fpwned.tar.gz",
+            ),
+            // A URL parser drops an encoded dot segment itself; a bare name does not.
+            ("%2E%2E", "%2E%2E"),
+            ("https://example.com/pkg%00x.tar.gz", "pkg%00x.tar.gz"),
+            (
+                "https://example.com/We%2DAre%2DThe%2DChampions.zip",
+                "We-Are-The-Champions.zip",
+            ),
         ] {
+            assert_eq!(get_filename_from_url(url), expected, "{url}");
+        }
+        // A raw name that would itself leave the directory is not used.
+        assert_eq!(get_filename_from_url(".."), "download");
+        // `:` is path syntax only on Windows, where a literal one would name a
+        // drive and discard the download directory when joined.
+        for (url, windows, elsewhere) in [
+            (
+                "https://example.com/C%3Atool.zip",
+                "C%3Atool.zip",
+                "C:tool.zip",
+            ),
+            ("https://example.com/C:payload", "download", "C:payload"),
+        ] {
+            let expected = if cfg!(windows) { windows } else { elsewhere };
             assert_eq!(get_filename_from_url(url), expected, "{url}");
         }
     }
@@ -2622,6 +2717,37 @@ size = "5120"
         // since the function should handle missing platform-specific values gracefully
         assert!(checksum.is_some());
         assert!(size.is_some());
+    }
+
+    #[test]
+    fn test_verify_artifact_checks_size_without_a_checksum() {
+        let backend = crate::backend::gem::GemBackend::from_arg("gem:rubocop".into());
+        let tv = test_tool_version(&backend, "1.0.0", &[]);
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("tool.tar.gz");
+        std::fs::write(&file_path, b"12345").unwrap();
+        let size_opts = |size: &str| {
+            let mut opts = ToolVersionOptions::default();
+            opts.opts
+                .insert("size".to_string(), toml::Value::String(size.to_string()));
+            opts
+        };
+
+        let err = verify_artifact(&tv, &file_path, &size_opts("4"), None)
+            .expect_err("a size mismatch must fail even without a checksum");
+        assert!(
+            err.to_string().contains("Size mismatch"),
+            "unexpected error: {err}"
+        );
+
+        let err = verify_artifact(&tv, &file_path, &size_opts("big"), None)
+            .expect_err("a non-numeric size must fail");
+        assert!(
+            err.to_string().contains("invalid size option: big"),
+            "unexpected error: {err}"
+        );
+
+        verify_artifact(&tv, &file_path, &size_opts("5"), None).unwrap();
     }
 
     #[test]

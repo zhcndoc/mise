@@ -20,7 +20,9 @@ use std::{borrow::Cow, sync::Arc};
 
 pub(crate) use crate::hook_env::HookReason;
 
-/// [internal] called by activate hook to update env vars directory change
+/// [internal] Update the environment at each prompt
+///
+/// The shell hook that `mise activate` installs runs this command.
 #[derive(Debug, usage_rs::Args)]
 #[usage(hide = true)]
 pub(crate) struct HookEnv {
@@ -68,6 +70,7 @@ impl HookEnv {
             .build(&config)
             .await?;
         time!("hook-env");
+        super::tool_update::update_in_background(&config, &ts);
 
         // Try to use cached watch_files for early exit check if env_cache is enabled
         // This avoids executing plugins just to get watch_files

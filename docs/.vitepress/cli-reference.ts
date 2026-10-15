@@ -1,8 +1,15 @@
 // Add mise-specific website navigation after usage generates docs/cli.
 // Command prose, arguments, flags, and visibility still come from mise.usage.kdl.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pageDescription } from "./social-descriptions.mjs";
 
@@ -19,146 +26,203 @@ const navigationMarker = "<!-- generated reference navigation -->";
 
 // Longest matching command path wins; descendants share their resource's guide.
 const guides: Record<string, [string, string]> = {
-  activate: ["Shell activation", "/getting-started.html#activate-mise"],
-  deactivate: ["Shell activation", "/getting-started.html#activate-mise"],
-  en: ["Shell activation", "/getting-started.html#activate-mise"],
-  shell: ["Shell activation", "/getting-started.html#activate-mise"],
-  completion: ["Shell completions", "/dev-tools/packslip-resources.html"],
-  "shell-alias": ["Shell aliases", "/shell-aliases.html"],
-  env: ["Environment variables", "/environments/"],
-  set: ["Environment variables", "/environments/"],
-  unset: ["Environment variables", "/environments/"],
-  exec: ["Running tools", "/dev-tools/"],
-  installs: ["Install layout", "/dev-tools/install-layout.html"],
-  backends: ["Choosing backends", "/dev-tools/backends/"],
-  config: ["Configuration", "/configuration.html"],
-  edit: ["Configuration", "/configuration.html"],
-  fmt: ["Configuration", "/configuration.html"],
-  settings: ["Settings reference", "/configuration/settings.html"],
-  "tool-alias": ["Tool version aliases", "/dev-tools/aliases.html"],
-  bootstrap: ["Bootstrap workflow", "/bootstrap.html"],
-  "bootstrap accounts": ["Users and groups", "/bootstrap/accounts.html"],
-  "bootstrap compose": ["Compose projects", "/bootstrap/compose.html"],
-  "bootstrap dotfiles": ["Dotfile ownership and modes", "/dotfiles.html"],
-  "bootstrap files": [
-    "Privileged files and directories",
-    "/bootstrap/files.html",
+  "bootstrap unapply": [
+    "移除模块",
+    "/bootstrap/modules.html#remove-a-module-s-resources",
   ],
-  "bootstrap firewall": ["Host firewall", "/bootstrap/firewall.html"],
-  "bootstrap launchd": ["LaunchAgents", "/bootstrap/launchd.html"],
-  "bootstrap linux": ["systemd user units", "/bootstrap/systemd.html"],
-  "bootstrap macos": ["macOS defaults", "/bootstrap/macos-defaults.html"],
+  "bootstrap status": [
+    "检查初始化状态",
+    "/bootstrap.html#inspecting-state",
+  ],
+  "bootstrap plan": [
+    "预览初始化",
+    "/bootstrap.html#plan-declarative-resources",
+  ],
+  "plugins ls": ["安装插件", "/plugins.html#installing-plugins"],
+  "plugins uninstall": ["移除插件", "/plugins.html#remove-plugins"],
+  "plugins update": ["更新插件", "/plugins.html#update-plugins"],
+  "plugins install": ["安装插件", "/plugins.html#installing-plugins"],
+  activate: ["Shell 设置", "/shell-setup.html"],
+  deactivate: ["Shell 设置", "/shell-setup.html"],
+  en: ["Shell 设置", "/shell-setup.html"],
+  shell: ["Shell 设置", "/shell-setup.html"],
+  completion: ["Shell 补全", "/shell-setup.html#autocompletion"],
+  "shell-alias": ["Shell 别名", "/shell-aliases.html"],
+  vars: ["配置变量", "/configuration/vars.html"],
+  env: ["环境变量", "/environments/"],
+  set: ["环境变量", "/environments/"],
+  unset: ["环境变量", "/environments/"],
+  exec: ["运行工具", "/dev-tools/"],
+  installs: ["身份安装布局", "/dev-tools/install-layout.html"],
+  backends: ["选择后端", "/dev-tools/backends/"],
+  config: ["配置", "/configuration.html"],
+  edit: ["配置", "/configuration.html"],
+  fmt: ["配置", "/configuration.html"],
+  settings: ["设置参考", "/configuration/settings.html"],
+  "tool-alias": ["工具版本别名", "/dev-tools/aliases.html"],
+  bootstrap: ["初始化工作流", "/bootstrap.html"],
+  "bootstrap accounts": ["Linux 用户和用户组", "/bootstrap/accounts.html"],
+  "bootstrap compose": ["Docker Compose 项目", "/bootstrap/compose.html"],
+  "bootstrap files": ["系统文件和目录", "/bootstrap/files.html"],
+  "bootstrap firewall": ["Linux 防火墙", "/bootstrap/firewall.html"],
+  "bootstrap linux": ["systemd 用户单元", "/bootstrap/systemd.html"],
+  "bootstrap macos": ["macOS 默认设置", "/bootstrap/macos-defaults.html"],
   "bootstrap macos launchd-agents": ["LaunchAgents", "/bootstrap/launchd.html"],
-  "bootstrap macos-defaults": [
-    "macOS defaults",
-    "/bootstrap/macos-defaults.html",
+  "bootstrap mise-shell-activate": [
+    "Shell 激活和登录 Shell",
+    "/bootstrap/shell.html",
   ],
-  "bootstrap mise-shell-activate": ["Shell setup", "/bootstrap/shell.html"],
-  "bootstrap packages": ["Host packages", "/bootstrap/packages/"],
+  "bootstrap packages": ["初始化软件包", "/bootstrap/packages/"],
   "bootstrap packages brew": [
-    "Homebrew packages and taps",
-    "/bootstrap/packages/brew.html",
+    "Homebrew 软件包和 tap",
+    "/bootstrap/packages/brew.html#third-party-taps",
   ],
-  "bootstrap plugins": ["Package plugins", "/bootstrap/packages/plugins.html"],
-  "bootstrap remote": ["Remote bootstrap", "/bootstrap/remote.html"],
-  "bootstrap repos": ["Repository checkouts", "/bootstrap/repos.html"],
-  "bootstrap secrets": ["Bootstrap secrets", "/bootstrap/secrets.html"],
-  "bootstrap services": ["System services", "/bootstrap/services.html"],
-  "bootstrap systemd": ["systemd user units", "/bootstrap/systemd.html"],
-  "bootstrap user": ["Current-user settings", "/bootstrap/user.html"],
-  cache: ["Cache behavior", "/cache-behavior.html"],
-  "cache task": ["Task output caching", "/tasks/caching.html"],
-  deps: ["Project dependencies", "/dev-tools/deps.html"],
-  doctor: ["Troubleshooting", "/troubleshooting.html"],
+  "bootstrap plugins": [
+    "软件包管理器插件",
+    "/bootstrap/packages/plugins.html",
+  ],
+  daemons: ["守护进程", "/daemons.html"],
+  "daemons providers": [
+    "在项目间共享守护进程",
+    "/daemons/sharing.html",
+  ],
+  dotfiles: ["点文件", "/dotfiles.html"],
+  "dotfiles history": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles save": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles rollback": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles undo": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles sync": ["在多台机器间同步", "/dotfiles/sync.html"],
+  "dotfiles pull": ["在多台机器间同步", "/dotfiles/sync.html"],
+  "dotfiles origin": ["在多台机器间同步", "/dotfiles/sync.html"],
+  "dotfiles conflicts": ["在多台机器间同步", "/dotfiles/sync.html"],
+  "dotfiles watch": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles notify": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles track": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles untrack": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles exclude": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles include": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles paths": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles capture": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles recover": ["点文件历史", "/dotfiles/history.html"],
+  secrets: ["fnox 密钥", "/environments/secrets/fnox.html"],
+  "generate task-stubs": [
+    "项目本地任务入口",
+    "/tips-and-tricks.html#bootstrap-script",
+  ],
+  "bootstrap remote": ["远程主机", "/bootstrap/remote.html"],
+  "bootstrap repos": ["Git 仓库", "/bootstrap/repos.html"],
+  "bootstrap secrets": ["机密输入", "/bootstrap/secrets.html"],
+  "bootstrap services": ["服务", "/bootstrap/services.html"],
+  "bootstrap user": [
+    "登录 Shell",
+    "/bootstrap/shell.html#set-your-login-shell",
+  ],
+  cache: ["缓存行为", "/cache-behavior.html"],
+  "cache task": ["任务缓存", "/tasks/caching.html"],
+  deps: ["项目依赖", "/dev-tools/deps.html"],
+  doctor: ["故障排除", "/troubleshooting.html"],
   "doctor project": [
-    "Project diagnostics",
+    "项目诊断",
     "/configuration/project-diagnostics.html",
   ],
-  generate: ["Tasks and automation", "/tasks/"],
-  "generate config": ["Configuration", "/configuration.html"],
-  "generate devcontainer": ["IDE integration", "/ide-integration.html"],
-  "generate github-action": [
-    "Continuous integration",
-    "/continuous-integration.html",
+  generate: ["任务和自动化", "/tasks/"],
+  "generate config": ["配置", "/configuration.html"],
+  "generate devcontainer": [
+    "开发容器",
+    "/ide-integration.html#dev-containers",
   ],
-  "generate install-script": ["Project installation scripts", "/dev-tools/"],
-  "generate tool-stub": ["Portable tool stubs", "/dev-tools/tool-stubs.html"],
-  implode: ["Uninstalling mise", "/installing-mise.html"],
-  "install-into": ["Development tools", "/dev-tools/"],
-  install: ["Installing and selecting tools", "/dev-tools/"],
-  latest: ["Version requests", "/dev-tools/"],
-  link: ["Development tools", "/dev-tools/"],
-  lock: ["Lockfiles and strict installation", "/dev-tools/mise-lock.html"],
-  ls: ["Development tools", "/dev-tools/"],
-  "ls-remote": ["Version requests", "/dev-tools/"],
-  mcp: ["MCP integration", "/mcp.html"],
-  oci: ["Building and running OCI images", "/dev-tools/mise-oci.html"],
-  outdated: ["Upgrading tools", "/dev-tools/"],
-  packslip: ["Signer verification", "/dev-tools/packslip-verification.html"],
-  patrons: ["Supporting mise", "/about.html"],
-  plugins: ["Plugin selection and maintenance", "/plugin-usage.html"],
-  "plugins link": ["Developing tool plugins", "/tool-plugin-development.html"],
-  prune: ["Development tools", "/dev-tools/"],
-  registry: ["Registry and explicit backends", "/registry.html"],
-  reshim: ["Shims", "/dev-tools/shims.html"],
-  run: ["Running tasks", "/tasks/running-tasks.html"],
-  search: ["Registry and explicit backends", "/registry.html"],
-  "self-update": ["Installing and updating mise", "/installing-mise.html"],
+  "generate github-action": [
+    "持续集成",
+    "/continuous-integration.html#github-actions",
+  ],
+  "generate install-script": [
+    "项目安装脚本",
+    "/continuous-integration.html#bootstrapping",
+  ],
+  "generate tool-stub": ["可移植工具存根", "/dev-tools/tool-stubs.html"],
+  implode: ["卸载 mise", "/installing-mise.html#uninstalling"],
+  "install-into": ["开发工具", "/dev-tools/"],
+  install: ["安装和选择工具", "/dev-tools/"],
+  latest: ["版本请求", "/dev-tools/versions.html"],
+  link: ["开发工具", "/dev-tools/"],
+  lock: ["锁定文件和严格安装", "/dev-tools/mise-lock.html"],
+  ls: ["开发工具", "/dev-tools/"],
+  "ls-remote": ["版本请求", "/dev-tools/versions.html"],
+  mcp: ["AI 助手（MCP）", "/mcp.html"],
+  oci: ["OCI 镜像", "/dev-tools/mise-oci.html"],
+  outdated: ["升级工具", "/dev-tools/#upgrade-tools"],
+  packslip: ["签名者验证", "/dev-tools/packslip-verification.html"],
+  patrons: ["支持 mise", "/about.html#supporting-mise"],
+  plugins: ["插件", "/plugins.html"],
+  "plugins link": ["工具插件", "/tool-plugin-development.html"],
+  prune: ["移除工具", "/dev-tools/#remove-tools"],
+  registry: ["注册表和显式后端", "/registry.html"],
+  reshim: ["垫片", "/dev-tools/shims.html"],
+  run: ["运行任务", "/tasks/running-tasks.html"],
+  search: ["注册表和显式后端", "/registry.html"],
+  "self-update": ["更新 mise", "/installing-mise.html#updating"],
   skills: [
-    "Skills and other Packslip resources",
+    "技能和其他 Packslip 资源",
     "/dev-tools/packslip-resources.html",
   ],
-  sponsors: ["Supporting mise", "/about.html"],
-  ssh: ["Git provider authentication", "/dev-tools/github-tokens.html"],
-  sync: ["Development tools", "/dev-tools/"],
-  "sync node": ["Node.js", "/lang/node.html"],
-  "sync python": ["Python", "/lang/python.html"],
-  "sync ruby": ["Ruby", "/lang/ruby.html"],
-  tasks: ["Task configuration", "/tasks/task-configuration.html"],
-  "tasks add": ["TOML tasks", "/tasks/toml-tasks.html"],
-  "tasks deps": ["Task dependency graph", "/tasks/architecture.html"],
-  "tasks edit": ["File tasks", "/tasks/file-tasks.html"],
-  "tasks graph": ["Monorepo projects", "/tasks/monorepo.html"],
-  "tasks run": ["Running tasks", "/tasks/running-tasks.html"],
+  sponsors: ["支持 mise", "/about.html#supporting-mise"],
+  ssh: ["GitHub 中继", "/bootstrap/github-relay.html"],
+  sync: ["开发工具", "/dev-tools/"],
+  "sync node": [
+    "Node.js",
+    "/lang/node.html#migrating-from-nvm-nodenv-or-homebrew",
+  ],
+  "sync python": ["Python", "/lang/python.html#migrating-from-pyenv-or-uv"],
+  "sync ruby": ["Ruby", "/lang/ruby.html#migrating-from-other-ruby-managers"],
+  tasks: ["任务配置参考", "/tasks/task-configuration.html"],
+  "tasks add": ["TOML 任务", "/tasks/toml-tasks.html"],
+  "tasks deps": [
+    "依赖和执行顺序",
+    "/tasks/architecture.html",
+  ],
+  "tasks edit": ["文件任务", "/tasks/file-tasks.html"],
+  "tasks graph": ["工作区项目图", "/tasks/workspace-graph.html"],
+  "tasks run": ["运行任务", "/tasks/running-tasks.html"],
   "test-tool": [
-    "Contributing and registry tests",
-    "/contributing.html#tool-testing",
+    "测试注册表工具",
+    "/contributing/registry.html#tool-testing",
   ],
-  token: ["Git provider authentication", "/dev-tools/github-tokens.html"],
-  tool: ["Development tools", "/dev-tools/"],
-  "bin-paths": ["Shims and executable lookup", "/dev-tools/shims.html"],
-  "tool-stub": ["Portable tool stubs", "/dev-tools/tool-stubs.html"],
-  trust: ["Configuration trust", "/security.html"],
-  untrust: ["Configuration trust", "/security.html"],
-  uninstall: ["Development tools", "/dev-tools/"],
-  unuse: [
-    "Configuration write targets",
-    "/configuration.html#target-file-for-write-operations",
+  token: ["Git 提供商身份验证", "/dev-tools/github-tokens.html"],
+  tool: ["开发工具", "/dev-tools/"],
+  "bin-paths": ["垫片和可执行文件查找", "/dev-tools/shims.html"],
+  "tool-stub": ["可移植工具存根", "/dev-tools/tool-stubs.html"],
+  trust: ["配置信任", "/security.html#configuration-trust"],
+  untrust: ["配置信任", "/security.html#configuration-trust"],
+  uninstall: ["移除工具", "/dev-tools/#remove-tools"],
+  unuse: ["移除工具", "/dev-tools/#remove-tools"],
+  upgrade: ["升级工具", "/dev-tools/#upgrade-tools"],
+  use: ["安装和选择工具", "/dev-tools/"],
+  version: ["故障排除", "/troubleshooting.html"],
+  watch: [
+    "文件更改时重新运行任务",
+    "/tasks/running-tasks.html#rerun-tasks-when-files-change",
   ],
-  upgrade: ["Development tools", "/dev-tools/"],
-  use: ["Installing and selecting tools", "/dev-tools/"],
-  version: ["Troubleshooting", "/troubleshooting.html"],
-  watch: ["Watching tasks", "/tasks/running-tasks.html"],
-  where: ["Development tools", "/dev-tools/"],
-  which: ["Shims and executable lookup", "/dev-tools/shims.html"],
+  where: ["开发工具", "/dev-tools/"],
+  which: ["垫片和可执行文件查找", "/dev-tools/shims.html"],
 };
 
 const categories = [
   [
-    "Install and inspect tools",
+    "安装和检查工具",
     "use install install-into installs uninstall unuse upgrade outdated lock latest ls ls-remote tool where which bin-paths registry search backends link sync prune reshim tool-stub packslip",
   ],
   [
-    "Shell and environment",
-    "activate deactivate completion en env exec shell set unset shell-alias tool-alias ssh",
+    "Shell 和环境",
+    "activate deactivate completion en env exec shell set unset vars shell-alias tool-alias secrets token ssh",
   ],
-  ["Tasks and project automation", "run tasks watch deps generate"],
-  ["Machine setup and images", "bootstrap oci"],
+  ["任务和项目自动化", "run tasks watch deps daemons generate"],
+  ["机器设置和镜像", "bootstrap dotfiles oci"],
   [
-    "Configuration and diagnostics",
+    "配置和诊断",
     "config edit fmt settings trust untrust doctor cache version self-update implode",
   ],
-  ["Integrations and community", "mcp skills patrons sponsors"],
+  ["插件", "plugins test-tool"],
+  ["集成和社区", "mcp skills patrons sponsors"],
 ];
 
 export function commandIndex(root: Command): string {
@@ -168,7 +232,7 @@ export function commandIndex(root: Command): string {
   const sections: string[] = [];
   for (const [heading, names] of [
     ...categories,
-    ["Other commands", [...remaining.keys()].join(" ")],
+    ["其他命令", [...remaining.keys()].join(" ")],
   ]) {
     const rows: string[] = [];
     for (const name of names.split(" ")) {
@@ -176,12 +240,12 @@ export function commandIndex(root: Command): string {
       if (!cmd) continue;
       remaining.delete(name);
       rows.push(
-        `- [\`mise ${name}\`](/cli/${name}.html) — ${cmd.help ?? "Command reference"}`,
+        `- [\`mise ${name}\`](/cli/${name}.html) — ${cmd.help ?? "命令参考"}`,
       );
     }
     if (rows.length) sections.push(`### ${heading}\n\n${rows.join("\n")}`);
   }
-  return `## Subcommands\n\nChoose a command family below. Its page lists the available subcommands.\n\n${sections.join("\n\n")}`;
+  return `## 子命令\n\n请选择下面的命令类别。对应页面会列出可用的子命令。\n\n${sections.join("\n\n")}`;
 }
 
 export function replaceCommandIndex(page: string, index: string): string {
@@ -205,7 +269,7 @@ export function withCommandDescription(page: string, command: Command): string {
     {
       description: command.full_cmd.length
         ? command.help
-        : "Explore mise commands for managing tools, environments, tasks, and machine setup.",
+        : "探索用于管理工具、环境、任务和机器设置的 mise 命令。",
     },
     `CLI command ${command.full_cmd.join(" ") || "index"}`,
   );
@@ -214,6 +278,33 @@ export function withCommandDescription(page: string, command: Command): string {
     "",
   );
   return `---\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`;
+}
+
+/**
+ * Whether a command sits under a hidden command. usage still generates pages
+ * for the subcommands of a hidden command; they are only reachable through the
+ * hidden spelling, so the reference leaves them out.
+ */
+export function underHiddenCommand(
+  name: string,
+  commands: Map<string, Pick<Command, "hide">>,
+): boolean {
+  const parts = name ? name.split(" ") : [];
+  return parts
+    .slice(0, -1)
+    .some(
+      (_, i) => commands.get(parts.slice(0, i + 1).join(" "))?.hide === true,
+    );
+}
+
+/** Remove directories left empty under `dir`. */
+function removeEmptyDirs(dir: string) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const path = join(dir, entry.name);
+    removeEmptyDirs(path);
+    if (readdirSync(path).length === 0) rmdirSync(path);
+  }
 }
 
 function sourcePath(url: string): string {
@@ -253,6 +344,7 @@ function main() {
       throw new Error(`Missing guide: ${label} (${url})`);
   }
   let count = 0;
+  let removed = 0;
   for (const name of commands.keys()) {
     const file = resolve(
       docsDir,
@@ -260,13 +352,18 @@ function main() {
       name ? `${name.replaceAll(" ", "/")}.md` : "index.md",
     );
     if (!existsSync(file)) continue; // usage excludes hidden commands' own pages.
+    if (underHiddenCommand(name, commands)) {
+      rmSync(file);
+      removed++;
+      continue;
+    }
     let page = readFileSync(file, "utf8").split(navigationMarker)[0].trimEnd();
     if (name) {
       const parts = name.split(" ");
       let guide: [string, string] | undefined;
       for (let i = parts.length; i > 0 && !guide; i--)
         guide = guides[parts.slice(0, i).join(" ")];
-      guide ??= ["Getting started", "/getting-started.html"];
+      guide ??= ["入门指南", "/getting-started.html"];
       let parent = parts.slice(0, -1);
       while (
         parent.length &&
@@ -278,19 +375,7 @@ function main() {
       const parentLink = parent.length
         ? `[\`mise ${parentUsage}\`](/cli/${parent.join("/")}.html)`
         : "[All commands](/cli/)";
-      const hiddenParent = parts
-        .slice(0, -1)
-        .some((_, i) => commands.get(parts.slice(0, i + 1).join(" "))?.hide);
-      let compatibility = "";
-      if (hiddenParent) {
-        const canonical = name
-          .replace("bootstrap launchd", "bootstrap macos launchd-agents")
-          .replace("bootstrap systemd", "bootstrap linux systemd-units")
-          .replace("bootstrap macos-defaults", "bootstrap macos defaults");
-        if (canonical !== name && commands.has(canonical))
-          compatibility = `\nThis is a compatibility spelling. Use [\`mise ${commands.get(canonical)!.usage}\`](/cli/${canonical.replaceAll(" ", "/")}.html) in new scripts.\n`;
-      }
-      page += `\n\n${navigationMarker}\n${compatibility}\n## Related documentation\n\n- [${guide[0]}](${guide[1]}).\n- ${parentLink}.\n- [Global flags and argument syntax](/cli/#global-flags).\n`;
+      page += `\n\n${navigationMarker}\n\n## 相关文档\n\n- [${guide[0]}](${guide[1]})。\n- ${parentLink}。\n- [全局选项和参数语法](/cli/#global-flags)。\n`;
     } else {
       page = page.replace(
         /^(?:- )?\*\*Usage:\*\* `[^\n]+`/m,
@@ -300,11 +385,11 @@ function main() {
       page = replaceCommandIndex(page, commandIndex(root));
       page = page.replace(
         "## Arguments",
-        "Use `mise COMMAND --help` for the help shipped with your installed version. Put mise\nflags before a task name; arguments after the name are passed to that task.\nSquare brackets mark optional input, angle brackets mark required input, and `…`\nmeans the argument can repeat. Do not type those notation characters.\n\n## Arguments",
+        "请使用 `mise COMMAND --help` 查看当前安装版本附带的帮助。将 mise\n选项放在任务名称之前；名称之后的参数会传递给该任务。\n方括号表示可选输入，尖括号表示必需输入，`…`\n表示参数可以重复。不要输入这些表示法字符。\n\n## 参数",
       );
       page = page.replace(
         "## Global Flags",
-        "## Global Flags\n\nThese flags provide shared context. A command can define its own flag with the same\nname, so consult that command's page for placement and meaning. Effect labels describe\nthe command's intended operation; configuration evaluation, caches, and required tool\ninstallation can still have side effects. They are not sandbox guarantees.\n",
+        "## 全局选项\n\n这些选项提供共享上下文。命令可以定义同名的自有选项，因此请参考该命令的页面\n了解放置位置和含义。效果标签描述命令的预期操作；配置求值、缓存和所需工具\n安装仍可能产生副作用。它们不构成沙箱保证。\n",
       );
     }
     writeFileSync(
@@ -313,7 +398,10 @@ function main() {
     );
     count++;
   }
-  console.log(`Added reference navigation to ${count} CLI pages`);
+  removeEmptyDirs(resolve(docsDir, "cli"));
+  console.log(
+    `Added reference navigation to ${count} CLI pages; removed ${removed} under hidden commands`,
+  );
 }
 
 if (import.meta.main) main();

@@ -99,7 +99,7 @@ struct CacheKeyMaterial<'a> {
     task: &'a str,
     phase: crate::task::TaskRunPhase,
     run: &'a [RunEntry],
-    args: &'a [String],
+    args: Vec<String>,
     shell: &'a Option<String>,
     outputs: Vec<String>,
     root: PathBuf,
@@ -314,21 +314,29 @@ impl TaskArtifactCacheBuilder {
             inputs,
             output_roots,
         } = self;
+        // The encoded action is uploaded to remote caches, so env, var, and
+        // arg values enter it only as digests. Args can carry them too: dep
+        // args are rendered from templates such as `{{env.TOKEN}}`, and CLI
+        // args are whatever the user passed.
         let mut environment = declared_env
             .iter()
-            .map(|(key, _)| (key.clone(), resolved_env.get(key).cloned()))
+            .map(|(key, _)| (key.clone(), env_value_digest(resolved_env, key)))
             .collect::<BTreeMap<_, _>>();
         let cache_config = task.cache.as_ref().expect("cache must be configured");
         for key in &cache_config.env {
-            environment.insert(key.clone(), resolved_env.get(key).cloned());
+            environment.insert(key.clone(), env_value_digest(resolved_env, key));
         }
-        let vars = task
+        let vars: BTreeMap<String, String> = task
             .tera_ctx(config)
             .await?
             .get("vars")
             .map(|value| serde::Deserialize::deserialize(value.clone()))
             .transpose()?
             .unwrap_or_default();
+        let vars = vars
+            .into_iter()
+            .map(|(name, value)| (name, value_digest(&value)))
+            .collect();
         let mut tools = toolset
             .list_current_versions()
             .into_iter()
@@ -346,7 +354,7 @@ impl TaskArtifactCacheBuilder {
             task: &task.name,
             phase: task.run_phase,
             run: task.run(),
-            args: &task.args,
+            args: task.args.iter().map(|arg| value_digest(arg)).collect(),
             shell: &task.shell,
             outputs: task.outputs.patterns(),
             root: inputs.root_identity,
@@ -446,6 +454,16 @@ impl TaskArtifactCacheBuilder {
     }
 }
 
+/// Digest of an env, var, or arg value as recorded in the cache action, so the
+/// action changes with the value without carrying the value itself.
+fn value_digest(value: &str) -> String {
+    format!("blake3:{}", hash::hash_blake3_to_str(value))
+}
+
+fn env_value_digest(env: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    env.get(key).map(|value| value_digest(value))
+}
+
 pub(super) fn canonical_json(value: &serde_json::Value) -> Result<Vec<u8>> {
     fn write(value: &serde_json::Value, output: &mut Vec<u8>) -> Result<()> {
         match value {
@@ -522,6 +540,19 @@ impl TaskArtifactCache {
         .ok()?;
         self.store.touch(&self.key);
         Some(manifest.output)
+    }
+
+    /// Whether the outputs in the working tree were last produced or restored under this key.
+    /// Raw and interactive tasks store no artifact, so this marker is all they skip on.
+    pub(crate) fn is_current(&self) -> bool {
+        file::read_to_string(&self.state_path).is_ok_and(|key| key.trim() == self.key)
+    }
+
+    /// Forget which key produced the working tree outputs, before a run that may
+    /// change them and fail before marking its own key current. A marker that is
+    /// already gone, including one a concurrent `mise cache clear` removed, is fine.
+    pub(crate) fn clear_current(&self) -> Result<()> {
+        remove_cache_file(&self.state_path)
     }
 
     pub(crate) fn mark_current(&self) -> Result<()> {

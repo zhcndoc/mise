@@ -1,67 +1,83 @@
 ---
-description: "预设是你编写的用于创建项目初始配置的任务。"
+description: "Write a global mise task that adds tools and tasks to a new project, such as a Python and uv setup."
 ---
 
-# 预设
+# Project scaffolding tasks
 
-预设是你编写的用于创建项目初始配置的任务。将其存储为[全局文件任务](/tasks/file-tasks.html)，这样它就能在新仓库中使用。若要在现有项目中复用，[任务模板](/tasks/templates.html)可能更合适：它们可以共享任务定义，而不会生成文件。
+A scaffolding task is a [file task](/tasks/file-tasks.html) in your global
+config that sets up a project with `mise use` and `mise tasks add`. To share
+task definitions between existing projects without generating files, use
+[task templates](/tasks/templates.html).
 
-## Python 预设示例
-
-此 Bash 任务会将 Python 和 uv 配置写入你执行该任务的目录。它拒绝替换现有的 `mise.toml`，并将项目初始化和依赖安装保留为明确的后续步骤。
+## Scaffold a Python project {#example-python-preset}
 
 创建任务目录：
 
 ```sh
-mkdir -p ~/.config/mise/tasks/preset
+mkdir -p ~/.config/mise/tasks/scaffold
 ```
 
-然后将以下内容保存为 `~/.config/mise/tasks/preset/python`：
+File tasks in `~/.config/mise/tasks` are
+[global tasks](/tasks/task-discovery.html#global-tasks), available in every
+directory. Save this script as `~/.config/mise/tasks/scaffold/python`:
 
-```bash [~/.config/mise/tasks/preset/python]
+```bash [~/.config/mise/tasks/scaffold/python]
 #!/usr/bin/env bash
-#MISE description="Create a Python and uv project config"
+#MISE description="Add Python, uv and test tasks to the current project"
 #MISE dir="{{cwd}}"
+#USAGE arg "[version]" default="3.14" help="Python version"
 set -euo pipefail
 
-if [[ -e mise.toml ]]; then
-  echo "mise.toml already exists; merge the preset manually" >&2
-  exit 1
-fi
-
-cat > mise.toml <<'TOML'
-[tools]
-python = "3.12"
-uv = "latest"
-
-[tasks.sync]
-description = "Sync the project's locked dependencies"
-run = "uv sync --locked"
-
-[tasks.test]
-description = "Run tests from the project environment"
-run = "uv run --locked pytest"
-TOML
-
-echo "Created mise.toml"
+mise use "python@${usage_version}" uv@latest
+mise tasks add sync --description "Sync locked dependencies" -- uv sync --locked
+mise tasks add test --description "Run tests" -- uv run --locked pytest
 ```
 
-在 Unix 上使任务可执行：
+<span v-pre>`#MISE dir="{{cwd}}"`</span> makes the task run in the directory where you
+invoke it. Without it, a global task runs in your home directory, the global
+config root. The directory name becomes the task's namespace, so this file is
+the task `scaffold:python`, and the `#USAGE` line gives it an optional
+`version` argument that the script reads as `$usage_version`.
+
+Make the script executable:
 
 ```sh
-chmod +x ~/.config/mise/tasks/preset/python
+chmod +x ~/.config/mise/tasks/scaffold/python
 ```
 
-然后从空项目目录中运行它：
+## Use it in a new project
 
 ```sh
 mkdir my-project
 cd my-project
-mise run preset:python
+mise run scaffold:python
 mise exec -- uv init --bare
 mise exec -- uv add --dev pytest
 ```
 
-该预设会创建 `mise.toml`；uv 会创建项目清单和锁文件。添加应用程序和测试，然后运行 `mise run test`。队友克隆项目后可以运行 `mise run sync` 来安装已锁定的依赖。提交 `mise.toml`、`pyproject.toml` 和 `uv.lock`，并忽略 `.venv/`。
+`mise run scaffold:python 3.13` selects another Python version. The task
+installs Python and uv and writes this `mise.toml`:
 
-对于全局任务而言，`#MISE dir="{{cwd}}"` 很重要：它会让任务写入执行任务的目录，而不是全局任务的配置根目录。在配置已存在或使用其他包管理器的仓库中使用此脚本前，请先进行调整。
+```toml [mise.toml]
+[tools]
+python = "3.14"
+uv = "latest"
+
+[tasks.sync]
+description = "Sync locked dependencies"
+run = "uv sync --locked"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run --locked pytest"
+```
+
+uv then writes `pyproject.toml`, `uv.lock` and `.venv`. Add your code and tests,
+then run `mise run test`. After cloning, teammates run `mise run sync` to install
+the locked dependencies. Commit `mise.toml`, `pyproject.toml` and `uv.lock`, and
+add `.venv/` to `.gitignore`.
+
+In a project that already has a `mise.toml`, the task adds to it, but
+`mise tasks add` replaces a task with the same name and `mise use` replaces the
+existing `python` and `uv` versions. Run `mise tasks ls` first to check whether
+the project already defines `sync` or `test`.

@@ -1,35 +1,50 @@
 ---
-description: "核心工具已将安装逻辑内置于 mise。"
+description: "Install Node.js, Python, Go, Java and other languages with installers built into mise, no plugin needed."
 ---
 
-# 核心工具
+# Core tools overview
 
-核心工具已将安装逻辑内置于 mise。它们不需要单独安装插件。它们的语言指南会说明平台支持、编译选项、虚拟环境以及其他特定于运行时的行为。
-
-使用以下命令列出当前的核心条目：
+Core tools are languages whose installers are built into mise, so they need no
+plugin. Each guide covers platform support, how mise installs the language,
+version files, and language-specific options.
 
 ```sh
-mise registry -b core
+mise use node@24 python@3.14
 ```
 
-## 语言指南
+| Tool                        | Name in `mise.toml` | Version files (when [enabled](/dev-tools/versions.html#idiomatic-version-files)) |
+| --------------------------- | ------------------- | -------------------------------------------------------------------------------- |
+| [Bun](/lang/bun.html)       | `bun`               | `.bun-version`, `package.json`                                                   |
+| [Deno](/lang/deno.html)     | `deno`              | `.deno-version`, `package.json`                                                  |
+| [.NET](/lang/dotnet.html)   | `dotnet`            | `global.json`                                                                    |
+| [Elixir](/lang/elixir.html) | `elixir`            | `.exenv-version`                                                                 |
+| [Erlang](/lang/erlang.html) | `erlang`            |                                                                                  |
+| [Go](/lang/go.html)         | `go`                | `.go-version`, `go.mod`, `go.work`                                               |
+| [Java](/lang/java.html)     | `java`              | `.java-version`, `.sdkmanrc`                                                     |
+| [Node.js](/lang/node.html)  | `node`              | `.nvmrc`, `.node-version`, `package.json`                                        |
+| [Python](/lang/python.html) | `python`            | `.python-version`, `.python-versions`                                            |
+| [Ruby](/lang/ruby.html)     | `ruby`              | `.ruby-version`, `Gemfile`                                                       |
+| [Rust](/lang/rust.html)     | `rust`              | `rust-toolchain.toml`                                                            |
+| [Swift](/lang/swift.html)   | `swift`             | `.swift-version`                                                                 |
+| [Zig](/lang/zig.html)       | `zig`               | `.zig-version`                                                                   |
 
-- [Bun](/lang/bun)
-- [Deno](/lang/deno)
-- [.NET](/lang/dotnet)
-- [Elixir](/lang/elixir)
-- [Erlang](/lang/erlang)
-- [Go](/lang/go)
-- [Java](/lang/java)
-- [Node.js](/lang/node)
-- [Python](/lang/python)
-- [Ruby](/lang/ruby)
-- [Rust](/lang/rust)
-- [Swift](/lang/swift)
-- [Zig](/lang/zig)
+`mise registry -b core` lists the same set, and `dotnet-core` is another name
+for `dotnet`. For tools beyond these languages, see the
+[registry](/registry.html).
 
-## 选择其他实现
+## Selecting another implementation {#selecting-another-implementation}
 
-安装具有相同名称的外部插件可以覆盖核心工具。仅在你需要该插件提供的行为时使用此方式；它也会改变安装和信任要求。请参阅[插件](/plugins.html)和[后端选择](/dev-tools/backends/)，了解 mise 如何选择实现。
+An installed plugin with the same name as a core tool can take precedence over
+the built-in installer. Use one only when you need behavior the plugin provides,
+because it also changes how the tool installs and whose code you trust. See
+[plugins](/plugins.html) and
+[how backend selection works](/dev-tools/backends/#how-backend-selection-works).
 
-要显式选择内置实现，请使用 `core:` 前缀，例如 `mise use core:python@3.14`。[注册表](/registry.html)涵盖核心集合之外的工具。
+To use the built-in installer explicitly, prefix the name with `core:`, as in
+`mise use core:python@3.14`. To keep it for every project even when a plugin
+is installed, add a [tool alias](/dev-tools/aliases.html):
+
+```toml [mise.toml]
+[tool_alias]
+python = "core:python"
+```

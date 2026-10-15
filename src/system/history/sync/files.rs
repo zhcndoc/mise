@@ -93,11 +93,10 @@ fn audit_history_cached(
     }
     // Policy changes cannot hide older plaintext, including on a merge
     // parent or a platform that this machine never activates.
-    for commit in &commits {
-        if let Some(manifest) = crate::system::history::manifest::Manifest::read(repo, commit)? {
-            protected.extend(manifest.encrypted_paths());
-        }
-    }
+    crate::system::history::manifest::Manifest::read_distinct(repo, &commits, |manifest| {
+        protected.extend(manifest.encrypted_paths());
+        std::ops::ControlFlow::Continue(())
+    })?;
     // A newly protected path invalidates the old proof for that policy: its
     // plaintext may live anywhere in old ancestry, including a merge parent.
     if cached
@@ -108,32 +107,26 @@ fn audit_history_cached(
     }
     let inspected = commits.len();
     let mut checked = BTreeSet::new();
-    for commit in commits.into_iter().filter(|_| !protected.is_empty()) {
-        for entry in repo.ls_tree(&commit)? {
-            if !protected.iter().any(|path| {
-                entry.path == *path
-                    || entry
-                        .path
-                        .strip_prefix(path)
-                        .is_some_and(|rest| rest.starts_with('/'))
-            }) || !checked.insert((entry.path.clone(), entry.mode.clone(), entry.oid.clone()))
-            {
-                continue;
+    if !protected.is_empty() {
+        repo.visit_paths_in(&commits, &protected, |commit, entry| {
+            if !checked.insert((entry.path.clone(), entry.mode.clone(), entry.oid.clone())) {
+                return Ok(());
             }
+            let path = entry.path;
             let object = (entry.mode, entry.oid);
             let valid =
                 envelope(repo, &object, agecrypt::MAX_ENCRYPTED_BYTES)?.is_some_and(|outer| {
-                    outer.path == entry.path
+                    outer.path == path
                         && matches!(outer.mode.as_str(), "100644" | "100755" | "120000")
                         && outer.ciphertext.0.starts_with(b"age-encryption.org/v1\n")
                 });
             if !valid {
                 bail!(
-                    "cannot publish: encrypted path {} has an unencrypted or invalid version in commit {commit}; encrypting the latest version does not erase earlier plaintext. Remove that history before pushing, or use `mise dot sync --allow-plaintext-history` to publish it anyway",
-                    entry.path
+                    "cannot publish: encrypted path {path} has an unencrypted or invalid version in commit {commit}; encrypting the latest version does not erase earlier plaintext. Remove that history before pushing, or use `mise dot sync --allow-plaintext-history` to publish it anyway",
                 );
             }
-        }
+            Ok(())
+        })?;
     }
     if let Ok(mut cache) = AUDITS.lock() {
         // One watcher normally uses one repository. Bound temporary onboarding
@@ -243,6 +236,21 @@ fn validate(path: &str, outer: &Envelope, inner: &Plaintext) -> Result<()> {
     Ok(())
 }
 
+/// The context of a decryption that failed because no identity this machine
+/// holds unlocks the file, so a caller can tell it from a damaged envelope.
+#[derive(Debug)]
+pub(crate) struct Locked(pub String);
+
+impl std::fmt::Display for Locked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot unlock {}; run mise dot pull interactively with a matching age identity",
+            self.0
+        )
+    }
+}
+
 pub(crate) fn decrypt(
     repo: &HistoryRepo,
     path: &str,
@@ -260,10 +268,17 @@ pub(crate) fn decrypt(
     if let Some(decrypted) = repo.decrypted_object(&object.1) {
         return Ok(decrypted);
     }
-    let bytes = agecrypt::decrypt_sync(&outer.ciphertext.0, interactive).wrap_err_with(|| {
-        format!(
-            "cannot unlock {path}; run mise dot pull interactively with a matching age identity"
-        )
+    let bytes = agecrypt::decrypt_sync(&outer.ciphertext.0, interactive).map_err(|err| {
+        // a damaged file is not one another key would unlock, so it is not
+        // collected with the locked ones: it fails as itself
+        if matches!(
+            err.downcast_ref::<agecrypt::DecryptError>(),
+            Some(agecrypt::DecryptError::Corrupt(_))
+        ) {
+            err.wrap_err(format!("{path} is not a readable encrypted file"))
+        } else {
+            err.wrap_err(Locked(path.to_string()))
+        }
     })?;
     let inner: Plaintext =
         rmp_serde::from_slice(&bytes).wrap_err("invalid encrypted file payload")?;
@@ -272,6 +287,34 @@ pub(crate) fn decrypt(
     let decrypted = (inner.mode, oid);
     repo.remember_decrypted(&object.1, decrypted.clone());
     Ok(decrypted)
+}
+
+/// Whether `object` already holds `content` at `path` for the recipients
+/// `scheme` names, so a save can keep that ciphertext. Encryption is
+/// randomized: without this, a machine with no encryption cache, such as one
+/// that just adopted the setup, rewrites every encrypted file it saves, and
+/// that rewrite conflicts with the next real edit from another machine.
+pub(crate) fn holds(
+    repo: &HistoryRepo,
+    path: &str,
+    object: &Object,
+    mode: &str,
+    content: &[u8],
+    scheme: &str,
+) -> bool {
+    let Ok(Some(outer)) = envelope(repo, object, agecrypt::MAX_ENCRYPTED_BYTES) else {
+        return false;
+    };
+    if outer.scheme != scheme || outer.mode != mode {
+        return false;
+    }
+    let Ok(decrypted) = decrypt(repo, path, object, false) else {
+        return false;
+    };
+    decrypted.0 == mode
+        && repo
+            .transient_blob_id(content)
+            .is_ok_and(|oid| oid == decrypted.1)
 }
 
 fn encrypt(
@@ -306,10 +349,7 @@ pub(super) fn commit_object(
     }) {
         return Ok(object.clone());
     }
-    let mut strings = manifest.recipients.clone();
-    strings.sort();
-    strings.dedup();
-    let scheme = crate::hash::hash_sha256_to_str(&strings.join("\n"));
+    let (strings, scheme) = scheme(&manifest.recipients);
     for parent in parents {
         if let Some(raw) = repo.object_at(parent, path)?
             && envelope(repo, &raw, agecrypt::MAX_ENCRYPTED_BYTES)?
@@ -319,14 +359,107 @@ pub(super) fn commit_object(
             return Ok(raw);
         }
     }
-    let recipients = strings
+    let recipients = parse_recipients(&strings, interactive)?;
+    encrypt(repo, path, object, &scheme, &recipients)
+}
+
+/// The normalized recipient list and the scheme an envelope records for it.
+fn scheme(recipients: &[String]) -> (Vec<String>, String) {
+    let mut strings = recipients.to_vec();
+    strings.sort();
+    strings.dedup();
+    let scheme = crate::hash::hash_sha256_to_str(&strings.join("\n"));
+    (strings, scheme)
+}
+
+fn parse_recipients(
+    strings: &[String],
+    interactive: bool,
+) -> Result<Vec<Box<dyn age::Recipient + Send>>> {
+    strings
         .iter()
         .map(|recipient| {
             agecrypt::parse_recipient_mode(recipient, interactive)?
                 .ok_or_else(|| eyre::eyre!("invalid age recipient: {recipient}"))
         })
-        .collect::<Result<Vec<_>>>()?;
-    encrypt(repo, path, object, &scheme, &recipients)
+        .collect()
+}
+
+/// Re-encrypt every encrypted file in `tree` whose envelope names other
+/// recipients than the tree's manifest, keeping the contents the tree holds:
+/// a saved version is never replaced by live contents. Returns the new tree
+/// and the paths whose recipients changed since `previous`, both those
+/// re-encrypted here and those the capture already encrypted afresh. When
+/// this machine cannot unlock a file, refuses and names each one, replacing
+/// nothing.
+pub(crate) fn re_encrypt(
+    repo: &HistoryRepo,
+    tree: &str,
+    previous: Option<&str>,
+    interactive: bool,
+) -> Result<(String, Vec<String>)> {
+    let Some(manifest) = crate::system::history::manifest::Manifest::read(repo, tree)? else {
+        return Ok((tree.into(), vec![]));
+    };
+    let encrypted = encrypted_paths(repo, Some(tree))?;
+    let (strings, scheme) = scheme(&manifest.recipients);
+    let mut recipients = None;
+    let mut overlays = vec![];
+    let mut locked = vec![];
+    // files the capture read live are already encrypted to the current
+    // recipients; they count when the previous checkpoint used others
+    let mut captured = vec![];
+    for entry in repo.ls_tree(tree)? {
+        if !encrypted.contains(&entry.path) {
+            continue;
+        }
+        let object = (entry.mode, entry.oid);
+        // a file outside an envelope is the publish audit's to refuse
+        let Some(outer) = envelope(repo, &object, agecrypt::MAX_ENCRYPTED_BYTES)? else {
+            continue;
+        };
+        if outer.scheme == scheme {
+            if let Some(previous) = previous
+                && let Some(before) = repo.object_at(previous, &entry.path)?
+                && envelope(repo, &before, agecrypt::MAX_ENCRYPTED_BYTES)?
+                    .is_some_and(|before| before.scheme != scheme)
+            {
+                captured.push(entry.path);
+            }
+            continue;
+        }
+        let plain = match decrypt(repo, &entry.path, &object, interactive) {
+            Ok(plain) => plain,
+            Err(err) => {
+                debug!("history: {err:#}");
+                locked.push(crate::system::history::tracked::tree_path_to_display(
+                    &entry.path,
+                ));
+                continue;
+            }
+        };
+        let recipients = match &recipients {
+            Some(recipients) => recipients,
+            None => recipients.insert(parse_recipients(&strings, interactive)?),
+        };
+        let object = encrypt(repo, &entry.path, &plain, &scheme, recipients)?;
+        overlays.push(crate::system::history::shadow::Overlay {
+            path: entry.path,
+            object: Some(object),
+        });
+    }
+    if !locked.is_empty() {
+        bail!(
+            "cannot re-encrypt {}: no age identity on this machine unlocks them; nothing was saved. Run `mise dot save --re-encrypt` where they can be unlocked",
+            locked.join(", ")
+        );
+    }
+    let paths = overlays
+        .iter()
+        .map(|overlay| overlay.path.clone())
+        .chain(captured)
+        .collect();
+    Ok((repo.compose(tree, &overlays)?, paths))
 }
 
 /// Encrypt bytes before they enter Git. Callers may store only the returned
@@ -551,6 +684,55 @@ mod tests {
             };
             assert!(validate("tracked/home/secret", &outer, &inner).is_err());
         }
+    }
+
+    #[test]
+    fn a_damaged_ciphertext_is_not_reported_as_locked() {
+        use age::secrecy::ExposeSecret;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = HistoryRepo::open_or_init_in(tmp.path()).unwrap().unwrap();
+        let key = age::x25519::Identity::generate();
+        let mut environment = crate::test::EnvVarGuard::new();
+        environment.set("MISE_AGE_KEY", key.to_string().expose_secret());
+        let outer = Envelope {
+            path: "tracked/home/secret".into(),
+            mode: "100644".into(),
+            scheme: "scheme".into(),
+            ciphertext: Bytes(b"not an age file".to_vec()),
+        };
+        let mut encoded = MAGIC.to_vec();
+        encoded.extend(rmp_serde::to_vec_named(&outer).unwrap());
+        let object = ("100644".into(), repo.hash_blob(&encoded).unwrap());
+        let err = decrypt(&repo, "tracked/home/secret", &object, false).unwrap_err();
+        assert!(err.downcast_ref::<Locked>().is_none(), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("is not a readable encrypted file"),
+            "{err:#}"
+        );
+
+        // and one this machine's key does not open is
+        let other: Vec<Box<dyn age::Recipient + Send>> =
+            vec![Box::new(age::x25519::Identity::generate().to_public())];
+        let sealed = repo
+            .hash_blob(
+                &encode(
+                    "tracked/home/secret",
+                    "100644",
+                    b"private",
+                    "scheme",
+                    &other,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let err = decrypt(
+            &repo,
+            "tracked/home/secret",
+            &("100644".into(), sealed),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.downcast_ref::<Locked>().is_some(), "{err:#}");
     }
 
     #[test]

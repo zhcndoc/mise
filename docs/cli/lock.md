@@ -11,110 +11,143 @@ description: "创建或刷新锁文件版本、校验和及下载 URL"
 
 创建或刷新锁文件版本、校验和及下载 URL
 
-对当前配置根目录执行操作，包括任务中声明的工具。除非使用 `--bump` 重新解析其选择器，否则会保留现有的匹配锁定版本。
-此命令会写入锁文件，但不会安装工具；`--dry-run` 可预览变更。
+Operates on the current config root, including tools declared by tasks.
+Existing matching locked versions are preserved unless `--bump` re-resolves
+their requests. This command does not install tools; `--dry-run` previews
+changes.
 
-使用 `--platform` 指定明确的目标。否则，如果配置了 `lockfile_platforms`，mise 会使用其指定的平台以及当前平台；如果有可用的现有锁文件平台，则使用现有锁文件平台；对于新锁文件，则使用通用平台默认值。
+`mise lock TOOL@VERSION` locks that exact version. When the version falls
+outside the configured request, such as `tiny@3.0.1` with `tiny = "2"`, mise
+also updates the request in mise.toml to match.
 
-## 参数
-- **`[TOOL]…`** — 要在锁文件中更新的工具
-  例如：node python
-  如果未指定，将更新所有已配置的工具和任务专用工具
+## Arguments
+- **`[TOOL]…`** — Tools to lock, such as `node python`; defaults to every configured tool and every tool a task needs
 
-## 标志
-- **`-g --global`** — 仅定位全局配置锁文件（~/.config/mise/mise.lock 和系统配置）
-  默认情况下，仅锁定活动项目配置根目录
-- **`-j --jobs <JOBS>`** — 并行运行的任务数
-  小于 1 的值将按 1 处理
+  Use `tool@version` to lock an exact version. If it falls outside the configured
+  request, mise.toml is updated to match.
 
-  **环境变量：** `MISE_JOBS`
-- **`-n --dry-run`** — 显示将要更新的内容，但不进行更改
-- **`-p --platform <PLATFORM>`** — 要定位的平台，以逗号分隔的列表
-  例如：linux-x64、macos-arm64、windows-x64
-  如果省略，则使用 `lockfile_platforms`、现有平台或通用默认值
-- **`--bump`** — 根据最新可用版本重新解析模糊版本选择器
+## Flags
+- **`-g --global`** — Lock only the global and system config lockfiles
 
-  默认情况下，`mise lock` 会刷新当前锁定版本的元数据。
-  使用此标志后，诸如 “latest”、“lts” 或 “20” 这样的前缀选择器
-  会根据远程端最新的匹配版本重新解析，因此锁文件会推进，而不会安装任何内容。配置文件不会被修改：
-  明确固定的版本会解析为自身并保持不变
-  （使用 `mise upgrade --bump` 可重写 mise.toml 中的固定版本）。
-  如果无法获取远程版本，命令会失败，而不会保留旧的锁定版本。
-- **`--json`** — 以 JSON 格式输出版本变更
+  These are ~/.config/mise/mise.lock and the system config's lockfile. By
+  default, only the current project's config root is locked.
+- **`-j --jobs <JOBS>`** — How many jobs to run in parallel; defaults to the `jobs` setting
 
-  输出一个描述锁文件版本变更的对象数组：
-  name、backend、lockfile、old_versions、new_versions。
-  版本列表保留配置文件／锁文件中的顺序，不会排序。
-  只报告版本级别的变更：未变更版本的校验和／URL 刷新不会生成条目，因此普通的 `mise lock --json`
-  通常会输出 `[]`，同时仍然更新锁文件。
-  抑制人类可读的输出。与 `--dry-run` 结合使用，可以在不写入锁文件的情况下检测可用更新。
-- **`--local`** — 更新 mise.local.lock，而不是 mise.lock
-  用于在 .local.toml 配置中定义的工具
-- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 仅锁定在此时间长度或日期之前发布的版本
+  Values below 1 are treated as 1.
 
-  支持类似 “2024-06-01” 的绝对日期和类似 “90d” 或 “1y” 的相对时长。
-  这只影响类似 “20” 或 “latest” 的模糊版本匹配。
-  明确固定的版本，如 “22.5.0”，不会被筛选。
-  现有的匹配锁文件条目会被保留，不会仅因该标志而降级。
-- **`--upgrade`** — 将旧版锁文件升级为最新格式
+  **Environment Variable:** `MISE_JOBS`
+- **`-n --dry-run`** — Show what would change, without writing anything
+- **`-p --platform <PLATFORM>`** — Platforms to lock, comma-separated, such as `linux-x64,macos-arm64`
 
-  现有的无版本锁文件使用格式版本 0，并以其他方式保留，以避免锁文件意外漂移。此标志会将它们
-  升级为包含特定请求版本绑定的最新格式。
-  格式升级始终处理每个已配置的工具，且不能与工具参数结合使用。
-  `--sidecars` 会列出原生依赖 sidecar，而不是更新锁文件：它会为作用域内的每个锁文件打印 mise 保存原生依赖图的 sidecar 目录，以及锁文件引用的每个 sidecar 目录。不会解析、安装或写入任何内容。路径在当前目录内时相对显示，否则显示绝对路径。可与 `--json`、`--local` 和 `--global` 组合使用。
-- **`-h --help`** — 打印帮助
+  Defaults to the `lockfile_platforms` setting plus the current platform when
+  that setting is configured, else the platforms already in the lockfile, else
+  a common set for a new lockfile.
+- **`--bump`** — Re-resolve version requests against the latest available versions
 
-## 示例
+  By default, `mise lock` refreshes metadata for the currently locked versions.
+  With this flag, requests such as "latest", "lts", or prefixes such as "24" are
+  re-resolved against the latest matching remote versions, so the lockfile
+  advances without installing anything. `--bump` never modifies config files:
+  exact versions resolve to themselves and stay unchanged (use
+  `mise upgrade --bump` to rewrite pins in mise.toml). If the remote versions
+  cannot be fetched, it fails rather than keep the locked version.
+- **`--json`** — Output version changes as JSON
 
-创建或刷新项目锁文件
+  Prints an array of objects describing lockfile version changes:
+  name, backend, lockfile, old_versions, new_versions.
+  Version lists keep config/lockfile order; they are not sorted.
+  Only version-level changes are reported: checksum and URL refreshes for
+  unchanged versions produce no entries, so `mise lock --json` prints `[]`
+  when no version changed, even though it still updates the lockfile.
+  Suppresses the human-readable output. Combine with `--dry-run` to
+  detect available updates without writing the lockfile.
+- **`--local`** — Update mise.local.lock, for tools in mise.local.toml, instead of mise.lock
+- **`--minimum-release-age <AGE>`** — Only lock versions released before a date or at least a duration ago
+
+  Takes a date such as `2024-06-01` or a duration such as `90d` or `1y`.
+  Overrides the `minimum_release_age` setting and tool option. It filters only
+  requests that are not exact, such as "24" or "latest"; exact versions such
+  as "24.11.0" are not filtered. Existing matching lockfile entries are kept;
+  this flag alone does not downgrade them.
+- **`--upgrade`** — Upgrade lockfiles to the latest format
+
+  mise keeps an existing lockfile at its format version during normal updates,
+  so collaborators on an older mise can still read it. This flag rewrites it in
+  the newest format, which adds request bindings, dependency-graph sidecars,
+  and packslip repository IDs. It processes every configured tool and cannot be
+  combined with tool arguments. See
+  <https://mise.jdx.dev/dev-tools/mise-lock-reference.html#format-versions>.
+- **`--sidecars`** — List native dependency sidecars instead of updating lockfiles
+
+  Backends such as npm and pypi keep a tool's locked dependency graph in a
+  sidecar directory next to mise.lock; see
+  <https://mise.jdx.dev/dev-tools/mise-lock-reference.html#native-dependency-sidecars>.
+  For each existing lockfile in scope, prints the sidecar directory mise keeps
+  its dependency graphs in and every sidecar directory the lockfile references.
+  Nothing is resolved, installed, or written.
+  Paths are relative to the current directory when they are inside it,
+  and absolute otherwise, such as the sidecars of a symlinked lockfile.
+  Combine with `--json` for machine-readable output, or with `--local`
+  and `--global` to choose the lockfiles.
+- **`-h --help`** — Print help
+
+## Examples
+
+Create or refresh the project lockfile
 
 ```
 mise lock
 ```
 
-仅更新 node 和 python
+Refresh only node and python
 
 ```
 mise lock node python
 ```
 
-仅更新 linux-x64 平台
+Lock an exact version; mise.toml keeps a request such as "24"
+
+```
+mise lock node@24.11.0
+```
+
+Lock only the linux-x64 platform
 
 ```
 mise lock --platform linux-x64
 ```
 
-显示将要更新的内容
+Show what would change
 
 ```
 mise lock --dry-run
 ```
 
-将类似 “latest” 或 “20” 的选择器重新解析为最新匹配版本
+Re-resolve requests such as "latest" or "24" to the latest matching versions
 
 ```
 mise lock --bump
 ```
 
-以 JSON 格式列出可用更新，但不写入文件
+List available updates as JSON without writing
 
 ```
 mise lock --bump --dry-run --json
 ```
 
-锁定在 2024-01-01 之前发布的最新／模糊版本
+Lock versions released before 2024-01-01 for requests that are not exact
 
 ```
 mise lock --minimum-release-age 2024-01-01
 ```
 
-为本地配置更新 mise.local.lock
+Update mise.local.lock
 
 ```
 mise lock --local
 ```
 
-仅更新全局配置锁文件
+Update only the global lockfiles
 
 ```
 mise lock --global

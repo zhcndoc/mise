@@ -11,34 +11,68 @@ description: "就地跟踪文件或目录"
 
 就地跟踪文件或目录
 
-添加一个 `mode = "track"` 的 `[dotfiles]` 条目：文件保留在原位置，不会复制或链接，并立即由历史记录保存一个检查点。运行历史记录监视器服务后，之后的编辑会自动保存；未运行该服务时，可使用 `mise dot save` 保存。
+Adds a `[dotfiles]` entry with `mode = "track"` to your global config: the file stays where it is, nothing is copied or linked, and mise saves a checkpoint of it right away. While the watcher service runs, later edits are saved automatically; without it, `mise dot save` saves them. Use `--dry-run` to see what a large directory would add before tracking it.
 
-`--os` 和 `--profile` 用于声明变体：为符合该平台或 mise 环境的计算机提供独立的共享流，因此 Mac 和 Linux 计算机可以共享相同的实时路径，同时使用不同的内容。
-`--machine` 会让每台机器使用自己的流，适用于不应在其他机器上应用的显示器布局等文件。
+`--os` and `--profile` declare a variant: machines that match the platform or config environment keep their own version of the file, so a Mac and a Linux machine can have different contents at the same path. `--machine` gives every machine its own version instead, for files such as a monitor layout that should never be applied on another machine.
+
+See <https://mise.jdx.dev/dotfiles/history.html>
 
 ## 参数
 - **`<PATH>…`** — 要跟踪的路径（绝对路径或以 ~/ 开头）
 
-## 标志
-- **`--os <OS>`** — 为此平台声明变体（macos、linux、linux/arm64、…）
-- **`--profile <PROFILE>`** — 为此 mise 环境声明变体
-- **`--local`** — 仅在此机器上保留文件历史；永远不会共享
-- **`--machine`** — 每台机器使用独立的流，永远不会在其他机器上应用
-- **`--no-autosave`** — 仅在执行 `mise dot save <path>` 时保存，从不自动保存
-- **`--encrypt`** — 在保存到历史记录前加密内容（需要 `[history.encryption].recipients`）
-- **`--allow-plaintext`** — 允许将明确受跟踪且名称类似凭据的文件以明文保存
-- **`-y --yes`** — 为兼容而保留；track 不再询问是否确认路径
-- **`-n --dry-run`** — 显示每个路径展开后的文件、大小以及被排除内容，但不跟踪它
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--os <OS>`** — Declare a variant for this platform (macos, linux, linux/arm64, …)
+- **`--profile <PROFILE>`** — Declare a variant for this config environment (`MISE_ENV` or `-E`)
+- **`--local`** — Keep this file's history on this machine only; it is never shared
+- **`--machine`** — Keep a separate stream on every machine, never applied on another
+- **`--no-autosave`** — Save only on `mise dot save <path>`, never automatically
+- **`--encrypt`** — Encrypt contents before saving them to history (requires `[history.encryption] recipients`)
+- **`--allow-plaintext`** — Save an explicitly tracked credential-named file in plaintext
+- **`-y --yes`** — Accepted for compatibility; track no longer asks to confirm the paths
+- **`-n --dry-run`** — Show what each path expands to (files, size, what is left out) without tracking it
+- **`-h --help`** — Print help
 
-示例：
+## Examples
+
+Track a file and a directory
 
 ```
 mise dot track ~/.zshrc ~/.config/hypr
+```
+
+Show what tracking a directory would save
+
+```
 mise dot track --dry-run ~/.codex
+```
+
+Keep a separate version for macOS machines
+
+```
 mise dot track ~/.zshrc --os macos
+```
+
+Keep a separate version on every machine
+
+```
 mise dot track ~/.config/hypr/monitors.lua --machine
+```
+
+Keep the file's history on this machine only
+
+```
+mise dot track ~/.config/app/state.json --local
+```
+
+Encrypt the file before saving it
+
+```
 mise dot track ~/.config/app/credentials --encrypt
+```
+
+Save the file only when you run mise dot save
+
+```
 mise dot track ~/.config/app/state.json --no-autosave
 ```
 
@@ -46,6 +80,6 @@ mise dot track ~/.config/app/state.json --no-autosave
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

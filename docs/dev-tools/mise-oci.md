@@ -1,40 +1,43 @@
 ---
-description: "mise oci build 会将 mise.toml 转换为容器镜像，并且每个已安装的工具对应一个 OCI 层。"
+description: Build container images from a project's mise.toml with one OCI layer per tool, then run them locally or push them to a registry.
+socialDescription: Turn a project's mise.toml into a container image with one layer per tool.
 ---
 
-# mise oci <Badge type="warning" text="experimental" />
+# OCI images <Badge type="warning" text="experimental" />
 
-`mise oci build` 会将一个 `mise.toml` 转换为容器镜像，并且每个已安装的工具对应一个
-[OCI](https://github.com/opencontainers/image-spec) 层。
+`mise oci build` packages the tools a project's `mise.toml` declares into a
+container image with one [OCI](https://github.com/opencontainers/image-spec)
+layer per tool, so changing one tool's version rebuilds only that tool's layer.
+`mise oci run` runs a command in the image with Docker or Podman, and
+`mise oci push` uploads the image to a registry.
 
-工具层可以在版本发生变化时独立复用。镜像配置、清单以及输入发生变化的层仍需要更新；Python
-发生变化时，也可能使依赖它的 pipx 层失效。
-
-请在具有目标架构的 **Linux 主机上构建**。mise 会打包已安装的主机二进制文件；它不会交叉编译，也不会为镜像下载其他操作系统的工具。`mise oci run` 还需要 Docker 或 Podman。构建和推送 OCI 布局使用 mise 自带的镜像和注册表支持。
-
-::: warning 实验性
-`mise oci build` 是实验性功能。可通过以下方式启用：
-
-```sh
-mise settings set experimental=true
-# or, per-invocation:
-MISE_EXPERIMENTAL=1 mise oci build …
-```
-
-标志、输出布局和默认值在未来版本中可能会发生变化。
+::: warning Experimental
+`mise oci` is experimental. Enable it with `experimental = true` under
+`[settings]`, or with `MISE_EXPERIMENTAL=1`. Flags and the output layout can
+change between releases.
 :::
 
-## 命令一览
+## Requirements
 
-| 命令             | 作用                                               |
-| ---------------- | -------------------------------------------------- |
-| `mise oci build` | 在磁盘上生成 OCI 镜像布局。                         |
-| `mise oci run`   | 构建（或复用）镜像，并通过 podman/docker 在其中运行命令。 |
-| `mise oci push`  | 构建（或复用）镜像，并将其推送到镜像仓库。           |
+- A Linux host with the image's architecture. mise copies the tools installed on
+  the host into the image and does not cross-compile them, so an image built on
+  macOS or Windows contains host binaries that fail with `Exec format error`, and
+  mise warns when you build there. On another OS, run mise inside a Linux
+  container that has its own tool installations; a stock `debian` image does not
+  contain mise, and mounting your macOS or Windows installations into it does
+  not work.
+- The tools installed on the host. Run `mise install` before building: the build
+  fails for a configured version that is not installed. The exception is a tool
+  layer that [`mise oci push` reuses from the registry](#reuse-layers-from-the-registry).
+- Docker or Podman, for `mise oci run` only. Building and pushing use mise's own
+  registry client.
+- A base image with a compatible libc. See [Base images](#registry-base-image-support).
+
+<a id="quick-start"></a>
 
 ## 快速开始
 
-在 Linux 上，先从类似以下的项目配置开始：
+On Linux, start with a project config such as:
 
 ```toml [mise.toml]
 [settings]
@@ -44,234 +47,135 @@ experimental = true
 node = "24"
 ```
 
-构建本地镜像布局，然后通过容器引擎验证其中的可执行文件：
+Install the tools, build the image, and run a command in it:
 
 ```sh
+mise install
 mise oci build -o ./mise-oci
 mise oci run --image-dir ./mise-oci -- node --version
+# v24.x.x
 ```
 
-默认基础镜像为 `debian:bookworm-slim`。将生成的 `mise-oci/` 目录添加到 `.gitignore`。这会创建一个工具环境；它不会自动复制你的应用或安装其软件包依赖。开发时请使用卷，或者使用
-[`oci.copy`](/dev-tools/mise-oci.html#oci-section-in-mise-toml) 将需要放入镜像的文件复制进去。
+`mise oci build` writes an OCI image layout to `./mise-oci`; add `mise-oci/` to
+`.gitignore`. The image holds your tools on top of the base image set by
+[`oci.default_from`](/configuration/settings.html#oci.default_from), but not your
+application or its packages. Mount the project with `--volume` for development,
+or [copy files into the image](#copy-files-into-the-image).
 
-要使用外部工具检查布局，请安装 `skopeo`，然后运行
-`skopeo inspect oci:./mise-oci`。要发布它，请参阅[推送认证](#push-authentication)，并选择一个你有写入权限的注册表/仓库：
+To inspect the layout without a container engine, run
+`skopeo inspect oci:./mise-oci`. To publish the image, see
+[Push to a registry](#mise-oci-push).
 
-```sh
-mise oci push --image-dir ./mise-oci ghcr.io/OWNER/IMAGE:TAG
-```
+## What goes into the image
 
-请替换大写的占位符。此命令会将镜像发布到该注册表；它独立于本地构建和运行检查。
+By default the image contains only what the project's config files declare: the
+project's `mise.toml` and config files in its parent directories, such as a
+monorepo root, but not a `mise.toml` directly in your home directory. Tools,
+`[oci]` settings, `[bootstrap.packages]`, and `[dotfiles]` from your global
+config (`~/.config/mise/config.toml`) and the system config are left out, as are
+`MISE_<TOOL>_VERSION` overrides in the environment, so your personal tools stay
+out of a project image. Pass `--include-global` to `build`, `run`, or `push` to
+include them. Without any project config, the commands fail unless you pass
+`--include-global`.
 
-## 分层工作方式
+`[env]` is the exception: it is read from every loaded config, including your
+global config. See [Environment variables in the image](#environment-variables-in-the-image).
 
-给定这个 `mise.toml`：
+### Layers {#how-layering-works}
 
-```toml
-[tools]
-node = "20"
-python = "3.12"
-jq = "1.8.1"
-```
+`mise oci build` produces these layers, in order:
 
-`mise oci build` 会生成大致如下的分层：
+1. The base image's layers, copied from the registry unchanged so the registry
+   can deduplicate them.
+2. The running mise binary at `/usr/local/bin/mise`, unless you pass `--no-mise`.
+3. One layer for the apt or apk [system packages](#bootstrap-and-dotfiles-in-oci-images),
+   if any.
+4. One layer per [vfox plugin](#vfox-plugins) that installed a tool, at
+   `/mise/plugins/<name>/`, annotated with `dev.mise.plugin`.
+5. One layer per tool at `/mise/installs/<tool>/<version>/`, annotated with
+   `dev.mise.tool.short` and `dev.mise.tool.version`.
+6. One layer per [copied file or directory](#copy-files-into-the-image),
+   annotated with `dev.mise.copy`.
+7. One layer for the [dotfiles](#bootstrap-and-dotfiles-in-oci-images), if any.
+8. `/etc/mise/config.toml`, which pins each packaged tool to its exact version.
+   The image's `MISE_DATA_DIR` and `MISE_CONFIG_DIR=/etc/mise` environment
+   variables point the embedded mise at these files.
 
-1. **基础镜像层**（例如 `debian:bookworm-slim`）——从 registry 原样复制，因此 registry
-   去重机制可以生效。
-2. `/usr/local/bin/mise` 中的 **mise 二进制文件**（使用 `--no-mise` 跳过）。
-3. **配置的 apt 或 apk `[bootstrap.packages]`**（如果有），安装到基础 rootfs 中，并作为一个软件包层输出。
-4. **每个工具一个层**，每个层的根目录为
-   `/mise/installs/<plugin>/<version>/`。使用
-   `dev.mise.tool.short` 和 `dev.mise.tool.version` 注解。
-5. **配置的 `[dotfiles]`**（如果有），作为镜像文件写入。
-6. **生成的 `/etc/mise/config.toml`**，将 `/mise` 作为数据目录。
+The paths above use the default mount point, `/mise`; change it with
+`--mount-point` or `[oci].mount_point`.
 
-更改 Node.js 后，不相关的工具归档仍可复用。生成的配置和镜像清单仍会反映新版本。复用还取决于镜像内路径、文件所有权以及任何重定位输入。
+Changing the Node.js version rebuilds only Node.js's layer. The other tool
+layers are reused, while the config layer, image config, and manifest change to
+record the new version. A tool layer is also rebuilt when its in-image path,
+file owner, or contents change, and a Python change can rebuild the layers of
+`pypi:` tools that link to that Python.
 
-## `mise oci build`
+## Configure the image {#oci-section-in-mise-toml}
 
-```sh
-mise oci build [-o PATH] [--from REF] [--tag REF] [--mount-point PATH]
-               [--copy HOST_PATH:IMAGE_PATH]...
-               [--no-mise] [--owner UID[:GID]]
-```
-
-- `-o, --output PATH` — 输出目录（默认为 `./mise-oci`）
-- `--from REF` — 基础镜像引用（覆盖 `[oci].from` 和
-  `oci.default_from` 设置）。使用 `scratch` 可在没有基础镜像的情况下构建。
-- `-t, --tag REF` — 写入 `index.json` 的
-  `org.opencontainers.image.ref.name` 注解中的标签
-- `--mount-point PATH` — mise 在镜像中的安装位置
-  （默认为 `/mise`）。必须是绝对路径。
-- `--copy HOST_PATH:IMAGE_PATH` — 将主机文件或目录复制到镜像中的绝对路径。
-  对于多个负载，可重复使用此标志。每个负载都会在工具层之后作为独立的、
-  内容寻址的层生成。
-- `--no-mise` — 不在 `/usr/local/bin/mise` 嵌入正在运行的 mise 二进制文件
-- `--owner UID[:GID]` — 每个生成的层条目的数字所有者。
-  默认为 `[oci].user_id` / `[oci].group_id`，然后是 `0:0`。如果省略 GID，
-  则默认为 UID。这只影响文件所有权，不影响镜像的 `USER` 指令。
-
-## `mise oci run`
-
-构建（或复用）一个镜像，并在其中运行命令，类似于
-`docker run` / `podman run`。会继承 stdin/stdout/stderr。
-
-```sh
-mise oci run [--engine ENGINE] [--image-dir DIR]
-             [--from REF] [--mount-point PATH] [--no-mise]
-             [--owner UID[:GID]]
-             [-i] [-t] [-e KEY=VAL]... [--volume HOST:CONTAINER]...
-             [-w DIR] [--keep]
-             -- <cmd> [args...]
-```
-
-- `--engine` — `auto`（默认，优先使用 podman）、`podman` 或 `docker`。
-- `--image-dir` — 跳过构建，直接使用现有的 OCI 布局。
-- `--owner UID[:GID]` — 在全新构建时，为生成的 layer 条目指定数字所有者；
-  不能与 `--image-dir` 同时使用。
-- `-i`、`-t`、`-e`、`--volume`、`-w`、`--keep` — 以与
-  `docker run` 相同的方式透传给底层引擎。（`--volume` 没有 `-v`
-  短选项，因为 mise 已将 `-v` 保留给 `--verbose`；请使用
-  `--volume` 或 `--mount`。）
-
-示例：
-
-```sh
-# 交互式 shell
-mise oci run -it -- bash
-
-# 带环境变量 + 挂载卷的一次性命令
-mise oci run -e DEBUG=1 --volume "$PWD:/work" -w /work -- npm test
-
-# 复用之前构建的布局
-mise oci build -o ./img
-mise oci run --image-dir ./img -- node --version
-```
-
-**要求：**必须使用 `podman`（原生支持 OCI 布局）或
-`docker`（mise 通过 `docker load` 将镜像流式传输到守护进程）。
-
-## `mise oci push`
-
-使用 mise 内置的 registry 客户端构建（或复用）镜像并将其推送到 registry——无需
-skopeo、crane 或 docker 守护进程。只有 registry 中尚不存在的 blob 才会被上传，
-因此，对于大部分内容未变化的工具集，重复推送时传输的数据非常少。
-当基础镜像位于目标 registry 时，其 blob 会进行跨仓库挂载，而不是重新上传（不会传输任何字节）。
-大型层会分块上传并显示进度条，暂时性的网络故障会采用退避策略重试
-（`http_retries` 控制尝试次数）。
-
-### 层复用
-
-`oci build`、`oci run` 和 `oci push` 共享一个用于打包工具层的本地缓存。未发生变化的工具只需要 tar 和 gzip 一次，即使构建不同的镜像或使用不同的输出目录也是如此。并发构建会针对每个缓存条目进行协调，每个输出布局都会获得本地缓存层的完整副本。
-
-本地复用会对文件及其镜像路径、可执行权限、符号链接目标、所有权和重定位后的内容进行哈希。编辑或重新安装工具后，如果打包内容发生变化，其缓存就会失效，即使版本、文件大小和修改时间保持不变。缓存命中时仍会读取并哈希安装内容；它们会跳过 tar 构建和 gzip 压缩。基础镜像不属于工具层的缓存键。
-
-传入 `oci build --no-cache` 或 `oci push --no-cache` 可绕过本地缓存。
-`mise cache clear TOOL` 会移除该工具的缓存层；`mise cache clear`
-会移除所有缓存层。缓存条目位于常规 mise 工具缓存中，因此 CI 任务可以通过 `MISE_CACHE_DIR` 一并保留这些缓存。
-
-当推送一个基础镜像位于目标**同一仓库**中的镜像时，mise 会获取当前基础镜像清单和配置，但将其层 blob 保留在 registry 中。每次推送都会解析可变的基础镜像标签。这样可以避免下载目标中已经包含的基础层，包括使用 `--cache-from` 或 `--no-cache` 时也是如此。安装 `[bootstrap.packages]` 的构建仍会下载基础层以解包文件系统；`oci build` 和 `oci run` 也会下载这些层以生成完整的本地镜像。
-
-缓存键（工具、版本、镜像内前缀和文件所有者）与之前推送的镜像匹配的工具层，会**从 registry 复用而不是重新构建**——完全跳过 tar/gzip 操作。复用的工具甚至不需要在本地安装，这使 CI 推送变得很快：只有实际版本发生变化的工具才会被安装和打包。
-
-- 默认情况下，缓存来源就是目标引用本身（之前以该标签推送的镜像）。
-- `--cache-from REF` 会从**同一仓库**中的另一个标签复用层——适用于每次推送都使用唯一标签的情况：
-
-  ```sh
-  mise oci push --cache-from ghcr.io/me/dev:latest ghcr.io/me/dev:$GIT_SHA
-  ```
-
-- `--no-cache` 会禁用远程和本地工具层复用，并从本地安装重新构建（docker 风格的逃生开关——复用会信任 registry 的层内容与其注解匹配，而不是在本地重新构建完全相同的字节）。
-
-有一个注意事项：环境派生（`JAVA_HOME` 风格的 `exec_env` 变量）会基于本地安装运行。
-对于未安装的复用工具，大多数后端仍能正确派生路径，但较特殊的后端可能会生成不完整的环境变量——如果镜像配置看起来不正确，
-请传入 `--no-cache`（并确保工具已安装）。
-
-```sh
-mise oci push [--image-dir DIR]
-              [--from REF] [--mount-point PATH] [--no-mise]
-              [--owner UID[:GID]]
-              <REGISTRY_REF>
-```
-
-- `<REGISTRY_REF>` — 完全限定的目标地址（例如
-  `ghcr.io/me/devenv:latest`）。必须包含 registry 主机名。回环地址 registry
-  （`localhost:5000/…`）会通过普通 HTTP 访问，这是与 docker 相同的默认不安全约定。
-  非回环的普通 HTTP registry（例如 `registry.lan:5000`）必须通过
-  `oci.insecure_registries` 设置显式启用：
-
-  ```toml
-  [settings.oci]
-  insecure_registries = ["registry.lan:5000"]
-  ```
-
-- `--image-dir` — 推送现有的 OCI 布局，而不是进行构建。
-
-- `--owner UID[:GID]` — 在全新构建时，为生成的层条目指定数字所有者；它不能与
-  `--image-dir` 同时使用。
-
-示例：
-
-```sh
-# 一次性构建并推送
-mise oci push ghcr.io/me/devenv:latest
-
-# 推送之前构建好的镜像
-mise oci build -o ./img
-mise oci push --image-dir ./img ghcr.io/me/devenv:v1
-```
-
-### 推送认证
-
-凭据会按照 docker 和 podman 使用的相同来源解析，顺序如下：
-
-1. `$REGISTRY_AUTH_FILE`
-2. `$XDG_RUNTIME_DIR/containers/auth.json`（podman）
-3. `~/.config/containers/auth.json`
-4. `~/.docker/config.json`（或 `$DOCKER_CONFIG/config.json`）
-
-支持内联的 `auths` 条目和凭据助手
-（`credsStore` / `credHelpers`，例如 `docker-credential-osxkeychain`、
-`docker-credential-ecr-login`）——因此，只需执行普通的
-`docker login ghcr.io` 或 `podman login ghcr.io` 即可完成设置。
-如果找不到凭据，mise 会匿名推送（适用于本地 registry）并发出警告。
-
-对于 ghcr.io，令牌需要具备 `write:packages` 权限范围。
-
-### `mise.toml` 中的 `[oci]` 部分
+Set image options in an `[oci]` section of the project's `mise.toml`:
 
 ```toml
 [oci]
-from        = "debian:bookworm-slim"  # 基础镜像引用
-tag         = "ghcr.io/me/devenv:v1"  # 构建镜像的默认标签
-workdir     = "/workspace"             # WORKDIR
-entrypoint  = []           # ENTRYPOINT
-cmd         = []                        # CMD
-user        = "1000:1000"                # USER
-user_id     = 1000                      # tar layer entry UID (file ownership)
-group_id    = 1000                      # tar layer entry GID (defaults to user_id)
-mount_point = "/mise"                  # where tools install in the image
+from = "debian:bookworm-slim"  # base image
+tag = "ghcr.io/me/devenv:v1"   # tag recorded in the layout
+workdir = "/workspace"         # WORKDIR
+entrypoint = []                # ENTRYPOINT
+cmd = []                       # CMD
+user = "1000:1000"             # USER
+user_id = 1000                 # owner UID of files in generated layers
+group_id = 1000                # owner GID (defaults to user_id)
+mount_point = "/mise"          # where tools live in the image
 
-[[oci.copy]]
-host  = "dist/my-app"
-image = "/usr/local/bin/my-app"
-
-[[oci.copy]]
-host  = "assets"
-image = "/srv/app/assets"
-
-# 注入到镜像配置中的额外环境变量（仅适用于镜像——不会覆盖 MISE_*）。
-[oci.env]
-NODE_ENV = "production"
-
-# 注入到镜像配置中的标签。
 [oci.labels]
 "org.opencontainers.image.source" = "https://github.com/me/my-app"
 ```
 
-复制示例要求 `dist/my-app` 和 `assets` 存在。
-`[oci].user` 设置镜像的 `USER` 指令；它不会创建账户、主目录或可写工作区。请使用数字 UID/GID，或使用基础镜像已经提供的用户。`[oci].user_id` 和
-`[oci].group_id` 设置层文件所有权；如果未配置 `group_id`，则默认为解析后的 `user_id`。
+`entrypoint`, `cmd`, and `user` default to the base image's values, and
+`workdir` defaults to `/workspace` when neither the base image nor `[oci]` sets
+one. `user` sets the image's `USER`; it does not create an account, home
+directory, or writable workspace, so use a numeric UID and GID or a user the
+base image already has. `user_id` and `group_id` set the owner of files in the
+generated layers (`0:0` when unset); `--owner UID[:GID]` overrides them.
+
+### Precedence
+
+Command-line flags override `[oci]`, and `[oci]` overrides the
+[`oci.default_from`](/configuration/settings.html#oci.default_from) and
+[`oci.default_mount_point`](/configuration/settings.html#oci.default_mount_point)
+settings. When several project config files set `[oci]`, for example a monorepo
+root and a subproject, mise merges them field by field, and the more specific
+file wins each field; `[oci.env]` and `[oci.labels]` merge key by key. `[oci]` in
+your global config applies only with `--include-global`.
+
+### Environment variables in the image
+
+The image's environment is built in this order, and later entries win:
+
+1. The base image's environment.
+2. `[env]` from every loaded config, including your global
+   `~/.config/mise/config.toml`, even without `--include-global`. Templates are
+   expanded and `.env` files are read.
+3. Variables each tool sets, such as `JAVA_HOME`, `GOROOT`, or `GEM_HOME`, with
+   host paths rewritten to the image paths.
+4. `[oci.env]`.
+5. `PATH`: each tool's bin directories in the image, followed by the `PATH` from
+   the entries above.
+6. `MISE_DATA_DIR` (the mount point) and `MISE_CONFIG_DIR=/etc/mise`, which
+   nothing above can override.
+
+::: warning `[env]` values are baked into the image
+Everything in `[env]`, including values loaded from `.env` files and from your
+global config, is written into the image config, where anyone with the image can
+read it with `docker inspect` or `skopeo inspect`. Move personal tokens out of
+your global `[env]`, or unset them, before building an image you will push. Pass
+secrets at runtime with `docker run -e`, secret mounts, or your orchestrator, and
+put only values that are safe to publish in `[oci.env]`. mise warns with the
+number of `[env]` variables it baked in.
+:::
+
+A variable that `[env]` marks `required` is satisfied by `[oci.env]` during
+`mise oci` commands, so the build host does not need it set. This lets you give
+the image a placeholder for a secret that exists only at runtime:
 
 CLI 标志会覆盖 `[oci]` 部分。`[oci]` 部分会覆盖
 `oci.default_from` / `oci.default_mount_point` 设置。
@@ -289,13 +193,38 @@ CLI 中的相对路径相对于当前工作目录解析。
 当分层配置复制到相同的镜像路径时，较不具体的条目会先输出，以便更具体的配置生效。
 CLI 复制项最后输出。
 
-### OCI 镜像中的 `[bootstrap]` 和 `[dotfiles]`
+### Copy files into the image
 
-`mise oci build` 会将项目作用域的 `[bootstrap.packages]` 和
-`[dotfiles]` 条目应用到镜像中。这相当于
-`mise bootstrap` 中声明式包和 dotfile 部分的 OCI 版本。
-传入 `--include-global` 也会包含全局配置中的 `[bootstrap.packages]` 和
-`[dotfiles]`。
+Each `[[oci.copy]]` entry, or `--copy HOST:IMAGE` flag, adds one layer after the
+tool layers:
+
+```toml
+[[oci.copy]]
+host = "dist/my-app"
+image = "/usr/local/bin/my-app"
+
+[[oci.copy]]
+host = "assets"
+image = "/srv/app/assets"
+```
+
+The source can be a file, a directory, or a symlink, and it must exist when you
+build. A directory's contents land at `image`; the source directory's name is
+not added. Image paths must be absolute and cannot contain `.` or `..`
+components. mise creates parent directories, keeps executable bits, and sets
+ownership from `--owner` or `user_id` and `group_id`. A relative `host` path in
+`[[oci.copy]]` resolves from the directory of the config file that declares it,
+and a relative `--copy` path resolves from the current directory. When layered
+configs copy to the same image path, less specific entries come first, so the
+most specific config wins, and `--copy` layers come last. mise warns for each
+copy, as a reminder to check its contents for secrets.
+
+## System packages and dotfiles {#bootstrap-and-dotfiles-in-oci-images}
+
+`mise oci build` applies the project's `[bootstrap.packages]` and `[dotfiles]`
+entries to the image, the image equivalent of the package and dotfile parts of
+[`mise bootstrap`](/bootstrap.html). With `--include-global`, entries from the
+global and system configs are applied too.
 
 ```toml
 [bootstrap.packages]
@@ -306,107 +235,148 @@ CLI 复制项最后输出。
 "~/.config/app/config.toml" = { source = "config.toml", mode = "template" }
 ```
 
-对于软件包，OCI 构建支持 Debian/Ubuntu 基础镜像中的 `apt:` 条目，以及 Alpine/Wolfi 基础镜像中的
-`apk:` 条目。mise 会将基础镜像解包到临时 rootfs 中，调用匹配的主机软件包管理器将软件包安装到该 rootfs，
-然后将文件系统变更作为一个 OCI 层输出，并使用
-`dev.mise.system.packages=apt` 或 `dev.mise.system.packages=apk` 进行注解。一次构建只能使用与其基础镜像匹配的软件包管理器；混用 `apt:` 和 `apk:` 条目会被拒绝。
+Packages can be `apt:` entries on a Debian or Ubuntu base image, or `apk:`
+entries on an Alpine or Wolfi base image, but not both in one build. mise
+unpacks the base image into a temporary root filesystem, runs the matching
+package manager on the host to install into it, and emits the changes as one
+layer annotated with `dev.mise.system.packages`. The host needs `apt-get` and
+`dpkg` for apt, or `apk` for apk. Apk package scripts run inside a chroot, so
+apk layers need a Linux host running mise as root. mise removes package-manager
+caches and logs before creating the layer.
 
-对于 apt 层，主机必须提供 `apt-get` 和 `dpkg`；对于 apk 层，主机必须提供 `apk`。
-apk 软件包脚本会在 chroot 中执行，因此 apk 层目前要求在以 root 身份运行 mise 的 Linux 主机上构建。
-`--no-cache` 会传递给 apk，并且会在创建层之前删除临时软件包管理器缓存和日志文件。
+Entries for any other package manager, such as `brew:`, make the build fail.
+Keep them in a config the image build does not include, or exclude that manager
+for the build with the
+[`system_packages.managers`](/configuration/settings.html#system_packages.managers)
+setting, for example `MISE_SYSTEM_PACKAGES_MANAGERS=apt mise oci build`.
 
-对于镜像构建，`symlink` 和 `symlink-each` 条目会作为文件内容复制。
-宿主机上的符号链接通常会指回检出路径，在容器内会失效，因此镜像会改为接收解析后的内容。
-以 `~/` 开头的目标会写入 `/root/` 下。
+Dotfiles are written as files in the image:
 
-`mise oci build` 不会运行 `[bootstrap.macos.defaults]` 和命令式的
-`bootstrap` 任务。macOS 默认配置不适用于 Linux OCI 镜像，而容器特有的启动工作
-应放在镜像的 entrypoint 或 command 中。
+- `symlink` and `symlink-each` entries are copied as file contents, because a
+  link to the build host's checkout would be broken in the container.
+- Targets that start with `~/` are written under `/root/`.
+- An `absent` entry, or a `remove_empty` template that renders empty, adds an
+  OCI whiteout, so a file the base image has at that path is hidden.
+- Templates that call `secret()` fail the build. Templates render without the
+  `env` context, and calling `get_env()`, `exec()`, or `read_file()` fails the
+  build, because those values could be recovered from an image layer.
+- Tracked files and permissions-only entries are left out.
 
-### 设置
+`mise oci build` fails if an included config sets `[bootstrap.macos.*]`
+defaults; keep them in a config the build does not read, such as your global
+config without `--include-global`. Other `[bootstrap]` sections, such as
+`[bootstrap.files]`, and the `bootstrap` task are not applied to images. Put
+container startup work in the image's `entrypoint` or `cmd`.
 
-| 设置                    | 默认值               | 描述                                   |
-| ----------------------- | -------------------- | -------------------------------------- |
-| `oci.default_from`       | `debian:bookworm-slim` | 未指定时使用的默认基础镜像。 |
-| `oci.default_mount_point` | `/mise`               | 工具在镜像内的安装位置。      |
+## Run commands in the image {#mise-oci-run}
 
-请选择与打包二进制文件及其共享库兼容的基础镜像。
-默认使用 glibc。Alpine/musl 基础镜像需要兼容 musl 或适用的静态二进制文件；更改 `--from` 不会针对不同的 libc 重新构建已安装的工具。运行时所需的系统库必须存在于镜像中。
-
-## 镜像中的环境变量
-
-镜像配置的 `Env` 按以下顺序构建（后面的条目优先）：
-
-1. 基础镜像环境变量（来自拉取的 `--from` 镜像配置）。
-2. 你的 `mise.toml` 中的 `[env]` 部分（已完全解析——模板已展开，`.env` 文件已读取）。
-3. 每个工具的 `exec_env()` —— 例如 `JAVA_HOME`、`GOROOT`、`GEM_HOME`。
-   路径会从主机安装目录重新映射到镜像内路径。
-4. `[oci].env` 条目。
-5. 合成的 PATH（镜像中每个工具的 bin 路径）以及
-   继承的 PATH。
-6. `MISE_DATA_DIR=/mise` 和 `MISE_CONFIG_DIR=/etc/mise` —— 始终
-   最后应用，因此不会被覆盖。
-
-::: warning `[env]` 中的密钥会被烘焙进镜像
-`mise` 的 `[env]` 部分中的任何内容——包括从
-`.env` 文件加载的值——都会写入镜像配置 JSON，并且对
-任何运行 `docker inspect` / `skopeo inspect` 的人可见。**不要把
-密钥放在那里。** 请在运行时使用 `docker run -e`、secret 挂载或编排器
-secrets。仅对适合保留在镜像中的值使用 `[oci].env`。
-
-mise 会发出警告，说明它烘焙进镜像的 `[env]` 变量数量。
-:::
-
-## 支持的后端
-
-构建器接受内置后端，并打包每个选定工具的安装目录。它还会重定位受支持的可执行文件路径和 shebang。构建器接受某个工具并不保证该工具是自包含的：可能仍需要系统库、外部运行时或其安装目录之外的路径。请将所需的运行时与工具一同声明，并使用项目实际运行的命令验证生成的镜像。
-
-asdf 和 vfox 插件（包括自定义 vfox 后端插件）会被拒绝。它们的安装钩子可能会在每个版本目录之外写入内容，而每工具层模型无法可靠地捕获这些内容。
-
-## 注册表基础镜像支持
-
-基础镜像可以从任何 OCI Distribution v2 注册表中拉取 —
-Docker Hub、ghcr.io、quay.io、自托管注册表等。对于公开镜像，
-匿名令牌身份验证会自动处理；当你已登录时
-（`docker login` / `podman login`），系统会使用这些凭据，因此
-私有基础镜像也同样可用。
-
-支持 digest 引用：
+`mise oci run` builds the image, or uses the layout you pass with `--image-dir`,
+loads it into a container engine, and runs a command with your terminal's
+stdin, stdout, and stderr:
 
 ```sh
-mise oci build --from "REGISTRY/IMAGE@sha256:FULL_DIGEST"
+mise oci run -it -- bash
+mise oci run -e DEBUG=1 --volume "$PWD:/work" -w /work -- npm test
 ```
 
-请将占位符替换为实际的镜像引用及其完整的 SHA256 摘要。digest 会固定基础镜像；可变标签可能会在之后的构建中解析到新的基础镜像。
+mise prefers Podman, which loads OCI layouts natively, and otherwise streams the
+image into Docker with `docker load`; choose one with `--engine`. There is no
+`-v` short flag for `--volume`, because `-v` is mise's `--verbose`. When the
+command exits, mise removes the container and the loaded image. Pass `--keep` to
+keep the image in the engine's storage, tagged `mise-oci:run-*` in Docker.
 
-## 可复现性
+## Push to a registry {#mise-oci-push}
 
-在同一主机上，使用未更改的输入重新运行 `mise oci build`
-会生成字节级完全相同的工具层摘要。跨机器时，层摘要
-可能会漂移，因为编译产物（pyc 字节码、生成的
-node-gyp 输出等）可能会嵌入绝对路径。
-
-要实现完全可复现的镜像配置时间戳，请设置
-`SOURCE_DATE_EPOCH`：
+`mise oci push` builds the image, or takes the layout you pass with
+`--image-dir`, and uploads it with mise's own registry client. It does not need
+Docker, skopeo, or crane.
 
 ```sh
-SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) mise oci build
+# Build and push in one step
+mise oci push ghcr.io/me/devenv:latest
+
+# Push an image built earlier
+mise oci build -o ./img
+mise oci push --image-dir ./img ghcr.io/me/devenv:v1
 ```
 
-## 跨平台构建
+Include the registry host in the reference. A reference with a path but no host,
+such as `me/devenv:latest`, is pushed to Docker Hub (`docker.io`), and a bare
+name such as `devenv:latest` is rejected.
 
-OCI 镜像以 Linux 为目标。虽然在 macOS 或 Windows 上构建会生成 `os` 字段为 `linux` 的镜像，但其中嵌入的二进制文件（mise 和每个工具层）仍然是主机原生的——在容器中执行时会因 `Exec format error` 而失败。
+mise uploads only the blobs the registry does not have yet, so pushing a mostly
+unchanged image transfers little. When the base image is on the destination
+registry, its layers are mounted across repositories instead of uploaded. When
+it is in the same repository as the destination, mise does not download its
+layers either, unless the build installs `[bootstrap.packages]`. Large layers
+upload in chunks, and failed requests are retried up to
+[`http_retries`](/configuration/settings.html#http_retries) times.
 
-请在 Linux 主机上，或在已经安装 mise 和所需工具安装依赖的 Linux 开发容器中构建。标准的 `debian` 镜像不包含 mise。不要将 macOS 或 Windows 的工具安装目录挂载到该容器中来替代 Linux 安装。主机和镜像平台不匹配时，mise 会发出警告。
+### Authentication {#push-authentication}
 
-### 多架构镜像
+mise reads registry credentials from the same files Docker and Podman use, in
+this order:
 
-单个主机只能构建单个平台，但 `mise oci push
---update-index` 允许每种架构使用一个运行器来组装多架构
-标签：每次推送都会按摘要上传其平台清单，并将标签指向一个 OCI **镜像索引**，同时保留其他已推送平台的条目。
+1. `$REGISTRY_AUTH_FILE`
+2. `$XDG_RUNTIME_DIR/containers/auth.json`
+3. `~/.config/containers/auth.json`
+4. `~/.docker/config.json`, or `$DOCKER_CONFIG/config.json`
 
-例如，以下 GitHub Actions 任务会一次构建一个架构。
-它假定项目具有 `mise.toml`，发布到 GHCR，并且授予工作流访问该软件包的权限：
+Inline `auths` entries and credential helpers (`credsStore` and `credHelpers`,
+such as `docker-credential-osxkeychain` or `docker-credential-ecr-login`) both
+work, so `docker login ghcr.io` or `podman login ghcr.io` is all the setup you
+need. Without credentials, mise warns and pushes anonymously, which suits a
+local registry. For ghcr.io, the token needs the `write:packages` scope.
+
+### Plain-HTTP registries
+
+mise contacts loopback registries such as `localhost:5000` over plain HTTP, as
+Docker does. List any other plain-HTTP registry in
+[`oci.insecure_registries`](/configuration/settings.html#oci.insecure_registries):
+
+```toml
+[settings.oci]
+insecure_registries = ["registry.lan:5000"]
+```
+
+### Reuse layers from the registry
+
+`mise oci push` reuses tool layers from the image already at the destination. A
+layer is reused when its tool, version, mount point, file owner, and, for vfox
+tools, plugin contents all match. Reused tools are not packaged again and do not
+need to be installed locally, so a CI push installs and packages only the tools
+that changed.
+
+When every push gets a unique tag, reuse layers from another tag in the same
+repository with `--cache-from`:
+
+```sh
+mise oci push --cache-from ghcr.io/me/dev:latest "ghcr.io/me/dev:$GIT_SHA"
+```
+
+`--no-cache` turns off remote and local reuse and rebuilds every tool layer from
+local installs; use it if you do not want to trust that a registry layer matches
+its annotations. `--cache-from` cannot be combined with `--no-cache` or
+`--image-dir`.
+
+Tool environment variables such as `JAVA_HOME` are computed from local installs.
+Most backends compute them correctly for a reused tool that is not installed,
+but a vfox plugin whose environment hook inspects the install directory can
+contribute incomplete values. If the image's environment looks wrong, install
+the tool and push with `--no-cache`.
+
+## Multi-arch images
+
+One host builds one platform. To publish a multi-arch tag, run
+`mise oci push --update-index` once per architecture: each push uploads its
+platform's manifest by digest and points the tag at an OCI image index that
+keeps the entries other platforms pushed. Pushing the same platform again
+replaces its entry, and a single-platform tag becomes an index without losing
+its platform. Layer reuse works through indexes, using the entry for the build
+platform.
+
+This GitHub Actions workflow builds one architecture at a time. It assumes the
+project has a `mise.toml` and that the workflow can write to the GHCR package:
 
 ```yaml
 name: Publish development image
@@ -427,8 +397,8 @@ jobs:
     env:
       MISE_EXPERIMENTAL: "1"
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
       - name: Authenticate to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -437,23 +407,103 @@ jobs:
         run: mise oci push --update-index "ghcr.io/${GITHUB_REPOSITORY,,}/dev:latest"
 ```
 
-请选择仓库中可用的运行器标签。矩阵串行化可以防止两个平台的推送相互竞争，而工作流并发控制可以防止该工作流的多个运行实例同时更新同一标签。
+Updating the index is a read-modify-write, because the registry API has no
+conditional writes, so two pushes to the same tag at once can lose an entry.
+`max-parallel: 1` runs the architectures one after another, and the workflow's
+`concurrency` group keeps two runs from updating the tag at the same time.
+Choose runner labels your repository has.
 
-重新推送同一平台会替换其条目（不会产生重复项），之前的单架构标签会升级为索引，同时不会丢失现有平台。层复用可以通过索引工作——缓存会解析到与构建平台匹配的条目。
+## Layer cache and reproducibility {#layer-reuse}
 
-索引更新采用读取-修改-写入方式（Distribution API 不支持条件写入），因此不同运行器向同一标签并发推送时可能发生竞争——请像上面的示例一样进行排序。
+`mise oci build`, `run`, and `push` share a local cache of packaged tool layers,
+so an unchanged tool is compressed once even across separate images and output
+directories. The cache key covers each file's contents and image path,
+executable permissions, symlink targets, ownership, and relocated contents, but
+not the base image. Editing or reinstalling a tool invalidates its entry when
+the packaged content changes, even if the version, file size, and modification
+time stay the same. A cache hit still reads and hashes the installation; it
+skips building and compressing the tar.
 
-## 已知限制（v1）
+`mise oci build --no-cache` and `mise oci push --no-cache` bypass the local
+cache. `mise oci run` has no such flag; build with `--no-cache` and pass the
+result to `mise oci run --image-dir`. `mise cache clear TOOL` removes one
+tool's cached layers, and `mise cache clear` removes all of them. The entries
+live in the mise cache directory, so a CI job can keep them by caching
+`MISE_CACHE_DIR`.
 
-- `asdf` / `vfox` 后端会被拒绝（见上文）。
-- 跨平台构建会生成损坏的镜像（二进制文件是主机原生的）；
-  请在 Linux 主机上运行构建。
-- 基础镜像必须提供兼容的 libc 和其他运行时库。
-- `mise oci run` 需要容器引擎（podman 或 docker）——mise 没有
-  内置的容器运行时。推送不需要外部工具。
+### Reproducibility
 
-## 另请参阅
+On one host, rebuilding with unchanged inputs produces byte-identical tool
+layers. Across machines, layer digests can differ, because compiled files such
+as Python bytecode or node-gyp output can embed absolute paths. To make the
+image config's timestamps reproducible, set `SOURCE_DATE_EPOCH`:
 
-- [`mise oci build`](/cli/oci/build.md) — 完整的 CLI 参考
-- [OCI 镜像规范](https://github.com/opencontainers/image-spec)
-- [OCI 分发规范](https://github.com/opencontainers/distribution-spec)
+```sh
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) mise oci build
+```
+
+## Supported backends
+
+`mise oci build` packages tools from every backend except asdf, including
+vfox plugins. It copies each tool's install directory into its layer and rewrites
+executable paths and shebangs that point at the host install directory. That
+does not make a tool self-contained: it can still need system libraries, other
+runtimes, or files outside its install directory. Declare the runtimes a tool
+needs alongside it, and test the image with the commands your project runs.
+
+[asdf plugins](/dev-tools/backends/asdf.html) are rejected. Their install
+scripts can write outside the version's directory, which a per-tool layer cannot
+capture, and their `exec-env` scripts expect bash at runtime.
+
+### vfox plugins
+
+Tools installed by [vfox plugins](/dev-tools/backends/vfox.html), including
+custom [backend plugins](/backend-plugin-development.html) (`my-plugin:tool`),
+are packaged like any other tool. mise also copies each plugin, without `.git`,
+into its own layer at `/mise/plugins/<name>/`, so the embedded mise can use those
+tools without cloning the plugin, and logs each plugin directory it copies.
+Plugins built into the mise binary are not copied. A symlink inside a plugin
+that resolves outside the plugin directory fails the build instead of copying a
+host file into the image; replace it with a copy. Links that are already broken
+on the build host are kept as they are.
+
+The plugin's environment hook (`EnvKeys` or `BackendExecEnv`) runs on the build
+host. Paths under the host install directory are rewritten to the image path,
+and other values are written as they are. mise warns when a value points under
+the build host's home directory, which usually does not exist in the container;
+override such variables with [`[oci.env]`](#oci-section-in-mise-toml).
+
+A plugin's `PostInstall` or `BackendInstall` hook can run any command, but only
+files written to the tool's install directory end up in the image. A tool layer
+is reused from the registry only when the plugin's contents match the plugin
+that built it, so updating a plugin rebuilds its tools' layers.
+
+## Base images {#registry-base-image-support}
+
+mise pulls base images from any OCI Distribution v2 registry, such as Docker
+Hub, ghcr.io, quay.io, or a self-hosted one. It handles anonymous tokens for
+public images and uses your `docker login` or `podman login` credentials, so
+private base images work too. Pass `scratch` to `--from` to build without a base
+image.
+
+A digest pins the base image; a mutable tag can resolve to a new base on a later
+build:
+
+```sh
+mise oci build --from "REGISTRY/IMAGE@sha256:FULL_DIGEST"
+```
+
+Replace the placeholders with an image reference and its complete SHA256
+digest.
+
+Choose a base whose libc and shared libraries suit the packaged binaries. The
+default, `debian:bookworm-slim`, uses glibc. An Alpine or other musl base needs
+musl-compatible or static binaries; changing `--from` does not rebuild the
+installed tools for another libc. System libraries a tool needs at runtime must
+be in the image.
+
+For every flag, see [`mise oci build`](/cli/oci/build.html),
+[`mise oci run`](/cli/oci/run.html), and [`mise oci push`](/cli/oci/push.html).
+The [OCI image spec](https://github.com/opencontainers/image-spec) and
+[distribution spec](https://github.com/opencontainers/distribution-spec) define
+the formats.

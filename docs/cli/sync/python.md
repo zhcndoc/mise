@@ -11,35 +11,40 @@ description: "将通过 pyenv 或 uv 安装的 python 版本链接到 mise"
 
 将通过 pyenv 或 uv 安装的 python 版本链接到 mise
 
-使用此命令可让其他版本管理器安装的版本供 mise 使用。
+Use this to make versions installed by another version manager available to
+mise. It does not overwrite managed installs, runtime aliases, or links from
+other providers. With --uv, it also links mise's python versions into uv.
+Pass --pyenv, --uv, or both; with neither, nothing is linked.
 
-这不会覆盖受管理的安装、运行时别名或来自其他提供程序的链接。
-
-## 标志
-- **`--pyenv`** — 从 pyenv 获取工具版本
-- **`--uv`** — 与 uv 同步工具版本（双向同步）
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--pyenv`** — Get tool versions from pyenv
+- **`--uv`** — Link uv's python versions into mise and mise's python versions into uv
+- **`-h --help`** — Print help
 
 ## 示例
 
-```
-pyenv install 3.11.0
-mise sync python --pyenv
-mise use -g python@3.11.0 # uses pyenv-provided python
-```
+Use a python that pyenv installed
 
 ```
-uv python install 3.11.0
-mise install python@3.10.0
+pyenv install 3.13.0
+mise sync python --pyenv
+mise use -g python@3.13.0
+```
+
+Share python versions with uv in both directions
+
+```
+uv python install 3.13.0
+mise install python@3.12.0
 mise sync python --uv
-mise x python@3.11.0 -- python -V # uses uv-provided python
-uv run -p 3.10.0 -- python -V # uses mise-provided python
+mise exec python@3.13.0 -- python -V
+uv run -p 3.12.0 -- python -V
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [Python](/lang/python.html)。
-- [`mise sync <SUBCOMMAND>`](/cli/sync.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Python](/lang/python.html#migrating-from-pyenv-or-uv).
+- [`mise sync <SUBCOMMAND>`](/cli/sync.html).
+- [Global flags and argument syntax](/cli/#global-flags).

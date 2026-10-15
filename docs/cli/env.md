@@ -15,12 +15,13 @@ description: "打印当前配置的环境"
 计算 Shell 输出以加载工具和变量一次，而无需安装提示钩子。之后更改目录不会重新计算此环境。
 使用 `mise exec -- command` 可将其应用于一个子进程。
 
-JSON、dotenv 和 Shell 输出包含实际变量值，包括机密。
-`--redacted` 选择标记为要隐藏的变量；它不会屏蔽其值。
-根据 mise 的设置，构建环境可能会安装缺失的工具。
+JSON, dotenv, and shell output contain actual variable values, including secrets.
+`--redacted` selects variables marked for redaction; it does not mask their values.
+Tools you pass as TOOL@VERSION arguments are installed first if they are missing;
+missing tools from the config are reported, not installed.
 
-## 参数
-- **`[TOOL@VERSION]…`** — 除配置中的工具外要包含的工具，例如 node@20
+## Arguments
+- **`[TOOL@VERSION]…`** — Tools to include in addition to those in the config, such as `node@24`
 
 ## 标志
 - **`-D --dotenv`** — 以 dotenv 格式输出
@@ -35,14 +36,43 @@ JSON、dotenv 和 Shell 输出包含实际变量值，包括机密。
 
 ## 示例
 
+Load the environment once into the current bash session
+
 ```
 eval "$(mise env -s bash)"
+```
+
+Same, for zsh
+
+```
 eval "$(mise env -s zsh)"
+```
+
+Same, for fish
+
+```
 mise env -s fish | source
+```
+
+Same, for xonsh
+
+```
 execx($(mise env -s xonsh))
 ```
 
-<!-- 生成的参考导航 -->
+Print the variables as JSON
+
+```
+mise env --json
+```
+
+Write a dotenv file; it contains secret values
+
+```
+mise env --dotenv > .env
+```
+
+<!-- generated reference navigation -->
 
 ## 相关文档
 

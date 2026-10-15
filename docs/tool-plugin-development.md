@@ -1,269 +1,497 @@
 ---
-description: "一个工具插件使用 Lua 生命周期 Hook 管理一个版本化工具。"
+description: "Write a Lua plugin that lists, downloads, verifies and sets up the versions of one tool."
 ---
 
-# 工具插件开发
+# Tool plugins
 
-工具插件使用 Lua 生命周期 Hook 管理一个版本化工具。对于管理多个工具的集成，请使用
-[后端插件](/backend-plugin-development.html)；对于不涉及安装的变量，请使用
-[环境插件](/env-plugin-development.html)。在编写安装器之前，请先查看内置的
-[后端](/dev-tools/backends/)。
+A tool plugin is a set of Lua hooks that tells mise how to list a tool's
+versions, download and verify one, and set up its environment. Write one when
+no [backend](/dev-tools/backends/) can install the tool; for a family of tools,
+write a [backend plugin](/backend-plugin-development.html) instead.
 
-[工具插件模板](https://github.com/jdx/mise-tool-plugin-template)提供了一个起始布局和开发工具。mise 嵌入了
-Lua 5.1；其支持的 vfox Hook 和扩展在此处说明。与上游 vfox 共享插件时，还需要在那里进行测试，尤其是在使用 mise 专用模块或元数据时。
+A tool plugin can download archives, build from source, set environment
+variables and read version files such as `.example-version`. Tool plugins use
+the same hooks as [vfox](https://vfox.dev) plugins and run on mise's built-in
+Lua 5.1. If you also publish for the vfox CLI, test there too; see
+[Differences from vfox](#differences-from-vfox).
 
-## 什么是工具插件？
+## Quick start {#quick-start}
 
-工具插件可以下载归档文件、编译源代码、返回环境条目，并解析惯用的版本文件。Lua 运行时可在 Windows、macOS 和 Linux 上运行；每个插件都必须实现这些目标平台所需的构件选择和外部命令。
+Create a repository from the
+[tool plugin template](https://github.com/jdx/mise-tool-plugin-template), either
+with **Use this template** on GitHub or with the GitHub CLI:
 
-插件以用户权限运行。保持元数据不包含主机探测，并避免在安装 Hook 中更改全局包管理器配置。
+```sh
+gh repo create mise-example --template jdx/mise-tool-plugin-template --public --clone
+```
 
-## 插件架构
+A tool plugin has this layout:
+
+```text
+mise-example/
+├── metadata.lua                    # name, version, version files, dependencies
+├── hooks/
+│   ├── available.lua               # required: list versions
+│   ├── pre_install.lua             # required: describe the download
+│   ├── env_keys.lua                # required: set the environment
+│   ├── post_install.lua            # optional: finish the install
+│   ├── mise_install_satisfied.lua  # optional: check an install against its options
+│   ├── pre_uninstall.lua           # optional: clean up before removal
+│   └── parse_legacy_file.lua       # optional: read idiomatic version files
+└── lib/                            # optional: modules for require()
+```
+
+Link your working copy under the name users type, then try it in an empty
+project:
+
+```sh
+mise plugins link example ./mise-example
+mise ls-remote example
+mise use example@1.10.0
+mise exec -- example --version
+```
+
+## Complete example {#complete-example}
+
+This plugin installs a CLI named `example` whose publisher lists its releases,
+newest first, in `releases.json` and puts each release's archives and a
+`SHA256SUMS` file in a directory named after the version:
+
+```text
+https://downloads.example.com/example/releases.json
+https://downloads.example.com/example/1.10.0/example-1.10.0-linux-x64.tar.gz
+https://downloads.example.com/example/1.10.0/SHA256SUMS
+```
+
+```lua [metadata.lua]
+PLUGIN = {
+    name = "example",
+    version = "0.1.0",
+    description = "Install the example CLI",
+    legacyFilenames = { ".example-version" },
+}
+```
+
+```lua [lib/release.lua]
+local M = {}
+
+M.base_url = "https://downloads.example.com/example"
+
+-- The publisher names macOS "macos" and x86-64 "x64"; RUNTIME says
+-- "darwin" and "amd64". Map only the platforms the publisher builds for.
+function M.asset_name(version)
+    local os_names = { darwin = "macos", linux = "linux", windows = "windows" }
+    local arch_names = { amd64 = "x64", arm64 = "arm64" }
+    local os_name = os_names[RUNTIME.osType] or error("unsupported OS: " .. RUNTIME.osType)
+    local arch = arch_names[RUNTIME.archType] or error("unsupported architecture: " .. RUNTIME.archType)
+    return "example-" .. version .. "-" .. os_name .. "-" .. arch .. ".tar.gz"
+end
+
+-- Find one file's SHA-256 in a SHA256SUMS body. Compare names exactly:
+-- "." and "-" are pattern characters, so line:match(filename) is not exact.
+function M.find_checksum(body, filename)
+    for line in body:gmatch("[^\r\n]+") do
+        local digest, name = line:match("^(%x+)%s+%*?(.+)$")
+        if name == filename and #digest == 64 then
+            return digest
+        end
+    end
+    error("no SHA-256 for " .. filename)
+end
+
+return M
+```
+
+```lua [hooks/available.lua]
+local http = require("http")
+local json = require("json")
+local release = require("release")
+
+function PLUGIN:Available(ctx)
+    local resp = http.get({ url = release.base_url .. "/releases.json" })
+    if resp.status_code ~= 200 then
+        error("fetching releases.json failed: HTTP " .. resp.status_code)
+    end
+    local result = {}
+    -- releases.json lists the newest release first; keep that order
+    for _, r in ipairs(json.decode(resp.body)) do
+        table.insert(result, { version = r.version })
+    end
+    return result
+end
+```
+
+```lua [hooks/pre_install.lua]
+local http = require("http")
+local release = require("release")
+
+function PLUGIN:PreInstall(ctx)
+    local dir = release.base_url .. "/" .. ctx.version .. "/"
+    local filename = release.asset_name(ctx.version)
+    local sums = http.get({ url = dir .. "SHA256SUMS" })
+    if sums.status_code ~= 200 then
+        error("fetching SHA256SUMS failed: HTTP " .. sums.status_code)
+    end
+    return {
+        version = ctx.version,
+        url = dir .. filename,
+        sha256 = release.find_checksum(sums.body, filename),
+    }
+end
+```
+
+```lua [hooks/env_keys.lua]
+function PLUGIN:EnvKeys(ctx)
+    local file = require("file")
+    return {
+        { key = "EXAMPLE_HOME", value = ctx.path },
+        { key = "PATH", value = file.join_path(ctx.path, "bin") },
+    }
+end
+```
+
+`mise use example@1.10.0` calls `Available` to resolve the request, then
+`PreInstall`. mise downloads the archive, checks it against the SHA-256,
+extracts it into the install directory and calls `EnvKeys` to put `bin` on
+`PATH` and set `EXAMPLE_HOME`. `mise ls-remote example` lists the versions
+oldest first.
+
+## How mise runs a tool plugin {#plugin-architecture}
 
 ```mermaid
 flowchart LR
     A[Available: list versions] --> B[Resolve a version]
-    B --> C[PreInstall: describe artifact]
+    B --> C[PreInstall: describe the download]
     C --> D[mise: download, verify, extract]
     D --> E[PostInstall: optional setup]
     E --> F[EnvKeys: return environment]
 ```
 
-固定版本或已安装的版本可以跳过此流程中的某些部分。环境构建可能会在后续调用中再次发生；它不是一次性的安装回调。
+`Available`, `PreInstall` and `PostInstall` run only while mise lists or installs
+versions. `EnvKeys` runs when mise builds the environment for an installed
+version. mise caches its result for each version and set of options, so keep it
+fast and free of side effects.
 
-## Hook 函数
+Hooks can use the `http`, `json`, `file`, `archiver`, `cmd` and other modules
+in the [Plugin Lua reference](/plugin-lua-modules.html), and the
+[`RUNTIME`](/plugin-lua-modules.html#runtime) global that describes the
+platform.
 
-### 必需的 Hook
+## Hooks {#hook-functions}
 
-#### Available Hook
+| Hook                   | File                               | Required | mise calls it                                                     |
+| ---------------------- | ---------------------------------- | -------- | ----------------------------------------------------------------- |
+| `Available`            | `hooks/available.lua`              | yes      | to list versions (`mise ls-remote`, resolving `latest` or `1.10`) |
+| `PreInstall`           | `hooks/pre_install.lua`            | yes      | to get the download for one version                               |
+| `EnvKeys`              | `hooks/env_keys.lua`               | yes      | to build the environment for an installed version                 |
+| `PostInstall`          | `hooks/post_install.lua`           | no       | after the download is extracted                                   |
+| `MiseInstallSatisfied` | `hooks/mise_install_satisfied.lua` | no       | to check an installed version against its options                 |
+| `PreUninstall`         | `hooks/pre_uninstall.lua`          | no       | before mise removes an installed version                          |
+| `ParseLegacyFile`      | `hooks/parse_legacy_file.lua`      | no       | to read a version file listed in `legacyFilenames`                |
 
-返回一个按发布者发布策略排序的数组，**最新版本在前**。mise 会反转此列表，以用于其内部按最旧版本优先的版本列表。这与已经按最旧版本优先返回的
-`BackendListVersions` 不同。
+A hook fails by raising an error with `error()`. mise stops and shows the
+message, except where a hook's section below says otherwise.
 
-```lua
--- hooks/available.lua
+### Available {#available-hook}
+
+| `ctx` field | Value                        |
+| ----------- | ---------------------------- |
+| `args`      | Always an empty list in mise |
+
+Return a list of tables, newest first, ordered by the publisher's release
+policy:
+
+| Field      | Required | Value                                                              |
+| ---------- | -------- | ------------------------------------------------------------------ |
+| `version`  | yes      | The version string, unchanged apart from a documented prefix       |
+| `rolling`  | no       | `true` for a channel whose contents change, such as `nightly`      |
+| `checksum` | no       | For a rolling channel, the SHA-256 of the current platform's asset |
+
+mise reverses the list into its own oldest-first order. `BackendListVersions` in
+a backend plugin returns oldest first instead. `Available` receives no tool
+options, so the version list cannot depend on them.
+
+#### Rolling releases {#rolling-releases}
+
+For a channel whose contents change without its name changing, return
+`rolling = true` and the checksum of the asset it currently points to:
+
+```lua [hooks/available.lua]
 function PLUGIN:Available(ctx)
     return {
-        {version = "1.10.0", note = "Current stable release"},
-        {version = "1.2.0"},
+        -- nightly_sha256() is your own helper that reads the publisher's
+        -- checksum for this platform's nightly asset
+        { version = "nightly", rolling = true, checksum = nightly_sha256() },
+        { version = "1.10.0" },
     }
 end
 ```
 
-不要丢弃预发布后缀，也不要使用共享的 SemVer 解析器对任意版本进行排序。这里可以使用
-`ctx.args`，但 mise 不会在此处提供交互式 vfox 参数。
+`mise upgrade` and `mise outdated` compare this checksum with the `sha256` that
+`PreInstall` returned when the channel was installed, so both hooks must report
+the same SHA-256 of the current platform's asset. If `PreInstall` returns no
+`sha256`, the channel is always reported as outdated. If `Available` returns no
+checksum, mise cannot tell that the channel changed. `mise upgrade --bump` keeps
+the channel name.
 
-##### 滚动发布
+### PreInstall {#preinstall-hook}
 
-对于内容会发生变化但名称不变的频道，返回 `rolling = true`，以及一个会随频道构件变化而变化的构件校验和：
+| `ctx` field | Value                                                 |
+| ----------- | ----------------------------------------------------- |
+| `version`   | The resolved version to install, such as `"1.10.0"`   |
+| `options`   | The tool's options; see [Tool options](#tool-options) |
+
+Return a table:
+
+| Field                | Required | Value                                                                          |
+| -------------------- | -------- | ------------------------------------------------------------------------------ |
+| `version`            | yes      | The version, normally `ctx.version`                                            |
+| `url`                | no       | The file to download                                                           |
+| `sha256` or `sha512` | no       | The file's checksum; return one with every `url`                               |
+| `sha1` or `md5`      | no       | Weaker checksums, also checked                                                 |
+| `attestation`        | no       | A signature or provenance to verify; see [Verify downloads](#verify-downloads) |
+
+mise downloads `url`, checks every checksum and attestation you return, and
+extracts the file into the install directory. It extracts `.tar.gz`, `.tgz`,
+`.tar.xz`, `.txz`, `.tar.bz2`, `.tbz2`, `.tbz` and `.zip` archives, and when an
+archive holds a single top-level directory, that directory's contents become
+the install directory. Any other file is moved into the install directory and
+marked executable. Without a `url`, mise downloads nothing and `PostInstall`
+does the install, as in a build from source.
+
+mise also calls `PreInstall` to record download URLs in `mise.lock` for other
+platforms. `RUNTIME` then describes the target platform, so build the URL from
+`RUNTIME` and do not probe the host or install anything in this hook.
+
+#### Verify downloads {#verify-downloads}
+
+Return `sha256` or `sha512` for every URL. mise also checks `sha1` and `md5`,
+but only SHA-256 and SHA-512 are strong enough to stand in for an attestation
+that `mise.lock` recorded. A checksum fetched from the same server as the
+download catches a corrupted file, not a compromised server; a signature or
+attestation does.
+
+When the publisher signs its releases, return an `attestation` table as well.
+mise verifies it during the install and records the method in `mise.lock`, so a
+later install that cannot verify the same way fails instead of downgrading:
 
 ```lua
-function PLUGIN:Available(ctx)
-    return {
-        {
-            version = "nightly",
-            rolling = true,
-            checksum = "REPLACE_WITH_CURRENT_PLATFORM_ASSET_SHA256",
-        },
-    }
-end
-```
-
-上面的校验和是占位符。请获取所选平台的实际校验和。
-`mise upgrade` 会比较滚动校验和，而 `mise upgrade --bump` 会保留频道名称。此更新标记与
-`PreInstall` 返回的构件校验和是分开的。
-
-#### PreInstall Hook
-
-返回 `ctx.version` 对应的 URL 和验证元数据。mise 会下载并提取主要构件。`ctx.options` 包含类型化的工具选项；使用
-`RUNTIME` 获取平台信息，包括 mise 请求其他平台的锁文件条目时的平台信息。
-
-```lua
--- hooks/pre_install.lua: 一个示例性的 Linux x64 发布布局
-function PLUGIN:PreInstall(ctx)
-    if RUNTIME.osType ~= "linux" or RUNTIME.archType ~= "amd64" then
-        error("This example artifact supports Linux x64 only")
-    end
-    local filename = "example-" .. ctx.version .. "-linux-x64.tar.gz"
-    return {
-        version = ctx.version,
-        url = "https://downloads.example.com/" .. filename,
-        sha256 = ctx.options.sha256 or error("sha256 option is required"),
-    }
-end
-```
-
-替换发布者 URL，并提供其受信任的 SHA-256 摘要。工作中的安装器绝不能包含省略号或虚假的校验和。没有强校验和或受支持证明的 URL，无法确保构件完整性。支持 SHA-256 和 SHA-512；旧版 SHA-1/MD5 不满足强验证要求。
-
-对于受支持的证明，请返回一个 `attestation` 表。例如：
-
-```lua
-local attestation = {
-    github_owner = "your-org",
-    github_repo = "your-tool",
-    -- 可选：限制发布工作流。
-    github_signer_workflow = "your-org/your-tool/.github/workflows/release.yml",
+return {
+    version = ctx.version,
+    url = url,
+    sha256 = sha256,
+    attestation = {
+        github_owner = "your-org",
+        github_repo = "example",
+        -- optional: accept only artifacts built by this workflow
+        github_signer_workflow = "your-org/example/.github/workflows/release.yml",
+    },
 }
 ```
 
-将此表赋值给 `PreInstall` 响应中的 `attestation` 字段。其他受支持的字段包括带有
-`cosign_public_key_path` 的 `cosign_sig_or_bundle_path`，或者对于无密钥签名，带有
-`cosign_certificate_identity`／`cosign_certificate_identity_regexp`（必需）和
-`cosign_certificate_oidc_issuer` 的 `cosign_sig_or_bundle_path`。如果无密钥 Cosign 没有固定的身份，
-则会被拒绝，因为任何 GitHub Actions 工作流都可以获取有效的 Fulcio 证书。还支持带有可选
-`slsa_min_level` 的 `slsa_provenance_path`，以及 `slsa_signer_identity`（准确的 Fulcio 证书 URI subject，
-包含 workflow ref）和 `slsa_signer_issuer`（准确的 OIDC issuer）。缺少签名者字段时会跳过 SLSA。
-为所选方法提供真实的验证输入。不要在一个示例中组合无关的占位方法。
+| Fields                                                                                                                                        | Verifies                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `github_owner`, `github_repo`, optional `github_signer_workflow`                                                                              | A GitHub artifact attestation. Users need `MISE_GITHUB_TOKEN` or `GITHUB_TOKEN` in the environment; without one the install fails.                    |
+| `cosign_sig_or_bundle_path`, `cosign_public_key_path`                                                                                         | A cosign signature made with a key.                                                                                                                   |
+| `cosign_sig_or_bundle_path`, `cosign_certificate_identity` or `cosign_certificate_identity_regexp`, optional `cosign_certificate_oidc_issuer` | A keyless cosign signature. The identity is required, because any GitHub Actions workflow can get a valid Fulcio certificate.                         |
+| `slsa_provenance_path`, `slsa_signer_identity`, `slsa_signer_issuer`, optional `slsa_min_level`                                               | SLSA provenance. `slsa_signer_identity` is the exact certificate subject URI, including the workflow ref. mise skips SLSA without both signer fields. |
 
-mise 的生命周期会处理主要构件；不要依赖上游 vfox 的 `addition` 条目来安装第二个 SDK。需要时，请使用工具依赖，或明确实现额外工作。
+### EnvKeys {#envkeys-hook}
 
-#### EnvKeys Hook
+| `ctx` field | Value                                                 |
+| ----------- | ----------------------------------------------------- |
+| `path`      | The install directory                                 |
+| `version`   | The installed version                                 |
+| `main`      | `{ name, version, path }` for this install            |
+| `sdkInfo`   | The same table, keyed by the plugin name              |
+| `options`   | The tool's options; see [Tool options](#tool-options) |
 
-返回 `{key, value}` 条目。`ctx.path` 是安装路径，`ctx.version` 是所选版本。`ctx.main`、`ctx.sdkInfo` 和类型化的
-`ctx.options` 也可用；`ctx.runtimeVersion` 不属于此 Hook 的上下文。
+Return a list of `{ key = ..., value = ... }` tables. Return each `PATH`
+directory as its own entry, not a full `PATH`; mise joins repeated keys with the
+platform's path separator. If you return no `PATH` entry, mise adds the install
+directory's `bin`.
 
-```lua
--- hooks/env_keys.lua
+Executables are often in `bin` on Linux and macOS but at the top of the archive
+on Windows:
+
+```lua [hooks/env_keys.lua]
 function PLUGIN:EnvKeys(ctx)
     local file = require("file")
+    local bin = RUNTIME.osType == "windows" and ctx.path or file.join_path(ctx.path, "bin")
     return {
-        {key = "EXAMPLE_HOME", value = ctx.path},
-        {key = "PATH", value = file.join_path(ctx.path, "bin")},
+        { key = "EXAMPLE_HOME", value = ctx.path },
+        { key = "PATH", value = bin },
     }
 end
 ```
 
-多个 PATH 条目会被合并。返回目录，而不是包含完整继承 PATH 的替换值。在此 Hook 中避免网络访问或其他开销较大的工作。
+Return only the variables the tool needs. A variable such as `LD_LIBRARY_PATH`
+affects every program started in the environment. For variables that do not
+belong to a tool version, write an [environment plugin](/env-plugin-development.html).
 
-### 可选 Hook
+### PostInstall {#postinstall-hook}
 
-#### PostInstall Hook
+| `ctx` field      | Value                                                                     |
+| ---------------- | ------------------------------------------------------------------------- |
+| `rootPath`       | The install directory                                                     |
+| `runtimeVersion` | The resolved version being installed, the same as `sdkInfo[name].version` |
+| `sdkInfo`        | `{ name, version, path }` for this install, keyed by the plugin name      |
+| `options`        | The tool's options; see [Tool options](#tool-options)                     |
 
-使用 `ctx.rootPath` 作为提取后的安装目录。`ctx.sdkInfo` 描述主要 SDK，`ctx.options` 包含工具选项。兼容性字段
-`ctx.runtimeVersion` 保存请求的工具版本，而不是 mise 应用程序版本。
+`PostInstall` returns nothing. mise calls it after it extracts the download, or
+instead of a download when `PreInstall` returns no `url`:
 
-```lua
--- hooks/post_install.lua
+```lua [hooks/post_install.lua]
 function PLUGIN:PostInstall(ctx)
     local file = require("file")
     if not file.exists(file.join_path(ctx.rootPath, "bin", "example")) then
-        error("Expected bin/example in the extracted archive")
+        error("expected bin/example in the archive")
     end
 end
 ```
 
-上面的检查假设采用 Unix 可执行文件布局。归档文件通常会携带可执行权限；只有在实际发行版需要时才修改权限。
+To build from source, compile here, not in `PreInstall`. Declare the compilers
+and libraries the build needs in [`systemDependencies`](#system-dependencies),
+run commands with `cmd.exec` and its `cwd` option, and pass paths as quoted
+arguments or environment variables. Say in your README whether the build needs
+a POSIX shell: `nproc`, `chmod` and `./configure` do not work on Windows.
 
-#### MiseInstallSatisfied Hook
+### MiseInstallSatisfied {#miseinstallsatisfied-hook}
 
-Some tools keep install state that depends on tool options, such as add-on components the
-plugin installs in `PostInstall`. Without this hook, mise treats a version as installed
-once its directory exists, so changing the option later has no effect until the user runs
-`mise install --force`, which downloads the tool again.
+| `ctx` field | Value                                                       |
+| ----------- | ----------------------------------------------------------- |
+| `path`      | The install directory                                       |
+| `version`   | The installed version                                       |
+| `options`   | The current tool options; see [Tool options](#tool-options) |
 
-`MiseInstallSatisfied` lets the plugin report that an installed version no longer matches
-the request. mise calls it whenever it decides whether a tool needs installing, including
-`mise install` and auto-install, so keep it fast and free of side effects: inspect files
-under `ctx.path` rather than running the tool or making network requests. `ctx.version` is
-the installed version and `ctx.options` contains the current tool options.
+Some tools keep install state that depends on tool options, such as add-on
+components that `PostInstall` installs. Without this hook, mise treats a version
+as installed once its directory exists, so a changed option has no effect until
+the user runs `mise install --force`, which downloads the tool again.
 
-```lua
--- hooks/mise_install_satisfied.lua
+`MiseInstallSatisfied` reports whether an installed version still matches the
+request. mise calls it whenever it decides whether a tool needs installing,
+including `mise install` and auto-install, so inspect files under `ctx.path`
+rather than running the tool or making network requests:
+
+```lua [hooks/mise_install_satisfied.lua]
 function PLUGIN:MiseInstallSatisfied(ctx)
     local file = require("file")
     for _, name in ipairs(ctx.options.components or {}) do
         if not file.exists(file.join_path(ctx.path, "components", name)) then
-            return {satisfied = false, reason = "missing component " .. name}
+            return { satisfied = false, reason = "missing component " .. name }
         end
     end
-    return {satisfied = true}
+    return { satisfied = true }
 end
 ```
 
-Return `{satisfied = false}` (or `false`) when the install needs updating. mise then runs
-`PostInstall` again on the existing install, without running `PreInstall`, downloading, or
-removing the install directory, so `PostInstall` must be safe to rerun. After that and the
-tool's `postinstall` script, mise calls `MiseInstallSatisfied` again and fails with its
-`reason` if the install still does not match;
-the existing install stays in place either way. `mise install --force` still reinstalls from
-scratch.
+Return `{ satisfied = false, reason = "..." }` or `false` when the install needs
+updating, and `{ satisfied = true }`, `true` or nothing when it does not. On
+`false`, mise runs `PostInstall` again on the existing install, without
+`PreInstall`, a download or removing the install directory, so `PostInstall`
+must be safe to run twice. After that and the tool's `postinstall` command, mise
+calls `MiseInstallSatisfied` again and fails with `reason` if the install still
+does not match. The install stays in place either way, and
+`mise install --force` still reinstalls from scratch.
 
-`reason` appears in debug output (`MISE_DEBUG=1`). Returning `true` or `nil` keeps the install
-as it is. If the hook raises an error, mise warns and keeps the install, so a broken check
-cannot trigger work on every command.
+`reason` appears in debug output (`MISE_DEBUG=1`). If the hook raises an error,
+mise warns and treats the install as current, so a broken check cannot trigger
+work on every command.
 
-#### PreUse Hook
+### PreUninstall {#preuninstall-hook}
 
-mise 不实现上游 vfox 的 `PreUse` Hook。不要依赖它来重写版本、观察 Shell 更改或执行激活工作。使用受支持的版本列表/别名解析版本请求，并通过
-`EnvKeys` 返回环境条目。
+| `ctx` field | Value                                                   |
+| ----------- | ------------------------------------------------------- |
+| `main`      | `{ name, version, path }` for the install being removed |
+| `sdkInfo`   | The same table, keyed by the plugin name                |
 
-#### ParseLegacyFile Hook
+mise calls `PreUninstall` before it removes an installed version, in
+`mise uninstall`, `mise upgrade` and `mise prune`. Use it to undo changes the
+plugin made outside the install directory; the directory still exists while the
+hook runs. The hook returns nothing and receives no tool options. If it raises
+an error, mise stops and keeps the install directory, so the user can retry.
 
-在 `metadata.lua` 中声明文件名，实现解析器，并要求用户为插件的安装名称启用
-[`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools)。返回版本请求，但不要改变其含义：
+```lua [hooks/pre_uninstall.lua]
+function PLUGIN:PreUninstall(ctx)
+    -- PostInstall recorded this version in a file outside the install directory
+    os.remove(os.getenv("HOME") .. "/.example/versions/" .. ctx.main.version)
+end
+```
 
-```lua
--- hooks/parse_legacy_file.lua
+### ParseLegacyFile {#parselegacyfile-hook}
+
+| `ctx` field              | Value                                                                                  |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `filename`               | The file's name, such as `.example-version`                                            |
+| `filepath`               | The file's full path                                                                   |
+| `getInstalledVersions()` | Despite its name, calls `Available` and returns those versions; it can use the network |
+
+vfox calls these legacy files; mise calls them
+[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files). List
+the file names in `legacyFilenames` in `metadata.lua`, and return
+`{ version = ... }` with the request as written:
+
+```lua [hooks/parse_legacy_file.lua]
 function PLUGIN:ParseLegacyFile(ctx)
     local file = require("file")
-    local contents = file.read(ctx.filepath)
-    local version = contents:match("^%s*([^\r\n]+)")
-    if version then
-        version = version:match("^%s*(.-)%s*$")
-    end
-    return {version = version}
+    local line = file.read(ctx.filepath):match("^%s*([^\r\n]+)")
+    return { version = line and line:match("^(.-)%s*$") }
 end
 ```
 
-此解析器支持单行版本请求，包括频道和预发布版本。请根据文件的实际格式进行调整。`ctx.filename` 是基本名称，`ctx.filepath` 是完整路径。尽管名称如此，兼容性方法
-`ctx:getInstalledVersions()` 调用的是 `Available`；它不是已安装版本的清单，并且可能会执行网络请求。
+This parser reads the first line as the request, including channels and
+prereleases, and trims the spaces around it. Adapt it to the file's real format.
+mise splits the returned string on whitespace, so `"1.2.0 1.10.0"` requests
+both versions.
 
-## 创建工具插件
+mise reads idiomatic version files only for tools listed in the
+[`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools)
+setting, so tell users to add your plugin's name to it.
 
-### 使用模板仓库
+## metadata.lua {#metadata-lua}
 
-从[工具模板](https://github.com/jdx/mise-tool-plugin-template)创建仓库，或克隆它以查看并自定义其文件。在测试期间，请选择一个不会与核心工具或现有插件冲突的插件名称。
+`metadata.lua` sets the global `PLUGIN` table with at least `name` and
+`version`; the Lua reference lists [every field](/plugin-lua-modules.html#metadata).
+mise caches what a tool plugin declares there until one of the plugin's Lua
+files changes. Do not probe the host in `metadata.lua`: a shell-out slows down
+many commands, and its cached answer goes stale after an OS upgrade.
 
-### 1. 插件结构
+### depends {#depends}
 
-```text
-my-tool-plugin/
-├── metadata.lua
-├── hooks/
-│   ├── available.lua
-│   ├── pre_install.lua
-│   ├── env_keys.lua
-│   ├── post_install.lua       # optional
-│   ├── mise_install_satisfied.lua  # optional
-│   └── parse_legacy_file.lua  # optional
-└── lib/
-    └── helper.lua            # optional shared code
-```
+`depends` lists tools the plugin needs, by their `mise.toml` names:
 
-### 2. metadata.lua
-
-```lua
+```lua [metadata.lua]
 PLUGIN = {
-    name = "my-tool",
-    version = "1.0.0", -- plugin release, separate from the tool version
-    description = "Install Example Tool",
-    author = "Plugin Author",
-    legacyFilenames = {".example-version"},
-    -- Add only real installation prerequisites, if any:
-    -- depends = {"go", "make"},
+    name = "example",
+    version = "0.1.0",
+    depends = { "go" },
 }
 ```
 
-`depends` 会向安装 Hook 暴露匹配的已配置工具，并对其安装任务进行排序。用户必须配置这些工具；元数据不会选择它们的版本。避免自依赖。这与工具的 `[tools]` `depends` 选项不同，后者会对已配置的安装图进行排序。
+When the project configures a listed tool, mise installs it before this
+plugin's tool and puts it on `PATH` for the commands the hooks run with
+`cmd.exec` and `os.execute`, but not `io.popen`. While the tool installs, those
+commands also see `[env]` values marked `tools = true`. `depends` does not
+choose a version or install a tool the project does not configure; an
+unconfigured one can still come from the existing `PATH`. Do not list the
+plugin's own tool.
 
-#### 系统依赖
+Users can add more with the [`depends` tool option](/dev-tools/#tool-dependencies);
+mise combines both lists. Backend plugins declare `depends` the same way.
 
-从源代码编译（或以其他方式依赖系统库和构建工具）的插件，可以通过 `systemDependencies` 声明这些前置条件。在安装工具之前，mise 会检查每一项，并根据 [`system_deps`](/configuration/settings.html#system_deps) 设置，报告缺失项、提供安装选项或自动安装缺失项。
+### System dependencies {#system-dependencies}
 
-```lua
+Plugins that compile from source can list the libraries and build tools they
+need in `systemDependencies`. Before installing, mise checks each one and
+handles anything missing according to the
+[`system_deps`](/configuration/settings.html#system_deps) setting: report it,
+offer to install it, or install it.
+
+```lua [metadata.lua]
 PLUGIN = {
-    name = "php",
-    version = "1.0.0",
+    name = "example",
+    version = "0.1.0",
 
     systemDependencies = {
         -- PATH 上的可执行文件，可附带版本约束
@@ -272,196 +500,158 @@ PLUGIN = {
         { bin = "re2c",
           packages = { brew = "re2c", apt = "re2c", dnf = "re2c" } },
 
-        -- 可通过 pkg-config 发现的库
+        -- a library that pkg-config can find
         { pkgconfig = "libxml-2.0",
           packages = { brew = "libxml2", apt = "libxml2-dev", dnf = "libxml2-devel" } },
-        { pkgconfig = "openssl",
-          packages = { brew = "openssl@3", apt = "libssl-dev", dnf = "openssl-devel" } },
 
-        -- a runtime shared library, by soname (Linux). apt renamed this
-        -- package in the 64-bit time_t transition, so list both names and
-        -- let mise pick the one that exists.
+        -- a shared library by soname (Linux). apt renamed this package in the
+        -- 64-bit time_t transition, so list both names, newest first.
         { sharedlib = "libaio.so.1",
           packages = { apt = { "libaio1t64", "libaio1" }, dnf = "libaio" } },
 
-        -- 备用方案：任何退出状态为 0 即表示“满足”的 shell 命令
-        { command = "xcode-select -p", optional = "macOS 命令行工具" },
+        -- any shell command that exits 0 when the dependency is present
+        { command = "xcode-select -p", optional = "macOS command line tools" },
     },
 }
 ```
 
-每个条目必须设置**且只能设置一项**检查：
+Each entry sets exactly one check:
 
-| 检查       | 检测方式                                             | 用途                                       |
-| ----------- | -------------------------------------------------- | ------------------------------------------ |
-| `bin`       | 可在 `PATH` 上解析的可执行文件                       | 编译器、构建工具、`*-config` 脚本          |
-| `pkgconfig` | `pkg-config --exists <name>`                       | 提供 `.pc` 文件的 C 库                     |
-| `sharedlib` | 动态链接器能够解析 soname（仅限 Linux）              | 预编译二进制文件所需的运行时库              |
-| `command`   | shell 命令退出状态为 `0`                            | 上述方式无法表达的任何依赖                  |
+| Check       | Passes when                                    | Use for                                    |
+| ----------- | ---------------------------------------------- | ------------------------------------------ |
+| `bin`       | the executable is on `PATH`                    | compilers, build tools, `*-config` scripts |
+| `pkgconfig` | `pkg-config --exists <name>` succeeds          | C libraries that ship a `.pc` file         |
+| `sharedlib` | the dynamic linker can find the soname (Linux) | runtime libraries for prebuilt binaries    |
+| `command`   | the shell command exits `0`                    | anything the other checks cannot express   |
 
-可选字段：
+- `version`: a constraint for `bin` and `pkgconfig`, such as `>=3.0`, `>3`,
+  `<=1.2` or `=3.0`; a bare `3.0` means `>=3.0`. mise reads the version from
+  `<bin> --version` or `pkg-config --modversion`, and treats the dependency as
+  satisfied when it cannot read one.
+- `optional`: a short reason, such as `"wxWidgets GUI"`. A missing optional
+  dependency prints one line and never prompts or fails the install.
+- `packages`: the package that provides the dependency, for each package
+  manager that has one. Keys are any package manager mise knows, such as
+  `brew`, `brew-cask`, `apt`, `dnf`, `zypper`, `pacman`, `aur`, `apk`, `nix`,
+  `flatpak`, `flatpak-user`, `mas`, `scoop`, `snap`, `winget`, or an installed package
+  manager plugin's name. mise uses the first available manager that has an
+  entry. For a list of names, `apt` installs the first one it offers, and the
+  other managers use the first entry.
 
-- **version** — `bin` 和 `pkgconfig` 的约束（`>=3.0`、`>3`、`<=1.2`、`=3.0`，或表示 `>=3.0` 的裸版本号 `3.0`）。mise 会运行 `<bin> --version` / `pkg-config --modversion` 并进行比较。如果无法提取版本，则将依赖视为满足（存在即可），而不是阻止安装
-- **optional** — 简短的原因字符串。缺失的可选依赖不会提示或失败；它们会显示为一行信息，让用户可以在不需要某些功能时进行构建（例如 Erlang 的 wxWidgets GUI）
-- **packages** — 将包管理器名称（brew、brew-cask、apt、dnf、zypper、pacman、apk、flatpak、flatpak-user、mas、scoop、winget）映射到提供该功能的包。值可以是单个包名称（apt = "bison"），也可以是候选项列表（apt = { "libaio1t64", "libaio1" }），用于同一功能在不同发行版版本中使用不同包名称的情况。候选项按新名称优先排列：mise 会选择包管理器实际拥有的第一个候选项；如果无法判断，则回退到列表中的第一个候选项。只有可以查询包可用性的管理器（目前为 apt）会执行此选择；其他管理器始终使用第一个候选项。
+A passing check is enough: mise does not care how the dependency was installed,
+and uses `packages` only to install what is missing. Older mise versions ignore
+`systemDependencies`.
 
-**绝不要从 `metadata.lua` 探测主机。** 每次 mise 加载插件元数据时都会运行其顶层代码，因此在那里执行 Shell 命令（检查哪个包名称存在、读取发行版版本）会在许多 mise 调用中产生开销，并且其结果会与元数据一同缓存——当用户升级操作系统后，这个针对特定机器的答案会过时。请声明候选项并让 mise 解析它们；mise 会延迟执行此操作：只有实际未通过检查的依赖，在即将安装包时才会进行解析。
+## Tool options {#tool-options}
 
-**检测结果是唯一依据。** 无论某项功能是通过 Homebrew、apt、nix、MacPorts 还是从源代码安装的，只要检查通过，就视为满足；mise 不会询问它是如何安装的。只有在**提供安装缺失项的选项**时，才会查询 `packages` 映射；它只是补救提示，并不声明该工具必须来自相应的包管理器。
+`ctx.options` holds the tool's options from `mise.toml` in `PreInstall`,
+`PostInstall`, `EnvKeys` and `MiseInstallSatisfied`. `Available` and
+`PreUninstall` do not receive them. mise keeps `os`, `depends`, `install_env`,
+`lazy`, `lazy_bins` and `auto_update` to itself; every other option reaches the
+hooks, including `postinstall` and `minimum_release_age`, which mise also acts
+on.
 
-这些声明在较旧版本的 mise 和上游 vfox 中不会产生作用（两者都会忽略未知的 `PLUGIN` 字段），因此添加它们具有向后兼容性。
-
-### 3. 辅助库
-
-使用 Lua 辅助函数处理发布者特定的平台命名。运行时对 macOS 报告 `darwin`，对 x64 报告 `amd64`；上游归档文件可能使用不同的拼写。仅映射发布者实际支持的平台，并明确拒绝其他平台。
-
-```lua
--- lib/platform.lua
-local M = {}
-function M.archive_platform()
-    local os_names = {darwin = "macos", linux = "linux", windows = "windows"}
-    local arches = {amd64 = "x64", arm64 = "arm64"}
-    local os_name = os_names[RUNTIME.osType] or error("Unsupported OS: " .. RUNTIME.osType)
-    local arch = arches[RUNTIME.archType] or error("Unsupported architecture: " .. RUNTIME.archType)
-    return os_name .. "-" .. arch
-end
-return M
+```toml [mise.toml]
+[tools]
+example = { version = "1.10.0", bundled = false, channels = ["stable", "beta"] }
 ```
 
-## 真实世界示例：vfox-nodejs
+Arrays and tables stay structured, and values inside them keep their TOML types.
+Top-level booleans and numbers arrive as strings, so `bundled = false` arrives as
+`"false"`, which is truthy in Lua. Compare strings explicitly and convert
+numbers with `tonumber`:
 
-请研究 [vfox-nodejs](https://github.com/version-fox/vfox-nodejs) 以了解上游实现。对于常规 Node 使用，优先使用 mise 的
-[核心 Node 后端](/lang/node.html)。Node 插件必须处理以下细节，而不是复制固定的 Linux 归档 URL。
-
-### 可用 Hook 示例
-
-Node 的发布索引包含版本字符串和发布元数据。解码之前请检查 HTTP 状态，保留索引的发布顺序，并仅移除已知的前导
-`v`。 [HTTP 和 JSON 模块](/plugin-lua-modules.html)提供请求和解码 API。
-
-### PreInstall Hook 示例
-
-为目标操作系统/架构选择准确的归档文件，然后在 `SHASUMS256.txt` 中精确匹配其文件名。文件名包含 `.` 和 `-` 等 Lua 模式字符，因此
-`line:match(filename)` 并不是精确的文件名检查。例如：
-
-```lua
-local function find_checksum(body, filename)
-    for line in body:gmatch("[^\r\n]+") do
-        local digest, name = line:match("^(%x+)%s+%*?(.+)$")
-        if name == filename and #digest == 64 then
-            return digest
-        end
+```lua [hooks/pre_install.lua]
+function PLUGIN:PreInstall(ctx)
+    local bundled = ctx.options.bundled == "true"
+    for _, channel in ipairs(ctx.options.channels or {}) do
+        -- channels is a Lua list
     end
-    error("No SHA-256 entry for " .. filename)
+    -- ...
 end
 ```
 
-如果缺少校验和则失败。请求失败后，不要默默地继续使用 `sha256 = nil`。从同一服务器获取校验和是一项完整性检查，但这与验证 Node 的签名校验和清单并不具有相同的保证。
+The install, environment and uninstall hooks, and the commands they run, also
+see each option as an environment variable named `MISE_TOOL_OPTS__` and the key
+in uppercase, such as `MISE_TOOL_OPTS__BUNDLED`. Arrays and tables appear there
+in TOML syntax. Plugins written before `ctx.options` existed read these
+variables; new plugins should use `ctx.options`. See
+[Plugins](/plugins.html#tool-options) for how users set options.
 
-### EnvKeys Hook 示例
+## Testing {#testing-your-plugin}
 
-Node 归档文件在 Unix 上将可执行文件放置在 `bin` 中，在 Windows 上则放置于安装根目录。请使用正确的目录：
-
-```lua
-function PLUGIN:EnvKeys(ctx)
-    local file = require("file")
-    local bin = RUNTIME.osType == "windows" and ctx.path or file.join_path(ctx.path, "bin")
-    return {
-        {key = "NODE_HOME", value = ctx.path},
-        {key = "PATH", value = bin},
-    }
-end
-```
-
-### PostInstall Hook 示例
-
-不要在没有明确配置范围的情况下运行 `npm config set`：它可能会更改工具安装目录之外的用户 npm 配置。如果插件需要特定的 npm 前缀或缓存，请优先返回环境条目。在添加权限更改或设置命令之前，请测试实际的归档布局。
-
-### 旧文件支持
-
-Node 版本文件可以包含 `lts/*` 等别名、前缀和预发布版本。不要只提取数字和点号。解析器必须保留请求，插件也必须支持解析该请求；否则应报告不受支持的值，而不是选择其他发布版本。
-
-## 测试你的插件
-
-### 本地开发
-
-使用单独的测试项目和不会替换常用工具的插件名称：
+Use a separate test project and a plugin name that does not replace a tool you
+use:
 
 ```sh
-mise plugin link my-tool /path/to/my-tool-plugin
-mise ls-remote my-tool
-mise use my-tool@1.0.0
+mise plugins link example ./mise-example
+mise ls-remote example
+mise use example@1.10.0
 mise exec -- example --version
 ```
 
-将 `1.0.0` 替换为已发布的测试版本，将 `example` 替换为它提供的可执行文件。对于版本文件测试，请使用另一个没有竞争性 `[tools]` 固定版本的空项目：
+To test a version file, use another empty project with no `[tools]` entry for
+the tool, so that the file decides the version:
 
-```toml
+```toml [mise.toml]
 [settings]
-idiomatic_version_file_enable_tools = ["my-tool"]
+idiomatic_version_file_enable_tools = ["example"]
 ```
 
-将受支持的请求写入 `.example-version`，运行 `mise install`，并验证
-`mise exec -- example --version`。`mise use my-tool` 会写入工具选择，因此它不能用于测试版本文件是否控制了解析。
+Write a request to `.example-version`, run `mise install`, and check
+`mise exec -- example --version`. `mise use example` writes a `[tools]` entry, so
+it does not test the version file.
 
-### 调试模式
+When a hook fails, run the command again with debug output. When a cached
+version list or environment hides an edit to a hook, clear the tool's cache:
 
 ```sh
-MISE_DEBUG=1 mise install my-tool@1.0.0
-mise cache clear my-tool
+MISE_DEBUG=1 mise install example@1.10.0
+mise cache clear example
 ```
 
-当缓存的元数据或版本结果掩盖了本地 Hook 编辑时，请清除工具的缓存。
+Before you publish, test version listing, an install, the executable and the
+environment on every OS you support, plus an unsupported platform, a missing
+checksum, a path with spaces and, if you support them, version files. See
+[Publishing plugins](/plugin-publishing.html#testing-before-publication) for an
+isolated test setup.
 
-### 插件测试脚本
+## Common mistakes {#common-mistakes}
 
-使用独立的[发布测试工作流](/plugin-publishing.html#testing-before-publication)。测试版本列表、具体安装、可执行文件查找和环境值。还要测试不受支持的平台、缺少校验和、格式错误的元数据、包含空格的路径，以及受支持时的惯用文件。在 CI 中运行每个声明支持的操作系统。
+- Matching a file name with `line:match(filename)`. `.` and `-` are pattern
+  characters; compare strings with `==`, as `find_checksum` does.
+- Continuing with `sha256 = nil` after a checksum request fails. Raise an error
+  instead.
+- Reading a boolean option with `if ctx.options.flag then`. Top-level booleans
+  arrive as strings, so `"false"` is true; compare with `== "true"`.
+- Stripping more than a documented prefix from versions. Removing `-beta.1` or
+  turning `lts/*` into digits changes the request; treat versions as opaque
+  strings and do not sort them with a SemVer parser.
+- Changing user-wide configuration from `PostInstall`, such as
+  `npm config set`. Return environment variables from `EnvKeys` instead.
+- Expecting a Lua table to cache data between commands. Each mise command
+  starts a new Lua runtime; mise caches version lists and environments itself.
+  See [cache behavior](/cache-behavior.html).
+- Logging tokens or a response body that contains secrets to explain a failed
+  request.
 
-## 最佳实践
+## Differences from vfox {#differences-from-vfox}
 
-### 错误处理
+- mise never calls `PreUse`. Return environment variables from `EnvKeys`, and
+  resolve version requests in `Available`.
+- mise installs only the main download from `PreInstall` and ignores
+  `addition` entries. Install extra components in `PostInstall`, or declare
+  them as tool dependencies.
+- mise ignores `headers` in `PreInstall`'s result. It applies its own
+  [`url_replacements`](/url-replacements.html) and
+  [`netrc`](/configuration/settings.html#netrc) settings to the download.
+- mise does not read `minRuntimeVersion`.
+- mise ignores `note` in the results of `Available` and `PreInstall`.
+- `ctx.args` is always empty.
+- `ctx:getInstalledVersions()` in `ParseLegacyFile` calls `Available` instead
+  of listing installed versions.
+- `rolling` and `checksum` in `Available`, `attestation` in `PreInstall`,
+  `ctx.options`, `MiseInstallSatisfied`, `PLUGIN.depends` and
+  `systemDependencies` are mise additions that the vfox CLI ignores.
 
-对于可恢复的传输失败，请使用 `http.try_get`，并在解析之前检查 HTTP 状态。`json.decode` 和
-`cmd.exec` 等同步操作会抛出可捕获的 Lua 错误。绝不要仅为了解释请求失败而记录令牌或包含密钥的响应正文。
-
-### 平台检测
-
-使用注入的运行时，而不是生成 `uname`：
-
-| 字段                    | 值或含义                                                  |
-| ----------------------- | ---------------------------------------------------------- |
-| `RUNTIME.osType`        | `windows`、`linux`、`darwin`                               |
-| `RUNTIME.archType`      | `amd64`、`arm64`、`x86` 及其他受支持的架构 |
-| `RUNTIME.envType`       | 在检测到的 Linux 系统上为 `gnu` 或 `musl`；否则为 `nil` |
-| `RUNTIME.version`       | 嵌入式 vfox 运行时版本                                      |
-| `RUNTIME.pluginDirPath` | 插件源目录                                                  |
-
-### 版本规范化
-
-仅规范化有文档说明的发布者约定，例如前导 `v`。将版本的其余部分视为不透明内容。移除
-`-beta.1` 会将预发布版本改成不同的请求。
-
-### 缓存
-
-mise 会缓存远程版本列表和环境结果。模块级 Lua 表只在该运行时持续存在，无法提供跨独立 mise 调用共享的缓存。保持元数据为声明式，并参阅[缓存行为](/cache-behavior.html)了解刷新控制。
-
-## 高级特性
-
-### 条件安装
-
-使用 `RUNTIME` 和准确的请求版本选择归档文件。在为其他目标平台生成锁文件时也可能调用
-`PreInstall`；不要为了计算构件 URL 而探测主机或安装依赖。
-
-### 源码编译
-
-仅在安装阶段进行编译。声明前置条件，使用带有 `cwd` 选项的 `cmd.exec`，并通过正确引用的参数或环境变量传递路径。说明构建是否需要 POSIX Shell。`nproc`、`chmod` 和
-`./configure` 等命令无法构成可移植的 Windows 构建方案。
-
-### 环境配置
-
-仅返回工具所需的变量。PATH 条目是目录；设置 `LD_LIBRARY_PATH` 等不相关变量可能会影响环境中启动的每个进程。对于与工具版本无关的变量，请使用[环境插件](/env-plugin-development.html)。
-
-## 后续步骤
-
-- [后端插件开发](/backend-plugin-development.html)
-- [插件 Lua 模块](/plugin-lua-modules.html)
-- [插件发布](/plugin-publishing.html)
+To publish the plugin, see [Publishing plugins](/plugin-publishing.html).

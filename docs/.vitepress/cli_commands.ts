@@ -84,7 +84,7 @@ export const commands: { [key: string]: Command } = {
         hide: true,
       },
       dotfiles: {
-        hide: false,
+        hide: true,
         subcommands: {
           add: {
             hide: false,
@@ -202,10 +202,10 @@ export const commands: { [key: string]: Command } = {
         hide: true,
         subcommands: {
           apply: {
-            hide: false,
+            hide: true,
           },
           status: {
-            hide: false,
+            hide: true,
           },
         },
       },
@@ -256,10 +256,10 @@ export const commands: { [key: string]: Command } = {
         hide: true,
         subcommands: {
           apply: {
-            hide: false,
+            hide: true,
           },
           status: {
-            hide: false,
+            hide: true,
           },
         },
       },
@@ -377,10 +377,10 @@ export const commands: { [key: string]: Command } = {
         hide: true,
         subcommands: {
           apply: {
-            hide: false,
+            hide: true,
           },
           status: {
-            hide: false,
+            hide: true,
           },
         },
       },
@@ -920,7 +920,7 @@ export const commands: { [key: string]: Command } = {
         hide: false,
       },
       run: {
-        hide: false,
+        hide: true,
       },
       validate: {
         hide: false,
@@ -990,6 +990,20 @@ export const commands: { [key: string]: Command } = {
   },
   use: {
     hide: false,
+  },
+  vars: {
+    hide: false,
+    subcommands: {
+      ls: {
+        hide: false,
+      },
+      prompt: {
+        hide: false,
+      },
+      unset: {
+        hide: false,
+      },
+    },
   },
   version: {
     hide: false,

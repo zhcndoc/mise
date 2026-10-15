@@ -1,5 +1,5 @@
 ---
-description: "获取有关任务的信息"
+description: "Show a task's definition"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -9,7 +9,9 @@ description: "获取有关任务的信息"
 - **效果：** 只读
 - **源代码：** [`src/cli/tasks/info.rs`](https://github.com/jdx/mise/blob/main/src/cli/tasks/info.rs)
 
-获取有关任务的信息。
+Show a task's definition
+
+Prints the task's description, source file, dependencies, sources, outputs, run commands, environment, and usage spec. `--json` prints the full definition.
 
 ## 参数
 - **`<TASK>`** — 要获取信息的任务名称
@@ -20,7 +22,7 @@ description: "获取有关任务的信息"
 
 ## 示例
 
-检查选定的定义及其源文件
+Show the test task and the file that defines it
 
 ```
 mise tasks info test
@@ -36,6 +38,6 @@ mise tasks info test --json
 
 ## 相关文档
 
-- [任务配置](/tasks/task-configuration.html)。
-- [`mise tasks [FLAGS] [TASK] [SUBCOMMAND]`](/cli/tasks.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Task configuration reference](/tasks/task-configuration.html).
+- [`mise tasks [FLAGS] [TASK] [SUBCOMMAND]`](/cli/tasks.html).
+- [Global flags and argument syntax](/cli/#global-flags).

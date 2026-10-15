@@ -12,25 +12,29 @@ description: "列出 identity 安装布局中的安装实例"
 
 列出 identity 安装布局中的安装实例。
 
-每个安装实例都会单独列出，因此可以区分同一版本的不同选项或由锁文件锁定到不同构件的实例。状态列说明无锁文件请求使用的实例（`selected`）、被锁文件采用的实例（`pinned`），以及位于只读共享安装目录中的实例（`shared`）。
+Every installation is listed separately, so variants of one version (made
+with different options, or pinned to different artifacts by lockfiles) can
+be told apart. The Status column marks the installation mise uses when no
+lockfile pins one (`selected`), installations a lockfile pins (`pinned`), and
+installations in a read-only shared installs directory (`shared`).
 
 ## Arguments
 - **`[TOOL]…`** — 只显示这些工具的安装实例
 
 ## Flags
-- **`-J --json`** — 以 JSON 格式输出
-- **`--no-header`** — 不显示表头
-- **`-h --help`** — 显示帮助
+- **`-J --json`** — Output in JSON format
+- **`--no-header`** — Do not print the table header
+- **`-h --help`** — Print help
 
 ## Examples
 
-列出 identity 布局中的所有安装实例
+List every installation in the identity layout
 
 ```
 mise installs ls
 ```
 
-以 JSON 格式列出 node 的安装实例
+List the installations of node as JSON
 
 ```
 mise installs ls node --json
@@ -40,6 +44,6 @@ mise installs ls node --json
 
 ## Related documentation
 
-- [Install layout](/dev-tools/install-layout.html).
+- [Identity install layout](/dev-tools/install-layout.html).
 - [`mise installs [SUBCOMMAND]`](/cli/installs.html).
 - [Global flags and argument syntax](/cli/#global-flags).

@@ -11,12 +11,27 @@ description: "管理来自 `[bootstrap.compose]` 的 Docker Compose 项目"
 
 管理来自 `[bootstrap.compose]` 的 Docker Compose 项目
 
-目标主机上需要可正常工作的 Docker 引擎和 Compose 命令。`apply` 使声明的项目状态保持一致；`status` 检查现有项目。
+Needs a running Docker engine and the Docker Compose command on this
+machine.
 
 ## 标志
 - **`-h --help`** — 显示帮助
 
-## 子命令
+## Examples
+
+Show the state of every declared project
+
+```
+mise bootstrap compose status
+```
+
+Show what would change
+
+```
+mise bootstrap compose apply --dry-run
+```
+
+## Subcommands
 
 - [`mise bootstrap compose apply [-n --dry-run] [-y --yes]`](/cli/bootstrap/compose/apply.html)
 - [`mise bootstrap compose status [-J --json] [--missing]`](/cli/bootstrap/compose/status.html)
@@ -25,6 +40,6 @@ description: "管理来自 `[bootstrap.compose]` 的 Docker Compose 项目"
 
 ## 相关文档
 
-- [Compose 项目](/bootstrap/compose.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Docker Compose projects](/bootstrap/compose.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

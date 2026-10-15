@@ -13,62 +13,68 @@ description: "打印用于在交互式 Shell 中激活 mise 的脚本"
 
 使用 Shell 的语法执行此命令的输出；单独运行它只会打印脚本。激活功能会随着此 Shell 切换目录而更新工具和环境变量。
 
-将下方相应的示例添加一次到交互式启动文件中：
-Bash 使用 ~/.bashrc，Zsh 使用 ~/.zshrc，Fish 使用 ~/.config/fish/config.fish，PowerShell 使用 $PROFILE。其他 Shell 请参阅入门指南。
+Add the matching example below once to your interactive startup file:
+~/.bashrc for Bash, ~/.zshrc for Zsh, ~/.config/fish/config.fish for Fish,
+or $PROFILE for PowerShell. For Nushell, Elvish and other shells, see
+<https://mise.jdx.dev/shell-setup.html>.
 
 执行该行之前，mise 可执行文件必须位于 PATH 中。否则请使用其绝对路径，例如 `eval "$(~/.local/bin/mise activate zsh)"`。
 
-对于不需要交互式钩子的脚本和 CI，请使用 `mise exec -- command`。使用 `status` 设置自定义状态输出。
+Use `mise exec -- command` for scripts and CI that do not need interactive hooks.
+The `status.*` settings control the messages mise prints when you change
+directories.
 
 ## 参数
 - **`[SHELL_TYPE]`** — 要为其生成脚本的 Shell 类型
 
-  **可选项：** `bash`、`elvish`、`fish`、`nu`、`xonsh`、`zsh`、`pwsh`、`powershell`
+  Defaults to the shell named by MISE_SHELL or SHELL. mise reports an error when neither names a supported shell, as in PowerShell and cmd on Windows.
 
-## 标志
-- **`-q --quiet`** — 抑制非错误消息
-- **`--no-hook-env`** — 不自动调用 hook-env
+  **Choices:** `bash`, `elvish`, `fish`, `nu`, `xonsh`, `zsh`, `pwsh`, `powershell`
 
-  这有助于调试 mise。如果运行 `eval "$(mise activate --no-hook-env)"`，则可以手动调用 `mise hook-env`，它会将环境变量输出到 stdout，而不会实际修改环境。这样就可以执行 `mise hook-env --trace` 之类的命令来获取更多信息，或者直接查看 hook-env 输出的值。
-- **`--shims`** — 使用 shims，而不是修改 PATH
+## Flags
+- **`-q --quiet`** — Suppress non-error messages from the hook that runs at each prompt
+- **`--no-hook-env`** — Do not run hook-env automatically
 
-  实际上等同于：
+  Use it for debugging: after `eval "$(mise activate zsh --no-hook-env)"`, run `mise hook-env` yourself to print the shell code it would evaluate, or `mise hook-env --trace` for more detail.
+- **`--shims`** — Put the shims directory on PATH instead of updating PATH at each prompt
+
+  Roughly equivalent to:
 
   ```
   PATH="$HOME/.local/share/mise/shims:$PATH"
   ```
 
-  `mise activate --shims` 不支持 `mise activate` 的所有功能。
-  有关更多信息，请参阅 <https://mise.jdx.dev/dev-tools/shims.html#shims-vs-path>
-- **`-h --help`** — 打印帮助
+  Shims do not support every feature of `mise activate`; see
+  <https://mise.jdx.dev/dev-tools/shims.html#shims-vs-path>.
+- **`-h --help`** — Print help
 
 ## 示例
 
-在 Bash 中激活 mise。
+Activate mise in Bash
 
 ```
 eval "$(mise activate bash)"
 ```
 
-在 Zsh 中激活 mise。
+Activate mise in Zsh
 
 ```
 eval "$(mise activate zsh)"
 ```
 
-在 Fish 中激活 mise。
+Activate mise in Fish
 
 ```
 mise activate fish | source
 ```
 
-在 Xonsh 中激活 mise。
+Activate mise in Xonsh
 
 ```
 execx($(mise activate xonsh))
 ```
 
-在 PowerShell 中激活 mise。
+Activate mise in PowerShell
 
 ```
 (&mise activate pwsh) | Out-String | Invoke-Expression
@@ -78,6 +84,6 @@ execx($(mise activate xonsh))
 
 ## 相关文档
 
-- [Shell 激活](/getting-started.html#activate-mise)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Shell setup](/shell-setup.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

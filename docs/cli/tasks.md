@@ -12,28 +12,49 @@ description: "管理任务"
 
 管理任务。
 
-## 参数
-- **`[TASK]`** — 要显示信息的任务名称
+With no subcommand, lists tasks like `mise tasks ls` and accepts the same flags. With a task name, shows that task like `mise tasks info`. To run a task, use `mise run`.
 
-## 标志
-- **`-g --global`** — 仅显示全局任务
-- **`-J --json`** — 以 JSON 格式输出
-- **`-l --local`** — 仅显示非全局任务
-- **`-x --extended`** — 显示所有列
-- **`--all`** — 从整个 monorepo 加载所有任务，包括同级目录。
-  默认情况下，仅加载当前目录层级中的任务。
-- **`--hidden`** — 显示隐藏任务
-- **`--name-only`** — 仅显示任务名称，每行一个。适用于传递给 fzf 和类似工具。
-- **`--no-header`** — 不打印表头
-- **`--sort <COLUMN>`** — 按列排序。默认为名称。
+## Arguments
+- **`[TASK]`** — Task to show, as `mise tasks info` does
 
-  **可选项：** `name`、`alias`、`description`、`source`
-- **`--sort-order <SORT_ORDER>`** — 排序顺序。默认为升序。
+## Flags
+- **`-g --global`** — Only show global tasks
+- **`-J --json`** — Output in JSON format
+- **`-l --local`** — Only show non-global tasks
+- **`-x --extended`** — Show all columns
+- **`--all`** — Include tasks from every project in the monorepo, not only the current directory's hierarchy
+- **`--hidden`** — Show hidden tasks
+- **`--name-only`** — Print only task names, one per line (for fzf and similar tools)
+- **`--no-header`** — Do not print the table header
+- **`--sort <COLUMN>`** — Column to sort by (default: name)
+
+  **Choices:** `name`, `alias`, `description`, `source`
+- **`--sort-order <SORT_ORDER>`** — Sort direction (default: asc)
 
   **可选项：** `asc`、`desc`
 - **`-h --help`** — 打印帮助
 
-## 子命令
+## Examples
+
+List tasks
+
+```
+mise tasks
+```
+
+Show the build task
+
+```
+mise tasks build
+```
+
+Include hidden tasks, sorted by source
+
+```
+mise tasks --hidden --sort source
+```
+
+## Subcommands
 
 - [`mise tasks add [FLAGS] <TASK> [-- RUN]…`](/cli/tasks/add.html)
 - [`mise tasks deps [FLAGS] [TASKS]…`](/cli/tasks/deps.html)
@@ -41,13 +62,12 @@ description: "管理任务"
 - [`mise tasks graph [FLAGS]`](/cli/tasks/graph.html)
 - [`mise tasks info [-J --json] <TASK>`](/cli/tasks/info.html)
 - [`mise tasks ls [FLAGS]`](/cli/tasks/ls.html)
-- [`mise tasks run [FLAGS] [TASK] [ARGS]…`](/cli/tasks/run.html)
 - [`mise tasks validate [--errors-only] [--json] [TASKS]…`](/cli/tasks/validate.html)
 
 <!-- 生成的参考导航 -->
 
 ## 相关文档
 
-- [任务配置](/tasks/task-configuration.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Task configuration reference](/tasks/task-configuration.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

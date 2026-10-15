@@ -1,262 +1,220 @@
 ---
-description: "任务可以通过不同方式在 mise.toml 文件中定义。"
+description: "Define short commands and task groups in the [tasks] table of mise.toml."
 ---
 
-# 基于 TOML 的任务
+# TOML tasks
 
-任务可以通过不同方式在 `mise.toml` 文件中定义。简单的任务可以写在 `[tasks]` 部分中，而更详细的任务则分别拥有自己的独立部分。
+Define a task in `mise.toml` when its command fits on a line or two, or when it
+mostly runs other tasks. Move longer scripts to [file tasks](/tasks/file-tasks.html)
+so your editor can highlight and lint them.
 
-## 简单任务示例
+## Define a task
 
-```mise-toml [mise.toml]
+The shortest form maps a task name to a command:
+
+```toml [mise.toml]
 [tasks]
 build = "cargo build"
 test = "cargo test"
 lint = "cargo clippy"
 ```
 
-## 详细任务示例
+Give a task its own table to add properties:
 
 ```mise-toml [mise.toml]
-[tasks.cleancache]
-run = "rm -rf .cache"
-hide = true # 从列表中隐藏此任务
-
-[tasks.clean]
-depends = ['cleancache']
-run = "cargo clean" # 作为 shell 命令运行
-
 [tasks.build]
-description = '构建 CLI'
+description = "Build the CLI"
 run = "cargo build"
-alias = 'b' # `mise run b`
-
-[tasks.test]
-description = '运行自动化测试'
-# 按顺序运行多个命令
-run = [
-    'cargo test',
-    './scripts/test-e2e.sh',
-]
-dir = "{{cwd}}" # 在用户的 cwd 中运行，默认为项目的基础目录
-
-[tasks.lint]
-description = '使用 clippy 进行 lint'
-env = { RUST_BACKTRACE = '1' } # 脚本的环境变量
-# 你可以指定多行脚本，而不是单独的命令
-run = '''
-#!/usr/bin/env bash
-cargo clippy
-'''
-
-[tasks.ci] # 仅运行依赖项
-description = '运行 CI 任务'
-depends = ['build', 'lint', 'test']
-
-[tasks.release]
-confirm = '确定要发布一个新版本吗？'
-description = '发布一个新版本'
-file = 'scripts/release.sh' # 执行外部脚本
 ```
 
-你可以使用[环境变量](/environments/)或 [`vars`](/configuration/vars) 来定义通用参数：
+Each property below has one example. The
+[task configuration reference](/tasks/task-configuration.html) lists them all.
 
-```mise-toml [mise.toml]
-[env]
-VERBOSE_ARGS = '--verbose'
+### Add a task from the command line
 
-# 变量可以在任务之间像环境变量一样共享，
-# 但它们不会作为环境变量传递给脚本
-[vars]
-e2e_args = '--headless'
+[`mise tasks add`](/cli/tasks/add.html) writes a task to `mise.toml`:
 
-[tasks.test]
-run = './scripts/test-e2e.sh {{vars.e2e_args}} $VERBOSE_ARGS'
-```
-
-## 添加任务
-
-你可以直接编辑 `mise.toml` 文件，也可以使用 [`mise tasks add`](/cli/tasks/add)。例如：
-
-```shell
+```sh
 mise tasks add pre-commit --depends "test" --depends "render" -- echo pre-commit
 ```
 
-会将以下内容添加到 `mise.toml`：
+This adds:
 
-```toml
+```mise-toml [mise.toml]
 [tasks.pre-commit]
 depends = ["test", "render"]
 run = "echo pre-commit"
 ```
 
-## 常用选项
+## Common properties
 
-完整列表请参见[任务配置](/tasks/task-configuration)。
+### Run commands
 
-### 运行命令
-
-提供要运行的脚本。可以是单个命令，也可以是命令数组：
+`run` is a single command or an array of commands:
 
 ```mise-toml
 [tasks.test]
-run = 'cargo test'
+run = "cargo test"
 ```
-
-命令会依次运行。如果某个命令失败，任务会停止，剩余命令不会运行。
 
 ```mise-toml
 [tasks.test]
 run = [
-    'cargo test',
-    './scripts/test-e2e.sh',
+  "cargo test",
+  "./scripts/test-e2e.sh",
 ]
 ```
 
-你可以使用 `run_windows` 键指定在 Windows 上运行的备用命令：
+Array entries run in order. If one fails, the task stops and the remaining
+entries do not run. Extra command-line arguments go to the last entry. An entry
+can also run another task; see
+[Run steps in order](/tasks/architecture.html#run-steps-in-order).
+
+`run_windows` replaces `run` on Windows:
 
 ```mise-toml
 [tasks.test]
-run = 'cargo test'
-run_windows = 'cargo test --features windows'
+run = "cargo test"
+run_windows = "cargo test --features windows"
 ```
 
-### 指定使用哪个目录
+### Working directory
 
-[`dir`](/tasks/task-configuration.html#dir) 属性决定运行任务时使用的 `cwd`。你可以使用运行任务时所在的目录
-<span v-pre>`dir = "{{cwd}}"`</span>：
+Tasks run from the [config root](/configuration.html#config-root) by default.
+Set <span v-pre>`dir = "{{cwd}}"`</span> to run from the directory where you
+called mise:
 
 ```mise-toml
 [tasks.test]
-run = 'cargo test'
+run = "cargo test"
 dir = "{{cwd}}"
 ```
 
-`MISE_ORIGINAL_CWD` 也会被设置为原始工作目录，并传递给任务。
+`MISE_ORIGINAL_CWD` also holds that directory. See
+[`dir`](/tasks/task-configuration.html#dir) for other values.
 
-### 添加描述和别名
-
-你可以为任务添加描述和别名。
+### Description and alias
 
 ```mise-toml
 [tasks.build]
-description = '构建 CLI'
+description = "Build the CLI"
 run = "cargo build"
-alias = 'b' # `mise run b`
+alias = "b"
 ```
 
-- 可以使用别名运行任务
-- 使用 [`mise tasks ls`](/cli/tasks/ls.html) 或不带参数的 [`mise run`](/cli/run.html) 时会显示描述
+`mise run b` now runs `build`. The description appears in
+[`mise tasks ls`](/cli/tasks/ls.html) and in the selector that
+[`mise run`](/cli/run.html) opens when you give it no task name.
 
-```shell
-❯ mise run
-Tasks
-# Select a task to run
-# > build  构建 CLI
-#   test   运行测试
-```
+Set `hide = true` on a helper task to leave it out of `mise tasks ls`. You can
+still run it by name, and `mise tasks ls --hidden` lists it.
 
 ### 依赖项
 
-你可以为任务指定依赖项。依赖项会在任务本身之前运行。如果依赖项失败，任务不会运行。
+Dependencies run before the task. If one fails, the task does not run:
 
 ```mise-toml
 [tasks.build]
-run = 'cargo build'
+run = "cargo build"
 
 [tasks.test]
-depends = ['build']
+depends = ["build"]
+run = "cargo test"
 ```
 
-还有其他指定依赖项的方式；请参见 [wait_for](/tasks/task-configuration.html#wait-for) 和 [depends_post](/tasks/task-configuration.html#depends-post)。
-
-### 守护进程 <Badge type="warning" text="实验性" />
-
-当任务需要一个应在多次任务调用之间持续运行的服务时，请使用 `daemons`。mise 会通过 pitchfork 启动服务，等待其就绪后再运行任务。
-
-~~~mise-toml
-[settings]
-experimental = true
-
-[daemons]
-postgres = "18"
-
-[tasks.test]
-daemons = "postgres"
-run = "npm test"
-~~~
-
-`mise run test` 会在需要时启动 PostgreSQL，等待其就绪，然后运行测试脚本。之后的运行会复用该数据库。测试结束后它仍会运行；使用 `mise daemons stop postgres` 停止它。
-
-多个声明服务可以使用 `daemons = ["postgres", "redis"]`，也可以使用 `daemons = true` 选择任务项目配置中的所有守护进程。前置条件和服务配置请参阅[守护进程指南](/daemons.html)，名称解析和依赖标志请参阅 [`daemons` 参考](/tasks/task-configuration.html#daemons)。
+[Dependencies and execution order](/tasks/architecture.html) compares
+`depends` with `wait_for`, `depends_post`, and run steps.
 
 ### 环境变量
 
-你可以为任务指定环境变量：
+`env` sets variables for this task only, not for its dependencies:
 
 ```mise-toml
-[tasks.lint]
-description = '使用 clippy 进行 lint'
-env = { RUST_BACKTRACE = '1' } # 脚本的环境变量
-# 你可以指定多行脚本，而不是单独的命令
-run = '''
-#!/usr/bin/env bash
-cargo clippy
-'''
+[tasks.test]
+env = { RUST_BACKTRACE = "1" }
+run = "cargo test"
 ```
 
-### 源文件 / 输出文件
+Project-wide [environment variables](/environments/) from `[env]` reach every
+task. Use [`[vars]`](/configuration/vars.html) for values a command needs that
+should not be exported to its environment:
 
-如果某些文件没有发生变化（即任务已是最新状态），可以指定 `sources` 和 `outputs` 来跳过任务：
+```mise-toml [mise.toml]
+[env]
+VERBOSE_ARGS = "--verbose"
 
-```mise-toml
-[tasks.build]
-description = '构建 CLI'
-run = "cargo build"
-sources = ['Cargo.toml', 'src/**/*.rs'] # 如果这些文件没有变化，则跳过运行
-outputs = ['target/debug/mycli']
+[vars]
+e2e_args = "--headless"
+
+[tasks.test]
+run = "./scripts/test-e2e.sh {{vars.e2e_args}} $VERBOSE_ARGS"
 ```
 
-你可以单独使用 `sources` 配合 [`mise watch`](/cli/watch.html)，在源文件发生变化时运行任务。
-你可以使用 [`task_source_files()`](../templates.md#task-source-files) 函数，在任务的
-[模板](../templates.md)中获取任务 `sources` 的解析路径。
+### Sources and outputs
+
+With [`sources`](/tasks/task-configuration.html#sources) and
+[`outputs`](/tasks/task-configuration.html#outputs), mise skips the task while
+its outputs are up to date. See
+[Skip tasks that are up to date](/tasks/running-tasks.html#skip-tasks-that-are-up-to-date)
+for an example, and [Task caching](/tasks/caching.html) for how the checks work.
+`sources` alone also tells [`mise watch`](/cli/watch.html) which
+files to watch. In a run script, the
+[`task_source_files()`](/templates.html#task-source-files) template function
+returns the files that match `sources`.
 
 ### 确认
 
-将 `confirm` 设置为在任务自身的命令运行前进行提示。此时，其 `depends` 任务
-已经运行。若要在开始这些工作之前进行提示，请将确认设置在这些任务上，或通过 `run` 数组调用它们。请参见
-[`confirm`](./task-configuration.html#confirm)。
+`confirm` prompts before the task's own command runs:
 
-```mise-toml
+```toml
 [tasks.release]
-confirm = '你确定要发布一个新版本吗？'
-description = '发布一个新版本'
-file = 'scripts/release.sh'
+confirm = "Are you sure you want to cut a new release?"
+description = "Cut a new release"
+file = "scripts/release.sh"
 ```
 
-## 指定 shell 或解释器 {#shell-shebang}
+The task's `depends` have already run when the prompt appears. To prompt before
+that work, put the confirmation on those tasks or call them as
+[run steps](/tasks/architecture.html#run-steps-in-order). See
+[`confirm`](/tasks/task-configuration.html#confirm).
 
-如果 shell 是 `sh`、`bash` 或 `zsh`，任务会使用 `set -e`（`set -o errexit`）执行。这意味着脚本
-会在任意命令失败时退出。你可以在脚本中运行 `set +e` 来禁用此行为。
+### Daemons <Badge type="warning" text="experimental" />
+
+::: warning Experimental
+Daemons require `experimental = true` under `[settings]`.
+:::
+
+Set `daemons = "postgres"` to start a
+[project daemon](/daemons.html#tasks-that-require-daemons) and wait until it is
+ready before the task runs. The daemon keeps running afterward. See
+[`daemons`](/tasks/task-configuration.html#daemons) for the accepted values.
+
+## Specifying a shell or an interpreter {#shell-shebang}
+
+On Unix, inline commands run with the default
+[`sh -o errexit -c`](/configuration/settings.html#unix_default_inline_shell_args),
+so the script stops at the first failing command. Add `set +e` to keep going:
 
 ```mise-toml
-[tasks.echo]
+[tasks.cleanup]
 run = '''
 set +e
 cd /nonexistent
-echo "This will not fail the task"
+echo "This does not fail the task"
 '''
 ```
 
-你可以指定一个 `shell` 命令来运行脚本（默认是 [`sh -c`](/configuration/settings.html#unix_default_inline_shell_args) 或 [`cmd /c`](/configuration/settings.html#windows_default_inline_shell_args)）：
+The default on Windows is
+[`cmd /c`](/configuration/settings.html#windows_default_inline_shell_args).
+Set `shell` to run a task's commands with another shell:
 
 ```mise-toml
 [tasks.lint]
-shell = 'bash -c'
+shell = "bash -c"
 run = "cargo clippy"
 ```
 
-或者使用 shebang：
+Or start the script with a shebang:
 
 ```mise-toml
 [tasks.lint]
@@ -266,7 +224,22 @@ cargo clippy
 '''
 ```
 
-Shebang 任务会作为脚本文件执行。未在 [`usage` 规范](/tasks/task-arguments#usage-field)中定义的额外参数会作为普通脚本参数传递，例如 Bash 中的 `$1` 和 `$@`：
+A custom `shell` (even `sh -c` or `bash -c`), a shebang script, and the Windows
+default `cmd /c` do not stop at the first failure. Add `set -e` (or
+`set -euo pipefail`) to the script yourself:
+
+```mise-toml
+[tasks.lint]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cargo clippy
+'''
+```
+
+mise runs a shebang task as a script file. Extra arguments that a
+[usage spec](/tasks/task-arguments.html) does not define reach the script as
+ordinary arguments, such as `$1` and `$@` in Bash:
 
 ```mise-toml
 [tasks.greet]
@@ -276,18 +249,24 @@ echo "hello $1"
 '''
 ```
 
-```shell
-$ mise run greet world
-hello world
+```sh
+mise run greet world
+# hello world
 ```
 
-通过使用 `shebang`（或 `shell`），你可以使用其他语言运行任务（例如 Python、Node.js 或 Ruby）：
+Without a shebang, mise appends the arguments to the last command instead, so
+`$1` is empty.
+
+### Other languages
+
+A shebang or `shell` runs the task with any interpreter, such as Python,
+Node.js, or Ruby:
 
 ::: code-group
 
 ```mise-toml [python]
 [tools]
-python = 'latest'
+python = "latest"
 
 [tasks.python_task]
 run = '''
@@ -299,7 +278,7 @@ for i in range(10):
 
 ```mise-toml [python + uv]
 [tools]
-uv = 'latest'
+uv = "latest"
 
 [tasks.python_uv_task]
 run = '''
@@ -319,10 +298,10 @@ pprint([(k, v["title"]) for k, v in data.items()][:10])
 
 ```mise-toml [node]
 [tools]
-node = 'lts'
+node = "24"
 
 [tasks.node_task]
-shell = 'node -e'
+shell = "node -e"
 run = [
   "console.log('First line')",
   "console.log('Second line')",
@@ -331,7 +310,7 @@ run = [
 
 ```mise-toml [bun]
 [tools]
-bun = 'latest'
+bun = "latest"
 
 [tasks.bun_shell]
 description = "https://bun.sh/docs/runtime/shell"
@@ -346,38 +325,18 @@ await $`cat < ${response} | wc -c`; // 1256
 
 ```mise-toml [deno]
 [tools]
-deno = 'latest'
+deno = "latest"
 
 [tasks.deno_task]
-description = "使用 Deno 导入的更复杂任务"
 run = '''
 #!/usr/bin/env -S deno run
-import ProgressBar from "jsr:@deno-library/progress";
-import { delay } from "jsr:@std/async";
-
-if (!confirm('开始下载？')) {
-    Deno.exit(1);
-}
-
-const progress = new ProgressBar({ title:  "正在下载：", total: 100 });
-let completed = 0;
-async function download() {
-  while (completed <= 100) {
-    await progress.render(completed++);
-    await delay(10);
-  }
-}
-await download();
+console.log(`Hello from Deno ${Deno.version.deno}`)
 '''
-# ❯ mise run deno_task
-# [download_task] $ import ProgressBar from "jsr:@deno-library/progress";
-# 开始下载？ [y/N] y
-# 正在下载： ...
 ```
 
 ```mise-toml [ruby]
 [tools]
-ruby = 'latest'
+ruby = "latest"
 
 [tasks.ruby_task]
 run = '''
@@ -388,208 +347,99 @@ puts 'Hello, ruby!'
 
 :::
 
-::: details 什么是 shebang？`#!/usr/bin/env` 和 `#!/usr/bin/env -S` 有什么区别
+::: details What is a shebang, and what does `-S` do?
 
-Shebang 是脚本文件开头的字符序列 `#!`，用于告诉系统应该使用哪个程序解释该脚本。
-[env 命令](https://manpages.ubuntu.com/manpages/jammy/man1/env.1.html)来自 GNU Coreutils。`mise` 不使用 `env`，但行为类似。
+A shebang is the character sequence `#!` at the start of a script that names
+the program that interprets it. `#!/usr/bin/env python` runs the script with
+the `python` found on `PATH`. On Linux and macOS the system runs the shebang
+line, so [`env`](https://manpages.ubuntu.com/manpages/jammy/man1/env.1.html)
+finds `python` on `PATH`. Windows has no shebangs: mise reads the line, drops a
+leading `/usr/bin/env` or `/usr/bin/env -S`, and starts the named interpreter
+itself.
 
-例如，`#!/usr/bin/env python` 会使用 `PATH` 中找到的 Python 解释器来运行脚本。
-
-`-S` 标志允许向解释器传递多个参数。
-它会将该行的剩余部分视为需要拆分的参数字符串。
-
-当你需要指定解释器标志或选项时，这很有用。
-例如，`#!/usr/bin/env -S python -u` 会以无缓冲输出模式运行 Python。
+`-S` splits the rest of the line into separate arguments, so you can pass flags
+to the interpreter. For example, `#!/usr/bin/env -S python -u` runs Python with
+unbuffered output.
 
 :::
 
-## 使用文件或远程脚本
+### Simple commands run without a shell
 
-你可以指定一个文件作为任务运行：
+On Unix, when a task uses the default shell, mise can start a simple inline
+command such as `node build.js` directly, without `sh`. A command that uses
+shell syntax (quoting, expansion, operators, or builtins), or that runs with
+`ENV` or `BASH_ENV` set, still goes through the shell, as do sandboxed tasks and
+tasks with `cache.audit = true`. A task `shell`, `mise run --shell`, or the
+`unix_default_inline_shell_args` setting always uses the shell, even when it
+names the default, so set one if a wrapper named `sh` on `PATH` must run.
 
-```mise-toml
+## Using a file or remote script {#using-a-file-or-remote-script}
+
+`file` runs a script instead of an inline command:
+
+```toml
 [tasks.release]
-description = '创建一个新发布'
-file = 'scripts/release.sh' # 执行外部脚本
+description = "Cut a new release"
+file = "scripts/release.sh"
 ```
+
+<a id="remote-tasks"></a>
 
 ### 远程任务
 
-任务文件可以通过多种协议从远程获取：
+`file` can also fetch the script from a URL. mise downloads it and runs it, so
+use only sources you trust.
 
 #### HTTP
 
-```mise-toml
+```toml
 [tasks.build]
 file = "https://example.com/build.sh"
 ```
 
-文件会被下载并执行，因此请确保你信任其来源。
-
-#### Git <Badge type="warning" text="实验性" />
+#### Git
 
 ::: code-group
 
-```mise-toml [ssh]
+```toml [ssh]
 [tasks.build]
 file = "git::ssh://git@github.com/myorg/example.git//myfile?ref=v1.0.0"
 ```
 
-```mise-toml [https]
+```toml [https]
 [tasks.build]
 file = "git::https://github.com/myorg/example.git//myfile?ref=v1.0.0"
 ```
 
 :::
 
-URL 必须遵循 `git::<protocol>://<url>//<path>?ref=<ref>` 格式。
-
-必填字段：
-
-- `protocol`：Git 协议，例如 `ssh` 或 `https`
-- `url`：Git 仓库 URL
-- `path`：仓库中文件的路径
-
-可选字段：
-
-- `ref`：Git 引用（分支、标签、提交）
+The URL has the form `git::<protocol>://<repository>.git//<path>?ref=<ref>`,
+where `ref` is an optional branch, tag, or commit. See
+[Git URL syntax](/tasks/task-discovery.html#git-url-syntax) for every field.
 
 #### 缓存
 
-每个任务文件都会缓存在 `MISE_CACHE_DIR` 目录中。如果远程文件已更新，在清除缓存之前不会重新下载。
+mise caches each remote task file under `MISE_CACHE_DIR` and does not download
+it again until you run `mise cache clear`. To fetch fresh copies, pass
+`mise run --no-cache` or set
+[`task.remote_no_cache`](/configuration/settings.html#task.remote_no_cache)
+(`MISE_TASK_REMOTE_NO_CACHE=1`).
 
-:::tip
-你可以通过运行 `mise cache clear` 来重置缓存。
-:::
+## Arguments {#arguments}
 
-你可以使用 `MISE_TASK_REMOTE_NO_CACHE` 环境变量来禁用远程任务的缓存。
-
-## 参数
-
-::: tip
-有关任务参数的完整信息，请参阅专门的[任务参数](/tasks/task-arguments)页面。
-:::
-
-默认情况下，参数会传递给 `run` 数组中的最后一个脚本。因此，如果任务定义如下：
-
-```mise-toml
-[tasks.test]
-run = ['cargo test', './scripts/test-e2e.sh']
-```
-
-那么运行 `mise run test foo bar` 时，`foo bar` 会传递给 `./scripts/test-e2e.sh`，但不会传递给
-`cargo test`。
-
-### 推荐：使用 Usage 字段
-
-定义参数的推荐方式是使用 `usage` 字段：
+Define arguments with a `usage` spec. mise parses them and passes each value to
+the command as a `usage_*` environment variable:
 
 ```mise-toml
 [tasks.test]
 usage = '''
-arg "<file>" help="要运行的测试文件" default="all"
-flag "--format <format>" help="输出格式" default="text"
-flag "-v --verbose" help="启用详细输出"
+arg "<file>" help="Test file to run" default="all"
+flag "--format <format>" help="Output format" default="text"
 '''
 run = 'echo "Testing ${usage_file?} with format ${usage_format?}"'
 ```
 
-在 usage 字段中定义的参数可作为以 `usage_` 为前缀的环境变量使用。
-
-完整文档请参阅[任务参数](/tasks/task-arguments#usage-field)页面。
-
-### Tera 模板函数 <Badge type="danger" text="已弃用" />
-
-::: danger 已弃用 - 将于 2027.5.0 移除
-在运行脚本中使用 Tera 模板函数（`arg()`、`option()`、`flag()`）**已弃用**，并且将于 **mise 2027.5.0** 中**移除**。版本 >= 2026.5.0 将显示弃用警告。
-
-**移除原因：**
-
-- 模板函数在规范收集期间返回空字符串（两阶段解析问题）
-- Shell 转义规则复杂且不可预测
-- TOML 任务和文件任务之间的行为不一致
-
-**请改用 `usage` 字段。** 请参阅[迁移指南](/tasks/task-arguments#tera-templates)。
-:::
-
-<details>
-<summary>点击查看已弃用的 Tera 模板语法（不推荐）</summary>
-
-你可以使用 Tera 模板函数定义参数（已弃用）：
-
-```mise-toml
-[tasks.test]
-run = [
-    'cargo test {{arg(name="cargo_test_args", var=true)}}',
-    './scripts/test-e2e.sh {{option(name="e2e_args")}}',
-]
-```
-
-然后运行 `mise run test foo bar` 会将 `foo bar` 传递给 `cargo test`。
-`mise run test --e2e-args baz` 会将 `baz` 传递给 `./scripts/test-e2e.sh`。
-
-#### 位置参数
-
-这些参数在脚本中使用 <span v-pre>`{{arg()}}`</span> 定义。它们用于顺序很重要的位置参数。
-
-示例：
-
-```mise-toml
-[tasks.test]
-run = 'cargo test {{arg(name="file")}}'
-# 执行：mise run test my-test-file
-# 运行：cargo test my-test-file
-```
-
-- `i`：参数的索引。可用于指定参数顺序。默认值为它们在脚本中的定义顺序。
-- `name`：参数的名称。用于帮助/错误消息。
-- `var`：如果为 `true`，可以传递多个参数。
-- `default`：如果未提供该参数，则使用默认值。
-
-#### 选项
-
-这些参数在脚本中使用 <span v-pre>`{{option()}}`</span> 定义。它们用于有名称的参数，顺序不重要。
-
-示例：
-
-```mise-toml
-[tasks.test]
-run = 'cargo test {{option(name="file")}}'
-# 执行：mise run test --file my-test-file
-# 运行：cargo test my-test-file
-```
-
-- `name`：参数的名称。用于帮助/错误消息。
-- `var`：如果为 `true`，可以传递多个值。
-- `default`：如果未提供该选项，则使用默认值。
-
-#### 标志
-
-标志类似于选项，只是它们不接受值。它们在脚本中使用 <span v-pre>
-`{{flag()}}`</span> 定义。
-
-示例：
-
-```mise-toml
-[tasks.echo]
-run = 'echo {{flag(name="myflag")}}'
-# 执行：mise run echo --myflag
-# 运行：echo true
-```
-
-```mise-toml
-[tasks.maybeClean]
-run = '''
-if [ '{{flag(name='clean')}}' = 'true' ]; then
-  echo 'cleaning'
-fi
-'''
-# 执行：mise run maybeClean --clean
-# 运行：echo cleaning
-```
-
-- `name`：标志的名称。用于帮助/错误消息。
-
-如果传递了标志，其值为 `true`；否则为 `false`。
-
-</details>
+See [Task arguments](/tasks/task-arguments.html) for the spec syntax. Without a
+spec, extra arguments are [forwarded](/tasks/running-tasks.html#pass-arguments)
+to the command. Tasks that still use `arg()`, `option()`, or `flag()` in `run`
+should follow the [migration guide](/tasks/task-arguments.html#tera-templates).

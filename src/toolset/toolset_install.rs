@@ -121,9 +121,17 @@ impl Toolset {
         // than inheriting the provider's. The provider's own directory is still needed
         // to explain a failure that is caused by writing outside the user's install dir.
         let provider_install_dir = scope_installs_dir(&tv.request);
+        // Running a lazy tool for the first time doesn't need the other missing ones resolved.
         let install_options = InstallOptions {
             reason: "lazy shim".into(),
             scoped_install_dirs: true,
+            after_install_resolve: ResolveOptions {
+                defer_missing_lazy_tools: true,
+                // Nothing shows what resolves after the install, so this doesn't wait for
+                // `prefer_offline`: a command wrapper can reach here without it.
+                defer_missing_lazy_online: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let requests = self.lazy_install_requests(config, &tv).await;
@@ -144,7 +152,10 @@ impl Toolset {
             })?;
         if !installed.is_empty() {
             let ts = config
-                .get_toolset_with_opts(&ResolveOptions::without_lockfile_warnings())
+                .get_toolset_with_opts(&ResolveOptions {
+                    warn_not_in_lockfile: false,
+                    ..install_options.after_install_resolve.clone()
+                })
                 .await?;
             config::rebuild_shims_and_runtime_symlinks(
                 config,
@@ -232,7 +243,10 @@ impl Toolset {
         }
         if !installed.is_empty() {
             let ts = config
-                .get_toolset_with_opts(&ResolveOptions::without_lockfile_warnings())
+                .get_toolset_with_opts(&ResolveOptions {
+                    warn_not_in_lockfile: false,
+                    ..opts.after_install_resolve.clone()
+                })
                 .await?;
             config::rebuild_shims_and_runtime_symlinks(
                 config,
@@ -434,7 +448,10 @@ impl Toolset {
             trace!("install: reloading config");
             *config = Config::reset().await?;
             trace!("install: resolving");
-            if let Err(err) = self.resolve(config).await {
+            if let Err(err) = self
+                .resolve_with_opts(config, &opts.after_install_resolve)
+                .await
+            {
                 debug!("error resolving versions after install: {err:#}");
             }
             if !failed_backends.is_empty()
@@ -447,7 +464,10 @@ impl Toolset {
             // The caller has a live config that other work is using. Refresh this
             // toolset against that snapshot without replacing the global config.
             trace!("install: resolving without reloading config");
-            if let Err(err) = self.resolve(config).await {
+            if let Err(err) = self
+                .resolve_with_opts(config, &opts.after_install_resolve)
+                .await
+            {
                 debug!("error resolving versions after install: {err:#}");
             }
             if !failed_backends.is_empty()
@@ -804,7 +824,10 @@ impl Toolset {
         .await?;
         let backend = tv.backend()?;
         backend::ensure_backend_enabled(&backend.get_type())?;
-        crate::lockfile::ensure_locked_url_matches_version(&tv, &backend.get_platform_key())?;
+        crate::lockfile::ensure_locked_url_matches_version(
+            &tv,
+            &backend.get_platform_key_for(&tv),
+        )?;
         tv.ba().warn_if_locked_backend_superseded(&tv.version);
         let install_dir = opts.install_dir.clone().or_else(|| {
             opts.scoped_install_dirs
@@ -1017,7 +1040,7 @@ impl Toolset {
         let mpr = MultiProgressReport::get();
 
         for (plugin_key, url) in repo_urls {
-            let (plugin_type, name) = Self::parse_plugin_key(plugin_key);
+            let (plugin_type, name) = PluginType::from_plugin_entry(plugin_key, url);
 
             // Skip empty plugin names (e.g., from malformed keys like "" or "vfox:")
             if name.is_empty() {
@@ -1029,16 +1052,19 @@ impl Toolset {
             plugin.set_remote_url(url.clone());
 
             if !plugin.is_installed() {
+                // An unprefixed packslip entry already resolved to vfox, so
+                // only an explicit non-vfox prefix can reach this.
+                if url.starts_with("packslip:") && plugin_type != PluginType::Vfox {
+                    eyre::bail!(
+                        "plugin {plugin_key}: packslip plugin sources require the vfox plugin type"
+                    );
+                }
                 plugin
                     .ensure_installed(config, &mpr, false, dry_run)
                     .await?;
             }
         }
         Ok(())
-    }
-
-    fn parse_plugin_key(key: &str) -> (PluginType, &str) {
-        PluginType::from_plugin_config(key)
     }
 }
 

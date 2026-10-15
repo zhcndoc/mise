@@ -1,90 +1,252 @@
 ---
-description: "本页面列出了 mise 发出的常见错误消息、它们的成因以及修复方法。"
+description: "Look up a mise error or warning message to find what caused it and how to fix it."
+outline: [2, 3]
 ---
 
-# 错误
+# Error messages
 
-本页面列出了 mise 发出的常见错误消息、它们的成因以及修复方法。
-它是 [故障排除](/troubleshooting.html) 的补充，后者按症状组织
-（错误的工具版本、缓慢的提示、激活问题），而不是按错误消息组织。
+Look up a message that mise printed to see what causes it and how to fix it.
+Problems without a clear message, such as the wrong tool version running, are
+in [Troubleshooting](/troubleshooting.html).
 
-从最终退出状态或版本行上方的具体失败信息及其嵌套原因开始查看。页脚通常只建议启用详细日志；它不是错误的原因。
-例如，要诊断 Node 安装：
+## How mise reports an error {#reading-errors}
 
-```sh
-mise --verbose install node@24
-MISE_DEBUG=1 mise install node@24
-MISE_TRACE=1 mise install node@24
-mise doctor
+mise prints the error on a `mise ERROR` line, then each underlying cause on its
+own line, so the most specific cause is usually the last one before `Version:`:
+
+```text
+mise ERROR error parsing config file: ~/src/app/mise.toml
+mise ERROR Config files in ~/src/app/mise.toml are not trusted.
+Trust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.
+mise ERROR Version: 2026.10.4 linux-x64 (2026-10-07)
+mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
 ```
 
-将 `install node@24` 替换为失败的命令。跟踪日志尤其详细；分享日志前，请检查其中的凭据、环境值和私有路径。
+The `Version:` line and the hint to rerun with `--verbose` are not part of the
+cause. With `--verbose` or `MISE_DEBUG=1`, mise prints a longer report that
+numbers the causes from `0` and adds the source location. Before you share that
+output, see [Collect diagnostics](/troubleshooting.html#mise-is-failing-or-not-working-right).
 
-## `Config files in <dir> are not trusted. Trust them with mise trust.`
+## Loading config {#loading-config}
 
-mise 发现了需要先获得信任才能加载的配置。检查文件，然后如果你接受其内容，请在该目录中运行 [`mise trust`](/cli/trust.html)。
-`mise trust --show` 会显示当前的信任状态，但不会更改它。
+### `Invalid TOML in config file` {#invalid-toml}
 
-在正常模式下，简单的工具版本／任务配置无需信任即可加载；在 CI 环境之外，`mise run`、`mise install` 和 `mise exec` 等命令会隐式信任其活动配置。环境指令、模板、工具选项以及
-[偏执模式](/paranoid.html) 可能需要显式批准。列在
-[`ignored_config_paths`](/configuration/settings.html#ignored_config_paths) 中的路径永远不会被加载；
-`mise trust` 不会覆盖该设置。
+A config file has a syntax error. mise shows the file, line, and column with a
+marker under the problem:
 
-仅对你打算信任的路径使用 [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)，包括这些路径下未来的项目。
+```text
+  × Invalid TOML in config file
+   ╭─[~/src/app/mise.toml:1:7]
+ 1 │ [tools
+   ·       ▲
+   ·       ╰── unclosed table, expected `]`
+```
 
-## `<tool> 未在 mise 工具注册表中找到`
+Fix the syntax at that position. Until a project file parses, mise cannot tell
+whether it needs trust, so an untrusted file with a syntax error fails with
+[`Config files in <path> are not trusted`](#untrusted-config) instead. The
+`TOML parse error at line <N>, column <M>` warning above that error shows the
+real problem.
 
-你使用的工具名称在 [注册表](/registry.html) 中没有对应的简写。如果错误信息
-中包含 “Did you mean?” 列表，请先检查是否有拼写错误。
+### `Config files in <path> are not trusted` {#untrusted-config}
 
-如果注册表中没有对应条目，请选择支持该工具的后端。以下是语法示例；将仓库或软件包名称替换为真实名称：
+mise found a project config file that needs trust before it can load: one with
+`[env]`, hooks, templates, tool options, or settings. Usually `<path>` is the
+config file, and the message follows an `error parsing config file: <path>`
+line. Read the file, then trust it:
 
 ```sh
-mise use aqua:owner/repo     # 如果它在 aqua 注册表中
+mise trust ~/src/app/mise.toml
+```
+
+mise asks before it fails when it can. This error appears where it cannot ask,
+such as in a script, an editor extension, or a command without a terminal, and
+after you answer No. Once you answer No, or run `mise trust --ignore`, later
+commands skip that config without an error until you run `mise trust` on it.
+
+When `mise run` finds no tasks because a config in the current directory is
+untrusted or was declined, it prints
+`Config file(s) in <dir> are not trusted: <files>` instead. `mise doctor` reports an untrusted file only as
+`failed to load config: error parsing config file: <path>`; run
+`mise trust --show` to see the trust status of each config directory from the
+current one up.
+
+Paths under
+[`ignored_config_paths`](/configuration/settings.html#ignored_config_paths)
+never load, and `mise trust` does not override that setting. To trust every
+config under a directory you control, including projects you create there
+later, set
+[`trusted_config_paths`](/configuration/settings.html#trusted_config_paths) in
+your global config. In [paranoid mode](/paranoid.html), every project config
+needs trust, again each time it changes. See
+[Configuration trust](/security.html#configuration-trust) for which files need
+trust and which commands trust config for you.
+
+### `mise version <X> is required, but you are using <Y>` {#min-version}
+
+The project sets a
+[`min_version`](/configuration.html#minimum-mise-version) newer than your mise.
+Update with the package manager that installed mise, or run `mise self-update`.
+`mise self-update` skips releases younger than 24 hours, so if the required
+version is newer than that, name it:
+
+```sh
+mise self-update 2026.10.4
+```
+
+`mise version <X> is recommended, but you are using <Y>` is the same check as a
+warning, from a `soft` minimum. mise keeps working.
+
+### `<feature> is experimental` {#experimental}
+
+The command or config uses an experimental feature, and the full message ends
+`Enable it with mise settings experimental=true`. That command turns on
+[`experimental`](/configuration/settings.html#experimental) in your global
+config. To enable it for one project instead, add it to the project's
+`mise.toml`:
+
+```toml [mise.toml]
+[settings]
+experimental = true
+```
+
+Experimental features can change in any release.
+
+### `<operation> is disabled in safe mode (MISE_SAFE=1)` {#safe-mode}
+
+[Safe mode](/security.html#safe-mode) is on, through `MISE_SAFE=1` or the
+`safe` setting, and the command reached something it refuses, such as running
+a task, a `postinstall` option, or `exec()` in a template. Run the command
+without safe mode if you trust the config, or use a command that only resolves
+versions, such as `mise ls` or `mise lock`.
+
+## Finding and installing tools {#installing-tools}
+
+### `<tool> not found in mise tool registry` {#not-in-registry}
+
+There is no [registry](/registry.html) entry with that name. `mise install` and
+`mise use` report it as
+`Failed to install <tool>@<version>: <tool> not found in mise tool registry`,
+followed by a `Did you mean?` list when similar names exist. Check that list,
+or search the registry:
+
+```sh
+mise search ripgrep
+```
+
+For a tool that is not in the registry, name its backend directly. See
+[Which backend to use](/dev-tools/backends/#which-backend-to-use):
+
+```sh
 mise use github:owner/repo   # GitHub releases
-mise use cargo:some-tool     # crates.io
-mise use npm:some-tool       # npm
+mise use aqua:owner/repo     # a tool in the aqua registry
+mise use npm:package-name    # an npm package
 ```
 
-有关所有选项，请参阅 [后端](/dev-tools/backends/)。注册表只为常用工具提供简写名称。显式后端语法可以避免依赖注册表条目，但后端仍需要兼容的软件包或发布资源，以及任何所需的运行时。
+### `Failed to install <tool>@<version>: <cause>` {#failed-to-install}
 
-## `Failed to install <tool>@<version>: <underlying error>`
+The text after the colon is the actual error, often another entry on this page,
+such as a 404, a 403, or a checksum mismatch. When several tools fail, mise
+prints `Failed to install tools: <list>` and then each tool's cause. A line
+starting `note: <tool>@<version> was not checked against its version list`
+means mise could not fetch the version list, so the version may not exist.
 
-对安装过程中实际出错内容的封装——冒号后的文本才是真正的错误，所以请从那里开始看起（它通常是本页列出的其他错误之一，比如 403 或校验和不匹配）。如果不清楚，请使用 `--verbose` 重新运行以查看完整输出，或者使用 `mise install <tool>@<version> --raw` 以串行方式运行安装，并将 stdin/stdout 连接到你的终端。
+If the cause is unclear, rerun with `--verbose`, or install the tool alone with
+the installer connected to your terminal:
 
-## `<tool>@<version> 未安装`
+```sh
+mise install node@24 --raw
+```
 
-mise 已知请求的版本，但该版本尚未安装到磁盘上。运行
-`mise install`（或 `mise install <tool>@<version>`）进行安装。`mise ls <tool>`
-会显示已安装的版本，以及仅由配置文件请求但尚未安装的版本。
+### `HTTP status client error (404 Not Found)` {#http-404}
 
-## `[<配置文件>] <工具>@<版本>: <错误>`（无法解析版本）
+The URL in the message does not exist. Common causes:
 
-mise 无法解析由指定配置文件请求的版本——例如
-当不存在该版本时，`[~/src/proj/mise.toml] node@99`。常见原因包括：
+- The version does not exist. When a request matches no listed version, mise
+  tries to download it as written, so `node = "99"` fails with a 404 for
+  `node-v99.tar.gz`. Check the available versions with `mise ls-remote <tool>`.
+- Every release that matches a prefix is newer than the
+  [minimum release age](/security.html#minimum-release-age). For a day after
+  Node.js 26.11.0 comes out, `node = "26.11"` fails with a 404 for
+  `node-v26.11.tar.gz`, and `mise ls-remote node` warns that a newer release
+  is hidden. Name the exact version, such as `node@26.11.0`, to install it now,
+  or wait until the release is old enough.
+- The repository or package name in a backend identifier is wrong, such as
+  `github:owner/repo`.
+- The repository is private. GitHub answers 404, not 403, when the request has
+  no token with access. See
+  [GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html).
 
-- **版本不存在**：运行 `mise ls-remote <tool>` 查看可用版本。
-- **版本缓存过期**：最近发布的版本可能尚未缓存。对于 Node，运行
-  `mise cache clear node`，或者将其替换为受影响的工具，然后重试。请参阅
-  [新版本不可用](/troubleshooting.html#new-version-of-a-tool-is-not-available)。
-- **网络／API 错误**：后端无法列出版本（速率限制、离线）。冒号后的底层错误会说明具体情况。
+### `[<config file>] <tool>@<version>: <cause>` {#failed-to-resolve-version}
 
-## `HTTP 状态客户端错误（401 未授权）`
+mise could not resolve the version that the named config file requests, for
+example `[~/src/app/mise.toml] node@24: <cause>`. The text after
+`<tool>@<version>:` says why, usually that mise could not fetch the version
+list because of a network error or one of the HTTP errors on this page. It
+also appears inside a `Failed to resolve tool version list for <tool>`
+warning.
 
-对于 GitHub URL，这意味着 GitHub 拒绝了 mise 发送的凭据，通常是因为令牌无效、已过期、对应的是其他 GitHub 主机，或缺少必需的作用域。错误中会包含一行 `github auth:`，当 mise 解析出令牌时，该行会指明令牌来源，例如 `GITHUB_TOKEN`、`gh CLI (hosts.yml)` 或 `github_tokens.toml`。
+### `no versions found for <tool>` {#no-versions-found}
 
-检查或替换指定来源中的令牌。如果无法确定来源，mise 会打印 `github auth: yes`，并指向一个已配置的 GitHub 令牌。如果未发送 Authorization 标头，则会打印 `github auth: no`。有关支持的令牌来源和配置，请参阅
-[GitHub Tokens](/dev-tools/github-tokens.html)。对于其他主机，请检查相应后端的身份验证设置。
+The backend listed no version that matches a `latest` or `prefix:` request.
+A plain prefix such as `node = "26"` that matches nothing is tried as written
+instead, which usually fails with a [404](#http-404). When the message goes on
+`matching minimum_release_age`, every matching release is newer than the
+[minimum release age](/security.html#minimum-release-age), 24 hours by
+default. The message names the newest hidden release; install it explicitly as
+the message suggests, such as `mise use node@24.11.1`, or lower
+`minimum_release_age`.
 
-## `HTTP 状态客户端错误（403 禁止访问）` / `GitHub 速率限制超出`
+`unable to fetch versions for <tool>: <cause>` means mise could not list
+versions at all; the cause says why.
 
-403 可能表示 API 速率限制、缺少仓库访问权限，或拒绝请求的组织策略。检查 URL 和响应正文。对于 GitHub，`github auth:` 和 `github rate limit:` 诊断行有助于区分这些情况。
+### `HTTP status client error (401 Unauthorized)` {#http-401}
 
-如果错误报告了速率限制，请配置身份验证，或等待所述的重置时间。对于公共仓库，令牌不需要具有私有仓库访问权限。如果已经存在令牌，请验证其来源以及对该仓库的访问权限，包括任何必需的组织授权。请参阅 [GitHub Tokens](/dev-tools/github-tokens.html)。
+The server rejected the credential that mise sent. For GitHub, the token is
+invalid, expired, meant for another host, or missing a scope. The message
+includes a `github auth:` line:
 
-对于非 GitHub 主机，请使用相关后端文档中说明的身份验证机制。添加 GitHub 令牌无法修复其他服务返回的 403。
+- `github auth: yes (token from <source>)` names where the token came from, such
+  as `GITHUB_TOKEN`, `gh CLI (hosts.yml)`, or `github_tokens.toml`.
+- `github auth: yes` means a configured token was sent, with no known source.
+- `github auth: no` means mise sent no token.
 
-## `文件 <file> 的校验和不匹配`
+Fix or replace the token in that source. `mise token github` shows which token
+mise uses and where it came from. See
+[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html). For other
+hosts, check that backend's authentication settings.
+
+### `HTTP status client error (403 Forbidden)` / `GitHub rate limit exceeded` {#http-403}
+
+A 403 (or 429) from GitHub usually means you hit the API rate limit, which is
+common in CI. It can also mean that the token has no access to the repository,
+or that an organization policy rejects it. The message has three lines that
+tell these apart:
+
+- `github auth:` says whether mise sent a token.
+- `github rate limit:` shows the remaining quota and when it resets.
+- `github response:` shows GitHub's own explanation.
+
+For a rate limit, set a GitHub token or wait for the reset that mise prints in
+`GitHub rate limit exceeded. Resets at <time>`. A token for public repositories
+needs no scopes. If a token is already set, check its access to the repository
+and any organization authorization. See
+[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html), and
+[GitHub Actions and other CI](/dev-tools/github-tokens.html#ci-github-actions)
+for CI.
+
+mise gets public release metadata and artifact attestations from the
+[mise-versions](https://mise-versions.jdx.dev) host to avoid most GitHub API
+calls. A 403 from GitHub therefore usually means that the host did not have the
+metadata yet, that `MISE_USE_VERSIONS_HOST=0` is set, or that the tool comes
+from a private repository or GitHub Enterprise. A
+[lockfile](/dev-tools/mise-lock.html) that records download URLs avoids most
+API calls during installs.
+
+A 403 from another host needs that backend's credentials; a GitHub token does
+not help there.
+
+### `Checksum mismatch for file <file>` {#checksum-mismatch}
 
 ```text
 文件 node-v24.0.0.tar.gz 的校验和不匹配：
@@ -92,21 +254,90 @@ mise 无法解析由指定配置文件请求的版本——例如
 实际值：  sha256:def456...
 ```
 
-下载的文件与预期校验和不匹配。确定该预期值的来源：锁定文件、后端注册表或上游发布校验和。同时检查 URL 和所选资源是否与预期的版本、操作系统及架构匹配。
+The downloaded file does not match the checksum mise expected, which comes from
+`mise.lock`, the backend's metadata, or the release's checksum file. Usually the
+download was cut short or a proxy changed it, so retry. If it fails again, the
+publisher may have replaced the release file. Check the release page before you
+refresh the lockfile entry; see
+[Checksum mismatch](/dev-tools/mise-lock.html#regenerating-checksums). Never
+delete the checksum to get past the error. Clearing the cache does not change a
+checksum recorded in `mise.lock`.
 
-下载不完整可能导致不匹配；检查网络或代理错误后，重试下载。上游替换发布资源也可能使之前记录的校验和失效。在更新锁定文件条目前，请对比发布者提供的信息。不要为了让错误消失而删除预期校验和或禁用验证。
+### `<tool>@<version> is not in the lockfile` / `No lockfile URL found` {#not-in-lockfile}
 
-有关如何记录资源 URL 和校验和，请参阅 [锁定文件](/dev-tools/mise-lock.html)。仅清除版本缓存不会更改 `mise.lock` 中固定的校验和。
+[Strict lockfile mode](/dev-tools/mise-lock.html#strict-lockfile-mode) is on,
+through `--locked`, `MISE_LOCKED=1`, or the `locked` setting, and `mise.lock`
+does not cover this install:
 
-## `mise version <X> is required, but you are using <Y>`
+- `is not in the lockfile` means the lockfile records no version for the tool.
+- `No lockfile URL found for <tool> on platform <platform>` means the tool's
+  entry has no download URL for this platform.
 
-项目的配置文件声明了一个比你已安装的 mise 更新的 [`min_version`](/configuration.html)。使用 `mise self-update` 更新 mise（如果是通过独立安装程序安装的），或者通过你用于安装它的包管理器进行更新。
+Run `mise lock`, as the `hint:` line under the message says, and commit the
+updated `mise.lock`. To add entries for other platforms, such as your CI
+runners, see
+[Preparing platform entries](/dev-tools/mise-lock.html#preparing-platform-entries).
 
-## `未找到任务 <name>`
+## Running tools {#running-tools}
 
-当前配置层级中未定义名为该名称的[任务](/tasks/)。运行
-`mise tasks ls` 查看可用任务。检查当前目录、所选环境和任务名称，包括任何单体仓库命名空间。使用 `mise --cd path/to/project tasks ls` 检查其他项目。有关文件任务和配置发现，请参阅[任务配置](/tasks/)。
+### `missing: <tool>@<version>` {#missing}
 
-## `<command> 退出并返回非零状态：退出代码 <N>` / `命令失败：退出代码 <N>`
+This is a warning. The project asks for a version that is not installed, and
+another version of the tool is. Run `mise install`. To change when the warning
+appears, set
+[`status.missing_tools`](/configuration/settings.html#status.missing_tools).
 
-这表示 mise 执行的命令失败了——可能是任务、插件脚本，或通过 `mise exec`／shims 运行的程序。先查看子命令的输出，然后检查其工作目录、参数、所选工具和环境。如果这些输入与交互式 shell 中的输入不同，任务或安装可能会失败。如果尚未显示命令的完整输出，请使用 `--verbose`（或 `MISE_DEBUG=1`）重新运行以查看。
+### `No version is set for shim: <command>` / `Tool not installed for shim: <command>` {#shim-errors}
+
+You ran a [shim](/dev-tools/shims.html) in a directory where no config selects
+a version of its tool. Add one with `mise use <tool>@<version>`, or set a
+default for every directory with `mise use -g <tool>@<version>`; the message
+lists the installed versions to choose from.
+
+`Tool not installed for shim` means a config selects a version that is not
+installed, and automatic installation did not run. Run `mise install`.
+
+### `<tool>@<version> not installed` / `<command> is not a mise bin` {#not-installed}
+
+`mise where` and `mise which` report these when the version you name, or the
+version the project selects, is not installed. Run `mise install`, or
+`mise install <tool>@<version>`. `mise ls <tool>` shows which versions are
+installed and which ones config files ask for.
+
+### `PATH is <N> characters, longer than the 8191 cmd.exe accepts` {#path-too-long}
+
+On Windows, the `PATH` mise built is too long for `cmd.exe`, which then ignores
+it. See [PATH too long](/troubleshooting.html#path-limits).
+
+## Tasks and commands {#tasks}
+
+### `no task <name> found` / `no tasks defined in <dir>` {#task-not-found}
+
+`no task <name> found` lists similar task names and the tasks that are
+available. Check the spelling, the selected
+[config environment](/configuration/environments.html), and any monorepo
+prefix. `mise tasks ls` lists the tasks for the current directory, and
+`mise --cd <dir> tasks ls` lists them for another project.
+
+`no tasks defined in <dir>` means mise found no tasks at all. Check that you
+are in the project directory. If the message names non-executable files in a
+task directory, follow its hint to make them executable. If a config in the
+current directory is untrusted or was declined, mise reports
+[`Config file(s) in <dir> are not trusted`](#untrusted-config) instead.
+
+A dependency that names a missing task fails with `task not found: <name>`
+instead; see [Dependencies and execution order](/tasks/architecture.html).
+
+### `[<task>] ERROR task failed` / `<command> exited with non-zero status` {#command-failed}
+
+A task, plugin script, hook, or installer that mise ran exited with an error.
+For a task, mise prints `[<task>] ERROR task failed` and exits with the task's
+status. With `--continue-on-error`, it ends with an `ERROR <N> task(s) failed:`
+summary. For plugin scripts and installers, it reports
+`<command> exited with non-zero status: exit code <N>` (or `killed by <signal>`).
+`mise exec` and shims pass the command's exit code through without a message.
+
+The command's own output above the message is the cause. If that output is
+hidden, rerun with `--verbose`, or use `mise install --raw` for installs. If the
+command behaves differently than in your shell, compare its directory, tools and
+environment with `mise exec -- <command>`.

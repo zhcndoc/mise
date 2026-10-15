@@ -11,28 +11,35 @@ description: "显示以 Patron 级别成员身份支持 mise 的个人"
 
 显示以 Patron 级别成员身份支持 mise 的个人
 
-列出 <https://jdx.dev/patrons.json> 中 Patron 级别的个人。
-列表每天刷新；支持 OSC 8 超链接的终端会将每位 Patron 的姓名渲染为可点击的链接。
+Fetches the list from <https://jdx.dev/patrons.json> and caches it for a day;
+pass `--refresh` to fetch it now. If the fetch fails, the cached list is used.
+Terminals that support OSC 8 hyperlinks show each name as a link.
 
 如需显示在此处，请前往 <https://jdx.dev/sponsors.html> 成为 Patron。
 
-## 标志
-- **`-J --json`** — 以 JSON 格式输出
-- **`--refresh`** — 绕过本地缓存并重新获取
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-J --json`** — Output in JSON format
+- **`--refresh`** — Fetch the list now instead of using the cached copy
+- **`-h --help`** — Print help
 
 ## 示例
 
+List the patrons
+
 ```
 mise patrons
-mise patrons -J
-mise patrons --refresh
+```
+
+Fetch the list now and print it as JSON
+
+```
+mise patrons --refresh -J
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [支持 mise](/about.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Supporting mise](/about.html#supporting-mise).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

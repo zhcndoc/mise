@@ -1,34 +1,89 @@
 ---
-description: "mise 可用于在同一系统上管理多个版本的 Swift。"
+description: "Install the swift.org Swift toolchains for macOS and Linux with mise and select one per project."
 ---
 
 # Swift
 
-`mise` 可用于在同一系统上管理多个版本的 [`swift`](https://swift.org/)。Swift 支持 macOS 和 Linux。
+mise installs the [Swift](https://swift.org/) toolchains published on
+swift.org for macOS and Linux. Windows is not supported.
 
-## 用法
+## Quick start
 
 安装当前项目的 Swift 并检查所选工具链：
 
 ```sh
-mise use swift@latest
+mise use swift@6
 mise exec -- swift --version
 ```
 
-使用 `mise use -g swift@latest` 设置个人默认版本。在包含 `Package.swift` 的现有 Swift 包中，运行 `mise exec -- swift build` 进行构建。
+Use `mise use -g swift@6` for a personal default. In an existing Swift package
+with a `Package.swift`, run `mise exec -- swift build` to build it.
 
-在 Linux 上，Swift 压缩包面向特定发行版，并且需要兼容的系统库。mise 会在锁定文件选项中记录所选发行版；请使用为目标发行版构建的锁定文件条目。Swift 核心插件目前不支持 Windows。
+## Choosing a version
 
-### 没有匹配当前发行版的构建时
+`swift@6` selects the newest 6.x release, `swift@6.4.0` selects that release,
+and `swift@latest` selects the newest release. List the available versions with
+`mise ls-remote swift`. See [version requests](/dev-tools/versions.html) for
+the full syntax.
 
-swift.org 会为每个发行版系列发布一个构建。如果主机没有对应构建，mise 会发出警告并退回到另一个系列的构建。该构建可能链接到名称不同的库——例如 Arch 系列主机会使用仅宽字符的 ncurses，因此有 libncursesw.so.6，而回退构建需要 libncurses.so.6——当 mise 运行 swift --version 检查安装时，安装就会失败。mise 会列出无法解析的库：
+## Version files
 
-~~~
-this swift build needs shared libraries missing from this host:
-libform.so.6, libncurses.so.6, libpanel.so.6
-~~~
+mise can read `.swift-version`. Enable it for Swift:
 
-当名称不同但库兼容时，可以使用 install_env 将安装指向包含别名的目录：
+```sh
+mise settings add idiomatic_version_file_enable_tools swift
+```
+
+This changes your global config. Add `--local` to enable it in the project's
+`mise.toml` instead. See
+[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
+
+## Linux distributions
+
+swift.org publishes Linux builds for specific releases of a few distribution
+families: Ubuntu, Debian, Fedora, Amazon Linux and Red Hat UBI. mise picks the
+build for your distribution's release, or the nearest older release in the
+same family. If the family only has builds for newer releases, mise warns and
+uses the oldest of them. If your family has no build at all, as on Arch Linux,
+mise warns and installs the UBI build. Set [`swift.platform`](/lang/swift.html#swift.platform), for example
+to `ubuntu24.04`, to choose a build explicitly. Every build links against
+glibc, so musl systems such as Alpine are not supported.
+
+`mise.lock` records which distribution build an entry describes, so an entry
+written on Ubuntu does not apply on a Fedora machine, which installs the Fedora
+build instead.
+
+## How mise installs Swift
+
+mise downloads the toolchain from `download.swift.org`. On Linux it verifies
+the archive's OpenPGP signature ([`swift.gpg_verify`](/lang/swift.html#swift.gpg_verify)) and
+extracts it. On macOS it expands swift.org's installer package with `pkgutil`
+into mise's install directory; this toolchain is separate from the Swift that
+ships with Xcode. mise then links the `swift*` and `sourcekit*` executables into
+the install's `bin` directory and runs `swift --version` to check it. mise sets
+no Swift environment variables.
+
+## Troubleshooting
+
+An installed plugin named `swift` takes precedence over the built-in
+installer. If mise behaves differently from this page, check
+[`mise plugins ls`](/cli/plugins/ls.html) and see
+[selecting another implementation](/core-tools.html#selecting-another-implementation).
+
+### Missing shared libraries {#when-no-build-matches-your-distribution}
+
+A build made for another distribution can ask for libraries under names your
+distribution does not use. Arch Linux, for example, ships only the
+wide-character ncurses (`libncursesw.so.6`), while the UBI build asks for
+`libncurses.so.6`. The install then fails at the `swift --version` check, and
+mise lists the libraries it could not find:
+
+```text
+this swift build needs shared libraries missing from this host: libform.so.6, libncurses.so.6, libpanel.so.6 (point LD_LIBRARY_PATH at them with install_env)
+```
+
+When the names differ but the libraries are compatible, create a directory of
+aliases:
 
 ~~~sh
 mkdir -p ~/.local/lib/curses-compat
@@ -37,26 +92,34 @@ ln -sf /usr/lib/libformw.so.6 ~/.local/lib/curses-compat/libform.so.6
 ln -sf /usr/lib/libpanelw.so.6 ~/.local/lib/curses-compat/libpanel.so.6
 ~~~
 
-~~~toml
+Point the install at it with [`install_env`](/lang/swift.html#install-env), and point the
+installed toolchain at it with `[env]`:
+
+```toml [mise.toml]
 [tools]
-swift = { version = "6.3.3", install_env = { LD_LIBRARY_PATH = "{{env.HOME}}/.local/lib/curses-compat" } }
-~~~
+swift = { version = "6.4", install_env = { LD_LIBRARY_PATH = "{{env.HOME}}/.local/lib/curses-compat" } }
 
-同一个 LD_LIBRARY_PATH 也应放在 [env] 中，这样工具链安装后仍能正常工作。替换库是关于兼容性的判断，mise 无法替你完成；如果发行版确实缺少该库，应直接安装它。
+[env]
+LD_LIBRARY_PATH = "{{env.HOME}}/.local/lib/curses-compat"
+```
 
-请参阅[面向 Swift 开发者的 mise 指南](https://tuist.dev/blog/2025/02/04/mise)，了解如何将 mise 与 swift 搭配使用。
-## 工具选项
+Alias a library only when the versions are compatible. If your distribution
+lacks the library entirely, install it.
 
-以下 [工具选项](/dev-tools/#tool-options)可用于 `swift` 后端。这些选项位于 `mise.toml` 的 `[tools]` 部分。
+## Tool options
 
 ### `install_env`
 
-为由核心 `swift` 后端运行的安装时命令设置环境变量：
+Sets environment variables for the `swift --version` check mise runs after
+installing, for `pkgutil` on macOS, and for `postinstall` commands. It does not
+affect the download. Its main use is the library workaround in
+[Missing shared libraries](#when-no-build-matches-your-distribution). Other
+generic options are described in [tool options](/dev-tools/#tool-options).
 
-```toml
-[tools]
-swift = { version = "latest", install_env = { HTTPS_PROXY = "http://proxy.example" } }
-```
+## Further reading
+
+- [A mise guide for Swift developers](https://tuist.dev/blog/2025/02/04/mise),
+  from Tuist
 
 ## 设置
 

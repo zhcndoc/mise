@@ -12,7 +12,9 @@ description: "管理来自 `[bootstrap.mise_shell_activate]`"
 
 管理来自 `[bootstrap.mise_shell_activate]` 的 mise shell 激活。
 
-将受管理的激活代码块写入声明的 shell 启动文件。当前 shell 不会通过此命令重新激活；之后请打开一个新的 shell。
+Writes a managed activation block into each configured shell startup file.
+It does not activate mise in the shell you run it from; open a new shell
+afterward.
 
 ## 标志
 - **`-h --help`** — 打印帮助
@@ -26,6 +28,6 @@ description: "管理来自 `[bootstrap.mise_shell_activate]`"
 
 ## 相关文档
 
-- [Shell 设置](/bootstrap/shell.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Shell activation and login shell](/bootstrap/shell.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

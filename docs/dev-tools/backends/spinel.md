@@ -1,35 +1,35 @@
 ---
-description: "使用实验性的 Spinel 后端从 GitHub 源代码编译 Ruby 命令行工具。"
+description: "Compile a Ruby command-line tool from GitHub into a native executable with Spinel."
 ---
 
-# Spinel 后端 <Badge type="warning" text="实验性" />
+# spinel backend <Badge type="warning" text="experimental" />
 
-`spinel:` 后端使用 [Spinel](https://github.com/matz/spinel)（Matz 的 Ruby AOT 编译器）将 GitHub
-仓库中的 Ruby 命令行工具编译为本机可执行文件。生成的程序运行时既不需要 Ruby，也不需要 Spinel。
+The `spinel` backend compiles a Ruby command-line tool from a GitHub repository
+into a native executable with [Spinel](https://github.com/matz/spinel), Matz's
+Ruby ahead-of-time compiler. The result runs without Ruby or Spinel installed.
 
-::: warning
-此后端处于实验阶段，未来可能被移除。Spinel 尚处于早期阶段，只有在 Spinel 发展起来且此后端仍易于维护时，
-才值得保留。如果其中任一条件不再满足，它就会被移除。使用 `mise settings experimental=true` 启用它。
+::: warning Experimental
+This backend may change, or be removed if Spinel or the backend stops being
+practical to support. It installs tools without `experimental = true`, but
+`mise edit` offers it only when that setting is on.
 :::
 
 ## 要求
 
-- macOS 或 Linux（不支持 Windows）。
-- `git`。
-- `PATH` 中的 `spinel` 编译器，或在 `spinel` 工具选项中指定其路径。Spinel 以源代码形式发布：请参阅其
-  [快速开始](https://github.com/matz/spinel#quick-start)来构建它。
-- C 编译器，Spinel 会调用它来生成可执行文件。
+- macOS or Linux; Windows is not supported
+- `git`
+- The `spinel` compiler on `PATH`, or its path in the [`spinel`](#spinel) tool
+  option. Spinel ships as source; see its
+  [Quick Start](https://github.com/matz/spinel#quick-start) to build it.
+- A C compiler, which Spinel runs to produce the executable
 
-Spinel 只支持 Ruby 语言的一部分，因此许多 Ruby 工具无法编译。此后端只编译一个入口文件，不会安装 gem、
-复制数据文件或获取子模块。
+Spinel supports only part of the Ruby language, so many Ruby tools do not
+compile. The backend compiles a single entrypoint file. It does not install
+gems, copy data files or fetch submodules.
 
 ## 用法
 
-```sh
-mise settings experimental=true
-```
-
-大多数工具都需要选项，例如入口文件，因此请在 `mise.toml` 中声明它们，然后安装：
+Most tools need options, such as the entrypoint, so declare them in `mise.toml`:
 
 ```toml
 [tools."spinel:tobi/try"]
@@ -39,35 +39,57 @@ bin = "try"
 tag_prefix = "v"
 ```
 
+Then install the tool:
+
 ```sh
 mise install
 ```
 
-`mise ls-remote spinel:tobi/try` 会列出仓库的 git 标签（通过 `git ls-remote`，而不是 GitHub API）。设置
-`tag_prefix = "v"` 后，标签 `v1.10.1` 对应的版本就是 `1.10.1`。
+mise fetches the tag `v1.10.1`, compiles `try.rb` and writes the executable to
+`bin/try` in the install directory.
 
-## 工具选项
+`mise ls-remote spinel:tobi/try` lists the repository's Git tags with
+`git ls-remote`, so it needs no GitHub token. With `tag_prefix = "v"`, the tag
+`v1.10.1` is the version `1.10.1`.
 
-以下[工具选项](/dev-tools/#tool-options)可用于 `spinel` 后端，应将它们放在 `mise.toml` 的 `[tools]` 中。
+mise keeps the order that `git ls-remote` returns, which is alphabetical, and
+this backend does not support `version_order`. `latest` can therefore pick an
+older release when versions differ in the number of digits, such as `1.9.3`
+over `1.10.1`. Pin a version.
+
+## Tool options
 
 ### `entrypoint`
 
-要编译的 Ruby 文件，相对于仓库根目录。默认为 `main.rb`。
+The Ruby file to compile, relative to the repository root. Defaults to
+`main.rb`.
 
 ### `bin`
 
 写入 `bin/` 的可执行文件名称。默认为仓库名称。
 
-### `tag_prefix`
+### `tag_prefix` {#tag-prefix}
 
-每个 git 标签中版本之前的文本，例如 `v`。只会列出带有此前缀的标签。
+The text before the version in each Git tag, such as `v`. mise lists only tags
+that start with the prefix and removes it. Without it, every tag is listed as a
+version.
 
-### `source_ref`
+### `source_ref` {#source-ref}
 
-用于替代标签进行构建的完整 40 字符 commit SHA。此时版本只作为标签使用。
+A full 40-character commit SHA to build instead of the tag. The version is then
+only a label.
 
 ### `spinel`
 
-要运行的编译器。默认为 `PATH` 中的 `spinel`。
+The compiler to run, as a command name or a path. Defaults to `spinel` on
+`PATH`.
+
+## Troubleshooting
+
+| Message                                       | What to check                                                                                  |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `spinel may be required but was not found`    | Build Spinel and put it on `PATH`, or set the [`spinel`](#spinel) option.                      |
+| `spinel did not produce an executable`        | The compiler output above the error; the entrypoint may use Ruby that Spinel does not support. |
+| `the spinel backend does not support Windows` | Install the tool on macOS or Linux.                                                            |
 
 实现：[`src/backend/spinel.rs`](https://github.com/jdx/mise/blob/main/src/backend/spinel.rs)。

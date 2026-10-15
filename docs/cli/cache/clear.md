@@ -1,5 +1,5 @@
 ---
-description: "删除所有缓存文件"
+description: "Delete cached data"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -10,16 +10,42 @@ description: "删除所有缓存文件"
 - **作用：** 修改状态
 - **源代码：** [`src/cli/cache/clear.rs`](https://github.com/jdx/mise/blob/main/src/cli/cache/clear.rs)
 
-删除所有缓存文件
+Delete cached data
 
-## 参数
-- **`[TOOL]…`** — 要清除缓存的工具，例如：node、python
+With no arguments, deletes the whole cache directory, the cached environment,
+and every task's cached artifacts. With TOOL arguments, deletes only the cached
+data of those tools, such as their version lists. With --task, deletes only that
+task's cached artifacts. Installed tools are not removed; mise downloads or
+rebuilds what it needs again.
 
-## 标志
-- **`--task <TASK>`** — 清除任务名称或模式的输出缓存条目
-- **`-h --help`** — 显示帮助
+## Arguments
+- **`[TOOL]…`** — Only clear the cache of these tools, such as `node`
 
-<!-- 生成的参考导航 -->
+## Flags
+- **`--task <TASK>`** — [experimental] Clear task artifact cache entries for a task name or pattern
+- **`-h --help`** — Print help
+
+## Examples
+
+Clear the whole cache
+
+```
+mise cache clear
+```
+
+Refresh node's version list
+
+```
+mise cache clear node
+```
+
+[experimental] Forget the build task's cached artifacts
+
+```
+mise cache clear --task build
+```
+
+<!-- generated reference navigation -->
 
 ## 相关文档
 

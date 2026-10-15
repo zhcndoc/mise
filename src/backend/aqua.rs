@@ -339,8 +339,8 @@ impl Backend for AquaBackend {
         };
 
         if pkg.repo_owner.is_empty() || pkg.repo_name.is_empty() {
-            warn!(
-                "aqua package {} does not have repo_owner and/or repo_name.",
+            warn_once!(
+                "aqua package {} has no repo_owner and/or repo_name, so its versions cannot be listed. Pin an exact version to install it.",
                 self.id
             );
             return Ok(vec![]);
@@ -571,7 +571,8 @@ impl Backend for AquaBackend {
         // Public repos download from the browser URL; private repos return 404/HTML there
         // and must be fetched from the API asset endpoint instead.
         let download_url = select_github_download_url(pkg.private, &url, url_api.as_deref()).await;
-        self.download(ctx, &tv, &download_url, &filename).await?;
+        self.download(ctx, &tv, &download_url, &filename, api_digest.as_deref())
+            .await?;
 
         // Snapshot before any mutation so verify() knows whether the lockfile
         // originally contained a checksum (vs. one we just wrote from api_digest).
@@ -770,21 +771,23 @@ impl Backend for AquaBackend {
                 self.id, tv.version
             );
         }
-        let mut v = tag.unwrap_or_else(|| tv.version.clone());
-        let mut v_prefixed = (tag_is_none && !tv.version.starts_with('v')).then(|| format!("v{v}"));
-        let versions = match &v_prefixed {
-            Some(v_prefixed) => vec![v.as_str(), v_prefixed.as_str()],
-            None => vec![v.as_str()],
-        };
-
         // Get package and apply version/overrides directly for the target platform.
         // Using package_with_version() here would apply overrides for the current host
         // platform first, which can leak host-specific overrides into cross-platform lock.
         let pkg = AQUA_REGISTRY.package(&self.id).await?;
+        let mut v = tag.clone().unwrap_or_else(|| tv.version.clone());
+        let mut v_prefixed = (tag_is_none && !tv.version.starts_with('v')).then(|| format!("v{v}"));
         let raw_opts = tv.request.options();
         let opts = AquaOptions::new(&raw_opts);
         let target_libc = Self::target_variant_libc(target, self.tool_libc);
-        let pkg = pkg.with_version_libc(&versions, target_os, target_arch, target_libc.as_deref());
+        let pkg = lock_package_for_version(
+            pkg,
+            &tv.version,
+            tag.as_deref(),
+            target_os,
+            target_arch,
+            target_libc.as_deref(),
+        )?;
         let pkg = Self::apply_aqua_libc_replacement(
             pkg,
             target_os,
@@ -1073,7 +1076,7 @@ impl AquaBackend {
         let mut v_prefixed =
             (tag.is_none() && !tv.version.starts_with('v')).then(|| format!("v{v}"));
         let pkg = AQUA_REGISTRY.package(&self.id).await?;
-        let versions = install_package_version_candidates(&tv.version, tag.as_deref(), &pkg);
+        let versions = resolved_package_version_candidates(&tv.version, tag.as_deref(), &pkg);
         let versions = versions.iter().map(|v| v.as_ref()).collect_vec();
         let pkg = Self::package_with_options_for_pkg(tv, pkg, &versions)?;
         if let Some(prefix) = &pkg.version_prefix
@@ -2395,8 +2398,8 @@ impl AquaBackend {
         };
 
         if pkg.repo_owner.is_empty() || pkg.repo_name.is_empty() {
-            warn!(
-                "aqua package {} does not have repo_owner and/or repo_name.",
+            warn_once!(
+                "aqua package {} has no repo_owner and/or repo_name, so its versions cannot be listed. Pin an exact version to install it.",
                 self.id
             );
             return Ok(None);
@@ -2815,6 +2818,7 @@ impl AquaBackend {
         tv: &ToolVersion,
         url: &str,
         filename: &str,
+        api_digest: Option<&str>,
     ) -> Result<()> {
         let tarball_path = tv.download_path().join(filename);
         if tarball_path.exists() {
@@ -2824,8 +2828,22 @@ impl AquaBackend {
             return Ok(());
         }
         ctx.pr.set_message(format!("download {filename}"));
-        HTTP.download_file(url, &tarball_path, Some(ctx.pr.as_ref()))
-            .await?;
+        // The lockfile's checksum, or else the digest the GitHub API gave for the
+        // release asset, which verify() checks the same way.
+        let pinned = tv
+            .lock_platforms
+            .get(&self.get_platform_key())
+            .and_then(|platform| platform.checksum.clone())
+            .or_else(|| api_digest.map(str::to_string));
+        let headers = crate::http::host_auth_headers(&reqwest::Url::parse(url)?)?;
+        HTTP.download_file_linked(
+            url,
+            &tarball_path,
+            &headers,
+            pinned.as_deref(),
+            Some(ctx.pr.as_ref()),
+        )
+        .await?;
         Ok(())
     }
 
@@ -3496,7 +3514,7 @@ impl AquaBackend {
             if let Some(bin_name) = link.dst.file_name() {
                 let symlink_path = symlink_dir.join(bin_name);
                 if !symlink_path.exists() {
-                    file::make_symlink_or_copy(&link.dst, &symlink_path)?;
+                    super::mise_bins::link(&link.dst, &symlink_path)?;
                 }
             }
         }
@@ -3910,7 +3928,8 @@ fn package_version_candidates<'a>(version: &'a str, pkg: &AquaPackage) -> Vec<Co
     candidates.into_iter().unique().collect()
 }
 
-fn install_package_version_candidates<'a>(
+/// Keep an exact release tag authoritative, otherwise include registry prefixes.
+fn resolved_package_version_candidates<'a>(
     version: &'a str,
     tag: Option<&'a str>,
     pkg: &AquaPackage,
@@ -3918,11 +3937,53 @@ fn install_package_version_candidates<'a>(
     if let Some(tag) = tag {
         vec![Cow::Borrowed(tag)]
     } else {
-        // Locked HTTP package URLs do not contain a GitHub release tag. Include the
-        // registry's prefixes so prefix-scoped overrides still provide metadata such
-        // as the archive format.
+        // Tag lookup can miss a pinned release, and locked HTTP URLs have no release
+        // tag. Include registry prefixes before selecting version overrides, otherwise
+        // packages such as openai/codex keep their empty top-level asset and format.
         package_version_candidates(version, pkg)
     }
+}
+
+/// Select lock metadata only when the version candidates agree on a prefix family.
+fn lock_package_for_version(
+    pkg: AquaPackage,
+    version: &str,
+    tag: Option<&str>,
+    os: &str,
+    arch: &str,
+    libc: Option<&str>,
+) -> Result<AquaPackage> {
+    let candidates = resolved_package_version_candidates(version, tag, &pkg);
+    let versions = candidates.iter().map(|v| v.as_ref()).collect_vec();
+    // Without a prefix on any override every candidate resolves to the root prefix,
+    // so there is nothing to disambiguate and no reason to clone the package.
+    let has_override_prefix = pkg
+        .version_overrides
+        .iter()
+        .any(|vo| vo.version_prefix.is_some());
+    if tag.is_none() && has_override_prefix {
+        let prefixes = versions
+            .iter()
+            .filter(|v| pkg.version_constraint_ok(&[v]))
+            .map(|v| {
+                pkg.clone()
+                    .with_version_libc(&[v], os, arch, libc)
+                    .version_prefix
+                    .unwrap_or_default()
+            })
+            .unique()
+            .collect_vec();
+        if prefixes.len() > 1 {
+            bail!(
+                "ambiguous aqua version prefixes for {version}: {}; no exact release tag matched",
+                prefixes
+                    .iter()
+                    .map(|prefix| if prefix.is_empty() { "(none)" } else { prefix })
+                    .join(", ")
+            );
+        }
+    }
+    Ok(pkg.with_version_libc(&versions, os, arch, libc))
 }
 
 fn github_release_tag_from_url(url: &str) -> Option<String> {
@@ -4630,12 +4691,146 @@ packages:
         let request =
             ToolRequest::new(backend, "3.16.1.0", crate::toolset::ToolSource::Unknown).unwrap();
         let tv = ToolVersion::new(request, "3.16.1.0".to_string());
-        let versions = install_package_version_candidates("3.16.1.0", None, &pkg);
+        let versions = resolved_package_version_candidates("3.16.1.0", None, &pkg);
         let versions = versions.iter().map(|v| v.as_ref()).collect_vec();
         let pkg = AquaBackend::package_with_options_for_pkg(&tv, pkg, &versions).unwrap();
 
         assert_eq!(pkg.version_prefix.as_deref(), Some("cabal-install-v"));
         assert_eq!(pkg.format, "tar.xz");
+    }
+
+    #[test]
+    fn test_resolved_package_without_tag_selects_codex_windows_archive() {
+        let pkg: AquaPackage = mise_util::yaml::from_str(
+            r#"
+type: github_release
+repo_owner: openai
+repo_name: codex
+version_prefix: rust-
+version_constraint: "false"
+version_overrides:
+  - version_constraint: semver("<= 0.133.0-alpha.1")
+    asset: codex-{{.Arch}}-{{.OS}}.exe.{{.Format}}
+    format: zst
+  - version_constraint: "true"
+    asset: codex-package-{{.Arch}}-{{.OS}}.{{.Format}}
+    format: tar.gz
+    files:
+      - name: codex
+        src: bin/codex
+    replacements:
+      amd64: x86_64
+      windows: pc-windows-msvc
+"#,
+        )
+        .unwrap();
+
+        // A pinned release may be absent from GitHub's release listing. Its registry
+        // prefix must still be considered before applying the version overrides.
+        let pkg = lock_package_for_version(pkg, "0.154.0", None, "windows", "amd64", None).unwrap();
+
+        assert_eq!(
+            pkg.asset("rust-v0.154.0", "windows", "amd64").unwrap(),
+            "codex-package-x86_64-pc-windows-msvc.tar.gz"
+        );
+        assert_eq!(pkg.format, "tar.gz");
+        assert_eq!(pkg.files[0].src.as_deref(), Some("bin/codex"));
+    }
+
+    #[test]
+    fn test_resolved_package_known_tag_preserves_override_prefix() {
+        let pkg: AquaPackage = mise_util::yaml::from_str(
+            r#"
+version_constraint: "false"
+version_overrides:
+  - version_constraint: "true"
+    version_prefix: old-v
+    asset: old-layout.zip
+  - version_constraint: "true"
+    version_prefix: new-v
+    asset: new-layout.zip
+"#,
+        )
+        .unwrap();
+        let pkg =
+            lock_package_for_version(pkg, "1.0.0", Some("new-v1.0.0"), "windows", "amd64", None)
+                .unwrap();
+
+        assert_eq!(
+            pkg.asset("new-v1.0.0", "windows", "amd64").unwrap(),
+            "new-layout.zip"
+        );
+    }
+
+    #[test]
+    fn test_lock_package_without_tag_rejects_ambiguous_override_prefixes() {
+        let pkg: AquaPackage = mise_util::yaml::from_str(
+            r#"
+version_constraint: "false"
+version_overrides:
+  - version_constraint: "true"
+    version_prefix: old-v
+    asset: old-layout.zip
+  - version_constraint: "true"
+    version_prefix: new-v
+    asset: new-layout.zip
+"#,
+        )
+        .unwrap();
+        let err =
+            lock_package_for_version(pkg, "1.0.0", None, "windows", "amd64", None).unwrap_err();
+        assert!(err.to_string().contains("ambiguous aqua version prefixes"));
+        assert!(err.to_string().contains("old-v, new-v"));
+    }
+
+    #[test]
+    fn test_lock_package_prefixes_with_disjoint_constraints() {
+        let pkg: AquaPackage = mise_util::yaml::from_str(
+            r#"
+version_constraint: "false"
+version_overrides:
+  - version_constraint: semver("< 1.0.0")
+    version_prefix: old-v
+    asset: old-layout.zip
+  - version_constraint: semver(">= 1.0.0")
+    version_prefix: new-v
+    asset: new-layout.zip
+"#,
+        )
+        .unwrap();
+
+        for (version, expected) in [("0.9.0", "old-layout.zip"), ("1.0.0", "new-layout.zip")] {
+            let resolved =
+                lock_package_for_version(pkg.clone(), version, None, "windows", "amd64", None)
+                    .unwrap();
+            assert_eq!(
+                resolved.asset(version, "windows", "amd64").unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_lock_package_ignores_inactive_override_prefixes() {
+        let pkg: AquaPackage = mise_util::yaml::from_str(
+            r#"
+asset: default.zip
+version_overrides:
+  - version_constraint: "true"
+    version_prefix: old-v
+    asset: old-layout.zip
+  - version_constraint: "true"
+    version_prefix: new-v
+    asset: new-layout.zip
+"#,
+        )
+        .unwrap();
+
+        let pkg = lock_package_for_version(pkg, "1.0.0", None, "windows", "amd64", None).unwrap();
+        assert_eq!(
+            pkg.asset("1.0.0", "windows", "amd64").unwrap(),
+            "default.zip"
+        );
     }
 
     #[test]
@@ -6411,7 +6606,7 @@ version_overrides:
     }
 
     fn pkg_from_yaml(yaml: &str) -> AquaPackage {
-        let mut pkg: AquaPackage = serde_yaml::from_str(yaml).unwrap();
+        let mut pkg: AquaPackage = mise_util::yaml::from_str(yaml).unwrap();
         pkg.setup_version_filter().unwrap();
         pkg
     }

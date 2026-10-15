@@ -31,8 +31,7 @@ pub(super) struct RustPlugin {
     updatable_channels: std::sync::Mutex<BTreeSet<String>>,
 }
 
-const RUST_NIGHTLY_MANIFEST_URL: &str =
-    "https://static.rust-lang.org/dist/channel-rust-nightly.toml";
+const RUST_DEFAULT_DIST_SERVER: &str = "https://static.rust-lang.org";
 const RUST_DEFAULT_PROFILE_COMPONENTS: &[&str] = &["clippy", "rust-docs", "rustfmt"];
 
 fn parse_nightly_manifest(manifest: &str) -> Result<String> {
@@ -47,9 +46,63 @@ fn parse_nightly_manifest(manifest: &str) -> Result<String> {
     Ok(format!("nightly-{date}"))
 }
 
-async fn current_nightly_version() -> Result<String> {
+/// Where the nightly channel manifest lives. Honors `RUSTUP_DIST_SERVER`, the
+/// variable rustup uses to find toolchains, so a mirror serves the manifest too.
+fn nightly_manifest_url(config_env: &IndexMap<String, String>) -> String {
+    nightly_manifest_url_for(rustup_dist_server(config_env).as_deref())
+}
+
+/// The `RUSTUP_DIST_SERVER` mirror, from the config `[env]` or else the process
+/// environment, when one is set.
+fn rustup_dist_server(config_env: &IndexMap<String, String>) -> Option<String> {
+    config_env
+        .get("RUSTUP_DIST_SERVER")
+        .cloned()
+        .or_else(|| std::env::var("RUSTUP_DIST_SERVER").ok())
+        .filter(|server| !server.is_empty())
+}
+
+const RUSTUP_MIRROR_VARS: [&str; 2] = ["RUSTUP_DIST_SERVER", "RUSTUP_UPDATE_ROOT"];
+
+/// The non-empty `RUSTUP_DIST_SERVER` and `RUSTUP_UPDATE_ROOT` mirror variables
+/// set in the config `[env]`. A `mise install` outside an activated shell does
+/// not see them in its own environment, so rustup is handed them explicitly.
+fn rustup_mirror_env(
+    config_env: &IndexMap<String, String>,
+) -> impl Iterator<Item = (&str, &String)> {
+    RUSTUP_MIRROR_VARS
+        .into_iter()
+        .filter_map(|k| config_env.get(k).map(|v| (k, v)))
+        .filter(|(_, v)| !v.is_empty())
+}
+
+/// Hands rustup the config's mirror variables. One the config sets to an empty
+/// string is removed, so an inherited value is masked and older rustup releases
+/// never see an empty URL.
+fn apply_rustup_mirror_env<'a>(
+    mut cmd: CmdLineRunner<'a>,
+    config_env: &IndexMap<String, String>,
+) -> CmdLineRunner<'a> {
+    for key in RUSTUP_MIRROR_VARS {
+        if config_env.get(key).is_some_and(String::is_empty) {
+            cmd = cmd.env_remove(key);
+        }
+    }
+    cmd.envs(rustup_mirror_env(config_env))
+}
+
+fn nightly_manifest_url_for(dist_server: Option<&str>) -> String {
+    let server = dist_server
+        .map(|s| s.trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .unwrap_or(RUST_DEFAULT_DIST_SERVER);
+    format!("{server}/dist/channel-rust-nightly.toml")
+}
+
+async fn current_nightly_version(config: &Arc<Config>) -> Result<String> {
+    let url = nightly_manifest_url(&config.env().await?);
     let manifest = HTTP_FETCH
-        .get_text_cached(RUST_NIGHTLY_MANIFEST_URL)
+        .get_text_cached(&url)
         .await
         .wrap_err("failed to fetch the Rust nightly channel manifest")?;
     parse_nightly_manifest(&manifest)
@@ -237,8 +290,13 @@ impl RustPlugin {
             return Ok(());
         }
         ctx.pr.set_message("Downloading rustup-init".into());
-        HTTP.download_file(rustup_url(&settings), &rustup_path(), Some(ctx.pr.as_ref()))
-            .await?;
+        let config_env = ctx.config.env().await?;
+        HTTP.download_file(
+            rustup_url(&settings, &config_env),
+            &rustup_path(),
+            Some(ctx.pr.as_ref()),
+        )
+        .await?;
         file::make_executable(rustup_path())?;
         file::create_dir_all(&homes.rustup)?;
         let mut cmd = CmdLineRunner::new(rustup_path())
@@ -246,7 +304,8 @@ impl RustPlugin {
             .arg("--no-modify-path")
             .arg("--default-toolchain")
             .arg("none")
-            .arg("-y")
+            .arg("-y");
+        cmd = apply_rustup_mirror_env(cmd, &config_env)
             .env_values(tv.install_env())
             .envs(rustup_env(homes, &tv.version));
         if let Some(host) = settings.rust.default_host.as_ref() {
@@ -501,6 +560,7 @@ impl Backend for RustPlugin {
             Some(profile) => profile,
             None => self.rustup_default_profile(tv, &runtime)?,
         };
+        let effective_profile = normalize_rustup_profile(&effective_profile)?;
 
         // Query components even when none were explicitly requested. This
         // verifies that rustup still has the toolchain represented by mise's
@@ -562,7 +622,15 @@ impl Backend for RustPlugin {
         Ok(RustOptions::new(&raw_opts).lockfile_options())
     }
 
-    async fn _list_remote_versions(&self, _config: &Arc<Config>) -> Result<Vec<VersionInfo>> {
+    async fn remote_version_cache_context(&self, config: &Arc<Config>) -> Result<Option<String>> {
+        // The nightly entry comes from the mirror's manifest, so a listing cached
+        // for one mirror must not serve another. The default server keeps the
+        // shared cache and versions host.
+        Ok(rustup_dist_server(&config.env().await?)
+            .map(|server| crate::hash::hash_to_str(&server.trim_end_matches('/'))))
+    }
+
+    async fn _list_remote_versions(&self, config: &Arc<Config>) -> Result<Vec<VersionInfo>> {
         let mut versions: Vec<VersionInfo> = github::list_releases("rust-lang/rust")
             .await?
             .into_iter()
@@ -577,7 +645,7 @@ impl Backend for RustPlugin {
             })
             .rev()
             .collect();
-        if let Ok(current_nightly) = current_nightly_version().await {
+        if let Ok(current_nightly) = current_nightly_version(config).await {
             versions.push(VersionInfo {
                 version: current_nightly,
                 ..Default::default()
@@ -617,13 +685,13 @@ impl Backend for RustPlugin {
 
     async fn resolve_channel_version(
         &self,
-        _config: &Arc<Config>,
+        config: &Arc<Config>,
         version: &str,
     ) -> Result<Option<String>> {
         if !self.is_rolling_channel(version) {
             return Ok(None);
         }
-        current_nightly_version().await.map(Some)
+        current_nightly_version(config).await.map(Some)
     }
 
     fn requires_concrete_channel_version(&self, version: &str) -> bool {
@@ -677,6 +745,7 @@ impl Backend for RustPlugin {
             Some(profile) => profile.to_string(),
             None => self.rustup_default_profile(&tv, &runtime)?,
         };
+        let effective_profile = normalize_rustup_profile(&effective_profile)?;
         let mut components = components.unwrap_or_default();
         if effective_profile == "default" {
             components.extend(
@@ -688,14 +757,16 @@ impl Backend for RustPlugin {
             components.dedup();
         }
 
-        let mut cmd = CmdLineRunner::new(runtime.bin_dir.join(RUSTUP_BIN))
+        let config_env = ctx.config.env().await?;
+        let cmd = CmdLineRunner::new(runtime.bin_dir.join(RUSTUP_BIN))
             .with_pr(ctx.pr.as_ref())
             .arg("toolchain")
             .arg("install")
             .arg(&tv.version)
             .opt_args("--component", Some(components))
             .opt_args("--target", targets)
-            .prepend_path(vec![runtime.bin_dir.clone()])?
+            .prepend_path(vec![runtime.bin_dir.clone()])?;
+        let mut cmd = apply_rustup_mirror_env(cmd, &config_env)
             .env_values(tv.install_env())
             .envs(rustup_env(&runtime.homes, &tv.version));
         if let Some(profile) = profile.as_ref() {
@@ -765,13 +836,13 @@ impl Backend for RustPlugin {
                 let oi = OutdatedInfo::new(config, tv.clone(), tv.version.clone())?;
                 return Ok((oi.current.as_ref() != Some(&tv.version)).then_some(oi));
             }
-            let latest = current_nightly_version().await?;
+            let latest = current_nightly_version(config).await?;
             let oi = OutdatedInfo::new(config, tv.clone(), latest.clone())?;
             return Ok((oi.current.as_ref() != Some(&latest)).then_some(oi));
         }
         if is_dated_nightly(&requested) {
             let latest = if bump && !Settings::get().offline() && !opts.offline {
-                current_nightly_version().await?
+                current_nightly_version(config).await?
             } else {
                 tv.version.clone()
             };
@@ -944,19 +1015,60 @@ const CARGO_BIN: &str = "cargo";
 #[cfg(windows)]
 const CARGO_BIN: &str = "cargo.exe";
 
+/// Where to download `rustup-init` from. Honors `RUSTUP_UPDATE_ROOT`, the variable
+/// rustup itself uses to find its own releases, so a mirror such as panamax works
+/// for the bootstrap download as well as for the toolchains.
+fn rustup_url(settings: &Settings, config_env: &IndexMap<String, String>) -> String {
+    let root = config_env
+        .get("RUSTUP_UPDATE_ROOT")
+        .cloned()
+        .or_else(|| std::env::var("RUSTUP_UPDATE_ROOT").ok());
+    rustup_url_for(root.as_deref(), &rustup_host_triple(settings))
+}
+
+fn rustup_url_for(update_root: Option<&str>, triple: &str) -> String {
+    match update_root.map(|r| r.trim_end_matches('/')) {
+        Some(root) if !root.is_empty() => {
+            format!("{root}/dist/{triple}/{RUSTUP_INIT_BIN}")
+        }
+        _ => default_rustup_url(triple),
+    }
+}
+
 #[cfg(unix)]
-fn rustup_url(_settings: &Settings) -> String {
+fn default_rustup_url(_triple: &str) -> String {
     "https://sh.rustup.rs".to_string()
 }
 
 #[cfg(windows)]
-fn rustup_url(settings: &Settings) -> String {
-    let arch = match settings.arch() {
-        "x64" => "x86_64",
-        "arm64" => "aarch64",
-        other => other,
-    };
+fn default_rustup_url(triple: &str) -> String {
+    let arch = triple.split('-').next().unwrap_or(triple);
     format!("https://win.rustup.rs/{arch}")
+}
+
+/// The triple of the machine `rustup-init` runs on. `rust.default_host` is the
+/// toolchain host rustup is told to install, which may differ, so it is not used here.
+fn rustup_host_triple(settings: &Settings) -> String {
+    let target = crate::build_time::TARGET;
+    // An explicit `arch` setting (e.g. x64 under emulation) swaps the architecture
+    // of the build target, keeping its vendor, OS and ABI.
+    if settings.arch.is_some() {
+        let arch = match settings.arch() {
+            "x64" => "x86_64",
+            "arm64" => "aarch64",
+            other => other,
+        };
+        if let Some((_, rest)) = target.split_once('-') {
+            // `eabi`/`eabihf` belong to 32-bit ARM targets only.
+            let rest = if arch.starts_with("arm") {
+                rest
+            } else {
+                rest.trim_end_matches("eabihf").trim_end_matches("eabi")
+            };
+            return format!("{arch}-{rest}");
+        }
+    }
+    target.to_string()
 }
 
 fn rustup_path() -> PathBuf {
@@ -976,10 +1088,15 @@ fn rust_state_lock_identities(rustup_home: &Path, cargo_home: &Path) -> Vec<Path
 /// Serializes rustup state changes for the homes `config` resolves to. Callers that spawn
 /// `cargo` (which may run rustup itself) must hold this so they don't race the rust plugin.
 pub(crate) async fn lock_rust_state_for_config(
+    config_env: &IndexMap<String, String>,
     toolset_env: &BTreeMap<String, String>,
     install_env: &IndexMap<String, crate::config::env_directive::EnvValue>,
 ) -> Result<Vec<fslock::LockFile>> {
-    // Mirror the child's environment: it inherits the process env, then the toolset
+    // The homes the rust plugin locks. `install_env` belongs to this tool only, and other
+    // tools' exec env never reaches `RustHomes::resolve`, so neither affects them.
+    let plugin_homes = RustHomes::from_config_env(config_env);
+
+    // The homes the spawned `cargo` uses: it inherits the process env, then the toolset
     // env and `install_env` override it. Cargo only reads CARGO_HOME/RUSTUP_HOME.
     let mut effective: BTreeMap<String, String> = env::vars_safe().collect();
     effective.extend(toolset_env.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -989,18 +1106,32 @@ pub(crate) async fn lock_rust_state_for_config(
             None => effective.remove(key),
         };
     }
-    let homes = RustHomes::from_sources(
+    let child_homes = RustHomes::from_sources(
         &IndexMap::new(),
         None,
         effective.get("CARGO_HOME").map(PathBuf::from),
         None,
         effective.get("RUSTUP_HOME").map(PathBuf::from),
     );
-    lock_rust_state(&homes).await
+
+    // These differ when `install_env` changes or removes a home, or when a settings home
+    // never reaches the child, so lock both.
+    let mut identities = rust_state_lock_identities(&plugin_homes.rustup, &plugin_homes.cargo);
+    identities.extend(rust_state_lock_identities(
+        &child_homes.rustup,
+        &child_homes.cargo,
+    ));
+    lock_rust_state_identities(identities).await
 }
 
 async fn lock_rust_state(homes: &RustHomes) -> Result<Vec<fslock::LockFile>> {
-    let identities = rust_state_lock_identities(&homes.rustup, &homes.cargo);
+    lock_rust_state_identities(rust_state_lock_identities(&homes.rustup, &homes.cargo)).await
+}
+
+/// Takes the locks in sorted order so overlapping lock sets can't deadlock.
+async fn lock_rust_state_identities(mut identities: Vec<PathBuf>) -> Result<Vec<fslock::LockFile>> {
+    identities.sort();
+    identities.dedup();
     tokio::task::spawn_blocking(move || {
         identities
             .into_iter()
@@ -1029,15 +1160,18 @@ struct RustHomes {
 
 impl RustHomes {
     async fn resolve(config: &Arc<Config>) -> Result<Self> {
-        let config_env = config.env().await?;
+        Ok(Self::from_config_env(&config.env().await?))
+    }
+
+    fn from_config_env(config_env: &IndexMap<String, String>) -> Self {
         let settings = Settings::get();
-        Ok(Self::from_sources(
-            &config_env,
+        Self::from_sources(
+            config_env,
             settings.rust.cargo_home.clone(),
             env::var_path("CARGO_HOME"),
             settings.rust.rustup_home.clone(),
             env::var_path("RUSTUP_HOME"),
-        ))
+        )
     }
 
     fn from_sources(
@@ -1290,6 +1424,17 @@ fn rustup_path_env(runtime: &RustRuntime) -> Result<OsString> {
     )?)
 }
 
+fn normalize_rustup_profile(profile: &str) -> Result<&'static str> {
+    match profile {
+        "minimal" | "m" => Ok("minimal"),
+        "default" | "d" | "" => Ok("default"),
+        "complete" | "c" => Ok("complete"),
+        _ => bail!(
+            "unknown rustup profile name: {profile}; valid profile names are: minimal, default, complete"
+        ),
+    }
+}
+
 fn rustup_component_installed(installed: &BTreeSet<String>, component: &str) -> bool {
     installed.iter().any(|item| {
         item == component
@@ -1359,6 +1504,53 @@ const RUST_TARGET_ARCHES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use confique::Layer;
+
+    #[test]
+    fn test_nightly_manifest_url_for_mirror() {
+        assert_eq!(
+            nightly_manifest_url_for(Some("https://m.example.com/")),
+            "https://m.example.com/dist/channel-rust-nightly.toml"
+        );
+        for unset in [None, Some("")] {
+            assert_eq!(
+                nightly_manifest_url_for(unset),
+                "https://static.rust-lang.org/dist/channel-rust-nightly.toml"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rustup_mirror_env_forwards_only_mirror_vars() {
+        let config_env: IndexMap<String, String> = [
+            ("RUSTUP_DIST_SERVER", "https://m.example.com"),
+            ("RUSTUP_UPDATE_ROOT", ""),
+            ("RUSTUP_HOME", "/elsewhere"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let forwarded: Vec<_> = rustup_mirror_env(&config_env).collect();
+        assert_eq!(
+            forwarded,
+            [("RUSTUP_DIST_SERVER", &"https://m.example.com".to_string())]
+        );
+        assert_eq!(
+            rustup_dist_server(&config_env).as_deref(),
+            Some("https://m.example.com")
+        );
+    }
+
+    #[test]
+    fn test_rustup_url_for_mirror() {
+        let triple = "x86_64-unknown-linux-gnu";
+        assert_eq!(
+            rustup_url_for(Some("https://m.example.com/rustup/"), triple),
+            format!("https://m.example.com/rustup/dist/{triple}/{RUSTUP_INIT_BIN}")
+        );
+        assert_eq!(rustup_url_for(Some(""), triple), default_rustup_url(triple));
+        assert_eq!(rustup_url_for(None, triple), default_rustup_url(triple));
+    }
 
     fn rust_homes_at(root: &Path, explicit: bool) -> RustHomes {
         RustHomes {
@@ -1608,6 +1800,18 @@ rustup - up to date : 1.29.1
         assert!(!rustup_component_installed(&installed, "rustfmt"));
         assert!(!rustup_component_installed(&installed, "rust"));
         assert!(!rustup_component_installed(&installed, "llvm"));
+    }
+
+    #[test]
+    fn profile_aliases_match_rustup() {
+        assert_eq!(normalize_rustup_profile("minimal").unwrap(), "minimal");
+        assert_eq!(normalize_rustup_profile("m").unwrap(), "minimal");
+        assert_eq!(normalize_rustup_profile("default").unwrap(), "default");
+        assert_eq!(normalize_rustup_profile("d").unwrap(), "default");
+        assert_eq!(normalize_rustup_profile("").unwrap(), "default");
+        assert_eq!(normalize_rustup_profile("complete").unwrap(), "complete");
+        assert_eq!(normalize_rustup_profile("c").unwrap(), "complete");
+        assert!(normalize_rustup_profile("custom").is_err());
     }
 
     #[test]
@@ -1953,5 +2157,217 @@ targets = ["wasm32-wasip1", " wasm32-wasip1 "]
 
         assert_eq!(runtime.provider, RustProvider::Managed);
         assert_eq!(runtime.bin_dir, homes.cargo_bindir());
+    }
+
+    /// The lock `lock_rust_state_for_config` takes must be the same lock the rust
+    /// plugin resolves for the same environment, or `cargo install` fallbacks can
+    /// still race the plugin on the shared rustup state (#14041/#14042).
+    fn assert_plugin_locks_are_covered(homes: &RustHomes) {
+        let identities = rust_state_lock_identities(&homes.rustup, &homes.cargo);
+        for identity in identities {
+            let probe = LockFile::new(&identity).try_lock().unwrap();
+            assert!(
+                probe.is_none(),
+                "cargo fallback lock does not cover plugin-resolved home {}",
+                file::display_path(&identity)
+            );
+        }
+    }
+
+    fn ambient_homes_guard() -> crate::test::EnvVarGuard {
+        let mut guard = crate::test::EnvVarGuard::new();
+        guard.remove("CARGO_HOME");
+        guard.remove("RUSTUP_HOME");
+        guard
+    }
+
+    #[tokio::test]
+    async fn config_lock_resolves_tilde_homes_like_the_rust_plugin() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let _env_guard = ambient_homes_guard();
+        let cargo_home_dir = tempfile::Builder::new()
+            .prefix("mise-lock-probe-cargo-")
+            .tempdir_in(*dirs::HOME)
+            .unwrap();
+        let rustup_home_dir = tempfile::Builder::new()
+            .prefix("mise-lock-probe-rustup-")
+            .tempdir_in(*dirs::HOME)
+            .unwrap();
+        let cargo_home = format!(
+            "~/{}",
+            cargo_home_dir.path().file_name().unwrap().to_string_lossy()
+        );
+        let rustup_home = format!(
+            "~/{}",
+            rustup_home_dir
+                .path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+        );
+        let mut toolset_env = BTreeMap::new();
+        toolset_env.insert("CARGO_HOME".to_string(), cargo_home.clone());
+        toolset_env.insert("RUSTUP_HOME".to_string(), rustup_home.clone());
+
+        // `[env]` values reach both `config.env()` and the toolset env
+        let config_env = toolset_env.clone().into_iter().collect();
+        let _locks = lock_rust_state_for_config(&config_env, &toolset_env, &IndexMap::new())
+            .await
+            .unwrap();
+
+        let plugin_homes = RustHomes::from_sources(
+            &IndexMap::new(),
+            None,
+            Some(file::replace_path(&cargo_home)),
+            None,
+            Some(file::replace_path(&rustup_home)),
+        );
+        assert_plugin_locks_are_covered(&plugin_homes);
+    }
+
+    #[tokio::test]
+    async fn config_lock_honors_mise_prefixed_homes_from_config_env() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let _env_guard = ambient_homes_guard();
+        let root = tempfile::tempdir().unwrap();
+        let cargo_home = root.path().join("cargo");
+        let rustup_home = root.path().join("rustup");
+        let mut toolset_env = BTreeMap::new();
+        toolset_env.insert(
+            "MISE_CARGO_HOME".to_string(),
+            cargo_home.to_string_lossy().to_string(),
+        );
+        toolset_env.insert(
+            "MISE_RUSTUP_HOME".to_string(),
+            rustup_home.to_string_lossy().to_string(),
+        );
+
+        // `[env]` values reach both `config.env()` and the toolset env
+        let config_env = toolset_env.clone().into_iter().collect();
+        let _locks = lock_rust_state_for_config(&config_env, &toolset_env, &IndexMap::new())
+            .await
+            .unwrap();
+
+        let plugin_homes = RustHomes::from_sources(&config_env, None, None, None, None);
+        assert_plugin_locks_are_covered(&plugin_homes);
+    }
+
+    #[tokio::test]
+    async fn config_lock_covers_settings_configured_homes() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let _env_guard = ambient_homes_guard();
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = crate::config::settings::SettingsPartial::empty();
+        settings.rust.cargo_home = Some(root.path().join("cargo"));
+        settings.rust.rustup_home = Some(root.path().join("rustup"));
+        Settings::reset(Some(settings));
+
+        let _locks =
+            lock_rust_state_for_config(&IndexMap::new(), &BTreeMap::new(), &IndexMap::new())
+                .await
+                .unwrap();
+
+        let plugin_homes = RustHomes::from_sources(
+            &IndexMap::new(),
+            Some(root.path().join("cargo")),
+            None,
+            Some(root.path().join("rustup")),
+            None,
+        );
+        assert_plugin_locks_are_covered(&plugin_homes);
+    }
+
+    #[tokio::test]
+    async fn config_lock_ignores_ambient_home_removed_by_install_env() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let mut env_guard = ambient_homes_guard();
+        let root = tempfile::tempdir().unwrap();
+        env_guard.set("CARGO_HOME", root.path().join("ambient-cargo"));
+        let install_env = IndexMap::from([(
+            "CARGO_HOME".to_string(),
+            crate::config::env_directive::EnvValue::Boolean(false),
+        )]);
+
+        let _locks = lock_rust_state_for_config(&IndexMap::new(), &BTreeMap::new(), &install_env)
+            .await
+            .unwrap();
+
+        // the child `cargo` no longer sees CARGO_HOME, so it uses the default home
+        let child_homes = RustHomes::from_sources(&IndexMap::new(), None, None, None, None);
+        assert_plugin_locks_are_covered(&child_homes);
+    }
+
+    #[tokio::test]
+    async fn config_lock_covers_settings_home_when_another_tool_exports_cargo_home() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let _env_guard = ambient_homes_guard();
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = crate::config::settings::SettingsPartial::empty();
+        settings.rust.cargo_home = Some(root.path().join("settings-cargo"));
+        Settings::reset(Some(settings));
+        // another tool's exec env reaches the toolset env, but not `config.env()`
+        let toolset_env = BTreeMap::from([(
+            "CARGO_HOME".to_string(),
+            root.path().join("tool-cargo").to_string_lossy().to_string(),
+        )]);
+
+        let _locks = lock_rust_state_for_config(&IndexMap::new(), &toolset_env, &IndexMap::new())
+            .await
+            .unwrap();
+
+        // the rust plugin resolves the settings home
+        let plugin_homes = RustHomes::from_sources(
+            &IndexMap::new(),
+            Some(root.path().join("settings-cargo")),
+            None,
+            None,
+            None,
+        );
+        assert_plugin_locks_are_covered(&plugin_homes);
+        // while the child `cargo` uses the exported one
+        let child_homes = RustHomes::from_sources(
+            &IndexMap::new(),
+            None,
+            Some(root.path().join("tool-cargo")),
+            None,
+            None,
+        );
+        assert_plugin_locks_are_covered(&child_homes);
+    }
+
+    #[tokio::test]
+    async fn config_lock_covers_settings_home_and_child_default_when_install_env_removes_it() {
+        let _settings_guard = crate::test::SettingsGuard::lock();
+        let _env_guard = ambient_homes_guard();
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = crate::config::settings::SettingsPartial::empty();
+        settings.rust.cargo_home = Some(root.path().join("cargo"));
+        Settings::reset(Some(settings));
+        // the rust plugin's exec_env exports the settings home to the toolset env
+        let toolset_env = BTreeMap::from([(
+            "CARGO_HOME".to_string(),
+            root.path().join("cargo").to_string_lossy().to_string(),
+        )]);
+        let install_env = IndexMap::from([(
+            "CARGO_HOME".to_string(),
+            crate::config::env_directive::EnvValue::Boolean(false),
+        )]);
+
+        let _locks = lock_rust_state_for_config(&IndexMap::new(), &toolset_env, &install_env)
+            .await
+            .unwrap();
+
+        // the plugin still locks the settings home
+        let plugin_homes = RustHomes::from_sources(
+            &IndexMap::new(),
+            Some(root.path().join("cargo")),
+            None,
+            None,
+            None,
+        );
+        assert_plugin_locks_are_covered(&plugin_homes);
+        // while the child `cargo` falls back to the default home
+        let child_homes = RustHomes::from_sources(&IndexMap::new(), None, None, None, None);
+        assert_plugin_locks_are_covered(&child_homes);
     }
 }

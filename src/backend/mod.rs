@@ -70,6 +70,7 @@ pub(crate) mod github;
 pub(crate) mod go;
 pub(crate) mod http;
 pub(crate) mod jq;
+pub mod mise_bins;
 pub(crate) mod npm;
 pub(crate) mod npm_registry;
 pub(crate) mod options;
@@ -268,12 +269,13 @@ fn listing_option_digest(opts: &ToolVersionOptions, version_listing_opt_keys: &[
         .iter()
         .filter_map(|key| {
             // A table such as `headers` has no scalar form but still shapes the list, and its
-            // values can be credentials, so only the digest of it is kept.
+            // values can be credentials, so only the digest of it is kept. An array, such as
+            // packslip's `workflow` list, shapes the list the same way.
             opts.get_string(key)
                 .or_else(|| {
                     opts.opts
                         .get(*key)
-                        .filter(|value| value.is_table())
+                        .filter(|value| value.is_table() || value.is_array())
                         .map(ToString::to_string)
                 })
                 .map(|value| (*key, value))
@@ -448,6 +450,26 @@ pub async fn load_tools() -> Result<Arc<BackendMap>> {
     if let Some(memo_tools) = TOOLS.lock().unwrap().clone() {
         return Ok(memo_tools);
     }
+    let tools = build_tools().await?;
+    // Two tasks can race past the memo check above and both build seed maps.
+    // Committing unconditionally would let the loser replace a map list() may
+    // already have extended with installed tools — and TOOLS_INCLUDE_INSTALLED
+    // stays set, so those entries would never be restored. First publisher
+    // wins; everyone else adopts the published map.
+    {
+        let mut cached = TOOLS.lock().unwrap();
+        if let Some(existing) = cached.as_ref() {
+            return Ok(existing.clone());
+        }
+        *TOOLS_SEEDED.lock().unwrap() = Some(tools.clone());
+        *cached = Some(tools.clone());
+    }
+    time!("load_tools done");
+    Ok(tools)
+}
+
+/// Build the seed map: core tools plus registry entries with idiomatic files.
+async fn build_tools() -> Result<Arc<BackendMap>> {
     install_state::init().await?;
     time!("load_tools start");
     let core_tools = CORE_PLUGINS.values().cloned().collect::<Vec<ABackend>>();
@@ -476,22 +498,7 @@ pub async fn load_tools() -> Result<Arc<BackendMap>> {
         .into_iter()
         .map(|backend| (backend.ba().short.clone(), backend))
         .collect();
-    let tools = Arc::new(tools);
-    // Two tasks can race past the memo check above and both build seed maps.
-    // Committing unconditionally would let the loser replace a map list() may
-    // already have extended with installed tools — and TOOLS_INCLUDE_INSTALLED
-    // stays set, so those entries would never be restored. First publisher
-    // wins; everyone else adopts the published map.
-    {
-        let mut cached = TOOLS.lock().unwrap();
-        if let Some(existing) = cached.as_ref() {
-            return Ok(existing.clone());
-        }
-        *TOOLS_SEEDED.lock().unwrap() = Some(tools.clone());
-        *cached = Some(tools.clone());
-    }
-    time!("load_tools done");
-    Ok(tools)
+    Ok(Arc::new(tools))
 }
 
 /// Whether an installed tool should displace the TOOLS entry for `short`.
@@ -506,20 +513,19 @@ fn installed_replaces<V>(seeded: &BTreeMap<String, V>, short: &str) -> bool {
     seeded.contains_key(short)
 }
 
-/// Extend TOOLS with a backend for every installed tool. Installed tools are
-/// otherwise loaded one at a time through [`get`]; enumerating callers need
-/// them all, which means a full installs-dir scan.
-fn ensure_installed_tools_loaded() {
+/// Extend TOOLS with a backend for every installed tool and return the result.
+/// Installed tools are otherwise loaded one at a time through [`get`];
+/// enumerating callers need them all, which means a full installs-dir scan.
+///
+/// Returns the map read under the same lock that extended it, so a concurrent
+/// [`reset`] cannot swap it out between the two. `None` means load_tools has
+/// not run; the flag stays clear so a later call extends the map it publishes.
+fn installed_tools() -> Option<Arc<BackendMap>> {
     let mut tools = TOOLS.lock().unwrap();
+    let current = tools.clone()?;
     if TOOLS_INCLUDE_INSTALLED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
+        return Some(current);
     }
-    let Some(current) = tools.as_ref() else {
-        // load_tools has not run; the flag stays set and list() callers go
-        // through load_tools first, which ends up here again.
-        TOOLS_INCLUDE_INSTALLED.store(false, std::sync::atomic::Ordering::SeqCst);
-        return;
-    };
     let settings = Settings::get();
     let enable_tools = settings.enable_tools();
     let disable_tools = settings.disable_tools();
@@ -545,19 +551,15 @@ fn ensure_installed_tools_loaded() {
             next.entry(short).or_insert(backend);
         }
     }
-    *tools = Some(Arc::new(next));
+    let next = Arc::new(next);
+    *tools = Some(next.clone());
+    Some(next)
 }
 
 pub fn list() -> BackendList {
-    ensure_installed_tools_loaded();
-    TOOLS
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .values()
-        .cloned()
-        .collect()
+    installed_tools()
+        .map(|tools| tools.values().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Backends that can contribute version aliases.
@@ -608,7 +610,11 @@ pub fn get(ba: &BackendArg) -> Option<ABackend> {
     }
 
     let mut tools = TOOLS.lock().unwrap();
-    let tools_ = tools.as_ref().unwrap();
+    let Some(tools_) = tools.as_ref() else {
+        // load_tools has not run. Caching here would publish a map that
+        // load_tools then adopts in place of the seed map.
+        return arg_to_backend(ba.clone());
+    };
     if let Some(backend) = tools_.get(&ba.short) {
         Some(backend.clone())
     } else if let Some(backend) = arg_to_backend(ba.clone()) {
@@ -639,7 +645,7 @@ pub fn is_disabled_backend_type(backend_type: &BackendType) -> bool {
         .is_some_and(is_disabled_backend_name)
 }
 
-pub(crate) fn ensure_backend_enabled(backend_type: &BackendType) -> Result<()> {
+pub fn ensure_backend_enabled(backend_type: &BackendType) -> Result<()> {
     if is_disabled_backend_type(backend_type) {
         bail!("backend {backend_type} is disabled by disable_backends");
     }
@@ -655,17 +661,7 @@ fn is_disabled_backend_name(backend: &str) -> bool {
 
 pub fn arg_to_backend(ba: BackendArg) -> Option<ABackend> {
     match ba.backend_type() {
-        BackendType::Core => {
-            CORE_PLUGINS
-                .get(&ba.short)
-                .or_else(|| {
-                    // this can happen if something like "corenode" is aliased to "core:node"
-                    ba.full()
-                        .strip_prefix("core:")
-                        .and_then(|short| CORE_PLUGINS.get(short))
-                })
-                .cloned()
-        }
+        BackendType::Core => crate::plugins::core::get(&ba),
         BackendType::Aqua => Some(Arc::new(aqua::AquaBackend::from_arg(ba))),
         BackendType::Asdf => Some(Arc::new(asdf::AsdfBackend::from_arg(ba))),
         BackendType::Cargo => Some(Arc::new(cargo::CargoBackend::from_arg(ba))),
@@ -874,11 +870,14 @@ where
     let names = file::executable_names(bin);
     dirs.into_iter().find_map(|dir| {
         names.iter().map(|name| dir.join(name)).find(|candidate| {
-            if spawnable {
-                file::is_spawnable(candidate)
-            } else {
-                candidate.exists() && file::is_executable(candidate)
-            }
+            // is_file() first: a directory has the x bit set, so a tool that ships a
+            // `skills/` dir would otherwise shadow another tool's `skills` binary.
+            candidate.is_file()
+                && if spawnable {
+                    file::is_spawnable(candidate)
+                } else {
+                    file::is_executable(candidate)
+                }
         })
     })
 }
@@ -971,6 +970,44 @@ mod tests {
         // An entry `get` resolved after load_tools may carry command-scoped
         // options, so it is left alone.
         assert!(!installed_replaces(&seeded, "mytool"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_and_get_survive_concurrent_reset() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        const READERS: usize = 4;
+        // reset() rebuilds the shared cache from the current settings.
+        let _settings = crate::test::SettingsGuard::lock();
+        load_tools().await.unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reads = Arc::new(AtomicUsize::new(0));
+        // Hold the resets until every reader is running, so the readers cannot
+        // all start after the loop has finished and pass without reading.
+        let ready = Arc::new(std::sync::Barrier::new(READERS + 1));
+        let readers = (0..READERS)
+            .map(|_| {
+                let (stop, reads, ready) = (stop.clone(), reads.clone(), ready.clone());
+                std::thread::spawn(move || {
+                    let ba = BackendArg::from("node");
+                    ready.wait();
+                    while !stop.load(Ordering::SeqCst) {
+                        list();
+                        get(&ba);
+                        reads.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        tokio::task::block_in_place(|| ready.wait());
+        for _ in 0..200 {
+            reset().await.unwrap();
+        }
+        let reads_during_reset = reads.load(Ordering::SeqCst);
+        stop.store(true, Ordering::SeqCst);
+        for reader in readers {
+            reader.join().expect("reader panicked during reset");
+        }
+        assert!(reads_during_reset > 0, "no reader ran while resetting");
     }
 
     fn create_test_backend_arg(tool: &str) -> Arc<BackendArg> {
@@ -1175,6 +1212,34 @@ mod tests {
             which_in_dirs(vec![dir.path().to_path_buf()], "tool", false),
             None
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn which_in_dirs_skips_directory_in_earlier_dir() {
+        // A tool's bin dir can hold a mode-0755 directory named like another tool's
+        // binary (hunk ships `skills/`). It passes the x-bit check, so the lookup must
+        // reject it and keep walking instead of resolving to something unspawnable.
+        use std::os::unix::fs::PermissionsExt;
+
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        fs::create_dir(first.path().join("skills")).unwrap();
+        let bin = second.path().join("skills");
+        fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+
+        for spawnable in [false, true] {
+            assert_eq!(
+                which_in_dirs(
+                    vec![first.path().to_path_buf(), second.path().to_path_buf()],
+                    "skills",
+                    spawnable
+                ),
+                Some(bin.clone()),
+                "spawnable={spawnable}"
+            );
+        }
     }
 
     #[test]
@@ -1459,6 +1524,34 @@ mod tests {
         assert_eq!(
             listing_option_digest(&forward, keys),
             listing_option_digest(&forward, keys),
+        );
+    }
+
+    #[test]
+    fn test_listing_option_digest_tracks_array_values() {
+        use crate::toolset::ToolVersionOptions;
+
+        let with = |names: &[&str]| {
+            let mut opts = ToolVersionOptions::default();
+            opts.opts.insert(
+                "workflow".to_string(),
+                toml::Value::Array(
+                    names
+                        .iter()
+                        .map(|n| toml::Value::String(n.to_string()))
+                        .collect(),
+                ),
+            );
+            opts
+        };
+        let keys = &["workflow"];
+        assert_ne!(
+            listing_option_digest(&with(&["a.yml", "b.yml"]), keys),
+            listing_option_digest(&with(&["a.yml"]), keys),
+        );
+        assert_ne!(
+            listing_option_digest(&with(&["a.yml"]), keys),
+            listing_option_digest(&ToolVersionOptions::default(), keys),
         );
     }
 
@@ -2384,6 +2477,13 @@ pub trait Backend: Debug + Send + Sync {
         Platform::current().to_key()
     }
 
+    /// [`Self::get_platform_key`] for one tool request, for a backend whose
+    /// artifact depends on options the request sets, such as a `url` template in
+    /// `mise.toml`. Callers that hold the tool version use this one.
+    fn get_platform_key_for(&self, _tv: &ToolVersion) -> String {
+        self.get_platform_key()
+    }
+
     /// Resolves the lockfile options for a tool request on a target platform.
     /// These options affect artifact identity and must match exactly for lockfile lookup.
     ///
@@ -2436,6 +2536,13 @@ pub trait Backend: Debug + Send + Sync {
     /// - linux-x64-musl-baseline (musl + no AVX2)
     fn platform_variants(&self, platform: &Platform) -> Vec<Platform> {
         vec![platform.clone()] // Default: just the base platform
+    }
+
+    /// [`Self::platform_variants`] for one tool request, for a backend whose
+    /// variants depend on options the request sets. Callers that hold the tool
+    /// version use this one.
+    fn platform_variants_for(&self, _tv: &ToolVersion, platform: &Platform) -> Vec<Platform> {
+        self.platform_variants(platform)
     }
 
     /// Whether this backend supports URL-based locking in locked mode.
@@ -3915,7 +4022,7 @@ pub trait Backend: Debug + Send + Sync {
             );
         }
         if ctx.locked && self.supports_lockfile_url() {
-            let platform_key = self.get_platform_key();
+            let platform_key = self.get_platform_key_for(&tv);
             let has_lockfile_url = tv
                 .lock_platforms
                 .get(&platform_key)
@@ -5156,7 +5263,7 @@ pub trait Backend: Debug + Send + Sync {
         let lockfile_enabled = settings.lockfile_enabled();
 
         // Get the platform key for this tool and platform
-        let platform_key = self.get_platform_key();
+        let platform_key = self.get_platform_key_for(tv);
 
         // Get or create asset info for this platform
         let locked = tv
@@ -6969,12 +7076,13 @@ fn invalidate_postinstall_env() {
 pub async fn reset() -> Result<()> {
     install_state::reset();
     invalidate_postinstall_env();
-    {
-        let mut tools = TOOLS.lock().unwrap();
-        *tools = None;
-        *TOOLS_SEEDED.lock().unwrap() = None;
-        TOOLS_INCLUDE_INSTALLED.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-    load_tools().await?;
+    // Build the new map before replacing the old one. Clearing TOOLS first left
+    // a window, while the rebuild ran, in which a concurrent list() or get()
+    // found no map at all and panicked (#14238).
+    let tools = build_tools().await?;
+    let mut cached = TOOLS.lock().unwrap();
+    *TOOLS_SEEDED.lock().unwrap() = Some(tools.clone());
+    TOOLS_INCLUDE_INSTALLED.store(false, std::sync::atomic::Ordering::SeqCst);
+    *cached = Some(tools);
     Ok(())
 }

@@ -1,644 +1,426 @@
 ---
-description: "mise's embedded Lua 5.1 runtime provides modules for plugin hooks, including backend, tool, environment, and package plugins."
+description: "Look up the globals, metadata fields, hook files and Lua modules that mise provides to plugin hooks."
 ---
 
-# Plugin Lua Modules
+# Plugin Lua reference
 
-mise's embedded Lua 5.1 runtime provides modules for plugin hooks, including backend, tool,
-environment, and package plugins. This reference describes mise's implementations; upstream
-vfox may differ. Load modules with `require` and use `RUNTIME` for the target platform.
-
-Use direct HTTP and file operations when possible. `cmd.exec` runs a shell, so command
-quoting and external prerequisites still depend on the selected platform.
-
-## 可用模块
-
-### 核心模块
-
-- **`cmd`** - Execute shell commands
-- **`json`** - Parse and generate JSON
-- **`http`** - Make HTTP requests and downloads
-- **`file`** - File system operations
-- **`env`** - Environment variable operations
-- **`strings`** - String manipulation utilities
-- **`semver`** - Numeric-component comparison and sorting (not full SemVer precedence)
-- **`html`** - HTML parsing and manipulation
-- **`archiver`** - Archive extraction
-- **`log`** - Structured logging
-
-## HTTP 模块
-
-The HTTP module makes web requests and downloads files. `get` and `head` return a response
-or raise on a transport failure; a non-2xx HTTP response is still a response, so check
-`status_code`. `download_file` raises on transport and HTTP error status and returns no
-value on success. Use the non-raising `try_*` variants for fallback logic.
-
-### 基本 HTTP 请求
+mise runs every Lua plugin hook (tool, backend, environment and package
+plugins) in an embedded Lua 5.1 interpreter. It provides globals,
+`metadata.lua` fields, hook files, and modules you load with `require`.
 
 ```lua
 local http = require("http")
+```
 
--- GET request
+These are mise's implementations; a module with the same name in upstream vfox
+can behave differently. Prefer the `http`, `file` and `archiver` modules to
+shelling out: `cmd.exec` runs shell code, so quoting and the programs it needs
+differ by platform.
+
+## Globals
+
+| Global                 | What it is                                                                                                                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN`               | The table `metadata.lua` defines. Hooks are methods on it, such as `function PLUGIN:PreInstall(ctx)`.                                                                                                          |
+| `RUNTIME`              | The platform the hook targets. See [`RUNTIME`](#runtime).                                                                                                                                                      |
+| `print(...)`           | The same function as `log.info`. It writes a log line to stderr, not to stdout. See [`print`](#print-override).                                                                                                |
+| `os.execute(command)`  | Runs shell code in the [hook environment](#hook-environment) and returns its exit code. See [cmd](#command-module).                                                                                            |
+| `os.getenv(name)`      | Reads the [hook environment](#hook-environment) in hooks that have one, and the environment of the mise process in the others.                                                                                 |
+| `OS_TYPE`, `ARCH_TYPE` | The OS and architecture, with the same values as `RUNTIME.osType` and `RUNTIME.archType`. During `mise lock` they describe the target platform, as `RUNTIME` does. Prefer `RUNTIME`, which also has `envType`. |
+
+The rest of the Lua 5.1 standard library behaves as usual, except that the
+`debug` library is not loaded and `require` searches only the plugin's
+directories (see [Loading your own code](#loading-your-own-code)). `io.popen`
+always uses the environment of the mise process rather than the hook
+environment, so run commands with `cmd.exec` instead.
+
+### `RUNTIME` {#runtime}
+
+| Field                   | Value                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `RUNTIME.osType`        | `linux`, `darwin` or `windows`                                                                                              |
+| `RUNTIME.archType`      | `amd64`, `arm64`, or another architecture name such as `x86` or `riscv64`                                                   |
+| `RUNTIME.envType`       | `gnu` or `musl` on Linux, from the [`libc`](/configuration/settings.html#libc) setting or detection; `nil` on other systems |
+| `RUNTIME.version`       | The vfox API version mise implements (`0.6.0`), not the mise version                                                        |
+| `RUNTIME.pluginDirPath` | The plugin's installed directory                                                                                            |
+
+```lua
+local platform = {
+    os = RUNTIME.osType,
+    arch = RUNTIME.archType,
+    libc = RUNTIME.envType,
+}
+```
+
+When [`mise lock`](/cli/lock.html) records other platforms, it runs `PreInstall`
+for each of them, and `RUNTIME` describes that platform, with `envType` set to
+`nil`. Use `RUNTIME` to pick an artifact. Running `uname` from a hook reports
+the host and can select the wrong download for the platform being locked.
+
+### Loading your own code
+
+`require` looks for `NAME.lua` in the plugin's root directory, then in `hooks/`
+and `lib/`, so `require("util")` loads `lib/util.lua`. Put shared helpers in
+`lib/`.
+
+The built-in modules also load under their upstream vfox names:
+`require("vfox.cmd")`, `require("vfox.env")`, `require("vfox.semver")`,
+`require("vfox.strings")` and `require("vfox").log`.
+
+### The hook environment {#hook-environment}
+
+mise builds an environment for each hook from your environment and the
+project's `[env]` values. It adds the tool's `install_env` values during an
+install, and the `PATH` entries of the tools the plugin
+[depends on](/tool-plugin-development.html#depends). In the install, uninstall
+and environment hooks, it also adds each [tool option](#tool-options) as a
+`MISE_TOOL_OPTS__<KEY>` variable, which never reaches the user's shell;
+`Available` and `BackendListVersions` do not get them. In tool and backend
+hooks, mise removes its shims directory from that `PATH`, so a hook cannot reach
+another tool through its shim. Package manager plugin hooks keep it; see
+[package manager plugins](/package-plugin-development.html#mise-plugin-toml).
+
+`os.getenv`, `os.execute`, `cmd.exec` and `cmd.stream` use this
+environment. Values you pass in the `env` option of `cmd.exec` or `cmd.stream`
+are merged over it.
+
+`ParseLegacyFile`, `BackendListTools` and `BackendSearchTools` get no hook
+environment: in them, `os.getenv` and commands see the environment of the mise
+process, including values set with [`env.setenv`](#environment-module).
+
+## metadata.lua {#metadata}
+
+`metadata.lua` sits at the plugin's root and assigns the `PLUGIN` table:
+
+```lua
+PLUGIN = {
+    name = "my-tool",
+    version = "1.2.0",
+    description = "Install Example Tool",
+    homepage = "https://github.com/your-org/my-tool-plugin",
+    license = "MIT",
+    legacyFilenames = { ".my-tool-version" },
+}
+```
+
+| Field                                          | Required | What mise does with it                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                         | yes      | Becomes the key of `ctx.sdkInfo` in `PostInstall`, `EnvKeys` and `PreUninstall`. Commands and log lines use the name the plugin was installed under.                                                                                                                                    |
+| `version`                                      | yes      | Nothing beyond the check that it is set. Users choose a release by its Git ref; see [Publishing plugins](/plugin-publishing.html#tag-a-release).                                                                                                                                        |
+| `description`, `author`, `license`, `homepage` | no       | Nothing; they describe the plugin to readers of the file.                                                                                                                                                                                                                               |
+| `legacyFilenames`                              | no       | Lists the [idiomatic version files](/dev-tools/versions.html#idiomatic-version-files) the tool plugin reads with `ParseLegacyFile`. mise reads them only for tools listed in [`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools). |
+| `depends`                                      | no       | Lists tools to install before this one and put on `PATH` for its install hooks. See [`PLUGIN.depends`](/tool-plugin-development.html#depends).                                                                                                                                          |
+| `systemDependencies`                           | no       | Lists system programs and libraries that mise checks for before an install. See [System dependencies](/tool-plugin-development.html#system-dependencies).                                                                                                                               |
+
+mise stops with an error when `name` or `version` is missing. It runs the whole
+file each time it loads the plugin, so keep it to assignments: do not run
+commands or read the host there.
+
+## Hook files
+
+Each hook lives in its own file under `hooks/`, named after the hook in snake
+case, and defines that method on `PLUGIN`: `hooks/pre_install.lua` defines
+`PLUGIN:PreInstall`. mise runs every hook file when it loads the plugin, so
+keep their top level to function definitions.
+
+| Plugin type                                         | Required hook files                                                        | Optional hook files                                                                            |
+| --------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [Tool](/tool-plugin-development.html)               | `available.lua`, `pre_install.lua`, `env_keys.lua`                         | `post_install.lua`, `pre_uninstall.lua`, `parse_legacy_file.lua`, `mise_install_satisfied.lua` |
+| [Backend](/backend-plugin-development.html)         | `backend_list_versions.lua`, `backend_install.lua`, `backend_exec_env.lua` | `backend_uninstall.lua`, `backend_list_tools.lua`, `backend_search_tools.lua`                  |
+| [Environment](/env-plugin-development.html)         | `mise_env.lua`, `mise_path.lua`, or both                                   | none                                                                                           |
+| [Package manager](/package-plugin-development.html) | `package_installed.lua`, `package_install.lua`                             | `package_upgrade.lua`, `package_uninstall.lua`                                                 |
+
+mise decides a plugin's type from these files. A plugin with
+`hooks/backend_install.lua` is a backend plugin. One with both
+`hooks/package_install.lua` and `hooks/package_installed.lua` is a package
+manager plugin. Any other plugin with a `metadata.lua` is a tool or environment
+plugin. Package manager plugins can also declare their capabilities in a
+`mise.plugin.toml` file. mise does not call upstream vfox's `PreUse` hook.
+
+## Tool options in hooks {#tool-options}
+
+Tool and backend hooks read the options on a tool's entry in `mise.toml` from
+`ctx.options`, where top-level booleans and numbers arrive as strings:
+`bundled = false` arrives as `"false"`, which is truthy in Lua. See
+[tool options](/tool-plugin-development.html#tool-options) for the hooks that
+receive them, the options mise keeps to itself and the `MISE_TOOL_OPTS__`
+environment variables, and [backend plugins](/backend-plugin-development.html#tool-options)
+for the backend hooks. An environment plugin's `MiseEnv` and `MisePath` hooks
+receive the options of its `[env]` directive with their TOML types kept; see
+[environment plugins](/env-plugin-development.html).
+
+## Module index
+
+| Module                         | Functions                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| [`http`](#http-module)         | `get`, `head`, `download_file`, `try_get`, `try_head`, `try_download_file`    |
+| [`json`](#json-module)         | `encode`, `decode`                                                            |
+| [`file`](#file-module)         | `read`, `exists`, `stat`, `list`, `glob`, `join_path`, `move`, `symlink`      |
+| [`archiver`](#archiver-module) | `decompress`                                                                  |
+| [`cmd`](#command-module)       | `exec`, `stream`                                                              |
+| [`strings`](#strings-module)   | `split`, `join`, `trim`, `trim_space`, `has_prefix`, `has_suffix`, `contains` |
+| [`semver`](#semver-module)     | `compare`, `parse`, `sort`, `sort_by`                                         |
+| [`html`](#html-module)         | `parse`                                                                       |
+| [`env`](#environment-module)   | `setenv`                                                                      |
+| [`log`](#log-module)           | `trace`, `debug`, `info`, `warn`, `error`                                     |
+
+## Errors
+
+A Lua error stops the hook, and mise reports it as the failure of the operation
+that ran the hook, such as the install. Raise one with `error("message")`.
+
+`pcall` catches the errors that the `json`, `file`, `archiver`, `cmd`,
+`strings` and `semver` functions raise. It does not work with the `http`
+functions: a call to any of them inside `pcall`, directly or through a function
+you pass to `pcall`, fails with
+`attempt to yield across metamethod/C-call boundary`, even when the request
+would succeed. When a request may fail and you have a fallback, call
+`http.try_get`, `http.try_head` or `http.try_download_file`, which return the
+error instead of raising it.
+
+```lua
+local json = require("json")
+
+local ok, data = pcall(json.decode, body)
+if not ok then
+    error("unexpected response: " .. tostring(data))
+end
+```
+
+## `http` {#http-module}
+
+| Function                                     | Returns                                               | On failure                                                                      |
+| -------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `http.get({ url, headers })`                 | `{ status_code, headers, body }`                      | Raises on a network error. Any HTTP status is returned, so check `status_code`. |
+| `http.head({ url, headers })`                | `{ status_code, headers }`, with no body              | Same as `get`                                                                   |
+| `http.download_file({ url, headers }, path)` | nothing                                               | Raises on a network error or an HTTP error status                               |
+| `http.try_get(...)`, `http.try_head(...)`    | `response, nil`, or `nil, message` on a network error | Does not raise                                                                  |
+| `http.try_download_file(...)`                | `true, nil`, or `nil, message`                        | Does not raise                                                                  |
+
+`headers` is optional. Response header names are in lower case, such as
+`resp.headers["content-length"]`. `download_file` creates the directories above
+`path` if they are missing.
+
+```lua
+local http = require("http")
+local json = require("json")
+
 local resp = http.get({
     url = "https://api.github.com/repos/owner/repo/releases",
-    headers = {
-        ['User-Agent'] = "mise-plugin",
-        ['Accept'] = "application/json"
-    }
+    headers = { ["Accept"] = "application/json" },
 })
-
-
 if resp.status_code ~= 200 then
-    error("HTTP 错误: " .. resp.status_code)
+    error("GET releases returned " .. resp.status_code)
 end
+local releases = json.decode(resp.body)
 
-local body = resp.body
-```
-
-### HEAD 请求
-
-```lua
-local http = require("http")
-
--- HEAD request to check file info
-local resp = http.head({
-    url = "https://example.com/file.tar.gz"
-})
-
-
-local content_length = resp.headers['content-length']
-local content_type = resp.headers['content-type']
-```
-
-### 文件下载
-
-```lua
-local http = require("http")
-
--- 下载文件
-local err = http.download_file({
+-- Raises on failure; use http.try_download_file to handle errors without stopping the hook.
+http.download_file({
     url = "https://github.com/owner/repo/archive/v1.0.0.tar.gz",
-    headers = {
-        ['User-Agent'] = "mise-plugin"
-    }
 }, "/path/to/download.tar.gz")
 
+-- Fall back to a mirror when the primary host cannot be reached.
+local index, err = http.try_get({ url = "https://primary.example.com/index.json" })
 if err ~= nil then
-    error("下载失败: " .. err)
+    index, err = http.try_get({ url = "https://mirror.example.com/index.json" })
 end
 ```
 
-### 不抛出错误的变体（`try_*`）
+Requests retry transient failures (connection errors, timeouts, and HTTP 408,
+429 and 5xx responses) up to `MISE_HTTP_RETRIES` times, 3 by default. The
+plugin HTTP client reads only that environment variable, not an
+[`http_retries`](/configuration/settings.html#http_retries) value from a config
+file. Requests follow mise's [`url_replacements`](/url-replacements.html), and
+credentials from [`netrc`](/configuration/settings.html#netrc) are added for the
+destination host. A request to `api.github.com`, or to a GitHub Enterprise Cloud
+`api.*.ghe.com` host, that has no `Authorization` header gets the
+[GitHub token](/dev-tools/github-tokens.html) mise resolves for `github.com`
+(even for a `ghe.com` host) and an `X-GitHub-Api-Version` header. For a GitHub
+Enterprise Cloud host that needs its own token, set `Authorization` yourself.
+A plugin that calls `api.github.com` therefore needs no token handling, and no
+plugin needs a retry loop of its own. Do not attach a GitHub token to
+`github.com` release-download URLs: GitHub then redirects to a host that
+rejects the request.
 
-标准的 `http.get`、`http.head` 和 `http.download_file` 方法在传输失败（超时、DNS 错误、连接被拒绝等）时会抛出 Lua 错误。由于在此环境中 `pcall()` 无法捕获异步函数的错误，因此提供了不抛出错误的变体：
+`download_file` does not verify what it downloads. In a tool plugin, return
+`sha256` or `sha512` from `PreInstall` instead of downloading, and mise
+downloads, verifies and extracts the file. A backend plugin that downloads in
+`BackendInstall` must check the digest itself. The Lua modules have no hash
+function, so run the platform's checksum tool through `cmd.exec`, such as
+`sha256sum` on Linux or `shasum -a 256` on macOS.
 
-```lua
-local http = require("http")
+## `json` {#json-module}
 
--- try_get: 成功时返回 (resp, nil)，失败时返回 (nil, err_string)
-local resp, err = http.try_get({
-    url = "https://primary.example.com/index"
-})
-if err ~= nil then
-    -- 回退到另一个来源
-    resp, err = http.try_get({ url = "https://fallback.example.com/index" })
-end
-
--- try_head: 返回值约定与 try_get 相同
-local resp, err = http.try_head({ url = "https://example.com/file.tar.gz" })
-
--- try_download_file: 成功时返回 (true, nil)，失败时返回 (nil, err_string)
-local ok, err = http.try_download_file({
-    url = "https://example.com/archive.tar.gz"
-}, "/path/to/download.tar.gz")
-if err ~= nil then
-    error("下载失败: " .. err)
-end
-```
-
-### 响应对象
-
-HTTP 响应包含以下字段：
-
-```lua
-{
-    status_code = 200,
-    headers = {
-        ['content-type'] = "application/json",
-        ['content-length'] = "1234"
-    },
-    body = "response content"
-}
-```
-
-## JSON 模块
-
-The JSON module encodes and decodes JSON.
-
-### 基本用法
+| Function             | Returns       | On failure                                                                               |
+| -------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `json.encode(value)` | a JSON string | Raises when the value holds a function, or userdata other than the `null` sentinel below |
+| `json.decode(text)`  | a Lua value   | Raises on invalid JSON; `pcall` catches it                                               |
 
 ```lua
 local json = require("json")
 
--- 将 table 编码为 JSON 字符串
-local obj = {
-    name = "mise-plugin",
-    version = "1.0.0",
-    tools = {"prettier", "eslint"}
-}
-local jsonStr = json.encode(obj)
--- 结果：'{"name":"mise-plugin","version":"1.0.0","tools":["prettier","eslint"]}'
+local text = json.encode({ name = "mise-plugin", tools = { "prettier", "eslint" } })
+-- {"tools":["prettier","eslint"],"name":"mise-plugin"}; key order is not guaranteed
 
--- 将 JSON 字符串解码为 table
-local decoded = json.decode(jsonStr)
-print(decoded.name)  -- "mise-plugin"
-print(decoded.tools[1])  -- "prettier"
+local data = json.decode(text)
+print(data.tools[1]) -- prettier
 ```
 
-### 错误处理（Lua）
+JSON `null` decodes to a sentinel value, not `nil`, and the sentinel is truthy.
+Compare against it explicitly; encoding the sentinel produces `null`:
 
 ```lua
-local json = require("json")
-
--- 安全解析 JSON
-local success, result = pcall(json.decode, response_body)
-if not success then
-    error("解析 JSON 失败: " .. result)
-end
-
--- 使用解析后的数据
-for _, item in ipairs(result) do
-    print(item.version)
+local NULL = json.decode("null")
+local release = json.decode(resp.body)
+if release.body == nil or release.body == NULL then
+    -- the field is missing or null
 end
 ```
 
-## 字符串模块
+An empty Lua table encodes as `{}`, not `[]`.
 
-The strings module provides string manipulation utilities.
+## `file` {#file-module}
 
-### 字符串操作
+| Function                 | Returns                                                        | On failure                                   |
+| ------------------------ | -------------------------------------------------------------- | -------------------------------------------- |
+| `file.join_path(...)`    | the non-empty arguments joined with the host's separator       | Does not fail                                |
+| `file.read(path)`        | the file's contents as text                                    | Raises when the file is missing or not UTF-8 |
+| `file.exists(path)`      | `true` or `false`                                              | Raises when the path cannot be checked       |
+| `file.stat(path)`        | a table described below, or `nil` when the path is missing     | Raises on other errors                       |
+| `file.list(dir)`         | full paths of the directory's immediate entries, sorted        | Raises when the directory is missing         |
+| `file.glob(pattern)`     | paths matching the pattern, sorted                             | Raises on an invalid pattern                 |
+| `file.move(from, to)`    | nothing; moves a file or directory and creates parents of `to` | Raises                                       |
+| `file.symlink(src, dst)` | nothing; creates the link `dst` pointing at `src`              | Raises                                       |
 
-```lua
-local strings = require("strings")
-
--- 将字符串拆分成多个部分
-local parts = strings.split("hello,world,test", ",")
-print(parts[1])  -- "hello"
-print(parts[2])  -- "world"
-print(parts[3])  -- "test"
-
--- 连接字符串
-local joined = strings.join({"hello", "world", "test"}, " - ")
-print(joined)  -- "hello - world - test"
-
--- 去除空白字符
-local trimmed = strings.trim_space("  hello world  ")
-print(trimmed)  -- "hello world"
-```
-
-### 字符串检查
+A relative path resolves against the directory mise runs in, not against the
+plugin or install directory. Build paths from the absolute paths in `ctx`:
 
 ```lua
-local strings = require("strings")
+local file = require("file")
 
--- 检查前缀和后缀
-local text = "hello world"
-print(strings.has_prefix(text, "hello"))  -- true
-print(strings.has_suffix(text, "world"))  -- true
-print(strings.contains(text, "lo wo"))    -- true
+-- In BackendInstall. Tool plugin hooks call this path ctx.rootPath or ctx.path.
+local install_path = ctx.install_path
+local bin = file.join_path(install_path, "bin", "mytool")
 
--- Remove repeated exact suffixes (not a character set)
-local trimmed = strings.trim("hello world", "world")
-print(trimmed)  -- "hello "
-```
-
-### 版本字符串工具
-
-Use Lua patterns to remove a known publisher prefix. The module has no `trim_prefix`
-function, and stripping a prerelease suffix would change the requested version:
-
-```lua
-local function normalize_version(version)
-    return (version:gsub("^v", ""))
+local matches = file.glob(file.join_path(install_path, "bin", "mytool-*"))
+if #matches == 1 then
+    file.move(matches[1], bin)
 end
-local version = normalize_version("v1.2.3-beta.1") -- "1.2.3-beta.1"
-```
-
-## Semver 模块
-
-Despite its name, this module compares **numeric components extracted from strings**, not
-full Semantic Versioning precedence. It ignores non-digit text and treats missing numeric
-components as zero. For example, `1.0.0-beta` compares equal to `1.0.0`, and `1.0.0-beta.1`
-compares greater. Do not use it to choose the newest arbitrary tool version or order channels.
-
-Use it only when a tool's documented version scheme matches this numeric comparison.
-Otherwise preserve the publisher's order or implement that tool's actual policy.
-
-### 版本比较
-
-```lua
-local semver = require("semver")
-
--- 比较两个版本
--- 返回：如果 v1 < v2 则为 -1，相等为 0，如果 v1 > v2 则为 1
-local result = semver.compare("1.2.3", "1.2.4")  -- -1
-local result = semver.compare("2.0.0", "1.9.9")  -- 1
-local result = semver.compare("1.0.0", "1.0.0")  -- 0
-
--- 正确处理数字比较
-local result = semver.compare("9.6.9", "9.6.24")   -- -1（不是按字典序！）
-local result = semver.compare("10.0.0", "9.6.24") -- 1
-```
-
-### 解析版本
-
-```lua
-local semver = require("semver")
-
--- 将版本字符串解析为数字部分
-local parts = semver.parse("1.2.3")
-print(parts[1])  -- 1
-print(parts[2])  -- 2
-print(parts[3])  -- 3
-
--- Non-digit text is discarded; this is not a SemVer parser
-local parts = semver.parse("v1.2.3-beta")  -- {1, 2, 3}
-```
-
-### 对版本字符串排序
-
-```lua
-local semver = require("semver")
-
--- 对版本字符串数组排序（升序）
-local versions = {"1.10.0", "1.2.0", "1.9.0", "2.0.0"}
-local sorted = semver.sort(versions)
--- 结果：{"1.2.0", "1.9.0", "1.10.0", "2.0.0"}
-```
-
-### 按版本字段对表排序
-
-```lua
-local semver = require("semver")
-
--- 按某个版本字段对表数组排序（升序）
-local releases = {
-    {version = "1.10.0", url = "..."},
-    {version = "1.2.0", url = "..."},
-    {version = "1.9.0", url = "..."},
-}
-local sorted = semver.sort_by(releases, "version")
--- 结果：按版本升序排序
-```
-
-### 真实示例：Available 钩子
-
-This sketch applies only to releases made of three numeric components, with no prereleases
-or channels. Prefer a structured release API over scraping text when one is available.
-
-```lua
-local http = require("http")
-local semver = require("semver")
-
-function PLUGIN:Available(ctx)
-    local resp = http.get({
-        url = "https://example.com/releases/"
-    })
-
-
-    assert(resp.status_code == 200, "Release request failed")
-    local result = {}
-    -- 从响应中解析版本...
-    for version in string.gmatch(resp.body, 'v([0-9]+%.[0-9]+%.[0-9]+)') do
-        table.insert(result, {version = version})
-    end
-
-    -- Available() must return newest-first. semver.sort_by() sorts ascending,
-    -- so reverse that result before returning it.
-    local sorted = semver.sort_by(result, "version")
-    local newest_first = {}
-    for i = #sorted, 1, -1 do
-        table.insert(newest_first, sorted[i])
-    end
-    return newest_first
+if not file.exists(bin) then
+    error("mytool was not installed to " .. bin)
 end
 ```
 
-### 在自定义排序中使用 Compare
+`file.move` renames the path, so the source and destination must be on the
+same file system.
 
-```lua
-local semver = require("semver")
+`file.join_path` does not normalize separators, resolve `..`, expand `~`, or
+make an untrusted path safe. Pass relative segments after the base directory.
+In environment plugins, use `ctx.config_root` as the base for paths that come
+from the project.
 
--- 使用自定义比较器排序（降序 - 最新的在前）
-table.sort(versions, function(a, b)
-    return semver.compare(a.version, b.version) > 0
-end)
+`file.stat` inspects the link itself, not its target. Its table has `size`,
+`is_file`, `is_dir`, `is_symlink`, and the Unix timestamps `modified`,
+`accessed` and `created` when the system provides them. `mode` is an octal
+permission string such as `"644"` on Unix and `nil` elsewhere.
 
--- Sort ascending (oldest first); reverse this before returning from Available()
-table.sort(versions, function(a, b)
-    return semver.compare(a.version, b.version) < 0
-end)
-```
+## `archiver` {#archiver-module}
 
-## HTML 模块
-
-The HTML module returns selection objects, not Lua arrays. Use `:each(function(index,
-node) ... end)` to iterate a selection, `:first()` for its first element, and `:eq(0)` for
-its zero-based first position. `:text()` reads the first selected node's inner content
-(which can include markup); `:attr(name)` reads its attribute.
-
-### 基础 HTML 解析
-
-```lua
-local html = require("html")
-
--- 解析 HTML 文档
-local doc = html.parse([[
-    <html>
-        <body>
-            <div id="version" class="info">1.2.3</div>
-            <ul class="downloads">
-                <li><a href="/download/v1.2.3.tar.gz">源代码</a></li>
-                <li><a href="/download/v1.2.3.zip">Windows</a></li>
-            </ul>
-        </body>
-    </html>
-]])
-
--- 提取文本内容
-local version = doc:find("#version"):text()  -- "1.2.3"
-
--- 提取属性
-local links = doc:find("a")
-links:each(function(index, link)
-    local href = link:attr("href")
-    print(index, link:text(), href)
-end)
-```
-
-### CSS 选择器
-
-```lua
-local html = require("html")
-
-local doc = html.parse(html_content)
-
--- 按 ID 查找
-local element = doc:find("#version")
-
--- 按类查找
-local elements = doc:find(".download-link")
-
--- 按标签查找
-local links = doc:find("a")
-
--- 复杂选择器
-local specific_links = doc:find("ul.downloads a[href$='.tar.gz']")
-```
-
-### 实际示例：抓取发布信息
-
-This illustrates selection traversal. Website HTML and duplicate links can change; prefer
-a release API when available and deduplicate identifiers before returning a hook result.
-
-```lua
-local html = require("html")
-local http = require("http")
-
-function get_github_releases(owner, repo)
-    local resp = http.get({
-        url = "https://github.com/" .. owner .. "/" .. repo .. "/releases"
-    })
-
-
-    assert(resp.status_code == 200, "Release page request failed")
-    local doc = html.parse(resp.body)
-    local releases = {}
-
-    -- 查找所有发布标签
-    local release_elements = doc:find("a[href*='/releases/tag/']")
-    release_elements:each(function(index, element)
-        local href = element:attr("href")
-        local version = href:match("/releases/tag/(.+)")
-        if version then
-            table.insert(releases, {
-                version = version,
-                url = "https://github.com" .. href
-            })
-        end
-    end)
-
-    return releases
-end
-```
-
-## 归档模块
-
-The archiver module extracts archives based on their filename suffix. It does not download
-or authenticate the archive; verify the artifact before extracting it.
-
-### 支持的格式
-
-- **tar.gz** - Gzip 压缩的 tar 归档文件
-- **tar.xz** - XZ 压缩的 tar 归档文件
-- **tar.bz2** - Bzip2 压缩的 tar 归档文件
-- **zip** - ZIP 归档文件
-
-### 基本解压
+`archiver.decompress(archive, destination[, options])` extracts an archive. It
+picks the format from the file name: `.tar.gz`, `.tar.xz`, `.tar.bz2` or
+`.zip`. Any other name, including `.tgz`, raises an error. It does not download
+or verify the archive.
 
 ```lua
 local archiver = require("archiver")
 
--- 将归档文件解压到目录
-archiver.decompress("archive.tar.gz", "extracted/")
+archiver.decompress("/path/to/tool.tar.gz", "/path/to/destination") -- raises on failure
 
--- Failures raise Lua errors and stop the hook.
-archiver.decompress("package.zip", "destination/")
-```
-
-To flatten versioned directories at the root of an archive, pass
-`strip_components = 1`. Files already at the archive root are retained, matching
-mise's built-in archive backends. Only `0` and `1` are supported; higher values raise an error.
-
-```lua
-archiver.decompress("node-v24.18.1-linux-x64.tar.gz", "destination/", {
+-- Move the contents of the archive's top-level directory into the destination.
+archiver.decompress("/path/to/node-v24.18.1-linux-x64.tar.gz", "/path/to/destination", {
     strip_components = 1,
 })
 ```
 
-### 实际示例：插件安装
+`strip_components = 1` keeps files that sit at the archive's root, as mise's
+own archive extraction does. Only `0` and `1` are accepted.
+
+## `cmd` {#command-module}
+
+`cmd.exec` runs a command and returns what it printed:
 
 ```lua
-local archiver = require("archiver")
-local http = require("http")
+local cmd = require("cmd")
+local log = require("log")
 
-function install_from_archive(download_url, install_path)
-    -- 下载归档文件
-    local archive_path = install_path .. "/download.tar.gz"
-    http.download_file({
-        url = download_url
-    }, archive_path)
+-- src_dir and install_path are directories your hook has worked out.
 
-    -- 解压到安装目录
-    archiver.decompress(archive_path, install_path)
+-- Returns stdout, including the trailing newline; raises with stderr on a non-zero exit.
+local tag = cmd.exec("git describe --tags", { cwd = src_dir })
 
-    -- 清理归档文件
-    os.remove(archive_path)
+-- Catch the error when you have a fallback.
+local ok, err = pcall(cmd.exec, "example --version")
+if not ok then
+    log.debug("example not available:", err)
 end
+
+-- Extra variables for this command only.
+cmd.exec("make install", { cwd = src_dir, env = { PREFIX = install_path } })
 ```
 
-## 文件模块
+The command is shell code, not an argument list. mise runs it with the shell
+set by [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)
+or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args),
+in the [hook environment](#hook-environment). Quote any value you interpolate
+for that shell: a tool option pasted into the command can run commands you did
+not intend.
 
-文件模块提供文件系统操作。
+### Options {#available-options}
 
-### 路径拼接
+`cmd.exec` and `cmd.stream` accept an options table. `os.execute` takes none.
 
-```lua
-local file = require("file")
+| Option    | Type   | Effect                                                                                                  |
+| --------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `cwd`     | string | Working directory for the command                                                                       |
+| `env`     | table  | Variables merged over the [hook environment](#hook-environment)                                         |
+| `timeout` | number | Seconds the command may run, greater than 0 (fractions allowed); then mise kills it and the call raises |
 
--- 使用操作系统特定的分隔符拼接路径段
-local full_path = file.join_path("/foo", "bar", "baz.txt")
-print(full_path)  -- On Unix: /foo/bar/baz.txt
-```
+### Output, stdin and the terminal
 
-`file.join_path` joins nonempty segments with the host path separator. It does not normalize
-existing separators, resolve `..`, expand `~`, or make an untrusted path safe. Pass relative
-segments after the base directory. For environment plugins, use `ctx.config_root` as the
-base for project-relative options.
+mise installs tools in parallel, so the three ways to run a command differ in
+how they share the terminal:
 
-### 读取文件内容
+| Function                       | Output                                   | stdin                           | Returns                                                   | Terminal lock |
+| ------------------------------ | ---------------------------------------- | ------------------------------- | --------------------------------------------------------- | ------------- |
+| `cmd.exec(command, options)`   | captured; stderr is discarded on success | `/dev/null` unless `raw` is set | stdout as a string; raises with stderr on a non-zero exit | none          |
+| `os.execute(command)`          | written to the terminal                  | `/dev/null` unless `raw` is set | the exit code (`0` on success)                            | shared        |
+| `cmd.stream(command, options)` | written to the terminal                  | connected to the terminal       | the exit code                                             | exclusive     |
 
-```lua
-local file = require("file")
-print(file.read("/path/to/file"))
-```
+Only the exclusive side of the lock makes other work wait. While a
+`cmd.stream` child (or a command run with `--raw`) runs, every command mise
+starts for other installs (a core tool's build, an asdf plugin's script,
+`os.execute` in another plugin) waits until it exits, and `cmd.stream` also
+pauses the progress display. `os.execute` takes the shared side, like mise's
+own commands, so it does not hold up other installs, but a pending
+`cmd.stream` waits for it to finish. `cmd.exec` takes no lock.
 
-`file.read` returns UTF-8 text or raises an error; it does not return `nil` for a missing file.
+Use `cmd.exec` unless the user must watch the output as it happens
+(`os.execute`) or answer a prompt (`cmd.stream`). Visibility is not a reason to
+stream: report progress with `print()` or `log.info()`, which mise writes above
+the progress display (see [`print`](#print-override)).
 
-### Create Symbolic Links
-
-```lua
-local file = require("file")
-file.symlink("/path/to/source", "/path/to/new-symlink")
-```
-
-### 检查文件是否存在
-
-```lua
-local file = require("file")
-if file.exists("important_file.txt") then
-    print("文件存在")
-else
-    print("文件不存在")
-end
-```
-
-### 列出和匹配文件
-
-```lua
-local file = require("file")
-
--- 立即返回的条目，按排序顺序排列
-local entries = file.list("/path/to/directory")
-
--- 匹配 glob 的路径，按排序顺序排列
-local executables = file.glob(file.join_path("/path/to/bin", "mytool-*"))
-```
-
-### 移动文件和目录
-
-`file.move` 可以移动文件或整个目录。目标路径的父目录会自动创建。
-
-```lua
-local file = require("file")
-file.move(
-    file.join_path("/path/to/bin", "mytool-linux-amd64"),
-    file.join_path("/path/to/bin", "mytool")
-)
-```
-
-### File Metadata
-
-`file.stat(path)` returns `nil` when the path is missing. Otherwise it returns `size`,
-`is_file`, `is_dir`, `is_symlink`, and available `modified`, `accessed`, and `created` Unix
-timestamps. It inspects the link itself. `mode` is an octal permission string on Unix and
-`nil` on other platforms.
-
-## Environment Module
-
-`env.setenv` changes the mise process environment. It does not return a variable to the
-user's shell, and it does not update an already-constructed hook environment. Prefer
-returning values from `MiseEnv`, `EnvKeys`, or `BackendExecEnv`. For one child command, use
-`cmd.exec(..., {env = {...}})` to avoid process-wide mutations.
-
-### 设置环境变量
-
-```lua
-local env = require("env")
-
--- 设置环境变量
-env.setenv("MY_VAR", "my_value")
-```
-
-### 获取环境变量
-
-> 要在 Lua 中读取变量，请使用 `os.getenv("MY_VAR")`。
-
-### 路径操作
-
-Return separate PATH entries from an environment hook. Use `file.join_path` to construct
-paths and let mise merge them using the host's PATH separator. Do not prepend a Unix
-colon-separated string to PATH in code that also runs on Windows.
-
-## 命令模块
-
-Three functions run a command. **Prefer `cmd.exec`.** It is the only one that does not
-compete for the terminal, so it never holds up the tools installing alongside it.
-
-| Function     | Output                                    | Returns                               | Cost to other installs                   |
-| ------------ | ----------------------------------------- | ------------------------------------- | ---------------------------------------- |
-| `cmd.exec`   | captured                                  | stdout as a string; raises on failure | none                                     |
-| `os.execute` | streamed to the terminal                  | exit status                           | holds mise's terminal lock while it runs |
-| `cmd.stream` | streamed to the terminal, stdin connected | exit status                           | holds that lock exclusively              |
-
-Reach for `os.execute` only when the user should watch output as it happens, and for
-`cmd.stream` only when the child genuinely has to interact with the user. Because mise
-installs tools in parallel, only one child can own the terminal at a time, so both take
-mise's terminal lock.
-
-What waits on that lock is everything that writes to the terminal: any command mise runs
-itself, such as a core tool's build or an asdf plugin's script, plus `os.execute` and
-`cmd.stream` in any other plugin. `cmd.exec` does not take the lock at all — it captures
-its output, so it can never collide with a child that owns the terminal. That is why a
-hook that shells out through the streaming functions repeatedly slows the installs running
-beside it, and a long `cmd.stream` call stalls them until it exits.
-
-Preferring `cmd.exec` costs nothing in visibility. A plugin's own `print()` output is
-routed to that tool's progress line, so progress reporting belongs in `print()` rather
-than in a child's streamed output.
-
-Unless the user enables [`raw`](/configuration/settings.html#raw), `cmd.exec` and
-`os.execute` give children `/dev/null` on stdin; `cmd.stream` always connects it. See
-[Hooks and stdin](#hooks-and-stdin) below.
-
-`cmd.exec` runs a command through mise's configured default inline shell. It returns stdout
-on success and raises an error containing stderr on failure. Successful stderr is not part
-of the returned string. `pcall(cmd.exec, ...)` can intercept the error.
-
-The string is shell code, not an argument array. Use `cwd` for the working directory and
-quote external values for that shell; interpolating tool options into shell text can execute
-unintended commands. `os.execute` streams output and returns the exit status using Lua 5.1
-conventions (`0` for success), with the same mise-constructed environment.
+<a id="hooks-and-stdin"></a>
 
 ### 钩子和 stdin
 
-请优先使用非交互式钩子。mise 会并行安装工具，因此没有某个子进程独占终端：钩子写入的提示可能出现在其他安装的进度条下方，用户看不见也无法回答。请从工具选项、环境或锁文件中获取所需信息，并在子进程支持时传入非交互式标志（--yes、--non-interactive、-n）。
+Write hooks that do not prompt. Take what you need from tool options, the
+environment or the lockfile, and pass child processes their non-interactive
+flag (`--yes`, `--non-interactive`, `-n`) where they have one. Unless the user
+sets `raw`, a child that reads stdin under `cmd.exec` or `os.execute` sees end
+of file at once rather than hanging or taking input meant for another install.
 
-因此，除非用户启用 raw（见下文），cmd.exec 和 os.execute 会将子进程的 stdin 连接到 /dev/null。使用这两者读取 stdin 的子进程会立即看到 EOF，而不会挂起或抢占其他安装的输入。
-
-### 使用 cmd.stream 运行交互式子进程
-
-当钩子确实必须交互（例如输入凭据或接受许可证）时，请使用 cmd.stream。它会连接 stdin，并将 stdout 和 stderr 流式传到终端，而不是捕获它们，同时返回退出状态：
+When a hook must interact with the user, for example to enter a credential or
+accept a license, use `cmd.stream`:
 
 ~~~lua
 local cmd = require("cmd")
@@ -649,61 +431,19 @@ if code ~= 0 then
 end
 ~~~
 
-cmd.stream 接受与 cmd.exec 相同的 cwd 和 env 选项，并使用同样由 mise 构造的环境。
+While the child runs, the other installs continue but cannot start commands of
+their own, so a long `cmd.stream` call stalls them. Prefer a non-interactive
+path when the tool offers one.
 
-子进程运行期间，mise 会暂停进度显示并持有独占锁，因此不会有其他 mise 命令同时运行。其他安装会继续，但会等待自己的命令，直到子进程退出。这正是交互式子进程需要独占终端的原因，但也意味着长时间运行的 cmd.stream 会阻塞其他操作。只有确实需要交互时才使用它；如果工具提供非交互路径，应优先使用后者。
-
-用户也可以通过 raw 为每个子进程连接 stdio（mise install --raw、MISE_RAW=1），但这会串行化安装。这是用户侧的逃生通道，不是构建插件的方式：只在 --raw 下工作的钩子，对于未设置它的用户来说仍然是坏的。请使用 cmd.stream。
-
-### 基本命令执行
-```lua
-local cmd = require("cmd")
-
--- 执行命令并获取输出
-local output = cmd.exec("ls -la")
-print("目录列表：", output)
-
--- 执行命令并进行错误处理
-local success, output = pcall(cmd.exec, "some-command")
-if not success then
-    error("命令执行失败: " .. output)
-end
-```
-
-### 带选项的命令执行
-
-```lua
-local cmd = require("cmd")
-
--- 在指定目录中执行命令
-local output = cmd.exec("pwd", {cwd = "/tmp"})
-print("当前目录：", output)
-
--- 使用自定义环境变量执行命令
-local result = cmd.exec("echo $TEST_VAR", {
-    cwd = "/path/to/project",
-    env = {TEST_VAR = "hello", NODE_ENV = "production"}
-})
-
--- 在指定目录中安装包
-local result = cmd.exec("npm install package-name", {cwd = "/path/to/project"})
-```
-
-### 可用选项
-
-选项表支持以下键：
-
-- **`cwd`** (string): Set the working directory for the command
-- **`env`** (table): Set environment variables for the command. These are merged on top of the inherited environment (see below).
-- **`timeout`** (number): Seconds to allow the command to run before it is killed and an
-  error is raised. Must be greater than zero; fractions are allowed. Supported by
-  `cmd.exec` and `cmd.stream`; `os.execute` takes no options table.
+The [`raw`](/configuration/settings.html#raw) setting (`mise install --raw`,
+`MISE_RAW=1`) connects stdin for every child and runs installs one at a time.
+It is a user's escape hatch. A hook that works only with `raw` set is broken for
+everyone else; use `cmd.stream` instead.
 
 ### Timeouts
 
-Without `timeout` a command runs as long as it likes, which is usually what an install
-step wants. Pass it when a command could hang indefinitely — reaching a network service
-that may not answer, or an interactive child nobody is there to answer:
+A command runs until it exits unless you pass `timeout`. Set one when a
+command could hang, such as a request to a network service that may not answer:
 
 ```lua
 local cmd = require("cmd")
@@ -714,306 +454,179 @@ if not ok then
 end
 ```
 
-On expiry the command is killed and the call raises, so a timeout can be caught with
-`pcall` but never mistaken for a normal non-zero exit. `cmd.exec` discards whatever the
-command had produced so far.
+When the time runs out, mise kills the command, and the call raises an error
+that `pcall` can catch; `cmd.exec` discards the output collected so far. Only
+the shell mise started is killed, so background processes it spawned keep
+running. Prefer the tool's own timeout flag when it has one.
 
-Only the shell mise spawned is killed. A command that starts its own background
-processes can leave them running after the timeout fires, so prefer a tool's own
-timeout flag when it has one. `cmd.exec` stops collecting output at the deadline in
-that case, so the call still returns on time, but output those processes had already
-written may be discarded along with the error.
+### Commands in environment hooks {#environment-inheritance-in-env-module-hooks}
 
-### Env 模块钩子中的环境继承
+In an environment plugin's `MiseEnv` and `MisePath` hooks, commands run with
+the environment mise has built so far, including tools when the directive sets
+`tools = true`. See [environment plugins](/env-plugin-development.html).
 
-当从环境模块钩子（`MiseEnv`、`MisePath`）调用 `cmd.exec()` 时，命令会自动继承 mise 构造的环境，而不是进程环境。这包括前置指令设置的环境变量，以及到目前为止累积的 `_.path` 条目。
+## `strings` {#strings-module}
 
-When the module directive has `tools = true`, the inherited environment also includes the bin paths of installed tools, so mise-managed tools can be called directly:
+| Function                                                                     | Returns                                                          |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `strings.split(s, sep)`                                                      | a list of the parts of `s` between each `sep`                    |
+| `strings.join(list, sep)`                                                    | the values in `list`, converted to strings and joined with `sep` |
+| `strings.trim(s, suffix)`                                                    | `s` with every trailing copy of `suffix` removed                 |
+| `strings.trim_space(s)`                                                      | `s` without leading and trailing whitespace                      |
+| `strings.has_prefix(s, prefix)`, `has_suffix(s, suffix)`, `contains(s, sub)` | `true` or `false`                                                |
 
-```toml
-[env]
-_.my-plugin = { tools = true }
-```
-
-```lua
-function PLUGIN:MiseEnv(ctx)
-    local cmd = require("cmd")
-    -- With tools=true, mise-managed tools are on PATH
-    local version = cmd.exec("node --version")
-    return {
-        {key = "NODE_VERSION", value = version:gsub("%s+", "")}
-    }
-end
-```
-
-如果没有 `tools = true`，则只有 `_.path` 指令条目和原始系统 PATH 可供 `cmd.exec()` 使用。
-
-传递给 `cmd.exec()` 的任何显式 `env` 选项都会与继承的环境合并，从而允许进行选择性覆盖。
-
-### 平台相关命令
+`strings.trim` treats `suffix` as a literal string, not a set of characters,
+and leaves the start of the string alone.
 
 ```lua
-local cmd = require("cmd")
-
--- 跨平台命令执行
-local function is_windows()
-    return package.config:sub(1,1) == '\\'
-end
-
-local function get_os_info()
-    if is_windows() then
-        return cmd.exec("systeminfo")
-    else
-        return cmd.exec("uname -a")
-    end
-end
-
-local os_info = get_os_info()
-print("操作系统信息：", os_info)
-```
-
-## 实用示例
-
-### 从 API 获取版本
-
-This helper collects version identifiers. An unordered JSON object does not establish
-oldest/newest order, and lexicographic sorting misorders `1.10.0` and `1.2.0`.
-
-```lua
-local http = require("http")
-local json = require("json")
-
-function fetch_npm_versions(package_name)
-    local resp = http.get({
-        url = "https://registry.npmjs.org/" .. package_name,
-        headers = {
-            ['User-Agent'] = "mise-plugin"
-        }
-    })
-
-
-    assert(resp.status_code == 200, "Package metadata request failed")
-    local package_info = json.decode(resp.body)
-    local versions = {}
-
-    for version, _ in pairs(package_info.versions) do
-        table.insert(versions, version)
-    end
-
-    -- The JSON object has no release order. Return the collected identifiers;
-    -- callers must apply npm's actual release policy before using this as a hook.
-    return versions
-end
-```
-
-### Download and Verification {#file-download-with-progress}
-
-`http.download_file` downloads bytes; checking that the destination exists is not checksum
-verification. A tool plugin should return the trusted digest in `PreInstall.sha256` or
-`PreInstall.sha512` so mise verifies before extraction. A backend plugin performing its own
-download must implement verification explicitly. Do not accept an `expected_sha256` argument
-and then ignore it.
-
-### 配置文件解析
-
-```lua
-local file = require("file")
-local json = require("json")
 local strings = require("strings")
 
-function parse_config_file(config_path)
-    if not file.exists(config_path) then
-        return {}  -- 返回空配置
-    end
-
-    local content = file.read(config_path)
-        -- Trim whitespace
-    content = strings.trim_space(content)
-
-    -- 解析 JSON
-    local success, config = pcall(json.decode, content)
-    if not success then
-        error("配置文件中的 JSON 无效: " .. config_path)
-    end
-
-    return config
-end
+strings.split("a,b,c", ",")            --> { "a", "b", "c" }
+strings.join({ "a", "b", "c" }, " - ") --> "a - b - c"
+strings.trim("hello worldworld", "world") --> "hello "
+strings.trim_space("  1.2.3\n")         --> "1.2.3"
 ```
 
-### 用于版本的网页抓取
+## `semver` {#semver-module}
+
+`semver` compares the numbers in a version string and ignores everything else,
+so `1.0.0-beta` equals `1.0.0` and `v2` equals `2.0.0`. A missing part counts
+as `0`, so `1.0.0-beta.1` is greater than `1.0.0`. This is not SemVer
+precedence. Use it only for tools whose versions are plain dotted numbers, and
+otherwise keep the order the publisher's release list gives you.
+
+| Function                      | Returns                                                   |
+| ----------------------------- | --------------------------------------------------------- |
+| `semver.compare(a, b)`        | `-1`, `0` or `1`                                          |
+| `semver.parse(v)`             | the numbers in `v`: `"v1.2.3-beta"` gives `{ 1, 2, 3 }`   |
+| `semver.sort(list)`           | a new list of version strings, in ascending order         |
+| `semver.sort_by(list, field)` | a new list of tables, ascending by the version in `field` |
+
+```lua
+local semver = require("semver")
+
+semver.compare("1.2.3", "1.2.4")  --> -1
+semver.compare("2.0.0", "1.9.9")  --> 1
+semver.compare("9.6.9", "9.6.24") --> -1 (numeric, not string, comparison)
+semver.sort({ "1.10.0", "1.2.0" }) --> { "1.2.0", "1.10.0" }
+```
+
+`Available` must return versions newest first, but `sort` and `sort_by` sort
+ascending. Sort with a comparator instead:
+
+```lua
+table.sort(versions, function(a, b)
+    return semver.compare(a.version, b.version) > 0
+end)
+```
+
+## `html` {#html-module}
+
+`html.parse(text)` returns a document. `find` accepts CSS selectors, including
+descendant and attribute selectors such as `ul.downloads a[href$='.tar.gz']`.
+
+| Method                                     | Returns                                                                                               |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `doc:find(selector)`, `sel:find(selector)` | a selection of the matching elements                                                                  |
+| `sel:each(function(index, el) ... end)`    | nothing; calls the function for each element, with a zero-based index                                 |
+| `sel:first()`, `sel:eq(n)`                 | a selection of the first element, or of the element at zero-based position `n`                        |
+| `sel:text()`                               | the inner content of the first element, which can include markup; `""` when empty                     |
+| `sel:attr(name)`                           | an attribute of the first element; `nil` when that element lacks it, `""` when the selection is empty |
+
+`sel:find()` searches below the first element of a selection only, so
+`doc:find("ul"):find("a")` misses links in a second `ul`. To search every
+element, write one descendant selector such as `doc:find("ul a")`, or call
+`:find()` on each element inside `:each()`. Calling `:find()` on an empty
+selection raises an error.
+
+### Collect links from a download page
 
 ```lua
 local http = require("http")
 local html = require("html")
-local strings = require("strings")
 
-function scrape_versions_from_releases(base_url)
-    local resp = http.get({
-        url = base_url .. "/releases"
-    })
-
-
-    assert(resp.status_code == 200, "Release page request failed")
-    local doc = html.parse(resp.body)
-    local versions = {}
-
-    -- 查找版本标签
-    local version_elements = doc:find("h2 a[href*='/releases/tag/']")
-    version_elements:each(function(index, element)
-        local version_text = element:text()
-        local version = strings.trim_space(version_text)
-
-        -- Remove 'v' prefix if present
-        version = version:gsub("^v", "")
-
-        if version and version ~= "" then
-            table.insert(versions, {
-                version = version,
-                url = base_url .. element:attr("href")
-            })
+-- Lists versions linked from a page such as https://example.com/downloads/
+-- whose links look like example-1.2.3.tar.gz.
+local function list_versions(index_url)
+    local resp = http.get({ url = index_url })
+    if resp.status_code ~= 200 then
+        error("GET " .. index_url .. " returned " .. resp.status_code)
+    end
+    local seen, versions = {}, {}
+    html.parse(resp.body):find("a[href$='.tar.gz']"):each(function(_, a)
+        local v = a:attr("href"):match("example%-(.+)%.tar%.gz$")
+        if v and not seen[v] then
+            seen[v] = true
+            table.insert(versions, v)
         end
     end)
-
     return versions
 end
 ```
 
-## 日志模块
+Prefer a release API or a JSON index when the publisher has one: HTML layouts
+change, and paginated release pages list only recent versions.
 
-The log module provides structured logging that routes through Rust's `log` crate and respects the `MISE_DEBUG` and `MISE_TRACE` environment variables.
+## `env` {#environment-module}
 
-### 日志级别
+`env.setenv(key, value)` sets a variable in the mise process. It never reaches
+the user's shell. In hooks that have a [hook environment](#hook-environment),
+`os.getenv`, `os.execute` and the `cmd` functions use that environment and do
+not see it. To give the user a variable, return it from `MiseEnv`, `EnvKeys` or
+`BackendExecEnv`. To give one command a variable, pass it in the `env` option
+of `cmd.exec`:
+
+```lua
+local cmd = require("cmd")
+
+cmd.exec("make", { env = { CC = "clang" } })
+```
+
+To add directories to the user's `PATH`, return each one as a separate entry,
+built with `file.join_path`, from `MisePath` or as a `PATH` key from `EnvKeys`
+or `BackendExecEnv`. mise joins them with the host's separator, so do not
+build a colon-separated string in a plugin that also runs on Windows.
+
+## `log` {#log-module}
+
+`log` writes to mise's log on stderr, prefixed with the plugin's name. `info`,
+`warn` and `error` show by default, `debug` with `MISE_DEBUG=1`, and `trace`
+with `MISE_TRACE=1`. [`MISE_LOG_LEVEL`](/configuration/environment-variables.html#mise-log-level)
+changes the default, and `--quiet` hides everything below `error`.
 
 ```lua
 local log = require("log")
 
-log.trace("详细跟踪信息")   -- 仅在 MISE_TRACE=1 时可见
-log.debug("调试信息")          -- 仅在 MISE_DEBUG=1 时可见
-log.info("状态消息")           -- 默认可见
-log.warn("警告消息")           -- 默认可见
-log.error("错误消息")          -- 默认可见
+log.debug("resolved download URL", url)
+log.info("version", version, "installed to", path)
+log.warn("no checksum published for", version)
 ```
 
-### 可变参数
+The functions take any number of arguments, convert each with `tostring`, and
+join them with tabs. The `log.info` call above prints:
 
-所有日志函数都接受任意类型的多个参数。参数会通过 `tostring()` 转换为字符串，并使用制表符（`\t`）连接，这与 Lua 的 `print()` 行为一致：
-
-```lua
-log.info("版本", version, "安装到", path)
--- 输出: [plugin-name] version<TAB>1.0.0<TAB>installed to<TAB>/path
+```text
+mise [my-plugin] version  1.0.0  installed to  /path/to/install
 ```
 
-### 插件名后缀
+### `print` {#print-override}
 
-所有日志消息都会自动添加 `[plugin_name]` 前缀：
+`print()` is `log.info()`. Its output goes to stderr as an info line prefixed
+with the plugin's name, printed above the progress display, and is hidden when
+the log level is above `info`. Use it to report progress.
 
-```
-mise [INFO] [my-plugin] Installing version 1.0.0
-```
+## Caching
 
-### print 覆盖
+mise caches version lists and the environment a tool's hooks return, so hooks
+rarely need a cache of their own; see [Caches](/cache-behavior.html). A Lua
+table lasts for one mise command only. Environment plugins can return cache
+settings with their variables; see
+[environment plugins](/env-plugin-development.html).
 
-`print()` 会被重写为通过 `info!()` 级别日志进行路由。这意味着：
+## Related pages
 
-- `print()` 输出到 stderr，而不是 stdout
-- 消息会带有 `[plugin_name]` 前缀
-- 输出遵循日志级别过滤
-
-```lua
--- 下面两者等价：
-print("hello", "world")
-log.info("hello", "world")
-```
-
-### 通过 vfox 命名空间访问
-
-日志模块也可以通过 `vfox.log` 使用：
-
-```lua
-local log = require("vfox").log
-log.info("消息")
-```
-
-## 最佳实践
-
-### 错误处理
-
-始终优雅地处理错误：
-
-```lua
-local http = require("http")
-local json = require("json")
-
-function safe_api_call(url)
-    local resp = http.get({url = url})
-
-
-    if resp.status_code ~= 200 then
-        error("API returned error: " .. resp.status_code)
-    end
-
-    local success, data = pcall(json.decode, resp.body)
-    if not success then
-        error("Failed to parse JSON response: " .. data)
-    end
-
-    return data
-end
-```
-
-### 缓存
-
-A local Lua table can avoid repeated work within one runtime. It does not persist between
-separate mise invocations. mise already caches tool version and environment results;
-environment plugins can also return [cache metadata](/env-plugin-development.html#hooks-mise-env-lua).
-The example below is only an in-memory cache:
-
-```lua
-local cache = {}
-local cache_ttl = 3600  -- 1 小时
-
-function cached_http_get(url)
-    local now = os.time()
-    local cache_key = url
-
-    -- 检查缓存
-    if cache[cache_key] and (now - cache[cache_key].timestamp) < cache_ttl then
-        return cache[cache_key].data
-    end
-
-    -- 获取新鲜数据
-    local http = require("http")
-    local resp = http.get({url = url})
-
-
-    assert(resp.status_code == 200, "Request failed")
-    -- Cache the result
-    cache[cache_key] = {
-        data = resp,
-        timestamp = now
-    }
-
-    return resp
-end
-```
-
-### 平台检测
-
-Use runtime metadata instead of subprocesses or ambient host variables:
-
-```lua
-local platform = {
-    os = RUNTIME.osType,
-    arch = RUNTIME.archType,
-    libc = RUNTIME.envType,
-}
-```
-
-`RUNTIME` may describe another target during lockfile generation. Shelling out to `uname`
-would report the host and can produce the wrong artifact URL for that target.
-
-## Next Steps
-
-- [后端插件开发](backend-plugin-development.md)
-- [工具插件开发](tool-plugin-development.md)
-- [发布你的插件](plugin-publishing.md)
+- [Tool plugins](/tool-plugin-development.html)
+- [Backend plugins](/backend-plugin-development.html)
+- [Environment plugins](/env-plugin-development.html)
+- [Package manager plugins](/package-plugin-development.html)
+- [Publishing plugins](/plugin-publishing.html)

@@ -11,14 +11,7 @@ description: "停止排除与 glob 匹配的路径"
 
 停止排除与 glob 匹配的路径
 
-从全局配置中的 `[history] exclude` 移除该 glob。请传入与 `mise dot exclude` 相同的模式：
-
-```
-mise dot exclude '~/.codex/sessions/**'
-mise dot include '~/.codex/sessions/**'
-```
-
-其他匹配的排除规则仍会生效。此命令不会编辑受跟踪目录的 `include` 列表；请修改 `[dotfiles]` 中的该字段来选择目录保存的文件。
+Removes a glob that `mise dot exclude` added to `[history] exclude` in the global config. Pass the pattern exactly as you excluded it. Other matching exclusion rules still apply. This command does not edit a tracked directory's `include` list; change that list in its `[dotfiles]` entry.
 
 ## 参数
 - **`<GLOB>`** — `mise dot exclude` 使用的 glob
@@ -26,10 +19,18 @@ mise dot include '~/.codex/sessions/**'
 ## 标志
 - **`-h --help`** — 打印帮助
 
+## Examples
+
+Save Codex session logs again
+
+```
+mise dot include '~/.codex/sessions/**'
+```
+
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

@@ -12,113 +12,100 @@ description: "升级过时的工具"
 
 升级过时的工具
 
-默认情况下，这会保留 mise.toml 中指定的范围：设置为 node@20 后，它会升级到可用的最新 20.x.x 版本。使用 `--bump` 可升级到整体最新版本，并重写 mise.toml 中的版本。
+By default, keeps the range in mise.toml: with `node = "20"`, it installs the
+newest 20.x release. Use `--bump` to upgrade to the newest release overall
+and update the version in mise.toml. Also updates mise.lock when lockfiles
+are enabled; see <https://mise.jdx.dev/dev-tools/mise-lock.html>
 
-如果启用了锁定文件，这也会更新 mise.lock，详见 <https://mise.jdx.dev/configuration/settings.html#lockfile>
+The version you upgraded from is removed after the `upgrade.prune_after`
+setting's grace period unless a tracked config or tool stub still uses it.
+Pass `--prune` to remove it now or `--no-prune` to keep it.
 
-## 参数
-- **`[INSTALLED_TOOL@VERSION]…`** — 要升级的工具
-  例如：node@20 python@3.10
-  如果未指定，将升级所有当前工具
+## Arguments
+- **`[INSTALLED_TOOL@VERSION]…`** — Tools to upgrade, such as node@20 python@3.10
+
+  Upgrades every configured tool when omitted.
 
 ## Flags
-- **`-b --bump`** — 升级到可用的最新版本，并提升 mise.toml 中的版本
+- **`-b --bump`** — Upgrade past the configured range to the newest release, and update the config to match
 
-  例如，如果 mise.toml 中有 `node = "20.0.0"`，但可用的最新版本是 22.1.0，
-  这将安装 22.1.0，并在配置中设置 `node = "22.1.0"`。
+  The config keeps its precision: `node = "20"` becomes `node = "22"`, and `node = "20.0.0"` becomes `node = "22.1.0"`. If you name a version on the command line (`node@latest`, `node@3`, or `node@prefix:3`), that request is written instead; `mise upgrade node@latest --bump` writes `latest`. With the `pin` setting on, a version request such as `node@3` is written as the version it resolved to. Requests that do not come from a config file mise can write, such as `MISE_NODE_VERSION`, are upgraded but not written.
+- **`-i --interactive`** — Choose which tools to upgrade from a multiselect menu
+- **`-j --jobs <JOBS>`** — Number of jobs to run in parallel (default: the `jobs` setting)
 
-  它会保留之前版本的精度，因此如果之前是 `node = "20"`，它会将配置改为 `node = "22"`。
-- 当显式提供选择器（`node@latest`、`node@3` 或 `node@prefix:3`）时，会持久化该选择器。对于版本选择器，`settings.pin` 会持久化解析后的具体版本。来自不可写来源的请求不会持久化。例如，`mise upgrade node@latest --bump` 会写入 `latest`。
-- **`-i --interactive`** — 从多选菜单中选择要升级的工具
-- **`-j --jobs <JOBS>`** — 并行运行的任务数
-  小于 1 的值将按 1 处理
-  默认为 `jobs` 设置
+  **Environment Variable:** `MISE_JOBS`
+- **`-n --dry-run`** — Show what would change without changing anything
+- **`-x --exclude <INSTALLED_TOOL>`** — Tools to exclude from upgrading, such as go python
+- **`--dry-run-code`** — Like --dry-run, but exit with code 1 if there are outdated tools
 
-  **环境变量：** `MISE_JOBS`
-- **`-n --dry-run`** — 打印将要执行的操作，但不实际执行
-- **`-x --exclude <INSTALLED_TOOL>`** — 要排除升级的工具
-  例如：go python
-- **`--dry-run-code`** — 类似于 --dry-run，但如果存在过时工具，则以代码 1 退出
+  Use it in scripts that check whether tools need upgrading.
+- **`--inactive`** — Also upgrade installed tools that the current config does not request
+- **`--global`** — Only upgrade tools defined in the global config
 
-  这对于脚本检查工具是否需要升级很有用。
-- **`--inactive`** — 升级所有工具，包括已安装但未激活且未出现在当前配置中的工具
-- **`--local`** — 仅升级本地配置文件中定义的工具
+  Upgrades the requests in the global and system config (~/.config/mise/config.toml, /etc/mise/config.toml), even where a project config or a `MISE_<TOOL>_VERSION` environment variable sets its own version of the tool. It runs as if from outside any project, so project config, lockfiles, and `[env]` are neither read nor changed. Tools that update themselves, such as coding agents, run this instead of their own updater; see <https://mise.jdx.dev/dev-tools/self-updating-tools.html>
+- **`--local`** — Only upgrade tools defined in project config files
 
-  这只会升级项目本地 mise.toml 中定义的工具，
-  并跳过全局配置（~/.config/mise/config.toml）中定义的工具。
-- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 仅升级到在此日期之前发布或早于此时长的版本
+  Skips tools defined in the global config (~/.config/mise/config.toml) and tools set through `MISE_<TOOL>_VERSION` environment variables.
+- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — Only upgrade to versions released before this date or older than this duration
 
-  支持类似于 "2024-06-01" 的绝对日期，以及类似于 "90d" 或 "1y" 的相对时长。
-  这对于可复现性或安全目的很有用。
+  Supports absolute dates such as "2024-06-01" and relative durations such as "90d" or "1y".
 
-  这只会影响类似于 "20" 或 "latest" 的模糊版本匹配。
-  明确固定的版本（如 "22.5.0"）不会经过筛选。
-- **`--monorepo`** — 未来 monorepo 升级的占位标志；`mise upgrade --monorepo` 尚未实现。
-- **`--no-prune`** — 不卸载已被升级版本替代的版本
+  Applies only to requests that can match several versions, such as "20" or "latest". Exact versions such as "22.5.0" are not filtered.
+- **`--no-prune`** — Do not uninstall the versions that were upgraded away from
 
-  旧版本会保留在原处，不会安排移除。如果 mise 之外的某些程序指向安装目录，请使用此选项。
+  The old version is left in place and is not scheduled for removal. Use this when something outside mise points at the install directory.
 
   设置 `upgrade.auto_prune = false` 可使其成为默认行为。
 - **`--prune`** — 立即卸载已被升级版本替代的版本
 
-  使用此选项可绕过 `upgrade.prune_after`，或在单次运行中覆盖 `upgrade.auto_prune = false`。
-- **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含 `--jobs=1`
-- **`-h --help`** — 打印帮助
+  Use this to bypass `upgrade.prune_after`, or to override `upgrade.auto_prune = false` for a single run.
+- **`--raw`** — Connect the install commands' stdin, stdout, and stderr to the terminal
+
+  Implies `--jobs=1`.
+- **`-h --help`** — Print help
 
 ## 示例
 
-将 node 升级到匹配 mise.toml 中范围的最新版本
-
-```
-mise upgrade node
-```
-
-将 node 升级到最新版本，并提升 mise.toml 中的版本
-
-```
-mise upgrade node --bump
-```
-
-在当前请求范围内升级所有已配置的工具
+Upgrade every configured tool within its range
 
 ```
 mise upgrade
 ```
 
-将所有工具升级到最新版本，并提升 mise.toml 中的版本
+Upgrade only node
+
+```
+mise upgrade node
+```
+
+Upgrade every tool to its newest release and update mise.toml
 
 ```
 mise upgrade --bump
 ```
 
-仅打印将要执行的操作，不实际执行
+Show what would be upgraded
 
 ```
 mise upgrade --dry-run
 ```
 
-在当前请求范围内升级 node 和 python
-
-```
-mise upgrade node python
-```
-
-升级除 go 之外的所有工具
+Upgrade everything except go
 
 ```
 mise upgrade --exclude go
 ```
 
-显示多选菜单以选择要升级的工具
+Choose tools from a menu
 
 ```
 mise upgrade --interactive
 ```
 
-仅升级本地 mise.toml 中定义的工具，不升级全局工具
+Upgrade claude within the global config's request, leaving project config alone
 
 ```
-mise upgrade --local
+mise upgrade --global claude
 ```
 
 弃用说明：
@@ -130,6 +117,6 @@ mise upgrade --local
 
 ## 相关文档
 
-- [开发工具](/dev-tools/)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Upgrading tools](/dev-tools/#upgrade-tools).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

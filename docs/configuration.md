@@ -1,15 +1,15 @@
 ---
-description: "Configure tools, environment variables, and tasks in mise.toml."
+description: "Configure tools, environment variables, and tasks in mise.toml, and control where mise finds and writes config files."
+socialDescription: "Configure tools, environment variables, and tasks in mise.toml, and where mise finds config files."
 ---
 
-# Configuration
+# mise.toml {#mise-toml-reference}
 
-A project's `mise.toml` declares tools, environment variables, and tasks. Global
-configuration supplies personal defaults; project and local files override them.
+A project's `mise.toml` declares the tools, environment variables, and tasks the
+project needs. mise combines it with your global config and with config files in
+parent directories.
 
-Start with one file in the project root:
-
-```toml [mise.toml]
+```mise-toml [mise.toml]
 [tools]
 node = "24"
 
@@ -20,212 +20,295 @@ NODE_ENV = "development"
 run = "node --eval 'console.log(process.env.NODE_ENV)'"
 ```
 
-Run `mise run hello` to install the declared tool if needed and print
-`development`. Use `mise config` to see the active config files and
+Run `mise run hello` to install Node.js if it is missing and print `development`.
+Run [`mise config`](/cli/config.html) to list the config files mise loaded, and
 `mise ls --current` to see the selected tool versions.
 
-| Configure                                  | Reference                                               |
-| ------------------------------------------ | ------------------------------------------------------- |
-| Tool versions and installation options     | [Dev tools](/dev-tools/)                                |
-| Variables passed to commands               | [Environments](/environments/)                          |
-| Reusable values inside templates           | [Variables](/configuration/vars.html)                   |
-| Development, test, and production overlays | [Config Environments](/configuration/environments.html) |
-| Commands and dependencies                  | [Tasks](/tasks/)                                        |
-| mise's own behavior                        | [Settings](/configuration/settings.html)                |
+| Configure                                       | Reference                                                      |
+| ----------------------------------------------- | -------------------------------------------------------------- |
+| Tool versions and installation options          | [Dev tools](/dev-tools/)                                       |
+| Environment variables passed to commands        | [Environment variables](/environments/)                        |
+| Values reused inside templates                  | [Config variables](/configuration/vars.html)                   |
+| Development, test, and production overlays      | [Config environments](/configuration/environments.html)        |
+| Commands and their dependencies                 | [Tasks](/tasks/)                                               |
+| Commands run on `cd`, on install, or on changes | [Hooks](/hooks.html)                                           |
+| Checks that a machine can build the project     | [Project diagnostics](/configuration/project-diagnostics.html) |
+| Long-running services                           | [Daemons](/daemons.html)                                       |
+| mise's own behavior                             | [Settings](/configuration/settings.html)                       |
 
-## `mise.toml`
+[Top-level keys](#top-level-keys) lists every section a `mise.toml` can contain.
 
-`mise.toml` is the config file for mise. It can live at any of the following paths (in order of precedence; files higher in the list override those lower down):
+## How config files combine {#configuration-hierarchy}
 
-- `mise.local.toml` - used for local config; this should not be committed to source control
-- `mise.toml`
-- `mise/config.toml`
-- `mise/conf.d/*.toml` - 此目录中的所有非隐藏 TOML 文件都会按字母顺序加载；类似 `x.base.toml` 这样的带点名称[正在弃用](/configuration/environments.html#conf-d-environments)，只有在 `env_conf_d = true` 时才会为匹配的环境加载
-- `.mise/config.toml`
-- `.mise/conf.d/*.toml` - all non-hidden TOML files in this directory are loaded in alphabetical order; dotted names like `x.base.toml` are [being deprecated](/configuration/environments.html#conf-d-environments) and load only for the matching environment under `env_conf_d = true`
-- `.config/mise.toml` - use this to group config files in a common directory
-- `.config/mise/config.toml`
-- `.config/mise/conf.d/*.toml` - 在归组配置目录下，分片加载和[弃用](/configuration/environments.html#conf-d-environments)行为相同
+mise loads config in this order, and a later file overrides an earlier one:
 
-::: tip
-Run [`mise config`](/cli/config.html) to see the order in which mise loads files on your setup. This is often
-much easier than working through mise's rules.
-:::
+1. System config in `/etc/mise`.
+2. Global config in `~/.config/mise`.
+3. Config files in every directory from the filesystem root down to the current
+   directory. The search starts below the nearest
+   [`ceiling_paths`](/configuration/settings.html#ceiling_paths) directory when
+   one is set; files in the ceiling directory itself are not loaded.
 
-注意：
+So a file in a deeper directory overrides one in a parent directory. In each
+directory, mise reads the files in [Config file locations](#mise-toml), and
+that table's order decides which one wins. Selecting a
+[config environment](/configuration/environments.html) adds environment files
+at each level of this search. An environment file in a parent directory does not
+override an ordinary file in a child directory.
 
-- Paths that start with `mise` can be dotfiles, e.g. `.mise.toml` or `.mise/config.toml`.
-- This list doesn't include [Configuration Environments](/configuration/environments), which allow environment-specific config files like `mise.development.toml`—selected with `MISE_ENV=development`. Platform-specific environments like `mise.windows.toml` or `mise.macos-arm64.toml` can be enabled automatically with the [`auto_env` setting](/configuration/environments.html#platform-environments).
-- A folder inside any `conf.d` directory is also a fragment. See [conf.d folders](/configuration.html#conf-d-folders).
-- See [`LOCAL_CONFIG_FILENAMES` in `src/config/mod.rs`](https://github.com/jdx/mise/blob/main/src/config/mod.rs) for the actual code for these paths and their precedence. Some legacy paths are not listed here for brevity.
-
-## 配置层级
-
-mise uses a hierarchical configuration system that merges settings from multiple sources. Understanding this hierarchy helps you organize your development environments.
-
-### 配置合并的工作方式
-
-mise looks for these files in every parent directory, so if you have a `~/src/work/myproj/mise.toml` file,
-what is defined there overrides anything set in
-`~/src/work/mise.toml` or `~/.config/mise.toml`. The config contents are merged.
-
-### 配置解析过程
-
-当 mise 需要配置时，它会遵循以下过程：
-
-1. Reads early configuration, including the selected config environments.
-2. Discovers system and global config, then searches the current directory and its
-   parents up to the root or `MISE_CEILING_PATHS`.
-3. Includes matching environment-specific files at each level of that hierarchy.
-4. Merges the files with child directories taking precedence over parents, and
-   same-directory variants following the order above.
-
-An environment-specific parent file does not override an ordinary child file
-just because it names an environment. Environment selection is part of file
-discovery, not a final override applied after the hierarchy.
-
-### 可视化配置层级
-
-```
+```text
 /
-├── etc/mise/                         # 系统范围配置（最低优先级）
-│   ├── conf.d/*.toml                 # 系统分片，按字母顺序加载
-│   ├── config.toml                   # 系统默认配置
-│   └── config.<env>.toml             # 特定环境的系统配置（MISE_ENV 或 -E）
+├── etc/mise/                         # system config (lowest precedence)
+│   ├── conf.d/*.toml
+│   ├── config.toml
+│   └── config.<env>.toml
 └── home/user/
-    ├── .config/mise/
-    │   ├── conf.d/*.toml             # 用户分片，按字母顺序加载
-    │   ├── config.toml               # 全局用户配置
-    │   ├── config.<env>.toml         # 特定环境的用户配置
-    │   ├── config.local.toml         # 用户本地覆盖
-    │   └── config.<env>.local.toml   # 特定环境的用户本地覆盖
+    ├── .config/mise/                 # global config
+    │   ├── conf.d/*.toml
+    │   ├── config.toml
+    │   ├── config.<env>.toml
+    │   ├── config.local.toml
+    │   └── config.<env>.local.toml
     └── work/
-        ├── mise.toml                 # 工作区范围设置
+        ├── mise.toml                 # shared by every project in work/
         └── myproject/
-            ├── mise.local.toml       # Local overrides (git-ignored)
-            ├── mise.toml             # Project config
-            ├── mise/
-            │   ├── config.toml       # Visible grouped project config
-            │   └── conf.d/*.toml     # Visible project fragments, loaded alphabetically
-            ├── .mise/
-            │   ├── config.toml       # 归入 .mise 的项目配置
-            │   └── conf.d/*.toml     # 项目分片，按字母顺序加载
-            ├── mise.<env>.toml       # 特定环境的项目配置
-            ├── mise.<env>.local.toml # 特定环境的项目本地覆盖
+            ├── mise.toml             # project config
+            ├── mise.<env>.toml       # environment config
+            ├── mise.local.toml       # personal overrides, not committed
+            ├── mise.<env>.local.toml
             └── backend/
-                └── mise.toml         # 特定服务配置（最高优先级）
+                └── mise.toml         # nearest file (highest precedence)
 ```
 
-### Example: merging tool versions
+Values merge rather than replace whole files. With these three files, mise uses
+the `node` request from `mise.local.toml` and the `python` request from the
+global config when you work in `~/src/app`:
 
-For a project with these three config files, each later file overrides the same
-tool from an earlier file. A tool omitted from the later files is inherited.
-All entries shown below belong to each file's `[tools]` section.
+::: code-group
 
-```mermaid
----
-config:
-  htmlLabels: false
----
-flowchart TB
-    accTitle: Tool configuration precedence
-    accDescr: Project and local config override the Node request. The Python request is inherited from global config.
-    global["Global config<br/>node = &quot;22&quot;<br/>python = &quot;3.13&quot;"]
-    project["Project mise.toml<br/>node = &quot;24&quot;"]
-    local["Project mise.local.toml<br/>node = &quot;20&quot;"]
-    effective["Effective tool requests<br/>node = &quot;20&quot;<br/>python = &quot;3.13&quot;"]
-    global -->|Override Node| project
-    project -->|Override Node again| local
-    local -->|Keep other tool requests| effective
+```toml [~/.config/mise/config.toml]
+[tools]
+node = "22"
+python = "3.13"
 ```
 
-The local file wins for Node; Python keeps its global request. These are version
-requests, which mise still resolves to concrete tool versions. This example
-illustrates `[tools]`; other sections have the merge rules below.
-
-### Merge Behavior by Section
-
-不同的配置部分会以不同方式合并：
-
-**工具** (`[tools]`): 以覆盖方式叠加
-
-```toml
-# 全局：node@18, python@3.11
-# 项目：node@20, go@1.21
-# 结果：node@20, python@3.11, go@1.21
+```toml [~/src/app/mise.toml]
+[tools]
+node = "24"
 ```
 
-**工具策略** (`[tool_config]`): 仅应用于由共享同一配置根目录的配置声明的工具；不会合并到整个调用范围的设置中
-
-```toml
-[tool_config]
-locked = true
-```
-
-**环境变量** (`[env]`): 累加并允许覆盖
-
-```toml
-# 全局：NODE_ENV=development
-# 项目：NODE_ENV=production, API_URL=localhost
-# 结果：NODE_ENV=production, API_URL=localhost
-```
-
-**Tasks** (`[tasks]`): A more specific command definition replaces the earlier command
-
-```toml
-# Global: [tasks.test] = "npm test"
-# Project: [tasks.test] = "yarn test"
-# Result: "yarn test"
-```
-
-Metadata-only task definitions can overlay an existing task without replacing its
-command. Included task files and file tasks have additional merge rules; see
-[`task_config.includes`](/tasks/task-configuration.html#task_config.includes).
-
-**Settings** (`[settings]`): Additive with overrides
-
-```toml
-# 全局：experimental = true
-# 项目：jobs = 4
-# 结果：experimental = true, jobs = 4
-```
-
-::: tip
-运行 `mise config` 查看 mise 按优先级顺序加载了哪些文件。
-:::
-
-### 写入操作的目标文件
-
-When commands like [`mise use`](/cli/use), [`mise set`](/cli/set), or [`mise unset`](/cli/unset) need to write to a config file, they use the **lowest precedence file in the highest precedence directory**. This means:
-
-- 如果 `mise.toml` 和 `mise.local.toml` 都存在，则写入 `mise.toml`
-- 如果 `mise.toml` 和 `mise.production.toml` 都存在，则写入 `mise.toml`
-- 如果只存在 `mise.local.toml`，则写入 `mise.local.toml`
-
-这种行为确保共享配置（`mise.toml`）默认会被更新，而本地覆盖（`mise.local.toml`）和特定环境配置则保持不变，除非明确指定目标。
-
-::: info 示例
-
-```bash
-# 当同时存在 mise.toml 和 mise.local.toml 时：
-$ mise use node@22              # 写入 mise.toml
-$ mise use --env local node@20  # 写入 mise.local.toml
-$ mise set NODE_ENV=production  # 写入 mise.toml
+```toml [~/src/app/mise.local.toml]
+[tools]
+node = "25"
 ```
 
 :::
 
-Other commands select files differently:
+These are version requests, which mise then resolves to concrete versions.
 
-- [`mise config get`](/cli/config/get) and [`mise config set`](/cli/config/set) default to the **highest-precedence loaded TOML file**, which can be `mise.local.toml`. Use `--file` to choose an existing project file explicitly.
-- [`mise unuse`](/cli/unuse) defaults to the first loaded config that declares any requested tool. A version-qualified argument matches the literal configured request: `node@20` matches `node = "20"`, not `node = "20.0.0"`. Use `--path` to choose the file.
+### How each section merges {#merge-behavior-by-section}
 
-**密钥源**（`[secrets.*]`）：每个字段由最近的项目文件决定；全局配置会忽略此部分
+| Section              | How files combine                                                                                                                                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[tools]`            | Per tool. The nearest file's entry replaces that tool's whole entry, including its options. Other tools are inherited.                                                                                                                                |
+| `[env]`              | Per variable; the nearest file wins. See [Environment variables](/environments/).                                                                                                                                                                     |
+| `[vars]`             | Per variable; the nearest file wins.                                                                                                                                                                                                                  |
+| `[settings]`         | Per setting.                                                                                                                                                                                                                                          |
+| `[tasks]`            | Per task name. A task from a nearer directory replaces the parent's task. Within one directory, a block without `run`, `run_windows`, or `file` adds metadata instead. See [which definition wins](/tasks/task-discovery.html#which-definition-wins). |
+| `[tool_config]`      | Not merged. It applies only to tools declared in the same [config root](#config-root).                                                                                                                                                                |
+| `[secrets.*]`        | Per field; the nearest project file wins. Ignored in global config.                                                                                                                                                                                   |
+| `[daemons]`          | Per daemon. The nearest declaration replaces the whole daemon.                                                                                                                                                                                        |
+| `[daemons_settings]` | Per key, and inherited by child projects. Ignored in global and system config.                                                                                                                                                                        |
 
-### 全局部分写入目标
+## Config file locations {#mise-toml}
 
-全局配置可以将工具、bootstrap 软件包和点文件分别保存到不同文件，同时继续使用各自的添加命令。
-为每个部分配置可选的目标：
+These are the file names mise looks for in each directory it searches, from the
+filesystem root down to the current directory. Within one directory, a file
+higher in the table overrides one lower down. System and global config use the
+names in [Global and system config](#global-config).
+
+| File                              | Use                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| `mise.local.toml`                 | Personal overrides. Keep it out of version control.                                    |
+| `mise.toml`                       | Shared project config                                                                  |
+| `mise/config.toml`                | Project config in a `mise/` directory                                                  |
+| `mise/conf.d/*/mise.toml`         | Folder fragments in `mise/`; see [conf.d folders](#conf-d-folders)                     |
+| `mise/conf.d/*.toml`              | Config fragments, loaded in alphabetical order; see [conf.d](#conf-d)                  |
+| `.mise/config.toml`               | Project config in a hidden `.mise/` directory                                          |
+| `.mise/conf.d/*/mise.toml`        | Folder fragments in `.mise/`                                                           |
+| `.mise/conf.d/*.toml`             | Fragments in `.mise/`                                                                  |
+| `.config/mise.toml`               | Project config under `.config/`                                                        |
+| `.config/mise/mise.toml`          | Project config in `.config/mise/`                                                      |
+| `.config/mise/config.toml`        | Project config in `.config/mise/`                                                      |
+| `.config/mise/conf.d/*/mise.toml` | Folder fragments in `.config/mise/`                                                    |
+| `.config/mise/conf.d/*.toml`      | Fragments in `.config/mise/`                                                           |
+| `.tool-versions`                  | Tool versions in the [`.tool-versions` format](/dev-tools/versions.html#tool-versions) |
+
+- `mise.toml` and `mise.local.toml` also work as dotfiles. `.mise.toml`
+  overrides `mise.toml`, and `.mise.local.toml` overrides `mise.local.toml`.
+- Each `config.toml` can have a `config.local.toml` beside it, such as
+  `.config/mise/config.local.toml`, and each other `mise.toml` can have a
+  `mise.local.toml`, such as `.config/mise.local.toml`. Every local file
+  overrides every shared file in the same directory.
+- Environment files such as `mise.production.toml` override the shared files
+  when their environment is selected, and the local files override them in
+  turn. Environment local files such as `mise.production.local.toml` override
+  all of these. With several environments selected, a later environment's file
+  overrides an earlier one's of the same kind. See
+  [Config environments](/configuration/environments.html#file-names-and-precedence).
+- The [`override_config_filenames`](/configuration/settings.html#override_config_filenames)
+  setting replaces the TOML names in this list with your own (environment files
+  still load), and
+  [`override_tool_versions_filenames`](/configuration/settings.html#override_tool_versions_filenames)
+  replaces `.tool-versions`.
+  [`default_config_filename`](/configuration/settings.html#default_config_filename)
+  changes the name mise creates.
+
+`mise config` lists the files mise loaded, lowest precedence first: later files
+override earlier ones.
+
+## Split config with conf.d {#conf-d}
+
+Put `*.toml` files in a `conf.d` directory to split config by topic. mise loads
+them in alphabetical order, before the directory's own `config.toml`, so
+`config.toml` overrides its fragments. This works in `mise/conf.d`,
+`.mise/conf.d`, and `.config/mise/conf.d` in a project, and in the global
+(`~/.config/mise/conf.d`) and system (`/etc/mise/conf.d`) directories. Files
+whose names start with `.` are skipped.
+
+Dots in fragment names, such as `node.tools.toml`, are deprecated; rename the
+file to `node-tools.toml`. See
+[conf.d environments](/configuration/environments.html#conf-d-environments).
+
+### conf.d folders {#conf-d-folders}
+
+A folder inside a `conf.d` directory is a fragment that keeps its config next to
+the files it uses:
+
+```text
+~/.config/mise/conf.d/
+├── git.toml                  # single-file fragment
+└── git-tools/                # folder fragment
+    ├── mise.toml             # always loaded
+    ├── mise.local.toml       # always loaded, usually gitignored
+    ├── mise.linux.toml       # loaded when the linux environment is active
+    ├── mise.linux.local.toml
+    └── gitconfig
+```
+
+The folder is the [config root](#config-root) for its files. Relative paths,
+such as a [dotfile](/dotfiles.html) source of `"gitconfig"`, resolve inside the
+folder, <code v-pre>{{ config_root }}</code> is the folder's path, and tasks
+defined in the folder run there by default. The folder can be a symlink, so a
+dotfiles checkout can keep its own layout:
+
+```sh
+ln -s ~/src/dotfiles/git ~/.config/mise/conf.d/git-tools
+```
+
+mise reads only `mise.toml`, `mise.local.toml`, `mise.<env>.toml`, and
+`mise.<env>.local.toml` from a folder, and does not search folders recursively.
+Folders whose names start with `.` are ignored. `mise.<env>.toml` files load for
+explicit [config environments](/configuration/environments.html) and
+[platform environments](/configuration/environments.html#platform-environments),
+and are not affected by the `env_conf_d` migration.
+
+Folder fragments load after single-file fragments in the same `conf.d`
+directory, in alphabetical order by folder name, and before the directory's own
+config such as `config.toml`. Their environment files take the same place as
+`conf.d/<name>.<env>.toml` and `conf.d/<name>.<env>.local.toml` would. A
+folder's `mise.local.toml` loads just before the directory's own
+`config.local.toml`: it overrides the `.<env>.toml` files in the folder and the
+directory, but not their `.<env>.local.toml` files, following the
+[environment file order](/configuration/environments.html#file-names-and-precedence).
+Tools declared in a project folder fragment share the project's lockfile.
+
+For tasks, a folder is its own root. Its `[task_config]` applies only to the
+tasks it defines, and `task_config.includes = ["tasks"]` loads file tasks from
+the folder's `tasks/` directory without replacing the default task directories
+of the surrounding config, such as `~/.config/mise/tasks`. `[task_config]`
+values that the surrounding config sets with `cascade = true` still apply,
+except `includes`. When a folder and other config define a task with the same
+name, the task from the higher-precedence file wins, and a task found only in a
+default task directory, such as `.mise/tasks`, loses to one a config file
+defines. See [Task discovery and precedence](/tasks/task-discovery.html).
+
+## Global and system config {#global-config}
+
+Global config applies in every directory. It lives in `~/.config/mise`
+([`MISE_CONFIG_DIR`](/directories.html#config-mise)), normally in `config.toml`.
+The directory can also hold `mise.toml`, `conf.d/` fragments, `config.local.toml`
+for machine-specific values, and environment files such as `config.work.toml`.
+`mise use --global` and `mise settings` write to it.
+
+```toml [~/.config/mise/config.toml]
+[tools]
+node = "lts"
+python = ["3.14", "3.13"]
+
+[settings]
+idiomatic_version_file_enable_tools = ["node"]
+trusted_config_paths = ["~/work"]
+
+[settings.status]
+show_env = false
+show_tools = false
+```
+
+Global config differs from project config in a few ways:
+
+- Its [config root](#config-root) is your home directory, or
+  [`global_config_root`](/configuration/settings.html#global_config_root).
+- `[secrets.*]` and `[daemons_settings]` are ignored there, and
+  `[daemon_providers]` is allowed only there.
+- [`global_config_file`](/configuration/settings.html#global_config_file)
+  (`MISE_GLOBAL_CONFIG_FILE`) replaces all of these files with one file.
+
+System config applies to every user on the machine and has the lowest
+precedence. It lives in `/etc/mise`
+([`MISE_SYSTEM_CONFIG_DIR`](/directories.html#system-config)) and accepts the
+same file names as the global directory, such as `/etc/mise/config.toml`.
+[`system_config_file`](/configuration/settings.html#system_config_file)
+(`MISE_SYSTEM_CONFIG_FILE`) replaces them with a single file.
+
+## Which file mise writes to {#target-file-for-write-operations}
+
+When [`mise use`](/cli/use.html), [`mise set`](/cli/set.html),
+[`mise unset`](/cli/unset.html), `mise settings --local`, and
+[`mise tasks add`](/cli/tasks/add.html) change project config, they write to the
+lowest-precedence file in the nearest directory that has config. Shared config
+is updated by default, and personal and environment files change only when you
+ask for them:
+
+```sh
+# In a directory with mise.toml and mise.local.toml:
+mise use node@24                # writes mise.toml
+mise set NODE_ENV=production    # writes mise.toml
+mise use --env local node@25    # writes mise.local.toml
+mise use --env staging node@24  # writes mise.staging.toml
+```
+
+When the directory has only `mise.local.toml`, writes go to `mise.local.toml`.
+From a subdirectory without config, writes go to the parent directory's file.
+When no directory has a config file, mise creates `mise.toml` in the current
+directory; in your home directory, it writes the global config instead. Use
+`--global` to write the global config, or `--path` to choose a file.
+
+Other commands choose differently:
+
+- [`mise config get`](/cli/config/get.html) and
+  [`mise config set`](/cli/config/set.html) use the highest-precedence loaded
+  TOML file, which can be `mise.local.toml`. Use `--file` to choose another
+  project file.
+- [`mise unuse`](/cli/unuse.html) uses the first loaded config that declares a
+  requested tool. A version-qualified argument matches the configured request
+  literally: `node@20` matches `node = "20"`, not `node = "20.0.0"`. Use
+  `--path` to choose the file.
+
+### Send global writes to separate files {#global-section-write-targets}
+
+To keep global tools, bootstrap packages, and dotfiles in separate files, set a
+target for each in [`write_targets`](/configuration/settings.html#write_targets):
 
 ```toml [~/.config/mise/config.toml]
 [settings.write_targets]
@@ -234,70 +317,184 @@ packages = "~/.config/mise/conf.d/20-packages.toml"
 dotfiles = "~/.config/mise/conf.d/30-dotfiles.toml"
 ```
 
-这样配置后，`mise use --global`、`mise bootstrap packages use --global`、
-`mise bootstrap packages import --global` 和全局 `mise dot add` 会分别写入对应文件。
-目标必须是绝对路径（或以 `~/` 开头），并且必须是 mise 会从全局配置根目录加载的文件：
-`config.toml`、`mise.toml` 或受支持的 `conf.d` 片段，例如 `conf.d/10-tools.toml`。
-不会自动加载 `~/.config/mise/tools.toml`，因此会拒绝该路径。
+New declarations from `mise use --global`,
+`mise bootstrap packages use --global`,
+`mise bootstrap packages import --global`, and `mise dotfiles add` (which
+writes global config by default) then go to those files. A target must be an
+absolute path (or start with `~/`) to a file mise loads from the global config
+directory: `config.toml`, `mise.toml`, or a `conf.d` fragment. A path such as
+`~/.config/mise/tools.toml` is not loaded, so mise rejects it.
 
-既有声明不会迁移：更新既有全局工具或软件包时仍保留在声明它的全局文件中，`mise dot add` 也会继续捕获其配置的源。
-如果一个命令要更新位于多个全局文件中的条目，mise 会停止并要求使用 `--path`，不会猜测合并更新应写入哪个文件。
-`--path` 始终选择显式目标。这些默认值不影响本地或环境专用写入，因此 `mise use --env staging` 和
-`mise bootstrap packages use --env staging` 仍然写入选中的项目环境文件。未设置部分目标时，全局写入继续使用常规全局配置目标。
+Only new entries move. An existing tool, package, or dotfile stays in the file
+that declares it, and when one command updates entries found in more than one
+global file, mise stops and asks for `--path`. `--path` always wins, and project
+writes such as `mise use --env staging` are not affected. Unset targets use the
+normal global config file.
 
-### `[tools]` - 开发工具
+## .miserc.toml {#miserc}
 
-参见 [工具](/dev-tools/)。除了指定版本之外，每个工具条目还可以包含以下选项：
+`.miserc.toml` holds settings mise needs before it looks for config files, such
+as which [config environments](/configuration/environments.html) to load. mise
+reads it before any `mise.toml`, so setting these values under `[settings]` in
+`mise.toml` has no effect on config discovery.
 
-- `os`: Restrict installation to certain operating systems
-- `depends`: Install order relative to other tools in this config only; vfox plugin hook dependencies belong in plugin `metadata.lua` (see [Tool Dependencies](/dev-tools/#tool-dependencies))
-- `install_env`: Environment vars used during download, install, and tool-level `postinstall`
-- `postinstall`: Command to run after installation completes for that specific tool
-- `auto_update`: 在运行全局工具前更新它（`true` 或类似 `"6h"` 的检查间隔）；参见[自动更新工具](#automatic-tool-updates)
-
-示例：
-
-```toml
-[tools]
-node = { version = "22", postinstall = "corepack enable" }
+```toml [.miserc.toml]
+env = ["development"]
 ```
 
-### 自动更新工具
+It accepts only these keys:
+[`env`](/configuration/settings.html#env),
+[`auto_env`](/configuration/settings.html#auto_env),
+[`env_conf_d`](/configuration/settings.html#env_conf_d),
+[`ceiling_paths`](/configuration/settings.html#ceiling_paths),
+[`ignored_config_paths`](/configuration/settings.html#ignored_config_paths),
+[`override_config_filenames`](/configuration/settings.html#override_config_filenames),
+and
+[`override_tool_versions_filenames`](/configuration/settings.html#override_tool_versions_filenames).
+Its JSON schema is
+[schema/miserc.json](https://github.com/jdx/mise/blob/main/schema/miserc.json).
+Relative paths in `ignored_config_paths` resolve from the directory that holds
+the `.miserc.toml` file.
 
-全局配置（例如 `~/.config/mise/config.toml`）中的工具可以自动保持最新。在工具条目上设置 `auto_update`：
+### Where mise looks for .miserc.toml {#miserc-locations}
 
-```toml
-[tools]
-claude = { version = "latest", auto_update = true }
-node = { version = "22", auto_update = "6h" }
+From highest to lowest precedence:
+
+1. The current directory, then each parent: `.miserc.local.toml`,
+   `.miserc.toml`, then `.config/miserc.toml`. The search ends after your home
+   directory, or at the filesystem root when you are outside it, and stops
+   before any directory listed in the `MISE_CEILING_PATHS` environment
+   variable, which is not searched. In the home directory and at the root, only
+   `.miserc.local.toml` and `.miserc.toml` are read.
+2. `~/.config/mise/miserc.local.toml`, then `~/.config/mise/miserc.toml`, read
+   from any directory.
+3. `/etc/mise/miserc.toml`.
+
+A file overrides only the keys it sets; the others keep their inherited values.
+`env` replaces the inherited list, and `env = []` clears it. The `-E` flag and
+environment variables such as `MISE_ENV` override every `.miserc.toml` file.
+
+### Personal and machine-wide choices
+
+Use `.miserc.local.toml` for a choice that belongs to your checkout rather than
+the whole project:
+
+```toml [.miserc.local.toml]
+env = ["native"]
 ```
 
-当 shim 或 `mise x` 即将运行该工具，且 mise 在指定间隔内尚未检查更新时，它会先运行 `mise upgrade`，
-显示常规安装进度，然后运行新版本。更新仍在已配置的版本范围内：`node = "22"` 只会获取最新的 22.x，
-不会变成 23。更新失败或处于离线状态时，mise 会发出警告并运行当前版本。
+Commands such as `mise install` and `mise run dev` then load `mise.native.toml`.
+Add `.miserc.local.toml` to your global Git ignore file (`core.excludesFile`) so
+it stays untracked in every repository, and create it separately in each
+worktree.
 
-`auto_update = true` 每 24 小时检查一次，也可以使用
-[`tool_update.check_duration`](/configuration/settings.html#tool_update.check_duration) 配置。
-类似 `"6h"` 的间隔会设置该工具自己的检查周期，短于一小时的间隔会提升为一小时。
+To choose for the whole machine without editing a shared global
+`miserc.toml`, use `miserc.local.toml` in `~/.config/mise`:
 
-- 只有全局配置可以启用此功能。项目配置不能启用；当项目为该工具设置自己的版本时，该项目中的运行不会更新它。
-- 只检查当前运行的工具：`mise x -- npm test` 不会更新 `claude`。任务、`mise hook-env` 和 shell 激活从不更新工具。
-- 精确版本（如 `node = "22.11.0"`）永远不会更新。全局锁定文件（`mise lock --global`）固定工具时，更新会将锁定条目移动到新版本；不会修改项目配置或锁定文件。
-- 离线、CI 或 `locked = true` 时不会更新。
-- 旧版本会按照 `upgrade.auto_prune` 的计划清理；上次更新失败时，`mise doctor` 会显示错误。
-
-如要在后台更新，使启动永远不会等待，并让通过 PATH 直接运行的工具也保持最新，请在全局配置声明 `tool-update` 服务并运行 `mise bootstrap services apply`：
-
-```toml
-[bootstrap.services.mise-tool-update]
-builtin = "tool-update"
+```toml [~/.config/mise/miserc.local.toml]
+env = ["work"]
 ```
 
-该服务每小时检查一次，并在工具的间隔到期时更新它。服务运行期间，启动不会自行更新工具。参见[服务](/bootstrap/services.html#user-services)。
+Project `.miserc.toml` and `.miserc.local.toml` files can still override it.
 
-### `[tool_config]` - 配置根目录范围的工具策略
+### Templates in .miserc.toml
 
-`[tool_config]` 会将策略应用于由共享同一配置根目录的配置声明的工具。例如，`mise.local.toml` 中的策略也会应用于其旁边的 `mise.toml` 中的工具。它不会影响从全局、系统或父级配置根目录继承的工具。
+Values in `.miserc.toml` can use [Tera templates](/templates.html) with a
+limited context, such as <code v-pre>ceiling_paths = ["{{ env.HOME }}"]</code>.
+See [templates in .miserc.toml](/templates.html#miserc-template-support) for
+what is available. If a template fails to render, mise uses the file's raw
+content without printing a warning.
+
+## config_root {#config-root}
+
+`config_root` is the directory a config file's relative paths resolve against,
+and the value of <code v-pre>{{ config_root }}</code> in its templates. For
+project config it is the project directory, even when the file is
+`.config/mise.toml`, `.config/mise/config.toml`, `.mise/config.toml`,
+`mise/config.toml`, or a `conf.d/*.toml` fragment, and even when you run mise
+from a subdirectory. Tasks defined in the file run there by default. The
+exceptions are `.config/mise/mise.toml` and `.config/mise/mise.local.toml`,
+whose root is `.config/mise/` itself.
+
+| Config file                                  | `config_root`                |
+| -------------------------------------------- | ---------------------------- |
+| `~/src/app/mise.toml`                        | `~/src/app`                  |
+| `~/src/app/.config/mise.toml`                | `~/src/app`                  |
+| `~/src/app/.config/mise/config.toml`         | `~/src/app`                  |
+| `~/src/app/.config/mise/conf.d/tools.toml`   | `~/src/app`                  |
+| `~/src/app/.mise/config.toml`                | `~/src/app`                  |
+| `~/src/app/mise/conf.d/node/mise.toml`       | `~/src/app/mise/conf.d/node` |
+| `~/.config/mise/config.toml` (global config) | `~`                          |
+
+A [conf.d folder](#conf-d-folders) is its own root. For global config, set
+[`global_config_root`](/configuration/settings.html#global_config_root) to use
+another directory.
+
+```toml
+[env]
+# Both entries resolve against the project root
+_.path = ["tools/bin", "{{ config_root }}/tools/bin"]
+
+# Same as "{{ config_root }}/scripts/env.sh"
+_.source = "scripts/env.sh"
+```
+
+## Top-level keys {#top-level-keys}
+
+| Key                                 | Purpose                                                                 | Documentation                                                      |
+| ----------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `[tools]`                           | Tool versions and per-tool options                                      | [Dev tools](/dev-tools/), [tool options](/dev-tools/#tool-options) |
+| `[tool_config]`                     | Policy for the tools this config root declares                          | [`[tool_config]`](#tool-config)                                    |
+| `[tool_alias]`                      | Custom version names for a tool                                         | [Tool aliases](/dev-tools/aliases.html)                            |
+| `[plugins]`                         | Plugin repository URLs and local plugin paths                           | [`[plugins]`](#plugins)                                            |
+| `[env]`                             | Environment variables for commands and tasks                            | [Environment variables](/environments/)                            |
+| `[vars]`                            | Values for templates, not exported                                      | [Config variables](/configuration/vars.html)                       |
+| `redactions`                        | `env` or `vars` keys to hide in output                                  | [Redaction](/environments/secrets/#redaction)                      |
+| `[secrets.*]` (experimental)        | Sources for mise secrets; project config only                           | [fnox](/environments/secrets/fnox.html)                            |
+| `[tasks]`                           | Tasks                                                                   | [Tasks](/tasks/)                                                   |
+| `[task_config]`                     | Task includes, excludes, and defaults                                   | [Task configuration reference](/tasks/task-configuration.html)     |
+| `[task_templates]`                  | Shared task definitions for `extends`                                   | [Task templates](/tasks/templates.html)                            |
+| `[settings]`                        | mise's own behavior                                                     | [Settings](/configuration/settings.html)                           |
+| `[hooks]`                           | Commands run on `cd`, enter, leave, and install                         | [Hooks](/hooks.html)                                               |
+| `[[watch_files]]`                   | Commands run when files change                                          | [Hooks](/hooks.html)                                               |
+| `[shell_alias]`                     | Shell aliases defined while you are in the directory; needs activation  | [Shell aliases](/shell-aliases.html)                               |
+| `[wrappers]`                        | Commands that intercept a binary name                                   | [Command wrappers](/dev-tools/shims.html#command-wrappers)         |
+| `include`                           | Config files merged into this one                                       | [`include`](#include)                                              |
+| `min_version`                       | Oldest mise release that can use this file                              | [`min_version`](#minimum-mise-version)                             |
+| `monorepo_root`, `[monorepo]`       | `//path:task` addressing; trusting the root trusts the configs below it | [Monorepo tasks](/tasks/monorepo.html)                             |
+| `[doctor]`                          | Project checks for `mise doctor project`                                | [Project diagnostics](/configuration/project-diagnostics.html)     |
+| `[deps]` (experimental)             | Project dependency providers                                            | [Project dependencies](/dev-tools/deps.html)                       |
+| `[oci]` (experimental)              | Settings for `mise oci build`                                           | [OCI images](/dev-tools/mise-oci.html)                             |
+| `[daemons]` (experimental)          | Background processes and service presets                                | [Daemons](/daemons.html)                                           |
+| `[daemon_groups]` (experimental)    | Named sets of daemons                                                   | [Groups](/daemons.html#groups)                                     |
+| `[daemons_settings]` (experimental) | Namespace for daemon IDs and hostnames                                  | [Ports, URLs, and worktrees](/daemons/worktrees.html#namespaces)   |
+| `[daemon_providers]` (experimental) | Shared servers; global config only                                      | [Share daemons across projects](/daemons/sharing.html)             |
+| `[bootstrap]`                       | Machine setup: packages, repositories, services, and more               | [Bootstrap](/bootstrap.html)                                       |
+| `[dotfiles]`                        | Files mise manages in your home directory                               | [Dotfiles](/dotfiles.html)                                         |
+| `[dotfile_groups]`                  | Named directory trees of dotfiles                                       | [Groups](/dotfiles/groups.html)                                    |
+| `[history]`                         | What dotfiles history captures                                          | [History](/dotfiles/history.html)                                  |
+| `[_]`                               | Free-form data that mise ignores                                        | [`[_]`](#free-form-data)                                           |
+
+Version requests, prefixes such as `prefix:1.25`, and `.tool-versions` are
+described in [Version requests and version files](/dev-tools/versions.html).
+A global tool can update itself with
+[`auto_update`](/dev-tools/#automatic-tool-updates).
+
+These keys are deprecated:
+
+| Deprecated key               | Use instead     | Removed in  |
+| ---------------------------- | --------------- | ----------- |
+| `[alias]`                    | `[tool_alias]`  | No date set |
+| `env_file`, `dotenv`         | `env._.file`    | 2027.4.0    |
+| `env_path`                   | `env._.path`    | 2027.4.0    |
+| `experimental_monorepo_root` | `monorepo_root` | 2027.12.0   |
+
+### `[tool_config]` {#tool-config}
+
+`[tool_config]` applies policy to the tools declared by config files that share
+its [config root](#config-root). Policy in `mise.local.toml` also applies to the
+tools in `mise.toml` beside it. It does not affect tools inherited from global,
+system, or parent config roots.
 
 ```toml
 [tool_config]
@@ -307,548 +504,151 @@ locked = true
 node = "24"
 ```
 
-目前，`locked` 是唯一受支持的策略。它要求此配置根目录中的工具从其锁定文件解析并安装。参见 [mise.lock](/dev-tools/mise-lock.html#strict-lockfile-mode)。
+`locked` is the only policy. It requires this config root's tools to resolve and
+install from their lockfiles; see
+[strict lockfile mode](/dev-tools/mise-lock.html#strict-lockfile-mode).
 
-### `[env]` - 任意环境变量
+### `[plugins]` {#plugins}
 
-请参阅 [环境](/environments/)。
-
-### `[secrets.*]` - 密钥源 {#secrets}
-
-<Badge type="warning" text="实验性" />
-
-mise 密钥的来源：只有在 mise 启动被授予密钥的任务或 `mise x` 命令时才解析值。
-仅限项目配置使用，例如 `[secrets.fnox]`。参见[mise 使用 fnox 管理密钥](/environments/secrets/fnox.html)。
-
-### `[vars]` - 配置变量
-
-定义可在 Tera 渲染的配置中重复使用的值，而不会将它们导出给子进程。请参阅 [变量](/configuration/vars)。
-
-### `[tasks.*]` - 运行文件或 Shell 脚本
-
-参见 [任务](/tasks/)。
-
-### `[settings]` - Mise 设置
-
-参见 [设置](/configuration/settings) 获取完整的设置列表。
-
-### `[plugins]` - 指定自定义插件仓库 URL
-
-Use `[plugins]` to add or modify plugin shortnames. This only affects
-_new_ plugin installations; existing plugins can use any URL.
+`[plugins]` sets the repository for a plugin name, so everyone on the project
+installs the same plugin:
 
 ```toml
 [plugins]
 elixir = "https://github.com/my-org/mise-elixir.git"
-node = "https://github.com/my-org/mise-node.git#DEADBEEF" # 支持特定 gitref
+node = "https://github.com/my-org/mise-node.git#v1.2.0" # a branch, tag, or full commit SHA
 "vfox-backend:myplugin" = "https://github.com/jdx/vfox-npm"
 ```
 
-插件类型前缀（例如 `asdf:`、`vfox:` 或 `vfox-backend:`）是可选的。
-如果省略，mise 会先克隆该插件，然后从已安装的插件文件中检测插件类型。
+A ref pinned to a commit must be the full SHA; mise rejects abbreviated SHAs
+because they cannot be fetched from the remote. The plugin type prefix, such as
+`asdf:`, `vfox:`, or `vfox-backend:`, is optional. Without it, mise clones the
+plugin and detects its type from the plugin's files.
 
-To install a plugin from a specific URL once, use
-`mise plugin install <NAME> <GIT_URL>` instead. Add this section to `mise.toml` when you want
-to share the plugin location and revision with other developers in your project.
+An entry applies only to new installs. When an installed plugin no longer
+matches its entry (a different URL, or a ref that is not checked out),
+`mise install`, `mise plugins install`, and `mise doctor` warn about it. Run
+`mise plugins install --force <name>` to reinstall it from `[plugins]`. To
+install a plugin from a URL once without sharing it, run
+`mise plugins install <name> <git-url>` instead.
 
-本地插件目录同样受支持。绝对路径和以 `~/` 开头的路径会直接使用。以 `./` 或 `../` 开头的显式相对路径，会相对于声明它们的文件所在配置根目录进行解析：
+An entry can also point at a local directory. Absolute paths and paths starting
+with `~/` are used as they are. Relative paths starting with `./` or `../`
+resolve from the [config root](#config-root) of the file that declares them:
 
 ```toml
 [plugins]
 example = "./plugins/mise-example"
 ```
 
-本地插件会以符号链接的形式链接到 mise 的插件目录中，其行为与
-`mise plugins link` 一致，因此源目录中的更改会立即生效。
-与远程条目一样，`[plugins]` 只会影响新安装。运行
-`mise plugins install --force <NAME>`，可使用配置的本地源替换现有插件。
-`file://` 源仍然是 Git 仓库，并且会被克隆。
+mise symlinks a local plugin into its plugin directory, as
+[`mise plugins link`](/cli/plugins/link.html) does, so changes to the source
+are available immediately. `file://` URLs are Git repositories and are cloned.
 
-这取代了已弃用的 `settings.shorthands_file` / `MISE_SHORTHANDS_FILE` 机制：将相同的
-`shortname = "backend-or-url"` 条目放在 `[plugins]` 下，而不是放在单独的 TOML 文件中。
+`[plugins]` replaces the deprecated `shorthands_file` setting
+(`MISE_SHORTHANDS_FILE`): move its `shortname = "backend-or-url"` rows here.
 
-### `[tool_alias]` - 工具版本别名
+### `include` {#include}
 
-::: tip
-`[alias]` 已重命名为 `[tool_alias]`，以将其与 `[shell_alias]` 区分开来。
-旧的 `[alias]` 键仍然可用，但已被弃用。
-:::
-
-The following makes `mise install node@my_custom_node` install node-20.x.
-Aliases can also be specified in a [plugin](/dev-tools/aliases.md).
+`include` merges other config files into this one, so an organization can
+publish a baseline that every repository uses, or a repository can split a
+large config into parts:
 
 ```toml
-[tool_alias.node.versions]
-my_custom_node = '20'
-```
-
-### `[shell_alias]` - Shell 别名
-
-定义在进入目录时设置、离开目录时取消设置的 shell 别名：
-
-```toml
-[shell_alias]
-ll = "ls -la"
-gs = "git status"
-dev = "npm run dev"
-```
-
-These work similarly to environment variables—they're set dynamically based on your current directory.
-See [Shell Aliases](/shell-aliases) for more details.
-
-### 最低 mise 版本
-
-Specify the minimum mise version required by the configuration file.
-
-你可以设置硬性最低版本（不满足时会报错）或软性最低版本（会警告并继续）：
-
-```toml
-# Require this version or newer
-min_version = '2024.11.1'
-```
-
-Or specify a hard minimum and a newer recommended version:
-
-```toml
-min_version = { hard = '2024.11.1', soft = '2026.1.0' }
-```
-
-When a soft minimum is not met, mise prints a warning and, if available, self-update instructions. When a hard minimum is not met, mise errors and shows self-update instructions.
-
-Use a hard minimum for syntax or behavior the project requires. A soft minimum
-recommends an upgrade while allowing older clients to continue. A soft-only
-requirement is also valid: `min_version = { soft = '2026.1.0' }`.
-
-Keep mise current so backend integrations and deprecation notices stay up to date.
-A minimum version lets teammates upgrade without changing the project's requirement.
-
-### Monorepo 根目录
-
-将配置文件标记为 monorepo 根目录，以便为任务启用目标路径语法。
-
-```toml
-monorepo_root = true
-
-[monorepo]
-config_roots = ["projects/frontend", "projects/api"]
-```
-
-`monorepo_root` enables task addressing; `config_roots` identifies the projects to
-load. When enabled:
-
-- Tasks in subdirectories are available with namespaced paths (e.g., `//projects/frontend:build`)
-- Subdirectory tasks use tools from parent configs
-- Tasks are only loaded when needed (e.g., when running them, or with `mise tasks ls --all`)
-- Trusting a monorepo root allows descendant configs to share that trust; review
-  the repository before trusting it (see [trust behavior](/cli/trust.html))
-
-有关详细用法和示例，请参见 [Monorepo 任务](/tasks/monorepo)。
-
-### `mise.toml` 架构
-
-- You can find the JSON schema for `mise.toml` in [schema/mise.json](https://github.com/jdx/mise/blob/main/schema/mise.json) or at <https://mise.jdx.dev/schema/mise.json>.
-- Some editors can load it automatically to provide autocompletion and validation when editing a `mise.toml` file ([VSCode](https://code.visualstudio.com/docs/languages/json#_json-schemas-and-settings), [IntelliJ](https://www.jetbrains.com/help/idea/json.html#ws_json_using_schemas), [neovim](https://github.com/b0o/SchemaStore.nvim), etc.). It is also available in the [JSON schema store](https://www.schemastore.org/).
-- `included tasks` (see [task configuration](/tasks/task-configuration)) use a separate schema: <https://mise.jdx.dev/schema/mise-task.json>
-
-## 全局配置：`~/.config/mise/config.toml`
-
-可以在 `~/.config/mise/config.toml` 中配置 mise。它的作用类似于本地的 `mise.toml`，但会应用于每个目录。
-
-这里只展示了一些常见设置。完整列表和说明请参阅 [设置](/configuration/settings)。
-
-```toml [~/.config/mise/config.toml]
-[tools]
-# 全局工具版本写在这里
-# 你可以使用 `mise use -g` 来设置这些
-node = 'lts'
-python = ['3.10', '3.11']
-
-[settings]
-# 读取其他版本管理器使用的版本文件，例如 .nvmrc
-idiomatic_version_file_enable_tools = ['node']
-
-trusted_config_paths = [
-    '~/work/my-trusted-projects',
+include = [
+  "./config/tools.toml",
+  "git::https://github.com/myorg/platform.git//mise.toml?ref=main",
+  "oci::ghcr.io/myorg/platform-config@sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
 ]
 
-env_file = '.env' # 从 dotenv 文件加载环境变量，参见 `MISE_ENV_FILE`
+[tools]
+node = "24" # this file's own entries override the included ones
+```
 
-[settings.status]
-show_env = false
-show_tools = false
+A local include is a path to a `.toml` file, relative to the including file or
+absolute. A `git::` include points at a `.toml` file. An `oci::` include points
+at an artifact with a `mise.toml` at its root.
 
-# "_" 是一个特殊键，用于放置你想写入 mise.toml 但 mise 永远不会解析的信息
+An included file ranks directly below the file that includes it, and a later entry
+in `include` overrides an earlier one. Its relative paths, such as `_.file`,
+and <code v-pre>{{ config_root }}</code> resolve against the including file. Its
+tools are locked in the including file's lockfile, and its `min_version` is
+enforced.
+
+An included file can contain `[tools]`, `[tool_alias]`, `[env]`, `[vars]`,
+`[hooks]`, `[shell_alias]`, `[plugins]`, `[wrappers]`, `[bootstrap]`,
+`min_version`, and `[_]`. The deprecated `[alias]` and `env_path` keys are also
+accepted. Its hooks
+run before the including file's hooks for the same event. `[bootstrap]` entries
+merge key by key, and the including file's own entry wins. Any other key is an
+error: `include` (includes do not nest), `[settings]` and the monorepo keys
+(mise reads them before it resolves includes), `[tasks]`, `task_config`, and
+`task_templates` (share tasks with
+[`task_config.includes`](/tasks/task-discovery.html)), and machine sections such
+as `[dotfiles]` and `[daemons]`.
+
+An include uses the including file's trust. An untrusted project cannot make
+mise fetch a URL when you `cd` into it, and
+[safe mode](/security.html#safe-mode) never fetches includes for project config.
+Once you trust the file, the included content runs with that trust, as a
+`mise.toml` that changes on `git pull` does. In
+[paranoid mode](/paranoid.html#remote-includes), an include must be pinned to a
+commit SHA or an OCI digest, and a local include is an error because its content
+is not covered by the file's trust hash.
+
+A local include is read on every load and is never cached. mise caches each
+remote included file under `MISE_CACHE_DIR` and never refetches a commit SHA or
+an OCI digest. Commands such as `mise install`, `mise use`, and
+`mise upgrade` refresh a branch, tag, or OCI tag once the cached copy is older
+than
+[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache).
+Shell activation, `mise exec`, `mise env`, `mise ls`, shims, and
+[offline](/configuration/settings.html#offline) mode always use the cached copy.
+If a refresh fails or returns a file this mise cannot load, mise warns and keeps
+the cached copy; with nothing cached, it is an error. `mise cache clear` forces
+a refetch.
+
+### `min_version` {#minimum-mise-version}
+
+A plain string is a hard minimum. Older mise releases stop with an error and
+print upgrade instructions:
+
+```toml
+min_version = "2026.1.0"
+```
+
+Add a soft minimum to warn without failing:
+
+```toml
+min_version = { hard = "2025.6.0", soft = "2026.1.0" }
+```
+
+Set `hard` to the oldest release that understands this file and `soft` to the
+release you want teammates on. `{ soft = "2026.1.0" }` on its own is also valid.
+
+### `[_]` {#free-form-data}
+
+mise never reads the `[_]` table, so you can keep your own data in a config
+file without mise rejecting the key:
+
+```toml
 [_]
-foo = "bar"
+owner = "platform-team"
 ```
 
-## 系统配置：`/etc/mise/config.toml`
-
-Like `~/.config/mise/config.toml`, but applied to all users on the system. This is useful for
-setting system-wide defaults.
-
-## `.tool-versions`
-
-The `.tool-versions` file is asdf's config file, and mise can use it just like `mise.toml`.
-It isn't as flexible, so `mise.toml` is recommended instead. It is useful if you
-already have many `.tool-versions` files or work on a team that uses asdf.
-
-下面是一个包含所有受支持语法的示例：
-
-```text
-node        20.0.0       # 允许使用注释
-ruby        3            # 可以是模糊版本
-shellcheck  latest       # 也支持 "latest"
-jq          1.6
-erlang      ref:master   # 从 vcs ref 编译
-go          prefix:1.19  # 使用最新的 1.19.x 版本——在 "1.19" 恰好匹配时需要
-shfmt       path:./shfmt # 使用自定义运行时
-node        lts          # 使用 node 的 lts 版本（并非所有插件都支持）
-
-node        sub-2:lts      # 从解析出的主版本号中减去 2（例如：20 变为 18）
-python      sub-0.1:latest # 从解析出的次版本号中减去 1（例如：3.11 变为 3.10）
-```
-
-有关此文件格式的更多信息，请参见 [asdf 文档](https://asdf-vm.com/manage/configuration.html#tool-versions)。
-
-## 作用域
-
-Both `mise.toml` and `.tool-versions` support "scopes", which modify how a version is resolved:
-
-- `ref:<SHA>` - compile from a vcs (usually git) ref
-- `prefix:<PREFIX>` - use the latest version that matches the prefix. Useful for Go, since `1.20`
-  would only match `1.20` exactly, whereas `prefix:1.20` matches `1.20.1`, `1.20.2`, etc.
-- `path:<PATH>` - use a custom compiled version at the given path. One use case is reusing
-  Homebrew tools (e.g. `path:/opt/homebrew/opt/node@20`). On Windows both separators work and
-  mise stores the forward-slash form either way, but mind the TOML quoting: a backslash is an
-  escape inside a _basic_ (double-quoted) string, so write `{ path = 'C:\tools\node' }` as a
-  literal string, or double them as `"C:\\tools\\node"`. `"C:\tools\node"` is not rejected — TOML
-  reads `\t` as a tab — so the path silently becomes something else. A path containing a `cmd.exe`
-  metacharacter (`& | < > ^ %`) is rejected there, since the path is passed to tool plugins that
-  build shell commands with it; `%` in particular is not a literal.
-- `sub-<PARTIAL_VERSION>:<ORIG_VERSION>` - resolves `ORIG_VERSION`, subtracts the numeric components
-  in `PARTIAL_VERSION` from the corresponding resolved version components, then resolves the result
-  as a version prefix. For example, `sub-2:lts` resolves `lts` and subtracts 2 from its major
-  component (`20` becomes `18`), while `sub-0.1:latest` subtracts 1 from the resolved minor
-  component (`3.11` becomes `3.10`). This is numeric version arithmetic, not a request for the Nth
-  previous release.
-
-## 惯用版本文件
-
-mise supports "idiomatic version files" just like asdf. They're language-specific files
-like `.node-version` and `.python-version`. These are ideal for setting the runtime version of a project without forcing
-other developers to use a specific tool like mise or asdf.
-
-They support aliases, so an `.nvmrc` file containing `lts/hydrogen` works
-in both mise and nvm. Here are some of the supported idiomatic version files:
-
-<!-- mise:idiomatic-version-files:start -->
-
-| 插件          | 惯用文件                                                                                                                                                                                                                                                                                             |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| atmos         | `.atmos-version`                                                                                                                                                                                                                                                                                           |
-| bazel         | `.bazelversion`                                                                                                                                                                                                                                                                                            |
-| bun           | `.bun-version`, `package.json`                                                                                                                                                                                                                                                                             |
-| chezmoi       | `.chezmoiversion`                                                                                                                                                                                                                                                                                          |
-| cmake         | `CMakeLists.txt`                                                                                                                                                                                                                                                                                           |
-| crystal       | `.crystal-version`                                                                                                                                                                                                                                                                                         |
-| dagger        | `dagger.json`                                                                                                                                                                                                                                                                                              |
-| deno          | `.deno-version`, `package.json`                                                                                                                                                                                                                                                                            |
-| dotnet        | `global.json`                                                                                                                                                                                                                                                                                              |
-| earthly       | `Earthfile`                                                                                                                                                                                                                                                                                                |
-| elixir        | `.exenv-version`                                                                                                                                                                                                                                                                                           |
-| go            | `.go-version`, `go.mod`, `go.work`                                                                                                                                                                                                                                                                         |
-| golangci-lint | `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`                                                                                                                                                                                                                                      |
-| goreleaser    | `.config/goreleaser.yml`, `.config/goreleaser.yaml`, `.goreleaser.yml`, `.goreleaser.yaml`, `goreleaser.yml`, `goreleaser.yaml`                                                                                                                                                                            |
-| java          | `.java-version`, `.sdkmanrc`                                                                                                                                                                                                                                                                               |
-| lefthook      | `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, `.lefthook.yaml`, `lefthook.toml`, `.lefthook.toml`, `lefthook.json`, `.lefthook.json`, `lefthook.jsonc`, `.lefthook.jsonc`, `.config/lefthook.yml`, `.config/lefthook.yaml`, `.config/lefthook.toml`, `.config/lefthook.json`, `.config/lefthook.jsonc` |
-| nim           | `.nim-version`                                                                                                                                                                                                                                                                                             |
-| node          | `.nvmrc`, `.node-version`, `package.json`                                                                                                                                                                                                                                                                  |
-| npm           | `package.json`                                                                                                                                                                                                                                                                                             |
-| opentofu      | `.opentofu-version`                                                                                                                                                                                                                                                                                        |
-| packer        | `.packer-version`                                                                                                                                                                                                                                                                                            |
-| perl          | `.perl-version`                                                                                                                                                                                                                                                                                            |
-| pixi          | `pixi.toml`, `pyproject.toml`                                                                                                                                                                                                                                                                              |
-| pnpm          | `package.json`                                                                                                                                                                                                                                                                                             |
-| pre-commit    | `.pre-commit-config.yaml`                                                                                                                                                                                                                                                                                  |
-| python        | `.python-version`, `.python-versions`                                                                                                                                                                                                                                                                      |
-| ruby          | `.ruby-version`, `Gemfile`                                                                                                                                                                                                                                                                                 |
-| ruff          | `ruff.toml`, `.ruff.toml`                                                                                                                                                                                                                                                                                  |
-| rust          | `rust-toolchain.toml`                                                                                                                                                                                                                                                                                      |
-| swift         | `.swift-version`                                                                                                                                                                                                                                                                                           |
-| task          | `Taskfile.yml`, `Taskfile.yaml`, `taskfile.yml`, `taskfile.yaml`                                                                                                                                                                                                                                           |
-| terraform     | `.terraform-version`                                                                                                                                                                                                                                                                                       |
-| terragrunt    | `.terragrunt-version`                                                                                                                                                                                                                                                                                      |
-| terramate     | `.terramate-version`                                                                                                                                                                                                                                                                                      |
-| yarn          | `.yvmrc`, `package.json`                                                                                                                                                                                                                                                                                   |
-| zig           | `.zig-version`                                                                                                                                                                                                                                                                                             |
-
-<!-- mise:idiomatic-version-files:end -->
-
-For Bazel setup and supported `.bazelversion` values, see the [Bazel cookbook](/mise-cookbook/bazel.html).
-
-Registry-backed tools can also describe how mise should extract versions from structured
-idiomatic files. Registry entries may use the same `version_regex`, `version_json_path`, and
-`version_expr` parsers as the [HTTP backend](/dev-tools/backends/http.html#version-list-url).
-This lets tools installed through backends such as `aqua:` and `github:` support JSON manifests
-and other tool-specific version files without requiring an asdf or vfox plugin.
-
-### mise 读取哪些字段
-
-An idiomatic version file is only read for fields that declare **the version the project is built
-with**. Fields that declare a **minimum compatible version** — a floor for whoever consumes the
-project — are not version requests and mise does not install from them. A floor says nothing about
-which version the project is developed and tested against: a library that still supports Node 18
-or CMake 3.25 is almost certainly not built with it, so resolving the floor either pins everyone to
-the oldest supported release or, read as a range, means "latest".
-
-配置格式的主版本号有所不同，仍然会被读取：GoReleaser 配置中的 `version: 2` 是有意与 CLI 主版本绑定的架构选择器，而不是兼容性最低版本，因此它会选择最新的 GoReleaser 2.x。
-
-::: warning
-mise 过去会将两个最低版本视为版本请求。这两者均已弃用，在解析出版本时会发出警告，并将在 mise 2026.11.0 中移除：`go.mod` 的 `go X.Y` 指令（请向 `go.mod` 添加 `toolchain goX.Y.Z` 行，或使用 `.go-version` 或 `mise.toml`）以及 `CMakeLists.txt` 的 `cmake_minimum_required`（请使用 `mise.toml`）。
-
-已经完成迁移的项目可以在此之前选择最终行为——忽略最低版本且不发出警告：
-
-```sh
-mise settings set idiomatic_version_file_ignore_minimum_versions true
-```
-
-该设置将在 2026.11.0 中与其控制的行为一起移除。
-:::
-
-对于 `package.json`（由 `node`、`deno`、`bun`、`npm`、`pnpm` 和 `yarn` 支持）：
-
-- 运行时工具（`node`、`deno` 和 `bun`）读取 `devEngines.runtime`（同时支持单对象和数组格式）。
-- 包管理器（`npm`、`pnpm` 和 `yarn`）读取 `devEngines.packageManager` 或顶层的 `packageManager`（例如 `pnpm@9.1.0` 或 `npm@10.0.0`）。
-- 对于 `bun`，mise 会首先检查 `devEngines.runtime`，然后回退到 `devEngines.packageManager` 和顶层的 `packageManager`（例如 `bun@1.2.0`）。
-
-不会读取 `engines` 字段，这正是上述规则最清晰的例子。`engines` 声明的是软件包兼容的 Node 版本范围——当有人在不受支持的运行时上安装软件包时，npm 会使用它来发出警告或失败。它描述的是使用者，而不是开发者；而且它通常是一个很宽的范围（`>=18`），没有人会严格使用该范围进行开发。npm 专门添加的 `devEngines` 正是为了填补这一空白，它声明项目开发者实际使用的版本，这正是 mise 所需的信息。如果你只有 `engines`，请显式固定实际版本：
-
-```sh
-mise use node@22
-```
-
-对于 `go.mod`，会使用 `toolchain goX.Y.Z` 指令——这是模块构建和测试所使用工具链的精确固定版本。`go X.Y` 指令表示最低版本，已被弃用（见上文）。
-
-### 启用惯用版本文件
-
-In mise, these are disabled by default; see <https://github.com/jdx/mise/discussions/4345> for the rationale.
-
-- Run `mise settings add idiomatic_version_file_enable_tools python` to enable them for a specific tool such as Python ([docs](/configuration/settings.html#idiomatic_version_file_enable_tools))
-
-可以通过 `tool:filename` 组合为某个工具禁用单个文件。例如，要让 node 使用
-`.nvmrc`，同时让包管理器继续使用 `package.json`：
-
-```sh
-mise settings add idiomatic_version_file_disable_files node:package.json
-```
-
-发现并解析这些文件会产生少量性能开销。注册表解析器会在进程内运行；由插件提供的文件可能会调用插件的解析器。结果会被[缓存](/cache-behavior)，因此通常不会明显影响性能。
-
-asdf calls these "legacy version files". mise uses "idiomatic version files" to
-distinguish language and ecosystem conventions from mise's own configuration.
-
-## 设置
-
-请参阅 [设置](/configuration/settings) 以查看完整的设置列表。
-
-## 任务
-
-查看 [任务](/tasks/) 以获取完整的配置选项列表。
-
-### `[daemons]`
-
-Define background processes, managed PostgreSQL or Redis instances, and references
-to daemons in other projects. Daemon management requires `experimental = true`.
-
-```toml
-[daemons.api]
-run = "npm run dev"
-
-[daemons.worker]
-project = "../workers"
-```
-
-The `api` daemon runs in this project; `worker` uses the `worker` declaration in
-`../workers`. A reference accepts only `project` and an optional `name` to select a
-differently named daemon.
-
-A higher-precedence declaration replaces the complete same-name daemon. Explicit
-environment variables override preset exports. `proxy` sets the daemon's hostname
-label, opts it out with `false`, or re-enables it with `true`, `proxy_tls` chooses
-`"terminate"` or `"passthrough"`, and `proxy_idle_timeout` (a duration such as `"30m"`,
-or `false`) stops a proxy-started daemon after it sits idle. See [Daemons](/daemons) for presets,
-[project references](/daemons#daemons-from-another-project),
-[stable URLs](/daemons#stable-urls-per-worktree), and lifecycle commands.
-
-### `[daemons_settings]`
-
-Set the namespace used in daemon IDs such as `my-app/api`:
-
-```toml
-[daemons_settings]
-namespace = "my-app"
-namespace_per_worktree = true # default
-```
-
-Without an explicit namespace, mise derives one from the project path. Linked Git
-worktrees append a unique suffix to an explicit namespace by default.
-
-The namespace also names the project in the hostnames daemons are reachable at. See
-[Stable URLs per worktree](/daemons#stable-urls-per-worktree).
-
-These settings merge by key across project configuration files and are inherited
-by child projects. They are ignored in global and system configuration. See
-[Namespaces](/daemons#namespaces) for naming rules, inheritance, and worktree behavior.
-
-### `[daemon_groups]`
-
-Experimental named sets of project daemons. Each member is a daemon or another group declared in the same project, so a group never selects daemons outside it. Group names work wherever `mise daemons` accepts a daemon name. See [daemons](/daemons#groups).
-
-## Environment variables
-
-::: tip
-Most environment variables in mise set [settings](/configuration/settings), so they are documented
-there. The following environment variables are not settings.
-
-mise 中的一个设置项通常可以通过环境变量进行配置，也可以在配置文件中设置。
-:::
-
-mise 也可以通过环境变量进行配置。可用的选项如下：
-
-### `MISE_DATA_DIR`
-
-默认（Linux）：`~/.local/share/mise` 或 `$XDG_DATA_HOME/mise`
-默认（macOS）：`~/.local/share/mise` 或 `$XDG_DATA_HOME/mise`
-默认（Windows）：`%LOCALAPPDATA%\mise` 或 `$XDG_DATA_HOME/mise`
-
-This is the directory where mise stores plugins and tool installs. These should not be shared
-across machines.
-
-### `MISE_CACHE_DIR`
-
-默认（Linux）：`~/.cache/mise` 或 `$XDG_CACHE_HOME/mise`
-默认（macOS）：`~/Library/Caches/mise` 或 `$XDG_CACHE_HOME/mise`
-默认（Windows）：`%TEMP%\mise` 或 `$XDG_CACHE_HOME/mise`
-
-This is the directory where mise stores its internal cache. It should not be shared
-across machines and may be deleted whenever mise is not running.
-
-### `MISE_TMP_DIR`
-
-Default: [`std::env::temp_dir()`](https://doc.rust-lang.org/std/env/fn.temp_dir.html) implementation
-in Rust
-
-This is used for temporary storage, such as when installing tools.
-
-### `MISE_SYSTEM_CONFIG_DIR`
-
-默认：`/etc/mise`
-
-这是 mise 存储系统级配置的目录。
-`MISE_SYSTEM_DIR` 也作为旧别名受支持。
-
-### `MISE_GLOBAL_CONFIG_FILE`
-
-Default: `$MISE_CONFIG_DIR/config.toml` (usually `~/.config/mise/config.toml`)
-
-This is the path to the global config file.
-
-Use this when you want global writes, such as `mise use` or `mise set` run from
-`$HOME`, to target a different config file. [`MISE_DEFAULT_CONFIG_FILENAME`](#mise-default-config-filename)
-customizes the default local config filename, not the global config path.
-
-### `MISE_DEFAULT_CONFIG_FILENAME` {#mise-default-config-filename}
-
-默认：`mise.toml`
-
-这会自定义 mise 创建或查找项目配置文件时使用的默认本地配置文件名。
-
-### `MISE_GLOBAL_CONFIG_ROOT`
-
-默认：`$HOME`
-
-::: v-pre
-这是用于全局配置文件的 `{{config_root}}` 的路径。
-:::
-
-### `MISE_ENV_FILE`
-
-Set to a filename to read env vars from a dotenv file, e.g. `MISE_ENV_FILE=.env`.
-mise searches for and loads all matching files in the current directory and its parents.
-This uses [dotenvy](https://crates.io/crates/dotenvy) under the hood.
-
-### `MISE_${TOOL}_VERSION`
-
-为某个工具设置版本。例如，`MISE_NODE_VERSION=20` 将使用 <node@20.x>，无论
-`mise.toml`/`.tool-versions` 中设置了什么。
-
-### `MISE_TRUSTED_CONFIG_PATHS`
-
-这是一个路径列表，mise 会自动将其标记为受信任的路径。它们按照平台对 PATH 环境变量的约定进行分隔：Unix 上使用 `:`，Windows 上使用 `;`。
-
-### `MISE_CEILING_PATHS`
-
-This is a list of paths at which mise stops searching for
-configuration files and file tasks. This is useful to keep
-mise from searching slow-loading directories. Paths are separated according to platform conventions for the PATH environment variable: `:` on Unix and `;` on Windows.
-
-### `MISE_LOG_LEVEL=trace|debug|info|warn|error`
-
-Sets the verbosity of mise's log output.
-
-你也可以使用 `MISE_DEBUG=1`、`MISE_TRACE=1` 和 `MISE_QUIET=1`，以及
-`--log-level=trace|debug|info|warn|error`。
-
-### `MISE_LOG_FILE=~/mise.log`
-
-将日志输出到文件。
-
-### `MISE_LOG_FILE_LEVEL=trace|debug|info|warn|error`
-
-Same as `MISE_LOG_LEVEL`, but for the log _file_. This is useful if you want
-to store logs without cluttering your display.
-
-### `MISE_LOG_HTTP=1`
-
-在日志中显示 HTTP 请求/响应。
-
-### `MISE_LOG_VERBOSE_DEPS=1`
-
-来自噪声较大的第三方 crate（`h2`、`hyper`、`reqwest`、`rustls` 等，它们会为每个 HTTP/2 帧或套接字读取输出一行）的调试和跟踪日志会始终被丢弃——否则它们会淹没调试/跟踪输出。将其设为 `1` 可让这些日志通过；这是唯一能看到它们的方法，包括在 `--log-level=trace`/`-vv` 下。
-
-### `MISE_QUIET=1`
-
-等同于 `MISE_LOG_LEVEL=warn`。
-
-### `MISE_HTTP_TIMEOUT`
-
-Set the timeout for HTTP requests in seconds. The default is `30`.
-
-### `MISE_RAW=1`
-
-Set to "1" to connect plugin scripts directly to stdin/stdout/stderr. By default stdin is disabled
-because when several plugins install in parallel you wouldn't see the prompt. Use this if a
-plugin accepts input or otherwise does not seem to install correctly.
-
-This also sets `MISE_JOBS=1`, because only one plugin script can run at a time.
-
-### `MISE_TERM_WIDTH`
-
-覆盖 mise 用于渲染表格和列表（例如 `mise ls`）的终端宽度。
-默认情况下，mise 会从终端检测宽度。这在 CI 或其他非交互式环境中很有用，因为这些环境中的检测可能会返回错误值（例如 CircleCI 会将宽度报告为 `0`），从而导致输出出现异常换行。
-
-如果未设置 `MISE_TERM_WIDTH`，mise 会回退到常用的 `COLUMNS`
-环境变量，最后才使用自动检测。该覆盖值会被严格遵守，因此你也可以强制使用更窄的宽度：
-
-```sh
-MISE_TERM_WIDTH=120 mise ls
-```
-
-### `MISE_FISH_AUTO_ACTIVATE=1`
-
-Controls whether the `vendor_conf.d` script for fish automatically activates mise.
-Homebrew and potentially other installs use this file to activate mise without
-any configuration.
-
-Enabled by default; set to "0" to disable.
+### Editor schema {#mise-toml-schema}
+
+The JSON schema for `mise.toml` is at <https://mise.jdx.dev/schema/mise.json>
+and in the [JSON Schema Store](https://www.schemastore.org/), so editors such as
+[VS Code](https://code.visualstudio.com/docs/languages/json#_json-schemas-and-settings),
+[IntelliJ](https://www.jetbrains.com/help/idea/json.html#ws_json_using_schemas),
+and [Neovim](https://github.com/b0o/SchemaStore.nvim) can complete and validate
+it. Task files loaded through `task_config.includes` use a separate schema:
+<https://mise.jdx.dev/schema/mise-task.json>.
+
+## Idiomatic version files {#idiomatic-version-files}
+
+mise can read the version files other tools use, such as `.nvmrc` and
+`.python-version`, once you enable them for a tool. See
+[Idiomatic version files](/dev-tools/versions.html#idiomatic-version-files) for
+the supported files and how to enable them.

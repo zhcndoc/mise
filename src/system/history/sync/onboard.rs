@@ -146,14 +146,20 @@ fn preview_config_path(
 
 /// `mise bootstrap --adopt <url>`: `Some` when the repository is
 /// history-managed and this machine was set up from it (or would be, on a
-/// dry run); `None` leaves the ordinary clone to the caller.
+/// dry run); `None` leaves the ordinary clone to the caller. `branch` is the
+/// one `?ref=` named, else the repository's default branch is probed.
 pub async fn from_git(
     url: &str,
+    branch: Option<&str>,
     yes: bool,
     dry_run: bool,
     replace_history: bool,
     take_remote_all: bool,
 ) -> Result<Option<Outcome>> {
+    // Fail on a credential-bearing URL here: probing treats an unusable URL as
+    // "not a setup repository", which would silently fall back to an ordinary
+    // clone that persists the secret in `.git/config`.
+    super::network::validate_url(url)?;
     // Detect marked repositories without creating persistent tracking state
     // for users of the released, ordinary --adopt workflow.
     let probe_dir = tempfile::tempdir()?;
@@ -164,8 +170,12 @@ pub async fn from_git(
     let repo = store
         .repo()
         .ok_or_else(|| eyre::eyre!("probing a setup repository requires git"))?;
-    let Some(branch) = default_branch(&Remote::new(repo, url))? else {
-        return Ok(None);
+    let branch = match branch {
+        Some(branch) => branch.to_string(),
+        None => match default_branch(&Remote::new(repo, url))? {
+            Some(branch) => branch,
+            None => return Ok(None),
+        },
     };
     if !matches!(probe(&store, url, &branch)?, RepoState::Marked(_)) {
         return Ok(None);

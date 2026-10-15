@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToUpperCamelCase,
 };
+use indexmap::IndexSet;
 use path_absolutize::Absolutize;
 use rand::prelude::*;
 use regex::Regex;
@@ -64,8 +66,10 @@ impl TeraEngine {
             Self::V2(tera) => tera.render_str(input, context, false),
             Self::V1(tera) => {
                 let context = tera1_context(input, context)?;
+                // keep the cause (such as a function's own error) as the
+                // source, which the message alone leaves out
                 tera.render_str(input, &context)
-                    .map_err(|e| tera_err(e.to_string()))
+                    .map_err(|e| tera::Error::chain(e.to_string(), e))
             }
         }
     }
@@ -363,6 +367,8 @@ static TERA: Lazy<Tera> = Lazy::new(|| {
         "os_family",
         move |_: Kwargs, _: &State| -> TeraResult<Value> { Ok(Value::from(env::consts::FAMILY)) },
     );
+    tera.register_function("libc", tera2_variant_fn(host_libc_name));
+    tera.register_function("avx2", tera2_variant_fn(host_avx2_name));
     tera.register_function(
         "choice",
         move |args: Kwargs, _: &State| -> TeraResult<Value> {
@@ -921,6 +927,8 @@ static TERA1: Lazy<tera1::Tera> = Lazy::new(|| {
     tera.register_function("get_env", tera1_get_env(env::PRISTINE_ENV.clone()));
     tera.register_function("arch", tera1_host_fn(host_arch_name));
     tera.register_function("os", tera1_host_fn(|| env::consts::OS));
+    tera.register_function("libc", tera1_variant_fn(host_libc_name));
+    tera.register_function("avx2", tera1_variant_fn(host_avx2_name));
     tera.register_function("os_family", move |_: &HashMap<String, JsonValue>| {
         Ok(json!(env::consts::FAMILY))
     });
@@ -1156,6 +1164,58 @@ static TERA1: Lazy<tera1::Tera> = Lazy::new(|| {
     tera
 });
 
+/// The libc of the host as `libc()` reports it: `musl` or `gnu`.
+fn host_libc_name() -> String {
+    match crate::platform::Platform::current().libc() {
+        Some("musl") => "musl",
+        _ => "gnu",
+    }
+    .to_string()
+}
+
+/// Whether the host CPU has AVX2, as `avx2()` reports it: `yes` or `no`.
+/// Only x86-64 can lack it, so every other CPU reports `yes`.
+fn host_avx2_name() -> String {
+    let avx2 = crate::platform::host_has_avx2();
+    if avx2 { "yes" } else { "no" }.to_string()
+}
+
+/// The `libc()` and `avx2()` values of a lock target, from its platform
+/// qualifier (`musl`, `baseline`, `musl-baseline`).
+fn target_libc_name(qualifier: Option<&str>) -> String {
+    let musl = qualifier.is_some_and(|q| q.split('-').any(|part| part == "musl"));
+    if musl { "musl" } else { "gnu" }.to_string()
+}
+
+fn target_avx2_name(qualifier: Option<&str>) -> String {
+    let baseline = qualifier.is_some_and(|q| q.split('-').any(|part| part == "baseline"));
+    if baseline { "no" } else { "yes" }.to_string()
+}
+
+fn tera2_variant_fn(
+    value: impl Fn() -> String + Send + Sync + 'static,
+) -> impl Fn(Kwargs, &State) -> TeraResult<Value> + Send + Sync + 'static {
+    move |args: Kwargs, _: &State| -> TeraResult<Value> {
+        let value = value();
+        if let Some(remapped) = args.get::<&str>(&value)? {
+            return Ok(Value::from(remapped));
+        }
+        Ok(Value::from(value))
+    }
+}
+
+fn tera1_variant_fn(
+    value: impl Fn() -> String + Send + Sync + 'static,
+) -> impl Fn(&HashMap<String, JsonValue>) -> tera1::Result<JsonValue> + Send + Sync + 'static {
+    move |args| {
+        let value = value();
+        Ok(args
+            .get(&value)
+            .and_then(JsonValue::as_str)
+            .map_or_else(|| json!(value), |remapped| json!(remapped)))
+    }
+}
+
 fn host_arch_name() -> &'static str {
     if cfg!(target_arch = "x86_64") {
         "x64"
@@ -1387,29 +1447,140 @@ fn quote_for_cmd(mut engine: TeraEngine) -> TeraEngine {
     engine
 }
 
-/// Returns the normal mise renderer with command execution disabled.
-pub fn get_tera_for_dry_run(dir: Option<&Path>) -> TeraEngine {
+/// What a dry run makes of a template. See [`render_for_dry_run`].
+#[derive(Debug)]
+pub enum DryRunRender {
+    /// The template rendered with the values the dry run could compute.
+    Rendered(String),
+    /// The template failed to render, and the failure may come from what a
+    /// dry run leaves out: it called `exec()`, or a var was left unresolved.
+    /// A real run decides; the dry run shows the template as written.
+    Unrendered(tera::Error),
+    /// The template failed to render with nothing unresolved and no `exec()`
+    /// call, so a real run fails the same way.
+    Failed(tera::Error),
+}
+
+/// Renders `input` for a dry run.
+///
+/// A dry run never calls exec() and never substitutes made-up values. Hooks
+/// and dry-run vars are rendered with the values the dry run could compute;
+/// vars that need exec() (directly or through another var) are left
+/// undefined. If that render succeeds, the preview shows it. If it fails and
+/// the dry run left any var unresolved or the template called exec(), the
+/// hook is shown unrendered with a note that includes the render error, and
+/// the dry run continues. If it fails with nothing unresolved and no exec()
+/// call, it is an error, as in a real run. While any var is unresolved, a
+/// template that uses the `vars` map as a whole rather than one entry at a
+/// time (`vars | json_encode`, `{% for k, v in vars %}`, `{% set v = vars %}`)
+/// is also shown unrendered, since it would render without the vars the dry
+/// run could not compute.
+///
+/// `context` holds the values the dry run computed, and `unresolved` names
+/// the vars it left out. Known limitation: a template that tolerates an
+/// undefined var (`default`, `is defined`) renders its fallback in the
+/// preview.
+pub fn render_for_dry_run(
+    dir: Option<&Path>,
+    input: &str,
+    context: &Context,
+    unresolved: &IndexSet<String>,
+) -> DryRunRender {
+    if !unresolved.is_empty() && reads_whole_vars_map(input) {
+        let names = unresolved.iter().map(String::as_str).collect::<Vec<_>>();
+        return DryRunRender::Unrendered(tera_err(format!(
+            "the template reads the whole vars map, which leaves out vars the dry run could not compute: {}",
+            names.join(", ")
+        )));
+    }
+    let reached_exec = Arc::new(AtomicBool::new(false));
+    let mut tera = dry_run_tera(dir, reached_exec.clone());
+    match render_str(&mut tera, input, context) {
+        Ok(out) => DryRunRender::Rendered(out),
+        Err(err) if reached_exec.load(Ordering::Relaxed) || !unresolved.is_empty() => {
+            DryRunRender::Unrendered(err)
+        }
+        Err(err) => DryRunRender::Failed(err),
+    }
+}
+
+/// Whether `input` may use the `vars` map as a whole: pass it to a filter or
+/// function, iterate, spread, assign or test it, rather than read one entry
+/// with `vars.NAME` or `vars[...]`.
+///
+/// This deliberately does not parse the template. Any `vars` identifier that is
+/// not followed by `.` or `[` counts, wherever it appears: in a tag, a string,
+/// a comment, a `{% raw %}` block or plain text. Skipping any of those would
+/// need Tera's own parser to get right, and a miss renders a preview without
+/// the unresolved vars, while a false positive only shows it unrendered.
+fn reads_whole_vars_map(input: &str) -> bool {
+    let s = input.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while i < s.len() {
+        if !is_ident(s[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < s.len() && is_ident(s[i]) {
+            i += 1;
+        }
+        // `x.vars` is an attribute, but `...vars` spreads the whole map
+        let attribute = start > 0 && s[start - 1] == b'.' && !s[..start].ends_with(b"...");
+        if &s[start..i] == b"vars" && !attribute {
+            let next = s[i..].iter().find(|b| !b.is_ascii_whitespace());
+            if !matches!(next, Some(b'.' | b'[')) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The messages of `err` and its sources joined with `: `, since a Tera
+/// error's `Display` leaves out the sources that say what went wrong.
+pub fn error_chain(err: &tera::Error) -> String {
+    let mut chain = vec![err.to_string()];
+    let mut source = std::error::Error::source(err);
+    while let Some(err) = source {
+        chain.push(err.to_string());
+        source = err.source();
+    }
+    chain.dedup();
+    chain.join(": ")
+}
+
+/// The normal mise renderer with command execution disabled. A call to
+/// `exec()` fails and sets `reached_exec`.
+fn dry_run_tera(dir: Option<&Path>, reached_exec: Arc<AtomicBool>) -> TeraEngine {
     if use_tera_v1() {
         let mut tera = get_tera_v1(dir);
-        tera.register_function("exec", dry_run_disabled_fn_v1("exec"));
+        tera.register_function("exec", dry_run_disabled_fn_v1("exec", reached_exec));
         TeraEngine::V1(Box::new(tera))
     } else {
         let mut tera = get_tera_v2(dir);
-        tera.register_function("exec", dry_run_disabled_fn("exec"));
+        tera.register_function("exec", dry_run_disabled_fn("exec", reached_exec));
         TeraEngine::V2(Box::new(tera))
     }
 }
 
-fn dry_run_disabled_fn(name: &'static str) -> impl Fn(Kwargs, &State) -> TeraResult<Value> {
+fn dry_run_disabled_fn(
+    name: &'static str,
+    reached: Arc<AtomicBool>,
+) -> impl Fn(Kwargs, &State) -> TeraResult<Value> {
     move |_args: Kwargs, _: &State| -> TeraResult<Value> {
+        reached.store(true, Ordering::Relaxed);
         Err(tera_err(format!("{name}() is disabled during dry run")))
     }
 }
 
 fn dry_run_disabled_fn_v1(
     name: &'static str,
+    reached: Arc<AtomicBool>,
 ) -> impl Fn(&HashMap<String, JsonValue>) -> tera1::Result<JsonValue> {
     move |_args: &HashMap<String, JsonValue>| -> tera1::Result<JsonValue> {
+        reached.store(true, Ordering::Relaxed);
         Err(tera1_err(format!("{name}() is disabled during dry run")))
     }
 }
@@ -1422,7 +1593,12 @@ fn dry_run_disabled_fn_v1(
 /// `arch` a platform arch name (e.g. "x64", "arm64"), matching the values
 /// returned by the host-bound functions. Remap arguments such as
 /// `os(macos="darwin")` and `arch(x64="amd64")` keep the same semantics.
-pub fn get_tera_for_target(dir: Option<&Path>, os: &str, arch: &str) -> TeraEngine {
+pub fn get_tera_for_target(
+    dir: Option<&Path>,
+    os: &str,
+    arch: &str,
+    qualifier: Option<&str>,
+) -> TeraEngine {
     // os_family() must follow the target too, not the host.
     let family = if os == "windows" { "windows" } else { "unix" };
     if use_tera_v1() {
@@ -1444,6 +1620,10 @@ pub fn get_tera_for_target(dir: Option<&Path>, os: &str, arch: &str) -> TeraEngi
         tera.register_function("os_family", move |_: &HashMap<String, JsonValue>| {
             Ok(json!(family))
         });
+        let libc = target_libc_name(qualifier);
+        tera.register_function("libc", tera1_variant_fn(move || libc.clone()));
+        let avx2 = target_avx2_name(qualifier);
+        tera.register_function("avx2", tera1_variant_fn(move || avx2.clone()));
         TeraEngine::V1(Box::new(tera))
     } else {
         let mut tera = get_tera_v2(dir);
@@ -1471,6 +1651,11 @@ pub fn get_tera_for_target(dir: Option<&Path>, os: &str, arch: &str) -> TeraEngi
             move |_: Kwargs, _: &State| -> TeraResult<Value> { Ok(Value::from(family)) },
         );
 
+        let libc = target_libc_name(qualifier);
+        tera.register_function("libc", tera2_variant_fn(move || libc.clone()));
+        let avx2 = target_avx2_name(qualifier);
+        tera.register_function("avx2", tera2_variant_fn(move || avx2.clone()));
+
         TeraEngine::V2(Box::new(tera))
     }
 }
@@ -1489,6 +1674,8 @@ pub fn get_tera_preserving_os_arch(dir: Option<&Path>) -> TeraEngine {
         tera.register_function("os", reemit_template_fn_v1("os"));
         tera.register_function("arch", reemit_template_fn_v1("arch"));
         tera.register_function("os_family", reemit_template_fn_v1("os_family"));
+        tera.register_function("libc", reemit_template_fn_v1("libc"));
+        tera.register_function("avx2", reemit_template_fn_v1("avx2"));
         TeraEngine::V1(Box::new(tera))
     } else {
         let mut tera = get_tera_v2(dir);
@@ -1498,6 +1685,8 @@ pub fn get_tera_preserving_os_arch(dir: Option<&Path>) -> TeraEngine {
         // resolving it against the host here would bake e.g. "unix" into a template
         // that is later rendered for a windows target.
         tera.register_function("os_family", reemit_template_fn("os_family"));
+        tera.register_function("libc", reemit_template_fn("libc"));
+        tera.register_function("avx2", reemit_template_fn("avx2"));
         TeraEngine::V2(Box::new(tera))
     }
 }

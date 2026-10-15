@@ -11,24 +11,36 @@ description: "将文件恢复到检查点所保存的版本"
 
 将文件恢复到检查点所保存的版本
 
-不使用 `--to` 时，每个路径都会恢复到最近一次保存的、与磁盘上内容不同的版本；无关的检查点不会影响选择。使用 `--to <ref>` 时，指定的检查点将作为来源，而 `--all` 会选择该检查点涵盖的所有内容。当前状态会先保存到一个保护性检查点中，因此可以使用 `mise dot undo` 撤销此操作。
+Without `--to`, each path returns to its most recent saved version that differs from what is on disk; other checkpoints do not affect the choice. With `--to REF`, the named checkpoint is the source, and `--all` restores everything it covers. mise saves the current state in a checkpoint first, so `mise dot undo` can reverse the rollback.
 
 ## 参数
 - **`[PATH]…`** — 要回滚的路径（文件或目录）
 
-## 标志
-- **`--to <REF>`** — 要回滚到的检查点：数字 ID、`latest`、`latest~N` 或 `commit:<sha>`
-- **`--all`** — 与 --to 一起使用：检查点涵盖的所有内容
-- **`-n --dry-run`** — 显示计划，但不进行任何更改
-- **`-y --yes`** — 无需提示直接应用
-- **`--force`** — 替换类型发生变化的路径（文件、符号链接、目录）
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--to <REF>`** — The checkpoint to roll back to: numeric ID, `latest`, `latest~N`, or `commit:<sha>`
+- **`--all`** — With `--to`, restore everything the checkpoint covers
+- **`-n --dry-run`** — Show the plan without changing anything
+- **`-y --yes`** — Apply without prompting
+- **`--force`** — Replace a path whose type changed (file, symlink, directory)
+- **`-h --help`** — Print help
 
-示例：
+## Examples
+
+Restore the latest saved version that differs from the file
 
 ```
 mise dot rollback ~/.config/hypr/bindings.lua
+```
+
+Restore ~/.zshrc as checkpoint 42 holds it
+
+```
 mise dot rollback ~/.zshrc --to 42
+```
+
+Preview restoring every file from three checkpoints ago
+
+```
 mise dot rollback --to latest~3 --all --dry-run
 ```
 
@@ -36,6 +48,6 @@ mise dot rollback --to latest~3 --all --dry-run
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

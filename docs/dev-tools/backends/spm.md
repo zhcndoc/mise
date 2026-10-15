@@ -1,188 +1,205 @@
 ---
-description: "从 GitHub 或 GitLab 发布版本中安装 Swift Package Manager 可执行文件。"
+description: "Install Swift package executables from GitHub or GitLab, from an artifact bundle or a source build."
 ---
 
-# SPM 后端
+# spm backend
 
-你可以直接从 GitHub 或 GitLab 的发布版本中安装由 [Swift Package Manager](https://www.swift.org/documentation/package-manager) 管理的可执行文件。
+The `spm` backend installs command-line executables from
+[Swift Package Manager](https://www.swift.org/documentation/package-manager)
+packages hosted on GitHub or GitLab. It uses a prebuilt artifact bundle from the
+release when one matches your platform, and otherwise builds the package from
+source with `swift build`.
 
-此后端的代码位于 mise repository 的 [`./src/backend/spm.rs`](https://github.com/jdx/mise/blob/main/src/backend/spm.rs) 中。
+## Requirements {#dependencies}
 
-当某个发布版本提供 SwiftPM artifact bundle（`*.artifactbundle.zip`）时，如果该资源包与当前 Swift target triple 匹配，mise 会使用其中预构建的可执行文件。如果没有可匹配的资源包，除非明确要求使用 artifact bundle，否则 mise 会回退为从源代码构建软件包。
-
-## 依赖项
-
-此后端即使在使用 artifact bundle 时也需要 Swift，因为 mise 需要 Swift 提供 target triple。从源代码构建还需要 Git 和软件包的构建依赖项。你可以[手动安装](https://www.swift.org/install)，也可以[使用 mise 安装](/lang/swift)。
-
-> [!NOTE]
-> 如果你已经安装了 Xcode，并且通过 `xcode-select` 在系统中选择了它，那么 Swift 已经可以通过 Xcode 安装中内置的工具链使用。
+This backend needs Swift, even for artifact bundles, because mise asks Swift for
+the target triple. Install Swift [manually](https://www.swift.org/install) or
+[with mise](/lang/swift.html). On macOS, the toolchain in Xcode works when Xcode
+is selected with `xcode-select`. Source builds also need Git and the package's
+own build dependencies.
 
 ## 用法
 
-在具备所需 Swift 工具链的情况下，在 macOS 上将 Tuist 安装到当前项目中：
+Install SwiftFormat in the current project, then run it:
 
 ```sh
-mise use spm:tuist/tuist
-mise exec -- tuist --help
+mise use spm:nicklockwood/SwiftFormat
+mise exec -- swiftformat --version
 ```
 
-这会将以下内容写入 `mise.toml`。添加 `-g` 以用于全局配置。
-从源代码构建前，请检查软件包所需的 Swift/Xcode 版本。
+This writes the following to `mise.toml`. Add `-g` for a global tool.
 
 ```toml
 [tools]
-"spm:tuist/tuist" = "latest"
+"spm:nicklockwood/SwiftFormat" = "latest"
 ```
 
-如果发布版本只提供了一个 SwiftPM 资源包，mise 可以直接安装该资源包：
+SwiftFormat's releases include `swiftformat.artifactbundle.zip`. When the bundle
+has an executable for your Swift target triple, mise installs it; otherwise mise
+builds the package from source. Check the package's required Swift or Xcode
+version before a source build.
+
+A package can also ship only an artifact bundle:
 
 ```sh
 mise use spm:giginet/swift-testing-revolutionary@0.4.0
 mise exec -- swift-testing-revolutionary --help
 ```
 
-项目配置如下：
+Versions are release tags exactly as published, so
+`mise ls-remote spm:owner/repo` shows `v1.2.0` for a repository that tags
+`v1.2.0`. Both `@1.2.0` and `@v1.2.0` resolve to that tag.
+
+### Supported syntax
+
+| Form                                    | Example                                                      |
+| --------------------------------------- | ------------------------------------------------------------ |
+| GitHub shorthand                        | `spm:nicklockwood/SwiftFormat`                               |
+| GitHub shorthand with a release version | `spm:nicklockwood/SwiftFormat@0.63.1`                        |
+| GitHub URL                              | `spm:https://github.com/nicklockwood/SwiftFormat.git`        |
+| GitHub URL with a release version       | `spm:https://github.com/nicklockwood/SwiftFormat.git@0.63.1` |
+| GitLab URL                              | `spm:https://gitlab.com/owner/repo.git`                      |
+| Self-hosted URL                         | `spm:https://git.example.com/owner/repo.git`                 |
+| A specific commit                       | `spm:owner/repo@rev:<commit>`                                |
+| A specific commit, by URL               | `spm:https://github.com/owner/repo.git@rev:<commit>`         |
+
+A shorthand means GitHub unless the tool sets [`provider = "gitlab"`](#provider).
+A `gitlab.com` URL always uses GitLab. For a self-hosted URL, mise derives the
+API URL from the host; set `provider = "gitlab"` when the server runs GitLab.
+
+A commit selector (`rev:<commit>`, or the equivalent `ref:<commit>`) always
+builds from source. Use a full commit SHA for a reproducible installation.
+Artifact bundles are release assets, so they cannot be combined with a commit
+selector.
+
+## Tool options
+
+### `install_env` {#install-env}
+
+Environment variables for the Swift commands mise runs, such as
+`swift package dump-package`, `swift -print-target-info` and `swift build`. For
+an artifact bundle install, they reach only `swift -print-target-info`; mise
+downloads, extracts and links the bundle itself. On macOS, select the Xcode
+developer directory for a system Swift toolchain:
 
 ```toml
 [tools]
-"spm:giginet/swift-testing-revolutionary" = "0.4.0"
-```
-
-### 支持的语法
-
-| 描述                                           | 用法                                                 |
-| --------------------------------------------- | ---------------------------------------------------- |
-| GitHub 最新发布版本的简写                     | `spm:tuist/tuist`                                    |
-| GitHub 特定发布版本的简写                     | `spm:tuist/tuist@4.15.0`                             |
-| GitHub 最新发布版本的 URL                     | `spm:https://github.com/tuist/tuist.git`             |
-| GitHub 特定发布版本的 URL                     | `spm:https://github.com/tuist/tuist.git@4.15.0`      |
-| GitHub 特定提交的简写                         | `spm:owner/repo@rev:<commit>`                        |
-| GitHub 特定提交的 URL                         | `spm:https://github.com/owner/repo.git@rev:<commit>` |
-
-其他语法可能可用，但不受支持且未经测试。
-
-提交选择器（`rev:<commit>` 和兼容的 `ref:<commit>` 形式）始终会从源代码构建资源包。要实现可复现的安装，请使用完整的提交 SHA。资源包归档是发布资源，不能与提交选择器结合使用。
-
-## 工具选项
-
-以下 [工具选项](/dev-tools/#tool-options) 适用于后端——这些
-放在 `mise.toml` 的 `[tools]` 中。
-
-### `install_env`
-
-为 Swift Package Manager 命令设置环境变量，例如
-`swift package dump-package`、`swift -print-target-info` 和 `swift build`。
-对于 artifact bundle 安装，此选项仅适用于
-`swift -print-target-info`；下载、提取和符号链接步骤由 mise 直接处理。在 macOS
-上，对于系统 Swift 工具链，使用以下配置选择 Xcode 开发者目录：
-
-```toml
-[tools]
-"spm:tuist/tuist" = { version = "latest", install_env = { DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer" } }
+"spm:nicklockwood/SwiftFormat" = { version = "latest", install_env = { DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer" } }
 ```
 
 ### `provider`
 
-设置用于获取资源和发布信息的提供者类型。可以是 `github` 或 `gitlab`（默认为 `github`）。
-如果你在自托管仓库中使用带有 `api_url` 的简写形式，请明确设置 `provider`，
-因为通常无法从 URL 推导出类型。
+The forge that hosts the package: `github` (the default) or `gitlab`. Set it for
+a GitLab shorthand or a self-hosted GitLab URL.
 
 ```toml
 [tools]
 "spm:patricklorran/ios-settings" = { version = "latest", provider = "gitlab" }
 ```
 
-### `api_url`
+### `api_url` {#api-url}
 
-设置提供者 API 的 URL。在使用自托管实例时，这很有用。
+The provider's API URL. For a self-hosted package, write the full package URL,
+so that source builds clone from that server. mise derives the API URL from its
+host, `https://<host>/api/v3` for GitHub or `https://<host>/api/v4` for GitLab;
+set `api_url` when the API lives somewhere else:
 
 ```toml
 [tools]
-"spm:acme/my-tool" = { version = "latest", provider = "gitlab", api_url = "https://gitlab.acme.com/api/v4" }
+"spm:https://git.acme.com/acme/my-tool.git" = { version = "latest", provider = "gitlab", api_url = "https://git.acme.com/gitlab/api/v4" }
+```
+
+A package given as `owner/repo` clones from the host of `api_url`: mise drops
+an `/api/v3` or `/api/v4` suffix, turns a GitHub `https://api.<host>` into
+`https://<host>`, and leaves out any credentials in the URL. Any other
+`api_url`, such as a proxy of the public API, still clones from github.com or
+gitlab.com, so write the full repository URL instead:
+
+```toml
+[tools]
+"spm:acme/SwiftTool" = { version = "1.2.0", api_url = "https://github.acme.com/api/v3" } # clones https://github.acme.com/acme/SwiftTool.git
 ```
 
 ### `artifactbundle`
 
-控制是否使用 SwiftPM artifact bundle。未设置时，mise 会先尝试匹配
-`*.artifactbundle.zip` 的发布资源；如果没有匹配的 bundle，则回退为从源代码构建。
-
-将 `artifactbundle = true` 设为某个工具必需使用 artifact bundle。如果没有 bundle 匹配
-当前 Swift target triple，则安装会失败，而不是回退到源代码构建。
-
-将 `artifactbundle = false` 设为跳过 artifact bundle，并始终从源代码构建。
+Whether to use SwiftPM artifact bundles. When it is unset, mise tries a matching
+`*.artifactbundle.zip` release asset first and builds from source if none
+matches. Set `artifactbundle = true` to require a bundle: the install fails when
+no bundle matches the current Swift target triple. Set `artifactbundle = false`
+to always build from source; it conflicts with the
+[`spm.artifactbundle_only`](/configuration/settings.html#spm.artifactbundle_only) setting.
 
 ```toml
 [tools]
 "spm:giginet/swift-testing-revolutionary" = { version = "0.4.0", artifactbundle = true }
-"spm:tuist/tuist" = { version = "latest", artifactbundle = false }
+"spm:nicklockwood/SwiftFormat" = { version = "latest", artifactbundle = false }
 ```
 
-### `artifactbundle_asset`
+### `artifactbundle_asset` {#artifactbundle-asset}
 
-选择特定的 artifact bundle 发布资源。当某个发布包含多个
-`*.artifactbundle.zip` 资源时，这是必需的。
+The artifact bundle to use when a release has several `*.artifactbundle.zip`
+assets. Setting it also requires a bundle, as `artifactbundle = true` does.
 
 ```toml
 [tools]
 "spm:giginet/swift-testing-revolutionary" = { version = "0.4.0", artifactbundle_asset = "swift-testing-revolutionary.artifactbundle.zip" }
 ```
 
-### `filter_bins`
+### `filter_bins` {#filter-bins}
 
-限制从包或 artifact bundle 中安装哪些可执行产品。未设置时，
-`Package.swift` 中声明的每个可执行产品都会被构建并符号链接到 `bin/`，或者 artifact bundle 中每个
-匹配的可执行资源都会被符号链接到 `bin/`。
+The executable products to install. When it is unset, mise builds and links
+every executable product declared in `Package.swift`, or links every matching
+executable from an artifact bundle. Use it when a package ships helper
+executables, such as test harnesses, that you do not want on `PATH`. For source
+builds, mise filters before `swift build`, so it never builds the other
+products.
 
-这对那些会附带辅助可执行文件（例如测试运行器）且你不希望它们出现在
-`PATH` 中的包很有用。对于源代码构建，过滤会在 `swift build` 之前进行，因此不需要的产品永远不会
-被构建。
-
-接受 TOML 数组或逗号分隔字符串。如果列出的任何名称与包中的可执行
-产品不匹配，安装将以清晰的错误失败。
+The value is an array or a comma-separated string. The install fails when a
+name does not match an executable product.
 
 ```toml
 [tools]
 "spm:swiftlang/swiftly" = { version = "latest", filter_bins = ["swiftly"] }
-# Equivalent string form:
-# "spm:swiftlang/swiftly" = { version = "latest", filter_bins = "swiftly" }
 ```
 
-### `install_command`
+### `install_command` {#install-command}
 
-从已检出的软件包目录中运行显式命令，而不是发现可执行产品并运行 `swift build --product`。该命令使用 mise 的默认内联 shell，并继承 [`install_env`](/dev-tools/backends/spm.html#install-env) 以及 Swift 依赖项的 `PATH`。`PREFIX` 和
-`MISE_TOOL_INSTALL_PATH` 都会设置为工具的安装目录。
+A command to run in the checked-out package directory instead of discovering
+executable products and running `swift build --product`. It runs with mise's
+default inline shell and gets [`install_env`](#install-env), the Swift that mise
+manages on `PATH`, and `PREFIX` and `MISE_TOOL_INSTALL_PATH` set to the install
+directory. It applies
+only to source builds and cannot be combined with `filter_bins`. mise never runs
+a package's Makefile or install script unless you configure it here.
 
-此选项仅适用于源代码安装，不能与 `filter_bins` 结合使用。mise 永远不会
-自动运行软件包的 Makefile 或其他安装脚本；必须显式配置该命令。
-
-适用于可执行文件并非唯一需要安装的产物的包——例如某个包还附带动态库或 Swift 模块，
-其自身的 `make install` 目标会将这些文件放置在二进制文件旁边：
+Use it for packages that install more than the executable, such as a dynamic
+library or Swift modules placed by the package's own `make install`:
 
 ```toml
 [tools]
 "spm:owner/repo" = { version = "1.2.3", artifactbundle = false, install_command = "make install PREFIX=\"$MISE_TOOL_INSTALL_PATH\"" }
 ```
 
-有些安装脚本即使底层的 `swift build` 失败也会成功退出，因此 mise
-会验证该命令是否至少将一个可执行文件安装到了 `bin/` 中；否则安装将失败。
+Some install scripts exit successfully even when `swift build` failed, so mise
+checks that the command put at least one executable in `bin/` and fails the
+install otherwise.
 
 ## 设置
 
-### `spm.artifactbundle_only`
+<script setup>
+import Settings from '/components/settings.vue';
+</script>
 
-将 `spm.artifactbundle_only = true` 设置为要求所有 `spm:` 安装都使用 SwiftPM artifact bundle。
-这与 `cargo.binstall_only` 的行为一致：如果没有可匹配的 artifact bundle，mise 会失败，
-而不是从源代码编译。
-
-```toml
-[settings]
-spm.artifactbundle_only = true
-```
-
-也可以通过 `MISE_SPM_ARTIFACTBUNDLE_ONLY=1` 设置。
+<Settings child="spm" :level="3" />
 
 ## 故障排除
 
-- **没有匹配的 artifact bundle：** 检查 Swift target triple。仅当软件包支持你的主机且已安装其构建前置条件时，才允许从源代码构建。
-- **意外进行编译：** 当缺少预构建 bundle 时应失败而不是触发源代码构建，请设置 `artifactbundle = true`。
-- **没有可执行产品：** 确认软件包发布了 CLI，检查 `filter_bins`，或者在项目具有自定义安装流程时使用显式的 `install_command`。
+| Problem                               | What to check                                                                                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| No matching artifact bundle           | The Swift target triple. Allow a source build only if the package supports your host and its build prerequisites are installed.                 |
+| An unexpected source build            | Set `artifactbundle = true` so that a missing bundle fails the install.                                                                         |
+| Several artifact bundles              | Set `artifactbundle_asset` to choose one.                                                                                                       |
+| No executable products                | That the package publishes a command-line tool, the `filter_bins` names, or an `install_command` for a custom installation.                     |
+| `latest` resolves to an unrelated tag | Repositories that release several products tag each one, and mise lists tags exactly as published. Pin a version, as in `spm:owner/repo@1.2.0`. |
+
+Implementation: [`src/backend/spm.rs`](https://github.com/jdx/mise/blob/main/src/backend/spm.rs).

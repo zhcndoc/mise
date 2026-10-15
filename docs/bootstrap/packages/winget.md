@@ -1,10 +1,11 @@
 ---
-description: 在 mise bootstrap 期间使本地 Windows 软件包与 WinGet 保持一致
+description: "Install and upgrade Windows packages with WinGet from mise.toml, including version pins."
 ---
 
-# WinGet
+# WinGet packages (winget)
 
-通过 Windows Package Manager CLI 管理 Windows 应用程序和软件包。
+The `winget` manager installs and upgrades Windows packages with the Windows
+Package Manager, `winget`.
 
 ```toml
 [bootstrap.packages]
@@ -12,28 +13,56 @@ description: 在 mise bootstrap 期间使本地 Windows 软件包与 WinGet 保�
 "winget:Microsoft.PowerToys" = "0.101.0"
 ```
 
-使用 `winget search` 显示的软件包标识符，而不是显示名称。mise 会将该标识符与 `--id` 和 `--exact` 一起传递给 WinGet，因此 bootstrap 永远不会接受含糊的模糊匹配。
-
-WinGet 软件包 ID 不区分大小写；请保持拼写一致，以避免[声明冲突](/bootstrap/packages/#semantics)。
-
-## 命令
-
 ```sh
-mise bootstrap packages use winget:BurntSushi.ripgrep.MSVC
-mise bootstrap packages status
+mise bootstrap packages apply --manager winget --dry-run
 mise bootstrap packages apply --manager winget
-mise bootstrap packages apply --manager winget --update
-mise bootstrap packages upgrade --manager winget
 ```
 
-`mise bootstrap packages status` 会运行 `winget list --id <ID> --exact`，并将已安装版本与可选的固定版本作为不透明字符串进行比较。`"latest"` 会被任何已安装版本视为满足；使用升级命令可将其更新到已配置的 WinGet 源中提供的最新版本。
+## Prerequisites
 
-应用和升级操作会在禁用交互的静默模式下运行，并接受 WinGet 提供的软件包和源协议。安装程序仍可能需要通过 UAC 提升 Windows 权限。mise 不会绕过 UAC，也不会尝试自行提升 WinGet 进程的权限，并会原样传递 WinGet 的失败信息。
+The manager is available on Windows when `winget.exe` is on `PATH`. On other
+machines, `winget:` entries show as
+[`skipped`](/bootstrap/packages/#choose-platforms), so one config can hold
+packages for several platforms.
 
-`--update` 会在应用缺失软件包前刷新 WinGet 源。升级操作始终会先刷新源。初始 WinGet 集成不支持声明式移除、软件包导入和清理。
+Installs and upgrades run silently with interaction disabled, and mise accepts
+the package and source agreements that WinGet presents. An installer may still
+ask for elevation through a UAC prompt. mise does not bypass UAC or elevate
+WinGet itself, and it reports WinGet failures unchanged.
 
-## 可用性和范围
+[`mise bootstrap remote`](/bootstrap/remote.html) needs a POSIX shell on the
+target and cannot drive a native Windows host, so run `mise bootstrap` on the
+Windows machine itself. For Scoop apps, use the
+[`scoop`](/bootstrap/packages/scoop.html) manager. Chocolatey is not supported.
 
-该管理器仅在 `winget.exe` 位于 `PATH` 中的 Windows 上可用。共享配置可以包含 `winget:` 条目以及 Linux 或 macOS 软件包条目；不可用的管理器会被报告为已跳过，不会阻止其他平台的 bootstrap。
+## Package names
 
-此支持仅适用于运行 `mise bootstrap` 的 Windows 本地计算机。[`mise bootstrap remote`](/bootstrap/remote.html) 仍需要 POSIX shell 目标；原生 Windows SSH/PowerShell 目标尚不支持。Scoop 软件包有自己的 [`scoop`](/bootstrap/packages/scoop.html) 管理器；不支持 Chocolatey。
+Use the package ID that `winget search` shows, not its display name. mise
+passes the ID with `--id` and `--exact`, so it never accepts a fuzzy match.
+WinGet IDs are case-insensitive; spell each ID the same way everywhere to avoid
+[conflicting declarations](/bootstrap/packages/#semantics).
+
+## Version pins
+
+mise passes a pin to WinGet as `--version` for both `apply` and `upgrade`. It
+must match WinGet's version string exactly. Run
+`winget show --id Microsoft.PowerToys --versions` to list the available
+versions. A `"latest"` entry is satisfied by any installed version; use
+`upgrade` to move it to the newest.
+
+## What mise runs
+
+| Operation             | Command                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| Check installed state | `winget list --id <id> --exact`                                     |
+| Install               | `winget install --id <id> --exact [--version <pin>] --silent ...`   |
+| `apply --update`      | `winget source update` first                                        |
+| Upgrade               | `winget source update`, then `winget upgrade --id <id> --exact ...` |
+
+mise runs WinGet once per package.
+
+## Remove packages
+
+mise does not support `state = "absent"`, `import`, or `prune` for WinGet
+packages. Deleting an entry leaves the package installed; run
+`winget uninstall` yourself.

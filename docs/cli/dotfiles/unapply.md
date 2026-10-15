@@ -1,5 +1,5 @@
 ---
-description: "移除从 `[dotfiles]` 应用的点文件"
+description: "Remove files that `mise dot apply` deployed"
 ---
 
 <!-- 由 usage-cli 根据用法规范生成 -->
@@ -9,33 +9,52 @@ description: "移除从 `[dotfiles]` 应用的点文件"
 - **影响：** 破坏性操作——可能删除或不可逆地覆盖内容
 - **源代码：** [`src/cli/dotfiles/unapply.rs`](https://github.com/jdx/mise/blob/main/src/cli/dotfiles/unapply.rs)
 
-移除从 `[dotfiles]` 应用的点文件
+Remove files that `mise dot apply` deployed
 
-移除已配置的整个文件条目和编辑内容，同时保留
-mise 无法识别为受管理的文件。修改后的副本、模板和纯行
-编辑需要使用 `--force`。源文件和配置条目会保留。
-在删除声明之前运行此命令，以便 mise 仍能识别其目标。
+Removes the targets of whole-file entries and the blocks and lines that edit entries added, but only what mise can identify as its own. Modified copies, modified templates, and plain-line edits need `--force`. Merged keys, `absent` entries, and permissions-only targets are left alone. Sources and config entries are kept, so run this before you delete a declaration, while mise can still identify its targets.
 
-使用 `--group` 时，只移除该点文件组的文件，使用 mise 应用时记录的信息，因此即使该组已取消选中或从配置中删除也能工作。
+With `--group`, removes only that dotfile group's files, using what mise recorded when it applied them, so it works even after the group is deselected or deleted from the config.
 
 ## 参数
 - **`[TARGET]…`** —— 仅取消应用这些目标
 
-## 标志
-- **`-f --force`** —— 移除已修改或其他存在歧义的受管理文件和行
-- **`-n --dry-run`** —— 输出将执行的操作，但不写入任何内容
-- **`-y --yes`** —— 跳过确认提示
-- **`--group <NAME>`** —— 仅取消应用此点文件组的文件，即使该组已不再选中或声明
-- **`--prompt-secrets`** —— 安全地提示输入缺失的引导秘密输入
-- **`-h --help`** —— 输出帮助信息
+## Flags
+- **`-f --force`** — Remove modified or otherwise ambiguous managed files and lines
+- **`-n --dry-run`** — Print the actions that would run without writing anything
+- **`-y --yes`** — Skip the confirmation prompt
+- **`--group <NAME>`** — Only unapply the files of this dotfile group, even one that is no longer selected or declared
+- **`--prompt-secrets`** — Prompt for `[bootstrap.secrets]` values that templates need and the environment does not set
+- **`-h --help`** — Print help
 
 ## 示例
 
+Remove every target mise can identify
+
 ```
 mise dot unapply
+```
+
+Remove one target
+
+```
 mise dot unapply ~/.zshrc
+```
+
+Remove one dotfile group's files
+
+```
 mise dot unapply --group work
+```
+
+Preview what would be removed
+
+```
 mise dot unapply --dry-run
+```
+
+Also remove modified targets, without prompting
+
+```
 mise dot unapply --force --yes
 ```
 
@@ -43,6 +62,6 @@ mise dot unapply --force --yes
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles](/dotfiles.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

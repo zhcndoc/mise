@@ -12,56 +12,62 @@ description: "生成 shell 补全内容"
 
 生成 shell 补全内容。
 
-## 参数
-- **`[SHELL]`** — 要为其生成补全内容的 Shell 类型
+Prints a completion script for SHELL, or with --install writes it where that
+shell loads completions from. The script asks mise for candidates as you type,
+so it also completes your project's task names and tool versions. See
+<https://mise.jdx.dev/shell-setup.html#autocompletion>.
+
+## Arguments
+- **`[SHELL]`** — Shell type to generate completions for (required)
 
   **可选项：** `bash`、`fish`、`powershell`、`zsh`、`pwsh`
 
-## 标志
-- **`--include-bash-completion-lib`** — 为兼容较旧的补全生成器而保留。
+## Flags
+- **`--install`** — Install the script where this shell looks for it, instead of printing it
 
-  usage-rs 的内置 bash 脚本是自包含的，因此现在此选项不执行任何操作。
-- **`--install`** — 将脚本安装到此 shell 查找它的位置，而不是打印脚本
-
-  只写入脚本文件，不执行其他操作：不会修改 shell rc 文件，也不会修改 PowerShell 配置文件。对于需要一次性添加专属配置行的 shell——zsh 的 `fpath+=`、PowerShell 的点源命令——会将其打印出来供你添加。
+  It writes only the script file, never a shell startup file or PowerShell
+  profile. If your shell needs a one-time setup line, such as zsh's `fpath+=`
+  or PowerShell's dot-source, mise prints it for you to add.
 
   **效果：** 修改状态
 - **`--force`** — 替换目标路径中不是由 mise 写入的文件
 
-  **效果：** 修改状态
-- **`--tool <TOOL>`** — 从安装它的 packslip 中获取某个工具的补全，而不是 mise 自身的补全
+  **Effect:** modifies state
+- **`--tool <TOOL>`** — Generate completions for a tool installed with the `packslip:` backend
 
-  NAME 是一个使用 `packslip:` 后端安装的工具，或其可执行文件之一。脚本来自此处处于活动状态的版本，并取自其 packslip 所提供的最可验证来源：供应商提供的文件、根据其 CLI 规范生成的脚本，或该工具自身的命令。使用 `--install` 时，写入的是一个小型存根，每次 shell 为该工具执行补全时都会请求 mise 提供脚本，因此无需重写即可跟随版本切换。
-- **`-h --help`** — 打印帮助
+  TOOL is the tool or one of its executables; with --install, pass the
+  executable's name. The script matches the version active in the current
+  directory and comes from the most verifiable source its packslip offers: a
+  file the vendor shipped, a script derived from its CLI spec, or a command of
+  the tool's own. With --install, mise writes a small stub that asks mise for
+  the script each time the shell completes the tool, so it follows version
+  changes without being rewritten.
+- **`-h --help`** — Print help
 
 ## 示例
 
-为你的 shell 安装；遵循打印出的任何一次性设置说明
+Install completions for zsh; bash, fish, and powershell work the same way
 
 ```
 mise completion zsh --install
-mise completion bash --install
-mise completion fish --install
-mise completion powershell --install
 ```
 
-打印补全脚本，以便检查或保存到自定义路径
+Print the script to inspect it or save it somewhere else
 
 ```
 mise completion zsh
 ```
 
-对于通过 Packslip 安装且包含补全资源的工具
+Install completions for hk, a tool installed with the packslip backend
 
 ```
-mise completion zsh --tool rg
-mise completion zsh --tool rg --install
+mise completion zsh --tool hk --install
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [Shell 补全](/dev-tools/packslip-resources.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Shell completions](/shell-setup.html#autocompletion).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

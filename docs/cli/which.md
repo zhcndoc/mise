@@ -11,29 +11,36 @@ description: "显示工具的可执行文件解析到的路径"
 
 显示工具的可执行文件解析到的路径
 
-可用它来确定当前激活的是哪个版本的工具。
+Prints the real path of the executable mise would run for BIN_NAME in the
+current directory, bypassing shims. Use `--version` or `--plugin` to see
+which tool version provides it.
 
 ## 参数
 - **`[BIN_NAME]`** — 要查找的可执行文件
 
-## 标志
-- **`-t --tool <TOOL@VERSION>`** — 使用指定的 tool@version
-  例如：`mise which npm --tool=node@20`
-- **`--plugin`** — 显示插件名称，而不是路径
-- **`--version`** — 显示版本，而不是路径
-- **`-h --help`** — 打印帮助
+## Flags
+- **`-t --tool <TOOL@VERSION>`** — Look in a specific tool version, such as `mise which npm --tool=node@20`
+- **`--plugin`** — Show the name of the tool that provides the executable
+- **`--version`** — Show the version instead of the path
+- **`-h --help`** — Print help
 
 ## 示例
 
+Show the path of the node executable
+
 ```
 mise which node
-/home/username/.local/share/mise/installs/node/20.0.0/bin/node
+~/.local/share/mise/installs/node/20.0.0/bin/node
 ```
+
+Show the tool that provides it
 
 ```
 mise which node --plugin
 node
 ```
+
+Show the version that provides it
 
 ```
 mise which node --version

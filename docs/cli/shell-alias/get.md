@@ -19,6 +19,8 @@ description: "显示 shell 别名对应的命令"
 
 ## 示例
 
+Print the command that ll runs
+
 ```
 mise shell-alias get ll
 ls -la

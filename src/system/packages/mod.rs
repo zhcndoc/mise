@@ -1,4 +1,4 @@
-//! Host package managers (apk, apt, aur, brew, brew-cask, flatpak, flatpak-user, macos-app, mas, scoop, winget, zypper) for the `[bootstrap.packages]` config section.
+//! Host package managers (apk, apt, aur, brew, brew-cask, flatpak, flatpak-user, macos-app, mas, scoop, snap, winget, zypper) for the `[bootstrap.packages]` config section.
 //!
 //! These are host-owned, unversioned packages — deliberately separate from
 //! the `Backend` system, which manages per-project, version-pinned dev tools.
@@ -12,16 +12,19 @@ use crate::system::ManagerPackageOptions;
 
 pub(crate) mod apk;
 pub(crate) mod apt;
+pub mod apt_sources;
 pub(crate) mod aur;
 #[cfg(unix)]
 pub mod brew;
 pub(crate) mod dnf;
+pub mod dnf_repos;
 pub(crate) mod flatpak;
 pub(crate) mod mas;
 pub mod nix;
 pub(crate) mod pacman;
 pub mod plugin;
 pub(crate) mod scoop;
+pub mod snap;
 pub(crate) mod winget;
 pub(crate) mod zypper;
 
@@ -147,6 +150,9 @@ pub struct InstallOpts {
     pub dry_run: bool,
     /// force a package manager metadata refresh before installing
     pub update: bool,
+    /// ask before changes the package prompt does not cover, such as
+    /// adding `[bootstrap.apt.sources]` or `[bootstrap.dnf.repos]`
+    pub ask: bool,
 }
 
 // `?Send`: the brew manager's source-build path drives the toolset
@@ -177,6 +183,18 @@ pub trait SystemPackageManager: Send + Sync {
 
     /// Query installed state. Must be side-effect free and never elevate.
     async fn installed(&self, pkgs: &[PackageRequest]) -> Result<Vec<PackageStatus>>;
+
+    /// Bring the repositories this manager installs from to their declared
+    /// state, before installed state is queried. Runs for dry runs too, which
+    /// print what would change. apt declares them in `[bootstrap.apt.sources]`
+    /// and dnf in `[bootstrap.dnf.repos]`.
+    async fn apply_sources(
+        &self,
+        _manager_options: &ManagerPackageOptions,
+        _opts: &InstallOpts,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     /// Prepare for a mutating package operation before querying installed state.
     ///
@@ -368,6 +386,7 @@ pub(crate) fn builtin_managers() -> Vec<Arc<dyn SystemPackageManager>> {
         Arc::new(nix::NixManager),
         Arc::new(pacman::PacmanManager::new()),
         Arc::new(scoop::ScoopManager::new()),
+        Arc::new(snap::SnapManager),
         Arc::new(winget::WingetManager::new()),
         Arc::new(zypper::ZypperManager),
     ]

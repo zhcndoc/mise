@@ -11,20 +11,46 @@ description: "格式化 mise TOML 配置"
 
 格式化 mise TOML 配置
 
-使用 TOML 1.1 语法对键进行排序并规范化空白字符，包括多行内联表。对于顺序没有意义的列表也会进行排序：任务的 `sources` 和 `outputs`、`task_config.global_inputs` 和 `input_groups`，以及 `redactions`。文件模式列表按覆盖范围排序——先是 `@group:` 引用，然后是 glob，最后是字面路径——如果某个条目使用 `!` 排除或带有注释，则列表会保持原样。默认情况下，格式化当前目录中的配置文件；`--all` 会包含所有已加载的配置。使用 `--check` 运行 CI，或使用 `--stdin` 格式化提供的文档而不重写文件。
+Formats the config files in the current directory in place; --all formats every
+config file mise loads. Use --check in CI to fail when a file is not formatted,
+or --stdin to format a document from stdin to stdout.
+
+Formatting normalizes whitespace and writes TOML 1.1 syntax, including multiline
+inline tables. Top-level entries written as plain, dotted, or inline-table keys
+go in a standard order: min_version, env_file, env_path,_, env, vars, hooks,
+watch_files, tools, other keys, tasks, task_config, redactions, alias, plugins,
+settings. `[table]` sections and the keys inside any table keep the order they
+were written in.
+
+Lists whose order has no effect are sorted: task `sources` and `outputs`,
+`task_config.global_inputs` and `input_groups`, and `redactions`. File pattern
+lists put `@group:` references first, then globs, then literal paths. A list
+with a `!` exclusion or a comment is left as written.
 
 ## Flags
-- **`-a --all`** — 格式化 mise 当前加载的每个配置文件，而不仅是当前目录中的配置文件
-- **`-c --check`** — 检查配置是否已格式化而不重写配置；如果有任何配置未格式化则退出并返回 1
-- **`-s --stdin`** — 从 stdin 读取配置，并将其格式化后的版本写入 stdout
-- **`-h --help`** — 打印帮助
+- **`-a --all`** — Format every config file mise loads, not only those in the current directory
+- **`-c --check`** — Check whether the configs are formatted without rewriting them; exits 1 if any are not
+- **`-s --stdin`** — Format TOML from stdin and print it to stdout, without touching any file
+- **`-h --help`** — Print help
 
 ## Examples
 
+Format the config files in the current directory
+
 ```
 mise fmt
+```
+
+Exit 1 if any config file needs formatting
+
+```
 mise fmt --check
-cat mise.toml | mise fmt --stdin
+```
+
+Print a formatted copy without changing the file
+
+```
+mise fmt --stdin < mise.toml
 ```
 
 <!-- generated reference navigation -->

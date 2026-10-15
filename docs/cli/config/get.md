@@ -1,5 +1,5 @@
 ---
-description: "显示一个 mise TOML 文件中的值"
+description: "Print a value from one mise TOML file"
 ---
 
 <!-- 由 usage-cli 根据 usage 规范生成 -->
@@ -9,30 +9,36 @@ description: "显示一个 mise TOML 文件中的值"
 - **效果：** 只读
 - **源代码：** [`src/cli/config/get.rs`](https://github.com/jdx/mise/blob/main/src/cli/config/get.rs)
 
-显示一个 mise TOML 文件中的值
+Print a value from one mise TOML file
 
 默认读取优先级最高的已加载 TOML 文件。使用 `--file`、`--global` 或 `--system` 选择其他文件。此命令读取存储的值，而不是合并或模板展开后的环境；如需获取解析后的环境，请使用 `mise env`
 
-## 参数
-- **`[KEY]`** — 要显示的点分隔键路径，例如 `tools.python`；省略则打印整个文件
+## Arguments
+- **`[KEY]`** — Dotted key path to print, such as `tools.python`; omit to print the whole file
 
-## 选项
-- **`-f --file <FILE>`** — 要读取的 mise.toml 文件路径
+## Flags
+- **`-f --file <FILE>`** — Config file to read, or a directory whose config file to read
 
-  可以是文件路径或目录。如果提供的是目录，则使用该目录中的配置文件。
+  For a directory, mise reads the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest-precedence loaded TOML file.
 
-  如果未提供，则使用优先级最高的已加载 TOML 文件
-
-  **别名：** `--path`
-- **`-g --global`** — 读取全局配置文件。
-- **`--system`** — 读取系统配置文件。
-- **`-h --help`** — 显示帮助
+  **Aliases:** `--path`
+- **`-g --global`** — Read the global config file
+- **`--system`** — Read the system config file
+- **`-h --help`** — Print help
 
 ## 示例
 
+Print the python request
+
 ```
 mise config get tools.python
-3.12
+3.13
+```
+
+Print the whole file
+
+```
+mise config get
 ```
 
 <!-- 生成的参考文档导航 -->

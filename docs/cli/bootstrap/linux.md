@@ -1,5 +1,5 @@
 ---
-description: "管理来自 `[bootstrap.linux]` 的 Linux 启动配置"
+description: "Manage systemd user units from `[bootstrap.linux.systemd.units]`"
 ---
 
 <!-- 由 usage-cli 根据 usage 规范生成 -->
@@ -9,7 +9,10 @@ description: "管理来自 `[bootstrap.linux]` 的 Linux 启动配置"
 - **效果：** 只读
 - **源代码：** [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-管理来自 `[bootstrap.linux]` 的 Linux 启动配置。
+Manage systemd user units from `[bootstrap.linux.systemd.units]`
+
+The host firewall in `[bootstrap.linux.firewall]` is managed by
+`mise bootstrap firewall`.
 
 ## 标志
 - **`-h --help`** — 打印帮助

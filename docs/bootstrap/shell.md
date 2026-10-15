@@ -1,87 +1,245 @@
 ---
-description: "将 Bash、Zsh 和 Fish shell 激活配置为机器设置的一部分。"
-socialDescription: "将 Bash、Zsh 和 Fish shell 激活配置为机器设置的一部分。"
+description: "Write mise activation into bash, zsh, and fish startup files, and set your login shell, as part of mise bootstrap."
+socialDescription: "Write mise activation into shell startup files and set your login shell."
 ---
 
-# Shell 激活
+# Shell activation and login shell
 
-mise 可以通过 `[bootstrap.mise_shell_activate]` 声明式地为 bash、zsh 和 fish 添加 [Shell 激活](/getting-started.html#activate-mise)
-代码片段，这些代码片段可通过 `mise bootstrap mise-shell-activate apply` 应用，也可以作为
-[`mise bootstrap`](/bootstrap.html) 的一部分应用。每个键表示一个 shell 启动文件，每个值选择一种模式：
+`[bootstrap.mise_shell_activate]` writes mise activation into your shell
+startup files, and `[bootstrap.user]` sets your login shell. `mise bootstrap`
+applies both, so a new machine's shell is ready after one run.
 
-```toml
-[bootstrap.mise_shell_activate]
-zprofile = "shims"
-zshrc = "activate"
-bash_profile = "shims"
-bashrc = "activate"
-fish = "activate"
-```
+## Activate mise in your shell
 
-只配置你使用的 shell 和启动文件。`"activate"` 会启用交互式环境更新；`"shims"` 会让已安装的工具命令可用，而无需提示钩子。有关该模式的限制，请参阅 [shims](/dev-tools/shims.html)。`mise` 可执行文件必须已经位于启动文件的 `PATH` 中。
-
-内联表形式可以明确启用状态和模式：
+For zsh, one key is enough:
 
 ```toml
 [bootstrap.mise_shell_activate]
-zprofile = {enabled = true, mode = "shims"}
-zshrc = {enabled = true, mode = "activate"}
+zsh = true
 ```
 
-Shell 键是快捷方式。例如，`zsh = true` 会展开为
-`zprofile = "shims"` 和 `zshrc = "activate"`。
-
-任何目标都可以使用 `"activate"` 或 `"shims"`。布尔值 `true` 会以默认模式启用该
-目标，而 `false` 则会禁用它。
-
-`mise bootstrap mise-shell-activate apply` 会向 shell rc
-文件写入由标记分隔的代码块：
-
-| 目标           | Shell | 默认模式     | 目标文件                     | 代码块                                 |
-| -------------- | ----- | ------------ | ---------------------------- | -------------------------------------- |
-| `bash_profile` | bash  | `shims`      | `~/.bash_profile`            | `eval "$(mise activate bash --shims)"` |
-| `bashrc`       | bash  | `activate`   | `~/.bashrc`                  | `eval "$(mise activate bash)"`         |
-| `zprofile`     | zsh   | `shims`      | `~/.zprofile`                | `eval "$(mise activate zsh --shims)"`  |
-| `zshrc`        | zsh   | `activate`   | `~/.zshrc`                   | `eval "$(mise activate zsh)"`          |
-| `zshenv`       | zsh   | `shims`      | `~/.zshenv`                  | `eval "$(mise activate zsh --shims)"`  |
-| `fish`         | fish  | `activate`   | `~/.config/fish/config.fish` | `mise activate fish \| source`         |
-
-这些标记与 [Dotfiles](/dotfiles.html) 使用的编辑标记相同：
+`zsh = true` adds shims to `~/.zprofile` and activation to `~/.zshrc`. Use
+`bash = true` for `~/.bash_profile` and `~/.bashrc`. For fish, use
+`fish = "auto"`, which writes `~/.config/fish/config.fish`; see
+[fish: activation interactively, shims otherwise](#fish-activation-interactively-shims-otherwise).
+Apply the section on its own, or as part of a full run:
 
 ```sh
-# >>> mise:activate >>> 由 mise 管理 - 不要编辑标记之间的内容
+mise bootstrap mise-shell-activate apply
+mise bootstrap
+```
+
+The blocks are the same lines [Shell setup](/shell-setup.html) shows for adding
+activation by hand.
+
+### Put mise on PATH first
+
+The blocks call `mise` by name, so `mise` must already be on `PATH` when the
+startup file runs. A package manager install, such as Homebrew, takes care of
+this. For the [mise.run](/installing-mise.html) install in `~/.local/bin`, put
+that directory on `PATH` before the blocks run, for example with a
+[`[dotfiles]` line entry](/dotfiles/edits.html) in `~/.zshenv`, which zsh reads
+first:
+
+```toml
+[dotfiles]
+"~/.zshenv/local-bin" = { line = 'export PATH="$HOME/.local/bin:$PATH"' }
+```
+
+For Bash, add the same line to `~/.bash_profile` and `~/.bashrc` with
+`position = "prepend"`, so it comes before the blocks. For fish, prepend a line
+that adds `~/.local/bin` to `PATH` in `~/.config/fish/config.fish`.
+`mise bootstrap` applies `[dotfiles]` before shell activation, so one run writes
+both.
+
+### Why login files get shims
+
+Activation applies the environment when the activation line runs, then updates
+it from hooks at each prompt and directory change. An editor or other program
+reads your login profile once, when it starts, and keeps that environment, so
+activation there would fix the tool versions of the directory the login shell
+started in. Shims choose the version each time a tool runs, from the directory
+it runs in. That is why the login files, `~/.zprofile` and `~/.bash_profile`,
+get shims, while `~/.zshrc` and `~/.bashrc`, which interactive shells read, get
+full activation. fish has one startup file, `config.fish`, so `fish = "auto"`
+splits it: full activation in interactive shells and shims everywhere else. See
+[Shims](/dev-tools/shims.html#overview) for how the two compare.
+
+Bash login shells read `~/.bash_profile` but not `~/.bashrc`. If your
+`~/.bash_profile` does not source `~/.bashrc`, an interactive login shell gets
+shims but not activation.
+
+## Choose files and modes
+
+Each key names a shell or a startup file. A shell key is a shortcut for that
+shell's default files, and a file key sets one file:
+
+| Key            | Shell | File                         | Default mode | Block in the default mode              |
+| -------------- | ----- | ---------------------------- | ------------ | -------------------------------------- |
+| `bash_profile` | bash  | `~/.bash_profile`            | `shims`      | `eval "$(mise activate bash --shims)"` |
+| `bashrc`       | bash  | `~/.bashrc`                  | `activate`   | `eval "$(mise activate bash)"`         |
+| `zprofile`     | zsh   | `~/.zprofile`                | `shims`      | `eval "$(mise activate zsh --shims)"`  |
+| `zshrc`        | zsh   | `~/.zshrc`                   | `activate`   | `eval "$(mise activate zsh)"`          |
+| `zshenv`       | zsh   | `~/.zshenv`                  | `shims`      | `eval "$(mise activate zsh --shims)"`  |
+| `fish`         | fish  | `~/.config/fish/config.fish` | `activate`   | `mise activate fish \| source`         |
+
+The other mode adds or removes `--shims`. The `bash` and `zsh` shortcuts cover
+the login and interactive startup files above. They never write `~/.zshenv`, which zsh reads
+for every script; set `zshenv` explicitly if you want it.
+
+Every key takes one of these values:
+
+| Value                                | Effect                                                |
+| ------------------------------------ | ----------------------------------------------------- |
+| `true`                               | Enable with the default mode                          |
+| `false`                              | Disable, even when a broader config enables it        |
+| `"activate"` or `"shims"`            | Enable with that mode; on a shell key, for every file |
+| `"auto"`                             | fish only: activation interactively, shims otherwise  |
+| `{ enabled = true, mode = "shims" }` | The same settings as a table; `enabled` is required   |
+
+For example, this puts shims in both zsh files:
+
+```toml
+[bootstrap.mise_shell_activate]
+zsh = "shims"
+```
+
+Within one config file, shell keys apply before file keys, so `zsh = true` with
+`zshrc = false` writes only `~/.zprofile`. Across config files, the most local
+value for each file wins, so a project config can turn off one file that your
+global config enables without changing the others.
+
+These files are fixed paths in your home directory and ignore `ZDOTDIR`. If you
+set `ZDOTDIR`, set `zsh = false` and add the blocks with
+[`[dotfiles]` edits](/dotfiles/edits.html) on the files in that directory:
+
+```toml
+[dotfiles]
+"~/.config/zsh/.zprofile/activate" = { block = 'eval "$(mise activate zsh --shims)"' }
+"~/.config/zsh/.zshrc/activate" = { block = 'eval "$(mise activate zsh)"' }
+```
+
+Only bash, zsh, and fish are supported here. For PowerShell, Nushell, or another
+shell, add its `mise activate` line from [Shell setup](/shell-setup.html) with a
+`[dotfiles]` edit.
+
+### fish: activation interactively, shims otherwise
+
+fish reads `config.fish` for interactive shells and for scripts alike. To get
+full activation at the prompt and shims everywhere else, use the `auto` mode,
+which only fish accepts:
+
+```toml
+[bootstrap.mise_shell_activate]
+fish = "auto"
+```
+
+It writes this block:
+
+```fish
+if status is-interactive
+    mise activate fish | source
+else
+    mise activate fish --shims | source
+end
+```
+
+bash and zsh already split the two cases across their login and interactive
+files, so `auto` on those shells is ignored with a warning.
+
+## Existing startup files
+
+mise owns only the lines between its markers and leaves the rest of the file
+alone. The markers are the same ones [`[dotfiles]` edits](/dotfiles/edits.html)
+use:
+
+```sh
+# >>> mise:activate >>> managed by mise — do not edit between markers
 eval "$(mise activate zsh)"
 # <<< mise:activate <<<
 ```
 
-## 语义
+If the file already has an `eval "$(mise activate zsh)"` line outside the
+markers, delete it, or activation runs twice. After applying, open a new shell
+and run `mise doctor`: editing a startup file does not change a shell that is
+already running. mise edits these files only when you run `mise bootstrap` or
+`mise bootstrap mise-shell-activate apply`.
 
-`[bootstrap.mise_shell_activate]` 遵循与其他 bootstrap 部分相同的手动、幂等模型：
+mise skips its own block for a file, without a warning, when `[dotfiles]`
+already covers it:
 
-- **按目标覆盖** — 项目配置可以针对某个启动文件覆盖全局设置，例如设置
-  `zshrc = false`，而不改变 `zprofile`。
-- **仅手动应用** — mise 不会隐式编辑 shell rc 文件。
-  只有 `mise bootstrap mise-shell-activate apply` 和 `mise bootstrap` 会应用此部分。
-- **仅编辑标记所拥有的内容** — mise 只负责其标记之间的代码块。rc 文件中的其他
-  内容保持不变。
-- **默认不将 Shims 写入 `zshenv`** — 配置中可以显式支持 `zshenv`，但 shell 快捷方式不会写入其中，因为 zsh
-  会在每次调用时读取它，包括执行脚本时。
-- **显式 dotfiles 优先** — 如果 `[dotfiles]` 已经将同一个 rc 文件作为完整文件进行管理，或者为同一目标/id 定义了编辑操作，例如
-  `"~/.zshrc/activate"`，mise 会跳过为该 shell 生成的激活条目。
+- An entry that deploys the whole file to the same path.
+- An edit with the id `activate` on the same path, such as
+  `"~/.zshrc/activate"`.
 
-对于完全由 mise 管理的 rc 文件或自定义激活代码块，请直接使用 `[dotfiles]`。检查现有的未标记激活行，以避免重复运行钩子。应用后，打开一个新的 shell 并检查 `mise doctor`；编辑启动文件不会改变已经运行的 shell 进程。
+A file tracked with `mode = "track"` or `mode = "track-local"` still gets the
+block, because tracking records the file's history without writing it. To write
+a custom block, use a `[dotfiles]` edit like the `ZDOTDIR` example above.
 
-## 命令
+## Preview and apply
 
 ```sh
-mise bootstrap mise-shell-activate status            # 显示激活块状态
-mise bootstrap mise-shell-activate status --json     # 机器可读
-mise bootstrap mise-shell-activate status --missing  # 如果有任何内容不同步则退出 1
-
-mise bootstrap mise-shell-activate apply           # 写入缺失/不同的块
-mise bootstrap mise-shell-activate apply --dry-run # 直接打印编辑内容
-mise bootstrap mise-shell-activate apply --yes     # 跳过确认提示
+mise bootstrap mise-shell-activate status            # show each block's state
+mise bootstrap mise-shell-activate status --missing  # exit 1 if a block is missing or differs
+mise bootstrap mise-shell-activate apply --dry-run   # print the edits
+mise bootstrap mise-shell-activate apply --yes       # apply without a prompt
 ```
 
-JSON 状态条目包括 `target`、`shell`、`path`、`mode` 和 `state`。
-`state` 的值为 `"missing" | "applied" | "differs" | "source_missing"`。`state = "differs"` 的条目还包括一个 `reason` 字段。
+`mise bootstrap shell` is a shorter alias. `status --json` returns one entry per
+file with `target`, `shell`, `path`, `mode`, and `state`. The state is
+`missing`, `applied`, or `differs`, and a `differs` entry also has a `reason`.
+
+## Set your login shell {#set-your-login-shell}
+
+`[bootstrap.user]` sets the current user's login shell. This installs fish with
+Homebrew and makes it the login shell on an Apple Silicon Mac:
+
+```toml
+[bootstrap.packages]
+"brew:fish" = "latest"
+
+[bootstrap.user]
+login_shell = "/opt/homebrew/bin/fish"
+```
+
+`mise bootstrap` installs packages before it changes the login shell, so one run
+does both. When you run `mise bootstrap user apply` on its own, install the
+shell first. The path must be absolute, such as `/bin/zsh`; mise ignores a
+relative name with a warning.
+
+Many systems accept only shells listed in `/etc/shells`, so mise adds the path
+there when it is missing. Then, if the account's shell differs, mise runs
+`chsh -s /opt/homebrew/bin/fish`, which may ask for your password.
+
+`/etc/shells` is usually owned by root. When mise cannot write it directly, it
+uses sudo, which can prompt for a password in an interactive terminal; otherwise
+mise needs passwordless sudo, and it never elevates when
+[`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) is
+`false`.
+
+This changes only the account's login shell. It does not affect the shell you
+are in, so `mise bootstrap` ends with a follow-up reminding you to start a new
+login session. It also does not set up [activation](#activate-mise-in-your-shell)
+in the new shell.
+
+A project config can override a global `login_shell`; the most local value
+wins. mise changes the login shell only when you run `mise bootstrap` or
+`mise bootstrap user apply`. When mise itself runs under `sudo`, it checks and
+changes the shell of `SUDO_USER` rather than root, while a plain root session,
+such as a container, changes root's shell. On Windows, or where `chsh` is
+missing, mise skips the setting and `status` reports it as skipped.
+
+```sh
+mise bootstrap user status            # show the login shell state
+mise bootstrap user status --missing  # exit 1 if the shell differs or is not listed
+mise bootstrap user apply --dry-run   # print the commands instead
+mise bootstrap user apply --yes       # apply without a prompt
+```
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where these parts fall in the
+  run order.
+- [Shell setup](/shell-setup.html) for activating mise by hand and for shell
+  completions.
+- [Edit part of a file](/dotfiles/edits.html) for custom blocks and lines.

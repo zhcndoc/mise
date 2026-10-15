@@ -12,111 +12,118 @@ description: "安装工具并将其添加到配置中"
 
 安装工具并将其添加到配置中
 
-安装缺失的工具版本，并将请求记录到配置文件中。默认情况下，mise 会选择最近的、包含受支持配置的目录，并写入优先级最低的文件，例如 `mise.toml` 而不是 `mise.local.toml`。如果不存在项目配置，则会在当前目录中创建一个配置文件。从主目录运行时，则会操作全局配置。
+Installs missing tool versions and records the requests in a config file.
+By default, mise selects the nearest directory with a supported config and
+writes to its lowest-precedence file, such as `mise.toml` rather than
+`mise.local.toml`. If no project config exists, it creates one in the current
+directory. Run from your home directory, it writes to the global config.
 
-使用 `--path` 指定文件或目录，使用 `--global` 设置个人默认值，或使用 `--env` 在当前目录中写入 `mise.ENV.toml`（保留已有的 `.mise.ENV.toml`）。这些选择器会相互覆盖；每条命令只能使用其中一个。
+Use `--path` for an explicit file or directory, `--global` for personal
+defaults, or `--env` to write `mise.ENV.toml` in the current directory (an
+existing `.mise.ENV.toml` is used instead). If you pass more than one, the
+last one wins.
 
-有关文件名覆盖和配置优先级，请参阅 <https://mise.jdx.dev/configuration.html#target-file-for-write-operations>。选择会在已激活的 shell 中于下一次提示符出现时生效，或在 `mise exec` 命令中立即生效。
+See <https://mise.jdx.dev/configuration.html#target-file-for-write-operations>
+for filename overrides and config precedence. The change takes effect in an
+activated shell at its next prompt, and immediately in `mise exec` commands.
 
-## 参数
-- **`<TOOL@VERSION>`** — 要添加到配置文件中的工具
+## Arguments
+- **`<TOOL@VERSION>`** — Tool to add to the config file, such as node@24, cargo:ripgrep@latest, or npm:prettier@3
 
-  e.g.: node@20, cargo:ripgrep@latest, npm:prettier@3
-  如果未指定版本，则默认为 @latest
-
-  可以使用以下语法设置工具选项：
+  Without a version, mise requests `latest`; with --pin it writes the resolved version.
+  Tool options can also be set inline:
 
   ```
   mise use "cargo:ripgrep[features=pcre2]"
   ```
 
-## 标志
-- **`-e --env <ENV>`** — 创建或修改环境专用的配置文件，例如 .mise.&lt;env>.toml
-- **`-f --force`** — 即使已经安装，也强制重新安装
-- **`-g --global`** — 使用全局配置文件（`~/.config/mise/config.toml`）而不是本地配置文件
-- **`-j --jobs <JOBS>`** — 并行运行的任务数
-  小于 1 的值将按 1 处理
-  默认为 `jobs` 设置的值
+## Flags
+- **`-e --env <ENV>`** — Write mise.&lt;ENV>.toml in the current directory, or .mise.&lt;ENV>.toml if that exists
 
-  **环境变量：** `MISE_JOBS`
-- **`-n --dry-run`** — 执行试运行，显示将要安装和修改的内容，但不进行更改
-- **`-p --path <PATH>`** — 指定配置文件或目录的路径
+  Not the same as the global -E, which only chooses which config files are loaded.
+- **`-f --force`** — Reinstall even if already installed
+- **`-g --global`** — Write to the global config instead of the project config
 
-  如果指定的是目录，则会按照目标文件选择规则在该目录中查找配置文件。
-- **`--dry-run-code`** — 类似于 --dry-run，但如果有需要执行的更改，则以代码 1 退出
+  Updates the global config file that already declares the tool, otherwise the file set by the `write_targets.tools` setting, otherwise ~/.config/mise/config.toml.
+- **`-j --jobs <JOBS>`** — Number of jobs to run in parallel (default: the `jobs` setting)
 
-  这对于脚本检查是否需要添加或移除工具很有用。
-- **`--fuzzy`** — 将模糊版本保存到配置文件
+  **Environment Variable:** `MISE_JOBS`
+- **`-n --dry-run`** — Show what would change without changing anything
+- **`-p --path <PATH>`** — Write to this config file, or to the config file in this directory
 
-  e.g.: `mise use --fuzzy node@20` 会将 `20` 保存为版本。
-  除非设置了 `MISE_PIN=1`，否则这是默认行为
-- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 仅安装在此日期之前发布或早于此时长的版本
+  For a directory, mise picks the file by the usual write-target rules.
+- **`--dry-run-code`** — Like --dry-run, but exit with code 1 if there are changes to make
 
-  支持类似 "2024-06-01" 的绝对日期和类似 "90d" 或 "1y" 的相对时长。
-- **`--pin`** — 将解析得到的具体版本保存到配置文件
+  Use it in scripts that check whether tools need to be added or removed.
+- **`--fuzzy`** — Write the version as requested, such as `20` for node@20
 
-  如果请求与可用版本完全匹配，则优先选择该版本，而不是已安装的模糊匹配版本。使用 `prefix:` 可显式请求递归前缀匹配。
-  例如：`mise use --pin node@20` 会保存解析得到的 `20.x.y` 版本
-  设置 `MISE_PIN=1` 可使其成为默认行为
+  This is the default unless the `pin` setting is on.
+- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — Only install versions released before this date or older than this duration
 
-  可以考虑使用 mise.lock 作为在 mise.toml 中固定版本的更好替代方案：
-  <https://mise.jdx.dev/configuration/settings.html#lockfile>
-- **`--raw`** — 将后端安装命令的标准输入、标准输出和标准错误直接连接到终端。隐含 `--jobs=1`
-- **`--remove <TOOL>`** — 从配置文件中移除工具
-- **`-h --help`** — 打印帮助
-- **`--postinstall <COMMAND>`** — 安装此工具后要运行的命令
-- **`--tool-option <KEY=VALUE>`** — 为此工具设置选项（可以重复指定多个选项）。
-  值使用内联工具选项类型；未加引号的文本将被视为字符串。
-  将这些标志放在它们所适用的工具之前。
+  Supports absolute dates such as "2024-06-01" and relative durations such as "90d" or "1y".
+- **`--pin`** — Write the resolved version, such as `20.19.5` for node@20
+
+  If the request exactly matches an available release, mise uses that release rather than an installed version that only matches it as a prefix. Write `prefix:` before the version, as in `node@prefix:20`, to force prefix matching. Make this the default with the `pin` setting (`MISE_PIN=1`).
+
+  To record exact versions without editing mise.toml, use a lockfile: <https://mise.jdx.dev/dev-tools/mise-lock.html>
+- **`--raw`** — Connect the install commands' stdin, stdout, and stderr to the terminal
+
+  Implies `--jobs=1`.
+- **`--remove <TOOL>`** — Remove these tools from the config file
+- **`-h --help`** — Print help
+- **`--postinstall <COMMAND>`** — Command to run after installing this tool
+- **`--tool-option <KEY=VALUE>`** — Set an option for the tool that follows; repeat for several options
+
+  Values use inline tool-option types; unquoted text is a string. Put these flags before the tool they apply to.
 
 ## 示例
 
-不带参数运行以使用交互式选择器
+Choose tools from an interactive selector
 
 ```
 mise use
 ```
 
-将当前版本的 node 设置为选定项目配置中的 20.x，并写入模糊版本（例如：20）
+Use node 24.x in the project config and record the request `24`
 
 ```
-mise use node@20
+mise use node@24
 ```
 
-安装工具后运行命令
+Run a command after installing a tool
 
 ```
 mise use --postinstall "mbx setup --defaults" mr-boxington
 ```
 
-为每个工具关联不同的安装后命令
+Give each tool its own postinstall command
 
 ```
-mise use --postinstall "setup-a" tool-a --postinstall "setup-b" tool-b
+mise use --postinstall "corepack enable" node@24 --postinstall "python -m pip install -U pip" python@3.13
 ```
 
-在安装 Rust 和 mbx 时启用 Rust 工具选项
+Enable a Rust tool option while installing Rust and mbx
 
 ```
 mise use --tool-option mr_boxington=true rust mr-boxington
 ```
 
-将当前版本的 node 设置为 ~/.config/mise/config.toml 中的 20.x，并写入精确版本（例如：20.0.0）
+Use node 24.x globally and record the exact version it resolves to
 
 ```
-mise use -g --pin node@20
+mise use -g --pin node@24
 ```
 
-写入 mise.local.toml（如果 .mise.local.toml 已存在，则保留它）
+Write mise.local.toml (an existing .mise.local.toml is used instead)
 
 ```
-mise use --env local node@20
+mise use --env local node@24
 ```
 
-写入 mise.staging.toml（使用 MISE_ENV=staging 加载）
+Write mise.staging.toml, which mise loads when MISE_ENV=staging
 
 ```
-mise use --env staging node@20
+mise use --env staging node@24
 ```
 
 <!-- generated reference navigation -->

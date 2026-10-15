@@ -11,74 +11,71 @@ description: "[实验性] 构建 OCI 镜像并将其推送到镜像仓库"
 
 [实验性] 构建 OCI 镜像并将其推送到镜像仓库
 
-使用 mise 内置的镜像仓库客户端进行推送——无需
-skopeo/crane/docker。如果未传入 `--image-dir`，则首先从当前的
-mise.toml 全新构建。只会上传镜像仓库中尚不存在的 blob，因此重复推送
-大部分未更改的工具集时，开销很低。
+Builds from the project's config, as `mise oci build` does, unless
+`--image-dir` names an image layout built earlier. Then uploads only the
+blobs the registry does not already have. mise pushes with its own registry
+client, so skopeo, crane, and docker are not needed.
 
-工具、版本、挂载点和文件所有者均与之前推送的镜像（或 `--cache-from`）匹配的工具层会直接复用，无需重新构建——这些工具甚至无需在本地安装。传入 `--no-cache` 可在不使用远程或本地层缓存的情况下重新构建工具层。
+Tool layers whose tool, version, mount point, and file owner match the
+previously pushed image (or `--cache-from`) are reused without being
+rebuilt, so those tools need not be installed locally. Pass `--no-cache` to
+rebuild every tool layer.
 
-凭据读取自 docker 和 podman 使用的相同位置：
-`$REGISTRY_AUTH_FILE`、`$XDG_RUNTIME_DIR/containers/auth.json`、
-`~/.config/containers/auth.json` 以及 `~/.docker/config.json`
-（包括凭据助手）——因此只需执行 `docker login` / `podman login`
-即可完成设置。
+Credentials come from the files docker and podman use: `$REGISTRY_AUTH_FILE`,
+`$XDG_RUNTIME_DIR/containers/auth.json`, `~/.config/containers/auth.json`,
+then `~/.docker/config.json`, including inline auths and credential helpers.
+Log in with `docker login` or `podman login`.
 
 需要 `mise settings experimental=true`（或 `MISE_EXPERIMENTAL=1`）。
 
 ## 参数
 - **`<REF>`** — 目标镜像仓库引用（例如 `ghcr.io/me/devenv:latest`）
 
-## 标志
-- **`--cache-from <REF>`** — 从此镜像复用未更改的工具层，而不是从目标引用复用
+## Flags
+- **`--cache-from <REF>`** — Reuse unchanged tool layers from this image instead of the destination's current tag
 
-  必须位于与目标相同的仓库中。当每次推送都使用唯一标签时很有用（例如 CI 中的每次提交标签）：`--cache-from ghcr.io/me/dev:latest ghcr.io/me/dev:$SHA`。
-- **`--from <FROM>`** — 构建所用的基础镜像（使用 --image-dir 时忽略）
-- **`--image-dir <IMAGE_DIR>`** — 推送已构建的 OCI 镜像布局（跳过构建步骤）
-- **`--include-global`** — 同时包含全局／系统配置中的工具（默认为仅项目）
+  Must be in the same repository as the destination. Useful when every push gets a new tag, as with per-commit tags in CI: `mise oci push --cache-from ghcr.io/me/dev:latest ghcr.io/me/dev:$SHA`. Cannot be combined with --no-cache.
+- **`--from <FROM>`** — Base image for the build
 
-  详见 `mise oci build --help`。
-- **`--mount-point <MOUNT_POINT>`** — 覆盖镜像内的挂载点（使用 --image-dir 时忽略）
-- **`--no-cache`** — 在不使用远程或本地层缓存的情况下重新构建工具层
-- **`--no-mise`** — 不嵌入 mise 二进制文件（使用 --image-dir 时忽略）
-- **`--owner <UID[:GID]>`** — 构建时为每个 tar 条目分配的 UID[:GID]（与 --image-dir 冲突）
+  Overrides [oci].from and the oci.default_from setting.
+- **`--image-dir <IMAGE_DIR>`** — Push an existing OCI image layout instead of building one
 
-  覆盖 [oci].user_id / [oci].group_id。默认为 0:0。如果省略 GID，则默认为 UID。此选项只影响文件所有权；[oci].user 控制镜像的 USER 指令。
-- **`--update-index`** — 将标签维护为多架构镜像索引
+  Cannot be combined with --cache-from, --from, --include-global, --mount-point, --no-mise, or --owner.
+- **`--include-global`** — Also package tools from the global and system configs
+
+  See `mise oci build --help` for details.
+- **`--mount-point <MOUNT_POINT>`** — Where tools install inside the image
+
+  Overrides [oci].mount_point and the oci.default_mount_point setting.
+- **`--no-cache`** — Rebuild tool layers without using the remote or local layer cache
+- **`--no-mise`** — Do not embed the running mise binary at /usr/local/bin/mise
+- **`--owner <UID[:GID]>`** — UID[:GID] to assign to every tar entry when building
+
+  Overrides [oci].user_id and [oci].group_id. Defaults to 0:0. If GID is omitted, it defaults to UID. This affects file ownership only; [oci].user controls the image USER directive.
+- **`--update-index`** — Maintain the tag as a multi-arch image index
 
   按摘要推送此构建的 manifest，并将标签指向一个 OCI 镜像索引。该索引每个平台包含一个条目，同时保留其他架构已推送的条目。请从每个平台各运行器运行 `mise oci push --update-index`，以组装多架构标签。
 - **`-h --help`** — 打印帮助
 
 ## 示例
 
-构建并推送到 GHCR：
+Build and push to GHCR
 
 ```
 mise oci push ghcr.io/me/devenv:latest
 ```
 
-推送之前构建的镜像：
+Push an image built earlier
 
 ```
 mise oci build -o ./img
 mise oci push --image-dir ./img ghcr.io/me/devenv:v1
 ```
 
-认证：
-
-```
-凭据的解析方式与 docker/podman 相同：
-$REGISTRY_AUTH_FILE、$XDG_RUNTIME_DIR/containers/auth.json、
-~/.config/containers/auth.json，然后是 ~/.docker/config.json
-（包括内联认证信息和凭据助手）。使用以下任一命令登录：
-$ docker login ghcr.io
-$ podman login ghcr.io
-```
-
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [构建和运行 OCI 镜像](/dev-tools/mise-oci.html)。
-- [`mise oci <SUBCOMMAND>`](/cli/oci.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [OCI images](/dev-tools/mise-oci.html).
+- [`mise oci <SUBCOMMAND>`](/cli/oci.html).
+- [Global flags and argument syntax](/cli/#global-flags).

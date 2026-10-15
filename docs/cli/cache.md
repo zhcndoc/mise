@@ -11,7 +11,9 @@ description: "管理 mise 缓存"
 
 管理 mise 缓存
 
-运行 `mise cache` 时不带任何参数，可查看当前缓存目录。
+The cache holds data mise can fetch or rebuild again, such as version lists and
+release metadata. With no subcommand, prints the cache directory, like
+`mise cache path`. See <https://mise.jdx.dev/cache-behavior.html>.
 
 ## 标志
 - **`-h --help`** — 打印帮助

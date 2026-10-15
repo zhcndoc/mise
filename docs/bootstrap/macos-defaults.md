@@ -1,13 +1,18 @@
 ---
-description: "从 mise 配置中声明并应用 macOS 偏好设置"
-socialDescription: "从 mise 配置中声明并应用 macOS 偏好设置"
+description: "Set macOS user preferences, such as Dock, Finder, keyboard, and trackpad settings, from mise.toml as the defaults command would."
+socialDescription: "Set macOS user preferences from mise.toml as the defaults command would."
 ---
 
-# macOS 默认设置
+# macOS defaults
 
-mise 可以在 `mise.toml` 的 `[bootstrap.macos.defaults]` 部分中声明 macOS 用户默认设置（偏好设置），并通过
-`mise bootstrap macos defaults apply` 或作为
-[`mise bootstrap`](/bootstrap.html) 的一部分应用这些设置：
+Declare macOS preferences in `mise.toml`, and
+[`mise bootstrap`](/bootstrap.html), or
+[`mise bootstrap macos defaults apply`](/cli/bootstrap/macos/defaults/apply.html),
+writes them the way the `defaults` command does. Common Dock, Finder, keyboard,
+and trackpad settings have named keys; anything else goes in
+`[bootstrap.macos.defaults]` by domain and key.
+
+## Example
 
 ```toml
 [bootstrap.macos.dock]
@@ -30,87 +35,77 @@ press_and_hold = false
 tap_to_click = true
 
 [bootstrap.macos.defaults]
-"com.apple.finder" = { AppleShowAllFiles = false }
+"com.apple.screencapture" = { type = "png", "disable-shadow" = true }
 ```
 
-友好设置和原始默认值共享相同的偏好设置键。对于友好设置部分未涵盖的偏好设置，请使用
-`[bootstrap.macos.defaults]`。在同一个配置文件中，原始默认值会覆盖由友好设置生成的
-原始 `(domain, key)`。在不同配置文件之间，正常的全局到本地优先级仍然适用，因此本地友好设置可以
-覆盖同一对键的全局原始默认值。
-
-## 预览和应用
+Apply as the user whose preferences should change:
 
 ```sh
-mise bootstrap macos defaults status
 mise bootstrap macos defaults apply --dry-run
 mise bootstrap macos defaults apply
 ```
 
-以偏好设置应发生更改的用户身份应用。除非你有意需要覆盖，否则请为每个偏好设置选择一个友好键
-或一个原始条目。该示例将友好设置 `show_all_files = true` 和原始设置
-`AppleShowAllFiles = false` 同时设定，以演示在同一个文件中原始条目会获胜。
+mise writes each preference that is missing or different and leaves the rest
+alone. Dock, Finder, and the menu bar read many preferences only when they
+start, so [restart them](#app-restarts) to see the change.
 
-## 友好设置部分
+## Named settings {#friendly-sections}
 
-`[bootstrap.macos.dock]` 支持：
+Each named key writes one preference, or two for the trackpad keys. An unknown
+key, a value of the wrong type, or a value outside the listed choices is
+ignored with a warning.
 
-| Key                      | 原始默认值                             |
-| ------------------------ | --------------------------------------- |
-| `autohide_delay`         | `com.apple.dock.autohide-delay`         |
-| `autohide_time_modifier` | `com.apple.dock.autohide-time-modifier` |
-| `autohide`               | `com.apple.dock.autohide`               |
-| `orientation`            | `com.apple.dock.orientation`            |
-| `tilesize`               | `com.apple.dock.tilesize`               |
-| `magnification`          | `com.apple.dock.magnification`          |
-| `largesize`              | `com.apple.dock.largesize`              |
-| `show_recents`           | `com.apple.dock.show-recents`           |
-| `mru_spaces`             | `com.apple.dock.mru-spaces`             |
+`[bootstrap.macos.dock]` writes to the `com.apple.dock` domain:
 
-`autohide_delay` 和 `autohide_time_modifier` 接受整数或浮点数，例如
-`0` 和 `0.5`。
+| Key                      | Preference key           | Value                                                                      |
+| ------------------------ | ------------------------ | -------------------------------------------------------------------------- |
+| `autohide`               | `autohide`               | Boolean: hide the Dock until the pointer reaches it                        |
+| `autohide_delay`         | `autohide-delay`         | Number of seconds before a hidden Dock appears, such as `0`                |
+| `autohide_time_modifier` | `autohide-time-modifier` | Number of seconds the show and hide animation takes, such as `0.5`         |
+| `orientation`            | `orientation`            | `"bottom"`, `"left"`, or `"right"`                                         |
+| `tilesize`               | `tilesize`               | Integer icon size                                                          |
+| `magnification`          | `magnification`          | Boolean: enlarge icons under the pointer                                   |
+| `largesize`              | `largesize`              | Integer size of enlarged icons                                             |
+| `show_recents`           | `show-recents`           | Boolean: show recent apps in the Dock                                      |
+| `mru_spaces`             | `mru-spaces`             | Boolean: rearrange Spaces by most recent use                               |
+| `apps`                   | `persistent-apps`        | List of application paths; see [Pin Dock applications](#dock-applications) |
 
-`orientation` 必须是 `bottom`、`left` 或 `right`。
+`[bootstrap.macos.finder]` writes to `com.apple.finder`, except one key:
 
-`[bootstrap.macos.finder]` 支持：
+| Key                           | Domain             | Preference key                      | Value                                                          |
+| ----------------------------- | ------------------ | ----------------------------------- | -------------------------------------------------------------- |
+| `show_all_files`              | `com.apple.finder` | `AppleShowAllFiles`                 | Boolean: show hidden files                                     |
+| `show_pathbar`                | `com.apple.finder` | `ShowPathbar`                       | Boolean: show the path bar                                     |
+| `show_status_bar`             | `com.apple.finder` | `ShowStatusBar`                     | Boolean: show the status bar                                   |
+| `show_extensions_warning`     | `com.apple.finder` | `FXEnableExtensionChangeWarning`    | Boolean: warn before changing a file extension                 |
+| `sort_folders_first`          | `com.apple.finder` | `_FXSortFoldersFirst`               | Boolean: keep folders on top when sorting by name              |
+| `preferred_view_style`        | `com.apple.finder` | `FXPreferredViewStyle`              | `"icon"`, `"list"`, `"column"`, or `"gallery"`                 |
+| `save_new_documents_to_cloud` | `NSGlobalDomain`   | `NSDocumentSaveNewDocumentsToCloud` | Boolean: save new documents to iCloud by default, in every app |
 
-| Key                           | 原始默认值                                        |
-| ----------------------------- | -------------------------------------------------- |
-| `sort_folders_first`          | `com.apple.finder._FXSortFoldersFirst`             |
-| `save_new_documents_to_cloud` | `NSGlobalDomain.NSDocumentSaveNewDocumentsToCloud` |
-| `show_all_files`              | `com.apple.finder.AppleShowAllFiles`               |
-| `show_pathbar`                | `com.apple.finder.ShowPathbar`                     |
-| `show_status_bar`             | `com.apple.finder.ShowStatusBar`                   |
-| `show_extensions_warning`     | `com.apple.finder.FXEnableExtensionChangeWarning`  |
-| `preferred_view_style`        | `com.apple.finder.FXPreferredViewStyle`            |
+`[bootstrap.macos.keyboard]` writes to `NSGlobalDomain`:
 
-`save_new_documents_to_cloud` 控制应用程序保存对话框的默认保存位置，而且是全局控制，
-尽管它被归类在 `finder` 下。
+| Key                             | Preference key                         | Value                                                           |
+| ------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
+| `key_repeat`                    | `KeyRepeat`                            | Integer: interval between repeated keys; lower is faster        |
+| `initial_key_repeat`            | `InitialKeyRepeat`                     | Integer: delay before a held key repeats; lower is shorter      |
+| `press_and_hold`                | `ApplePressAndHoldEnabled`             | Boolean: `false` repeats a held key instead of offering accents |
+| `automatic_capitalization`      | `NSAutomaticCapitalizationEnabled`     | Boolean                                                         |
+| `automatic_spelling_correction` | `NSAutomaticSpellingCorrectionEnabled` | Boolean                                                         |
+| `fn_state`                      | `com.apple.keyboard.fnState`           | Boolean: `true` makes F1 to F12 act as standard function keys   |
 
-`preferred_view_style` 必须是 `icon`、`list`、`column` 或 `gallery`。
+`[bootstrap.macos.trackpad]` writes each key to both
+`com.apple.AppleMultitouchTrackpad` and
+`com.apple.driver.AppleBluetoothMultitouch.trackpad`, for built-in and
+Bluetooth trackpads:
 
-`[bootstrap.macos.keyboard]` 支持：
+| Key                 | Preference key            | Value                            |
+| ------------------- | ------------------------- | -------------------------------- |
+| `tap_to_click`      | `Clicking`                | Boolean: tap to click            |
+| `three_finger_drag` | `TrackpadThreeFingerDrag` | Boolean: drag with three fingers |
 
-| Key                             | 原始默认值                                           |
-| ------------------------------- | ----------------------------------------------------- |
-| `automatic_capitalization`      | `NSGlobalDomain.NSAutomaticCapitalizationEnabled`     |
-| `automatic_spelling_correction` | `NSGlobalDomain.NSAutomaticSpellingCorrectionEnabled` |
-| `key_repeat`                    | `NSGlobalDomain.KeyRepeat`                            |
-| `initial_key_repeat`            | `NSGlobalDomain.InitialKeyRepeat`                     |
-| `press_and_hold`                | `NSGlobalDomain.ApplePressAndHoldEnabled`             |
-| `fn_state`                      | `NSGlobalDomain.com.apple.keyboard.fnState`           |
+## Pin Dock applications {#dock-applications}
 
-`[bootstrap.macos.trackpad]` 支持：
-
-| 键                 | 原始默认值                                                                                                                              |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `tap_to_click`      | `com.apple.AppleMultitouchTrackpad.Clicking`、`com.apple.driver.AppleBluetoothMultitouch.trackpad.Clicking`                               |
-| `three_finger_drag` | `com.apple.AppleMultitouchTrackpad.TrackpadThreeFingerDrag`、`com.apple.driver.AppleBluetoothMultitouch.trackpad.TrackpadThreeFingerDrag` |
-
-未知的友好键、无效的枚举值和不受支持的值类型会产生警告并被忽略。
-
-## Dock 应用程序
-
-使用 `apps` 按顺序声明固定的应用程序：
+`apps` declares the applications pinned in the Dock, in order:
 
 ```toml
 [bootstrap.macos.dock]
@@ -121,31 +116,70 @@ apps = [
 ]
 ```
 
-路径必须是绝对路径或以 `~/` 开头，以 `.app` 结尾，并且不能包含 `..` 组件。
-重复路径（包括指向同一应用程序的符号链接）会被拒绝。每个声明的应用程序都必须在更改后的布局
-可以应用之前作为目录存在。省略 `apps` 可保持布局不变；`apps = []` 会移除所有已识别的应用程序磁贴。
+Paths must be absolute or start with `~/`, end in `.app`, and contain no `..`.
+Duplicates, including symlinks to the same application, are rejected. Every
+application must exist before mise applies a changed layout. Leave out `apps` to
+leave the layout alone; `apps = []` removes every application tile mise
+recognizes.
 
-该列表负责管理固定在 `com.apple.dock` 的 `persistent-apps` 偏好设置中的应用程序。应用时会添加、
-移除并重新排列这些应用程序，同时保留现有磁贴的书签和元数据。匹配应用程序时会解析符号链接；
-新磁贴会保留声明的路径。非应用程序磁贴和未识别的磁贴会被保留，`persistent-others` 不受影响。
-正在运行但未固定的应用程序和最近使用的应用程序部分不在此列表中。
+mise adds, removes, and reorders the applications in `com.apple.dock`'s
+`persistent-apps` preference, and keeps each existing tile's bookmark and
+metadata. It resolves symlinks to match applications, and new tiles keep the
+path you declared. Other kinds of tiles and tiles mise does not recognize stay
+as they are, and `persistent-others`, which holds the Dock's folders and
+files, is not touched. Running apps that are not pinned, and the recent apps
+section, are outside this list.
 
-状态会比较应用程序路径和顺序，因此 Dock 添加的元数据不会造成偏离。手动移动固定的应用程序会造成
-偏离；应用时会恢复声明的顺序。没有捕获或同步操作。
+Status compares paths and order, so metadata that Dock adds does not count as
+a change. Moving a pinned app by hand does, and the next apply restores the
+declared order. mise has no command to capture your current Dock into the
+config.
 
-通常的优先级规则适用：同一文件中的原始 `persistent-apps` 会覆盖 `apps`，而跨文件时更本地的配置
-优先。生效的原始声明会保持精确的 plist 比较和整体值替换。`defaults_entries` 在同一文件中具有
-高于简写默认值的通常优先级。
+## Open apps at login {#login-items}
 
-与其他 Dock 偏好设置一样，mise 不会重启 Dock。应用后可以在方便时重新启动它（`killall Dock`），
-或者使用下面所述的现有 `post-defaults` hook。
+`[bootstrap.macos.login_items]` declares the applications that open when you
+log in, the list under System Settings → General → Login Items & Extensions →
+Open at Login:
+
+```toml
+[bootstrap.macos.login_items]
+apps = [
+  "/Applications/Bitwarden.app",
+  "/Applications/Ghostty.app",
+  "~/Applications/Example.app",
+]
+```
+
+Paths follow the same rules as [`dock.apps`](#dock-applications): absolute or
+starting with `~/`, ending in `.app`, no `..`, and no duplicates.
+
+By default the list is additive. `mise bootstrap status` reports declared apps that
+are missing and `apply` adds them, but entries you did not declare are left
+alone, because apps such as Rectangle register themselves. Set
+`exclusive = true` to make the config own the whole list, so `apply` also
+removes undeclared entries:
+
+```toml
+[bootstrap.macos.login_items]
+apps = ["/Applications/Ghostty.app"]
+exclusive = true
+```
+
+Across config files, `apps` are combined and the most local `exclusive` wins. With several selected config roots, `exclusive` applies only if every root that sets it says `true`.
+
+mise manages the list with the `LSSharedFileList` API, because `SMAppService`
+can only register the calling app. Apple has deprecated that API since macOS
+10.11 but it still works. If a future macOS removes it, mise will report an
+error instead of changing anything. `mise bootstrap macos defaults
+apply` applies login items together with defaults.
 
 ## 原始默认值
 
-`[bootstrap.macos.defaults]` 下的每个键都是一个偏好设置域。包含点号的域需要加引号。
-TOML 值按如下方式映射为 property-list 类型：
+Each key under `[bootstrap.macos.defaults]` is a preferences domain, and each
+key inside it a preference. Quote a domain that contains dots. TOML values map
+to property list types:
 
-| TOML 值   | property-list 类型 | 示例                           |
+| TOML value | Property list type | Example                        |
 | ---------- | ------------------ | ------------------------------ |
 | boolean    | boolean            | `autohide = true`              |
 | integer    | integer            | `tilesize = 48`                |
@@ -154,7 +188,8 @@ TOML 值按如下方式映射为 property-list 类型：
 | array      | array              | `favorite-spaces = [1, 2, 3]`  |
 | table      | dictionary         | `options = { enabled = true }` |
 
-数组和表会递归转换，因此嵌套值会保留其类型。例如，Dock 条目可以声明为字典数组：
+Arrays and tables are converted recursively, so nested values keep their types.
+For example, a Dock entry can be an array of dictionaries:
 
 ```toml
 [bootstrap.macos.defaults."com.apple.dock"]
@@ -163,39 +198,39 @@ TOML 值按如下方式映射为 property-list 类型：
 ]
 ```
 
-配置的值会替换整个偏好设置值；数组和字典不会逐个元素合并。TOML 日期和时间不受支持，
-会跳过并显示警告。二进制 plist 数据没有原生 TOML 类型，同样不受支持。
+A declared value replaces the whole preference; mise does not merge arrays or
+dictionaries element by element. To change one value inside a dictionary, see
+[Change one value in a dictionary](#targeted-dictionary-updates). TOML dates
+and times are skipped with a warning, and binary data has no TOML type, so
+neither is supported.
 
-## 语义
+### Find a preference's domain and key {#finding-keys}
 
-`[bootstrap.macos.defaults]` 遵循与
-[`[bootstrap.packages]`](/bootstrap/packages/) 相同的规则：
+Change the setting in System Settings and compare the output of
+`defaults read` before and after, or read a domain directly:
 
-- **声明式且追加式** —（domain、key）对会跨越
-  [配置层级](/configuration.html)（全局 → 项目）以并集方式合并；更本地的配置会覆盖全局配置
-  声明的某个键值对，但不能移除它。mise 永远不会删除默认值。
-- **按操作系统筛选** — 在 macOS 之外的任何系统上，此部分均不生效：
-  `mise bootstrap macos defaults status` 和 `mise doctor` 会将条目标记为已跳过（因此不会静默隐藏），
-  而 `mise bootstrap macos defaults apply` 会忽略它们，因此为 Linux 和 macOS 编写的共享配置可以
-  原样使用。
-- **仅手动应用** — mise 永远不会隐式写入默认值；只有
-  `mise bootstrap macos defaults apply` 或完整的 `mise bootstrap` 才会执行，并且会在通常的确认
-  提示之后进行。
-- **严格类型化** — 只有值和 plist 类型都匹配时，现有值才会被视为同步：整数 `1` 不会满足配置的
-  `true`。`mise bootstrap macos defaults apply` 会将其收敛为类型匹配的值。
+```sh
+defaults read com.apple.dock
+defaults read-type com.apple.dock tilesize
+```
 
-用户默认值是按用户设置的，因此与系统软件包不同，它们从不涉及 sudo。不支持 `sudo defaults`
-系统域。
+## Explicit entries
 
-## 沙盒应用
+Use `[[bootstrap.macos.defaults_entries]]` when a preference needs a host scope
+or a path inside a dictionary. Each entry takes:
 
-Safari 等沙盒应用会将偏好设置保存在 `~/Library/Containers/<domain>/Data/Library/Preferences/<domain>.plist`，而不是 `~/Library/Preferences`。当 `~/Library/Containers/<domain>` 存在时，mise 会读写容器的 plist；当前主机条目则使用容器的 `ByHost` 目录。这些就是 `defaults` 使用的文件。
+| Field    | Value                                                                                  |
+| -------- | -------------------------------------------------------------------------------------- |
+| `domain` | Preferences domain, such as `"NSGlobalDomain"`; `-g` and `-globalDomain` mean the same |
+| `key`    | Preference key                                                                         |
+| `value`  | Any type in the table above                                                            |
+| `host`   | `"any"` (the default) or `"current"`                                                   |
+| `path`   | List of dictionary keys inside the preference                                          |
 
-从未启动过的应用还没有容器，因此请先启动一次，再应用其默认设置。macOS 会保护其他应用的容器，因此终端可能需要“完全磁盘访问权限”（系统设置 → 隐私与安全性）才能让 `apply` 写入这些文件。
+### Current-host preferences
 
-## 当前主机偏好设置
-
-对于通常使用 `defaults -currentHost` 写入的偏好设置，请使用显式条目：
+Preferences you would write with `defaults -currentHost` need
+`host = "current"`:
 
 ```toml
 [[bootstrap.macos.defaults_entries]]
@@ -205,19 +240,16 @@ host = "current"
 value = 1
 ```
 
-条目接受与 `defaults` 相同的类型化值，包括数组和表。可选的 `host` 默认为 `"any"`；
-`"current"` 会将读取、写入和同步限定在当前主机。同一个域和键可以在每个范围内独立管理。
+mise then reads, writes, and synchronizes the preference for this machine
+only. The same domain and key can be managed separately in each scope. Status
+labels these domains with `(current host)`, JSON entries include `host`, and
+the dry run of a single boolean, number, or string value shows `-currentHost`.
 
-偏好设置会按照域、键和主机从全局到本地合并。显式条目会覆盖同一文件中的简写默认值。
-全局域别名 `-g` 和 `-globalDomain` 与 `NSGlobalDomain` 共享相同的标识。
+### Change one value in a dictionary {#targeted-dictionary-updates}
 
-状态会用 `(current host)` 标记当前主机域，JSON 条目会包含 `host`。标量试运行会包含
-`-currentHost`。
-
-## 目标字典更新
-
-向默认值条目添加 `path`，即可在共享字典中管理嵌套值，而不会替换其同级项。例如，禁用一个
-符号快捷键，同时保留其参数和其他快捷键：
+Add `path` to change a value inside a shared dictionary without replacing the
+values around it. This turns off one keyboard shortcut and keeps its other
+settings and every other shortcut:
 
 ```toml
 [[bootstrap.macos.defaults_entries]]
@@ -227,61 +259,112 @@ path = ["64", "enabled"]
 value = false
 ```
 
-每个 `path` 组件都是字面量字典键，因此组件中的点号不会作为分隔符。路径必须至少包含一个组件。
-`value` 接受与 `defaults` 相同的类型，并完整替换选中的值，包括该值为数组或字典的情况。不支持
-数组索引。
+Each component of `path` is a literal dictionary key, so a dot in a component
+is not a separator. A path needs at least one component, and array indexes are
+not supported. `value` replaces the selected value in full, even when it is an
+array or dictionary.
 
-路径同时适用于 `host = "any"`（默认值）和 `host = "current"`。Mise 会读取所选主机范围中的
-现有 plist，应用补丁，然后写入更新后的值。未选中的值会保留其类型，包括数据和日期。缺失的父级
-字典会被创建；路径中的现有标量或数组会导致错误。状态只比较选中的值，试运行输出会显示其路径。
+mise reads the existing preference in the selected host scope, changes the
+selected value, and writes the result. Other values keep their types, including
+data and dates. Missing dictionaries along the path are created; an existing
+value along the path that is not a dictionary is an error. Status compares only
+the selected value, and the dry run shows its path. Quit the app first if it
+rewrites this preference while it runs.
 
-具有相同域、键、主机和路径的声明会从全局到本地合并，最后一个值获胜。同一偏好设置和主机的
-祖先／后代补丁，或补丁与整体值声明，会在写入前被拒绝。所有补丁值都会在第一次偏好设置写入前
-准备完成。与其他偏好设置一样，应用程序可能会并发更改某个值；这不是与这些应用程序之间的原子事务。
+Two entries for the same preference and host where one path contains the other,
+or a path entry and a whole-value declaration for the same preference, are
+rejected before anything is written.
 
-## 命令
+## Sandboxed apps
+
+Sandboxed apps such as Safari keep their preferences in
+`~/Library/Containers/<domain>/Data/Library/Preferences/<domain>.plist`, not in
+`~/Library/Preferences`. When `~/Library/Containers/<domain>` exists, mise
+reads and writes the container's file, and current-host entries use the
+container's `ByHost` folder. These are the same files `defaults` uses.
+
+An app that has never been launched has no container yet, so launch it once
+before you apply its preferences. macOS protects other apps' containers, so
+your terminal may need Full Disk Access (System Settings > Privacy & Security)
+before `apply` can write them.
+
+## How configs combine {#semantics}
+
+Preferences merge by domain, key, host, and path across the
+[config hierarchy](/configuration.html#configuration-hierarchy). A more local
+config can change a value that a less local one declared, but it cannot remove
+it, and mise never deletes a preference.
+
+Named settings and raw defaults write the same preferences. Within one config
+file, a `[bootstrap.macos.defaults]` value wins over a named setting for the
+same domain and key, and a `[[bootstrap.macos.defaults_entries]]` entry wins
+over both. A raw `persistent-apps` value therefore replaces `apps` in the same
+file and is compared as a whole value. Across files, the more local config wins
+as usual, so a project's named setting overrides a raw default from your global
+config.
+
+A value counts as set only when its type matches too: an integer `1` does not
+satisfy `true`, and apply rewrites it as a boolean. Preferences belong to your
+user, so mise never uses `sudo` for them, and system-wide domains written with
+`sudo defaults` are not supported.
+
+## Restart affected apps {#app-restarts}
+
+Dock, Finder, and the menu bar read many preferences only when they start, so a
+stored value can match while the app still shows the old behavior. mise does
+not restart them. It prints a reminder after it writes preferences, and
+`mise bootstrap` repeats the reminder in its follow-up summary. Relaunch them
+yourself:
 
 ```sh
-mise bootstrap macos defaults status            # 显示默认值偏离
-mise bootstrap macos defaults status --missing  # 如果有任何未设置或不一致则退出 1
-
-mise bootstrap macos defaults apply           # 写入未设置或不一致的默认值
-mise bootstrap macos defaults apply --dry-run # 打印计划写入的偏好设置
-mise bootstrap macos defaults apply --yes     # 跳过确认提示
+killall Dock Finder SystemUIServer
 ```
 
-`mise bootstrap macos defaults status` 会将每一项报告为 `set`（匹配）、
-`differs`（存在值但不匹配——会显示当前值）或
-`unset`。`mise doctor` 会汇总相同的偏离情况。
-
-## 应用重启
-
-有些应用程序只有在重新启动后才会应用已更改的默认设置——mise 会在写入后打印一条提醒，而顶层的 `mise bootstrap` 会在其最终的后续摘要中包含同样的提醒。常见对象如下：
-
-```sh
-killall Dock
-killall Finder
-killall SystemUIServer
-```
-
-mise 不会自行终止应用程序。在 `mise bootstrap`
-写入默认值后，后续摘要会提醒你重新启动应用；常见的
-`post-defaults` hook 如下：
+To restart Dock on every bootstrap, add a [hook](/bootstrap.html#hooks). Hooks
+run on every bootstrap that includes the defaults step, even when nothing
+changed:
 
 ```toml
-[bootstrap.hooks.post-defaults]
-run = "killall Dock || true"
+[bootstrap.hooks]
+post-defaults = "killall Dock || true"
 ```
 
-存储的值可能已经匹配，但 Dock 或 Finder 仍然显示其之前的行为。请检查状态，然后在方便时重新启动
-受影响的应用。每次选中的 bootstrap 都会运行 post-defaults hook，即使没有偏好设置发生更改；
-如果不希望如此，请使用上面的手动命令。
+## Undo a preference
 
-## 查找键
-
-要发现某个设置的域和键，请在“系统设置”中更改它，然后对比更改前后 `defaults read` 的输出，或者直接读取某个域：
+mise never deletes a preference, so removing a declaration leaves the current
+value in place. To return a preference to the system default, remove it from
+your config and delete it:
 
 ```sh
-defaults read com.apple.dock
-defaults read-type com.apple.dock tilesize
+defaults delete com.apple.dock autohide
 ```
+
+## Preview and apply
+
+```sh
+mise bootstrap macos defaults status            # state of each preference
+mise bootstrap macos defaults status --json     # the same, as JSON
+mise bootstrap macos defaults status --missing  # exit 1 if any preference is unset or differs
+mise bootstrap macos defaults apply --dry-run   # print the planned writes
+mise bootstrap macos defaults apply             # apply after a confirmation prompt
+mise bootstrap macos defaults apply --yes       # apply without prompting
+```
+
+Status reports each preference as `set` (it matches), `differs` (a value exists
+but does not match, and status shows it), or `unset`. `mise doctor` summarizes
+the same drift.
+
+## On Linux and Windows
+
+The sections are ignored on other platforms, so one config can serve several
+machines.
+[`mise bootstrap macos defaults status`](/cli/bootstrap/macos/defaults/status.html)
+and `mise doctor` list the entries as skipped, and `apply` does nothing.
+
+## See also
+
+- [Bootstrap](/bootstrap.html#how-it-runs) for where defaults fall in the run
+  order.
+- [macOS LaunchAgents](/bootstrap/launchd.html) for programs that run at login.
+- [Homebrew casks](/bootstrap/packages/brew-cask.html) for the applications you
+  pin in the Dock.

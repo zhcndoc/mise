@@ -11,35 +11,37 @@ description: "移除已安装的工具版本"
 
 移除已安装的工具版本
 
-这只会移除已安装的版本；不会修改 mise.toml。
-使用 `mise unuse` 从 mise.toml 中移除工具并将其卸载。
+Removes installed versions but does not edit mise.toml. Use `mise unuse` to
+remove a tool from mise.toml and uninstall it. A tool name or version prefix,
+such as `node` or `node@22`, must match exactly one installed version unless
+you pass `--all`.
 
-## 参数
-- **`[INSTALLED_TOOL@VERSION]…`** — 要移除的工具
+## Arguments
+- **`[INSTALLED_TOOL@VERSION]…`** — Tools to remove, such as node@22.0.0
 
-## 标志
-- **`-a --all`** — 删除所有已安装的版本
-- **`-n --dry-run`** — 不实际删除任何内容
-- **`--dry-run-code`** — 类似于 --dry-run，但如果有工具需要卸载，则以代码 1 退出
+## Flags
+- **`-a --all`** — Remove every installed version of the named tools, or of every tool when none is named
+- **`-n --dry-run`** — Show what would change without changing anything
+- **`--dry-run-code`** — Like --dry-run, but exit with code 1 if there are tools to uninstall
 
-  这对于脚本检查是否需要卸载工具很有用。
-- **`-h --help`** — 显示帮助
+  Use it in scripts that check whether tools need uninstalling.
+- **`-h --help`** — Print help
 
 ## 示例
 
-卸载特定版本
+Uninstall a specific version
 
 ```
-mise uninstall node@18.0.0
+mise uninstall node@22.0.0
 ```
 
-卸载当前的 node 版本（如果只安装了一个版本）
+Uninstall node when exactly one version is installed
 
 ```
 mise uninstall node
 ```
 
-卸载 node 的每个已安装版本
+Uninstall every installed version of node
 
 ```
 mise uninstall --all node
@@ -49,6 +51,6 @@ mise uninstall --all node
 
 ## 相关文档
 
-- [开发工具](/dev-tools/)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Removing tools](/dev-tools/#remove-tools).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

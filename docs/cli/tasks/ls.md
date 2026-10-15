@@ -11,41 +11,57 @@ description: "列出可用任务"
 
 列出可用任务
 
-任务来自配置文件和任务目录，例如 `.mise/tasks`。
-所有父目录中的任务都会合并到此列表中。
+Lists tasks from `[tasks]` in your config files and from task directories such as `mise-tasks/`, `.mise-tasks/`, and `.mise/tasks/`, including global tasks in `~/.config/mise/tasks/`. Tasks from parent directories and the global config are included; a project task overrides a global task with the same name. In a monorepo, `--all` also lists tasks from sibling projects.
 
-因此，如果你在 `~/.config/mise/tasks/*` 中有全局任务，并且在
-`~/myproject/.mise/tasks/*` 中有项目特定任务，那么它们都会可用，但如果项目特定
-任务与全局任务同名，则会覆盖全局任务。
+See <https://mise.jdx.dev/tasks/task-discovery.html>
 
-## 标志
-- **`-g --global`** — 仅显示全局任务
-- **`-J --json`** — 以 JSON 格式输出
-- **`-l --local`** — 仅显示非全局任务
-- **`-x --extended`** — 显示所有列
-- **`--all`** — 从整个 monorepo 加载所有任务，包括同级目录中的任务。
-  默认情况下，仅加载当前目录层级中的任务。
-- **`--hidden`** — 显示隐藏任务
-- **`--name-only`** — 仅显示任务名称，每行一个。适用于通过管道传递给 fzf 和类似工具。
-- **`--no-header`** — 不打印表头
-- **`--sort <COLUMN>`** — 按列排序。默认为 name。
+## Flags
+- **`-g --global`** — Only show global tasks
+- **`-J --json`** — Output in JSON format
+- **`-l --local`** — Only show non-global tasks
+- **`-x --extended`** — Show all columns
+- **`--all`** — Include tasks from every project in the monorepo, not only the current directory's hierarchy
+- **`--hidden`** — Show hidden tasks
+- **`--name-only`** — Print only task names, one per line (for fzf and similar tools)
+- **`--no-header`** — Do not print the table header
+- **`--sort <COLUMN>`** — Column to sort by (default: name)
 
-  **选项：** `name`、`alias`、`description`、`source`
-- **`--sort-order <SORT_ORDER>`** — 排序顺序。默认为 asc。
+  **Choices:** `name`, `alias`, `description`, `source`
+- **`--sort-order <SORT_ORDER>`** — Sort direction (default: asc)
 
   **选项：** `asc`、`desc`
 - **`-h --help`** — 打印帮助
 
 ## 示例
 
+List tasks
+
 ```
 mise tasks ls
+```
+
+Include hidden tasks
+
+```
+mise tasks ls --hidden
+```
+
+List tasks from every monorepo project
+
+```
+mise tasks ls --all
+```
+
+Pick a task name interactively
+
+```
+mise tasks ls --name-only | fzf
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [任务配置](/tasks/task-configuration.html)。
-- [`mise tasks [FLAGS] [TASK] [SUBCOMMAND]`](/cli/tasks.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Task configuration reference](/tasks/task-configuration.html).
+- [`mise tasks [FLAGS] [TASK] [SUBCOMMAND]`](/cli/tasks.html).
+- [Global flags and argument syntax](/cli/#global-flags).

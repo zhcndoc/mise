@@ -11,38 +11,41 @@ description: "保存跟踪文件的更改"
 
 保存跟踪文件的更改
 
-在前台运行：为每个自动保存的跟踪条目安装文件系统监视，在更改后的文件保持
-`history.watch.debounce` 时间不变后保存检查点（持续更改的文件不会延迟其他文件；
-`history.watch.max_interval` 会强制保存该文件），并在启动时、每隔
-`history.watch.reconcile` 以及配置发生更改时协调整个集合。手动保存的条目不会被监视。
+Runs in the foreground and saves a checkpoint once a changed file has been quiet for `history.watch.debounce`. A file that keeps changing does not delay the others and is still saved every `history.watch.max_interval`. The watcher also rescans every tracked path at startup, every `history.watch.reconcile`, and when the configuration changes. Entries tracked with `--no-autosave` are not watched.
 
-连接了设置仓库时，监视器还会根据
-`settings.history.sync` 进行同步：在 `sync` 模式下，会在保存后的
-`history.sync_interval` 内发布，每隔 `history.fetch_interval` 获取一次，并在完整设置
-不存在冲突后应用传入的更改；在 `fetch-only` 模式下只获取；在 `manual` 模式下不进行
-网络操作。同步失败后会退避，并在保存继续进行的同时重试。`--once` 会执行一次协调和一次此类同步。
+With an origin connected, the watcher also syncs according to the `history.sync` setting. In `sync` mode it pushes within `history.sync_interval` of a save, fetches every `history.fetch_interval`, and applies incoming changes when there are no conflicts. In `fetch-only` mode it only fetches; in `manual` mode it does not use the network. A failed sync is retried with backoff while saving continues. `--once` runs one rescan and one sync, then exits.
 
-内置服务 `history-watch` 会为你运行此命令：
+The built-in `history-watch` service runs this for you:
 
 ```
 [bootstrap.services.mise-history]
 builtin = "history-watch"
 ```
 
-退出代码：当历史记录被禁用或已有其他监视器运行时为 0；当 git 不可用、存储无法打开或无法
-安装任何监视器时为 1。捕获失败后会以退避方式重试，绝不会丢弃待处理的更改；如果捕获会
-与其他历史记录操作重叠，则会延后执行。
+Exits 0 when history is disabled or another watcher is already running, and 1 when Git is unusable, the store cannot be opened, or no watch can be installed. A failed save is retried with backoff and never drops the pending changes, and a save that would overlap another history operation is deferred. With `--once`, nothing is retried: a save that fails or is deferred, or a sync that fails, exits 1.
 
-## 标志
-- **`--once`** — 协调并同步一次后退出（用于计时器和 cron）
-- **`-J --json`** — 每行输出一个 JSON 对象，而不是日志行
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--once`** — Rescan and sync once, then exit (for timers and cron)
+- **`-J --json`** — Print one JSON object per line instead of log lines
+- **`-h --help`** — Print help
 
-示例：
+## Examples
+
+Watch and save until stopped
 
 ```
 mise dot watch
-mise dot watch --once      # one reconcile, for a timer
+```
+
+Rescan and sync once, for a timer
+
+```
+mise dot watch --once
+```
+
+Print JSON lines instead of log lines
+
+```
 mise dot watch --json
 ```
 
@@ -50,6 +53,6 @@ mise dot watch --json
 
 ## 相关文档
 
-- [开始使用](/getting-started.html)。
-- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles [--local] <SUBCOMMAND>`](/cli/dotfiles.html).
+- [Global flags and argument syntax](/cli/#global-flags).

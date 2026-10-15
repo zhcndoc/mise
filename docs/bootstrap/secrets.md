@@ -1,18 +1,28 @@
 ---
-description: "[bootstrap.secrets] 声明引导配置所需的敏感输入，而无需将其值存储在 mise 配置中。"
+description: "Declare the secret values that bootstrap templates need without storing them in mise configuration."
 ---
 
-# 引导密钥输入
+# Secret inputs
 
-`[bootstrap.secrets]` 声明引导配置所需的敏感输入，而无需将其值存储在 mise 配置中。值来自环境，使 [fnox](https://fnox.jdx.dev/) 等密钥管理器成为提供方边界，而无需将特定于提供方的凭据添加到 mise 中。
+`[bootstrap.secrets]` names the secret values your bootstrap needs, such as
+tokens and passwords, without storing them in mise configuration. mise reads
+each value from an environment variable at run time, so you can set it however
+you like: with [fnox](https://fnox.jdx.dev/), a CI secret, or your shell.
+
+This is separate from [`[env]` secrets](/environments/secrets/), which load
+values into your shell environment.
+
+## Example
+
+Declare each input, then use it in a template with `secret()`:
 
 ```toml
 [bootstrap.secrets]
 cache_token = "MISE_CACHE_TOKEN"
-database_password = {
-  env = "PRODUCTION_DATABASE_PASSWORD",
-  description = "生产数据库密码",
-}
+
+[bootstrap.secrets.database_password]
+env = "PRODUCTION_DATABASE_PASSWORD"
+description = "Production database password"
 
 [bootstrap.files."/etc/example/service.env"]
 content = '''
@@ -23,28 +33,69 @@ template = true
 owner = "root"
 group = "root"
 mode = "0600"
+```
 
+Then [supply the values](#supply-values) when you apply.
+
+## Declare inputs
+
+The short form maps a name to an environment variable, as in
+`cache_token = "MISE_CACHE_TOKEN"`. The table form takes these keys:
+
+| Key           | Default  | Meaning                                             |
+| ------------- | -------- | --------------------------------------------------- |
+| `env`         | Required | Environment variable that holds the value           |
+| `description` | None     | Text mise shows when it prompts for the value       |
+| `allow_empty` | `false`  | Accept an empty value, which mise otherwise rejects |
+
+Names use ASCII letters, digits, `.`, `_`, and `-`. The environment variable
+name must be a valid shell variable name.
+
+## Use them in templates
+
+These templates can call <code v-pre>{{ secret(name="...") }}</code>:
+
+- [`[bootstrap.files]`](/bootstrap/files.html) content with `template = true`
+- [`[dotfiles]`](/dotfiles.html) entries with `mode = "template"`
+
+Block, line, and merge edits in `[dotfiles]` cannot. A `[dotfiles]` template
+uses a secret the same way; for example, `dotfiles/credentials.tmpl` might
+contain <code v-pre>token = {{ secret(name="cache_token") }}</code> for this
+entry:
+
+```toml
 [dotfiles."~/.config/example/credentials"]
 source = "dotfiles/credentials.tmpl"
 mode = "template"
 ```
 
-简短声明会将逻辑名称直接映射到环境变量。表格形式还接受 `description` 和 `allow_empty = true`；默认情况下会拒绝空值。mise 只解析选定文件模板所引用的输入；未使用的声明不会阻止不相关的文件。mise 会解析被引用的输入，并在任何完整引导变更开始前渲染每个模板，因此缺失的输入不会导致文件被部分渲染，也不会让较早的引导步骤运行。
+mise resolves only the inputs that the templates selected for a run use, so an
+unused declaration does not block anything. Before a full `mise bootstrap`
+changes anything, mise resolves those inputs and renders every template, so a
+missing value stops the run before it writes a partial file or runs earlier
+steps.
 
-`.env` 示例假定值可以写成单行赋值。`secret()` 函数会插入值；它不会针对 shell、JSON、TOML 或其他目标格式为其添加引号或进行转义。请根据服务所使用的格式渲染和编码值，尤其要注意引号或换行符。
+`secret()` inserts the value as it is. It does not quote or escape it for a
+shell, JSON, TOML, or any other format, so the `.env` example above works only
+for values that fit on one line without quoting. Encode the value for the format
+the service reads, especially when it can contain quotes or newlines.
 
-## 提供输入并检查可用性
+## Supply values
 
-使用 fnox 将由提供方提供的值注入引导进程：
+mise does not care where a value comes from. [fnox](https://fnox.jdx.dev/) can
+inject values from a secret provider into the bootstrap process:
 
 ```sh
 fnox exec -- mise bootstrap --yes
 fnox exec -- mise bootstrap plan
 ```
 
-这有意保持松耦合集成。运行 mise 的机器在其环境已经填充完成时不需要 fnox，并且 mise 不会知道某个值来自 fnox、CI 密钥、`systemd` 还是 shell。
+A machine whose environment already has the variables does not need fnox, and
+a value from a CI secret, a systemd credential, or your shell works the same
+way.
 
-对于需要人工参与的一次性运行，`--prompt-secrets` 会安全地提示输入缺失的值。提示输入的值会保留在内存中，不会被导出：
+For an attended run, `--prompt-secrets` asks for each missing value without
+echoing it. Prompted values stay in memory for that run and are not exported:
 
 ```sh
 mise bootstrap --prompt-secrets --yes
@@ -53,8 +104,43 @@ mise dot apply --prompt-secrets
 mise bootstrap plan --prompt-secrets
 ```
 
-`mise bootstrap secrets status` 会报告逻辑名称、环境变量名称，以及 `available`、`missing`、`empty` 或 `invalid_unicode` 状态；它永远不会打印值。添加 `--json` 可获取机器可读的输出，或添加 `--missing` 在输入不可用时以状态码 1 退出。
+## Check what is available
 
-对于[远程引导](/bootstrap/remote.html)，本地环境不会复制到 SSH 目标。请在目标上提供输入，或在需要人工参与的运行中使用 `--prompt-secrets`。
+```sh
+mise bootstrap secrets status
+```
 
-mise 会从其输出中隐藏已解析的值。计划、试运行、状态输出和特权辅助程序输出都不包含已渲染的文件内容。不存在用于显示引导密钥的命令。
+```text
+cache_token        MISE_CACHE_TOKEN              available
+database_password  PRODUCTION_DATABASE_PASSWORD  missing
+```
+
+Each input is `available`, `missing`, `empty`, or `invalid_unicode`. Status
+never prints values. Add `--json` for machine-readable output, or `--missing`
+to exit 1 when any input is unavailable.
+
+## How configs combine
+
+When several config files declare the same name, the most local declaration
+wins. `mise bootstrap status` includes the same secrets list as
+`mise bootstrap secrets status`.
+
+## Remote hosts
+
+[`mise bootstrap remote`](/bootstrap/remote.html) does not copy your local
+environment to the host, so values set on this machine are not available there.
+Make the values available on the host, or use `--prompt-secrets` for an
+attended run.
+
+## What mise never prints
+
+mise redacts resolved values from its output. Plans, dry runs, status output,
+and the output of its privileged helper contain no rendered file content, and no
+command reveals a bootstrap secret.
+
+## See also
+
+- [System files and directories](/bootstrap/files.html) for the files these
+  templates write.
+- [Bootstrap](/bootstrap.html#templates) for which bootstrap values are
+  templates.

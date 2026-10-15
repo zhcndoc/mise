@@ -1,49 +1,89 @@
 ---
-description: "实现用于共享 mise 任务构建产物的远程缓存服务。"
+description: "Implement a server or client for version 1 of the protocol behind mise's remote task cache."
 ---
 
-# 远程构建缓存协议
+# Remote cache protocol <Badge type="warning" text="experimental" />
 
-> [!WARNING]
-> 远程构建缓存仍处于实验阶段。本文档定义了 mise 任务构建产物缓存的协议版本 1。
+This page specifies version 1 of the protocol between mise and a remote task
+cache. It is for people who implement a cache server or client. To use a remote
+cache, see [Remote task cache](/tasks/remote-cache.html). The reference server
+is `mbx-cache`, from
+[`jdx/mr-boxington-cache`](https://github.com/jdx/mr-boxington-cache).
+It is developed separately from mise; this page is the authoritative protocol
+definition.
 
-本页面面向远程缓存客户端或服务器的实现者。要为项目配置缓存，请从[任务缓存](./caching.html)开始。
+::: warning Experimental
+The remote cache is experimental. The mise client uses it only with
+`experimental = true`.
+:::
 
-该协议定义了一个面向内容寻址的任务执行及其输出缓存。它不会公开 mise 的本地缓存目录、清单或归档格式。本地存储属于实现细节，可以使用归档或数据包，而无需更改远程协议。
+In this specification, the lowercase words must, must not, should, and may state
+requirement levels as defined in RFC 2119.
 
-版本 1 存储不可变的构建数据：
-
-- **内容寻址存储（CAS）**包含由其摘要标识的 Blob 和目录对象。
-- **操作结果**将规范构建操作的摘要映射到其输出目录和日志。该模型可以对操作之间的内容进行去重，支持部分传输和并行传输，并允许服务器在发布缓存命中前验证所有引用的内容。
+Version 1 has two stores: content-addressable storage (CAS) for blobs and
+directory objects, keyed by digest, and action results, which map an action's
+digest to its outputs and log. Splitting them lets clients deduplicate content
+across actions and transfer blobs in parallel or in part, and lets a server
+verify every referenced object before it publishes a hit. The protocol does not
+expose mise's local cache directories, manifests, or archive formats; a client
+may store entries locally in any form.
 
 ## 术语
 
-- **命名空间**：不透明的授权与隔离范围，通常代表组织、代码库、分支、拉取请求或用户。
-- **操作**：构建操作的类型化规范描述，以及所有会影响其结果的输入。
-- **操作结果**：操作成功完成后发布的不可变记录。
-- **Blob**：CAS 中未经解释的字节。
-- **目录对象**：CAS 中描述文件、子目录和符号链接的规范 JSON。
-- **摘要**：算法、小写十六进制哈希值以及未压缩字节长度。
-- **提交**：在验证所有引用的 CAS 对象后发布操作结果。
+| Term                  | Meaning                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Namespace             | An opaque authorization and isolation scope, usually an organization, repository, branch, pull request, or user |
+| Action                | The typed canonical description of a build operation and every input that affects its result                    |
+| Action result         | The immutable record published after an action completes successfully                                           |
+| Blob                  | Uninterpreted bytes in CAS                                                                                      |
+| Directory object      | Canonical JSON in CAS that describes files, subdirectories, and symbolic links                                  |
+| Digest                | An algorithm, a lowercase hexadecimal hash, and the uncompressed byte length                                    |
+| Commit                | Publication of an action result after every CAS object it references has been verified                          |
+| Verified CAS          | CAS content whose bytes the server has checked against their digest                                             |
+| CAS visibility domain | The CAS objects that a request's namespace is allowed to see                                                    |
+| Read scope            | The single namespace that a read request queries                                                                |
 
 ## 传输与版本控制
 
-版本 1 使用 HTTPS 和 HTTP 语义。携带授权凭据的请求必须使用 HTTPS，
-但回环开发服务器（`localhost`、`127.0.0.0/8` 和 `::1`）除外。客户端在发出可见警告后，
-可以连接到未经身份验证的非回环 HTTP 服务。此模式既不提供机密性，也不提供服务器真实性：链路上的攻击者可以替换操作结果及其内部一致的 CAS 图。实现可以使用 HTTP/1.1、HTTP/2 或 HTTP/3。
+Version 1 uses HTTPS and HTTP semantics. Requests that carry authorization
+credentials require HTTPS, except to loopback development servers (`localhost`,
+`127.0.0.0/8`, and `::1`). Clients may connect to an unauthenticated
+non-loopback HTTP service after they print a visible warning. That mode provides
+neither confidentiality nor server authenticity: an on-path attacker can replace
+an action result and its internally consistent CAS graph. Implementations may
+use HTTP/1.1, HTTP/2, or HTTP/3.
 
-每个 API 请求都会发送：
+Requests carry these headers:
 
-| Header                 | Value                                                          |
-| ---------------------- | -------------------------------------------------------------- |
-| `mise-cache-protocol`  | `1`                                                            |
-| `mise-cache-namespace` | 操作所使用的命名空间，但发现端点除外 |
+| Header                | Value                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `mbx-cache-protocol`  | `1`                                                                                                         |
+| `mbx-cache-namespace` | The namespace for the operation. Servers must not require it on `GET /v1/capabilities` and `GET /v1/status` |
+| `Authorization`       | `Bearer <token>` when the deployment uses bearer or OIDC tokens                                             |
 
-URL 前缀 `/v1` 是协议的主版本。兼容性新增功能会作为能力进行声明，无需新的 URL 前缀。不兼容的线路或完整性变更需要使用新的主协议；版本 1 不得作为不兼容实现的别名。
+The URL prefix `/v1` is the protocol's major version. Compatible additions are
+advertised as capabilities and do not need a new URL prefix. An incompatible
+wire or integrity change requires a new major version; version 1 must not be
+used as an alias for an incompatible implementation.
 
-服务器不得发送未知的 JSON 响应字段，客户端不得发送未知的请求字段，除非协商的能力允许这样做。
+Servers must not send unknown JSON response fields, and clients must not send
+unknown request fields, unless a negotiated capability permits them.
 
-GitHub Actions 受保护分支的 `push` 作业和 GitLab 受保护分支的 push 流水线可以使用配置的写入模式。拉取请求、标签/发布版本、未受保护的分支、未知 CI 系统以及本地运行仅限读取；配置为仅写入的客户端会禁用其远程端，而不会静默扩展为读取权限。
+## Endpoints
+
+The last column shows which endpoints mise's task cache calls today.
+
+| Endpoint                                           | Purpose                          | Used by the mise client |
+| -------------------------------------------------- | -------------------------------- | ----------------------- |
+| `GET /v1/capabilities`                             | Protocol version and features    | No                      |
+| `GET /v1/status`                                   | Health check                     | No                      |
+| `POST /v1/blobs:missing`                           | Find blobs the server lacks      | No                      |
+| `GET /v1/blobs/{algorithm}/{hash}/{size}`          | Read a blob                      | Yes                     |
+| `POST /v1/blobs:pack`                              | Read several blobs in one stream | No                      |
+| `PUT /v1/blobs/{algorithm}/{hash}/{size}`          | Upload a blob                    | Yes                     |
+| `POST /v1/uploads`                                 | Start an upload session          | No                      |
+| `GET /v1/action-results/{algorithm}/{hash}/{size}` | Read an action result            | Yes                     |
+| `PUT /v1/action-results/{algorithm}/{hash}/{size}` | Commit an action result          | Yes                     |
 
 ## 摘要
 
@@ -57,13 +97,21 @@ GitHub Actions 受保护分支的 `push` 作业和 GitLab 受保护分支的 pus
 }
 ```
 
-协议版本 1 定义了 `blake3` 和 `sha256`。服务器会公布其接受的算法，并且必须支持 BLAKE3。操作描述符和操作结果键始终使用 BLAKE3；对于其他 CAS 对象，如果服务器公布支持 SHA-256，则可以使用 SHA-256。摘要始终涵盖确切的未压缩字节，并包含其长度。服务器必须拒绝格式错误的哈希值、不支持的算法、负数大小，以及与其声明摘要不匹配的内容。
+Protocol version 1 defines `blake3` and `sha256`. Servers advertise the
+algorithms they accept and must support BLAKE3. Action descriptors and
+action-result keys always use BLAKE3; other CAS objects may use SHA-256 when the
+server advertises it. A digest always covers the exact, uncompressed bytes and
+includes their length. A server must reject malformed hashes, unsupported
+algorithms, negative sizes, and content that does not match its declared digest.
 
-摘要 URL 组件使用 `/v1/blobs/{algorithm}/{hash}/{size}`。算法和哈希值必须与 JSON 表示形式匹配，且 `size` 是无符号十进制整数。
+Digest URL components use `/v1/blobs/{algorithm}/{hash}/{size}`. The algorithm
+and hash must match the JSON representation, and `size` is an unsigned decimal
+integer.
 
 ## 能力
 
-`GET /v1/capabilities` 无需命名空间，并返回协议和服务器限制：
+`GET /v1/capabilities` requires no namespace and returns the protocol version
+and server limits:
 
 ```json
 {
@@ -88,22 +136,34 @@ GitHub Actions 受保护分支的 `push` 作业和 GitLab 受保护分支的 pus
 }
 ```
 
-每个 `action_kinds` 条目都会公布服务器针对该类型验证的操作描述符和客户端元数据架构版本。除非服务器公布了该类型以及客户端实现的确切架构版本，否则客户端不得读取或发布非 `task` 操作。服务器必须拒绝未公布的类型和不受支持的架构版本。兼容的协议新增内容可以添加类型或新的架构版本，而无需更改主协议版本。
+Each `action_kinds` entry advertises the action-descriptor and client-metadata
+schema versions the server validates for that kind. Clients must not read or
+publish a non-`task` action unless the server advertises the kind and the exact
+schema versions the client implements. Servers must reject unadvertised kinds
+and unsupported schema versions. Compatible protocol additions may add kinds or
+schema versions without changing the major version.
 
-客户端必须遵守公布的限制，并在可选功能不可用时回退。对于不受支持的主版本，服务器返回 `426
-Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本。
+Clients must honor advertised limits and fall back when an optional feature is
+absent. Servers return
+`426 Upgrade Required` for unsupported major versions and include their
+supported major version in `mbx-cache-protocol`.
 
-`GET /v1/status` 是一个运行状况检查端点。成功响应表示 API 进程正在运行；
-它不能替代能力协商或授权检查。
+`GET /v1/status` is an operational health endpoint. A successful response means
+the API process is live; it does not replace capability negotiation or an
+authorization check.
 
 ## 规范对象
 
-协议 JSON 对象使用 UTF-8，并在其字节被哈希时使用 JSON 规范化方案（RFC 8785）。重复的对象键、无效的 UTF-8、非规范编码，以及无法由声明的模式表示的值都必须被拒绝。
+Protocol JSON objects use UTF-8 and the JSON Canonicalization Scheme (RFC 8785)
+whenever their bytes are hashed. Duplicate object keys, invalid UTF-8,
+non-canonical encodings, and values the declared schema cannot represent must be
+rejected. The examples on this page are indented for reading; canonical bytes
+have no whitespace and sorted keys.
 
 ### 操作描述符
 
-操作描述符包含稳定的操作类型，以及所有声明会影响其结果的内容。
-操作架构版本 1 定义了 `task`：
+An action descriptor contains a stable action kind and everything declared to
+affect its result. Action schema version 1 defines `task`:
 
 ```json
 {
@@ -111,15 +171,13 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
   "kind": "task",
   "task": "build",
   "phase": "normal",
-  "run": [{ "task": "cargo build --release" }],
+  "run": ["cargo build --release"],
   "args": [],
   "shell": null,
   "outputs": ["target/release/widget"],
   "root": "crates/widget",
-  "source_hash": "blake3:...",
-  "dependency_keys": [],
+  "source_hash": "3efccd93f9ade4f470d8902c431ae261a20c8f38191becd8906d21c4aed4ba8a",
   "environment": { "PROFILE": "release" },
-  "command_inputs": [],
   "vars": {},
   "tools": ["core:rust@1.92.0"],
   "os": "linux",
@@ -127,9 +185,44 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 }
 ```
 
-顺序不具有操作含义的数组必须按照其模式定义的字段进行排序。版本字符串是不透明的，绝不会按语义排序。操作描述符中不得出现机密信息。任务仅在声明环境变量为缓存输入时，才会包含这些环境变量。每种操作类型都定义其自身的规范字段和可缓存性规则；服务器可以拒绝其未声明支持的类型。
+| Field             | JSON type        | Contents                                                                                                                                                     |
+| ----------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version`         | number           | `1`                                                                                                                                                          |
+| `kind`            | string           | `task`                                                                                                                                                       |
+| `task`            | string           | The task name                                                                                                                                                |
+| `phase`           | string           | `normal`, or `post` when the task runs as a `depends_post` dependency                                                                                        |
+| `run`             | array            | The task's `run` entries in declaration order. A script is a string; a task reference is an object such as `{ "task": "lint" }` or `{ "tasks": ["a", "b"] }` |
+| `args`            | array of strings | The task's arguments in order                                                                                                                                |
+| `shell`           | string or null   | The task's shell override                                                                                                                                    |
+| `outputs`         | array of strings | Output patterns in declaration order, including `!` exclusions                                                                                               |
+| `root`            | string           | The task directory relative to the outermost config root; `""` for a task at that root                                                                       |
+| `source_hash`     | string           | A 64-character lowercase hexadecimal BLAKE3 digest over the source paths and contents, with no algorithm prefix                                              |
+| `dependency_keys` | array of strings | Cache keys of cached dependencies, sorted and deduplicated. Omitted when empty                                                                               |
+| `environment`     | object           | Variable name to value, or `null` for an unset variable                                                                                                      |
+| `command_inputs`  | array of objects | One `{ "command", "stdout_hash", "stderr_hash" }` object per command input, in declaration order. Omitted when empty                                         |
+| `vars`            | object           | mise variable name to value                                                                                                                                  |
+| `tools`           | array of strings | Resolved tools as `backend:name@version`, sorted                                                                                                             |
+| `os`              | string           | The client's operating system, such as `linux` or `macos`                                                                                                    |
+| `arch`            | string           | The client's architecture, such as `x86_64` or `aarch64`                                                                                                     |
 
-`source_hash` 绑定所声明的源路径及其内容，而不会上传缓存专用操作不需要的任务输入。规范描述符存储在 CAS 中。其摘要即为操作摘要和操作结果 URL 键。描述相同操作的两个客户端必须生成完全相同的规范字节。
+Version strings are opaque and are never semantically ordered. Every action kind
+defines its own canonical fields and cacheability rules; a server may reject
+kinds it does not advertise.
+
+Secrets must not appear in an action descriptor. mise's client writes the
+resolved values of the task's `env` entries, of every variable named in
+`cache.env` or `task_config.global_env`, and of every mise variable visible to
+the task (config-level `[vars]` as well as task `vars`) into the descriptor
+verbatim, and uploads it to the remote CAS. `redactions` and `redact = true` are
+not applied. Only tasks that receive `secrets` grants are excluded from caching.
+Keep secret values out of those fields for any remotely cached task, and use
+`pass_through_env` for credentials.
+
+`source_hash` binds the declared source paths and contents without uploading
+task inputs that cache-only operation does not need. The canonical descriptor is
+stored in CAS. Its digest is the action digest and the action-result URL key.
+Two clients that describe the same action must produce identical canonical
+bytes.
 
 ### 目录对象
 
@@ -157,9 +250,17 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 }
 ```
 
-每个节点列表都按照 `name` 的 UTF-8 字节排序。名称必须是单一路径组件，不得为空、不得为 `.` 或 `..`，不得包含斜杠或 NUL，也不得与其他节点冲突。在恢复期间，必须拒绝绝对符号链接目标，以及会逃逸出所声明输出根目录的目标。
+Each node list is sorted by the UTF-8 bytes of `name`. A name must be a single
+path component and must not be empty, `.`, or `..`, contain a slash or NUL, or
+collide with another node. Absolute symlink targets and targets that escape the
+declared output root must be rejected during restoration.
 
-可移植元数据集合包括文件内容、目录结构、符号链接、可执行状态，以及由 `mode` 表示的可移植权限位。所有者、组、时间戳、设备、套接字、FIFO、平台 ACL 和扩展属性都不会被恢复。硬链接可以作为独立文件恢复。不受支持的源对象会使任务结果不具备远程缓存资格，而不会被悄然更改。
+The portable metadata set is file contents, directory structure, symbolic links,
+executable state, and the portable permission bits in `mode`. Owners, groups,
+timestamps, devices, sockets, FIFOs, platform ACLs, and extended attributes are
+not restored. Hard links may be restored as independent files. A task result
+that contains an unsupported object is not eligible for remote caching; the
+object is never silently changed.
 
 ### 操作结果
 
@@ -175,14 +276,19 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 }
 ```
 
-只有成功且具备缓存资格的操作执行结果才可以发布。当操作没有输出文件时，不包含 `output_root`。`metadata` 引用规范的
-`application/vnd.mise.cache-client-metadata.v1+json`，其中包含类型化的客户端元数据。任务元数据包含输出根目录、捕获的输出、任务标识、恢复字节数估计值和执行时长。元数据模式属于远程协议的一部分，并且独立于 mise 的本地缓存清单。
+Only successful, cacheable action executions may be published. `output_root` is
+absent when an action has no output files. `metadata` references canonical
+`application/vnd.mise.cache-client-metadata.v1+json` that contains typed client
+metadata. Task metadata contains the output roots, the captured log, the task
+identity, an estimate of the restored bytes, and the execution duration. The
+metadata schema is part of the remote protocol and independent of mise's local
+cache manifests.
 
 ```json
 {
   "version": 1,
   "kind": "task",
-  "task_identity": "build:crates/widget",
+  "task_identity": "f8ad8c7267ce409520fd6d9d242a6341bbc62bd8ef817317f1f8e1128297daf6",
   "roots": ["target/release/widget"],
   "output": [{ "stream": "stdout", "line": "built widget" }],
   "restored_bytes": 123456,
@@ -190,13 +296,21 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 }
 ```
 
-每种元数据类型都有带版本的模式。任务根路径使用正斜杠，相对于任务工作目录，并且必须满足与目录节点相同的路径安全规则。任务输出条目保留其声明顺序。
+`task_identity` is an opaque digest that the client defines; servers must not
+interpret it. Each metadata kind has a versioned schema. Task root paths use
+forward slashes, are relative to the task working directory, and must satisfy
+the same path-safety rules as directory nodes. Task output entries keep their
+order.
 
-元数据中的 `kind` 必须等于所引用操作描述符的 `kind`。即使两个对象分别独立满足各自的模式，服务器也会在发布前拒绝类型不匹配的提交。
+The metadata `kind` must equal the referenced action descriptor's `kind`.
+Servers reject a commit with mismatched kinds before publication, even when both
+objects satisfy their schemas on their own.
 
-操作描述符以及从结果可到达的每个对象都必须存在并通过验证，结果才会变得可读。
+The action descriptor and every object reachable from the result must exist and
+validate before the result becomes readable.
 
-保留期限、最后访问时间、配额核算、内部存储位置和服务器注释都不属于不可变操作结果。
+Retention, last-access time, quota accounting, internal storage location, and
+server annotations are not part of the immutable action result.
 
 ## CAS 操作
 
@@ -214,32 +328,38 @@ Upgrade Required`，并在 `mise-cache-protocol` 中包含其支持的主版本�
 { "missing": [{ "algorithm": "blake3", "hash": "...", "size": 1234 }] }
 ```
 
-服务器不得披露请求者可读命名空间或 CAS 可见性域之外是否存在对象。
+The server must not disclose whether objects exist outside the request's
+readable namespaces or CAS visibility domain.
 
 ### 读取 Blob
 
-`GET /v1/blobs/{algorithm}/{hash}/{size}` 在调用方可以读取对象时返回 `200 OK`，否则返回
-`404 Not Found`。响应包含 `Digest` 和 `Content-Length` 元数据。服务器可以支持
-`Range`，也可以返回协商后的 `Content-Encoding: zstd`；URL 中的摘要始终描述
-未压缩的字节。
+`GET /v1/blobs/{algorithm}/{hash}/{size}` returns `200 OK`, or `404 Not Found`
+when the caller cannot read the object. The response includes `Content-Length`.
+Clients verify the bytes against the digest in the URL, so servers need not send
+a digest header. Servers may honor `Range` and may return a negotiated
+`Content-Encoding: zstd`; the URL digest always describes the uncompressed
+bytes.
 
-声明支持委托传输的服务器可以将请求重定向（`307 Temporary Redirect`）到一个短时有效的 HTTPS
-URL。重定向只能授予对所请求不可变对象的访问权限。客户端不得将缓存服务的
-`Authorization` 标头转发给委托主机。
+A server that advertises delegated transfers may return
+`307 Temporary Redirect` to a short-lived HTTPS URL. The redirect must grant
+access only to the requested immutable object. Clients must not forward the
+cache service's `Authorization` header to the delegated host.
 
-客户端在使用下载内容前会验证完整的未压缩摘要。摘要不匹配时视为缓存未命中，发出可见的完整性警告；
-启用报告能力后，还必须将其报告到服务器遥测系统。
+Clients verify the complete uncompressed digest before they use downloaded
+content. A mismatch is a cache miss and produces a visible integrity warning.
 
 ### 读取 Blob 数据包
 
-声明 `features.blob_packs` 的服务器接受针对 `/v1/blobs:pack` 的 `POST` 请求，请求正文与
-`blobs:missing` 使用相同的 `application/vnd.mise.cache-digests.v1+json` 格式。声明的总大小
-不得超过 `limits.max_pack_bytes`，摘要数量不得超过
-`limits.max_batch_items`。超过项目数量限制时，服务器返回 `400 Bad Request`；声明的总大小超过
-字节限制时，返回 `413 Content Too Large`。
+Servers that advertise `features.blob_packs` accept `POST /v1/blobs:pack` with
+the same `application/vnd.mise.cache-digests.v1+json` body as `blobs:missing`.
+The aggregate declared size must not exceed `limits.max_pack_bytes`, and the
+number of digests must not exceed `limits.max_batch_items`. Servers return
+`400 Bad Request` when the item limit is exceeded and `413 Content Too Large`
+when the aggregate declared size exceeds the byte limit.
 
-成功响应使用 `application/vnd.mise.cache-blob-pack.v1`，并以八字节 ASCII 魔数
-`MISEPK01` 开始。其余部分是按请求顺序排列的帧流：
+A successful response uses `application/vnd.mise.cache-blob-pack.v1` and begins
+with the eight-byte ASCII magic `MISEPK01`. The rest is a stream of frames in
+request order:
 
 | 字段      | 编码                                        |
 | --------- | ------------------------------------------- |
@@ -248,99 +368,188 @@ URL。重定向只能授予对所请求不可变对象的访问权限。客户�
 | 大小      | 无符号大端序 64 位字节长度                  |
 | 内容      | 恰好为 `size` 个字节                        |
 
-服务器会省略缺失和未授权的 Blob，并且每个重复请求只发送一次。客户端会拒绝未请求或重复的帧，将每个帧流式传输到有界临时存储中，验证其完整摘要，然后才将其加入本地 CAS。当不具备该能力、摘要超出公布的数据包限制，或预期 Blob 被省略时，客户端会回退到普通的单 Blob 读取。数据包仅是传输优化；其帧格式不会改变 CAS 标识或操作语义。
+A server may also send `mbx-cache-pack-blobs` (the number of frames) and
+`mbx-cache-pack-bytes` (the sum of the frame content sizes). When they are
+present, they and `Content-Length` must match the decoded stream; clients reject
+a pack whose metadata disagrees.
+
+The server omits missing and unauthorized blobs and sends a blob requested more
+than once only once. Clients reject unrequested or duplicate frames, stream each
+frame to bounded temporary storage, verify its full digest, and only then admit
+it to local CAS. Clients fall back to single-blob reads when the capability is
+absent, a digest exceeds the advertised pack limit, or an expected blob is
+omitted. A pack is only a transfer optimization; its framing does not change CAS
+identity or action semantics.
 
 ### 上传 Blob
 
-较小的 Blob 可以直接通过
-`PUT /v1/blobs/{algorithm}/{hash}/{size}` 和 `If-None-Match: *` 发送。服务器返回：
+Small blobs may be sent directly with `PUT /v1/blobs/{algorithm}/{hash}/{size}`
+and `If-None-Match: *`. The server returns:
 
-- 验证并发布新内容后返回 `201 Created`；
-- 已存在相同的已验证内容时返回 `204 No Content`；
-- 字节内容与摘要不匹配时返回 `400 Bad Request`；
-- 不可变前置条件失败时返回 `412 Precondition Failed`；
-- 超出公布的限制时返回 `413 Content Too Large`。
+- `201 Created` after it verifies and publishes new content;
+- `204 No Content` when identical verified content already exists;
+- `400 Bad Request` when the bytes do not match the digest;
+- `412 Precondition Failed` when an immutable precondition fails;
+- `413 Content Too Large` when an advertised limit is exceeded.
 
-较大或可恢复的上传使用上传会话：
+The mise client uploads every blob with a single `PUT` and treats a `412`
+response like `204`.
 
-1. `POST /v1/uploads` 声明一个或多个摘要。
-2. 服务器返回上传 ID、过期时间、偏移量，以及服务器上传 URL 或委托上传 URL。
-3. 客户端上传分块，并在必要时从服务器确认的偏移量处恢复。
-4. `POST /v1/uploads/{id}/finalize` 验证完整内容，并将其提升到 CAS 中。
+Large or resumable uploads use an upload session:
 
-委托上传始终以隔离的暂存键为目标，绝不会使用可读的 CAS 键。因此，仅提供预签名的 S3
-上传是不够的：最终确认发布前必须验证所声明的摘要。过期或被放弃的暂存对象会被异步删除。
+1. `POST /v1/uploads` declares one or more digests.
+2. The server returns an upload ID, expiry, offsets, and server or delegated
+   upload URLs.
+3. The client uploads chunks and resumes from server-confirmed offsets when
+   necessary.
+4. `POST /v1/uploads/{id}/finalize` verifies the complete content and promotes
+   it into CAS.
+
+Version 1 does not yet define the request and response bodies for upload
+sessions, and the mise client does not use them.
+
+Delegated uploads always target an isolated staging key, never a readable CAS
+key. A presigned S3 upload is therefore not enough by itself: finalization must
+validate the declared digest before publication. Expired or abandoned staging
+objects are removed asynchronously.
 
 ## 操作结果操作
 
-`GET /v1/action-results/{algorithm}/{hash}/{size}` 返回已提交的操作结果，或返回 `404 未找到`。命名空间标识该请求的单一读取范围。配置了多个读取范围的客户端会按照策略顺序查询这些范围，而不是发送含义不明确的多命名空间请求。
+`GET /v1/action-results/{algorithm}/{hash}/{size}` returns a committed action
+result or `404 Not Found`. The namespace identifies the single read scope for
+that request. Clients configured with several read scopes query them in policy
+order rather than sending an ambiguous multi-namespace request.
 
-`PUT /v1/action-results/{algorithm}/{hash}/{size}` 提交操作结果。该请求要求使用
-`If-None-Match: *`。服务器必须以原子方式：
+`PUT /v1/action-results/{algorithm}/{hash}/{size}` commits an action result. It
+requires `If-None-Match: *`. The server must atomically:
 
-1. 授权对命名空间的写入；
-2. 验证 URL 摘要与结果及存储的操作描述符相匹配；
-3. 验证结果及所引用的元数据架构；
-4. 验证操作描述符与客户端元数据类型相匹配；
-5. 验证完整的可达目录和 Blob 图；
-6. 发布不可变映射。
+1. authorize writes to the namespace;
+2. verify that the URL digest matches the result and the stored action
+   descriptor;
+3. validate the result and referenced metadata schemas;
+4. verify that the action descriptor and client metadata kinds match;
+5. verify the complete reachable directory and blob graph;
+6. publish the immutable mapping.
 
-响应为 `201 已创建`；对于相同的已提交结果，响应为 `204 无内容`；当已有不同结果占用该操作键时，响应为 `409 冲突`；当缺少不可变前置条件或前置条件验证失败时，响应为 `412 前置条件失败`。并发的有效写入者可以上传相同的 CAS 数据，但只有一个操作结果提交能够成功。
+The response is `201 Created`, `204 No Content` for an identical committed
+result, `409 Conflict` when a different result already owns the action key, or
+`412 Precondition Failed` when the immutable precondition is absent or fails.
+Concurrent valid writers may upload identical CAS data, but only one
+action-result commit wins.
 
-普通缓存写入者不会获得删除权限。管理删除使用单独授权的端点，并且必须在不可达 CAS 数据被垃圾回收前删除操作结果映射。客户端缓存清除操作不得意味着拥有删除共享远程数据的权限。
+Ordinary cache writers do not receive delete permission. Administrative deletion
+uses a separately authorized endpoint and must remove the action-result mapping
+before unreachable CAS data is garbage collected. A client-side cache clear must
+not imply authority to delete shared remote data.
+
+<a id="authentication-and-namespace-policy"></a>
 
 ## 身份验证与命名空间策略
 
-该协议支持持有者令牌、OIDC 派生令牌、mTLS 以及受信任的反向代理身份。  
-身份验证机制的发现属于部署配置，而不是 CAS 对象元数据。  
-凭据必须进行作用域限定，并从诊断信息中脱敏。
+The protocol supports bearer tokens, OIDC-derived tokens, mTLS, and trusted
+reverse-proxy identity. How a client discovers the authentication mechanism is
+deployment configuration, not CAS object metadata. Credentials must be scoped
+and redacted from diagnostics.
 
-服务器分别授权读取和写入。标准的 CI 策略是使用一个共享命名空间：受保护的分支可以写入，而拉取请求作业只能读取。服务器根据已验证的 OIDC 声明（例如仓库、引用、事件和工作流身份）执行这一策略；客户端提供的远程模式属于纵深防御措施，而不是授权边界。
+Servers authorize reads and writes independently. The standard CI policy is one
+shared namespace: protected branches may write to it, while pull-request jobs
+may only read it. The server enforces this from verified OIDC claims such as
+repository, ref, event, and workflow identity. The mise client also refuses to
+write outside protected-branch push jobs in GitHub Actions and GitLab CI, but
+that is defense in depth: a client-provided mode is not the authorization
+boundary.
 
-不可变存储无法阻止首个写入者进行缓存投毒。因此，即使后端对象存储拒绝覆盖，也仍然需要基于 OIDC 的命名空间授权。由受信任和不受信任作业共享的单个存储桶凭据不构成符合要求的安全边界。
+Immutable storage does not prevent cache poisoning by the first writer.
+OIDC-backed namespace authorization is therefore required even when the backing
+object store rejects overwrites. A single bucket credential shared by trusted and
+untrusted jobs is not a conforming security boundary.
+
+Operators should issue short-lived, least-privilege credentials, restrict each
+credential to the namespaces it needs, keep authorization headers out of logs,
+and encrypt or otherwise protect stored objects according to their sensitivity
+and retention requirements. Cached logs, outputs, and action descriptors can
+contain sensitive values; see
+[What an entry contains](/tasks/remote-cache.html#what-an-entry-contains).
 
 ## 失败与重试行为
 
-- `401 Unauthorized` 表示缺少身份验证或身份验证无效。
-- `403 Forbidden` 表示该身份无权访问请求的命名空间或执行请求的操作。
-- `404 Not Found` 表示缓存未命中，且不得泄露无法访问的对象。
-- `409 Conflict` 表示不可变操作结果冲突。
-- `412 Precondition Failed` 表示缺少条件写入要求，或该要求未通过。
-- `422 Unprocessable Content` 表示对象编码有效，但其引用图无效。
-- `426 Upgrade Required` 表示主版本不匹配。
-- `429 Too Many Requests` 和 `5xx` 响应可以使用有界指数退避和
-  抖动进行重试，并遵循 `Retry-After`。
+- `401 Unauthorized` means authentication is missing or invalid.
+- `403 Forbidden` means the identity lacks permission for the namespace or
+  operation.
+- `404 Not Found` is a cache miss and must not reveal inaccessible objects.
+- `409 Conflict` is an immutable action-result conflict.
+- `412 Precondition Failed` is a missing or failed conditional-write
+  requirement.
+- `422 Unprocessable Content` is a validly encoded object with an invalid
+  reference graph.
+- `426 Upgrade Required` is a major-version mismatch.
+- `429 Too Many Requests` and `5xx` responses may be retried with bounded
+  exponential backoff and jitter, honoring `Retry-After`.
 
-缓存不可用、对象格式错误、引用的对象缺失以及完整性失败通常会降级为缓存未命中，以便本地任务继续执行。身份验证、授权和完整性失败仍必须产生可见警告；客户端不得将其静默标记为普通未命中。部署可以启用严格模式，使选定的失败成为致命错误。
+Version 1 does not define an error response body; clients act on the status
+code.
 
-幂等性密钥可以用于上传会话创建及其他可重试的 `POST` 操作。服务器必须限制其保留时间，并将其作用域限定为经过身份验证的身份和命名空间。
+Cache unavailability, malformed objects, missing referenced objects, and
+integrity failures normally degrade to a cache miss so that local task execution
+can continue. Authentication, authorization, and integrity failures must still
+produce visible warnings; clients must not report them as ordinary misses.
+Deployments may enable a strict mode that makes selected failures fatal.
+
+Idempotency keys may be sent for upload-session creation and other retryable
+`POST` operations. Servers must bound how long they keep them and scope them to
+the authenticated identity and namespace. Version 1 does not yet name the header
+for them, and the mise client does not send one.
 
 ## 自托管存储要求
 
-符合规范的自托管服务器可以使用文件系统、兼容 S3 的对象存储或其他 Blob
-存储。客户端与缓存服务通信，而不是获取通用对象存储凭据。
+A conforming self-hosted server may use a filesystem, S3-compatible object
+storage, or another blob store. Clients talk to the cache service and never
+receive general object-store credentials.
 
-官方参考服务器单独维护于
-[`jdx/mise-cache`](https://github.com/jdx/mise-cache)。它提供文件系统和兼容 S3 的 Blob
-存储、PostgreSQL 元数据、命名空间范围的授权、Docker Compose 以及 Helm chart。服务器的部署和发布生命周期仍与 mise 客户端分离，而本文档是规范协议的权威说明。
+A server that uses S3 should:
 
-使用 S3 的服务器应：
+- keep action metadata, authorization, access times, references, and quotas in a
+  transactional metadata store;
+- store CAS bytes under digest-derived immutable keys;
+- use random staging keys for delegated uploads;
+- use conditional object creation and deny ordinary overwrite and delete
+  permissions;
+- finalize an action result only after verifying every reachable object;
+- garbage-collect expired staging uploads and unreachable CAS objects;
+- support short-lived workload credentials and encryption at rest.
 
-- 将操作元数据、授权信息、访问时间、引用和配额存储在事务性元数据存储中；
-- 将 CAS 字节存储在基于摘要派生的不可变键下；
-- 为委托上传使用随机暂存键；
-- 使用有条件的对象创建，并拒绝普通覆盖和删除权限；
-- 仅在验证每个可达对象后最终确定操作结果；
-- 对过期的暂存上传和不可达的 CAS 对象执行垃圾回收；
-- 支持短期工作负载凭据和静态数据加密。
-
-对象存储版本控制、保留锁和加密是有用的纵深防御措施，但不能替代应用授权或摘要验证。
+Object-store versioning, retention locks, and encryption add defense in depth
+but do not replace application authorization or digest verification.
 
 ## 一致性
 
-该仓库的兼容性套件是版本 1 所需行为的可执行定义。
-它必须涵盖能力协商、规范对象验证、命名空间隔离、独立的读写授权、缺失 Blob 批次、流式传输和可恢复传输、摘要拒绝、
-操作结果的原子提交、不可变冲突、委托传输凭据隔离、损坏处理以及重试语义。
+To check a server, run
+[`scripts/task-cache-remote-compat.sh`](https://github.com/jdx/mise/blob/main/scripts/task-cache-remote-compat.sh)
+from the mise repository against a disposable namespace:
 
-服务器可以在 `/v1` 之外实现额外的管理、指标和健康检查 API。这些 API
-不得削弱版本 1 的缓存不变量。
+```sh
+MISE_TASK_CACHE_COMPAT_TOKEN=... scripts/task-cache-remote-compat.sh https://cache.example.com scratch-ns
+```
+
+The URL and namespace can also come from `MISE_TASK_CACHE_COMPAT_URL` and
+`MISE_TASK_CACHE_COMPAT_NAMESPACE`. The token is optional. The script needs
+`b3sum`, `curl`, `jq`, and `sha256sum`. It checks:
+
+- `/v1/status` and `/v1/capabilities` (protocol major 1, `sha256`, task schema
+  1);
+- `blobs:missing` before and after an upload;
+- conditional blob uploads with both `sha256` and `blake3` digests;
+- an action-result commit (`201`), an identical re-commit (`204`), and a read of
+  that action result;
+- a CAS download, following a `307` to an absolute HTTPS URL when the server
+  delegates;
+- namespace isolation (`403` or `404` from another namespace);
+- `412` for an immutable write without `If-None-Match: *`.
+
+The script does not test upload sessions, blob packs, digest or corruption
+rejection, conflicting commits, independent read and write authorization,
+credential isolation for delegated transfers, or retry behavior. A server meets
+those requirements only by following this specification.
+
+Servers may implement additional administrative, metrics, and health APIs
+outside `/v1`. Those APIs must not weaken the version 1 cache invariants.

@@ -1,22 +1,35 @@
 ---
-description: "选择如何向项目提供密钥值。"
+description: "Choose how to supply secret values to a project, and mask sensitive values in task output and CI logs."
 ---
 
 # 密钥
 
-选择如何向项目提供密钥值。mise 会将解析后的值作为环境变量传递给命令；密钥提供程序或加密密钥决定谁可以解析这些值。
+Keep secret values out of plaintext config. mise can fetch them from a secret
+manager through fnox, or decrypt files and values that you commit, and it masks
+values you mark as sensitive in the output it captures.
 
-| 方法                                               | 存储在仓库中                                           | 运行时要求                                                                    |
-| -------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [mise secrets（fnox）](./fnox.html)（推荐）        | 由 fnox 管理的密钥引用或加密值                         | fnox 以及对其配置的提供程序的访问权限                                          |
-| [sops](./sops.html)（实验性）                      | 加密的 JSON、YAML 或 TOML 文件                        | 解密身份；对于内置 age 支持之外的提供程序，还需要 SOPS CLI                     |
-| [直接使用 age 加密](./age.html)（实验性）          | `mise.toml` 中的单个加密值                             | age 或 SSH 解密身份                                                            |
+| Approach                                                            | You commit                                                     | Who receives the values                                         | Needs                                                    |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
+| [fnox](/environments/secrets/fnox.html) (experimental, recommended) | `fnox.toml` with secret references or encrypted values         | Only tasks that list the key, and commands run with `--secrets` | fnox 1.39.0 or newer, and access to its providers        |
+| [SOPS file](/environments/secrets/sops.html)                        | An encrypted `.env.json`, `.env.yaml` or `.env.toml`           | Everything that loads `[env]`: your shell, tasks, `mise env`    | An age identity, or the `sops` CLI for KMS, Vault or PGP |
+| [age values](/environments/secrets/age.html) (experimental)         | Encrypted values in `mise.toml`                                | Everything that loads `[env]`                                   | An age identity or an SSH key                            |
+| Untracked file                                                      | Nothing; `mise.local.toml` or `.env` is listed in `.gitignore` | Everything that loads `[env]`                                   | Nothing                                                  |
 
-## 使用密钥管理器
+## Use a secret manager {#use-a-secret-manager}
 
-在项目中声明 fnox 作为密钥源，并列出每个任务需要的键：
+mise secrets is experimental. Enable it and add fnox to the project:
 
-```toml [mise.toml]
+```sh
+mise settings experimental=true
+mise use fnox
+```
+
+Then name fnox as the project's secrets source and list the keys each task
+needs:
+
+```mise-toml [mise.toml]
+min_version = "2026.10.4"
+
 [secrets.fnox]
 
 [tasks.deploy]
@@ -24,14 +37,133 @@ secrets = ["DEPLOY_KEY", "DATABASE_URL"]
 run = "./deploy.sh"
 ```
 
-`mise run deploy` 只会把这两个键提供给 `deploy`，并从其输出中脱敏。依赖项、后置依赖项、钩子、shim 和 `mise env` 都不会获得这些值。详见[使用 fnox 的 mise secrets](./fnox.html)。fnox 支持 1Password、AWS Secrets Manager 等远程存储，以及 AWS KMS 等远程加密；提供程序设置请参阅 [fnox 文档](https://github.com/jdx/fnox)。
+`mise run deploy` gives those two keys to `deploy` only and redacts them from
+its output. Its dependencies, your shell, hooks and `mise env` get nothing;
+programs that `deploy` starts inherit the values like any environment variable.
+fnox reads secrets from providers such as 1Password, AWS Secrets Manager and AWS
+KMS. See [fnox](/environments/secrets/fnox.html) for the mise side and the
+[fnox documentation](https://fnox.jdx.dev) for provider setup.
 
-[引导密钥输入](/bootstrap/secrets.html)为配置模板提供稳定的名称，同时由 fnox 处理提供程序和身份验证。
+To declare secrets that `mise bootstrap` writes into managed files, such as a
+service's credentials, see [Bootstrap secret inputs](/bootstrap/secrets.html).
 
-## 加密仓库文件或值
+## Encrypt repository files or values {#encrypt-repository-files-or-values}
 
-当密钥属于单独的文件时，使用 [sops](./sops.html)；当少量加密变量应与其余 `mise.toml` 内容放在一起时，使用[直接 age 值](./age.html)。提交密文，并单独分发解密身份。
+Use a [SOPS file](/environments/secrets/sops.html) when the secrets belong in a
+separate file, or [age values](/environments/secrets/age.html) when a few
+encrypted variables should live in `mise.toml`. Commit the ciphertext and share
+decryption identities outside the repository.
 
-sops 和 age 值属于环境变量：加载时解密，并可见于 shell、`mise env` 和 hook-env。mise secrets 只会传递给被授予这些密钥的、由 mise 启动的进程。
+SOPS and age values are ordinary `[env]` values. mise decrypts them whenever it
+loads the config, so your activated shell, tasks and `mise env` see the
+plaintext. Mark SOPS values with `redact = true` to keep them out of task output;
+age values are redacted by default.
 
-加密可以保护存储的值。[脱敏](/environments/#redactions)会遮盖捕获的任务输出，而 [CI 掩码](/environments/#ci-masking)会保护 mise 输出捕获之外的日志。`mise env` 会有意导出明文值，包括那些标记为已脱敏的值。
+## Redaction and CI masking {#redaction}
+
+Redaction replaces sensitive values with `[redacted]` in output that mise
+captures. It does not encrypt anything, and the programs mise starts still
+receive the real values.
+
+### Mark values as sensitive {#mark-values-as-sensitive}
+
+Set `redact = true` on a variable, or on a directive to mark every value it
+loads:
+
+```toml [mise.toml]
+[env]
+SECRET = { value = "my_secret", redact = true }
+_.file = { path = ".env.json", redact = true }
+```
+
+Or list variable names, with `*` wildcards, in the top-level `redactions` array:
+
+```toml [mise.toml]
+redactions = ["SECRET_*", "*_TOKEN", "PASSWORD"]
+
+[env]
+API_TOKEN = "token_123"
+```
+
+Set `redact = false` on a variable to exempt it from `redactions` patterns,
+including patterns from the global config:
+
+```toml [mise.toml]
+[env]
+TEST_TOKEN = { value = "not-sensitive", redact = false }
+```
+
+`mise env --redacted` leaves out a variable that sets `redact = false`, so
+[CI masking](#ci-masking) that reads that list does not mask it either.
+
+mise also redacts a value the caller supplies for a `required` variable, or for
+a `default` the caller overrides, when the entry sets `redact = true` or a
+`redactions` pattern matches its name:
+
+```mise-toml [mise.toml]
+[tasks.deploy]
+env = { ASC_KEY_ID = { required = true, redact = true } }
+run = "./deploy.sh"
+```
+
+mise matches values, not names: once a value is marked, mise replaces that text
+wherever it appears in the output it processes.
+
+### What redaction covers {#what-redaction-covers}
+
+mise redacts:
+
+- the output of tasks run with `mise run`, and the command lines it prints for
+  them
+- its own log messages
+- the value column of `mise set` (pass `--no-redact` to see the values)
+
+mise does not redact:
+
+- tasks with [`raw = true`](/tasks/task-configuration.html#raw) or
+  [`interactive = true`](/tasks/task-configuration.html#interactive), or runs
+  with `--raw` or the `raw` setting, because their output goes straight to the
+  terminal. mise prints a hint when redactions are configured.
+- the output of `mise exec`, because mise hands the process over to the command
+- `mise env`, which prints real values on purpose (see
+  [Export sensitive values](#export-redacted-values))
+
+The [`task.output`](/configuration/settings.html#task.output) modes `replacing`
+and `timed` do not print every line. In CI, use `prefix` or `interleave`, for
+example `MISE_TASK_OUTPUT=prefix mise run build`, to keep complete, redacted
+logs.
+
+### Export sensitive values {#export-redacted-values}
+
+`mise env` prints real values, including values marked as sensitive.
+`--redacted` selects only the sensitive variables and still prints their values.
+Use these flags to hand secrets to another program on purpose:
+
+```sh
+mise env --redacted            # only sensitive variables, as shell code
+mise env --values              # only values, one per line
+mise env --redacted --values   # only the values of sensitive variables
+```
+
+### CI masking {#ci-masking}
+
+[mise-action](https://github.com/jdx/mise-action) registers GitHub Actions masks
+for values marked with `redact = true` or matching `redactions`. When you resolve
+secrets outside that action, register masks before running commands that might
+print them.
+
+In a custom GitHub Actions step with Bash and `jq`, export JSON so whitespace is
+preserved, and escape each value the way workflow commands require:
+
+```sh
+set -o pipefail
+mise env --redacted --json | jq -r '
+  .[] | select(length > 0) |
+  "::add-mask::" + (gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A"))
+'
+```
+
+This follows the
+[workflow-command escaping in the Actions toolkit](https://github.com/actions/toolkit/blob/main/packages/core/src/command.ts).
+Do not loop over values with word splitting, such as `for value in $(...)`,
+which breaks values that contain spaces or newlines.

@@ -18,8 +18,9 @@
 //! These are intentionally not part of `[tools]`: they're unversioned,
 //! machine-global settings and resources, not mise's per-project toolset.
 
+use std::collections::BTreeMap;
 #[cfg(unix)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -56,9 +57,11 @@ pub mod firewall;
 #[cfg(not(target_os = "linux"))]
 #[path = "firewall_non_linux.rs"]
 pub mod firewall;
+pub mod git_prerequisites;
 pub mod history;
 pub mod hooks;
 pub mod launchd;
+pub mod login_items;
 pub mod login_shell;
 pub mod managed_files;
 pub mod packages;
@@ -138,6 +141,12 @@ pub struct BootstrapTomlConfig {
     /// Homebrew-specific bootstrap package config.
     #[serde(default)]
     pub brew: SystemBrewTomlConfig,
+    /// apt-specific bootstrap package config.
+    #[serde(default)]
+    pub apt: SystemAptTomlConfig,
+    /// dnf-specific bootstrap package config.
+    #[serde(default)]
+    pub dnf: SystemDnfTomlConfig,
     /// Shell activation setup. Values stay raw TOML so future options can warn
     /// and be skipped without rejecting the whole config.
     #[serde(default)]
@@ -146,6 +155,146 @@ pub struct BootstrapTomlConfig {
     /// warn and be skipped without rejecting the whole config.
     #[serde(default)]
     pub hooks: IndexMap<String, toml::Value>,
+}
+
+/// The commands of a `[bootstrap.hooks]` value, in the shapes the hook parser accepts.
+fn hook_commands(value: toml::Value) -> Option<Vec<toml::Value>> {
+    match value {
+        toml::Value::String(_) => Some(vec![value]),
+        toml::Value::Array(values) => Some(values),
+        toml::Value::Table(mut table) => match table.remove("run")? {
+            run @ toml::Value::String(_) => Some(vec![run]),
+            toml::Value::Array(values) => Some(values),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+impl BootstrapTomlConfig {
+    /// Add the entries of `lower`, the `[bootstrap]` of an included file, below
+    /// this one's own: a key this file declares keeps its own value, a list gets
+    /// the shared entries first, and an unset option takes the shared one.
+    pub(crate) fn merge_below(&mut self, lower: Self) {
+        fn fill<K: std::hash::Hash + Eq, V>(own: &mut IndexMap<K, V>, lower: IndexMap<K, V>) {
+            for (key, value) in lower {
+                own.entry(key).or_insert(value);
+            }
+        }
+        fn below<T>(own: &mut Vec<T>, mut lower: Vec<T>) {
+            lower.append(own);
+            *own = lower;
+        }
+        fn or<T>(own: &mut Option<T>, lower: Option<T>) {
+            if own.is_none() {
+                *own = lower;
+            }
+        }
+        or(&mut self.config_roots, lower.config_roots);
+        or(&mut self.dotfile_groups, lower.dotfile_groups);
+        fill(&mut self.secrets, lower.secrets);
+        fill(&mut self.groups, lower.groups);
+        fill(&mut self.users, lower.users);
+        fill(&mut self.services, lower.services);
+        fill(&mut self.compose, lower.compose);
+        fill(&mut self.plugins, lower.plugins);
+        fill(&mut self.packages, lower.packages);
+        fill(&mut self.files, lower.files);
+        fill(&mut self.directories, lower.directories);
+        fill(&mut self.repos, lower.repos);
+        fill(&mut self.apt.sources, lower.apt.sources);
+        fill(&mut self.dnf.repos, lower.dnf.repos);
+        fill(&mut self.mise_shell_activate, lower.mise_shell_activate);
+        // hooks add up across files, the shared commands running first
+        for (phase, shared) in lower.hooks {
+            match self.hooks.entry(phase) {
+                indexmap::map::Entry::Occupied(mut own) => {
+                    if let (Some(mut commands), Some(own_commands)) =
+                        (hook_commands(shared), hook_commands(own.get().clone()))
+                    {
+                        commands.extend(own_commands);
+                        own.insert(toml::Value::Array(commands));
+                    }
+                }
+                indexmap::map::Entry::Vacant(slot) => {
+                    slot.insert(shared);
+                }
+            }
+        }
+
+        let remote = lower.remote;
+        or(&mut self.remote.source, remote.source);
+        or(&mut self.remote.mise_env, remote.mise_env);
+        or(&mut self.remote.install_mise, remote.install_mise);
+        or(&mut self.remote.copy_links, remote.copy_links);
+        below(&mut self.remote.copy_link, remote.copy_link);
+        below(&mut self.remote.exclude, remote.exclude);
+        fill(&mut self.remote.hosts, remote.hosts);
+
+        let macos = lower.macos;
+        // keys this file sets itself, taken before the shared ones are merged in
+        let mut own_keys = IndexMap::new();
+        merge_friendly_macos_defaults(&mut own_keys, &self.macos);
+        for (domain, entries) in &self.macos.defaults {
+            if let toml::Value::Table(entries) = entries {
+                for key in entries.keys() {
+                    own_keys.insert((domain.clone(), key.clone()), toml::Value::Boolean(true));
+                }
+            }
+        }
+        let own_keys: std::collections::HashSet<_> = own_keys
+            .into_keys()
+            .map(|(domain, key)| (canonical_domain(&domain).to_string(), key))
+            .collect();
+        fill(&mut self.macos.dock, macos.dock);
+        fill(&mut self.macos.finder, macos.finder);
+        fill(&mut self.macos.keyboard, macos.keyboard);
+        fill(&mut self.macos.trackpad, macos.trackpad);
+        // preferences merge per key within a domain, and a shared explicit
+        // entry never beats a preference this file sets for the same key
+        for (domain, shared) in macos.defaults {
+            match (self.macos.defaults.entry(domain), shared) {
+                (indexmap::map::Entry::Occupied(mut own), toml::Value::Table(shared)) => {
+                    if let toml::Value::Table(own) = own.get_mut() {
+                        for (key, value) in shared {
+                            own.entry(key).or_insert(value);
+                        }
+                    }
+                }
+                (indexmap::map::Entry::Vacant(slot), shared) => {
+                    slot.insert(shared);
+                }
+                _ => {}
+            }
+        }
+        let mut shared_entries = macos.defaults_entries;
+        shared_entries.retain(|entry| {
+            !(entry.host == HostScope::Any
+                && entry.path.is_none()
+                && own_keys.contains(&(
+                    canonical_domain(&entry.domain).to_string(),
+                    entry.key.clone(),
+                )))
+        });
+        below(&mut self.macos.defaults_entries, shared_entries);
+        fill(&mut self.macos.launchd.agents, macos.launchd.agents);
+        match (&mut self.macos.login_items, macos.login_items) {
+            (Some(own), Some(mut lower)) => {
+                lower.apps.append(&mut own.apps);
+                own.apps = lower.apps;
+                own.exclusive = own.exclusive.or(lower.exclusive);
+            }
+            (own @ None, lower) => *own = lower,
+            _ => {}
+        }
+
+        or(&mut self.linux.firewall, lower.linux.firewall);
+        fill(&mut self.linux.systemd.units, lower.linux.systemd.units);
+        or(&mut self.user.login_shell, lower.user.login_shell);
+        #[cfg(unix)]
+        or(&mut self.brew.adopt, lower.brew.adopt);
+        fill(&mut self.brew.taps, lower.brew.taps);
+    }
 }
 
 /// A `[bootstrap.packages]` value. The string form remains the concise default;
@@ -182,6 +331,12 @@ pub struct PackageOptionsTomlConfig {
     /// `macos-app` only: bundle to install out of the archive, e.g. "Nuvio.app".
     #[serde(default)]
     pub artifact: Option<String>,
+    /// `snap` only: channel to install from and track, e.g. "latest/stable".
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// `snap` only: install with classic confinement.
+    #[serde(default)]
+    pub classic: Option<bool>,
     #[serde(default)]
     pub state: PackageDesiredStateTomlConfig,
 }
@@ -213,6 +368,19 @@ impl PackageTomlConfig {
         match self {
             Self::Options(options) => options.appdir.as_deref(),
             Self::Version(_) => None,
+        }
+    }
+
+    /// The `channel` and `classic` options on this entry, if it sets either.
+    fn snap_options(&self) -> Option<packages::snap::SnapOptions> {
+        match self {
+            Self::Options(options) if options.channel.is_some() || options.classic.is_some() => {
+                Some(packages::snap::SnapOptions {
+                    channel: options.channel.clone(),
+                    classic: options.classic.unwrap_or(false),
+                })
+            }
+            _ => None,
         }
     }
 
@@ -366,6 +534,9 @@ pub struct BootstrapMacosTomlConfig {
     /// LaunchAgents rendered to ~/Library/LaunchAgents.
     #[serde(default)]
     pub launchd: BootstrapMacosLaunchdTomlConfig,
+    /// `[bootstrap.macos.login_items]`: applications to open at login.
+    #[serde(default)]
+    pub login_items: Option<login_items::LoginItemsTomlConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -420,6 +591,22 @@ pub struct SystemBrewTomlConfig {
     pub taps: IndexMap<String, String>,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct SystemAptTomlConfig {
+    /// `[bootstrap.apt.sources]`: source name -> PPA or repository, added
+    /// before apt packages are installed.
+    #[serde(default)]
+    pub sources: IndexMap<String, toml::Value>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct SystemDnfTomlConfig {
+    /// `[bootstrap.dnf.repos]`: repository name -> COPR project, enabled
+    /// before dnf packages are installed.
+    #[serde(default)]
+    pub repos: IndexMap<String, toml::Value>,
+}
+
 /// `[dotfiles]` as parsed from a single mise.toml.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(transparent)]
@@ -440,6 +627,14 @@ pub struct ManagerPackages {
 pub enum ManagerPackageOptions {
     #[default]
     None,
+    /// `[bootstrap.apt.sources]`, applied before apt queries its packages.
+    Apt {
+        sources: Vec<crate::system::packages::apt_sources::AptSource>,
+    },
+    /// `[bootstrap.dnf.repos]`, enabled before dnf installs its packages.
+    Dnf {
+        repos: Vec<crate::system::packages::dnf_repos::DnfRepo>,
+    },
     #[cfg(unix)]
     BrewCask {
         adopt: BTreeSet<String>,
@@ -452,6 +647,11 @@ pub enum ManagerPackageOptions {
         specs: BTreeMap<String, AppSpec>,
         adopt: BTreeSet<String>,
     },
+    /// `channel` and `classic`, keyed by snap name. Snaps without either are
+    /// absent.
+    Snap {
+        packages: BTreeMap<String, packages::snap::SnapOptions>,
+    },
 }
 
 impl ManagerPackageOptions {
@@ -459,7 +659,7 @@ impl ManagerPackageOptions {
     pub(crate) fn brew_cask_adopt(&self, name: &str) -> bool {
         match self {
             Self::BrewCask { adopt, .. } | Self::MacosApp { adopt, .. } => adopt.contains(name),
-            Self::None => false,
+            Self::None | Self::Apt { .. } | Self::Dnf { .. } | Self::Snap { .. } => false,
         }
     }
 
@@ -620,11 +820,17 @@ pub fn parse_use_spec(spec: &str) -> eyre::Result<(String, PackageRequest)> {
             },
         ));
     }
-    match rest.rsplit_once('@') {
+    // a leading `@` names a dnf group (`dnf:@development-tools`), not a version
+    let group_prefix = if mgr == "dnf" && rest.starts_with('@') {
+        "@"
+    } else {
+        ""
+    };
+    match rest[group_prefix.len()..].rsplit_once('@') {
         Some((name, version)) if !name.is_empty() && !version.is_empty() => Ok((
             mgr,
             PackageRequest {
-                name: name.to_string(),
+                name: format!("{group_prefix}{name}"),
                 version: (version != "latest").then(|| version.to_string()),
                 tap_url: None,
                 desired: packages::PackageDesiredState::Present,
@@ -874,6 +1080,10 @@ fn merge_manager_packages(
                 .brew_cask_appdir(&request.name)
                 .map(PathBuf::from);
             let app_spec = mp.options.macos_app_spec(&request.name).cloned();
+            let snap = match &mp.options {
+                ManagerPackageOptions::Snap { packages } => packages.get(&request.name).cloned(),
+                _ => None,
+            };
             match requests.iter_mut().find(|existing| {
                 existing.name == request.name && existing.version == request.version
             }) {
@@ -921,6 +1131,18 @@ fn merge_manager_packages(
                                 if adopt {
                                     app_adopt.insert(request.name.clone());
                                 }
+                            }
+                        }
+                        "snap" if snap.is_some() => {
+                            let options = manager_options
+                                .entry(manager_name.clone())
+                                .or_insert_with(|| ManagerPackageOptions::Snap {
+                                    packages: BTreeMap::new(),
+                                });
+                            if let (ManagerPackageOptions::Snap { packages }, Some(snap)) =
+                                (options, snap)
+                            {
+                                packages.entry(request.name.clone()).or_insert(snap);
                             }
                         }
                         _ => {}
@@ -975,6 +1197,7 @@ fn package_requests_from_config_files(
     let mut app_specs: BTreeMap<String, AppSpec> = BTreeMap::new();
     #[cfg(unix)]
     let mut app_adopt = BTreeSet::new();
+    let mut snap_options = BTreeMap::new();
     for (spec, package) in merged {
         if !package.is_os_supported() {
             debug!("[bootstrap.packages]: skipping '{spec}', not enabled for this platform");
@@ -1073,6 +1296,16 @@ fn package_requests_from_config_files(
                         }
                     }
                 }
+                match snap_options_for(&mgr, &name, &package) {
+                    Ok(Some(options)) => {
+                        snap_options.insert(name.clone(), options);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        warn!("[bootstrap.packages]: {err}");
+                        continue;
+                    }
+                }
                 by_mgr.entry(mgr).or_default().push(PackageRequest {
                     name,
                     version,
@@ -1084,7 +1317,7 @@ fn package_requests_from_config_files(
         }
     }
     #[cfg(unix)]
-    let options = {
+    let mut options = {
         let mut options = IndexMap::new();
         if !cask_adopt.is_empty() || !cask_appdirs.is_empty() {
             options.insert(
@@ -1107,8 +1340,19 @@ fn package_requests_from_config_files(
         options
     };
     #[cfg(not(unix))]
-    let options = IndexMap::new();
+    let mut options = IndexMap::new();
+    insert_package_sources(config_files, &mut options);
+    insert_snap_options(snap_options, &mut options);
     (by_mgr, options)
+}
+
+fn insert_snap_options(
+    packages: BTreeMap<String, packages::snap::SnapOptions>,
+    options: &mut IndexMap<String, ManagerPackageOptions>,
+) {
+    if !packages.is_empty() {
+        options.insert("snap".to_string(), ManagerPackageOptions::Snap { packages });
+    }
 }
 
 fn package_configs_from_config_files(
@@ -1211,6 +1455,57 @@ pub fn defaults_from_config(config: &Config) -> Vec<DefaultsRequest> {
     out
 }
 
+/// Aggregate `[bootstrap.macos.login_items]` across all loaded config files.
+///
+/// Apps union global -> local. Within one config hierarchy `exclusive` takes the
+/// most local value that sets it; across independent selected roots it applies
+/// only when every root that sets it says true. Invalid entries warn and are
+/// skipped.
+pub fn login_items_from_config(config: &Config) -> login_items::LoginItemsRequest {
+    let mut apps: Vec<String> = vec![];
+    let mut declared: Vec<bool> = vec![];
+    for config_files in config.bootstrap_config_maps() {
+        // config_files is ordered local -> global; reverse for global -> local
+        let mut map_exclusive = None;
+        for cf in config_files.values().rev() {
+            if let Some(sys) = cf.bootstrap_config()
+                && let Some(items) = sys.macos.login_items
+            {
+                apps.extend(items.apps);
+                map_exclusive = items.exclusive.or(map_exclusive);
+            }
+        }
+        declared.extend(map_exclusive);
+    }
+    // independent roots must all agree before undeclared items are removed
+    let mut exclusive = !declared.is_empty() && declared.iter().all(|e| *e);
+    let mut valid = vec![];
+    let mut invalid = false;
+    let mut seen = std::collections::HashSet::new();
+    for app in apps {
+        match login_items::app_path(&app) {
+            Ok(path) => {
+                if seen.insert(crate::file::canonicalize_or_self(&path)) {
+                    valid.push(path);
+                }
+            }
+            Err(err) => {
+                warn!("{err}");
+                invalid = true;
+            }
+        }
+    }
+    if invalid && exclusive {
+        // an incomplete declaration must not decide which items are undeclared
+        warn!("[bootstrap.macos.login_items]: ignoring exclusive because an entry is invalid");
+        exclusive = false;
+    }
+    login_items::LoginItemsRequest {
+        apps: valid,
+        exclusive,
+    }
+}
+
 /// Aggregate `[bootstrap.macos.launchd.agents]` across all loaded config files.
 ///
 /// Agent names union global -> local; a more local config replaces the full
@@ -1251,6 +1546,23 @@ pub fn launchd_from_config(config: &Config) -> Vec<LaunchdRequest> {
     out
 }
 
+/// Render a `[bootstrap.repos]` key as a template, so a checkout path can use
+/// `{{ vars.name }}`, without `exec()` so a preview cannot run commands. Reading
+/// a var never prompts: an unanswered one resolves to
+/// its `default`.
+fn render_repo_path(config: &Config, config_path: &Path, path_raw: &str) -> Result<String> {
+    if !mise_util::tera::contains_template_syntax(path_raw) {
+        return Ok(path_raw.to_string());
+    }
+    let mut ctx = config.bootstrap_tera_ctx(config_path).clone();
+    if ctx.get("config_root").is_none() {
+        let config_root = crate::config::config_file::config_root::config_root(config_path);
+        ctx.insert("config_root", &config_root);
+    }
+    let mut tera = crate::tera::get_tera_without_exec(config_path.parent());
+    Ok(crate::tera::render_str(&mut tera, path_raw, &ctx)?)
+}
+
 /// Aggregate `[bootstrap.repos]` across all loaded config files.
 ///
 /// Repo paths union global -> local; a more local config replaces the full
@@ -1262,6 +1574,13 @@ pub fn repos_from_config(config: &Config) -> Vec<RepoRequest> {
     for cf in config.config_files.values().rev() {
         if let Some(sys) = cf.bootstrap_config() {
             for (path_raw, repo) in sys.repos {
+                let path_raw = match render_repo_path(config, cf.get_path(), &path_raw) {
+                    Ok(path_raw) => path_raw,
+                    Err(err) => {
+                        warn!("[bootstrap.repos].\"{path_raw}\": {err}");
+                        continue;
+                    }
+                };
                 match RepoRequest::from_toml(path_raw.clone(), repo, cf.project_root().as_deref()) {
                     Ok(request) => {
                         merged.insert(request.path.clone(), request);
@@ -1882,7 +2201,9 @@ pub fn shell_activation_from_config_files(config_files: &ConfigMap) -> Vec<Shell
                 };
             }
             for (key, shell, value) in shell_entries {
-                match shell_activation_setting(&key, value) {
+                match shell_activation_setting(&key, value)
+                    .filter(|setting| shell_activation_mode_supported(&key, shell, setting))
+                {
                     Some(setting) => {
                         for &target in shell.default_targets() {
                             merge_shell_activation_target(&mut merged, target, setting);
@@ -1894,7 +2215,9 @@ pub fn shell_activation_from_config_files(config_files: &ConfigMap) -> Vec<Shell
                 }
             }
             for (key, target, value) in target_entries {
-                match shell_activation_setting(&key, value) {
+                match shell_activation_setting(&key, value).filter(|setting| {
+                    shell_activation_mode_supported(&key, target.shell(), setting)
+                }) {
                     Some(setting) => {
                         merge_shell_activation_target(&mut merged, target, setting);
                     }
@@ -1910,10 +2233,11 @@ pub fn shell_activation_from_config_files(config_files: &ConfigMap) -> Vec<Shell
         .filter_map(|(target, mode)| {
             mode.and_then(|mode| {
                 let request = ShellActivationRequest::new(target, mode);
-                if explicit_files
-                    .iter()
-                    .any(|file| file.target == request.edit.path)
-                {
+                // Tracking only observes a file; it writes nothing, so the
+                // activation block still belongs to bootstrap.
+                if explicit_files.iter().any(|file| {
+                    file.mode != files::FileMode::Track && file.target == request.edit.path
+                }) {
                     debug!(
                         "bootstrap: shell activation for {} skipped because [dotfiles] owns {}",
                         target.name(),
@@ -1957,6 +2281,22 @@ fn merge_shell_activation_target(
     merged.insert(target, mode);
 }
 
+fn shell_activation_mode_supported(
+    key: &str,
+    shell: ShellActivationShell,
+    setting: &ShellActivationSetting,
+) -> bool {
+    let Some(mode) = setting.mode.filter(|mode| !mode.supported_by(shell)) else {
+        return true;
+    };
+    warn!(
+        "[bootstrap.mise_shell_activate.{key}]: mode \"{}\" is only supported for fish, \
+         ignoring entry",
+        mode.name()
+    );
+    false
+}
+
 fn shell_activation_setting(key: &str, value: toml::Value) -> Option<ShellActivationSetting> {
     match value {
         toml::Value::Boolean(enabled) => Some(ShellActivationSetting {
@@ -1966,7 +2306,7 @@ fn shell_activation_setting(key: &str, value: toml::Value) -> Option<ShellActiva
         toml::Value::String(mode) => {
             let Some(mode) = ShellActivationMode::parse(&mode) else {
                 warn!(
-                    "[bootstrap.mise_shell_activate.{key}]: expected \"activate\" or \"shims\", \
+                    "[bootstrap.mise_shell_activate.{key}]: expected \"activate\", \"shims\", or \"auto\", \
                      ignoring entry"
                 );
                 return None;
@@ -2007,8 +2347,8 @@ fn shell_activation_setting(key: &str, value: toml::Value) -> Option<ShellActiva
                 Some(toml::Value::String(mode)) => {
                     let Some(mode) = ShellActivationMode::parse(mode) else {
                         warn!(
-                            "[bootstrap.mise_shell_activate.{key}].mode: expected \"activate\" or \
-                             \"shims\", ignoring entry"
+                            "[bootstrap.mise_shell_activate.{key}].mode: expected \"activate\", \
+                             \"shims\", or \"auto\", ignoring entry"
                         );
                         return None;
                     };
@@ -2027,7 +2367,7 @@ fn shell_activation_setting(key: &str, value: toml::Value) -> Option<ShellActiva
         _ => {
             warn!(
                 "[bootstrap.mise_shell_activate.{key}]: expected bool, \"activate\", \"shims\", \
-                 or table, ignoring entry"
+                 \"auto\", or table, ignoring entry"
             );
             None
         }
@@ -2079,6 +2419,7 @@ fn shell_activation_setting_display(setting: Option<ShellActivationMode>) -> &'s
     match setting {
         Some(ShellActivationMode::Activate) => "activate",
         Some(ShellActivationMode::Shims) => "shims",
+        Some(ShellActivationMode::Auto) => "auto",
         None => "disabled",
     }
 }
@@ -2137,8 +2478,8 @@ fn packages_from_specs_with_config_files(
     let brew_taps = brew_taps_from_config_files(config_files);
     #[cfg(unix)]
     let brew_adopt = brew_adopt_from_config_files(config_files);
-    #[cfg(unix)]
     let package_configs = package_configs_from_config_files(config_files);
+    let mut snap_options = BTreeMap::new();
     #[cfg(unix)]
     let mut cask_adopt = BTreeSet::new();
     #[cfg(unix)]
@@ -2176,6 +2517,13 @@ fn packages_from_specs_with_config_files(
     for spec in specs {
         let (mgr, name) = parse_spec(spec)?;
         validate_package_name(&mgr, &name)?;
+        // An explicit `snap:<name>` installs from the channel the config
+        // declares, the same as a full `mise bootstrap` would.
+        if mgr == "snap"
+            && let Some(options) = configured_snap_options(&package_configs, &name)?
+        {
+            snap_options.insert(name.clone(), options);
+        }
         // An explicit `macos-app:<name>` still needs its declaration, which
         // only the config carries. Without it there is no URL to install from,
         // and no Homebrew cask to fall back to.
@@ -2260,7 +2608,7 @@ fn packages_from_specs_with_config_files(
         }
     }
     #[cfg(unix)]
-    let options = {
+    let mut options = {
         let mut options = IndexMap::new();
         if !cask_adopt.is_empty() || !cask_appdirs.is_empty() {
             options.insert(
@@ -2283,7 +2631,9 @@ fn packages_from_specs_with_config_files(
         options
     };
     #[cfg(not(unix))]
-    let options = IndexMap::new();
+    let mut options = IndexMap::new();
+    insert_package_sources(config_files, &mut options);
+    insert_snap_options(snap_options, &mut options);
     resolve_managers(
         by_mgr,
         options,
@@ -2353,7 +2703,34 @@ fn validate_package_name(mgr: &str, name: &str) -> eyre::Result<()> {
     if mgr == "mas" && !packages::mas::is_adam_id(name) {
         bail!("mas app IDs must be numeric ADAM IDs (e.g. \"mas:497799835\")");
     }
+    if mgr == "snap" {
+        packages::snap::validate_name(name)?;
+    }
     Ok(())
+}
+
+/// The snap options on a `[bootstrap.packages]` entry, checked. Options on
+/// another manager's entry warn and are ignored. A bad channel is an error
+/// rather than ignored, because installing from the default channel instead
+/// would put the wrong build on the machine.
+fn snap_options_for(
+    mgr: &str,
+    name: &str,
+    package: &PackageTomlConfig,
+) -> eyre::Result<Option<packages::snap::SnapOptions>> {
+    let Some(options) = package.snap_options() else {
+        return Ok(None);
+    };
+    if mgr != "snap" {
+        warn!(
+            "[bootstrap.packages]: channel and classic are only supported for snap entries; ignoring them for '{mgr}:{name}'"
+        );
+        return Ok(None);
+    }
+    if let Some(channel) = &options.channel {
+        packages::snap::validate_channel(name, channel)?;
+    }
+    Ok(Some(options))
 }
 
 /// Collect export declarations before manager validation can warn and skip an
@@ -2373,6 +2750,170 @@ pub fn nix_packages_for_export(config: &Config) -> Vec<(String, PackageTomlConfi
 
 pub fn brew_taps_from_config(config: &Config) -> IndexMap<String, String> {
     brew_taps_from_config_files(&config.config_files)
+}
+
+/// `[bootstrap.apt.sources]` across `config_files`: a more local config
+/// replaces a source of the same name. An invalid entry warns and is skipped,
+/// as an invalid package entry is.
+fn apt_sources_from_config_files(
+    config_files: &ConfigMap,
+) -> Vec<packages::apt_sources::AptSource> {
+    let mut merged: IndexMap<String, toml::Value> = IndexMap::new();
+    for cf in config_files.values().rev() {
+        if let Some(sys) = cf.bootstrap_config() {
+            for (name, source) in sys.apt.sources {
+                merged.insert(name, source);
+            }
+        }
+    }
+    merged
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let parsed = value
+                .try_into::<packages::apt_sources::AptSourceTomlConfig>()
+                .map_err(|err| eyre::eyre!("{name}: {err}"))
+                .and_then(|config| packages::apt_sources::AptSource::parse(&name, config));
+            match parsed {
+                Ok(source) => Some(source),
+                Err(err) => {
+                    warn!("[bootstrap.apt.sources]: {err:#}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// `[bootstrap.dnf.repos]` across `config_files`: a more local config replaces
+/// a repository of the same name. An invalid entry warns and is skipped.
+fn dnf_repos_from_config_files(config_files: &ConfigMap) -> Vec<packages::dnf_repos::DnfRepo> {
+    let mut merged: IndexMap<String, toml::Value> = IndexMap::new();
+    for cf in config_files.values().rev() {
+        if let Some(sys) = cf.bootstrap_config() {
+            for (name, repo) in sys.dnf.repos {
+                merged.insert(name, repo);
+            }
+        }
+    }
+    merged
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let parsed = value
+                .try_into::<packages::dnf_repos::DnfRepoTomlConfig>()
+                .map_err(|err| eyre::eyre!("{name}: {err}"))
+                .and_then(|config| packages::dnf_repos::DnfRepo::parse(&name, config));
+            match parsed {
+                Ok(repo) => Some(repo),
+                Err(err) => {
+                    warn!("[bootstrap.dnf.repos]: {err:#}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// The repository options of each manager that declares repositories:
+/// `[bootstrap.apt.sources]` and `[bootstrap.dnf.repos]`.
+fn package_sources_from_config_files(
+    config_files: &ConfigMap,
+) -> Vec<(&'static str, ManagerPackageOptions)> {
+    let mut out = vec![];
+    let sources = apt_sources_from_config_files(config_files);
+    if !sources.is_empty() {
+        out.push(("apt", ManagerPackageOptions::Apt { sources }));
+    }
+    let repos = dnf_repos_from_config_files(config_files);
+    if !repos.is_empty() {
+        out.push(("dnf", ManagerPackageOptions::Dnf { repos }));
+    }
+    out
+}
+
+fn insert_package_sources(
+    config_files: &ConfigMap,
+    options: &mut IndexMap<String, ManagerPackageOptions>,
+) {
+    for (manager, sources) in package_sources_from_config_files(config_files) {
+        options.insert(manager.to_string(), sources);
+    }
+}
+
+/// The checked snap options that the config declares for `snap:<name>`.
+fn configured_snap_options(
+    package_configs: &IndexMap<String, PackageTomlConfig>,
+    name: &str,
+) -> eyre::Result<Option<packages::snap::SnapOptions>> {
+    match package_configs.get(&format!("snap:{name}")) {
+        Some(configured) => snap_options_for("snap", name, configured),
+        None => Ok(None),
+    }
+}
+
+/// The `[bootstrap.packages]` table written in the config file at `path`, or
+/// an empty one when the file does not exist.
+///
+/// Reads the TOML directly instead of loading the config: loading runs the
+/// trust check, which a dry run must not prompt for or record. Nothing here
+/// acts on the file; a real `use` loads it, trust check included, before it
+/// installs. Safe mode skips that trust check, so a project file's packages
+/// are dropped here as loading would drop its `[bootstrap]` section.
+pub fn declared_packages_in_file(path: &Path) -> eyre::Result<IndexMap<String, PackageTomlConfig>> {
+    #[derive(Default, Deserialize)]
+    struct File {
+        #[serde(default)]
+        bootstrap: Bootstrap,
+    }
+    #[derive(Default, Deserialize)]
+    struct Bootstrap {
+        #[serde(default)]
+        packages: IndexMap<String, PackageTomlConfig>,
+    }
+    use eyre::WrapErr;
+
+    if !path.exists() || crate::config::safe_mode_ignores_bootstrap(path) {
+        return Ok(IndexMap::new());
+    }
+    let file: File = toml::from_str(&crate::file::read_to_string(path)?)
+        .wrap_err_with(|| format!("failed to parse {}", crate::file::display_path(path)))?;
+    Ok(file.bootstrap.packages)
+}
+
+/// Give the snap entries of `mgrs` the `channel` and `classic` options of the
+/// entry `use` writes, for `use`, which builds its requests without the config.
+/// `declared` is the `[bootstrap.packages]` table of the file `use` writes.
+///
+/// `use` keeps a table entry's options when that file already declares the
+/// snap and writes a plain `"latest"` entry otherwise, so the options come
+/// from the file's own declaration and nothing else. Inheriting from other
+/// configs would install with options the written entry does not carry.
+pub fn attach_snap_options(
+    declared: &IndexMap<String, PackageTomlConfig>,
+    mgrs: &mut [ManagerPackages],
+) -> eyre::Result<()> {
+    for mp in mgrs.iter_mut().filter(|mp| mp.manager.name() == "snap") {
+        let mut packages = BTreeMap::new();
+        for request in &mp.requests {
+            if let Some(options) = configured_snap_options(declared, &request.name)? {
+                packages.insert(request.name.clone(), options);
+            }
+        }
+        if !packages.is_empty() {
+            mp.options = ManagerPackageOptions::Snap { packages };
+        }
+    }
+    Ok(())
+}
+
+/// Give the apt and dnf entries of `mgrs` the `[bootstrap.apt.sources]` and
+/// `[bootstrap.dnf.repos]` they install from, for callers that build requests
+/// without the config.
+pub fn attach_package_sources(config: &Config, mgrs: &mut [ManagerPackages]) {
+    for (manager, sources) in package_sources_from_config_files(&config.config_files) {
+        for mp in mgrs.iter_mut().filter(|mp| mp.manager.name() == manager) {
+            mp.options = sources.clone();
+        }
+    }
 }
 
 fn brew_taps_from_config_files(config_files: &ConfigMap) -> IndexMap<String, String> {
@@ -2492,6 +3033,24 @@ mod tests {
 
     fn tv(s: &str) -> toml::Value {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn merge_below_combines_login_items() {
+        let items = |apps: &[&str], exclusive| {
+            Some(login_items::LoginItemsTomlConfig {
+                apps: apps.iter().map(|a| a.to_string()).collect(),
+                exclusive,
+            })
+        };
+        let mut own = BootstrapTomlConfig::default();
+        own.macos.login_items = items(&["/Applications/B.app"], None);
+        let mut lower = BootstrapTomlConfig::default();
+        lower.macos.login_items = items(&["/Applications/A.app"], Some(true));
+        own.merge_below(lower);
+        let merged = own.macos.login_items.unwrap();
+        assert_eq!(merged.apps, ["/Applications/A.app", "/Applications/B.app"]);
+        assert_eq!(merged.exclusive, Some(true));
     }
 
     #[cfg(unix)]
@@ -3631,6 +4190,8 @@ mod tests {
             url: None,
             sha256: None,
             artifact: None,
+            channel: None,
+            classic: None,
         });
 
         assert!(package.is_env_supported(&["work".to_string()]));
@@ -3688,6 +4249,15 @@ mod tests {
         assert_eq!(mgr, "apt");
         assert_eq!(req.name, "curl");
         assert_eq!(req.version.as_deref(), Some("8.5.0-2"));
+
+        // a leading @ is a dnf group, not a version separator
+        let (mgr, req) = parse_use_spec("dnf:@development-tools").unwrap();
+        assert_eq!(mgr, "dnf");
+        assert_eq!(req.name, "@development-tools");
+        assert_eq!(req.version, None);
+        let (_, req) = parse_use_spec("dnf:@development-tools@latest").unwrap();
+        assert_eq!(req.name, "@development-tools");
+        assert_eq!(req.version, None);
 
         // @latest is the same as no pin
         let (_, req) = parse_use_spec("dnf:bash@latest").unwrap();
@@ -4115,6 +4685,13 @@ value = []"#;
             Some(ShellActivationSetting {
                 enabled: true,
                 mode: Some(ShellActivationMode::Activate)
+            })
+        );
+        assert_eq!(
+            shell_activation_setting("fish", tv(r#""auto""#)),
+            Some(ShellActivationSetting {
+                enabled: true,
+                mode: Some(ShellActivationMode::Auto)
             })
         );
         assert_eq!(

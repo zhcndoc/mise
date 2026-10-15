@@ -11,33 +11,51 @@ description: "列出注册表简写名称及其后端"
 
 列出注册表简写名称及其后端
 
-注册表将简短名称映射到安装后端。例如，`node` 使用内置的 Node 后端。一个工具可能有多个候选项；显式后端语法和配置可以覆盖注册表选择。
+The registry maps short names to backends. For example, `node` uses the
+built-in node backend (`core:node`). When a tool lists several backends, mise
+uses the first one that this platform and your settings allow. An explicit
+identifier such as `aqua:jqlang/jq`, a `[tool_alias]` entry, or a
+`MISE_BACKENDS_<TOOL>` environment variable overrides that choice.
 
-这不是 mise 可以安装的所有工具的列表。对于受支持但没有注册表简写的源，请使用类似 `github:owner/repo` 的显式标识符。
+This is not a list of every tool mise can install. Use an explicit identifier
+such as `github:owner/repo` for a source without a registry shorthand.
 
-## 参数
-- **`[NAME]`** — 仅显示指定工具的完整名称
+## Arguments
+- **`[NAME]`** — Show only this tool's backends, in the order mise prefers them
 
 ## Flags
-- **`-b --backend <BACKEND>`** — 仅显示此后端的工具
-- **`--hide-aliased`** — 隐藏别名工具
-- **`-J --json`** — 以 JSON 格式输出
-- **`--security`** — 在 JSON 输出中包含每个工具后端的安全特性
+- **`-b --backend <BACKEND>`** — Show only tools for this backend
+- **`--hide-aliased`** — Hide names that are aliases of another registry tool
+- **`-J --json`** — Output in JSON format
+- **`--security`** — Include security features for each tool's backends in JSON output
 
-  需要使用 --json。安全信息会在工具的所有后端之间去重。由于每个后端的安全信息都需要单独解析，对于大型列表，这可能会显著增加耗时。
-- **`-h --help`** — 打印帮助
+  Requires --json. Features are merged across a tool's backends. Each backend is resolved separately, so this slows down a full listing.
+- **`-h --help`** — Print help
 
 ## Examples
 
-列出注册表，然后检查 node。第二条命令输出 `core:node`。
+List every registry tool and its backends
 
 ```
 mise registry
-mise registry node
 ```
+
+Show the backends for one tool
+
+```
+mise registry jq
+aqua:jqlang/jq asdf:mise-plugins/asdf-jq
+```
+
+List the tools that have an aqua backend
 
 ```
 mise registry --backend aqua
+```
+
+Print the registry as JSON
+
+```
 mise registry --json
 ```
 

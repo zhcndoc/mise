@@ -11,20 +11,30 @@ description: "打印脚本以在当前 shell 会话中禁用 mise"
 
 打印脚本以在当前 shell 会话中禁用 mise
 
-由激活安装的 shell 函数会在受支持的 shell 中执行此输出。直接调用可执行文件时，请使用相应 shell 的语法执行或加载其输出。这不会删除启动文件中的行；新的 shell 仍会再次激活 mise。
+In a shell where mise is activated, run `mise deactivate`: the activation
+function evaluates the script for you. Calling the executable directly
+(`command mise deactivate`) only prints the script, so evaluate it yourself as
+in the examples below. New shells still activate mise; remove the line from your
+shell startup file to stop that.
 
 ## 标志
 - **`-h --help`** — 打印帮助
 
 ## Examples
 
-Bash 或 Zsh，调用可执行文件而不是激活函数
+Turn mise off in an activated shell
+
+```
+mise deactivate
+```
+
+Bash or Zsh, calling the executable rather than the activation function
 
 ```
 eval "$(command mise deactivate)"
 ```
 
-Fish
+Fish, calling the executable rather than the activation function
 
 ```
 command mise deactivate | source
@@ -34,6 +44,6 @@ command mise deactivate | source
 
 ## 相关文档
 
-- [Shell 激活](/getting-started.html#activate-mise)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Shell setup](/shell-setup.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

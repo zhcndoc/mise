@@ -13,23 +13,28 @@ description: "将活动工具的 skills 链接到 agent 查找它们的位置"
 
 在 DIR 中为每个 skill 写入一个符号链接，链接名称为 skill 名称，并指向当前在此处处于活动状态的版本目录。DIR 默认为 `skills.dir` 设置，即项目根目录下的 `.claude/skills`：最近的 mise 配置所在目录。在 `mise use` 更改版本后再次运行它，链接会随之更新；或者将 `skills.auto_sync` 设置为让 mise 在每次安装和 `mise use` 后执行此操作。
 
-只有 mise 创建且指向其安装目录的链接才会被替换，或者在使用 --prune 或 `skills.prune` 设置时被移除。skill 名称处已有的实际目录或由你创建的链接会被保留并报告。
+mise replaces only the links it made, which point into its installs
+directory, and removes them only with --prune or the `skills.prune` setting.
+A real directory or a link of your own at a skill's name is left alone and
+reported.
 
-## 标志
-- **`--dir <DIR>`** — 要将 skills 链接到的目录
-- **`-g --global`** — 链接到 ~/.claude/skills，而不是项目目录
-- **`--prune`** — 移除 mise 为已不再处于活动状态的 skills 创建的链接
-- **`-h --help`** — 打印帮助
+## Flags
+- **`--dir <DIR>`** — The directory to link skills into
+- **`-g --global`** — Link into the skills.dir directory under your home directory instead of the project's
+
+  With the default skills.dir, that is ~/.claude/skills.
+- **`--prune`** — Remove links mise made for skills that are no longer active
+- **`-h --help`** — Print help
 
 ## 示例
 
-链接到项目的 .claude/skills，或 skills.dir 指定的位置
+Link skills into the project's skills.dir (default .claude/skills)
 
 ```
 mise skills sync
 ```
 
-链接到其他位置，并移除已不再处于活动状态的 skills 的链接
+Link into .agents/skills and remove links for skills that are no longer active
 
 ```
 mise skills sync --dir .agents/skills --prune

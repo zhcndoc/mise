@@ -11,11 +11,9 @@ description: "运行任务及其依赖项"
 
 运行任务及其依赖项
 
-使用 `mise run TASK [ARGS...]` 运行一个任务，或使用 `:::` 分隔多个任务调用以安排多个任务。将 mise 标志放在任务名称之前；后续参数会传递给该任务。如果未指定任务，mise 会在定义了 `default` 时运行它，或在交互式终端中打开任务选择器。
+Run one task with `mise run TASK [ARGS...]`, or several with `:::` between them. Put mise flags before the task name; everything after it goes to the task. With no task, mise runs the `default` task if there is one, or opens a task picker in an interactive terminal.
 
-任务定义在 `mise.toml` 或任务目录中。具有 `sources` 和 `outputs` 的任务可以在其输出为最新状态时跳过执行。`--force` 会绕过最新状态检查；任务输出缓存有独立的 `--task-cache` 控制选项。
-
-对于已经有 npm 构建脚本且已安装其依赖项的项目：
+Tasks come from `[tasks]` in `mise.toml` and from task directories such as `mise-tasks/`. A task with `sources` and `outputs` is skipped while its outputs are up to date; `--force` runs it anyway. For example:
 
 ```toml
 [tasks.build]
@@ -24,136 +22,174 @@ sources = ["src/**/*.ts", "package.json", "package-lock.json"]
 outputs = ["dist/**/*.js"]
 ```
 
-要创建独立脚本任务，请使用 `mise tasks add --file hello -- echo hello`。然后运行 `mise run hello`。有关任务目录、参数、缓存和依赖项配置，请参阅 <https://mise.jdx.dev/tasks/>
+The experimental artifact cache (a task's `cache` field) has separate `--task-cache` controls.
 
-## 标志
-- **`--affected`** — 仅为受 Git 更改影响的项目运行匹配的任务
-- **`--affected-base <REV>`** — `--affected` 的 Git 基准修订版本
-  默认使用 MISE_AFFECTED_BASE、CI 元数据或 HEAD~1
-- **`--affected-explain`** — 解释为何通过 `--affected` 选择了项目和任务
-- **`--affected-head <REV>`** — `--affected` 的 Git 头部修订版本
-  默认使用 MISE_AFFECTED_HEAD、CI 元数据或 HEAD
-- **`--affected-json`** — 将受影响的项目和任务输出为 JSON，而不运行任务
-- **`--all`** — 在整个 monorepo 中使用所有任务打开交互式选择器
-- **`-c --continue-on-error`** — 即使某个任务失败，也继续运行任务
-- **`-C --cd <CD>`** — 执行命令前切换到此目录
-- **`-f --force`** — 即使输出已是最新状态，也强制运行任务
-- **`-j --jobs <JOBS>`** — 并行运行的任务数
-  小于 1 的值会按 1 处理
-  默认使用 `jobs` 设置或 `MISE_JOBS` 环境变量
+To create a script task, run `mise tasks add --file hello -- echo hello`, then `mise run hello`. See <https://mise.jdx.dev/tasks/running-tasks.html>
 
-  **环境变量：** `MISE_JOBS`
-- **`-n --dry-run`** — 不实际运行任务，只按执行顺序打印任务
-- **`-o --output <OUTPUT>`** — 任务输出的显示方式
+## Flags
+- **`--affected`** — Run matching tasks only in projects affected by Git changes
 
-  - `prefix` - 按行打印 stdout/stderr，并在前面加上任务标签
-  - `interleave` - 直接输出到 stdout/stderr，而不是按行输出
-  - `replacing` - 每次替换 stdout，stderr 原样打印
-  - `timed` - 仅当 stdout 行显示超过 1 秒时才显示
-  - `keep-order` - 按行打印 stdout/stderr，并在前面加上任务标签，但保持输出顺序
-  - `quiet` - 不显示额外输出
-  - `silent` - 不显示任何输出，包括任务的 stdout 和 stderr，但错误除外
+  Counts committed changes between the base and head revisions, plus staged, unstaged, and untracked changes in the working tree when the head revision is the checked-out commit. Requires a monorepo root (`monorepo_root = true`).
+- **`--affected-base <REV>`** — Git base revision for `--affected`
 
-  **环境变量：** `MISE_TASK_OUTPUT`
-- **`-q --quiet`** — 不显示额外输出
+  Defaults to `MISE_AFFECTED_BASE`, CI metadata, or `HEAD~1`.
+- **`--affected-committed`** — Count committed changes between the base and head revisions
 
-  **环境变量：** `MISE_QUIET`
-- **`-r --raw`** — 直接读写 stdin/stdout/stderr，而不是按行读写
-  使用此选项时不会应用脱敏
-  使用 `raw` 配置或 `MISE_RAW` 环境变量进行配置
-- **`--secrets <SECRET>`** — 将这些密钥（逗号分隔）提供给命令行指定的任务；依赖项和子任务不会收到。将此标志放在任务名称之前
-- **`--secrets-all`** — 将项目可注入的所有密钥提供给命令行指定的任务（fnox `env = true` 或 `"exec"`，不包括 `env = false`）。依赖项和子任务不会收到
-- **`-s --shell <SHELL>`** — 用于运行 toml 任务的 Shell
+  Alone, ignores the working tree. Combines with `--affected-uncommitted` and `--affected-untracked`. With none of the three, every source counts (the working-tree sources only when the head revision is the checked-out commit). Also set by `MISE_AFFECTED_COMMITTED`.
+- **`--affected-explain`** — Explain why `--affected` selected each project and task
+- **`--affected-head <REV>`** — Git head revision for `--affected`
 
-  在 unix 上默认为 `sh -o errexit -c`，在 Windows 上默认为 `cmd /c`
-  也可以通过设置 `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS` 或 `MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS` 进行设置
-  或者可以通过任务上的 `shell` 属性覆盖
-- **`-S --silent`** — 除错误外不显示任何输出
+  Defaults to `MISE_AFFECTED_HEAD`, CI metadata, or `HEAD`.
+- **`--affected-json`** — Print the affected projects and tasks as JSON without running tasks
+- **`--affected-uncommitted`** — Count staged and unstaged changes to tracked files
 
-  **环境变量：** `MISE_SILENT`
-- **`-t --tool <TOOL@VERSION>`** — 除 mise.toml 文件中的工具外，额外运行指定的工具，例如：node@20 python@3.10
-- **`--allow-env <VAR>`** — 允许指定的环境变量通过（这会对其他所有环境变量隐含启用 --deny-env）
-  支持通配符，例如 --allow-env='MYAPP_*'
-- **`--allow-net <HOST>`** — 允许访问指定主机的网络（这会对其他所有网络隐含启用 --deny-net）
-  Linux 不支持按主机过滤，并会返回错误
-  有关当前 macOS 主机过滤限制，请参阅沙箱指南
-  Windows 不支持沙箱：mise 会发出警告并在不进行主机过滤的情况下运行
-- **`--allow-read <PATH>`** — 允许读取指定路径（这会对其他所有路径隐含启用 --deny-read）
-- **`--allow-write <PATH>`** — 允许写入指定路径（这会对其他所有路径隐含启用 --deny-write）
-- **`--deny-all`** — 阻止读取、写入、网络访问和环境变量
-- **`--deny-env`** — 阻止继承环境变量，但 PATH、HOME、USER、SHELL、TERM、COLORTERM、LANG 除外
-- **`--deny-net`** — 阻止所有网络访问
-- **`--deny-read`** — 阻止文件系统读取（系统库和工具目录仍可访问）
-- **`--deny-write`** — 阻止所有文件系统写入
-- **`--fresh-env`** — 绕过环境缓存并重新计算环境
-- **`--no-cache`** — 不对远程任务使用缓存
+  Combines with the other source flags. Alone, ignores committed changes. Needs the head revision to be the current checkout. Also set by `MISE_AFFECTED_UNCOMMITTED`.
+- **`--affected-untracked`** — Count untracked files that Git does not ignore
 
-  **环境变量：** `MISE_TASK_REMOTE_NO_CACHE`
-- **`--no-deps`** — 跳过自动依赖项准备
-- **`--no-timings`** — 隐藏每个任务完成后打印的耗时
+  Combines with the other source flags. Alone, ignores committed changes. Needs the head revision to be the current checkout. Also set by `MISE_AFFECTED_UNTRACKED`.
+- **`--all`** — Open the task picker with tasks from every project in the monorepo
+- **`-c --continue-on-error`** — Continue running tasks even if one fails
+- **`-C --cd <DIR>`** — Change to this directory before running the tasks
+- **`-f --force`** — Run the tasks even if their outputs are up to date
+- **`-j --jobs <JOBS>`** — Number of tasks to run in parallel (default: the `jobs` setting)
 
-  设置 `MISE_TASK_TIMINGS=0` 可默认隐藏耗时
-- **`--skip-deps`** — 仅运行指定的任务，跳过所有依赖项
+  Values below 1 are treated as 1.
 
-  **环境变量：** `MISE_TASK_SKIP_DEPENDS`
-- **`--skip-tools`** — 运行任务前跳过工具安装
+  **Environment Variable:** `MISE_JOBS`
+- **`-n --dry-run`** — Print the tasks in the order they would run, without running them
+- **`-o --output <OUTPUT>`** — How task output is displayed
 
-  也可以通过 `task.run_auto_install` 设置或 `MISE_TASK_RUN_AUTO_INSTALL=false` 环境变量持久设置
-- **`--task-cache <TASK_CACHE>`** — 设置本次运行的任务输出缓存访问方式
+  - `prefix` - Print stdout/stderr by line, prefixed with the task's label
+  - `interleave` - Print directly to stdout/stderr instead of by line
+  - `replacing` - Stdout is replaced each time, stderr is printed as is
+  - `timed` - Only show stdout lines if they are displayed for more than 1 second
+  - `keep-order` - Print stdout/stderr by line, prefixed with the task's label, but keep the order of the output
+  - `quiet` - Deprecated; use `--output interleave --quiet`
+  - `silent` - Do not show any output, including the task's stdout and stderr, except errors
 
-  - `read-write` - 读取缓存结果并写入新结果
-  - `read-only` - 读取缓存结果，不写入新结果
-  - `write-only` - 写入新结果，不读取缓存结果
-  - `off` - 禁用任务输出缓存
-  - `local-only` - 仅读取和写入本地缓存；目前等同于 `read-write`
+  **Environment Variable:** `MISE_TASK_OUTPUT`
+- **`-q --quiet`** — Do not show extra output
+
+  **Environment Variable:** `MISE_QUIET`
+- **`-r --raw`** — Connect the tasks directly to stdin, stdout, and stderr instead of reading their output by line
+
+  Redactions are not applied, and tasks run one at a time. Set the `raw` setting to make this the default.
+- **`--secrets <SECRET>`** — [experimental] Give the named tasks these secrets (comma-separated); their dependencies and subtasks do not get them
+
+  Put this flag before the task name. Not allowed in safe mode.
+- **`--secrets-all`** — [experimental] Give the named tasks every secret the project can inject; their dependencies and subtasks do not get them
+
+  Covers the fnox secrets with `env = true` or `env = "exec"`, never those with `env = false`. Put this flag before the task name. Not allowed in safe mode.
+- **`-s --shell <SHELL>`** — Shell used to run TOML tasks that do not set their own `shell`
+
+  Defaults to `sh -o errexit -c` on Unix and `cmd /c` on Windows, from the `unix_default_inline_shell_args` or `windows_default_inline_shell_args` setting. A task's `shell` property takes precedence over this flag.
+- **`-S --silent`** — Do not show any output except for errors
+
+  **Environment Variable:** `MISE_SILENT`
+- **`-t --tool <TOOL@VERSION>`** — Extra tools to use with the tasks, e.g. node@24 python@3.13
+- **`--allow-env <VAR>`** — Allow a specific env var through (implies `--deny-env` for everything else)
+
+  Supports wildcards, such as `--allow-env='MYAPP_*'`.
+- **`--allow-net <HOST>`** — Allow network access only to HOST (not supported on any platform)
+
+  Per-host filtering does not work: Linux and macOS exit with an error, and Windows runs the task without network restrictions. See <https://mise.jdx.dev/sandboxing.html#access-to-particular-hosts>
+- **`--allow-read <PATH>`** — Allow reads from a specific path (implies `--deny-read` for everything else)
+- **`--allow-write <PATH>`** — Allow writes to a specific path (implies `--deny-write` for everything else)
+- **`--deny-all`** — Block reads, writes, network, and env vars
+- **`--deny-env`** — Block env var inheritance except PATH, HOME, USER, SHELL, TERM, COLORTERM, and LANG
+
+  On Windows it also keeps the variables programs need to start, such as `SystemRoot` and `TEMP`.
+- **`--deny-net`** — Block all network access
+- **`--deny-read`** — Block filesystem reads (system libraries and tool directories stay readable)
+- **`--deny-write`** — Block filesystem writes except temporary and device paths (/tmp, /dev)
+- **`--fresh-env`** — Bypass the environment cache and recompute the environment
+- **`--no-cache`** — Do not use the cache for remote tasks
+
+  **Environment Variable:** `MISE_TASK_REMOTE_NO_CACHE`
+- **`--no-deps`** — Do not run `[deps]` providers that have `auto = true` before the tasks
+- **`--no-timings`** — Hide the elapsed time printed after each task completes
+
+  Set `task.timings = false` to hide it by default.
+- **`--skip-deps`** — Run only the named tasks, not the tasks they depend on
+
+  **Environment Variable:** `MISE_TASK_SKIP_DEPENDS`
+- **`--skip-tools`** — Do not install missing tools before running the tasks
+
+  Set `task.run_auto_install = false` to make this the default.
+- **`--task-cache <TASK_CACHE>`** — [experimental] Set artifact cache access for this run
+
+  - `read-write` - Read cached results and write new results
+  - `read-only` - Read cached results without writing new results
+  - `write-only` - Write new results without reading cached results
+  - `off` - Disable the artifact cache
+  - `local-only` - Read and write only the local cache, skipping any remote cache
 
   **可选值：** `read-write`、`read-only`、`write-only`、`off`、`local-only`
 
   **默认值：** `read-write`
 
-  **环境变量：** `MISE_TASK_CACHE`
-- **`--task-cache-explain`** — 解释生成每个任务输出缓存键的输入
-- **`--task-cache-explain-json`** — 将缓存键输入详情输出为 JSON Lines，不运行任务
-- **`--task-cache-stats`** — 报告任务输出缓存命中次数、恢复的字节数和节省的时间
-- **`--timeout <TIMEOUT>`** — 任务完成的超时时间
-  例如：30s、5m
+  **Environment Variable:** `MISE_TASK_CACHE`
+- **`--task-cache-explain`** — [experimental] Explain the inputs that produced each task's artifact cache key
+- **`--task-cache-explain-json`** — [experimental] Print cache-key input details as JSON Lines without running tasks (requires `--dry-run`)
+- **`--task-cache-stats`** — [experimental] Report artifact cache hits, restored bytes, and time saved
+- **`--timeout <TIMEOUT>`** — Stop the run if it takes longer than this, e.g. 30s or 5m
+
+  Overrides the `task.timeout` setting.
 
 ## 示例
 
-运行在 mise.toml 中定义或作为独立脚本的 `lint` 任务
+Run the "lint" task, defined in mise.toml or as a script
 
 ```
 mise run lint
 ```
 
-即使源文件已是最新状态，也强制运行 `build` 任务
+Run "build" even if its outputs are up to date
 
 ```
 mise run --force build
 ```
 
-运行 `test`，使 stdin/stdout/stderr 全部连接到当前终端。这会强制使用 `--jobs=1`，以防止输出交错
+Run "test" connected directly to the terminal, one task at a time
 
 ```
 mise run --raw test
 ```
 
-从项目的密钥源向 `deploy` 任务提供 DEPLOY_KEY。它的依赖项不会收到该密钥。
-
-```
-mise run --secrets DEPLOY_KEY deploy
-```
-
-并行运行 `lint`、`test` 和 `check` 任务
+Run the "lint", "test", and "check" tasks in parallel
 
 ```
 mise run lint ::: test ::: check
 ```
 
-运行多个任务，每个任务都有自己的参数
+Run several tasks, each with its own arguments
 
 ```
 mise run cmd1 arg1 arg2 ::: cmd2 arg1 arg2
+```
+
+Run tasks one at a time
+
+```
+mise run -j 1 lint ::: test
+```
+
+Run every task that matches a pattern
+
+```
+mise run 'test:*'
+```
+
+Run a task in a monorepo project
+
+```
+mise run //services/api:build
+```
+
+Give "deploy" the DEPLOY_KEY secret (experimental); its dependencies do not get it
+
+```
+mise run --secrets DEPLOY_KEY deploy
 ```
 
 <!-- generated reference navigation -->

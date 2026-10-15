@@ -12,39 +12,51 @@ description: "[experimental] Manage project dependencies"
 
 [实验性] 管理项目依赖
 
-不使用子命令时，为当前项目运行依赖安装，这与 `mise deps install` 相同。提供者会检测其输入和已安装的输出，以决定是否需要执行操作；使用 `--explain PROVIDER` 查看该决策。
+Installs project dependencies such as node_modules, separately from the tools
+`mise install` manages. Each provider is one package-manager step: a built-in
+one such as npm or uv, or a custom `[deps.<name>]` command. A provider runs only
+when its inputs changed or its outputs are missing; `--explain` shows why.
 
-除非传递了 `--no-deps`，否则 `auto = true` 的提供者会在 `mise exec` 和 `mise run` 之前运行。这些提供者会安装项目依赖，例如 node_modules，与 `mise install` 管理的版本化工具分开。
+With no subcommand, runs `mise deps install`. Providers with `auto = true` also
+run before `mise exec` and `mise run` unless you pass --no-deps.
 
-## 参数
-- **`[PROVIDER]`** — 要操作的提供者（仅运行此提供者，或与 --explain 一起使用）
+## Arguments
+- **`[PROVIDER]`** — Run only this provider, or explain it with --explain
 
-## 标志
-- **`--explain`** — 显示提供者为何是最新或过期（需要提供提供者参数）
-- **`-f --force`** — 即使所有依赖步骤的输出都是最新的，也强制运行
-- **`-n --dry-run`** — 仅检查是否需要安装依赖，不运行命令
-- **`--list`** — 显示可用的依赖提供者
-- **`--monorepo`** — 从每个 [monorepo].config_roots 配置根目录安装依赖
+## Flags
+- **`--explain`** — Show why a provider is fresh or stale, and exit non-zero unless it is fresh (requires a PROVIDER argument)
+- **`-f --force`** — Run providers even when their outputs are up to date
+- **`-n --dry-run`** — Show which providers would run, without running them
+- **`--list`** — List configured providers with their status, sources, and outputs
+- **`--monorepo`** — Also run providers from every config root in `[monorepo].config_roots`
 
-  需要 `monorepo_root = true`，并且在 monorepo 根配置中显式指定
-  `[monorepo].config_roots`。提供者名称类似于 `//apps/api:uv`。
+  Requires `monorepo_root = true` and an explicit `config_roots` list in the
+  monorepo root's config. Provider names then include their root, such as
+  `//apps/api:uv`.
 
-  **环境变量：** `MISE_MONOREPO`
-- **`--only <ONLY>`** — 仅运行指定的依赖规则
-- **`--skip <SKIP>`** — 跳过指定的依赖规则
-- **`-h --help`** — 打印帮助信息
+  **Environment Variable:** `MISE_MONOREPO`
+- **`--only <PROVIDER>`** — Run only these providers
+- **`--skip <PROVIDER>`** — Skip these providers
+- **`-h --help`** — Print help
 
 ## 示例
 
+Run every provider that is out of date
+
 ```
-mise deps                    # 安装所有项目依赖
-mise deps install            # 与直接运行 `mise deps` 相同
-mise deps install --force    # 即使依赖是最新的，也强制重新安装
-mise deps install --dry-run  # 显示将要执行的操作
-mise deps --monorepo         # 从显式指定的 monorepo 配置根目录安装依赖
-mise deps add npm:react      # 添加依赖
-mise deps add -D npm:vitest  # 添加开发依赖
-mise deps remove npm:lodash  # 移除依赖
+mise deps
+```
+
+Show why the npm provider would or would not run
+
+```
+mise deps install npm --explain
+```
+
+Include providers from every monorepo config root
+
+```
+mise deps --monorepo
 ```
 
 ## 子命令
@@ -56,9 +68,9 @@ mise deps remove npm:lodash  # 移除依赖
 配置：
 
 ```toml
-# 内置 npm 提供器（自动检测 lockfile）
+# Built-in npm provider; needs package.json and package-lock.json
 [deps.npm]
-auto = true              # 在 mise x/run 之前自动运行
+auto = true              # run before mise exec and mise run
 
 # 自定义提供器
 [deps.codegen]
@@ -66,9 +78,9 @@ auto = true
 sources = ["schema/*.graphql"]
 outputs = ["src/generated/"]
 run = "npm run codegen"
-
-# To disable npm instead, add `disable = ["npm"]` under [deps].
 ```
+
+See <https://mise.jdx.dev/dev-tools/deps.html>.
 
 <!-- generated reference navigation -->
 

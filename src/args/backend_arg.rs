@@ -417,7 +417,7 @@ impl BackendArg {
         }
     }
 
-    pub(crate) fn backend_type(&self) -> BackendType {
+    pub fn backend_type(&self) -> BackendType {
         // Check if this is a valid backend:tool format first
         if let Some((backend_prefix, _tool_name)) = self.short.split_once(':')
             && let Ok(backend_type) = backend_prefix.parse::<BackendType>()
@@ -795,7 +795,7 @@ impl BackendArg {
         request_opts: Option<ToolVersionOptions>,
     ) -> ResolvedToolOptions {
         let mut opts = ResolvedToolOptions::default();
-        opts.apply_overrides(&self.registry_opts(), ToolOptionSource::Registry);
+        opts.apply_registry(&self.registry_opts(), &self.full_without_opts());
         if let Some(manifest_opts) = self.install_manifest_opts() {
             opts.apply_overrides(manifest_opts, ToolOptionSource::InstallManifest);
         }

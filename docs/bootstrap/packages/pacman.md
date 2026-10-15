@@ -1,10 +1,13 @@
 ---
-description: "Arch 系列 Linux（Arch、Manjaro、EndeavourOS 等）的系统软件包。"
+description: "Install and remove Arch Linux packages with pacman from mise.toml."
 ---
 
-# Arch 软件包（pacman）
+# Arch Linux packages (pacman)
 
-基于 Arch 的 Linux 发行版（Arch、Manjaro、EndeavourOS 等）的系统软件包。
+The `pacman` manager installs and removes packages on Arch Linux, Manjaro,
+EndeavourOS, and other Arch-based distributions. It uses
+[sudo](/bootstrap/packages/#sudo) when mise is not running as root. For AUR
+packages, use [`aur`](/bootstrap/packages/aur.html).
 
 ```toml
 [bootstrap.packages]
@@ -13,26 +16,53 @@ description: "Arch 系列 Linux（Arch、Manjaro、EndeavourOS 等）的系统�
 "pacman:libreoffice-fresh" = { state = "absent" }
 ```
 
-对于滚动发布的工作站，在添加软件包之前，使用 Arch 支持的完整系统升级工作流程来保持整个系统为最新状态。mise 的作用域 `upgrade` 命令不能替代该工作流程；请参阅下面的部分升级限制。
-
-## 预览并应用
-
 ```sh
-mise bootstrap packages status
 mise bootstrap packages apply --manager pacman --dry-run
 mise bootstrap packages apply --manager pacman
 ```
 
-这些命令使用当前生效的 `[bootstrap.packages]` 声明。要同时添加并安装软件包，请使用 `mise bootstrap packages use pacman:openssl`。管理器必须在主机上可用；当管理器不可用时，显式指定 `--manager pacman` 会失败。
+## Prerequisites
 
-## 行为
+The manager is available on Linux when `pacman` is on `PATH`. On other machines,
+its entries show as [`skipped`](/bootstrap/packages/#choose-platforms). If
+`/var/lib/pacman/sync` has no package databases (fresh containers), mise runs
+`pacman -Sy` before installing.
 
-- 使用 `pacman -Q` 和 `pacman -T` 检查软件包状态（只读，绝不会提权）。通过 `Provides` 满足所请求名称的已安装软件包会被视为已安装。
-- 缺少的软件包使用 `pacman -S --noconfirm --needed` 安装，必要时通过 sudo 提权（请参阅 [sudo](/bootstrap/packages/#sudo)）。`--needed` 使安装具有幂等性。
-- 使用 `state = "absent"` 声明的软件包会通过 `pacman -R --noconfirm` 移除。移除操作基于 pacman 的已安装软件包数据库，因此对官方 Arch 软件包以及来自已配置的第三方软件仓库（例如 Omarchy Package Repository）的软件包都以相同方式生效。mise 不会级联移除依赖它们的软件包，也不会移除孤立的依赖项。
-- 如果 `/var/lib/pacman/sync` 不包含任何数据库（全新容器），mise 会在安装前自动运行 `pacman -Sy`。使用 `mise bootstrap packages apply --update` 强制刷新。
-- `mise bootstrap packages upgrade` 会运行 `pacman -Sy`，然后仅升级已配置的软件包。通过 `Provides` 满足的软件包请求会被跳过，以避免替换已安装的提供者。Arch 官方仅支持完整系统升级（`pacman -Syu`）——升级单个软件包属于[部分升级](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported)，因此在滚动发布系统上，建议自行运行 `pacman -Syu`。
+## Package names
 
-::: warning
-Arch 软件仓库仅提供每个软件包的最新版本，因此 pacman 条目无法以固定版本安装——`mise bootstrap packages apply` 会跳过固定版本条目并发出警告，不过 `mise bootstrap packages status` 仍会报告其存在 `version mismatch`。必须从 Arch User Repository 构建的软件包，请使用单独的 [`aur:` 管理器](./aur.md)。
-:::
+Use the package name as `pacman -S` takes it, from any configured
+repository. An installed package that provides the requested name counts as
+installed.
+
+## Version pins
+
+Arch repositories carry only the current version of each package, so mise
+cannot install a pin. A pinned entry shows as `version mismatch` while another
+version is installed, and `apply` skips it with a warning.
+
+## What mise runs
+
+| Operation                       | Command                                                           |
+| ------------------------------- | ----------------------------------------------------------------- |
+| Check installed state (no sudo) | `pacman -Q` and `pacman -T`                                       |
+| Install                         | `pacman -S --noconfirm --needed -- <packages>`                    |
+| `apply --update`                | `pacman -Sy` first                                                |
+| Upgrade                         | `pacman -Sy`, then `pacman -S --noconfirm --needed -- <packages>` |
+| Remove                          | `pacman -R --noconfirm -- <packages>`                             |
+
+## Upgrade
+
+`mise bootstrap packages upgrade` refreshes the package databases and upgrades
+only the configured packages. That is a
+[partial upgrade](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported),
+which Arch does not support. On an Arch system, run `sudo pacman -Syu` yourself
+to keep everything current, and use `upgrade` only where you accept that risk.
+Entries satisfied by a package that provides the name are skipped, so the
+provider is not replaced.
+
+## Remove packages
+
+An entry with `state = "absent"` is removed with `pacman -R --noconfirm`. This
+works for packages from any configured repository. mise does not cascade the
+removal or remove orphaned dependencies, so pacman refuses to remove a package
+that another installed package still needs.

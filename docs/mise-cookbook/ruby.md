@@ -1,42 +1,58 @@
 ---
-description: "使用 mise 选择 Ruby，并使用任务运行应用程序的 Bundler 和 Rails 命令。"
+description: "Select Ruby from a Rails app's .ruby-version and run its Bundler and Rails commands as mise tasks."
 ---
 
-# Ruby 食谱
+# Ruby on Rails
 
-使用 mise 选择 Ruby，并使用任务运行应用程序的 Bundler 和 Rails 命令。本示例假设已有一个包含 `Gemfile`、`Gemfile.lock` 和 `bin/rails` 的 Rails 项目。在使用 lint 任务之前，请将 RuboCop 添加到开发 bundle 中。按照 [Ruby 指南](/lang/ruby.html)中的说明安装 Ruby 的平台依赖。
+Pin Ruby for an existing Rails app from its `.ruby-version` file, and run the
+app's Bundler and Rails commands as tasks. The recipe assumes `Gemfile`,
+`Gemfile.lock`, `bin/rails` and `.ruby-version`, with RuboCop in the
+development group.
 
-## 一个 Ruby on Rails 项目
+## Use the app's `.ruby-version` {#a-ruby-on-rails-project}
 
 ```toml [mise.toml]
-min_version = "2024.9.5"
+[settings]
+idiomatic_version_file_enable_tools = ["ruby"]
 
-[env]
-# 项目信息
-PROJECT_NAME = "{{ config_root | basename }}"
-
-[tools]
-# 使用指定版本安装 Ruby
-ruby = "{{ get_env(name='RUBY_VERSION', default='3.3.3') }}"
-
-[tasks."bundle:install"]
-description = "安装 gem 依赖"
+[tasks.install]
+description = "Install gem dependencies"
 run = "bundle install"
 
 [tasks.server]
 description = "启动 Rails 服务器"
 alias = "s"
-run = "bundle exec rails server"
+run = "bin/rails server"
 
 [tasks.test]
 description = "运行测试"
 alias = "t"
-run = "bundle exec rails test"
+run = "bin/rails test"
 
 [tasks.lint]
-description = "使用 Rubocop 进行 lint 检查"
+description = "Run RuboCop"
 alias = "l"
 run = "bundle exec rubocop"
 ```
 
-克隆后运行 `mise run bundle:install`，然后运行 `mise run test` 或 `mise run server`。`bundle exec` 会选择项目 bundle 中的可执行文件，包括锁定的 Rails 和 RuboCop 版本。数据库创建等应用程序设置仍属于 Rails 项目自身说明的一部分。
+The setting makes mise read the app's `.ruby-version` (a leading `ruby-`, as in
+`ruby-3.4.7`, is ignored), so the version stays in one file that other Ruby
+tools also read. Because the setting is in the project's `mise.toml`, teammates
+and CI read `.ruby-version` too. If the app has no `.ruby-version`, set
+`ruby = "4.0"` under `[tools]` instead. See
+[version files](/lang/ruby.html#version-files) for the other files mise can
+read.
+
+Run `mise run install` after cloning; mise installs the Ruby version first if it
+is missing. Then run `mise run test` or `mise run server`. The binstubs and
+`bundle exec` load the app's bundle, so Rails and RuboCop run at their locked
+versions. Database setup stays with the app's own `bin/setup` or
+`bin/rails db:prepare`.
+
+mise installs precompiled Ruby where a build exists for your platform. For
+source builds and the system libraries they need, see
+[compiling with ruby-build](/lang/ruby.html#compiling-with-ruby-build).
+
+To run `bundle install` only when `Gemfile` or `Gemfile.lock` changes, use the
+experimental [`[deps.bundler]`](/dev-tools/deps.html) provider instead of the
+install task.

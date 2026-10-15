@@ -11,16 +11,28 @@ description: "移除配置的显式信任"
 
 移除配置的显式信任
 
-## 参数
-- **`[CONFIG_FILE]`** — 要取消信任的配置文件
+mise asks again before loading the parts of the file that can run code. With
+no file, untrusts the nearest config in this directory or a parent. Same as
+`mise trust --untrust`.
+
+## Arguments
+- **`[CONFIG_FILE]`** — The config file to untrust
 
 ## 标志
 - **`-h --help`** — 打印帮助
 
-<!-- 生成的参考文档导航 -->
+## Examples
+
+Stop trusting a specific file
+
+```
+mise untrust ~/src/app/mise.toml
+```
+
+<!-- generated reference navigation -->
 
 ## 相关文档
 
-- [配置文件信任](/security.html)。
-- [全部命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Configuration trust](/security.html#configuration-trust).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

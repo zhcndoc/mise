@@ -11,9 +11,9 @@ description: "将由 nvm、nodenv 或 Homebrew 安装的 node 版本符号链接
 
 将由 nvm、nodenv 或 Homebrew 安装的 node 版本符号链接到 mise
 
-使用此命令可让 mise 使用由其他版本管理器安装的版本。
-
-这不会覆盖由 mise 管理的安装、运行时别名或来自其他提供程序的链接。
+Use this to make versions installed by another version manager available to
+mise. It does not overwrite managed installs, runtime aliases, or links from
+other providers. Pass one or more of --brew, --nodenv, and --nvm.
 
 ## 选项
 - **`--brew`** — 从 Homebrew 获取工具版本
@@ -23,16 +23,18 @@ description: "将由 nvm、nodenv 或 Homebrew 安装的 node 版本符号链接
 
 ## 示例
 
+Use the node that Homebrew installed
+
 ```
-brew install node@20
+brew install node@24
 mise sync node --brew
-mise use -g node@20 # uses Homebrew-provided node
+mise use -g node@24
 ```
 
 <!-- 生成的参考导航 -->
 
 ## 相关文档
 
-- [Node.js](/lang/node.html)。
-- [`mise sync <SUBCOMMAND>`](/cli/sync.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Node.js](/lang/node.html#migrating-from-nvm-nodenv-or-homebrew).
+- [`mise sync <SUBCOMMAND>`](/cli/sync.html).
+- [Global flags and argument syntax](/cli/#global-flags).

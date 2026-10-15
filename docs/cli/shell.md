@@ -12,36 +12,45 @@ description: "为当前 shell 会话设置工具版本"
 
 为当前 shell 会话设置工具版本
 
-仅在 mise 已经激活的会话中有效。
+Installs the version if needed, then sets `MISE_<TOOL>_VERSION`, such as
+`MISE_NODE_VERSION`, to the resolved version in the current shell. That
+overrides config files until you close the shell or run
+`mise shell --unset <TOOL>`. Requires `mise activate`: the shell function it
+defines applies the variable that this command prints.
 
-其工作方式是为当前 shell 会话设置环境变量，
-例如 `MISE_NODE_VERSION=20`，这些变量会被 `mise activate` 创建的 shell 函数进行“eval”执行。
+## Arguments
+- **`<TOOL@VERSION>…`** — Tools to set, such as node@20
 
-## 参数
-- **`<TOOL@VERSION>…`** — 要使用的工具
+## Flags
+- **`-j --jobs <JOBS>`** — Number of jobs to run in parallel (default: the `jobs` setting)
 
-## 标志
-- **`-j --jobs <JOBS>`** — 并行运行的任务数
-  小于 1 的值将按 1 处理
-  默认使用 `jobs` 设置
+  **Environment Variable:** `MISE_JOBS`
+- **`-u --unset`** — Remove a version set earlier with `mise shell`
+- **`--raw`** — Connect the install commands' stdin, stdout, and stderr to the terminal
 
-  **环境变量：** `MISE_JOBS`
-- **`-u --unset`** — 删除之前设置的版本
-- **`--raw`** — 将后端安装命令的 stdin/stdout/stderr 直接连接到终端。隐含 `--jobs=1`
-- **`-h --help`** — 显示帮助
+  Implies `--jobs=1`.
+- **`-h --help`** — Print help
 
 ## 示例
+
+Use node 20 in this shell
 
 ```
 mise shell node@20
 node -v
-v20.0.0
+v20.19.5
+```
+
+Go back to the version the config requests
+
+```
+mise shell --unset node
 ```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [Shell 激活](/getting-started.html#activate-mise)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Shell setup](/shell-setup.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

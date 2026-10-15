@@ -1,72 +1,167 @@
 ---
-description: "mise supports monorepo-style task organization with target path syntax."
+description: "Run tasks across the projects in one repository with //path:task names, per-project tools and environment, and shared root configuration."
+socialDescription: "Run tasks across a repository's projects with //path:task names and per-project tools."
 ---
 
-# Monorepo Tasks
+# Monorepo tasks
 
-mise supports monorepo-style task organization with target path syntax. This lets you manage tasks across multiple projects in a single repository, where each project can have its own `mise.toml` with tools, environment variables, and tasks that differ from those of the directory the task is called from.
+Use monorepo mode when one repository holds several projects that each need
+their own tools, environment variables, or tasks. Mark the root config as a
+monorepo root and list the project directories. Every project's tasks then get a
+path-based name such as `//projects/frontend:build`, which you can run from
+anywhere in the repository with the tools and environment of the project that
+defines it.
 
-## 概述
+## Set up a monorepo
 
-Set `monorepo_root = true` and list project directories in
-`[monorepo].config_roots`. mise loads their tasks into a shared namespace, with
-each task prefixed by its path relative to the monorepo root. Configuration roots
-and the experimental [workspace project graph](#workspace-project-graph-experimental)
-are separate: the former locate task configuration; the latter infer relationships
-from package metadata.
-
-::: tip
-The directory containing a `mise.toml` file is called the **config_root**. In monorepo mode, each project can have its own config_root with its own configuration, separate from the monorepo root. If you use one of the alternate paths in a subdirectory, such as `./projects/frontend/.mise/config.toml`, the config_root is `./projects/frontend`, not `./projects/frontend/.mise`.
-:::
-
-### 优势
-
-- **Consistent execution**: Run tasks from anywhere in the monorepo using the mise config that would apply if they were called from the task's directory
-- **Clear task namespacing**: Tasks are prefixed with their location from the monorepo root
-- **Pattern-based execution**: Use wildcards to run tasks across multiple projects
-- **Tool and environment layering**: Subdirectory tasks use tools and environment variables from parent configs, but can also define their own in their config_root
-- **Shared trust boundary**: In normal mode, trusting a monorepo root also trusts descendant configs. Review them as part of the repository; [paranoid mode](/paranoid.html) requires explicit trust.
-
-## 配置
-
-### 启用 Monorepo 模式
-
-Declare the root and its project directories in the repository's `mise.toml`:
+Declare the root and its projects in the repository's root `mise.toml`:
 
 ```toml
-# /myproject/mise.toml
+# mise.toml at the repository root
 monorepo_root = true
 
 [monorepo]
 config_roots = ["projects/frontend", "projects/backend"]
 
 [tools]
-# 此处定义的工具会应用于所有子目录
-node = "20"
+node = "24" # every project inherits this
 ```
 
-### 示例结构
+Each listed directory has its own config:
 
-```
+```text
 myproject/
-├── mise.toml（包含 monorepo_root = true）
-├── projects/
-│   ├── frontend/
-│   │   └── mise.toml（包含任务：build、test）
-│   └── backend/
-│       └── mise.toml（包含任务：build、test）
+├── mise.toml            # monorepo_root = true
+└── projects/
+    ├── frontend/
+    │   └── mise.toml    # tasks: build, test
+    └── backend/
+        └── mise.toml    # tasks: build, test
 ```
 
-With this structure, tasks are automatically namespaced:
+mise names those tasks `//projects/frontend:build`, `//projects/frontend:test`,
+`//projects/backend:build`, and `//projects/backend:test`.
+[`mise tasks --all`](/cli/tasks/ls.html) lists them.
 
-- `//projects/frontend:build`
-- `//projects/frontend:test`
-- `//projects/backend:build`
-- `//projects/backend:test`
+A config root is the directory that owns a mise config file. For both
+`projects/frontend/mise.toml` and `projects/frontend/.mise/config.toml`, the
+config root is `projects/frontend`.
 
-### 项目路径的短名称
+### Config roots {#explicit-config-roots}
 
-使用 `[monorepo.path_aliases]` 为配置根设置更短的路径名称：
+mise loads only the directories listed in `[monorepo].config_roots`; it does not
+search the filesystem for them. Each entry is a path relative to the monorepo
+root or a single-level glob:
+
+```toml
+[monorepo]
+config_roots = [
+  "packages/frontend",
+  "packages/backend",
+  "services/*",
+]
+```
+
+- A glob such as `services/*` matches directories one level deep. It skips
+  matches that have no mise config file, `.mise/tasks/` directory, or
+  `mise-tasks/` directory.
+- A listed path that has no mise config prints a warning.
+- Recursive `**` globs, absolute paths, and paths containing `..` are ignored
+  with a warning.
+
+::: warning Automatic discovery is deprecated
+Without `[monorepo].config_roots`, mise walks the filesystem to find task configs
+and prints a deprecation warning. The
+[`task.monorepo_depth`](/configuration/settings.html#task.monorepo_depth),
+[`task.monorepo_exclude_dirs`](/configuration/settings.html#task.monorepo_exclude_dirs),
+and [`task.monorepo_respect_gitignore`](/configuration/settings.html#task.monorepo_respect_gitignore)
+settings control that walk and have no effect once `config_roots` is set.
+[`mise install --monorepo`](/cli/install.html) and
+[`mise ls --monorepo`](/cli/ls.html) have no fallback and fail without
+`config_roots`.
+:::
+
+### Trust
+
+In normal mode, trusting the monorepo root also trusts every config beneath it,
+so review the whole repository before you run [`mise trust`](/cli/trust.html).
+In [paranoid mode](/paranoid.html), trusting the root does not extend to the
+configs beneath it, even if you trusted the root before you turned paranoid
+mode on; trust each one. See
+[Configuration trust](/security.html#configuration-trust) for the general rules.
+
+## Run tasks by path {#task-path-syntax}
+
+Run a monorepo task with [`mise run`](/cli/run.html) or directly as
+`mise <task>`:
+
+```sh
+mise //projects/frontend:build
+mise run //projects/frontend:build
+```
+
+Scripts normally use `mise run`, because a future mise subcommand could share a
+task's name. mise never adds a subcommand that starts with `//` or `:`, so the
+short form is safe for monorepo tasks. Quote any pattern that contains `*` so
+the shell does not expand it.
+
+### Absolute paths
+
+A name that starts with `//` is a path from the monorepo root:
+
+```sh
+mise //projects/frontend:build
+mise //projects/backend:test
+```
+
+### Tasks in the current project {#current-config-root-tasks}
+
+A name that starts with `:` refers to the nearest config root that encloses the
+current directory:
+
+```sh
+cd projects/frontend/src/components
+mise :build # runs //projects/frontend:build
+```
+
+When no config root encloses the current directory, the name resolves against
+the monorepo root.
+
+### Bare task names
+
+Inside a config root, a bare name such as `build` resolves the same way as
+`:build`, on the command line and in `depends`. Existing projects can therefore
+switch to monorepo mode without renaming their dependencies. Prefer `:build` in
+new configuration so it is clear that the name is project-relative.
+
+## Wildcards {#wildcard-patterns}
+
+Task paths accept `...` in the directory part and `*` or `**` in the task-name
+part:
+
+```sh
+mise //...:test                            # test in every project
+mise //projects/...:build                  # build in every project under projects/
+mise //projects/.../api:build              # projects/api, projects/x/api, projects/x/y/api, ...
+mise //.../frontend:build                  # build in every project directory named frontend
+mise '//projects/frontend:*'               # every task in projects/frontend without a : group
+mise '//projects/frontend:**'              # every task in projects/frontend, including test:unit
+mise '//projects/frontend:test:*'          # test:unit, but not test:unit:fast
+mise '//...:**'                            # every task in every project
+mise run '//...:test' ::: '//...:test:**'  # test and every test:… task in every project
+```
+
+`...` matches zero or more directories, following the Bazel and Buck2
+convention. Shell-style globs such as `//projects/*:build` are not supported in
+the directory part. In the task-name part, `*` matches within one `:` group and
+`**` matches across groups, as with other [task wildcards](/tasks/running-tasks.html#wildcards).
+
+Group related projects under a shared directory, such as `services/`, and give
+related tasks a shared prefix, such as `test:`, so that one pattern selects them.
+
+## Path aliases {#short-names-for-project-paths}
+
+Give a config root a shorter name with `[monorepo.path_aliases]`:
 
 ~~~toml
 monorepo_root = true
@@ -78,693 +173,218 @@ config_roots = ["foo/bar/baz/abc/123"]
 "123" = "foo/bar/baz/abc/123"
 ~~~
 
-之后，`mise run //123:build` 会运行 `//foo/bar/baz/abc/123:build`。该别名适用于该根中的所有任务，包括 `//123:*` 等任务模式。完整路径仍然是任务的规范名称，也继续有效。别名必须是单个路径段，并且必须指向 `[monorepo].config_roots` 中的根。它不能包含 `...` 通配符，也不能与现有配置根路径（包括 glob 选择的路径）重叠。
+`mise run //123:build` then runs `//foo/bar/baz/abc/123:build`. The alias works
+for every task in that root, including patterns such as `//123:*`. The full path
+remains the task's canonical name and keeps working.
 
-## 任务路径语法
+An alias is a single path segment made of letters, digits, `-`, `_`, and `.`,
+and cannot contain `...`. It must point to a root listed in `config_roots`,
+directly or through a glob. It cannot be the first segment of a configured root,
+such as `projects` when `projects/frontend` is a root.
 
-Monorepo tasks use special path syntax with `//` and `:` prefixes. You can run these tasks directly with `mise` or with `mise run`. For non-monorepo tasks, the guidance is to avoid the direct syntax in scripts because a task name could conflict with a future core mise command. mise will never define commands with a `//` or `:` prefix, however, so this guidance does not apply to monorepo tasks.
+## Depend on tasks in other projects
 
-```bash
-# 直接语法（monorepo 任务首选）
-mise //projects/frontend:build
+Name another project's task by its path in `depends`:
 
-# 使用 'run' 也可以
-mise run //projects/frontend:build
-
-# 通配符需要加引号
-mise '//projects/frontend:*'
-```
-
-### 绝对路径
-
-Use the `//` prefix to specify an absolute path from the monorepo root:
-
-```bash
-# 运行 frontend 项目中的 build 任务
-mise //projects/frontend:build
-
-# 运行 backend 项目中的 test 任务
-mise //projects/backend:test
-```
-
-### 当前 config_root 任务
-
-Use the `:` prefix to run tasks in the current config_root:
-
-```bash
-cd projects/frontend
-mise :build  # 从 frontend 的 config_root 运行 build 任务
-```
-
-这适用于 config_root 下的任意目录，而不仅仅是 config_root 本身。任务名称会解析到最近的上层 config_root，因此，`cd projects/frontend/src/components
-&& mise :build` 也会运行 frontend 的 `build`。如果当前目录不在任何 config_root 内，则该名称会相对于 monorepo 根目录解析。
-
-::: tip 可选的冒号语法
-从子目录运行任务或定义任务依赖时，开头的 `:` 是可选的。两种语法都有效，但**我们建议使用 `:` 前缀，以明确表示** monorepo 任务引用。
-
-**从子目录运行：**
-
-```bash
-cd projects/frontend
-mise :build      # 推荐：明确的 monorepo 任务引用
-mise build       # 也可以（用于迁移兼容）
-```
-
-**任务依赖：**
-
-```toml
+```mise-toml
 # projects/frontend/mise.toml
-[tasks.lint]
-run = "eslint ."
-
 [tasks.build]
-depends = [":lint"]  # Explicit reference to this config root
-# Alternatively, replace the line above with: depends = ["lint"]
-run = "webpack build"
+depends = ["//libs/shared:build", ":lint"]
+run = "npm run build"
 ```
 
-以 `./` 开头的依赖路径会相对于声明它们的任务进行解析。这样就可以在 monorepo 的不同层级复用相同的依赖声明：
+`//libs/shared:build` runs with the tools and environment of `libs/shared`
+before the frontend's `build`. When another build system, such as Turborepo,
+Cargo, or Bazel, already orders the builds, let one mise task call it instead of
+declaring the same edges again in `depends`.
+
+### Relative dependency paths
+
+A dependency that starts with `./` resolves relative to the project that
+declares it, so one declaration works at any depth:
 
 ```toml
 [tasks.test]
 depends = [{ task = "./...:groups:tests:*", optional = true }]
 ```
 
-例如，当由 `//apps/frontend:test` 声明时，此模式会解析为
-`//apps/frontend/...:groups:tests:*`，并匹配当前项目及其子项目，但不会匹配同级项目。
+Declared by `//apps/frontend:test`, this becomes
+`//apps/frontend/...:groups:tests:*`. It matches the project and the projects
+beneath it, but not its siblings.
 
-The bare-name syntax (without `:`) is supported primarily to ease migration from non-monorepo to monorepo configurations: existing task dependencies keep working, so you don't need to update them all at once. The `:` prefix, however, makes it clear that you're referencing a task in the current config_root.
-:::
+## Tool, environment, and vars layering
 
-### 通配符模式
-
-mise 支持两种类型的通配符，以便灵活执行任务：
-
-#### 路径通配符（`...`）
-
-Use an ellipsis (`...`) to match any directory depth:
-
-```bash
-# 运行所有项目中的 'test' 任务（任意深度）
-mise //...:test
-
-# 运行 projects/ 下所有子目录中的 'build'
-mise //projects/...:build
-
-# 匹配中间带有通配符的路径
-mise //projects/.../api:build  # 匹配 projects/*/api 和 projects/*/*/api
-```
-
-::: info
-Additional glob patterns may be added in a future version, so `mise //projects/*:build`
-and `mise '//projects/**:build'` will likely be supported. We're using `...` because it matches
-how Bazel and Buck2 do it.
-:::
-
-#### 任务名通配符（`*`）
-
-Use an asterisk (`*`) to match task names:
-
-```bash
-# 运行 frontend 项目中的所有任务
-mise '//projects/frontend:*'
-
-# 运行所有以 'test:' 开头的任务
-mise '//projects/frontend:test:*'
-
-# 在所有项目中运行 'lint' 任务
-mise //...:lint
-```
-
-### 组合通配符
-
-你可以将两种通配符组合起来，形成更强大的模式：
-
-```bash
-# 运行所有项目中的所有任务（不知道为什么你会想这么做，但确实可以）
-mise '//...:*'
-
-# Run test and nested test groups in all projects
-mise run '//...:test' ::: '//...:test:**'
-
-# 运行所有前端相关项目中的 build 任务
-mise //.../frontend:build
-```
-
-## 工具、环境和变量分层
-
-Subdirectory tasks automatically use tools and environment variables from parent config files in the hierarchy. However, each subdirectory can also define its own tools and environment variables in its config_root. This lets you:
-
-1. Define common tools and environment at the monorepo root
-2. Override tools or environment in specific subdirectories
-3. Add extra tools or environment in subdirectories
-
-`vars` 在任务模板中遵循相同的层级，因此从 monorepo 根目录运行子目录任务时，可以使用子配置中的变量。
-
-像 <span v-pre>`sources = ["{{env.SRC_DIR}}/*"]`</span> 这样的任务模板会使用该任务自身配置层级中的 env 进行渲染，因此无论任务从哪里被调用，子项目的 `[env]` 部分都会生效。
-
-子级 `task_config.includes` 模板也可以引用继承的 vars，这对集中管理任务 include 很有用，例如 <span v-pre>`git::https://example.com/tasks.git//go.toml?ref={{vars.central_ref}}`</span>。
-
-### 分层示例
+A project's tasks use the tools and environment variables of every config above
+them, and the project's own config can override or add to them. Put tools that
+most projects share in the root config and override them only where a project
+needs a different version.
 
 ```toml
-# /myproject/mise.toml
+# mise.toml at the repository root
 monorepo_root = true
+
+[monorepo]
+config_roots = ["projects/frontend", "projects/backend"]
 
 [tools]
-node = "20"      # 对所有子目录可用
-python = "3.12"  # 对所有子目录可用
+node = "24"
+python = "3.13"
 
 [env]
-LOG_LEVEL = "info"  # 对所有子目录可用
+LOG_LEVEL = "info"
 ```
 
-```toml
-# /myproject/projects/frontend/mise.toml
+```mise-toml
+# projects/frontend/mise.toml
 [tools]
-node = "18"  # 覆盖根目录的 node 20
+node = "22" # overrides the root's node 24
 
 [env]
-LOG_LEVEL = "debug"  # 覆盖根目录的 LOG_LEVEL
-PORT = "3000"        # 添加新的环境变量
+LOG_LEVEL = "debug" # overrides the root's LOG_LEVEL
+PORT = "3000"       # adds a variable
 
 [tasks.build]
-run = "npm run build"  # 使用 node 18 和 LOG_LEVEL=debug
+run = "npm run build" # node 22, python 3.13, LOG_LEVEL=debug
 ```
 
-```toml
-# /myproject/projects/backend/mise.toml
-# 没有 tools 或 env 部分 - 使用根目录中的 node 20、python 3.12 和 LOG_LEVEL=info
-
+```mise-toml
+# projects/backend/mise.toml
 [tasks.build]
-run = "npm run build"  # 使用根目录中的 node 20 和 LOG_LEVEL=info
+run = "npm run build" # node 24, python 3.13, LOG_LEVEL=info from the root
 ```
 
-### 分层规则
+A task's tools and environment are merged in this order, later entries winning:
 
-1. **基础工具集和环境**：任务从所有全局配置文件（包括层级中的父级配置）中的工具和环境开始
-2. **子目录覆盖**：子目录配置文件中定义的工具和环境会在其上进行合并，从而允许覆盖
-3. **任务特定工具和环境**：在任务的 `tools` 和 `env` 属性中定义的值具有最高优先级。
+1. Every config file above the task's config root, from your global config down
+   to the monorepo root and any directories in between.
+2. The config file in the task's config root.
+3. The task's own `tools` and `env`.
 
-## 工具
+`vars` follow the same hierarchy. Templates in a project's task, such as
+<span v-pre>`sources = ["{{ env.SRC_DIR }}/*"]`</span> or a
+`task_config.includes` URL that uses <span v-pre>`{{ vars.central_ref }}`</span>,
+render with that project's environment and vars wherever you run the task from.
 
-使用 `mise install --monorepo` 从 `[monorepo].config_roots` 中列出的每个目录安装工具的并集。这在 CI 中很有用，当你想为仓库中的所有项目预热缓存时：
+Tasks also receive `MISE_MONOREPO_ROOT`, the monorepo root, and
+`MISE_PROJECT_ROOT`, the task's config root. See
+[Task environment](/tasks/running-tasks.html#task-environment) for the other
+variables.
 
-```bash
-MISE_ENV=ci mise install --monorepo
-```
+## List tasks {#listing-tasks}
 
-传入工具名称会对并集进行过滤，同时保留多个已配置版本：
+`mise tasks` lists the tasks of the current config root and the configs above
+it. `mise tasks --all` lists every task in the monorepo. Given this layout:
 
-```bash
-mise install --monorepo node
-```
-
-`mise ls --monorepo` 会列出相同的并集，并可用于检查缓存键或调试哪些 config roots 提供了工具。这两个命令都要求 `monorepo_root = true` 以及显式的 `[monorepo].config_roots`。
-
-## 锁文件
-
-单体仓库可以在 monorepo 根目录使用一个锁文件。来自 `packages/api/mise.toml` 的工具会写入 `<monorepo_root>/mise.lock`，而环境和本地变体会写入根目录文件，例如 `mise.ci.lock` 和 `mise.local.lock`。
-
-This is rolling out as a tri-state setting. During the rollout window, leaving it unset keeps today's per-subproject lockfile behavior. Set `lockfile = true` to opt into root lockfiles now:
-
-```toml
-[monorepo]
-lockfile = true
-```
-
-如果 mise 发现了旧的子项目锁文件，它会在下一次运行支持锁文件的命令时将它们迁移到根锁文件中。冲突时以根目录条目为准，唯一的子项目条目会被保留，已迁移的子项目锁文件将被删除。
-
-如果想在默认行为改变后仍将锁文件保留在每个子项目配置旁边，可以在 monorepo 根目录中固定旧行为：
-
-```toml
-[monorepo]
-lockfile = false
-```
-
-Monorepos that leave the setting unset and use `mise*.lock` files will start warning in mise `2026.12.0` and will default to root lockfiles in mise `2027.6.0`. Older mise versions do not understand unified monorepo lockfiles for subproject-owned tools. Teams that need mixed-version compatibility should use `lockfile = false` until everyone has upgraded.
-
-## 配置根目录
-
-你必须使用 `[monorepo]` 部分显式列出你的配置根目录：
-
-```toml
-# /myproject/mise.toml
-monorepo_root = true
-
-[monorepo]
-config_roots = [
-    "packages/frontend",
-    "packages/backend",
-    "services/*",          # 单层通配符模式
-]
-```
-
-这会告诉 mise 哪些目录包含项目配置。优势：
-
-- **快速发现**：无需遍历文件系统
-- **显式控制**：只包含你列出的项目
-- **支持通配符**：使用 `*` 表示单层模式（例如，`services/*` 匹配 `services/api`、`services/worker`）
-
-::: tip
-Single-level globs (`*`) are supported, but recursive globs (`**`) are not. This keeps performance predictable while still allowing flexible patterns.
-:::
-
-::: warning Automatic Discovery Deprecated
-Automatic filesystem walking to discover monorepo subdirectories is deprecated. If you don't define `[monorepo].config_roots`, mise still walks the filesystem for task discovery but emits a deprecation warning; `mise install --monorepo` and `mise ls --monorepo` do not fall back and always require explicit config roots. Migrate to explicit config roots.
-:::
-
-### 嵌套的 Monorepo 根目录
-
-当层级结构中的多个配置将 `monorepo_root = true` 时，**最近的**配置优先。这种情况会出现在检出到主检出目录内部的 git worktree 中：
-
-```
-myproject/mise.toml                       # monorepo_root = true
-myproject/packages/api/mise.toml
-myproject/.worktrees/feature-x/mise.toml  # monorepo_root = true (同一仓库的其他分支)
-myproject/.worktrees/feature-x/packages/api/mise.toml
-```
-
-在 `myproject/.worktrees/feature-x` 内部时，该目录就是 monorepo 根目录：`//packages/api:build` 会解析到 worktree 中的副本，`{{config_root}}` 会指向 worktree 内部，并且会展开 worktree 自身的 `[monorepo].config_roots`。
-
-**外层** monorepo 中的任务不会被加载。它们属于另一个 monorepo 的任务集，而不是所选根目录的父级命名空间；因此加载它们会将其置于 `//` 命名空间之外——你会看到主检出目录中的 `build` 与 worktree 中的 `//:build` 并列。外层根目录之上的所有内容（你的全局配置、`$HOME/mise.toml`）都不受影响，仍会像往常一样提供任务。
-
-外层配置仍然是**工具、环境变量和变量**的祖先配置，它们会像继承任何父配置一样继承。如果你连这些内容也不希望继承，请将 worktree 保存在主检出目录之外（例如 `myproject-worktrees/feature-x`）。
-
-## 工作区项目图（实验性）
-
-mise 可以根据生态系统工作区元数据推断出一个与提供程序无关的项目图。此图与从配置根目录发现任务的机制分离：项目无需拥有自己的 `mise.toml` 也可以出现在图中。
-
-启用实验性功能并标记仓库根目录：
-
-```toml
-# /myproject/mise.toml
-monorepo_root = true
-
-[settings]
-experimental = true
-```
-
-使用以下命令检查推断出的项目：
-
-```bash
-mise tasks graph
-mise tasks graph --explain
-mise tasks graph --json
-```
-
-使用 `--explain` 查看每个项目、依赖边和任务是由哪个工作区提供程序推断出的。
-当提供程序建议任务输入、输出、可缓存性或依赖项时，解释信息还会显示每个建议字段对应的提供程序和生态系统元数据文件。由
-`[monorepo.projects]` 覆盖项引入的值会标记为 `configuration`，而不是归因于某个提供程序。
-
-JSON 输出会在每个项目的 `provenance`、`dependency_provenance` 和 `tasks` 字段中包含相同的信息。任务建议包含字段级来源信息，因此其他工具可以区分例如来自
-`turbo.json` 的输出声明和根 mise 任务默认值。
-
-### 受影响的任务
-
-使用 `mise run --affected <task-pattern>`，仅在两个 Git
-修订版本之间发生变更的项目中运行任务。mise 会选择拥有变更路径的项目，然后沿着反向项目依赖关系继续选择，
-因此也会包含下游项目。工作区全局路径和 `task_config.global_inputs` 会选择整个工作区。Provider 可能会将锁文件变更缩小到外部依赖发生变化的项目。
-
-```bash
-# 比较 HEAD 与其第一个父提交，并运行受影响的构建任务
-mise run --affected build
-
-# 在保留正常试运行行为的同时检查选择结果
-mise run --affected --affected-explain --dry-run build
-
-# 将选择结果输出为 JSON，但不运行任务
-mise run --affected --affected-json build
-
-# 比较显式指定的修订版本
-mise run --affected --affected-base origin/main --affected-head HEAD test
-```
-
-`--affected-explain` 会列出每个选中的项目及其原因：项目拥有的变更路径、工作区全局路径、由 Provider
-归属的锁文件，或依赖于另一个受影响的项目。它还会列出与这些项目关联的任务模式匹配结果。正常的任务依赖关系会在之后展开，因此选中的任务仍可能运行未变更项目中的必需前置任务。
-
-`--affected-json` 会输出相同的展开前选择结果，但不会运行任务。其稳定的 JSON 对象包含基础修订版本和头部修订版本、包含根目录和原因的受影响项目，以及包含关联项目 ID 的任务模式匹配结果。
-
-在本地，修订版本默认值为 `HEAD~1` 和 `HEAD`。`MISE_AFFECTED_BASE` 和
-`MISE_AFFECTED_HEAD` 可以覆盖这些默认值。当这些变量未设置时，GitHub Actions 和 GitLab 合并请求元数据会提供 CI 默认值；显式 CLI 选项具有最高优先级。
-
-### Cargo 工作区发现
-
-当根目录的 `Cargo.toml` 包含 `[workspace]` 表时，Cargo 提供程序会发现各个软件包。
-它会展开工作区的 `members` 模式，遵循 `exclude` 设置；如果工作区清单同时包含 `[package]`，还会包含根软件包。工作区根目录中的路径依赖会作为隐式成员包含在内，这与 Cargo 的工作区成员行为一致。工作区外部的路径仍是外部依赖，不会添加到图中。
-
-每个被发现的软件包都必须包含 `[package].name`。mise 使用这一稳定的生态系统标识来创建类似 `cargo:my-crate` 的 ID；将 crate 移动到另一个目录不会改变其 ID。`mise tasks graph` 还会将软件包根目录和 `Cargo.toml` 报告为工作区定义来源。发现过程会直接解析清单，不要求安装 `cargo` 可执行文件。
-
-### Cargo 依赖推断
-
-对于每个发现的 Cargo 软件包，mise 会根据带有本地
-`path` 的依赖项推断内部边。普通依赖、开发依赖、构建依赖以及特定目标的依赖表都会参与其中。重命名的依赖项会根据其路径解析，而声明了 `workspace = true` 的依赖项则会从根目录的 `[workspace.dependencies]` 表继承路径。
-
-仅指定版本的依赖项和注册表依赖项会被忽略，工作区之外的路径依赖项以及位于排除路径下的路径依赖项也会被忽略。解析后指向同一软件包的声明不会创建自依赖边。如果推断出的内部边形成环，`mise tasks graph` 会报告该环；必要时，项目覆盖项可以替换或调整推断出的依赖关系。
-
-### uv 工作区发现
-
-当根目录的 `pyproject.toml` 包含
-`[tool.uv.workspace]` 表时，uv 提供程序会发现 Python 项目。根项目始终包含在内，而 mise 会展开
-`members` glob，并为其余工作区成员遵循 `exclude`。每个项目都必须定义
-`[project].name`；mise 会将等价的 Python 包名称写法（例如 `my_package`、
-`my.package` 和 `my-package`）规范化为稳定的 ID，例如 `uv:my-package`。
-
-配置的 monorepo 根目录下的本地目录源也会被表示为项目，即使它们被排除在 uv 工作区成员之外。
-这保留了 uv 中工作区路径依赖替代方案的依赖边。本地元数据会直接解析，因此发现依赖图时无需安装
-`uv` 或 Python。
-
-### uv 依赖推断
-
-mise 会从 `[project].dependencies`、可选依赖组、`[dependency-groups]` 以及 uv 的旧版 `dev-dependencies` 中读取依赖。仅当相应的 `[tool.uv.sources]` 条目选择了一个设置为 `workspace = true` 的工作区成员，或通过 `path` 指向仓库内的项目目录时，才会添加内部边。根项目的源声明会应用于工作区成员，除非某个成员覆盖了该依赖的源。
-
-带有环境标记的源数组会以保守方式处理：任何本地替代源都会添加该边，因为依赖图与平台无关。Registry、Git、URL、wheel、源代码归档以及外部工作区源不会添加项目或边。自依赖会被忽略，而项目之间的循环依赖会由 `mise tasks graph` 报告，并可通过项目覆盖进行修正。
-
-### Go 工作区发现
-
-Go 提供程序会发现根目录 `go.work` 中由 `use` 指令列出的模块。单独的指令和 `use` 块均受支持。每个列出的目录都必须包含带有 `module` 指令的 `go.mod`；mise 使用该稳定的模块路径创建 ID，例如
-`go:example.com/acme/api`。位于已配置单体仓库根目录之外的模块会被忽略，因为 mise 图中的项目根目录始终相对于仓库。
-
-发现过程会直接解析 `go.work` 和 `go.mod`，不要求使用 `go` 可执行文件。它不会从 `require` 或 `replace` 推断依赖边：这些指令描述的是模块选择，不一定是任务图所需的源码级关系。请使用项目覆盖配置，将对构建有影响的边添加进去：
-
-```toml
-[monorepo.projects."go:example.com/acme/api"]
-depends_add = ["go:example.com/acme/lib"]
-```
-
-使用 `depends` 替换完整的依赖集合，或使用 `depends_add` 和 `depends_remove` 进行针对性调整。图解释会将这些已配置的边归因于 `configuration`。
-
-### Node 工作区发现
-
-Node 提供程序会从以下位置发现 npm、pnpm、Yarn 和 Bun 工作区包：
-
-- `pnpm-workspace.yaml`
-- 根目录 `package.json` 中的 `workspaces` 数组
-- `workspaces` 的单模式字符串形式
-- Yarn Classic 的对象形式 `workspaces.packages`
-
-当两个文件同时存在时，`pnpm-workspace.yaml` 定义工作区成员关系。对于 pnpm 和检测到的 Yarn 工作区，带有 `name` 的有效根目录 `package.json` 会被隐式包含。Node 工作区发现支持正向和负向模式、递归 `**` 通配符，以及类似 `packages/{web,api}` 的大括号模式。发现过程会跳过 `.git` 和 `node_modules`，但不会应用 Git 忽略文件或 `.ignore` 文件。
-
-每个被发现的包都必须在其 `package.json` 中包含 `name`。mise 使用这一稳定的生态系统标识来创建类似 `node:@acme/web` 的 ID；将包移动到另一个目录不会改变其 ID。`mise tasks graph` 还会报告包根目录、工作区定义来源以及检测到的包管理器。
-
-### Node 依赖推断
-
-对于每个发现的 Node 软件包，mise 会检查以下 `package.json` 字段：
-
-- `dependencies`
-- `devDependencies`
-- `optionalDependencies`
-- `peerDependencies`
-
-当声明的依赖名称与另一个已发现的工作区软件包完全匹配时，mise 会向该软件包稳定的 `node:` 项目 ID 添加一条边。外部软件包名称以及指向同一项目的声明会被忽略。
-
-依赖版本字符串会被视为不透明值。只要内部名称匹配，无论其值使用的是 `workspace:*`、`catalog:`、`*`、普通版本范围，还是其他特定于软件包管理器的形式，都会创建相同的边。mise 在构建项目图时不会解析或比较这些值。
-
-这四种依赖类型都会参与同一个项目图，包括开发依赖。如果这些声明产生循环，`mise tasks graph` 会报告该循环，而不会静默删除某条边。当推断出的构建关系需要不同于软件包清单中的关系时，请在项目覆盖配置中使用 `depends`、`depends_add` 或 `depends_remove`。
-
-### Node 包脚本
-
-启用任务推断和实验性功能后，mise 会将从每个发现的 Node 工作区包中导入脚本作为任务。包不需要拥有自己的 `mise.toml`。
-
-导入的任务使用稳定的项目 ID，后跟 `#` 和包脚本名称：
-
-```bash
-mise run 'node:@acme/web#build'
-```
-
-等效的 monorepo 路径可作为别名使用，因此现有的路径模式也同样有效：
-
-```bash
-mise run //apps/web:build
-mise //...:test
-```
-
-任务会通过工作区包管理器（`npm`、`pnpm`、`yarn` 或 `bun`）在包目录中运行，并将任务参数传递给包管理器。mise 使用根目录中的 `packageManager` 声明或锁定文件来选择包管理器；如果两者都无法确定包管理器，则回退到 npm。`mise task info` 会将包的 `package.json` 报告为任务来源。
-
-如果包的 monorepo 路径中存在显式的 mise 任务，则该任务优先于导入的脚本。这两个名称仍会继续解析到该显式任务。
-
-此推断功能需要选择启用，目前仍处于实验阶段，并且仅对已配置的 monorepo 根目录运行：
-
-```toml
-[settings]
-experimental = true
-task.auto_infer = ["node"]
-```
-
-### 根任务默认配置
-
-在根目录的 `mise.toml` 中使用 `[monorepo.task_defaults.<name>]`，为每个工作区项目中名称相同的任务定义共享默认配置：
-
-```toml
-[monorepo.task_defaults.build]
-sources = ["src/**", "package.json"]
-outputs = ["dist/**"]
-cache = { enabled = true }
-
-[monorepo.task_defaults.test]
-env = { NODE_ENV = "test" }
-```
-
-这些默认配置同时适用于提供程序推断的任务（例如 `node:@acme/web#build`）和显式的 mise 任务（例如 `//apps/web:build`）。任务本地配置具有更高优先级。当显式任务使用 `extends` 时，其模板的优先级也高于根默认配置。
-
-根任务默认配置处于实验阶段，除非启用实验性功能，否则会被忽略。
-
-### 任务定义优先级
-
-任务定义分两个阶段解析。首先，显式项目任务会替换具有相同项目和任务名称的提供程序推断任务。提供程序任务的项目 ID 名称会保留为显式任务的别名，因此使用任一名称都会运行显式定义。
-
-选择任务后，mise 按以下顺序填充未设置的字段，优先级从高到低：
-
-1. 所选任务自身的字段，无论这些字段来自项目本地配置还是提供程序推断
-2. 对于使用了 `extends` 的显式任务，由 `extends` 指定的任务模板
-3. 来自工作区根目录的匹配 `[monorepo.task_defaults.<name>]` 定义
-
-`env`、`vars` 和 `tools` 等映射字段会跨这些层级合并，优先级较高层级中的条目会覆盖其他层级中的条目。`depends`、`sources` 和 `outputs` 等集合字段不会拼接多个层级中的值，而是使用定义了该字段的最高优先级层级中的完整值。这些合并规则与[任务模板](/tasks/templates)使用的规则相同。
-
-例如，当根默认配置也定义了 `run` 时，推断出的包脚本仍会保留其提供程序命令，同时继续继承提供程序未指定的缓存输入或环境条目。如果项目之后显式定义了该任务，显式命令会替换包脚本；命名模板会先填充其缺失字段，然后才应用根默认配置。
-
-### 提供程序任务建议
-
-当生态系统元数据明确描述任务配置时，工作区提供程序可以附加任务配置。提供程序可以建议：
-
-- 相对于项目的输入模式，这些模式会成为任务的 `sources`
-- 相对于项目的输出模式，包括明确声明任务没有文件输出
-- 是否启用或禁用任务输出缓存
-- 相对于项目的任务依赖项以及 `^task` 依赖项
-
-建议属于推断出的任务定义的一部分，因此它们与提供程序命令具有相同的优先级。匹配的显式项目任务会替换这些建议。否则，任务模板和根任务默认值只会填充提供程序未建议的字段。当其生态系统元数据不具备权威性时，提供程序会将字段留空；mise 不会根据命令字符串猜测输出或可缓存性。
-
-Node 工作区提供程序会从匹配的 `turbo.json` 任务定义中读取 `inputs`、`outputs`、`cache` 和 `dependsOn`。对于 mise 无法精确保留的 Turbo 特定模式（例如 `$TURBO_ROOT$`），提供程序会将其留空，以便任务模板或根任务默认值可以提供这些模式。
-
-### 上游任务依赖
-
-在任务依赖前加上 `^`，即可先在上游工作区项目中运行该任务。根任务默认值通常用于在整个工作区中应用此关系：
-
-```toml
-[monorepo.task_defaults.build]
-depends = ["^build"]
-```
-
-`^` 前缀仅支持用于 `depends`。`depends_post` 和 `wait_for` 中不接受该前缀，因为这些字段描述的不是前置工作。
-
-现在运行 `node:@acme/web#build` 时，会先在 `@acme/web` 所依赖的每个项目中运行 `build`，然后再构建 `@acme/web`。该关系会遵循完整的项目依赖图，包括经过未定义 `build` 的中间项目。缺失的上游任务会被跳过。对于未在检测到的项目图中表示的已配置任务根，该依赖为空操作，因为该任务没有上游项目关系。
-
-上游依赖同时适用于提供程序推断的任务和显式配置的 mise 任务。它们使用与普通 `depends` 相同的任务调度器，包括循环检测、去重、并行执行和依赖缓存键传播。此语法仅适用于已配置的 monorepo 工作区，并且必须启用实验性功能。
-
-### 项目覆盖配置
-
-在根目录的 `mise.toml` 中使用 `[monorepo.projects]`，以修正或扩展提供程序推断。包含 `:` 的项目 ID 或作用域包名称必须加引号：
-
-```toml
-[monorepo.projects."node:@acme/web"]
-root = "apps/web"
-depends_add = ["custom:docs"]
-depends_remove = ["node:@acme/legacy"]
-
-[monorepo.projects."custom:docs"]
-root = "docs"
-metadata = { kind = "documentation" }
-```
-
-覆盖配置可以：
-
-- 设置 `remove = true`，移除推断出的项目及其关联边
-- 设置 `root` 或 `metadata`，替换推断出的值
-- 设置 `depends`，替换完整的推断依赖集合
-- 使用 `depends_add` 和 `depends_remove`，调整单个依赖边
-- 为新的命名空间 ID 指定明确的 `root`，添加与提供程序无关的项目
-
-最终图必须引用现有的项目 ID，且不得包含依赖循环。诊断信息会指出受影响的项目，以及可用于修复图的覆盖字段。
-
-## 列出任务
-
-`mise tasks` 和 `mise tasks --all` 的区别：
-
-- **`mise tasks`**：列出当前 config_root 层级中的任务（当前 config_root 及其父级）
-- **`mise tasks --all`**：列出整个 monorepo 中的任务，包括兄弟目录和子目录
-
-### 列表示例
-
-给定如下结构：
-
-```
+```text
 myproject/
-├── mise.toml (任务: deploy)
-├── projects/
-│   ├── frontend/
-│   │   └── mise.toml (任务: build, test)
-│   └── backend/
-│       └── mise.toml (任务: build, serve)
+├── mise.toml            # task: deploy
+└── projects/
+    ├── frontend/
+    │   └── mise.toml    # tasks: build, test
+    └── backend/
+        └── mise.toml    # tasks: build, serve
 ```
 
-当位于 `projects/frontend/` 时：
+From `projects/frontend/`:
 
-```bash
-# 列出: //:deploy, //projects/frontend:build, //projects/frontend:test
+```sh
+# //:deploy, //projects/frontend:build, //projects/frontend:test
 mise tasks
 
-# 列出: //:deploy, //projects/frontend:build, //projects/frontend:test,
-#        //projects/backend:build, //projects/backend:serve
+# also //projects/backend:build and //projects/backend:serve
 mise tasks --all
 ```
 
-### 查看特定项目任务
+To list one project's tasks from anywhere, filter the full list:
 
-```bash
-# 列出 frontend 项目中的所有任务
-mise tasks '//projects/frontend:*'
+```sh
+mise tasks --all --name-only | grep '^//projects/frontend:'
 ```
 
-## 最佳实践
+## Install tools for every project {#tools}
 
-### 1. 在根目录定义共享工具和环境
+`mise install --monorepo` installs the union of the tools configured in every
+directory listed in `[monorepo].config_roots`, using the active `MISE_ENV`. Use
+it in CI to warm a tool cache for the whole repository:
 
-Place commonly used tools and environment in the root `mise.toml` to avoid repetition:
-
-```toml
-# /myproject/mise.toml
-monorepo_root = true
-
-[tools]
-node = "20"
-python = "3.12"
-go = "1.21"
-
-[env]
-NODE_ENV = "development"
+```sh
+MISE_ENV=ci mise install --monorepo
 ```
 
-### 2. 仅在必要时覆盖
+Pass tool names to install only those tools, keeping every configured version:
 
-只有当子目录确实需要不同版本时，才覆盖其中的工具：
-
-```toml
-# /myproject/legacy-app/mise.toml
-[tools]
-node = "14"  # 仅为旧版应用覆盖
-# root 中的 python 和 go
+```sh
+mise install --monorepo node
 ```
 
-### 3. 使用具有描述性的任务名称
+Add `--include-task-tools` to also install the tools that tasks declare in their
+own `tools`. `mise ls --monorepo` lists the same union, which helps when you
+build CI cache keys or check which config roots contribute a tool.
 
-用公共名称为相关任务添加前缀，以便支持模式匹配：
+## Lockfiles
 
-```toml
-[tasks.test]
-run = "npm test"
+Set `[monorepo] lockfile = true` to keep one set of lockfiles at the monorepo
+root (`mise.lock`, `mise.ci.lock`, `mise.local.lock`) for the tools of every
+project, or `lockfile = false` to keep a lockfile next to each project's config.
+When you switch to `true`, the next command that reads or writes lockfiles
+merges the project lockfiles into the root one and deletes them; root entries
+win on conflicts. The default and its rollout schedule are described in
+[Lockfile (mise.lock)](/dev-tools/mise-lock.html#monorepos).
 
-[tasks."test:unit"]
-run = "npm run test:unit"
+## Nested monorepo roots
 
-[tasks."test:e2e"]
-run = "npm run test:e2e"
+When more than one config in the hierarchy sets `monorepo_root = true`, the
+nearest one wins. This happens with Git worktrees checked out inside the main
+checkout:
+
+```text
+myproject/mise.toml                       # monorepo_root = true
+myproject/packages/api/mise.toml
+myproject/.worktrees/feature-x/mise.toml  # monorepo_root = true (same repository, other branch)
+myproject/.worktrees/feature-x/packages/api/mise.toml
 ```
 
-Then run the named test task and nested test groups:
-`mise run '//...:test' ::: '//...:test:**'`.
+From inside `myproject/.worktrees/feature-x`, that directory is the monorepo
+root: `//packages/api:build` resolves to the worktree's copy,
+<code v-pre>{{ config_root }}</code> points inside the worktree, and the
+worktree's own `[monorepo].config_roots` are the ones expanded.
 
-### 4. 对相关项目进行分组
+Tasks from the enclosing monorepo are not loaded. They belong to a different
+monorepo's task set, so loading them would put them outside the `//` namespace,
+with `build` from the main checkout next to `//:build` from the worktree.
+Configs above the enclosing root, such as your global config or
+`$HOME/mise.toml`, still contribute tasks as usual.
 
-将项目组织到子目录中，以便进行有针对性的执行：
+The enclosing config is still an ancestor for tools, environment variables, and
+vars, which it passes down like any parent config. To avoid that as well, keep
+worktrees outside the main checkout, for example in `myproject-worktrees/feature-x`.
 
-```
-myproject/
-├── services/
-│   ├── api/
-│   ├── worker/
-│   └── scheduler/
-└── apps/
-    ├── web/
-    └── mobile/
-```
+## Shared task definitions {#task-templates}
 
-然后按组运行任务：
+Define a [task template](/tasks/templates.html#monorepo-usage) in the root config
+and `extends` it in each project. To give every project's task of a given name
+the same defaults without touching the projects, use
+[`[monorepo.task_defaults]`](/tasks/workspace-graph.html#root-task-defaults).
 
-```bash
-mise //services/...:build  # 构建所有服务
-mise //apps/...:test       # 测试所有应用
-```
+## `[monorepo]` reference
 
-## 与其他工具的比较
+`monorepo_root = true` marks the config root. These keys go in the
+`[monorepo]` section of a config at that root:
 
-Choose mise when you want project-specific tools, environment variables, and task
-commands in the same configuration. Existing package scripts and build systems
-can remain responsible for compilation; a mise task invokes them with the selected
-environment.
+| Key             | Type                       | Default | Description                                                                                              |
+| --------------- | -------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| `config_roots`  | array of strings           | none    | Project directories, as paths or single-level globs. See [Config roots](#explicit-config-roots)          |
+| `path_aliases`  | table of strings           | `{}`    | Short names for config roots. See [Path aliases](#short-names-for-project-paths)                         |
+| `lockfile`      | boolean                    | unset   | Root or per-project lockfiles. See [Lockfiles](#lockfiles)                                               |
+| `task_defaults` | table of task definitions  | `{}`    | Defaults by task name. See [Root task defaults](/tasks/workspace-graph.html#root-task-defaults)          |
+| `projects`      | table of project overrides | `{}`    | Corrections to the project graph. See [Project overrides](/tasks/workspace-graph.html#project-overrides) |
 
-Decide which layer owns each behavior before combining task runners:
+## Next steps
 
-- **Dependency ordering:** declare prerequisites in mise, or delegate the complete
-  build graph to an existing build system. Avoid duplicating conflicting graphs.
-- **Caching:** declare all relevant inputs and outputs before enabling mise's
-  [artifact cache](./caching.html). A task wrapper does not make an arbitrary
-  command deterministic.
-- **Package management:** mise can select the runtime and package manager; the
-  project's package manager still installs application dependencies.
-- **Isolation:** use [sandboxing](/sandboxing.html) for supported restrictions.
-  Tool version selection alone does not isolate filesystem or network access.
-
-## 任务模板
-
-The following Python example assumes a uv project with `pytest` and `pytest-cov`
-in its development dependencies.
-
-For monorepos with similar task patterns across projects, [task templates](/tasks/templates) let you define reusable task definitions at the monorepo root:
-
-```toml
-# Root mise.toml
-monorepo_root = true
-
-[monorepo]
-config_roots = ["packages/api"]
-
-[task_templates."python:build"]
-run = "uv build"
-tools = { python = "3.12", uv = "latest" }
-
-[task_templates."python:test"]
-run = "uv run pytest"
-tools = { python = "3.12", uv = "latest" }
-depends = ["build"]
-```
-
-然后，项目可以扩展这些模板：
-
-```toml
-# packages/api/mise.toml
-[tasks.build]
-extends = "python:build"
-
-[tasks.test]
-extends = "python:test"
-run = "uv run pytest --cov"  # Override with coverage
-```
-
-有关完整文档，请参见[任务模板](/tasks/templates)。
-
-## 相关内容
-
-- [任务模板](/tasks/templates) - 可复用的任务定义
-- [任务配置](/tasks/task-configuration) - 所有任务配置选项
-- [运行任务](/tasks/running-tasks) - 如何执行任务
-- [配置](/configuration) - 通用的 mise 配置。
+- [Workspace project graph](/tasks/workspace-graph.html):
+  infer projects and their dependencies from Cargo, uv, Go, and Node.js
+  workspaces, run only affected tasks, and import package scripts.
+- [Task templates](/tasks/templates.html): share task definitions between
+  projects.
+- [Task caching](/tasks/caching.html): skip or restore tasks whose inputs have
+  not changed.

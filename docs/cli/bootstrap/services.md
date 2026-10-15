@@ -11,12 +11,38 @@ description: "管理 `[bootstrap.services]` 中的服务"
 
 管理 `[bootstrap.services]` 中的服务
 
-系统范围的条目（默认）会使现有的 Linux systemd 系统单元达到一致状态。`scope = "user"` 条目是 mise 为当前用户定义的服务，支持所有平台：Linux 上的 systemd 用户单元、macOS 上的 LaunchAgent、Windows 上的计划任务。
+System-scope entries, the default for entries without `builtin`, start,
+stop, enable, disable, or mask systemd units that already exist on Linux.
+User-scope entries (`scope = "user"`, or any `builtin` service) define a
+service for the current user on every platform: a systemd user unit on
+Linux, a LaunchAgent on macOS, or a Scheduled Task on Windows. For options
+that only one platform has, see `mise bootstrap linux systemd-units` and
+`mise bootstrap macos launchd-agents`.
 
 ## 选项
 - **`-h --help`** — 打印帮助
 
-## 子命令
+## Examples
+
+Show the state of every declared service
+
+```
+mise bootstrap services status
+```
+
+Show what would change
+
+```
+mise bootstrap services apply --dry-run
+```
+
+Uninstall a user service
+
+```
+mise bootstrap services remove mise-history
+```
+
+## Subcommands
 
 - [`mise bootstrap services apply [-n --dry-run] [-y --yes]`](/cli/bootstrap/services/apply.html)
 - [`mise bootstrap services remove [-n --dry-run] <NAME>`](/cli/bootstrap/services/remove.html)
@@ -26,6 +52,6 @@ description: "管理 `[bootstrap.services]` 中的服务"
 
 ## 相关文档
 
-- [系统服务](/bootstrap/services.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Services](/bootstrap/services.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

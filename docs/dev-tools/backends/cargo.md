@@ -1,19 +1,29 @@
 ---
-description: "从 crates.io 或 Git 安装 Rust 命令行工具，可使用二进制文件或 Cargo 构建。"
+description: "Install Rust command-line tools from crates.io or Git, as prebuilt binaries or built with Cargo."
 ---
 
-# Cargo 后端
+# cargo backend
 
-`cargo` 后端从 [crates.io](https://crates.io/)
-或 Git 仓库安装 Rust 命令行应用。它可以通过 cargo-binstall 使用已发布的二进制文件，也可以使用 Cargo 构建
-crate。应用依赖项应写入你的 `Cargo.toml`。
+The `cargo` backend installs Rust command-line tools from
+[crates.io](https://crates.io/) or a Git repository. It downloads a prebuilt
+binary when cargo-binstall can find one and builds the crate with Cargo
+otherwise. It is for executables; add library crates to your project with
+`cargo add`.
 
-这部分代码位于 mise 仓库中的 [`./src/backend/cargo.rs`](https://github.com/jdx/mise/blob/main/src/backend/cargo.rs)。
+## Requirements
 
-## 依赖项
+<span id="dependencies"></span>
 
-为源码构建安装 Rust/Cargo。同时还必须提供可用的链接器以及 crate
-所需的任何原生库。预构建安装可以避免编译步骤；有关 cargo-binstall 的选择和回退，请参阅[设置](#设置)。
+Install Rust so mise can run `cargo install`. To skip compiling for crates that
+publish prebuilt binaries, add cargo-binstall too:
+
+```sh
+mise use -g rust cargo-binstall
+```
+
+When `rust`, `cargo-binstall` or `sccache` is in your config, mise installs it
+before your Cargo tools. Source builds also need a linker and any native
+libraries the crate uses.
 
 ## 用法
 
@@ -24,7 +34,8 @@ mise use rust@stable cargo:eza
 mise exec -- eza --version
 ```
 
-这会在 `mise.toml` 中记录这两个工具：
+This records both tools in `mise.toml`. Add `-g` to `mise use` for your global
+config.
 
 ```toml
 [tools]
@@ -32,85 +43,75 @@ rust = "stable"
 "cargo:eza" = "latest"
 ```
 
-为 `mise use` 添加 `-g` 以进行全局配置。运行
-`mise ls-remote cargo:eza` 来选择一个发行版，或使用
-`mise use cargo:eza@VERSION` 固定版本，将 `VERSION` 替换为列出的发行版。
+Run `mise ls-remote cargo:eza` to list releases, and pin one with
+`mise use cargo:eza@0.23.5`.
 
-### 使用 Git
+### Install from Git {#using-git}
 
-你也可以从 Git 仓库安装软件包。这使你可以
-安装特定的标签、分支或提交修订。替换下面的仓库和大写占位符；为完整的工具参数加上引号：
+Give a Git repository URL, or `owner/repo` for GitHub, and pick a tag, branch
+or commit as the version. Quote the argument:
 
 ```sh
-# 安装特定标签
-mise use 'cargo:https://github.com/username/demo@tag:TAG'
-
-# 安装分支中的最新版本
-mise use 'cargo:https://github.com/username/demo@branch:BRANCH'
-
-# 安装特定提交修订
-mise use 'cargo:https://github.com/username/demo@rev:COMMIT'
+mise use 'cargo:https://github.com/eza-community/eza@tag:v0.23.5'
+mise use 'cargo:eza-community/eza@branch:main'
+mise use 'cargo:eza-community/eza@rev:<commit>'
 ```
 
-这会使用相应的 Git 选项运行 `cargo install`。
+mise runs `cargo install --git` with the matching `--tag`, `--branch` or
+`--rev`. A Git source lists only `HEAD` as a version, so `latest`, or no
+version at all, installs the default branch.
 
-## 设置
+## How mise installs a crate
 
-使用 `mise settings set [VARIABLE]=[VALUE]` 或通过设置所列的环境变量来配置这些项。
+mise uses the first method that applies:
 
-某些 Cargo 设置只有在 mise 运行 `cargo install` 时才有意义。如果 `cargo-binstall`
-安装的是预编译二进制文件，那么 Cargo 的构建设置和 `cargo install` 行为不会影响该
-工件。当你需要让 Cargo 设置控制安装时，请将 `cargo.binstall = false`。
+1. A Git source always builds with `cargo install --git`.
+2. The `features` option, or `default-features = false`, needs a source build,
+   so mise runs `cargo install`.
+3. If [`cargo.binstall`](/dev-tools/backends/cargo.html#cargo.binstall) is on (the default) and
+   `cargo-binstall` is installed through mise or on `PATH`, mise runs
+   cargo-binstall with its compile strategy turned off. When cargo-binstall
+   reports that no prebuilt binary exists (exit code 94), mise runs
+   `cargo install` instead. Other cargo-binstall errors fail the install.
+4. If cargo-binstall is not installed and
+   [`cargo.binstall_native = true`](/dev-tools/backends/cargo.html#cargo.binstall_native), mise tries its own
+   prebuilt-binary installer and runs `cargo install` when it finds no binary.
+5. Otherwise mise runs `cargo install`.
 
-当 mise 使用外部 `cargo-binstall` 时，它会禁用 cargo-binstall 的 `compile` 策略。如果
-cargo-binstall 报告没有可用的预编译工件（退出代码为 94），mise 会自行运行
-`cargo install`。其他 cargo-binstall 错误不会触发此回退。当
-`cargo.binstall_only = true` 时，没有显式 Git 源的 Cargo 工具必须由 cargo-binstall
-安装：mise 不会回退到 `cargo install`，而需要 `cargo install` 的选项会产生错误。显式
-Git 源不受影响，因为它们始终使用 `cargo install --git`，也永远不符合 cargo-binstall
-的使用条件。
+Set [`cargo.binstall_only = true`](/dev-tools/backends/cargo.html#cargo.binstall_only) to fail instead of
+building from source; options that need a source build then fail too. Set
+`cargo.binstall = false` to always build. A prebuilt binary ignores your Cargo
+build configuration, so turn binstall off when that configuration must apply.
 
-默认情况下，mise 会禁用外部 `cargo-binstall` 使用第三方
-[cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) 工件主机。这与 crate
-作者的 GitHub 发布内容以及 `package.metadata.binstall` 中声明的工件相互独立。结合始终
-禁用的 compile 策略，外部 cargo-binstall 的默认标志为
-`--disable-strategies compile,quick-install`。设置 `cargo.binstall_quickinstall = true` 可
-启用 quick-install；此时 mise 会传递 `--disable-strategies compile`。此设置不会影响 mise
-原生的 `cargo.binstall_native` 路径，该路径不使用 quickinstall。设置 `cargo.binstall = false`
-可完全禁用 binstall。
+By default, mise also stops cargo-binstall from using the third-party
+[cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) artifact
+host, so it uses only artifacts published by the crate's authors. Set
+[`cargo.binstall_quickinstall = true`](/dev-tools/backends/cargo.html#cargo.binstall_quickinstall) to allow
+it. mise's own installer never uses quickinstall.
 
-<script setup>
-import Settings from '/components/settings.vue';
-</script>
-<Settings child="cargo" :level="3" />
+## Tool options
 
-## 工具选项
+Set these on the tool's entry in `[tools]`, or inline, as in
+`'cargo:eza[locked=false]'`. Options every backend accepts are described under
+[tool options](/dev-tools/#tool-options).
 
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `cargo` 后端——这些内容
-应写入 `mise.toml` 中的 `[tools]`。
+mise records the `features`, `default-features`, `bin`, `crate` and `locked`
+values with each installed version. Changing one reinstalls that version instead
+of reusing a binary built with other options. Feature names are normalized, so
+reordering them or switching between a string and an array does not trigger a
+reinstall.
 
-当 `cargo-binstall` 可用时，mise 会将其用于注册表安装，除非某个工具选项需要
-`cargo install` 从源码构建。
-
-对于不会跳过 `cargo-binstall` 的选项，mise 会禁用 cargo-binstall 的编译策略，并且仅当
-cargo-binstall 以代码 94 退出、报告没有可用的预构建构件时，才自行运行 `cargo install`。
-
-mise 会将生效的 `features`、`default-features`、`bin`、`crate` 和 `locked` 值与
-每个已安装的 Cargo 版本一起记录。更改其中任何选项都会重新安装相同版本，而不是
-重复使用使用不同选项构建或选择的二进制文件。特性名称会被标准化，因此更改其顺序
-或在字符串与数组之间切换不会触发不必要的重新安装。
-
-| 选项                       | `cargo-binstall` 行为                                                                        |
-| -------------------------- | ---------------------------------------------------------------------------------------- |
-| `features`                 | 跳过 `cargo-binstall`；需要 `cargo install --features`。                                      |
-| `default-features = false` | 跳过 `cargo-binstall`；需要 `cargo install --no-default-features`。                          |
-| `bin`                      | 透传给 `cargo-binstall`；不会跳过它。                                                        |
-| `crate`                    | 在适用时不会跳过 `cargo-binstall`。Git 安装始终使用 `cargo install`。                         |
-| `locked`                   | 透传给 `cargo-binstall`；不会跳过它。                                                        |
+| Option                     | Passed as               | Skips cargo-binstall |
+| -------------------------- | ----------------------- | -------------------- |
+| `features`                 | `--features`            | Yes                  |
+| `default-features = false` | `--no-default-features` | Yes                  |
+| `bin`                      | `--bin`                 | No                   |
+| `crate`                    | the crate name          | No                   |
+| `locked`                   | `--locked`              | No                   |
 
 ### `install_env`
 
-为 `cargo install` 或 `cargo-binstall` 命令设置环境变量：
+Set environment variables for `cargo install` or `cargo-binstall`:
 
 ```toml
 [tools]
@@ -119,68 +120,68 @@ mise 会将生效的 `features`、`default-features`、`bin`、`crate` 和 `lock
 
 ### `features`
 
-启用 crate 特性（作为 `cargo install --features` 传入）：
+Enable crate features:
 
 ```toml
 [tools]
 "cargo:sqlx-cli" = { version = "latest", features = ["postgres", "rustls"] }
 ```
 
-此选项需要 `cargo install`；当它被设置时，mise 会跳过 `cargo-binstall`。
-
 ### `default-features`
 
-禁用默认特性（作为 `cargo install --no-default-features` 传入）：
+Turn off the crate's default features:
 
 ```toml
 [tools]
 "cargo:cargo-edit" = { version = "latest", default-features = false }
 ```
 
-将其设置为 `false` 需要 `cargo install`；在这种情况下，mise 会跳过 `cargo-binstall`。
-
 ### `bin`
 
-在有多个可用时，选择要安装的 CLI bin 名称（作为 `cargo install --bin` 传入）：
+Install one executable from a crate that has several:
 
 ```toml
 [tools]
-"cargo:https://github.com/username/demo" = { version = "tag:v1.0.0", bin = "demo" }
+"cargo:sqlx-cli" = { version = "latest", bin = "sqlx" }
 ```
-
-`cargo-binstall` 支持此选项，因此不会导致 mise 跳过 `cargo-binstall`。
 
 ### `crate`
 
-在有多个可用时，选择要安装的 crate 名称（作为
-`cargo install --git=<repo> <crate>` 传入）：
+Choose the crate to install from a Git repository that contains several, such
+as a Cargo workspace:
 
 ```toml
 [tools]
-"cargo:https://github.com/username/demo" = { version = "tag:v1.0.0", crate = "demo" }
+"cargo:https://github.com/astral-sh/ruff" = { version = "tag:0.6.0", crate = "ruff" }
 ```
-
-在适用时，此选项不会导致 mise 跳过 `cargo-binstall`。Git 安装本来就使用
-`cargo install`。
 
 ### `locked`
 
-构建 CLI 时使用 Cargo.lock（传入 `cargo install --locked`）。这是默认设置；
-传入 `false` 可将其禁用：
+Build with the crate's own `Cargo.lock` (`cargo install --locked`). This is the
+default; set `false` to let Cargo resolve dependencies again:
 
 ```toml
 [tools]
-"cargo:https://github.com/username/demo" = { version = "tag:v1.0.0", locked = false }
+"cargo:eza" = { version = "latest", locked = false }
 ```
 
-此选项不会导致 mise 跳过 `cargo-binstall`；当 cargo-binstall 报告没有可用的预构建工件时，
-它会影响 mise 的 `cargo install` 回退行为。
+This is the crate's `Cargo.lock`, not [`mise.lock`](/dev-tools/mise-lock.html),
+which records the version of the tool mise installed.
+
+## Settings
+
+<script setup>
+import Settings from '/components/settings.vue';
+</script>
+<Settings child="cargo" :level="3" />
 
 ## 故障排除
 
-- **编译或链接器失败：**检查第一个 Cargo 错误以及 crate 的原生构建要求。选择特性会强制进行源码构建。
-- **找不到可执行文件：**软件包必须发布一个二进制目标；从工作区中选择时使用 `bin` 或 `crate`。
-- **意外的预构建二进制文件：**检查 binstall 设置。当你需要使用 Cargo 的配置进行本地构建时，设置 `cargo.binstall = false`。
+| Symptom                                                         | What to do                                                                                                                                 |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compiler or linker error                                        | Read the first Cargo error and install the crate's native build dependencies. `features` always builds from source.                        |
+| No executable installed                                         | The crate must have a binary target. Use `bin`, or `crate` for a Git workspace.                                                            |
+| A prebuilt binary ignores your Cargo config                     | Set `cargo.binstall = false` to build locally.                                                                                             |
+| `cargo-binstall cannot honor cargo install-only tool option(s)` | `cargo.binstall_only` is set and the tool uses `features` or `default-features = false`. Remove the option or unset `cargo.binstall_only`. |
 
-`locked` 工具选项在构建时使用 crate 的 `Cargo.lock`。它与
-[mise.lock](/dev-tools/mise-lock.html) 分开，后者记录由 mise 安装的 CLI 版本。
+Implementation: [`src/backend/cargo.rs`](https://github.com/jdx/mise/blob/main/src/backend/cargo.rs).

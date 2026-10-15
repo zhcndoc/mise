@@ -12,8 +12,14 @@ description: "管理后端"
 
 管理后端。
 
-## 标志
-- **`-h --help`** — 打印帮助
+A backend is where mise installs a tool from: a package registry such as npm or
+cargo, a release host such as GitHub, or a plugin. Each tool uses one, either
+written as a prefix (`npm:prettier`) or chosen by the registry. With no
+subcommand, lists the built-in backends. See
+<https://mise.jdx.dev/dev-tools/backends/>.
+
+## Flags
+- **`-h --help`** — Print help
 
 ## 子命令
 
@@ -22,8 +28,8 @@ description: "管理后端"
 
 弃用：
 
-`mise b` 别名已弃用，并将在 mise 2027.4.0 中移除。
-请改用 `mise backends`。
+The `mise b` alias is deprecated and will be removed in mise 2027.4.0; use
+`mise backends`.
 
 <!-- generated reference navigation -->
 

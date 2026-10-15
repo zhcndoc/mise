@@ -1,26 +1,36 @@
 ---
-description: "这些食谱结合了工具、环境变量和任务，用于特定工作流。"
+description: "Start from a working mise.toml for Node.js, Python, Rails, C++, Bazel, Terraform or Docker projects."
 ---
 
-# 食谱
+# Cookbook overview
 
-这些食谱结合了工具、环境变量和任务，用于特定工作流。从最接近你的项目的食谱开始，然后调整其路径、版本和应用程序命令。每个食谱都会说明它所需的文件或工具。
+Each recipe gives the config and commands for one kind of project or workflow.
+Start from the closest one and change its versions, paths and commands to match
+your project.
 
-| 工作流                                                         | 食谱                                                   |
-| -------------------------------------------------------------- | ------------------------------------------------------- |
-| 从项目版本文件选择 Bazel                                     | [Bazel](/mise-cookbook/bazel.html)                      |
-| 配置并构建 CMake 项目                                          | [C++](/mise-cookbook/cpp.html)                          |
-| 安装 mise 并在容器中共享工具                                  | [Docker](/mise-cookbook/docker.html)                    |
-| 运行 npm 脚本或选择包管理器                                   | [Node.js](/mise-cookbook/nodejs.html)                   |
-| 处理 requirements 文件、uv 项目或内联脚本                      | [Python](/mise-cookbook/python.html)                    |
-| 运行 Rails 和 Bundler 命令                                    | [Ruby](/mise-cookbook/ruby.html)                        |
-| 初始化、验证、规划和应用基础设施更改                           | [Terraform and OpenTofu](/mise-cookbook/terraform.html) |
-| 突出显示任务脚本并配置嵌入式语言服务器                         | [Neovim](/mise-cookbook/neovim.html)                    |
-| 创建你自己的项目脚手架                                        | [Presets](/mise-cookbook/presets.html)                  |
-| 自定义提示并检查 Shell 集成                                   | [Shell tricks](/mise-cookbook/shell-tricks.html)        |
+| Recipe                                                  | What it sets up                                                                  |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [Tips and tricks](/tips-and-tricks.html)                | Short recipes for everyday commands, scripts, configuration and the shell prompt |
+| [Bazel](/mise-cookbook/bazel.html)                      | Bazel from a project's `.bazelversion`, or Bazelisk                              |
+| [C++ and CMake](/mise-cookbook/cpp.html)                | CMake with configure, build and clean tasks                                      |
+| [Neovim](/mise-cookbook/neovim.html)                    | Highlighting for task scripts and language servers for embedded code             |
+| [Node.js](/mise-cookbook/nodejs.html)                   | npm scripts as tasks, pnpm or aube, and package managers without Corepack        |
+| [Python](/mise-cookbook/python.html)                    | A `requirements.txt` virtualenv, a uv project, and uv scripts                    |
+| [Ruby on Rails](/mise-cookbook/ruby.html)               | Ruby from `.ruby-version` with Bundler and Rails tasks                           |
+| [Scaffolding tasks](/mise-cookbook/presets.html)        | A global task that adds tools and tasks to a new project                         |
+| [Terraform and OpenTofu](/mise-cookbook/terraform.html) | init, validate, plan and apply tasks for a subdirectory                          |
+| [Docker](/mise-cookbook/docker.html)                    | mise in a container image, with tools installed during the build                 |
 
-有关底层行为，请参阅[任务配置](/tasks/task-configuration.html)、[环境变量](/environments/)和[工具配置](/dev-tools/)。
+Several recipes define an install task for project packages. The experimental
+[`mise deps`](/dev-tools/deps.html) can replace it and run the package manager
+only when the manifest or lockfile changes, or when its outputs go missing.
 
-## 贡献
+For the reference behind the recipes, see [task configuration](/tasks/task-configuration.html),
+[environment variables](/environments/) and [Dev tools](/dev-tools/).
 
-在 [cookbook 讨论区](https://github.com/jdx/mise/discussions/3645)分享食谱。请包含前置条件、完整配置、运行命令和预期结果，以便其他读者能够复现该工作流。
+## Contribute a recipe {#contributing}
+
+Open a pull request that adds a page under `docs/mise-cookbook/`, or share the
+recipe in the [cookbook discussion](https://github.com/jdx/mise/discussions/3645).
+Include the prerequisites, a complete config, the command to run and the
+expected result.

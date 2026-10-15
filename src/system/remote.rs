@@ -22,7 +22,7 @@ pub struct RemoteTomlConfig {
     pub mise_env: Option<Vec<String>>,
     pub install_mise: Option<InstallMiseTomlConfig>,
     #[serde(default)]
-    pub copy_links: bool,
+    pub copy_links: Option<bool>,
     #[serde(default)]
     pub copy_link: Vec<PathBuf>,
     #[serde(default)]
@@ -161,7 +161,7 @@ pub fn hosts_from_config(
         let default_source = resolve_local_path(base, remote.source.as_deref())?;
         let default_mise_env = remote.mise_env;
         let default_install_mise = remote.install_mise.and_then(InstallMiseTomlConfig::path);
-        let default_copy_links = remote.copy_links;
+        let default_copy_links = remote.copy_links.unwrap_or(false);
         let default_copy_link = remote.copy_link;
         for (name, host) in remote.hosts {
             if hosts.contains_key(&name) {
@@ -599,6 +599,9 @@ async fn run_staged(
         ];
         if options.update {
             install.push("--repository-update");
+        }
+        if repository.requested_branch {
+            install.push("--repository-require-branch");
         }
         if options.yes {
             install.push("--repository-yes");
@@ -1197,8 +1200,9 @@ esac"#,
     );
     match session.output_async(&["sh", "-lc", &script]).await {
         Ok(output) if output.trim() == "no" => warn!(
-            "{target} is not on {}'s login PATH; add its directory to PATH or declare [bootstrap.mise_shell_activate] in the bootstrap project",
-            session.host.name
+            "{target} is not on {}'s login PATH; add {} to PATH",
+            session.host.name,
+            remote_parent_directory(target)
         ),
         Ok(_) => {}
         Err(error) => debug!(

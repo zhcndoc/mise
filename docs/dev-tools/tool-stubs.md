@@ -1,25 +1,29 @@
 ---
-description: "工具存根是一个可执行文件，用于记录如何获取和运行某个工具。"
+description: "Commit an executable file that names one tool and version, so ./bin/tool installs and runs it through mise."
 ---
 
-# Tool Stubs
+# Tool stubs
 
-工具存根是一个可执行文件，用于记录如何获取和运行某个工具。
-将其提交到仓库后，诸如 `./bin/py` 这样的命令就可以选择预期的运行时并转发其参数。mise 会在首次执行时安装该工具；普通的项目级 `mise install` 不会发现并安装任意存根文件。
+A tool stub is an executable file that records how to get and run one tool.
+Commit it to a repository so that a command such as `./bin/py` runs the
+intended version and passes its arguments along. mise installs the tool the
+first time the stub runs; `mise install` does not look for stub files.
 
-此功能的灵感来自 [dotslash](https://github.com/facebook/dotslash)，它开创了在可移植工具执行中使用嵌入式配置的可执行文件这一概念。
+Use a stub when the executable file itself should carry the tool definition,
+for example a script directory that works without a project `mise.toml`. For
+a set of tools that should install when first used, prefer
+[`lazy = true` in `[tools]`](/dev-tools/shims.html#lazy-tools). For a one-line
+wrapper without download metadata, see
+[a `mise exec` wrapper](#alternative-creating-simple-stubs-with-mise-x). Tool
+stubs are modeled on Meta's [dotslash](https://github.com/facebook/dotslash).
 
-## 概述
+A stub needs `mise` on `PATH`, unless it was generated with
+[`--bootstrap`](#bootstrap), which installs mise first.
 
-工具存根是一个可执行文件，以指向 `mise tool-stub` 的 shebang 行开头，并包含用于指定要执行的工具以及执行方式的 TOML 配置。存根运行时，mise 会安装指定的工具版本（如果需要），并使用提供的参数执行它。
+## Write a stub {#tool-non-http-stubs}
 
-存根需要在 `PATH` 上找到 `mise`，除非使用可选的引导包装器生成。它可以命名一个后端，也可以提供 HTTP 下载 URL。后端存根使用该后端的版本解析方式；HTTP 存根则直接记录构件位置。
-
-对于普通工具的全机器级目录，优先使用 [`lazy = true` in `[tools]`](/dev-tools/shims.html#lazy-tools)。当可执行文件本身应携带可移植、自包含的工具定义时，独立的工具存根脚本仍然很有用。
-
-## 工具（非 http）存根
-
-创建一个 `bin` 目录，然后将此文件保存为 `bin/py`：
+A stub starts with a shebang that runs `mise tool-stub`, followed by TOML that
+names the tool. Save this as `bin/py`:
 
 ```toml [bin/py]
 #!/usr/bin/env -S mise tool-stub
@@ -29,7 +33,7 @@ version = "3.14"
 bin = "python"
 ```
 
-在 Unix 上，使其可执行并运行：
+Make it executable and run it:
 
 ```sh
 chmod +x ./bin/py
@@ -37,248 +41,51 @@ chmod +x ./bin/py
 ./bin/py -c 'import sys; print(sys.executable)'
 ```
 
-存根的名称是 `py`，但它运行的是已安装的 `python` 可执行文件。存根路径后面的参数会转发给 Python。若要使用精确的运行时版本，请使用具体版本，或[锁定存根](#locking-a-stub)。
+The stub is named `py` but runs the installed `python` executable, and
+arguments after the stub path go to Python. A backend stub resolves `version`
+the way `mise.toml` does; use an exact version or [lock the
+stub](#locked-tool-stub) when everyone must get the same build.
 
-::: info 为什么使用 `env -S`？
-`-S` 标志告诉 `env` 按空格拆分命令行，因此可以向解释器传递多个参数。这是必要的，因为 Unix 系统上的 shebang 传统上只支持在解释器路径后传递一个参数。`env -S mise tool-stub` 通过将其拆分为 `env` → `mise` → `tool-stub`，使 shebang 正常工作。
-:::
+`env -S` splits the rest of the shebang line into separate arguments, because
+a Unix shebang passes at most one argument to its interpreter.
 
-## 配置字段
+## Stub fields {#configuration-fields}
 
-存根包含工具声明，而不是完整的 `mise.toml`。将字段放在顶层；不要将它们包装在 `[tools]` 中。特定于后端的安装选项会传递给选定的后端，而 `tool`、`version`、`bin`、`os`、`install_env` 以及嵌入的 `lock` 数据则控制存根本身。
+A stub holds one tool declaration, not a whole `mise.toml`. Put the fields at
+the top level, without a `[tools]` table:
 
-### 可选字段
+| Field                     | Default                                                      | Purpose                                                        |
+| ------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
+| `tool`                    | `http:<file name>` when a URL is present, else the file name | Tool name or backend, such as `python` or `github:cli/cli`     |
+| `version`                 | `latest`                                                     | [Version request](/dev-tools/versions.html)                    |
+| `bin`                     | The stub's file name                                         | Executable to run, relative to the installation                |
+| `os`                      | All platforms                                                | Platforms the stub runs on, such as `["linux", "macos/arm64"]` |
+| `install_env`             | None                                                         | Environment variables for the install                          |
+| `url`, `checksum`, `size` | None                                                         | An HTTP download used on every platform                        |
+| `[platforms.<os>-<arch>]` | None                                                         | Per-platform `url`, `checksum`, `size`, and `bin`              |
 
-- `tool` - 显式的工具名称或后端规范（例如 `"python"`、`"github:cli/cli"`）。如果省略，顶层 URL 或特定平台的 URL 会选择 HTTP 后端；否则 mise 会使用存根文件名作为工具名称
-- `version` - 版本请求（默认为 `latest`）
-- `bin` - 要在工具中执行的二进制文件名称（默认为存根文件名）
-- `os` - 存根可用的操作系统，也可以进一步限定架构（例如 `["linux", "macos/arm64"]`）
+Any other key goes to the backend as a [tool option](/dev-tools/#tool-options).
+For example, this stub installs the GitHub CLI from its releases:
 
-## HTTP 存根
-
-顶层 URL 适用于运行存根的每个平台。只有当构件与所有这些机器兼容时，才使用顶层 URL。以下 URL 是占位符；使用生成器记录真实的下载元数据：
-
-```toml
+```toml [bin/gh]
 #!/usr/bin/env -S mise tool-stub
-url = "https://example.com/releases/1.0.0/tool.tar.gz"
-```
-
-对于特定操作系统或架构的二进制文件，请改为提供平台表：
-
-```toml
-#!/usr/bin/env -S mise tool-stub
-[platforms.linux-x64]
-url = "https://example.com/releases/1.0.0/tool-linux-x64.tar.gz"
-
-[platforms.macos-arm64]
-url = "https://example.com/releases/1.0.0/tool-macos-arm64.tar.gz"
-```
-
-### 平台特定的二进制路径
-
-将 `bin` 设置为相对于安装目录的路径，该目录位于移除任何归档根目录之后。生成器会处理这种解压布局。显式的 `--bin` 必须指定解压后保留的路径。
-
-当布局或可执行文件名称不同时，使用特定于平台的 `bin` 字段：
-
-```toml
-#!/usr/bin/env -S mise tool-stub
-# 平台通用的 bin 字段，在各平台结构相同时使用
-bin = "bin/tool"
-
-[platforms.linux-x64]
-url = "https://example.com/tool-linux.tar.gz"
-# 使用通用的 bin 字段："bin/tool"
-
-[platforms.windows-x64]
-url = "https://example.com/tool-windows.zip"
-bin = "tool.exe"  # Windows 的平台特定二进制文件
-```
-
-工具存根生成器会检测不同平台是否具有不同的二进制路径，并在需要时生成特定于平台的 `bin` 字段；如果所有平台共享相同的二进制结构，则生成单个全局 `bin` 字段。
-
-::: tip
-当存在下载 URL 且没有 `tool` 字段选择其他后端时，工具存根默认使用 HTTP 后端。
-有关配置基于 HTTP 的工具的完整详情，请参阅 [HTTP 后端文档](/dev-tools/backends/http)。
-:::
-
-## 生成工具存根（http）
-
-虽然你可以手动创建工具存根，但 mise 提供了 [`mise generate tool-stub`](/cli/generate/tool-stub) 命令，用于为基于 HTTP 的工具生成存根。
-
-::: tip 增量构建
-使用特定于平台的 URL 时，工具存根生成器会将新平台追加到现有存根文件中，而不是覆盖它们。这样，你就可以通过使用不同平台多次运行该命令，逐步构建跨平台工具存根。
-:::
-
-### 基本生成
-
-为通过 HTTP 分发的工具生成工具存根：
-
-```bash
-mise generate tool-stub ./bin/gh --url "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
-```
-
-这将会：
-
-- 下载归档并记录这些字节的校验和
-- 解压归档以自动检测二进制文件路径
-- 生成包含下载和执行元数据的可执行存根
-
-生成的校验和可以检测构件之后是否发生变化。但它本身无法验证初始下载的发布者身份。在提交存根之前，请检查 URL，并从你信任的来源获取它。
-
-### 特定平台生成
-
-对于每个平台对应不同 URL 的工具，你可以一次生成所有平台：
-
-```bash
-mise generate tool-stub ./bin/rg \
-  --platform-url linux-x64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-unknown-linux-musl.tar.gz \
-  --platform-url macos-arm64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-aarch64-apple-darwin.tar.gz
-```
-
-**自动平台检测**：如果 URL 包含平台信息，你可以省略平台前缀，让 mise 自动检测：
-
-```bash
-# 从 URL 自动检测平台（检测为 'macos-arm64'）
-mise generate tool-stub ./bin/node \
-  --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz
-
-# 从 URL 自动检测平台（检测为 'linux-x64'）
-mise generate tool-stub ./bin/node \
-  --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-linux-x64.tar.gz
-```
-
-或者通过一次添加一个平台来增量构建它们：
-
-```bash
-# 从 Linux 支持开始（显式平台）
-mise generate tool-stub ./bin/rg \
-  --platform-url linux-x64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-unknown-linux-musl.tar.gz
-
-# 之后，使用自动检测添加 macOS 支持（追加到现有文件）
-mise generate tool-stub ./bin/rg \
-  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-aarch64-apple-darwin.tar.gz
-
-# 使用自动检测添加 Windows 支持（追加到现有文件）
-mise generate tool-stub ./bin/rg \
-  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-pc-windows-msvc.zip
-```
-
-生成器会将新平台合并到现有的 `[platforms]` 表中。重新指定平台会更新该条目，因此请在提交前检查差异。文件名含义不明确时，请使用显式的平台前缀。
-
-### 生成选项
-
-- `--version VERSION` - 指定工具版本（默认为 `"latest"`）
-- `--bin PATH` - 覆盖自动检测的二进制文件路径
-- `--platform-url PLATFORM:URL` - 添加特定于平台的 URL（可重复）
-- `--platform-url URL` - 添加特定于平台的 URL，根据 URL 文件名自动检测平台
-- `--platform-bin PLATFORM:PATH` - 设置特定于平台的二进制文件路径
-- `--checksum-algorithm ALGORITHM` - 生成 `blake3`（默认）或 `sha256` 校验和
-- `--skip-download` - 在不生成校验和或进行二进制文件检测的情况下生成；请检查二进制文件路径，并在依赖完整性检查之前运行 `--fetch`
-- `--lock` - 解析并将锁定文件数据（固定版本＋平台 URL／校验和）嵌入现有存根
-- `--fetch` - 为现有存根文件获取缺失的校验和和大小
-
-`--checksum-algorithm` 不能与 `--lock` 或 `--skip-download` 结合使用，因为这些模式不会计算校验和。
-
-对于 Bazel 等要求 SHA256 校验和的使用者，生成存根时请选择该算法：
-
-```bash
-mise generate tool-stub ./bin/tool \
-  --url "https://example.com/tool.tar.gz" \
-  --checksum-algorithm sha256
-```
-
-所选算法也会应用于通过 `--fetch` 填充的缺失校验和。现有校验和会被保留。
-
-### 支持的归档格式
-
-生成器会自动检测并解压多种归档格式：
-
-- `.tar.gz` / `.tgz`（gzip 压缩的 tar 包）
-- `.tar.xz` / `.txz`（xz 压缩的 tar 包）
-- `.tar.bz2` / `.tbz2`（bzip2 压缩的 tar 包）
-- `.tar.zst` / `.tzst`（zstd 压缩的 tar 包）
-- `.zip`（zip 归档）
-- `.7z`（7-zip 归档）
-
-### 生成的存根示例
-
-请检查生成的文件，而不是手动输入校验和或大小：
-
-```sh
-cat ./bin/gh
-```
-
-该文件包含从归档中发现的 URL、可执行文件路径、校验和和大小。当默认值为 `latest` 时，可以省略 `version`。对于 HTTP 存根，该标签不会使带版本号的 URL 跟踪较新的版本；升级时请更新 URL 并重新生成其元数据。
-
-输出文件名会成为工具名称。如果自动检测选择了错误的可执行文件，请设置 `--bin`，尤其是在归档包含多个命令时。
-
-## 示例
-
-### 基础 Node.js 存根
-
-```toml
-#!/usr/bin/env -S mise tool-stub
-# Node.js tool stub
-
-tool = "node"
-version = "24"
-bin = "node"
-```
-
-### 使用自定义二进制名称的 Python
-
-```toml
-#!/usr/bin/env -S mise tool-stub
-# 可作为 'py' 访问的 Python 工具
-
-tool = "python"
-version = "3.14"
-bin = "python"
-```
-
-### GitHub Release 后端
-
-```toml
-#!/usr/bin/env -S mise tool-stub
-# GitHub CLI 工具
 
 tool = "github:cli/cli"
 version = "latest"
 bin = "gh"
 ```
 
-### 锁定的工具存根
+## Download from URLs {#http-stubs}
 
-锁定后端存根，以记录具体版本以及其后端能够提供的平台下载元数据。生成器会将这些数据写入 `[lock]`；顶层 `tool` 仍然用于选择后端，而 `version` 会变为解析后的版本。
+A stub with download URLs and no `tool` field uses the
+[HTTP backend](/dev-tools/backends/http.html). A top-level `url` applies on
+every platform, so use it only for an artifact that runs everywhere, such as a
+JAR or a script. For platform-specific binaries, give each platform a table.
+The URLs below are placeholders; [generate](#generating-tool-stubs-http) a stub
+to record real download metadata.
 
-存储的 URL 可以避免后续安装时进行版本发布发现。但它们不会移除私有下载身份验证，也不会移除每个后端的验证和策略请求。请检查生成的平台和校验和；无法提供 URL 的后端不能提供相同的下载快捷方式。
-
-#### 锁定存根
-
-```bash
-# Create a stub with a fuzzy version
-mise generate tool-stub ./bin/node --version 24
-
-# 锁定它以固定精确版本并添加平台 URL/校验和
-mise generate tool-stub ./bin/node --lock
-```
-
-默认情况下，这会解析版本，并获取所有常见平台（linux-x64、linux-x64-musl、linux-arm64、linux-arm64-musl、macos-x64、macos-arm64 和 windows-x64）的 URL。如果配置了 `lockfile_platforms`，则会使用这些平台以及当前平台。生成的元数据会写入存根中的 `[lock]` 部分。
-
-#### 提升锁定版本
-
-要提升锁定存根的版本，请在 `--lock` 的同时传入 `--version`：
-
-```bash
-# Select Node.js 26 and regenerate the locked metadata
-mise generate tool-stub ./bin/node --lock --version 26
-```
-
-### 带平台支持的 HTTP 后端
-
-```toml
+```toml [bin/tool]
 #!/usr/bin/env -S mise tool-stub
-# 带平台特定下载的自定义 HTTP 工具
 
 version = "1.0.0"
 
@@ -289,76 +96,235 @@ url = "https://releases.example.com/v{{version}}/tool-linux-x64.tar.gz"
 url = "https://releases.example.com/v{{version}}/tool-macos-arm64.tar.gz"
 ```
 
-## 用法
+With `version` left at `latest`, an HTTP stub installs whatever its URLs point
+to. To upgrade, change the URLs and regenerate the checksums.
 
-### 直接执行
+### Executable paths {#platform-specific-binary-paths}
 
-使存根可执行并直接运行它：
+Set `bin` relative to the installed directory, after mise strips the archive's
+top-level directory. Set it per platform when layouts or file names differ:
 
-```bash
-chmod +x ./bin/my-tool
-./bin/my-tool --version
+```toml [bin/tool]
+#!/usr/bin/env -S mise tool-stub
+
+bin = "bin/tool" # used by platforms without their own bin
+
+[platforms.linux-x64]
+url = "https://example.com/tool-linux.tar.gz"
+
+[platforms.windows-x64]
+url = "https://example.com/tool-windows.zip"
+bin = "tool.exe"
 ```
 
-#### 在 Windows 上
+The generator detects the executable in each archive and writes a single `bin`
+when every platform agrees, or per-platform `bin` fields when they differ.
 
-Windows 无法执行 shebang 脚本，因此 `mise generate tool-stub` 会在存根旁边写入一个 `.cmd` 启动器。请按名称运行存根，Windows 会通过 `PATHEXT` 找到它：
+## Generate a stub {#generating-tool-stubs-http}
 
-```powershell
-.\bin\my-tool.cmd --version
+[`mise generate tool-stub`](/cli/generate/tool-stub.html) writes HTTP stubs.
+It downloads the artifact, records its checksum and size, finds the
+executable, and makes the file executable. Pass `--platform-url`, and mise
+detects the platform from the file name:
+
+```sh
+mise generate tool-stub ./bin/rg \
+  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz
 ```
 
-每当存根可以在 Windows 上运行时，都会生成启动器。显式的 `os` 选择器必须包含 Windows，并且任何平台表都必须包含一个 `[platforms.windows-*]` 条目。未声明任何限制的存根也会获得启动器。仅限 Linux 和 macOS 的存根不会获得启动器，其自身名称以 `.cmd`、`.bat` 或 `.exe` 结尾的存根也不会获得启动器。启动器会在每个平台上写入，而不仅仅是在 Windows 上，因此在 Linux 上生成并提交到仓库的存根，在其他人于 Windows 上克隆仓库后仍然可以正常工作。
+```toml [bin/rg]
+#!/usr/bin/env -S mise tool-stub
 
-如果存根后来不再为 Windows 提供支持，重新生成存根时会删除启动器，因此它不会继续针对存根已不再声明的平台运行。只有由 mise 生成的启动器会被删除——你自行编写的启动器会被保留。
-
-不带扩展名的存根也会被保留：Git Bash 和 Cygwin 会通过 shebang 运行它，这与 [shims](/dev-tools/shims) 在 Windows 上同时放置不带扩展名的脚本和原生启动器的方式相同。
-
-### 通过 mise 命令
-
-通过 [`mise tool-stub`](/cli/tool-stub) 命令运行存根——当某些功能无法正常工作时，这对于调试很有用：
-
-```bash
-mise tool-stub ./bin/my-tool --version
+[platforms.linux-x64]
+url = "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz"
+checksum = "blake3:85bc9b662e1868a010691ae699ac4fb7c87f79fa9075a0efa14478164aafd4e7"
+size = 2265718 # 2.2 MiB
 ```
 
-## 缓存
+mise found `rg` in the archive, and because the stub is also named `rg`, it
+needed no `bin` line. A stub with another name gets `bin = "rg"`. Pass `--bin`
+when an archive holds several executables and mise picks the wrong one.
 
-工具存根会缓存查找结果，以减少运行它们时 mise 增加的开销：
+Run the command again with another platform's URL to add it to the same stub:
 
-- 二进制文件路径会根据存根文件路径和修改时间进行缓存
-- 存根文件发生变化时，缓存会自动失效
-- 缺失的二进制文件会自动触发缓存清理
+```sh
+mise generate tool-stub ./bin/rg \
+  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz
+mise generate tool-stub ./bin/rg \
+  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip
+```
 
-每次调用仍然会经过 mise。对于脚本中的重复调用，可以考虑先使用 `mise exec` 准备一次环境，然后在该脚本中直接调用工具。
+Re-running a platform replaces its entry, so review the diff before you commit.
+Prefix a URL with the platform, as in `linux-x64:https://...`, when its file
+name does not say which platform it is for.
 
-## 清理
+Pass `--url` instead only for an artifact that runs on every platform. See
+[`mise generate tool-stub`](/cli/generate/tool-stub.html) for every flag.
 
-执行存根会将其记录在 `~/.local/state/mise/tracked-stubs` 中，方式与使用配置文件时跟踪配置文件相同。[`mise prune`](/cli/prune) 会将跟踪存根所引用的工具版本视为必需版本，因此不会删除这些版本，就像跟踪配置文件所需的版本一样。
+A checksum detects later changes to the artifact. It does not prove who
+published the first download, so take the URL from a source you trust.
 
-存根必须至少在机器上执行过一次，其工具才能受到保护。如果之后删除存根文件，其工具版本将再次变得可以清理（除非还有其他内容需要它们）。
+The generator reads `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.tar.bz2`, `.tbz2`,
+`.tar.zst`, `.tzst`, `.zip`, and `.7z` archives.
 
-## 替代方案：使用 `mise x` 创建简单存根
+### Checksums for other consumers {#checksums}
 
-对于基本用例，你可以使用 [`mise x`](/cli/exec) 命令创建简单存根，而不必编写 TOML 配置：
+Checksums are `blake3` by default. For consumers such as Bazel that need
+SHA-256, pass `--checksum-algorithm sha256`:
 
-```bash
-# 创建 bin 目录
+```sh
+mise generate tool-stub ./bin/rg --checksum-algorithm sha256 \
+  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz
+```
+
+`--skip-download` writes a stub without downloading anything, so it has no
+checksum, size, or detected `bin`. Check the `bin` field, then run
+`mise generate tool-stub ./bin/rg --fetch` to fill in the missing checksums and
+sizes. `--fetch` uses the algorithm you pass with `--checksum-algorithm` and
+keeps existing checksums. `--checksum-algorithm` cannot be combined with
+`--lock` or `--skip-download`, which do not calculate checksums.
+
+## Stubs that install mise {#bootstrap}
+
+Add `--bootstrap` to write a bash script instead of a TOML file, for teammates
+who may not have mise:
+
+```sh
+mise generate tool-stub ./bin/rg --bootstrap \
+  --platform-url https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz
+```
+
+The script uses `mise` from `PATH` or `~/.local/bin/mise`. If neither exists,
+it installs mise into `~/.local/bin`, then runs the stub, which is embedded in
+the script as comments. `--bootstrap-version 2026.10.4` pins the mise version it
+installs.
+
+## Lock a stub {#locked-tool-stub}
+
+Locking a backend stub records a concrete version and the platform download
+metadata its backend provides, in the `mise.lock` of the nearest project config
+above the stub. Installs then use the recorded URLs, verify the recorded
+checksums, and work in locked mode (`--locked` or `MISE_LOCKED=1`). Stored URLs
+skip release discovery on later installs, but they do not remove a private
+download's authentication or every backend's verification requests.
+
+<a id="locking-a-stub"></a>
+
+`mise generate tool-stub` writes only HTTP stubs, and `--lock` works on any
+existing stub, so write a backend stub by hand first:
+
+```sh
+mkdir -p bin
+cat > bin/node <<'STUB'
+#!/usr/bin/env -S mise tool-stub
+tool = "node"
+version = "24"
+STUB
+chmod +x bin/node
+
+# Resolve the version and record platform URLs and checksums in mise.lock
+mise generate tool-stub ./bin/node --lock
+```
+
+The stub keeps its version request (`24`), just as `mise.toml` does, and
+`mise.lock` records the resolved version for the lockfile's existing
+platforms, or the default platforms for a new lockfile. `--lock` fails when no
+project config is found above the stub.
+
+```toml [mise.lock]
+lockfile_version = 3
+tool-stubs = ["bin/node"]
+
+[[tools.node]]
+version = "24.21.0"
+backend = "core:node"
+specifiers = ["24"]
+# ...platform URLs and checksums
+```
+
+`tool-stubs` lists the stubs whose entries the lockfile holds, relative to the
+lockfile. No config declares those tools, so the list is how `mise lock` knows
+to keep their entries and refresh them with the rest of the lockfile. When a
+listed stub is deleted, `mise lock` removes it from the list and prunes its
+entry.
+
+A stub finds its lockfile from where the stub file lives, not from the
+directory it runs in, and a symlinked stub is followed to its real location.
+`./bin/node` and a `~/.local/bin/node` symlink to it both use the project's
+`mise.lock` from any working directory. Local and environment configs
+(`mise.local.toml`, `mise.{env}.toml`) are not used, so a committed stub locks
+the same way on every machine. In locked mode, a stub without an entry for the
+current platform is rejected like any unlocked tool.
+
+### Bumping a locked version {#bumping-a-locked-version}
+
+Run `--lock` again to pick up a newer version; it resolves the stub's request
+from scratch. Pass `--version` to change the request itself:
+
+```sh
+mise generate tool-stub ./bin/node --lock --version 26
+```
+
+`mise lock --bump` also re-resolves the requests of the stubs listed in the
+lockfile.
+
+## Run a stub {#usage}
+
+Stubs written by `mise generate tool-stub` are already executable. Run
+`chmod +x` only on stubs you write by hand.
+
+Each run goes through mise, which caches the resolved executable until the stub
+changes. In a tight loop, run the script under `mise exec` and call the tool
+directly.
+
+To debug a stub, run it through [`mise tool-stub`](/cli/tool-stub.html):
+
+```sh
+mise tool-stub ./bin/rg --version
+```
+
+### On Windows {#on-windows}
+
+Windows cannot run a shebang script, so `mise generate tool-stub` also writes a
+`.cmd` launcher beside the stub. Run `.\bin\rg.cmd`, or `rg` when `bin` is on
+`PATH`, and Windows finds the launcher through `PATHEXT`.
+
+mise writes the launcher whenever the stub could run on Windows: when `os`
+includes Windows or is unset, and when the stub has a `[platforms.windows-*]`
+table or no platform tables. A stub limited to Linux and macOS gets no
+launcher, and neither does a stub whose name already ends in `.cmd`, `.bat` or
+`.exe`. The launcher is written on every platform, so a stub generated on Linux
+and committed to a repository still works for someone who clones it on
+Windows. If a stub stops supporting Windows, regenerating it removes the
+launcher. Only launchers mise generated are removed; a launcher you wrote is
+left alone.
+
+The extension-less stub stays as well, so Git Bash and Cygwin can run it
+through its shebang.
+
+## Stubs and mise prune {#pruning}
+
+Running a stub records it in `~/.local/state/mise/tracked-stubs`, the same way
+mise tracks config files it has used. [`mise prune`](/cli/prune.html) keeps the
+tool versions that a tracked stub needs. A stub protects its tool only after it
+has run at least once on the machine, and once the stub file is deleted, its
+versions can be pruned again unless something else needs them.
+
+## A `mise exec` wrapper instead {#alternative-creating-simple-stubs-with-mise-x}
+
+For a simple case, a shell script that calls [`mise exec`](/cli/exec.html)
+does the same job without TOML:
+
+```sh
 mkdir -p ./bin
-
-# 创建一个简单的 Node.js 存根
-cat > ./bin/node << 'EOF'
+cat > ./bin/node <<'SCRIPT'
 #!/usr/bin/env bash
-exec mise x node@24 -- node "$@"
-EOF
+exec mise exec node@24 -- node "$@"
+SCRIPT
 chmod +x ./bin/node
-
-# 创建一个使用特定版本的 Python 存根
-cat > ./bin/python << 'EOF'
-#!/usr/bin/env bash
-exec mise x python@3.14 -- python "$@"
-EOF
-chmod +x ./bin/python
 ```
 
-`--` 后的命令至关重要：`mise x node@24` 用于选择运行时，而 `node "$@"` 用于指定可执行文件并保留调用者的参数。这些包装器需要 Bash 和 mise，并且不会嵌入构件元数据。当你需要平台映射或嵌入的锁定数据时，请使用 TOML 存根格式。
+`node@24` selects the version, and `node "$@"` names the executable and passes
+the caller's arguments along. These wrappers need bash and mise, and they
+record no download metadata; use a tool stub when you need platform URLs or
+lock data.

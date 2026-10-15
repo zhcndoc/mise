@@ -251,6 +251,35 @@ async fn test_get_html_accepts_text_html_without_doctype() {
 }
 
 #[tokio::test]
+async fn test_get_text_cached_failures_keep_whether_the_server_was_reached() {
+    let _settings = set_test_http_retries(0);
+    let client = Client::new(Duration::from_secs(3), ClientKind::Http).unwrap();
+
+    // A closed port fails before any response arrives
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let refused = client
+        .get_text_cached(format!("http://127.0.0.1:{port}/refused"))
+        .await
+        .unwrap_err();
+    assert!(is_unreachable(&refused), "{refused:?}");
+
+    // A status from the server is not
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/missing")
+        .with_status(404)
+        .create_async()
+        .await;
+    let missing = client
+        .get_text_cached(format!("{}/missing", server.url()))
+        .await
+        .unwrap_err();
+    assert!(!is_unreachable(&missing), "{missing:?}");
+}
+
+#[tokio::test]
 async fn test_download_metadata_uses_redirected_filename() {
     let mut server = mockito::Server::new_async().await;
     let location = format!("{}/releases/tool.tar.gz", server.url());
@@ -332,4 +361,49 @@ async fn test_get_html_rejects_non_html_content_type() {
 
     assert!(err.to_string().contains("Got non-HTML text from"));
     mock.assert();
+}
+
+#[test]
+fn log_url_hides_userinfo() {
+    let url = Url::parse("https://user:TOKEN@git.example.com/api/v1?page=2").unwrap();
+    assert_eq!(
+        log_url(&url),
+        "https://[redacted]@git.example.com/api/v1?page=2"
+    );
+    let url = Url::parse("https://TOKEN@git.example.com/").unwrap();
+    assert_eq!(log_url(&url), "https://[redacted]@git.example.com/");
+    let url = Url::parse("https://git.example.com/a@b").unwrap();
+    assert_eq!(log_url(&url), "https://git.example.com/a@b");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_timeout_error_hides_url_credentials() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Hold every connection open without answering, so the request times out.
+    tokio::spawn(async move {
+        let mut held = vec![];
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let url = Url::parse(&format!("http://user:TOKEN@127.0.0.1:{port}/x")).unwrap();
+    let client = Client::new(Duration::from_millis(100), ClientKind::Fetch).unwrap();
+    let err = client
+        .send_once_inner(
+            Method::GET,
+            url,
+            &HeaderMap::new(),
+            "GET",
+            SendOnceOptions::new(None, true),
+        )
+        .await
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("HTTP timed out after"), "{message}");
+    assert!(
+        message.contains(&format!("http://[redacted]@127.0.0.1:{port}/x")),
+        "{message}"
+    );
+    assert!(!message.contains("TOKEN"), "{message}");
 }

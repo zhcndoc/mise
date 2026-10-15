@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mise-task-schema",
   "type": "object",
-  "description": "Config file for included mise tasks (https://mise.jdx.dev/tasks/#task-configuration)",
+  "description": "Config file for included mise tasks (https://mise.jdx.dev/tasks/task-configuration.html)",
   "additionalProperties": {
     "$ref": "#/$defs/task"
   },
@@ -15,10 +15,9 @@
           "type": "string"
         },
         {
-          "description": "script to run",
+          "description": "scripts or task references to run",
           "items": {
-            "description": "script to run",
-            "type": "string"
+            "$ref": "#/$defs/task_run_entry"
           },
           "type": "array"
         },
@@ -38,6 +37,54 @@
           ],
           "unevaluatedProperties": false,
           "type": "object"
+        }
+      ]
+    },
+    "task_run_entry": {
+      "oneOf": [
+        {
+          "description": "script to run",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "task": {
+              "description": "single task name to run",
+              "type": "string"
+            },
+            "args": {
+              "description": "arguments to pass to the task",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "env": {
+              "description": "environment variables to set for the task",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["task"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "tasks": {
+              "description": "parallel task group to run",
+              "items": {
+                "description": "task name and args",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["tasks"]
         }
       ]
     },
@@ -105,6 +152,9 @@
               "items": {
                 "$ref": "#/$defs/task_dependency_item"
               }
+            },
+            {
+              "$ref": "#/$defs/task_dependency_table"
             }
           ]
         },
@@ -140,6 +190,9 @@
               "items": {
                 "$ref": "#/$defs/task_dependency_item"
               }
+            },
+            {
+              "$ref": "#/$defs/task_dependency_table"
             }
           ]
         },
@@ -155,6 +208,9 @@
                 "$ref": "#/$defs/task_dependency_item"
               },
               "type": "array"
+            },
+            {
+              "$ref": "#/$defs/task_dependency_table"
             }
           ]
         },
@@ -265,8 +321,7 @@
               "unevaluatedProperties": false,
               "properties": {
                 "auto": {
-                  "description": "automatically touch an internal tracked file instead of specifying outputs",
-                  "enum": [true],
+                  "description": "automatically touch an internal tracked file instead of specifying outputs; `false` is the same as leaving `outputs` unset",
                   "type": "boolean"
                 }
               },
@@ -432,6 +487,10 @@
           "description": "timeout for this task",
           "type": "string"
         },
+        "skip_if": {
+          "description": "shell command checked before the task runs; if it exits 0, the task is skipped and counts as successful",
+          "type": "string"
+        },
         "deny_all": {
           "default": false,
           "description": "block reads, writes, network, and env vars",
@@ -472,7 +531,7 @@
           "type": "array"
         },
         "allow_net": {
-          "description": "allow network to specific hosts",
+          "description": "allow network to specific hosts; not supported yet, so Linux and macOS reject it",
           "items": {
             "type": "string"
           },
@@ -527,7 +586,8 @@
                 "$ref": "#/$defs/env_redact"
               },
               "required": {
-                "$ref": "#/$defs/env_required"
+                "const": false,
+                "description": "a variable with its own value cannot be required; only `required = false` is accepted"
               }
             },
             "required": ["value"],
@@ -559,7 +619,15 @@
                 "$ref": "#/$defs/env_redact"
               },
               "required": {
-                "$ref": "#/$defs/env_required"
+                "oneOf": [
+                  {
+                    "const": true
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "description": "a variable without a value must be required: `true` or help text on how to set it"
               }
             },
             "required": ["required"],
@@ -759,11 +827,13 @@
                         }
                       },
                       "required": ["path"],
+                      "additionalProperties": false,
                       "type": "object"
                     }
                   ]
                 }
               },
+              "additionalProperties": false,
               "type": "object"
             },
             "source": {
@@ -809,14 +879,24 @@
             "file": {
               "oneOf": [
                 {
+                  "$ref": "#/$defs/env_directive"
+                },
+                {
                   "description": "environment file to load (dotenv, json, yaml, or toml)",
                   "type": "string"
                 },
                 {
                   "description": "environment files to load (dotenv, json, yaml, or toml)",
                   "items": {
-                    "description": "environment file to load (dotenv, json, yaml, or toml)",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "description": "environment file to load (dotenv, json, yaml, or toml)",
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/env_directive"
+                      }
+                    ]
                   },
                   "type": "array"
                 }
@@ -825,14 +905,24 @@
             "source": {
               "oneOf": [
                 {
+                  "$ref": "#/$defs/env_directive"
+                },
+                {
                   "description": "bash script to load",
                   "type": "string"
                 },
                 {
                   "description": "bash scripts to load",
                   "items": {
-                    "description": "bash script to load",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "description": "bash script to load",
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/env_directive"
+                      }
+                    ]
                   },
                   "type": "array"
                 }
@@ -885,6 +975,10 @@
               "default": {
                 "$ref": "#/$defs/env_default"
               },
+              "prompt": {
+                "description": "question to ask once, on a machine with no saved answer, when a command is run with a prompt flag such as mise bootstrap --prompt-vars",
+                "type": "string"
+              },
               "redact": {
                 "$ref": "#/$defs/env_redact"
               }
@@ -895,6 +989,10 @@
           {
             "type": "object",
             "properties": {
+              "prompt": {
+                "description": "question to ask once, on a machine with no saved answer, when a command is run with a prompt flag such as mise bootstrap --prompt-vars",
+                "type": "string"
+              },
               "redact": {
                 "$ref": "#/$defs/env_redact"
               },
@@ -1083,6 +1181,33 @@
           }
         }
       ]
+    },
+    "task_dependency_table": {
+      "description": "task dependency with args, env, and optional flag",
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "optional": {
+          "description": "do not fail when the task name or pattern has no matches",
+          "type": "boolean"
+        }
+      },
+      "required": ["task"],
+      "unevaluatedProperties": false
     },
     "tool_github": {
       "description": "a tool installed with the github backend",
@@ -1589,54 +1714,6 @@
         }
       ]
     },
-    "task_run_entry": {
-      "oneOf": [
-        {
-          "description": "script to run",
-          "type": "string"
-        },
-        {
-          "type": "object",
-          "unevaluatedProperties": false,
-          "properties": {
-            "task": {
-              "description": "single task name to run",
-              "type": "string"
-            },
-            "args": {
-              "description": "arguments to pass to the task",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "env": {
-              "description": "environment variables to set for the task",
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            }
-          },
-          "required": ["task"]
-        },
-        {
-          "type": "object",
-          "unevaluatedProperties": false,
-          "properties": {
-            "tasks": {
-              "description": "parallel task group to run",
-              "items": {
-                "description": "task name and args",
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": ["tasks"]
-        }
-      ]
-    },
     "task_dependency_item": {
       "description": "task name and args",
       "oneOf": [
@@ -1647,33 +1724,11 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "minItems": 1
         },
         {
-          "type": "object",
-          "properties": {
-            "task": {
-              "type": "string"
-            },
-            "args": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "env": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "optional": {
-              "description": "do not fail when the task name or pattern has no matches",
-              "type": "boolean"
-            }
-          },
-          "required": ["task"],
-          "unevaluatedProperties": false
+          "$ref": "#/$defs/task_dependency_table"
         }
       ]
     },
@@ -1699,19 +1754,6 @@
       "type": "boolean",
       "description": "redact the value from logs"
     },
-    "env_required": {
-      "oneOf": [
-        {
-          "type": "boolean",
-          "description": "require this environment variable to be defined before mise runs or in a later config file"
-        },
-        {
-          "type": "string",
-          "description": "require this environment variable with user help text on how to set it"
-        }
-      ],
-      "description": "require this environment variable to be defined before mise runs or in a later config file. Cannot be used with empty string values or value=false. Can be a boolean or a help string."
-    },
     "env_default": {
       "oneOf": [
         {
@@ -1728,6 +1770,19 @@
     "env_age": {
       "type": "string",
       "description": "[experimental] age-encrypted value (simplified format)"
+    },
+    "env_required": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "description": "require this environment variable to be defined before mise runs or in a later config file"
+        },
+        {
+          "type": "string",
+          "description": "require this environment variable with user help text on how to set it"
+        }
+      ],
+      "description": "require this environment variable to be defined before mise runs or in a later config file. Can be a boolean or a help string. A variable that carries its own `value` cannot also be `required = true`."
     },
     "tool_options": {
       "properties": {
@@ -2623,8 +2678,19 @@
           "type": "string"
         },
         "workflow": {
-          "description": "repository workflow file that signs releases on a tag; github.com projects only, not valid with pubkey, identity, identity_prefix, or issuer",
-          "type": "string"
+          "description": "repository workflow file, or a list of them, that signs releases on a tag (or on the ref a name ends with, as in release.yml@refs/heads/main); github.com projects only, not valid with pubkey, identity, identity_prefix, or issuer",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          ]
         },
         "list_identity_prefix": {
           "description": "separate identity prefix for the vendor release list; needs an issuer, not valid with pubkey",

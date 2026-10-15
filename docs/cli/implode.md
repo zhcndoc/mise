@@ -11,17 +11,34 @@ description: "移除 mise CLI 及所有相关数据"
 
 移除 mise CLI 及所有相关数据
 
-除非传入 `--config`，否则会保留配置目录
+Deletes the mise executable and the data (including installed tools), state,
+and cache directories. It also deletes the system-wide shared directory used by
+`mise install --system` (MISE_SYSTEM_DATA_DIR, default /usr/local/share/mise),
+which other users on the machine may rely on. It asks before each removal;
+--yes skips the prompts. The config directory stays unless you pass --config.
 
-## 标志
-- **`-n --dry-run`** — 列出将被移除的目录，但不会实际移除它们
-- **`--config`** — 同时移除配置目录
-- **`-h --help`** — 打印帮助信息
+If a package manager such as Homebrew or apt installed mise, uninstall it with
+that package manager instead. Remove the `mise activate` line from your shell
+startup file yourself. See
+<https://mise.jdx.dev/installing-mise.html#uninstalling>.
+
+## Flags
+- **`-n --dry-run`** — Print what would be removed, without removing anything
+- **`--config`** — Also remove the config directory
+- **`-h --help`** — Print help
+
+## Examples
+
+List what would be removed
+
+```
+mise implode --dry-run
+```
 
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [卸载 mise](/installing-mise.html)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Uninstalling mise](/installing-mise.html#uninstalling).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

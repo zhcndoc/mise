@@ -11,13 +11,16 @@ use crate::task::task_fetcher::TaskFetcher;
 use crate::task::task_source_checker::task_cwd;
 use crate::ui::info;
 
-/// Get information about a task
+/// Show a task's definition
+///
+/// Prints the task's description, source file, dependencies, sources, outputs,
+/// run commands, environment, and usage spec. `--json` prints the full
+/// definition.
 #[derive(Debug, usage_rs::Args)]
 #[usage(
-    verbatim_doc_comment,
     example(
         r###"mise tasks info test"###,
-        help = r###"Inspect the selected definition and its source file"###
+        help = r###"Show the test task and the file that defines it"###
     ),
     example(
         r###"mise tasks info test --json"###,
@@ -60,7 +63,7 @@ impl TasksInfo {
             let mut tasks = vec![task.clone()];
             // always pass no_cache=false as the command doesn't take no-cache argument
             // MISE_TASK_REMOTE_NO_CACHE env var is still respected if set
-            TaskFetcher::new(false)
+            TaskFetcher::for_inspection(false)
                 .fetch_tasks(&config, &mut tasks)
                 .await?;
             let task = &tasks[0];
@@ -128,6 +131,9 @@ impl TasksInfo {
         if let Some(dir) = &task.dir {
             info::inline_section("Directory", display_path(dir))?;
         }
+        if let Some(skip_if) = &task.skip_if {
+            info::inline_section("Skip if", skip_if)?;
+        }
         if !task.sources.is_empty() {
             info::inline_section("Sources", task.sources.join(", "))?;
         }
@@ -157,7 +163,7 @@ impl TasksInfo {
                 .join("\n");
             info::section("Environment Variables", env_display)?;
         }
-        let spec = task.parse_usage_spec_for_display(config).await?;
+        let spec = usage_spec(config, task).await?;
         if !spec.is_empty() {
             info::section("Usage Spec", &spec)?;
         }
@@ -165,7 +171,7 @@ impl TasksInfo {
     }
 
     async fn display_json(&self, config: &Arc<Config>, task: &Task) -> Result<()> {
-        let spec = task.parse_usage_spec_for_display(config).await?;
+        let spec = usage_spec(config, task).await?;
         let resolved_dir = task
             .dir(config)
             .await?
@@ -196,6 +202,7 @@ impl TasksInfo {
             "outputs": task.outputs,
             "cache": task.cache.clone().unwrap_or_default(),
             "shell": task.shell,
+            "skip_if": task.skip_if,
             "quiet": task.quiet,
             "silent": task.silent,
             "tools": task.tools,
@@ -205,5 +212,14 @@ impl TasksInfo {
         });
         miseprintln!("{}", serde_json::to_string_pretty(&o)?);
         Ok(())
+    }
+}
+
+/// A `git::` file left unfetched (experimental is off) can't be read, so its usage comes from
+/// the task's TOML metadata alone.
+async fn usage_spec(config: &Arc<Config>, task: &Task) -> Result<usage::Spec> {
+    match TaskFetcher::toml_only(task) {
+        Some(toml_only) => toml_only.parse_usage_spec_for_display(config).await,
+        None => task.parse_usage_spec_for_display(config).await,
     }
 }

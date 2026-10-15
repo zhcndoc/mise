@@ -18,10 +18,18 @@ description: "设置检查点的描述"
 ## 标志
 - **`-h --help`** — 打印帮助
 
+## Examples
+
+Describe the newest checkpoint
+
+```
+mise dot history describe latest "before the theme change"
+```
+
 <!-- generated reference navigation -->
 
 ## 相关文档
 
-- [入门](/getting-started.html)。
-- [`mise dotfiles history [FLAGS] [SUBCOMMAND]`](/cli/dotfiles/history.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Dotfiles history](/dotfiles/history.html).
+- [`mise dotfiles history [FLAGS] [SUBCOMMAND]`](/cli/dotfiles/history.html).
+- [Global flags and argument syntax](/cli/#global-flags).

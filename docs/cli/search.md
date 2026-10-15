@@ -11,27 +11,31 @@ description: "搜索可用工具"
 
 搜索可用工具
 
-在 registry 和已安装的 backend catalogs 中搜索与 NAME 匹配的工具
+Searches the registry and the tool lists of installed backend plugins for
+tools matching NAME. When nothing matches, it also searches the aqua
+registry. Prefix NAME with `npm:`, `cargo:`, `gem:`, or `dotnet:` to also
+search that package registry, or pass `--all` to search every source.
 
-为 NAME 加上后端前缀，也可以搜索该后端的软件包注册表：`npm:`、`cargo:`、`gem:` 或 `dotnet:`。使用 `--all` 搜索所有后端，包括这些软件包注册表；否则，不带前缀的搜索不会查询软件包注册表。
-
-默认情况下，它将显示所有与搜索词模糊匹配的工具。对于非模糊匹配，请使用 `--match-type` 标志。
+Matching is fuzzy by default. Use `--match-type equal` or
+`--match-type contains` for stricter matches.
 
 ## 参数
 - **`[NAME]`** — 要搜索的工具
 
 ## Flags
-- **`-a --all`** — 搜索所有后端：注册表、aqua、已安装的后端插件，以及 npm、cargo、gem 和 dotnet 软件包注册表
-- **`-i --interactive`** — 显示交互式搜索菜单
-- **`-m --match-type <MATCH_TYPE>`** — 匹配类型：equal、contains 或 fuzzy
+- **`-a --all`** — Search every source: the registry, aqua, installed backend plugins, and the npm, cargo, gem, and dotnet package registries
+- **`-i --interactive`** — Show an interactive search menu
+- **`-m --match-type <MATCH_TYPE>`** — Match type: equal, contains, or fuzzy
 
   **选项：** `equal`、`contains`、`fuzzy`
 
-  **默认值：** `fuzzy`
-- **`--no-header`** — 不显示标题
-- **`-h --help`** — 打印帮助
+  **Default:** `fuzzy`
+- **`--no-header`** — Do not print the table header
+- **`-h --help`** — Print help
 
 ## 示例
+
+Fuzzy-search the registry for jq
 
 ```
 mise search jq
@@ -42,22 +46,18 @@ jiq   jid on jq - interactive JSON query tool using jq expressions. https://gith
 gojq  Pure Go implementation of jq. https://github.com/itchyny/gojq
 ```
 
+Look up one npm package by its exact name
+
 ```
 mise search --match-type equal npm:typescript-language-server
 Tool                            Description
 npm:typescript-language-server  Language Server Protocol (LSP) implementation for TypeScript using tsserver
 ```
 
+Pick a tool from a filterable list
+
 ```
 mise search --interactive
-Tool
-Search a tool
-❯ jq    Command-line JSON processor. https://github.com/jqlang/jq
-  jqp   A TUI playground to experiment with jq. https://github.com/noahgorstein/jqp
-  jiq   jid on jq - interactive JSON query tool using jq expressions. https://github.com/fiatjaf/jiq
-  gojq  Pure Go implementation of jq. https://github.com/itchyny/gojq
-/jq
-esc clear filter • enter confirm
 ```
 
 <!-- generated reference navigation -->

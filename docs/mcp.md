@@ -1,89 +1,138 @@
 ---
-description: "mise MCP 服务器允许 AI 助手检查项目的工具、任务、环境和配置，并运行 mise 任务。"
+description: "Connect an AI assistant to a project's mise tools, tasks, environment, and config through the mise MCP server."
+socialDescription: "Connect an AI assistant to a project's mise tools, tasks, and environment."
 ---
 
-# Model Context Protocol (MCP)
+# AI assistants (MCP)
 
-mise MCP 服务器允许 AI 助手检查项目的工具、任务、环境和配置，并运行 mise 任务。它通过 stdin/stdout 使用 [Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro)。客户端会启动一个本地 `mise mcp` 进程；不需要 HTTP 服务器或监听端口。
+[`mise mcp`](/cli/mcp.html) runs a
+[Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro)
+server that lets an AI assistant read a project's tools, tasks, environment
+variables and config files, and run its tasks. The client starts `mise mcp` as
+a local process and talks to it over stdin and stdout; nothing listens on a
+port.
 
-::: warning Experimental
-该服务器要求设置 `MISE_EXPERIMENTAL=1`。其资源和工具可能会发生变化。
-:::
+## Connect a client {#integration-with-ai-assistants}
 
-## 用法
-
-启动服务器时选择项目目录。否则它会使用客户端的工作目录，该目录可能是你的主目录或不相关的工作区：
-
-```sh
-MISE_EXPERIMENTAL=1 mise --cd /absolute/path/to/project mcp
-```
-
-将路径替换为你的项目路径。此命令会等待 MCP 输入；不会打开交互式提示。通常应配置 MCP 客户端来启动它，而不是亲自在终端中运行它。
-
-## 与 AI 助手集成
-
-使用 mise 可执行文件、项目目录和实验性环境变量配置客户端。对于使用 `mcpServers` JSON 配置的客户端：
+Configure the client to start mise with the project directory. Without `--cd`,
+the server uses the client's working directory, which may be your home directory
+or another workspace. For clients that use an `mcpServers` JSON configuration:
 
 ```json
 {
   "mcpServers": {
     "mise": {
       "command": "/absolute/path/to/mise",
-      "args": ["--cd", "/absolute/path/to/project", "mcp"],
-      "env": {
-        "MISE_EXPERIMENTAL": "1"
-      }
+      "args": ["--cd", "/absolute/path/to/project", "mcp"]
     }
   }
 }
 ```
 
-替换两个路径。在 Windows 上，使用 `mise.exe` 的路径，并在 JSON 中转义反斜杠。对于不会继承 shell 的 `PATH` 的 GUI 客户端，使用绝对可执行文件路径会很有帮助。配置文件的位置和键名取决于客户端；请参阅其 MCP 设置指南。更改配置或切换项目后，重启或重新连接服务器。
+Use the absolute path to mise, because GUI clients often do not inherit your
+shell's `PATH`. Find it with `command -v mise`, or `(Get-Command mise).Source`
+in PowerShell. On Windows, use the path to `mise.exe` and escape backslashes in
+JSON.
 
-### 访问和执行
+The file location and key names depend on the client. VS Code, for example,
+uses a `servers` key in `.vscode/mcp.json`. Clients with a command-line setup
+take the same command and arguments, such as Claude Code:
 
-仅将服务器连接到你信任的项目和客户端。读取 `mise://env` 会评估项目的环境配置并返回其值，其中可能包含机密信息。读取资源还可能评估配置模板和环境指令；只读查询并不能隔离不受信任的项目配置。
+```sh
+claude mcp add mise -- mise --cd /absolute/path/to/project mcp
+```
 
-`run_task` 会使用你账户的访问权限执行项目命令。它在没有交互式 stdin 的情况下运行，并设置 `MISE_YES=1`，因此应使用客户端的工具批准控制来决定可以运行哪些任务。在允许助手执行任务之前，请先检查任务定义。请参阅 [安全](/security.html)，了解 mise 的配置信任模型。
+Restart or reconnect the server after changing its configuration or switching
+projects.
 
-## 可用资源
+## Security {#access-and-execution}
 
-资源返回 JSON 文本。它们描述服务器启动时所选的项目。如果客户端继续显示缓存结果，请在编辑配置后重启服务器。
+Connect the server only to a project and a client you trust.
 
-| URI                                  | 内容                                                                                        |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `mise://tools`                       | 活动工具版本、请求的版本、安装路径／状态以及配置来源。 |
-| `mise://tools?include_inactive=true` | 活动工具以及其他已安装的版本。                                                     |
-| `mise://tasks`                       | 任务定义（包括 monorepo 子项目任务）、命令、描述、依赖项、源文件和执行选项。    |
-| `mise://env`                         | 已解析的 mise 环境变量名称和值。                                            |
-| `mise://config`                      | 活动配置文件路径和项目根目录。                                           |
+- Reading `mise://env` evaluates the project's environment config and returns
+  the values, which can include secrets. Resource reads can also evaluate
+  templates and environment directives, so a read is not a sandbox for config
+  you have not reviewed.
+- Resource reads follow mise's
+  [trust rules](/security.html#configuration-trust), and the server cannot show
+  the trust prompt. If the project's config needs trust, for example because
+  it has `[env]`, templates or tool options, reads fail with
+  `Failed to load config: error parsing config file: <path>` until you run
+  `mise trust` in the project.
+- `run_task` runs the project's commands with your account's access, and
+  `install_tool` installs tools. Unlike `mise run` and `mise install` in a
+  terminal, neither trusts the project for you: both refuse a project whose
+  config files are not trusted, and list the `mise trust` commands to run after
+  you review the files. The `mise` they start trusts nothing on its own either,
+  so config it reaches in a subdirectory must be trusted too.
+- `run_task` runs without stdin and sets `MISE_YES=1`, which answers mise's
+  other confirmation prompts. Use your client's tool approval settings to decide
+  which tasks may run, and review task definitions before allowing them.
 
-`mise://config` 不会返回完整的设置转储。在 `mise://tasks` 中，`env` 字段当前为空对象；它不会公开特定任务的环境值。当你需要资源未提供的详细信息时，请使用源配置。
+To let an assistant inspect a project you have not trusted, add
+`"env": { "MISE_SAFE": "1" }` to the server entry. In
+[safe mode](/security.html#safe-mode), `mise://env` returns no project values
+and `run_task` fails, while the other resources still list the project's tools,
+tasks and config files.
 
-## 可用工具
+## Resources {#available-resources}
 
-### `list_commands`
+Resources return JSON text. The server loads the project's configuration once
+and keeps it until it exits, so after you edit `mise.toml` or task files,
+restart the server from your client to refresh the resources. `run_task` starts
+a new `mise run` each time and always uses the current files.
 
-列出 mise 命令及其帮助文本和声明的影响：`read`、`write` 或 `destructive`。缺少影响表示该命令未分类。这些声明描述命令；它们不会执行命令，也不会强制实施客户端批准策略。
+| URI                                  | Contents                                                                                                                                                                                                                                       |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mise://tools`                       | Active tool versions, requested versions, install paths, whether each is installed, and the config file that requested it.                                                                                                                     |
+| `mise://tools?include_inactive=true` | Active tools plus other installed versions.                                                                                                                                                                                                    |
+| `mise://tasks`                       | Task definitions, including monorepo subproject tasks: commands, descriptions, dependencies, source files and options. The `env` field lists the task's environment directives as written, such as `"NODE_ENV=test"`, without evaluating them. |
+| `mise://env`                         | Resolved environment variable names and values.                                                                                                                                                                                                |
+| `mise://config`                      | Active config file paths and the project root. It does not include settings.                                                                                                                                                                   |
 
-可选的布尔值 `include_hidden` 默认为 `false`。例如：
+Reading `mise://tools` resolves each version request, which can fetch version
+lists over the network when no installed version matches. A trimmed example:
 
 ```json
 {
-  "include_hidden": false
+  "node": [
+    {
+      "version": "24.21.0",
+      "requested_version": "24",
+      "install_path": "/home/me/.local/share/mise/installs/node/24.21.0",
+      "installed": true,
+      "active": true,
+      "source": { "type": "mise.toml", "path": "/home/me/src/app/mise.toml" }
+    }
+  ]
 }
 ```
 
-### `run_task`
+## Tools {#available-tools}
 
-运行任务，包括其正常的 mise 依赖项和环境：
+| Tool            | Arguments                                   | What it does                                                                                                                                                                                         |
+| --------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_commands` | `include_hidden` (boolean, default `false`) | Lists mise commands with their help and declared effect: `read`, `write` or `destructive`. A command with no effect is unclassified, not safe. It runs nothing.                                      |
+| `run_task`      | `task` (string), `args` (array of strings)  | Runs a task with its dependencies and environment, and returns its output when it finishes.                                                                                                          |
+| `install_tool`  | `tool` (string), `version` (string)         | Installs a tool, as `mise install` does. `version` defaults to the configured version, or latest. Returns JSON with `tool`, the installed `version`, `install_path` and the install log as `output`. |
 
-| 参数      | 类型             | 必填 | 含义                                                           |
-| --------- | ---------------- | ---- | ----------------------------------------------------------------- |
-| `task`    | string           | 是   | 任务名称，例如 `build`。                                       |
-| `args`    | array of strings | 否   | 在任务名称之后传递的参数。默认为空数组。 |
+`list_commands` returns entries like:
 
-对于接受 `--verbose` 标志的任务，请传递：
+```json
+{
+  "bin": "mise",
+  "commands": [
+    {
+      "command": "tasks ls",
+      "help": "List available tasks",
+      "effect": "read",
+      "hidden": false
+    }
+  ]
+}
+```
+
+An assistant calls `run_task` with arguments like:
 
 ```json
 {
@@ -92,25 +141,27 @@ MISE_EXPERIMENTAL=1 mise --cd /absolute/path/to/project mcp
 }
 ```
 
-这些是工具参数，而不是完整的 JSON-RPC 请求。`--verbose` 会传递给任务；它不会启用 mise 自身的详细日志记录。
+`--verbose` here goes to the task, not to mise. The result holds the task's
+stdout and stderr after it finishes; output is not streamed, and a task cannot
+read terminal input. A nonzero exit returns a tool error with the exit code and
+output. The [`task.timeout`](/configuration/settings.html#task.timeout) setting
+limits how long a task can run.
 
-响应包含任务完成后的 stdout 和 stderr。非零退出状态会生成包含退出代码和输出的工具错误。输出不会流式传输，需要终端输入的任务无法通过此工具提示输入。[`task.timeout`](/configuration/settings.html#task.timeout) 设置会限制执行时间。
-
-### `install_tool`
-
-服务器会公布 `install_tool`，但调用它当前会返回“not yet implemented”错误。在运行任务之前，请在此 MCP 工具之外使用 `mise install` 安装所需工具，或者如果客户端提供单独的命令执行功能，则使用该功能。
-
-## 示例
+## Example prompts {#examples}
 
 连接到目标项目后，请让助手：
 
-- 显示活动的 Node.js 版本以及它是否已安装
-- 列出可用任务并检查 `build` 的依赖项
-- 运行你已检查过的指定任务
-- 显示哪些配置文件处于活动状态
+- Show the active Node.js version and whether it is installed.
+- List available tasks and the dependencies of `build`.
+- Run a named task you have reviewed.
+- Show which config files are active.
 
-如果工具列表或项目根目录不符合预期，请检查服务器的 `--cd` 参数。如果服务器无法启动，请在客户端日志中确认 mise 的绝对路径和 `MISE_EXPERIMENTAL=1`。
+## Troubleshooting {#troubleshooting}
 
-## 技术细节
-
-实现位于 [`src/cli/mcp.rs`](https://github.com/jdx/mise/blob/main/src/cli/mcp.rs)。它使用 `rmcp` crate 通过 stdio 实现 MCP 资源列表、资源读取和工具调用。客户端需要支持 MCP；仅支持原始 JSON-RPC 并不能建立 MCP 会话。
+- Unexpected tasks or tools: check the path after `--cd` in the server entry.
+- `Failed to load config`: run `mise trust` in the project, or `mise doctor` to
+  find the problem.
+- The server does not start: check the absolute mise path in the client's MCP
+  log. Run `mise --cd /absolute/path/to/project mcp` in a terminal; it prints
+  `Starting mise MCP server...` to stderr and waits for input.
+- Stale resources after editing config: restart the server from the client.

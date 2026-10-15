@@ -11,12 +11,30 @@ description: "从 `[bootstrap.linux.firewall]` 管理 Linux 主机防火墙"
 
 从 `[bootstrap.linux.firewall]` 管理 Linux 主机防火墙
 
-此命令管理主机防火墙策略和规则。在将策略应用到远程计算机之前，请先检查 `apply --dry-run`，其中包括允许你的 SSH 连接的规则。
+Works with nftables, firewalld, or UFW, and keeps mise's rules separate from
+other host rules. Over SSH, mise refuses a default incoming policy of deny
+or reject unless a rule allows the current connection or the config sets
+`allow_lockout = true`. Check `apply --dry-run` before applying a policy to
+a remote machine.
 
 ## 标志
 - **`-h --help`** — 打印帮助
 
-## 子命令
+## Examples
+
+Show the firewall's state
+
+```
+mise bootstrap firewall status
+```
+
+Show the policy and rules that would change
+
+```
+mise bootstrap firewall apply --dry-run
+```
+
+## Subcommands
 
 - [`mise bootstrap firewall apply [-n --dry-run] [-y --yes]`](/cli/bootstrap/firewall/apply.html)
 - [`mise bootstrap firewall status [-J --json] [--missing]`](/cli/bootstrap/firewall/status.html)
@@ -25,6 +43,6 @@ description: "从 `[bootstrap.linux.firewall]` 管理 Linux 主机防火墙"
 
 ## 相关文档
 
-- [主机防火墙](/bootstrap/firewall.html)。
-- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Linux firewall](/bootstrap/firewall.html).
+- [`mise bootstrap [FLAGS] [SUBCOMMAND]`](/cli/bootstrap.html).
+- [Global flags and argument syntax](/cli/#global-flags).

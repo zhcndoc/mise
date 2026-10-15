@@ -1,208 +1,150 @@
 ---
-description: "将已弃用的 ubi 配置迁移到 GitHub、GitLab 或 HTTP 后端。"
+description: "Move tools off the deprecated ubi backend to github, gitlab or http before mise 2027.1.0."
 ---
 
-# Ubi 后端 <Badge type="danger" text="已弃用" />
+# Migrating off the ubi backend <Badge type="danger" text="deprecated" />
 
-::: warning
-ubi 后端已**弃用**。请改用 [GitHub 后端](/dev-tools/backends/github)。
+The `ubi` backend installed single executables from GitHub and GitLab releases
+with the [ubi](https://github.com/houseabsolute/ubi) library. It is deprecated:
+move each `ubi:` tool to the [github](/dev-tools/backends/github.html),
+[gitlab](/dev-tools/backends/gitlab.html) or
+[http](/dev-tools/backends/http.html) backend.
 
-与 ubi 相比，GitHub 后端具有多项优势，包括来源验证、下载进度报告以及更少的依赖项。要进行迁移，请在配置文件中将 `ubi:owner/repo` 替换为 `github:owner/repo`。[`matching`](/dev-tools/backends/github.html#matching) 和 [`matching_regex`](/dev-tools/backends/github.html#matching-regex) 选项可以继续使用。需要注意的一个行为差异是：ubi 仅将子字符串 `matching` 应用于已经匹配你的 OS/arch 的资源之间进行决胜，并且当只有一个资源匹配平台时会跳过该选项。GitHub 后端则会在自动检测之前将 `matching` 作为预筛选条件，因此对于包含多个二进制文件的发布版本，你将获得筛选器指定的二进制文件；如果该文件未针对你的平台发布，则会收到明确指出该筛选器的错误。
-
-还有一个迁移时需要注意的问题：ubi 会将 `matching` 合并到安装路径中，因此你可以通过在同一个 `ubi:owner/repo` 字符串上使用不同的 `matching` 值，从一个仓库安装多个二进制文件。GitHub 后端则将安装路径仅按工具名称 + 版本键控，因此两个具有不同 `matching` 值的 `github:owner/repo` 条目会解析到**同一个**目录，第二个会覆盖第一个。如果你依赖这种 ubi 模式，请在 GitHub 上为每个二进制文件提供各自的 [`tool_alias`](/dev-tools/backends/github.html#multiple-assets-from-the-same-release)，这样每个文件都会获得自己独立的安装目录。
+::: warning Deprecated
+Since 2026.4.0, mise prints a deprecation warning, once per run, when it lists
+versions for or installs a `ubi:` tool. The ubi backend will be removed in mise
+2027.1.0; migrate before you upgrade to that release.
 :::
 
-此页面记录现有的 ubi 配置。对于新安装，请根据需要使用
-[GitHub](/dev-tools/backends/github.html)、[GitLab](/dev-tools/backends/gitlab.html)
-或 [HTTP](/dev-tools/backends/http.html) 后端。
+## Migrate a tool {#usage}
 
-## 用法
+Migrate one tool at a time, and keep the old installation until the replacement
+works.
 
-一次迁移一个工具。对于简单的发布版本安装，将：
+1. Change the backend prefix:
+
+   | ubi entry                                   | Replacement                                                                                |
+   | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+   | `ubi:owner/repo`                            | `github:owner/repo`                                                                        |
+   | `ubi:owner/repo` with `provider = "gitlab"` | `gitlab:owner/repo`                                                                        |
+   | `ubi:https://...`, a direct download URL    | An `http:` tool with that [`url`](/dev-tools/backends/http.html#usage) and a version label |
+
+2. Replace the tool options using the [option mapping](#option-mapping).
+3. Install the tool and run it:
+
+   ```sh
+   mise install
+   mise exec -- <command> --version
+   ```
+
+4. If you use a lockfile, run `mise lock` to write entries for the new tool.
+   Then remove the old installation with
+   `mise uninstall --all ubi:owner/repo`.
+
+A tool that named its executable with `exe` usually needs no option on the new
+backend, because the github backend extracts the archive and finds the
+executable:
 
 ```toml
 [tools]
-"ubi:BurntSushi/ripgrep" = "14.1.1"
-```
-
-改为：
-
-```toml
-[tools]
+# was: "ubi:BurntSushi/ripgrep" = { version = "14.1.1", exe = "rg" }
 "github:BurntSushi/ripgrep" = "14.1.1"
 ```
 
-然后运行 `mise install` 和 `mise exec -- rg --version`。根据目标后端检查自定义选项：例如，`exe` 和 `extract_all` 是 ubi 选项，不应盲目复制。重新生成并检查任何锁定文件。在替代方案正常工作之前，保留旧的安装。
-
-对于多个二进制文件，请按照上文所述的别名迁移方式操作。直接的
-`ubi:https://...` 下载应归入 [HTTP 工具条目](/dev-tools/backends/http.html#usage)。
-
-## 工具选项
-
-以下 [tool-options](/dev-tools/#tool-options) 适用于 `ubi` 后端——这些配置写在 `mise.toml` 的 `[tools]` 中。
-
-### `exe`
-
-`exe` 选项允许你指定归档包中的可执行文件名称。当归档包包含多个可执行文件时，这个选项很有用。
-
-如果你遇到类似 `could not find any files named cli in the downloaded zip file` 的错误，可以使用 `exe` 选项来指定可执行文件名称：
+To keep a renamed executable, rename it by its file name:
 
 ```toml
 [tools]
-"ubi:cli/cli" = { version = "latest", exe = "gh" } # github 的 cli
+# was: "ubi:cli/cli" = { version = "latest", exe = "gh", rename_exe = "gh-cli" }
+"github:cli/cli" = { version = "latest", rename_exe = { "gh" = "gh-cli" } }
 ```
 
-### `rename_exe`
-
-`rename_exe` 选项允许你指定在提取后可执行文件的名称。
-
-使用 `rename_exe` 选项指定目标可执行文件名称：
+A GitLab tool moves to the gitlab backend:
 
 ```toml
 [tools]
-"ubi:cli/cli" = { version = "latest", exe = "gh", rename_exe = "github" } # github 的 cli
+# was: "ubi:gitlab-org/cli" = { version = "latest", exe = "glab", provider = "gitlab" }
+"gitlab:gitlab-org/cli" = "latest"
 ```
 
-### `matching`
+## Option mapping
 
-当针对你的 OS/arch 存在多个文件时，设置一个字符串来匹配发布文件名，例如 "gnu"、"musl" 或 "msvc"。仅当多个发布文件名匹配你的 OS/arch 时才会使用此选项；如果只有一个发布资源匹配，则会忽略该选项。
+| ubi option       | Replacement                                                                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exe`            | Usually remove it: the github and gitlab backends extract the whole archive and find the executables. To expose only some, use [`filter_bins`](/dev-tools/backends/github.html#filter-bins). |
+| `rename_exe`     | [`rename_exe`](/dev-tools/backends/github.html#rename-exe). When `exe` named a file other than the repository name, use the table form, such as `rename_exe = { "gh" = "gh-cli" }`.          |
+| `matching`       | [`matching`](/dev-tools/backends/github.html#matching), which applies before platform detection; see [Behavior differences](#behavior-differences).                                          |
+| `matching_regex` | [`matching_regex`](/dev-tools/backends/github.html#matching-regex)                                                                                                                           |
+| `provider`       | The `github:` or `gitlab:` prefix                                                                                                                                                            |
+| `api_url`        | [`api_url`](/dev-tools/backends/github.html#api-url)                                                                                                                                         |
+| `extract_all`    | Remove it: these backends always extract the whole archive.                                                                                                                                  |
+| `bin_path`       | [`bin_path`](/dev-tools/backends/github.html#bin-path). The github backend strips a single top-level directory unless `bin_path` is set, so check the path against the archive.              |
+| `tag_regex`      | No equivalent. [`version_prefix`](/dev-tools/backends/github.html#version-prefix) keeps only tags that start with a fixed prefix.                                                            |
 
-```toml
-[tools]
-"ubi:BurntSushi/ripgrep" = { version = "latest", matching = "musl" }
-```
+## Behavior differences
 
-### `matching_regex`
+| Behavior                      | ubi                                                                                                | github and gitlab backends                                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `matching`                    | Breaks a tie between assets that already match your platform, and is ignored when only one matches | Filters assets before platform detection; a value that matches no asset for your platform is an error                      |
+| What is installed             | One executable, unless `extract_all` is set                                                        | The whole archive; the directories with executables go on `PATH`, so other executables in the archive can appear there     |
+| Repositories without releases | Lists Git tags as versions                                                                         | Lists only releases with assets, so a repository that publishes only tags has no versions                                  |
+| Verification                  | Records a checksum of the installed executable                                                     | Checks the release's digest or checksum file and GitHub artifact attestations, and records the download URL in `mise.lock` |
 
-设置一个正则表达式，在根据 OS/arch 进行匹配之前匹配发布文件名。如果该模式产生单个匹配项，则选择该文件。如果没有匹配项，ubi 会报告错误。
+Neither backend keeps two entries for the same `owner/repo` apart:
+`ubi:owner/repo[matching=a]` and `ubi:owner/repo[matching=b]` resolve to one
+tool, and only the first entry is installed. To install several binaries from
+one release, give each its own
+[tool alias](/dev-tools/backends/github.html#multiple-assets-from-the-same-release)
+that points at `github:owner/repo`.
 
-```toml
-[tools]
-"ubi:shader-slang/slang" = { version = "latest", matching_regex = "\\d+\\.tar" }
-```
+## Reference for existing configurations {#tool-options}
 
-### `provider`
+Until you migrate, these options still apply to `ubi:` tools:
 
-设置用于获取资源和发布信息的提供方：`github` 或 `gitlab`（默认为 `github`）。
-当你使用 `api_url` 时，请显式设置 `provider`，因为可能无法从 URL 正确推断类型。
+- `exe`: the executable to extract from the archive. Defaults to the
+  repository name.
+- `rename_exe`: the name to give the extracted executable.
+- `matching`: text to look for in asset names when several assets match your
+  OS and architecture, such as `gnu`, `musl` or `msvc`. ubi ignores it when only
+  one asset matches.
+- `matching_regex`: a regular expression that asset names must match before
+  OS and architecture matching. ubi reports an error when nothing matches.
+- `provider`: `github` (the default) or `gitlab`.
+- `api_url`: the provider's API URL, for a self-hosted instance. Set `provider`
+  too, and a token in `MISE_GITHUB_ENTERPRISE_TOKEN` or
+  `MISE_GITLAB_ENTERPRISE_TOKEN`.
+- `extract_all`: `true` extracts every file in the archive instead of one
+  executable. It ignores `exe` and `rename_exe`.
+- `bin_path`: the directory in the install that holds the executables, used with
+  `extract_all`.
+- `tag_regex`: a regular expression that release tags must match to be listed
+  as versions.
 
-```toml
-[tools]
-"ubi:gitlab-org/cli" = { version = "latest", exe = "glab", provider = "gitlab" }
-```
+A tool is written as `ubi:owner/repo`, `ubi:owner/repo@1.25.1`, or a direct
+download URL such as
+`ubi:https://github.com/goreleaser/goreleaser/releases/download/v1.16.2/goreleaser_Darwin_arm64.tar.gz`,
+which has only the version `latest`.
 
-### `api_url`
+mise puts `bin_path` on `PATH` when it is set. Otherwise it uses the install
+directory when `extract_all` is set, then the install's `bin/` directory if it
+exists, and the install directory last.
 
-设置提供方 API 的 URL。这在使用自托管实例时很有用。
-
-```toml
-[tools]
-"ubi:acme/my-tool" = {
-  version = "latest",
-  provider = "gitlab",
-  api_url = "https://gitlab.acme.com/api/v4",
-}
-```
-
-### `extract_all`
-
-设置为 `true` 以提取 tarball 中的所有文件，而不仅仅是二进制文件。不能与 `exe` 或 `rename_exe` 兼容。
-
-```toml
-[tools]
-"ubi:helix-editor/helix" = { version = "latest", extract_all = true }
-```
-
-### `bin_path`
-
-tarball 中包含二进制文件的目录。当二进制文件不在 tarball 根目录中时，此选项很有用，并且只有在 `extract_all` 设置为 `true` 时才有意义。
-
-```toml
-[tools]
-"ubi:owner/repo" = {
-  version = "latest",
-  extract_all = true,
-  bin_path = "target/release", # match the archive's actual layout
-}
-```
-
-**二进制路径查找顺序：**
-
-1. 如果指定了 `bin_path`，则使用该目录
-2. 如果 `extract_all` 设置为 `true`，则使用安装路径根目录
-3. 如果未设置 `bin_path`，则在安装路径中查找 `bin/` 目录
-4. 如果不存在 `bin/` 目录，则使用已解压目录的根目录
-
-### `tag_regex`
-
-设置一个正则表达式，以过滤掉与其不匹配的标签。当供应商在同一个仓库中为不相关的 CLI 发布版本时，此选项很有用。例如，`cargo-bins/cargo-binstall` 有许多针对 `cargo-binstall` 之外的 CLI 的发布版本；此选项可以过滤掉这些发布版本。
-
-```toml
-[tools]
-"ubi:cargo-bins/cargo-binstall" = { version = "latest", tag_regex = '^\d+\.' }
-```
-
-## 自托管 GitHub/GitLab
-
-如果你正在使用自托管的 GitHub/GitLab 实例，你可以设置 `provider` 和 `api_url` 工具选项。
-此外，你还可以设置 `MISE_GITHUB_ENTERPRISE_TOKEN` 或 `MISE_GITLAB_ENTERPRISE_TOKEN` 环境变量，以
-通过 API 进行身份验证。
-
-## 支持的 Ubi 语法
-
-- **用于最新发布版本的 GitHub 简写：** `ubi:goreleaser/goreleaser`
-- **用于特定发布版本的 GitHub 简写：** `ubi:goreleaser/goreleaser@1.25.1`
-- **URL 语法：** `ubi:https://github.com/goreleaser/goreleaser/releases/download/v1.16.2/goreleaser_Darwin_arm64.tar.gz`
-
-## ubi 故障排除
-
-### `ubi` 解析器找不到 os/arch
-
-有时供应商会以 ubi 无法识别的方式命名其发布版本，可能只针对特定的
-OS/arch 组合。例如，在[此工单](https://github.com/houseabsolute/ubi/issues/79)中，某个供应商使用了
-"mac"，而不是更常见的 "macos" 或 "darwin" 标签。
-
-对于现有的 ubi 安装，如果你需要隔离其解析器，可以将其与单独安装的 ubi CLI
-进行比较。在一个空的临时目录中运行：
+`tag_regex` is matched against the whole tag, including a leading `v`.
+`cargo-bins/cargo-binstall` publishes releases for several crates, and this
+keeps only the `v1.2.3`-style tags:
 
 ```sh
-ubi -p jdx/mise
-./bin/mise --version
+mise use 'ubi:cargo-bins/cargo-binstall[tag_regex=^v\d+\.]'
+mise ls-remote 'ubi:cargo-bins/cargo-binstall[tag_regex=^v\d+\.]'
 ```
 
-### `ubi` 选错了 tarball
+## Troubleshooting
 
-GitHub 发布版本可能包含许多 tarball，其中一些不包含你想要的 CLI。使用
-`matching` 字段指定要匹配发布文件名的字符串。
+If ubi picks the wrong asset, cannot find the executable or lists unrelated
+versions, migrate the tool. The github backend's
+[`matching`](/dev-tools/backends/github.html#matching),
+[`asset_pattern`](/dev-tools/backends/github.html#asset-pattern),
+[`version_prefix`](/dev-tools/backends/github.html#version-prefix) and
+[`rename_exe`](/dev-tools/backends/github.html#rename-exe) cover these cases.
 
-```sh
-mise use 'ubi:tamasfe/taplo[matching=full]'
-# or with ubi directly
-ubi -p tamasfe/taplo -m full
-```
-
-### `ubi` 无法在 tarball 中找到二进制文件
-
-ubi 假设仓库名称与二进制文件名称相同，但实际情况通常并非如此。
-例如，BurntSushi/ripgrep 提供的二进制文件名为 `rg`，而不是 `ripgrep`。在这种情况下，请使用 `exe` 字段指定
-二进制文件名称：
-
-```sh
-mise use 'ubi:BurntSushi/ripgrep[exe=rg]'
-# or with ubi directly
-ubi -p BurntSushi/ripgrep -e rg
-```
-
-### `ubi` 使用了奇怪的版本
-
-这是 mise 的问题，而不是 ubi 的问题。mise 需要列出工具的可用版本，以便让 "latest"
-指向 CLI 的实际最新发布版本。有时供应商会为不相关的内容发布 GitHub
-版本。例如，`cargo-bins/cargo-binstall` 是 cargo-binstall 的仓库，但它也有许多
-针对不相关 CLI 的发布版本。使用 `tag_regex` 工具选项将这些版本过滤掉：
-
-```sh
-mise use 'ubi:cargo-bins/cargo-binstall[tag_regex=^\d+\.]'
-```
-
-现在运行 `mise ls-remote ubi:cargo-bins/cargo-binstall[tag_regex=^\d+\.]` 时，你应该只看到
-以数字开头的版本。此命令的输出会被缓存，因此你可能需要先运行 `mise cache clear`。
+Implementation: [`src/backend/ubi.rs`](https://github.com/jdx/mise/blob/main/src/backend/ubi.rs).

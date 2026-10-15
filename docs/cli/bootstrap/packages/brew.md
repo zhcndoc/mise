@@ -1,5 +1,5 @@
 ---
-description: "管理 bootstrap packages 使用的 Homebrew tap"
+description: "Manage Homebrew tap URLs in `[bootstrap.brew.taps]`"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->
@@ -9,10 +9,14 @@ description: "管理 bootstrap packages 使用的 Homebrew tap"
 - **效果：** 只读
 - **源代码：** [`src/cli/system/brew/mod.rs`](https://github.com/jdx/mise/blob/main/src/cli/system/brew/mod.rs)
 
-管理 bootstrap packages 使用的 Homebrew tap
+Manage Homebrew tap URLs in `[bootstrap.brew.taps]`
 
-这些命令会编辑 `[bootstrap.brew.taps]`，以便已添加 tap 的 formula 和 cask
-可以由 mise 直接获取，而无需安装 Homebrew。
+mise finds a third-party tap such as `acme/tools` at
+`https://github.com/acme/homebrew-tools` without an entry. Add one only
+when the tap's repository lives at a different GitHub URL; only GitHub taps
+are supported. These commands edit config; they do not run Homebrew.
+
+Not available on Windows.
 
 ## 标志
 - **`-h --help`** — 打印帮助
@@ -26,6 +30,6 @@ description: "管理 bootstrap packages 使用的 Homebrew tap"
 
 ## 相关文档
 
-- [Homebrew 软件包和 tap](/bootstrap/packages/brew.html)。
-- [`mise bootstrap packages <SUBCOMMAND>`](/cli/bootstrap/packages.html)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Homebrew formulae and taps](/bootstrap/packages/brew.html#third-party-taps).
+- [`mise bootstrap packages <SUBCOMMAND>`](/cli/bootstrap/packages.html).
+- [Global flags and argument syntax](/cli/#global-flags).

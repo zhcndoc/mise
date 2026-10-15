@@ -14,34 +14,55 @@ description: "列出可供安装的工具版本"
 
 结果可能会被缓存；再次查询前，运行 `mise cache clear TOOL` 以刷新一个工具。版本格式和排序方式因后端而异。
 
-## 参数
-- **`[TOOL@VERSION]`** — 获取版本的工具
-- **`[PREFIX]`** — 按此前缀筛选可用版本
-  等效于第一个参数中 `@` 后的版本选择器
+## Arguments
+- **`[TOOL@VERSION]`** — Tool to get versions for
+- **`[PREFIX]`** — Version prefix to filter by; same as `TOOL@PREFIX`
 
-## 标志
-- **`--all`** — 列出 mise 当前已知的每个后端或工具的可用版本
-- **`--minimum-release-age <MINIMUM_RELEASE_AGE>`** — 仅显示在此时长或日期之前发布的版本
+## Flags
+- **`--all`** — List available versions for every tool mise currently knows about
+- **`--minimum-release-age <AGE>`** — Only show versions released before a date or at least a duration ago
 
-  支持类似 "2024-06-01" 的绝对日期以及类似 "90d" 或 "1y" 的相对时长。
-- **`-J --json`** — 以 JSON 格式输出（在可用时包含 created_at 时间戳等版本元数据）
-- **`--no-versions-host`** — 禁用对 mise-versions 主机的检查
-- **`--prerelease`** — 对于提供上游预发布元数据或选择加入基于正则表达式的预发布检测的后端，在输出中包含预发布版本
-  等效于在此命令执行期间设置 `MISE_PRERELEASES=1` 或 `prereleases` 设置。
-- **`--strict-metadata`** — 如果版本发布元数据获取失败则失败
+  Takes a date such as `2024-06-01` or a duration such as `90d` or `1y`.
+  Overrides the `minimum_release_age` setting and tool option.
+- **`-J --json`** — Output in JSON format, with metadata such as `created_at` when available
+- **`--no-versions-host`** — Fetch versions from the tool's upstream instead of mise's version mirror
 
-  需要 --json 和 --no-versions-host。
+  Same as `use_versions_host = false` for this command.
+- **`--prerelease`** — Include prerelease versions
 
-  这可以防止元数据使用者在后端获取元数据的上游请求失败时接受空的回退结果。
-- **`-h --help`** — 打印帮助
+  Works for backends that report prerelease metadata or detect prereleases by
+  pattern. Same as MISE_PRERELEASES=1 or the `prereleases` setting, for this
+  command only.
+- **`--strict-metadata`** — Exit with an error when release metadata cannot be fetched
+
+  Without it, backends such as aqua and ruby fall back to a version list
+  without release dates, or an empty one. Requires --json and
+  --no-versions-host.
+- **`-h --help`** — Print help
 
 ## 示例
 
+List every node version
+
 ```
 mise ls-remote node
-mise ls-remote node@20
-mise ls-remote node 20
+```
+
+List node 24.x versions
+
+```
+mise ls-remote node@24
+```
+
+Skip versions released in the last 30 days
+
+```
 mise ls-remote node --minimum-release-age 30d
+```
+
+Include release dates, as JSON
+
+```
 mise ls-remote github:cli/cli --json
 ```
 
@@ -49,6 +70,6 @@ mise ls-remote github:cli/cli --json
 
 ## 相关文档
 
-- [版本请求](/dev-tools/)。
-- [所有命令](/cli/)。
-- [全局标志和参数语法](/cli/#global-flags)。
+- [Version requests](/dev-tools/versions.html).
+- [All commands](/cli/).
+- [Global flags and argument syntax](/cli/#global-flags).

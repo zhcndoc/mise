@@ -323,6 +323,9 @@ Missing packages are skipped with a warning; use `apply` to install them. The
 manager decides which version is current. Managers that honor pins upgrade a
 pinned entry to its pin, and each manager's page says what it runs.
 
+若要在一次运行中安装缺少的软件包并升级已安装的软件包，请使用
+`mise bootstrap --upgrade`。它会在 packages 阶段升级软件包，并在 tools 阶段升级工具（与 `mise upgrade` 相同，但不带 `--bump`），然后运行 post 钩子。它不会更新 mise 自身、软件仓库或容器镜像。`--dry-run` 只会预览已安装的软件包和工具的升级；对于即将由本次运行安装的内容，必须等安装后才能确定升级行为。
+
 ### Import and prune
 
 [`mise bootstrap packages import`](/cli/bootstrap/packages/import.html) records

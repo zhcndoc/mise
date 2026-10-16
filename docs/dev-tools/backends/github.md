@@ -639,12 +639,7 @@ releases whether or not they have assets. A `url` for only some platforms also
 lists asset-less releases everywhere, and installing one of them on a platform
 without a `url` fails.
 
-mise reads one page of 100 releases. It reads more, up to three pages, only
-while it has not found a stable release with assets. Set
-`MISE_LIST_ALL_VERSIONS=1` to read every page. For public repositories, mise
-reads release lists from [mise-versions](https://mise-versions.jdx.dev) before
-it calls the GitHub API, unless
-[`use_versions_host`](/configuration/settings.html#use_versions_host) is off.
+mise 每次读取一页（100 个）发行版。只有尚未找到带有资源文件的稳定发行版时，它才会继续读取，最多读取三页。设置 `MISE_LIST_ALL_VERSIONS=1` 可读取所有页面。对于公开仓库，mise 会从 [mise-versions](https://mise-versions.jdx.dev) 读取发行版列表；只有 mise-versions 无法响应时，才会查询 GitHub API，但 [`use_versions_host`](/configuration/settings.html#use_versions_host) 关闭时除外。mise-versions 为每个仓库提供最新的 1,000 个发行版；若要列出更早的发行版，请关闭 `use_versions_host`。
 
 ## 设置
 

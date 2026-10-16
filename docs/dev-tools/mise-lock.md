@@ -358,12 +358,25 @@ already in the lockfile, or writes the common platforms for a new lockfile.
 [Locked tool stubs](/dev-tools/tool-stubs.html#locked-tool-stub) follow the
 same rules, using their project's `mise.lock`.
 
-## Lockfiles in CI {#ci-cd}
+## CI 和 Docker 中的锁文件 {#ci-cd}
 
-Commit entries for every runner platform and install with
-`mise install --locked` (`jdx/mise-action` adds `--locked` itself when the
-repository has a `mise.lock`); see
-[Continuous integration](/continuous-integration.html).
+在 CI 作业和 Docker 构建中提交 `mise.lock`。除了确保各处安装相同版本，它还可以避免每次运行都查询版本。没有锁文件时，像 `node = "24"` 或 `latest` 这样的请求需要获取工具的可用版本列表，来源可能是[版本主机](/configuration/settings.html#use_versions_host)，也可能是工具的上游。全新的运行器或 Docker 层没有缓存列表，因此每个工具在下载前至少都需要一次请求。恢复的缓存只能短暂提供帮助：列表超过 [`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache) 指定的时长（默认为 1 小时）后，`mise install` 会重新获取列表。工具存在匹配的锁文件条目时，mise 会直接使用其中的版本并跳过查询。
+
+为所有会运行这些工具的平台创建锁定条目，包括 CI 运行器、开发者机器和 Docker 镜像：
+
+```sh
+mise lock --platform linux-x64,linux-arm64,macos-arm64
+```
+
+提交 `mise.lock`；如果 mise 为[依赖关系图](#dependency-graphs)创建了 `.mise/locks/`，也一并提交。然后运行：
+
+```sh
+mise install --locked
+```
+
+仓库中存在 `mise.lock` 时，`jdx/mise-action` 会自动添加 `--locked`。在 Dockerfile 中，应在运行 `mise install` 前与 `mise.toml` 一起复制 `mise.lock`；若锁文件记录了依赖关系图，也要复制 `.mise/locks/`。详见 [Docker](/mise-cookbook/docker.html#installing-project-tools)。
+
+完整工作流示例见[持续集成](/continuous-integration.html)。
 
 ## Backend support
 

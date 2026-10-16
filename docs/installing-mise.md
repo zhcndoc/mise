@@ -52,6 +52,8 @@ a reproducible install:
 curl -fsSL https://mise.run | MISE_VERSION=v2026.10.4 sh
 ```
 
+脚本会从 mise.jdx.dev 下载发行版压缩包。如果 mise.jdx.dev 上没有该版本或无法访问，脚本会改从 [GitHub Releases](https://github.com/jdx/mise/releases) 下载。校验和不会从 mise.jdx.dev 获取。与脚本一同发布的版本使用嵌入脚本中的校验和；其他 `MISE_VERSION` 则使用 GitHub Releases 中的 `SHASUMS256.txt` 进行校验。如果脚本无法获取校验和，或压缩包校验不匹配，就会停止安装。
+
 #### Install and activate in one step {#shell-specific-installation-activation}
 
 The shell-specific endpoints install mise and append activation to that shell's
@@ -93,7 +95,7 @@ The script reads these environment variables, not TOML settings:
 | `MISE_INSTALL_MUSL`                    | With `1`, install the static musl build.                                                                                                                        |
 | `MISE_INSTALL_OS`, `MISE_INSTALL_ARCH` | Override the detected platform, such as `MISE_INSTALL_ARCH=x64` to install the Intel build on Apple silicon. Add `-musl` to the architecture for a musl build.  |
 | `MISE_INSTALL_EXT`                     | Archive format, `tar.zst` or `tar.gz`. Defaults to `tar.zst` when `zstd` is available.                                                                          |
-| `MISE_INSTALL_FROM_GITHUB`             | With `1`, download from GitHub Releases instead of mise.jdx.dev.                                                                                                |
+| `MISE_INSTALL_FROM_GITHUB`             | 设为 `1` 时，仅从 GitHub Releases 下载，不会先尝试 mise.jdx.dev。                                                                                                 |
 | `MISE_INSTALL_HELP`                    | With `0`, do not print the activation hint after installing.                                                                                                    |
 | `MISE_DEBUG`, `MISE_QUIET`             | With `1`, print debug output or only errors.                                                                                                                    |
 

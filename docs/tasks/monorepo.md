@@ -381,9 +381,8 @@ the same defaults without touching the projects, use
 
 ## Next steps
 
-- [Workspace project graph](/tasks/workspace-graph.html):
-  infer projects and their dependencies from Cargo, uv, Go, and Node.js
-  workspaces, run only affected tasks, and import package scripts.
+- [Workspace project graph](/tasks/workspace-graph.html)：
+  根据 Cargo、uv、Go、Gradle 和 Node.js 工作区推断项目及其依赖关系，只运行受影响的任务，并导入软件包脚本。
 - [Task templates](/tasks/templates.html): share task definitions between
   projects.
 - [Task caching](/tasks/caching.html): skip or restore tasks whose inputs have

@@ -153,10 +153,7 @@ replay a uv graph. `uvx_args` and `pipx_args` cannot be locked: a plain
 with the tool, and configure [Python](#choosing-python) and the
 [registry URL](#registry-url) directly.
 
-`mise lock` needs a Python that uv can find, though not necessarily the tool's
-configured version. Installs from a graph use the selected mise Python and do
-not download another. A locked install from a lockfile in format 2 or later
-fails if the tool's graph is missing; run `mise lock` to create it.
+`mise lock` 可以根据软件包元数据解析依赖关系图，无需先安装所选解释器。根据依赖关系图安装时会使用所选的 mise Python，不会另行下载 Python。如果锁文件格式为 2 或更高版本，但缺少该工具的依赖关系图，锁定安装会失败；请运行 `mise lock` 创建依赖关系图。
 
 The graph covers the Python range that every locked requirement supports,
 starting at Python 3.8, and keeps every published wheel target, so sidecars can
@@ -202,6 +199,16 @@ Graph-locked installs use the Python configured in mise, or the first one on
 tool's environment does not depend on a Python uv downloaded itself; pass your
 own `--python` in [`uvx_args`](/dev-tools/backends/pypi.html#uvx-args) to choose another. pipx uses its own
 default interpreter; pass `--python` in [`pipx_args`](/dev-tools/backends/pypi.html#pipx-args) to choose one.
+
+若要让某个工具使用独立于默认 Python 的版本，请将其 `python` 选项设为数字形式的 CPython 次版本号或精确补丁版本号。mise 会将该运行时解析并安装为工具的私有依赖，不会把 Python 添加到 Shell 的活动工具中。所选运行时会作为普通的 `python` 条目记录在同一锁文件范围内，因此使用锁定安装前请先提交更新后的锁文件。这需要支持 PyPI 工具 `python` 选项的 mise 版本。
+
+```toml
+[tools]
+"pypi:black" = { version = "latest", python = "3.12" }
+"pypi:ruff" = { version = "latest", python = "3.12.12" }
+```
+
+此选择器同时适用于 uv 和 pipx 安装，也会将依赖关系图限定为所选运行时能够满足的 Python 版本范围。它不能与 `uvx_args` 或 `pipx_args` 中的 `--python` 或 `-p` 组合使用。
 
 <a id="python-upgrades"></a>
 
@@ -271,6 +278,7 @@ described under [tool options](/dev-tools/#tool-options).
 | `with`                   | uv                        |
 | `expose`                 | uv 0.8.5 or later         |
 | `dependency_prereleases` | uv                        |
+| `python`                 | uv and pipx               |
 | `uvx_args`               | uv, version-only installs |
 | `uvx`                    | chooses pipx when `false` |
 | `pipx_args`              | pipx                      |

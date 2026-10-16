@@ -171,10 +171,14 @@ prompt or directory change. After that, mise refreshes the environment at each
 prompt and, in shells with a [directory-change hook](#hook-on-cd), after each
 `cd`. Child processes inherit the result.
 
-While shims are needed for [lazy tools](#lazy-tools) or
-`not_found_auto_install`, activation keeps the shim directories on `PATH`
-behind the real tool directories. See
-[Keep shims out of mise activate](#activate-shims) to remove them.
+默认情况下，即使当前目录没有 `mise.toml`，激活也会把 shim 目录保留在 `PATH` 中，并置于真实工具目录之后：
+
+```sh
+echo "$PATH"
+# ~/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+```
+
+这样，运行缺少的工具命令时可以自动安装（[`not_found_auto_install`](/configuration/settings.html#not_found_auto_install) 默认开启），也能让[延迟安装工具](#lazy-tools)在首次使用时安装。若要移除 shim，请参阅[让 mise activate 不添加 shim](#activate-shims)。
 
 ### Directory changes {#hook-on-cd}
 
@@ -398,17 +402,13 @@ shims: under `mise activate` without `--shims`, a tool's whole `bin` directory
 joins `PATH`, so excluded names are still found there.
 :::
 
+::: warning
+不要使用 mise 安装 `bash`、`zsh` 等 Shell。几乎所有脚本都会按名称运行它们，因此对应的 shim 会影响整个系统。请使用系统软件包管理器安装 Shell；[`mise bootstrap`](/bootstrap.html) 可以管理这些软件包。
+:::
+
 ## Keep shims out of mise activate {#activate-shims}
 
-PATH activation puts real tool directories first. When the toolset has a
-[lazy tool](#lazy-tools) or `not_found_auto_install` is on, it also keeps the
-user and system shim directories on `PATH` behind them, so running a missing
-tool's command can still install it. To remove the shim directories from
-activation entirely, run `mise settings activate_shims=false` and restart
-your shell. See [`activate_shims`](/configuration/settings.html#activate_shims)
-for what stops working. [Command wrappers](#command-wrappers) keep working,
-because they use their own directory, and an explicit `mise activate --shims`
-still adds the shims.
+PATH 激活会优先放置真实工具目录。默认开启的 [`activate_shims`](/configuration/settings.html#activate_shims) 也会将用户级和系统级 shim 目录保留在 `PATH` 中，排在真实工具目录之后，因此仍可通过运行缺少的工具命令来安装它。默认开启 `not_found_auto_install` 时，无论当前目录是否配置了工具，都会保留这些 shim；关闭该设置后，只有声明了[延迟安装工具](#lazy-tools)时才会保留 shim。运行 `mise settings activate_shims=false` 并重启 Shell，即可完全禁止激活过程添加 shim。关闭后会有哪些功能不可用，详见 [`activate_shims`](/configuration/settings.html#activate_shims)；[命令包装器](#command-wrappers)仍可使用，因为它们使用独立目录；显式运行 `mise activate --shims` 仍会添加 shim。
 
 ## Lazy tools {#lazy-tools}
 
@@ -435,11 +435,7 @@ command. Nothing else is installed. This works even when
 `not_found_auto_install` is off. A lazy declaration never overrides a
 higher-precedence config that selects the same tool without `lazy`.
 
-A bare `mise install` skips lazy tools. `mise install --include-lazy` installs
-them all now, and `mise install node` installs one. After installation,
-`mise activate` puts the real tool ahead of its shim, so later calls cost
-nothing extra. `mise activate --shims` keeps dispatching every call through
-mise.
+单独运行 `mise install` 会跳过延迟安装工具；不带参数的 `mise upgrade` 也会跳过尚未安装的延迟工具。`mise install --include-lazy` 可立即安装所有延迟安装工具；`mise install node` 或 `mise upgrade node` 则安装指定工具。`mise outdated` 仍会列出这些工具，并标记为 `[MISSING] (lazy)`。安装后，`mise activate` 会将真实工具放在其 shim 之前，后续调用无需额外操作。`mise activate --shims` 则会让每次调用继续通过 mise 分发。
 
 Tasks, `mise exec`, and `mise env` add the bootstrap shims behind the tool
 directories whenever the toolset has a lazy tool, so a task installs a lazy

@@ -235,13 +235,7 @@ and any organization authorization. See
 [GitHub Actions and other CI](/dev-tools/github-tokens.html#ci-github-actions)
 for CI.
 
-mise gets public release metadata and artifact attestations from the
-[mise-versions](https://mise-versions.jdx.dev) host to avoid most GitHub API
-calls. A 403 from GitHub therefore usually means that the host did not have the
-metadata yet, that `MISE_USE_VERSIONS_HOST=0` is set, or that the tool comes
-from a private repository or GitHub Enterprise. A
-[lockfile](/dev-tools/mise-lock.html) that records download URLs avoids most
-API calls during installs.
+mise 会从 [mise-versions](https://mise-versions.jdx.dev) 主机获取公开发行版元数据和制品证明，以避免大多数 GitHub API 调用。因此，GitHub 返回 403 通常表示该主机请求失败，mise 随后改为请求 GitHub（错误信息会列出两次请求的失败原因）；也可能是设置了 `MISE_USE_VERSIONS_HOST=0`，或该工具来自私有仓库或 GitHub Enterprise。使用记录了下载 URL 的[锁文件](/dev-tools/mise-lock.html)可避免安装时的大多数 API 调用。
 
 A 403 from another host needs that backend's credentials; a GitHub token does
 not help there.

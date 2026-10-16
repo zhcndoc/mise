@@ -67,19 +67,19 @@ own layer, so Docker rebuilds the tools only when the config changes.
 
 ### Build on the Debian image {#use-the-debian-image-as-a-base}
 
-This example assumes `mise.toml` declares Node.js and the application starts
-with `node server.js`:
+此示例假设 `mise.toml` 中声明了 Node.js，应用通过 `node server.js` 启动，且项目提交了 `mise.lock`：
 
 ```Dockerfile [Dockerfile]
 FROM ghcr.io/jdx/mise:2026.10.4-debian
 
 WORKDIR /app
-# Also copy mise.lock if the project has one.
-COPY mise.toml ./
-RUN mise trust && mise install
+COPY mise.toml mise.lock ./
+RUN mise trust && mise install --locked
 COPY . .
 CMD ["mise", "exec", "--", "node", "server.js"]
 ```
+
+使用锁文件时，构建会安装其中记录的版本，而不会获取各工具的可用版本列表；Docker 层没有缓存列表，因此不使用锁文件时，每次重建都会查询所有工具。请为镜像所用的平台创建锁定条目，例如运行 `mise lock --platform linux-x64,linux-arm64`；详见 [CI 和 Docker 中的锁文件](/dev-tools/mise-lock.html#ci-cd)。如果项目使用了 npm 或 PyPI 工具，且其[依赖关系图](/dev-tools/mise-lock.html#dependency-graphs)锁定在 `.mise/locks/` 中，也请在安装前添加 `COPY .mise/locks .mise/locks`。不使用锁文件时，请从 `COPY` 中移除 `mise.lock`，并从安装命令中移除 `--locked`。
 
 Add OS packages your tools need with `apt-get`. For GitLab CI, see the
 [CI image example](/continuous-integration.html#use-the-official-image).
@@ -114,9 +114,7 @@ COPY . .
 
 ### What to copy into the build {#build-context}
 
-Copy `mise.lock` along with `mise.toml` when the project uses a lockfile, plus
-any files the config reads. If an install hook needs application files, copy
-those before `mise install`.
+如果项目使用锁文件，请将 `mise.lock` 与 `mise.toml` 一起复制；若存在 `.mise/locks/` 目录，也一并复制，并复制配置读取的其他文件。如果安装钩子需要应用文件，请在运行 `mise install` 前复制这些文件。
 
 Exclude local credentials and mise's personal config files from the build
 context with a `.dockerignore`, so `COPY . .` does not bake them into the image.

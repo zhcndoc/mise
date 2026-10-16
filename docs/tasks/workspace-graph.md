@@ -1,15 +1,11 @@
 ---
-description: "Infer projects and dependencies from Cargo, uv, Go, and Node.js workspaces to run affected and upstream tasks in a monorepo."
-socialDescription: "Infer monorepo projects from Cargo, uv, Go, and Node.js workspaces to run affected tasks."
+description: "根据 Cargo、uv、Go、Gradle 和 Node.js 工作区推断单体仓库中的项目及其依赖关系，并运行受影响的任务及其上游任务。"
+socialDescription: "根据 Cargo、uv、Go、Gradle 和 Node.js 工作区推断单体仓库项目，并运行受影响的任务。"
 ---
 
 # Workspace project graph
 
-mise can read Cargo, uv, Go, and Node.js workspace manifests to learn which
-projects a [monorepo](/tasks/monorepo.html) contains and how they depend on
-each other. Use the graph to run tasks only in the projects a change affects, to
-run a task in upstream projects first, and to import Node.js package scripts as
-tasks.
+mise 可以读取 Cargo、uv、Go、Gradle 和 Node.js 工作区清单，从而识别[单体仓库](/tasks/monorepo.html)包含哪些项目及其依赖关系。你可以使用该图只运行受更改影响的项目中的任务、先运行上游项目的任务，并将 Node.js 软件包脚本导入为任务。
 
 The graph is separate from config roots. Config roots tell mise where task
 configuration lives; the graph comes from ecosystem manifests, and a project
@@ -56,13 +52,10 @@ carry field-level provenance, so other tools can tell, for example, a
 | Cargo    | A `[workspace]` table in the root `Cargo.toml`                    | `cargo:<package.name>`         | `path` dependencies, including `workspace = true` declarations                                                  |
 | uv       | A `[tool.uv.workspace]` table in the root `pyproject.toml`        | `uv:<normalized project.name>` | `[tool.uv.sources]` entries with `workspace = true` or a `path`                                                 |
 | Go       | `use` directives in the root `go.work`                            | `go:<module path>`             | None; add them with [project overrides](#project-overrides)                                                     |
+| Gradle   | 根目录 `settings.gradle(.kts)` 中的 `include` 指令                 | `gradle:<project path>`        | `dependencies {}` 块中的 `project(":x")` 引用                                                                  |
 | Node.js  | `pnpm-workspace.yaml`, or `workspaces` in the root `package.json` | `node:<package name>`          | `dependencies`, `devDependencies`, `optionalDependencies`, and `peerDependencies` that name a workspace package |
 
-Project IDs come from ecosystem metadata, not from directories, so moving a
-project does not change its ID. Every provider parses manifests directly:
-`cargo`, `uv`, Python, `go`, and the Node.js package managers do not need to be
-installed to build the graph. Running an imported Node.js script does need its
-package manager.
+项目 ID 来自生态系统元数据，而不是目录，因此移动项目不会改变其 ID。每个提供方都会直接解析清单：构建项目图不需要安装 `cargo`、`uv`、Python、`go`、Gradle 或 Node.js 包管理器；运行导入的 Node.js 脚本则需要安装相应的包管理器。
 
 A dependency that resolves back to the same project does not create an edge. If
 the inferred edges form a cycle, [`mise tasks graph`](/cli/tasks/graph.html)
@@ -120,6 +113,22 @@ Add the edges that matter with an override:
 ```toml
 [monorepo.projects."go:example.com/acme/api"]
 depends_add = ["go:example.com/acme/lib"]
+```
+
+### Gradle 工作区
+
+mise 会以 Groovy 或 Kotlin 语法读取单体仓库根目录的 `settings.gradle` 或 `settings.gradle.kts` 中的字面 `include` 指令。它不会运行 Gradle 或其包装器。项目 ID 使用 Gradle 自身的项目路径：`:app` 会成为 `gradle::app`，`:services:person-service` 会成为 `gradle::services:person-service`，根项目则为 `gradle::`。只有根项目本身带有构建脚本时才会纳入；对于 `include(":services:api")` 隐含的 `:services` 等父项目，也只有其存在构建脚本时才会纳入。`project(":x").projectDir = file("...")` 重映射会设置项目根目录；否则，根目录就是路径所指的目录。绝对路径或包含 `..` 的根目录会被跳过，因为项目根目录必须位于仓库之内。
+
+依赖边来自项目构建脚本顶层 `dependencies {}` 块中的字面引用：`project(":lib")`、`project(path: ":lib")` 和 `project(path = ":lib")`。mise 不会识别通过 `subprojects {}`、`allprojects {}`、`project(":x") {}` 或约定插件添加的依赖；请使用[项目覆盖配置](#project-overrides)添加这些依赖。mise 不会读取 `includeBuild`、版本目录或类型安全的项目访问器。修改 settings 脚本会影响所有项目。
+
+Gradle settings 是可执行脚本，因此 mise 不会猜测其含义。如果 `include` 参数不是字符串字面量（例如变量、插值、拼接，或遍历文件系统的循环），如果 `include` 带有条件或位于代码块内，如果 `projectDir` 不是 `file("...")` 字面量，或者两个 settings 脚本同时存在，mise 都会报告错误。请在 `[monorepo.projects]` 下声明项目，以接管该提供方的发现结果：
+
+```toml
+[monorepo.projects."gradle::app"]
+root = "app"
+
+[monorepo.projects."gradle::lib"]
+root = "lib"
 ```
 
 ### Node.js workspaces
@@ -400,3 +409,5 @@ A new project needs a namespaced ID, such as `custom:docs`, and a `root`. The
 same dependency cannot be both added and removed. The final graph must reference
 only existing project IDs and must not contain cycles; diagnostics name the
 projects involved and the override fields that can repair the graph.
+
+如果某个提供方无法读取工作区元数据，运行 [`mise tasks graph`](/cli/tasks/graph.html) 或 `mise run --affected` 时就会返回该提供方的错误。在该提供方的命名空间中声明项目（例如 `go:example.com/acme/api`）即可接管其发现结果：此时会忽略发现错误，而你声明的项目将构成该提供方的全部内容。

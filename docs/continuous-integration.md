@@ -9,12 +9,13 @@ same tools. Run commands with `mise exec` or [`mise run`](/tasks/) to load those
 tools and the project's [environment variables](/environments/). CI does not
 need shell activation.
 
-For reproducible installs, commit a [lockfile](/dev-tools/mise-lock.html) and
-install with `mise install --locked`, which fails when a tool has no recorded
-download for the platform; see
-[strict lockfile mode](/dev-tools/mise-lock.html#strict-lockfile-mode). Pin the
-mise version separately if the pipeline also needs to control updates to mise
-itself.
+提交一份[锁文件](/dev-tools/mise-lock.html)，并使用 `mise install --locked` 安装。这样每个作业都会安装相同的版本，mise 也会直接从 `mise.lock` 读取版本，而不必像在全新运行器上那样每次运行都获取各工具的可用版本列表。创建锁文件时，为每种运行器平台都添加条目：
+
+```sh
+mise lock --platform linux-x64,linux-arm64,macos-arm64
+```
+
+如果工具没有对应的锁文件条目，`--locked` 会直接失败，而不会查询其版本。对于会记录下载 URL 的后端，条目还必须包含当前平台对应的 URL；详见[严格锁文件模式](/dev-tools/mise-lock.html#strict-lockfile-mode)。如果流水线还需要控制 mise 自身的更新，请单独固定 mise 版本。
 
 ## GitHub Actions {#github-actions}
 
@@ -72,12 +73,20 @@ steps:
   - uses: actions/checkout@v7
   - uses: actions/cache@v6
     with:
+      # Linux default; use the platform-specific path below on macOS/Windows.
       path: ~/.cache/mise/downloads-cas
       key: mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
   - uses: jdx/mise-action@v5
     with:
       cache: false
 ```
+
+The path above is mise's default cache directory on Linux. On macOS, cache
+`~/Library/Caches/mise/downloads-cas`. On Windows, use the runner's temp
+directory context so GitHub Actions resolves the path before passing it to the
+cache action: <code v-pre>${{ runner.temp }}\mise\downloads-cas</code>. If
+`MISE_CACHE_DIR` is set, cache `downloads-cas` under that directory instead. See
+[`mise directories`](/directories.html) for details.
 
 Installs run `mise install --locked`, which only reuses a download that has a
 checksum to check it against. Tools are unpacked on every run, so this is slower
@@ -245,9 +254,8 @@ Cache installed tools to avoid downloading them on every job. Cache
 lockfile in the cache key, and use separate caches for jobs that use different
 [config environments](/configuration/environments.html) or install options.
 
-Still run `mise install` after restoring a cache: it installs anything missing,
-and the job must also succeed with an empty cache. See
-[Directories](/directories.html) for where mise keeps installs and metadata.
+恢复缓存后仍要运行 `mise install`：它会安装缺少的工具，而且作业也必须能在空缓存下成功。当缓存版本列表的年龄超过工具的
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age) 减去 1 小时时（默认 23 小时，且至少为 1 小时；参阅[mise 何时刷新版本列表](/cache-behavior.html#version-list-refresh)），`mise install` 会将其视为过期并重新获取。因此，恢复缓存不像使用锁文件那样能避免版本查询。安装目录和元数据位置见[目录](/directories.html)。
 
 ## Trust and untrusted branches {#safe-mode}
 

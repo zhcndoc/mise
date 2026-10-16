@@ -474,9 +474,6 @@ directories, and sudo settings.
 
 ## Caching {#caching-and-performance}
 
-mise reuses a tool's list of remote versions for the period set by
-[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache);
-run `mise cache clear <tool>` to refresh it. See
-[Caches](/cache-behavior.html), and
-[slow shell prompts](/troubleshooting.html#slow-shell-prompts) if activation
-feels slow.
+mise 会在一段时间内复用工具的远程版本列表：安装时最长复用到工具的
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age)，报告最新版本时则按
+[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache) 设置复用。运行 `mise cache clear <tool>` 可刷新列表。另请参阅[缓存](/cache-behavior.html)；若激活导致 Shell 提示符变慢，请参阅[Shell 提示符缓慢](/troubleshooting.html#slow-shell-prompts)。

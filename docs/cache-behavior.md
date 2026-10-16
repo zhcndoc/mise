@@ -31,9 +31,14 @@ they never wait on the network: shell activation, `mise exec`, `mise env`,
 `mise ls`, `mise current`, `mise which`, `mise where`, and shims. They fetch a
 list only when none is cached.
 
-Other commands, such as `mise install`, `mise use`, `mise upgrade`,
-`mise outdated`, and `mise ls-remote`, refetch a list once it is older than
-[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache).
+用于报告最新版本的命令（`mise outdated`、`mise upgrade`、`mise ls-remote`、`mise lock` 和 `mise latest`）会在版本列表超过
+[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache) 指定的时长后重新获取；该时长默认为 1 小时。
+
+只需要查找符合请求的版本的命令（例如 `mise install`、`mise use` 和 `mise run`）会缓存列表，时长为工具的
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age) 减去 1 小时（版本主机快照最多会延迟 1 小时），范围为 1 到 24 小时：默认截止时间下为 23 小时；工具设置 `minimum_release_age = "6h"` 时为 5 小时；关闭截止时间时为 1 小时。无论如何，列表中尚未达到该等待时长的发行版本都不能安装。若列表没有为每个版本记录日期，或你自行设置了 `fetch_remote_versions_cache`，则列表会改为在 `fetch_remote_versions_cache` 指定的时长后重新获取。
+
+同一缓存时长也适用于一次代表多个工具版本列表的 mise-versions 索引，以及 `pipx:` 工具注册表报告的最新发行版（即同一列表中日期最新的发行版）。维护者可以将 `latest` 指针移至任意版本，例如 npm 的 `latest` dist-tag 或 asdf 插件的 `latest-stable` 脚本；这类指针仍会在 `fetch_remote_versions_cache` 指定的时长后重新获取。
+
 Set [`prefer_offline`](/configuration/settings.html#prefer_offline) to make
 every command use cached lists the same way, or
 [`offline`](/configuration/settings.html#offline) to block network requests

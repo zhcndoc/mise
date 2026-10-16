@@ -236,12 +236,13 @@ is in `.config/mise/` or `.mise/` (see
 `$VAR` and `~`. Directives run in the order you write them, so `_.path` can use
 a variable that `_.source` set above it; `_.python.venv` always runs last.
 
-| Option   | `_.file` | `_.source` | `_.path` | Effect                                                                   |
-| -------- | -------- | ---------- | -------- | ------------------------------------------------------------------------ |
-| `path`   | Yes      | Yes        | Yes      | One path or a list of paths                                              |
-| `tools`  | Yes      | Yes        | Yes      | Resolve after tools load ([details](#lazy-eval))                         |
-| `redact` | Yes      | Yes        | No       | Mark every loaded value as [sensitive](/environments/secrets/#redaction) |
-| `expand` | Yes      | No         | No       | Let the file use values loaded before it                                 |
+| Option    | `_.file` | `_.source` | `_.path` | Effect                                                                   |
+| --------- | -------- | ---------- | -------- | ------------------------------------------------------------------------ |
+| `path`    | Yes      | Yes        | Yes      | One path or a list of paths                                              |
+| `tools`   | Yes      | Yes        | Yes      | Resolve after tools load ([details](#lazy-eval))                         |
+| `redact`  | Yes      | Yes        | No       | Mark every loaded value as [sensitive](/environments/secrets/#redaction) |
+| `expand`  | Yes      | No         | No       | Let the file use values loaded before it                                 |
+| `find_up` | Yes      | No         | No       | 从当前目录及其父目录中搜索相对路径                                     |
 
 ### `env._.file` {#env-file}
 
@@ -296,11 +297,17 @@ _.file = { path = ".env.json", expand = true }
 mise decrypts SOPS-encrypted JSON, YAML and TOML files as it loads them; see
 [SOPS files](/environments/secrets/sops.html).
 
-To load a dotenv file from the current directory and every parent directory, set
-the [`env_file`](/configuration/settings.html#env_file) setting, for example
-`MISE_ENV_FILE=.env`. Unlike `_.file`, which resolves paths against the config
-file that declares it, `env_file` searches upward from the current directory,
-and a closer file wins.
+`_.file` 会相对于配置根目录（通常是项目目录）解析相对路径。若要改为从当前目录及其所有父目录加载文件，请设置 `find_up = true`。此选项也适用于全局配置，因此一个条目即可覆盖所有项目：
+
+```toml [~/.config/mise/config.toml]
+[env]
+_.file = [
+  { path = ".env", find_up = true },
+  { path = ".env.local", find_up = true },
+]
+```
+
+文件会从文件系统根目录开始，沿目录层级逐级加载到当前目录，因此较近文件中的变量会覆盖较远文件中的变量。绝对路径不受 `find_up` 影响。[`env_file`](/configuration/settings.html#env_file) 设置（`MISE_ENV_FILE=.env`）可对单个文件名执行相同的向上搜索。
 
 ### `env._.path` {#env-path}
 

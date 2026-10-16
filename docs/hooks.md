@@ -233,17 +233,28 @@ patterns = ["uv.lock"]
 task = "sync-deps"
 ```
 
+checkout、pull 或 rebase 会在你没有编辑文件的情况下重写文件，mise 也会将这些文件报告为已更改。如果所有已更改文件的最后写入时间都早于 git 上次移动 HEAD 的时间，mise 就会设置 `MISE_WATCH_FILES_GIT_REWRITTEN=1`，使命令可以跳过格式化未改动文件等操作：
+
+```toml [mise.toml]
+[[watch_files]]
+patterns = ["**/*.go"]
+run = '[ -n "$MISE_WATCH_FILES_GIT_REWRITTEN" ] || { IFS=:; hk fix $MISE_WATCH_FILES_MODIFIED; }'
+```
+
+只要有任一已更改文件的时间晚于上次 HEAD 移动时间，该变量就不会设置，因此 rebase 同时发生真实编辑时仍会运行命令。如果上次 HEAD 移动是由提交造成的，该变量也不会设置，因为提交不会重写你编辑的文件。`git stash pop` 和 `git stash apply` 不会移动 HEAD，因此无法检测到。
+
 ## Environment variables {#hook-execution}
 
-| Variable                    | Set for                                                     | Value                                                                       |
-| --------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `MISE_PROJECT_ROOT`         | All hooks and `watch_files`                                 | The project root                                                            |
-| `MISE_CONFIG_ROOT`          | `[hooks]`                                                   | The root of the config file that defines the hook                           |
-| `MISE_ORIGINAL_CWD`         | All hooks and `watch_files`                                 | The directory you were in when mise ran                                     |
-| `MISE_PREVIOUS_DIR`         | `enter`, `leave`, `cd`                                      | The directory before the change                                             |
-| `MISE_INSTALLED_TOOLS`      | `postinstall`                                               | A JSON array of the installed tools; see [below](#mise-installed-tools)     |
-| `MISE_WATCH_FILES_MODIFIED` | `watch_files`                                               | The changed files, separated by `:`, with any `:` in a name escaped as `\:` |
-| `MISE_NO_HOOKS`             | Spawned `[hooks]` commands, task hooks, `watch_files` tasks | `1`, so a `mise` command run from the hook does not run hooks again         |
+| Variable                         | Set for                                                     | Value                                                                       |
+| -------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `MISE_PROJECT_ROOT`              | All hooks and `watch_files`                                 | The project root                                                            |
+| `MISE_CONFIG_ROOT`               | `[hooks]`                                                   | The root of the config file that defines the hook                           |
+| `MISE_ORIGINAL_CWD`              | All hooks and `watch_files`                                 | The directory you were in when mise ran                                     |
+| `MISE_PREVIOUS_DIR`              | `enter`, `leave`, `cd`                                      | The directory before the change                                             |
+| `MISE_INSTALLED_TOOLS`           | `postinstall`                                               | A JSON array of the installed tools; see [below](#mise-installed-tools)     |
+| `MISE_WATCH_FILES_MODIFIED`      | `watch_files`                                               | The changed files, separated by `:`, with any `:` in a name escaped as `\:` |
+| `MISE_WATCH_FILES_GIT_REWRITTEN` | `watch_files`                                               | 若 git 重写了所有已更改文件则为 `1`；否则未设置                            |
+| `MISE_NO_HOOKS`                  | Spawned `[hooks]` commands, task hooks, `watch_files` tasks | `1`, so a `mise` command run from the hook does not run hooks again         |
 
 Global hooks get the active project's root as `MISE_PROJECT_ROOT`, or the global
 config root when no project is active, and the global config root as

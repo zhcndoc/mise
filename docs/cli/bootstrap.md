@@ -75,6 +75,9 @@ resource-level changes.
 - **`--update`** — Refresh package metadata and update repositories before applying
 
   Also fast-forwards a checkout that `--from` or `--adopt` reuses. Without `--update`, a reused checkout stays at its current commit.
+- **`--upgrade`** — 升级已安装的软件包和工具，并安装缺少的软件包和工具
+
+  packages 阶段会在安装后执行相当于 `mise bootstrap packages upgrade` 的操作；tools 阶段会在安装后执行 `mise upgrade`（不带 `--bump`）。软件包固定版本和工具版本范围均会生效。此选项不会更新 mise 自身、软件仓库或容器镜像，也不会重启服务；更新软件仓库请参阅 `--update`，更新 mise 请参阅 `mise self-update`。
 - **`-h --help`** — Print help
 
 ## Examples

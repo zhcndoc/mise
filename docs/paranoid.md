@@ -113,3 +113,5 @@ accepts that answer, and a lockfile written afterwards records no provenance.
 
 Paranoid mode confirms a "none" answer with GitHub before it skips verification.
 This costs one GitHub API request per artifact without attestations.
+
+在两种模式下，如果 mise-versions 无法响应（例如超时、连接中断，或返回 `429`、`5xx`），mise 都会改为查询 GitHub attestation API，并以相同方式验证 GitHub 返回的结果。如果 GitHub 也失败，则由 [`provenance_api_failures_fatal`](/configuration/settings.html#provenance_api_failures_fatal) 决定后续处理方式。

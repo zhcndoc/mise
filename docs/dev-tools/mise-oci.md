@@ -237,12 +237,7 @@ global and system configs are applied too.
 
 Packages can be `apt:` entries on a Debian or Ubuntu base image, or `apk:`
 entries on an Alpine or Wolfi base image, but not both in one build. mise
-unpacks the base image into a temporary root filesystem, runs the matching
-package manager on the host to install into it, and emits the changes as one
-layer annotated with `dev.mise.system.packages`. The host needs `apt-get` and
-`dpkg` for apt, or `apk` for apk. Apk package scripts run inside a chroot, so
-apk layers need a Linux host running mise as root. mise removes package-manager
-caches and logs before creating the layer.
+mise 会将基础镜像解包到临时根文件系统，在宿主机上运行相应的软件包管理器进行安装，并将变更输出为一个带有 `dev.mise.system.packages` 注解的层。使用 apt 时，宿主机需要 `apt-get` 和 `dpkg`；使用 apk 时需要 `apk`。软件包脚本会在镜像的 chroot 中运行，因此构建 apt 或 apk 层时，mise 都必须以 root 身份运行（apk 还要求宿主机为 Linux）。创建镜像层前，mise 会清除软件包管理器缓存和日志。
 
 Entries for any other package manager, such as `brew:`, make the build fail.
 Keep them in a config the image build does not include, or exclude that manager

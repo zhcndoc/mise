@@ -222,6 +222,11 @@
       "default": false,
       "description": "enable shell-style variable expansion for values loaded by env._.file"
     },
+    "env_file_find_up": {
+      "type": "boolean",
+      "default": false,
+      "description": "look for a relative env._.file path in the current directory and each parent directory"
+    },
     "env_redact": {
       "type": "boolean",
       "description": "redact the value from logs"
@@ -279,6 +284,9 @@
         },
         "expand": {
           "$ref": "#/$defs/env_file_expand"
+        },
+        "find_up": {
+          "$ref": "#/$defs/env_file_find_up"
         },
         "redact": {
           "$ref": "#/$defs/env_redact"
@@ -1003,7 +1011,6 @@
           "type": "boolean"
         },
         "fetch_remote_versions_cache": {
-          "default": "1h",
           "description": "How long a tool's cached list of available versions stays fresh.",
           "type": "string"
         },
@@ -2579,12 +2586,12 @@
         },
         "use_versions_host": {
           "default": true,
-          "description": "Get version lists, public GitHub release metadata and attestations from mise-versions instead of upstream APIs.",
+          "description": "Get version lists, public GitHub release metadata and attestations from mise-versions before upstream APIs.",
           "type": "boolean"
         },
         "use_versions_host_track": {
           "default": true,
-          "description": "Send anonymous download statistics to mise-versions after installing a tool.",
+          "description": "Send download statistics to mise-versions after installing a tool.",
           "type": "boolean"
         },
         "verbose": {
@@ -4407,6 +4414,10 @@
           "description": "uv prerelease policy for dependency resolution (requires uv)",
           "type": "string",
           "enum": ["disallow", "allow", "if-necessary", "explicit"]
+        },
+        "python": {
+          "description": "mise-managed CPython version for this tool (minor or exact patch)",
+          "type": "string"
         },
         "package_name": {
           "description": "distribution name for git sources, used to attach extras",

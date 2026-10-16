@@ -226,6 +226,17 @@ binaries. To use precompiled binaries now, set `python.compile = false` or
 `all_compile = false`; on NixOS, enable [nix-ld](https://github.com/Mic92/nix-ld)
 first. To keep compiling, set `all_compile = true` explicitly.
 
+mise 会从 `https://mise-versions.jdx.dev/data/python-precompiled-<arch>-<os>.gz` 下载可用的预编译 CPython 构建版本列表，例如 `python-precompiled-aarch64-apple-darwin.gz`。即使 [`use_versions_host`](/configuration/settings.html#use_versions_host) 为 `false`，mise 也会下载此列表。mise 在以下情况下需要该列表：
+
+- 安装某个 CPython 版本，除非 `python.compile` 为 `true`（Windows 始终使用预编译构建），或锁文件已记录该版本在此平台上的构建 URL
+- 在 `python.compile` 为 `false` 时列出版本；Windows 上始终需要
+- 写入锁文件条目（例如 `mise lock`），无论 `python.compile` 设置为何值
+
+安装和版本列表操作会按
+[`fetch_remote_versions_cache`](/configuration/settings.html#fetch_remote_versions_cache) 设置的时长缓存列表。写入锁文件条目时，每次都会重新下载该列表，不使用缓存。
+
+[`offline`](/configuration/settings.html#offline) 模式会阻止下载。
+
 Official mise releases download the baseline `x86_64` build on x86-64 Linux.
 For a build optimized for newer CPUs, such as `x86_64_v3` on a CPU with AVX2,
 set [`python.precompiled_arch`](/lang/python.html#python.precompiled_arch).

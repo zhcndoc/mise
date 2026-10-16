@@ -284,6 +284,8 @@ one of these:
   after asking, or without asking under `--yes`. Add its `bin` directory to
   `PATH`, and set variables such as `JAVA_HOME` yourself.
 
+`bash`、`zsh` 等 Shell 也应在此处声明，而不是放在 `[tools]` 中。请将它们列入 `[bootstrap.packages]`。
+
 Both give every user one version, with no switching per project. To give each
 user mise-managed tools instead, keep them in `[tools]` and let
 [`mise bootstrap`](/bootstrap.html) set up each user's activation and tools.

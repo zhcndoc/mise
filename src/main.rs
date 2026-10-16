@@ -31,11 +31,8 @@ use crate::ui::multi_progress_report::MultiProgressReport;
 mod test {
     // See `mise::testing::init`; this is the same constructor for the binary's
     // own tests, which also need the frontend hooks that only `cli` can register.
-    #[cfg_attr(
-        target_vendor = "apple",
-        ctor::ctor(unsafe, body(link_section = "__TEXT,__text,regular,pure_instructions"))
-    )]
-    #[cfg_attr(not(target_vendor = "apple"), ctor::ctor(unsafe))]
+    mise_util::run_before_main!(init);
+
     fn init() {
         crate::cli::register_frontend();
         mise::testing::init();
@@ -111,7 +108,11 @@ fn main() -> ExitCode {
             return exit::status(1);
         }
     };
-    let result = runtime.block_on(main_());
+    // pest 2.9.3+ fails parsing when `stacker::remaining_stack()` reports < 64 KiB. On musl (the
+    // release binaries) `pthread_getattr_np` reports ~128 KiB for the main thread instead of its
+    // real size, so little headroom is left and aqua version filters fail (mise#14449). `maybe_grow`
+    // moves to a stack with known bounds when the detected space looks small and is a no-op otherwise.
+    let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || runtime.block_on(main_()));
     let (code, requested_exit) = match result {
         Ok(()) => (0, false),
         Err(err) => match exit::requested_exit_code(&err) {

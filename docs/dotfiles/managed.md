@@ -512,9 +512,7 @@ $EDITOR ~/.config/starship.toml
 mise dot add ~/.config/starship.toml
 ```
 
-`mise dot add --changed` updates the sources of every changed regular file
-managed in `copy` mode. Each file's config must be trusted. It skips directory
-copies, symlinks, templates, and inline content.
+`mise dot add --changed` 会更新所有已更改的普通文件的来源，前提是这些文件以 `copy` 模式托管；这也包括 copy 模式的[group](/dotfiles/groups.html)在目录树中发现的文件。每个文件的配置都必须受信任。它会跳过其他目录复制、符号链接、模板和内联内容。
 
 A target inside a [group](/dotfiles/groups.html#adding-files-to-a-group)'s
 tree is captured into that group's root instead, without a new entry.

@@ -32,6 +32,7 @@ missing tools from the config are reported, not installed.
 - **`--json-extended`** — 以 JSON 格式输出其他信息（来源、工具）
 - **`--redacted`** — 仅包含标记为要隐藏的变量；其值会以未屏蔽的形式打印
 - **`--values`** — 仅显示环境变量的值
+- **`--paths`** — 按 PATH 顺序逐行打印 mise 管理的 PATH 条目
 - **`-h --help`** — 打印帮助
 
 ## 示例
@@ -64,6 +65,12 @@ Print the variables as JSON
 
 ```
 mise env --json
+```
+
+列出 mise 管理的 PATH 条目，例如工具的 bin 目录
+
+```
+mise env --paths
 ```
 
 Write a dotenv file; it contains secret values

@@ -131,10 +131,10 @@ mise 提高 glibc 最低版本前，仍使用更旧版本的所有发行版都�
 
 | glibc  | 发行版                                                  | 标准支持结束时间                          |
 | ------ | ------------------------------------------------------ | ---------------------------------------- |
-| ≤ 2.27 | RHEL 7, Ubuntu 16.04 / 18.04, Debian 9, Amazon Linux 2 | ended (last: Amazon Linux 2, 2026-06-30) |
+| ≤ 2.27 | RHEL 7, Ubuntu 16.04 / 18.04, Debian 9, Amazon Linux 2 | 已结束（最后一个：Amazon Linux 2，2026-06-30） |
 | 2.28   | Debian 10                                              | ended 2024-06-30                         |
 | 2.28   | RHEL 8, Rocky 8, AlmaLinux 8                           | 2029-05-31                               |
-| 2.31   | Ubuntu 20.04, Debian 11                                | ended (last: Debian 11, 2026-08-31)      |
+| 2.31   | Ubuntu 20.04, Debian 11                                | 已结束（最后一个：Debian 11，2026-08-31） |
 | 2.34   | Amazon Linux 2023                                      | 2029-06-30                               |
 | 2.34   | RHEL 9, Rocky 9, AlmaLinux 9                           | 2032-05-31                               |
 | 2.35   | Ubuntu 22.04                                           | 2027-06-01                               |

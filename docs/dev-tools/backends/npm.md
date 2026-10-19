@@ -2,38 +2,35 @@
 description: "通过内置的 aube 安装器安装 npm 命令行软件包，每个软件包使用独立目录。"
 ---
 
-# npm backend
+# npm 后端
 
-The `npm` backend installs command-line packages from npm registries, each into
-its own directory. It installs them with mise's embedded
-[aube](https://github.com/aubepkg/aube) package manager, so you need Node.js only
-to run the tools. Keep your application's dependencies in `package.json` and
-install them with its package manager or [mise deps](/dev-tools/deps.html).
+`npm` 后端从 npm 注册表安装命令行软件包，并为每个软件包使用独立目录。安装由 mise 内置的
+[aube](https://github.com/aubepkg/aube) 包管理器完成，因此只有运行这些工具时才需要
+Node.js。应用程序依赖项应保留在 `package.json` 中，并通过项目使用的包管理器或
+[mise deps](/dev-tools/deps.html) 安装。
 
-## Requirements
+## 要求 {#requirements}
 
 <span id="dependencies"></span>
 
-mise lists and installs npm tools with the embedded aube package manager, so it
-needs neither Node.js nor npm for that. Most CLIs still need Node.js to run, and so do some
-lifecycle scripts. Add `node` to `[tools]`: mise installs it before your npm
-tools, but never adds it for you.
+mise 使用内置的 aube 包管理器列出并安装 npm 工具，因此此过程不需要 Node.js 或 npm。
+不过，大多数命令行工具以及部分生命周期脚本仍需要 Node.js 才能运行。请将 `node` 添加到
+`[tools]`：mise 会先于 npm 工具安装它，但不会自动为你添加此项。
 
-Other installers need their own executable; see
-[choosing an installer](#choosing-an-installer).
+其他安装程序需要单独的可执行文件；参见[选择安装程序](#choosing-an-installer)。
 
-## Usage {#usage}
+## 用法 {#usage}
 
 <span id="quick-start"></span>
 
-Prettier needs Node.js to run, so declare both tools in the current project:
+Prettier 运行时需要 Node.js，因此要在当前项目中同时声明这两个工具：
 
 ```sh
 mise use node@24 npm:prettier
 mise exec -- prettier --version
 ```
 
-This writes the following to `mise.toml`. Add `-g` for your global config.
+此命令会将以下内容写入 `mise.toml`。添加 `-g` 可改为写入全局配置。
 
 ```toml
 [tools]
@@ -41,211 +38,192 @@ node = "24"
 "npm:prettier" = "latest"
 ```
 
-If your project already lists Prettier in `package.json`, run that copy through
-a package script instead, so its version and plugins match the project.
+如果项目已在 `package.json` 中列出 Prettier，应通过项目的包脚本运行该版本，以便版本和
+插件与项目保持一致。
 
-For a scoped package, quote the identifier: `mise use 'npm:@biomejs/biome'`.
-The command it installs is `biome`, not the package name.
+安装带作用域的软件包时，请给标识符加引号：`mise use 'npm:@biomejs/biome'`。安装的
+命令名是 `biome`，而不是软件包名称。
 
-### Install from Git
+### 从 Git 安装 {#install-from-git}
 
-To install from a Git repository instead of the registry, use a Git URL or a
-`github:`, `gitlab:` or `bitbucket:` shorthand. The version is a Git ref (a tag,
-branch or commit), and `latest` is the repository's default branch:
+若要从 Git 仓库而非注册表安装，请使用 Git URL 或 `github:`、`gitlab:`、`bitbucket:`
+简写。版本可以是 Git 引用（标签、分支或提交），而 `latest` 表示仓库的默认分支：
 
 ```sh
 mise use 'npm:git+https://github.com/owner/repo'
 mise use 'npm:github:owner/repo@v1.2.0'
 ```
 
-## Private registries {#registry-configuration}
+## 私有注册表 {#registry-configuration}
 
-mise reads package metadata from the registry over HTTP, and embedded aube
-installs from it. Both read registries, scoped registries (`@scope:registry`),
-auth tokens, `ca` and `cafile`, `strict-ssl`, per-registry `cert` and `key`
-client certificates, and `tokenHelper` from your user `~/.npmrc` (or the file in
-`NPM_CONFIG_USERCONFIG`) and from `NPM_CONFIG_*` environment variables. Neither
-reads a `.npmrc` in your project.
+mise 通过 HTTP 从注册表读取软件包元数据，内置 aube 也从该注册表安装软件包。两者都会从
+用户级 `~/.npmrc`（或 `NPM_CONFIG_USERCONFIG` 指定的文件）以及 `NPM_CONFIG_*` 环境变量
+读取注册表、作用域注册表（`@scope:registry`）、身份验证令牌、`ca` 和 `cafile`、
+`strict-ssl`、每个注册表对应的 `cert` 和 `key` 客户端证书，以及 `tokenHelper`。它们
+都不会读取项目中的 `.npmrc`。
 
-Set [`npm.shell_out`](/dev-tools/backends/npm.html#npm.shell_out) to use `npm view` for metadata and, with
-the default `auto` installer, `npm install -g` for installs. This requires npm.
-Use it for npm-only behavior the built-in client does not replicate, or to debug
-a registry problem with npm itself.
+设置 [`npm.shell_out`](/dev-tools/backends/npm.html#npm.shell_out) 后，mise 会使用
+`npm view` 获取元数据；默认的 `auto` 安装程序还会使用 `npm install -g` 安装工具。此选项
+需要 npm。若要使用内置客户端尚未实现的 npm 专属功能，或通过 npm 本身排查注册表问题，可
+启用此选项。
 
-## Dependency locking
+## 锁定依赖项 {#dependency-locking}
 
-With the embedded aube installer, `mise.lock` records each npm tool's full
-dependency graph (lockfile format 2 or later, which new lockfiles use). Create a
-lockfile, or upgrade one written by an older mise, then install from it:
+使用内置 aube 安装程序时，`mise.lock` 会记录每个 npm 工具的完整依赖关系图（锁文件格式为
+2 或更高版本，新锁文件均使用此格式）。创建锁文件，或升级旧版 mise 写入的锁文件，然后
+按锁文件安装：
 
 ```sh
 mise lock --upgrade
 mise install --locked
 ```
 
-For a new lockfile, plain `mise lock` is enough. To refresh a tool's
-dependencies when its own version has not changed:
+创建新锁文件时，直接运行 `mise lock` 即可。若工具本身的版本未变，但需要刷新其依赖项：
 
 ```sh
 mise lock --bump npm:prettier
 ```
 
-Ordinary locking reuses the recorded graph, and locked installs replay it
-without resolving dependencies again. Other installers cannot replay an
-embedded-aube graph; use embedded aube, or refresh the lockfile for the
-installer you select.
+普通锁定会复用已记录的依赖关系图；锁定安装则直接按该图安装，不会再次解析依赖项。其他
+安装程序无法按内置 aube 生成的依赖关系图重放安装；请使用内置 aube，或针对所选安装程序
+刷新锁文件。
 
 <span id="dependency-sidecars"></span>
 
-Commit the tool's sidecar directory (by default
-`.mise/locks/npm-<package>/<version>/`) with `mise.lock`; `mise lock --sidecars`
-lists it. It holds the graph as `package.json` and `aube-lock.yaml`, in aube's format rather
-than `package-lock.json`, so scanners that read only npm lockfiles may miss its
-dependencies. See [dependency graphs](/dev-tools/mise-lock.html#dependency-graphs).
+请将工具的旁文件目录（默认为 `.mise/locks/npm-<package>/<version>/`）与 `mise.lock` 一起
+提交；运行 `mise lock --sidecars` 可列出这些目录。依赖关系图以 `package.json` 和
+`aube-lock.yaml` 的形式存放，使用 aube 格式而非 `package-lock.json`，因此只读取 npm 锁文件的
+扫描器可能无法发现其中的依赖项。另见[依赖关系图](/dev-tools/mise-lock.html#dependency-graphs)。
 
-## Minimum release age
+## 最短发行等待时间 {#minimum-release-age}
 
-mise applies [`minimum_release_age`](/configuration/settings.html#minimum_release_age)
-to the tool's dependencies as well as the tool. Embedded aube handles it
-itself. For a locked graph, the cutoff applies when the graph is resolved;
-installs replay the committed dependencies.
+mise 会将 [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 同时
+应用于工具及其依赖项。内置 aube 会自行处理此设置。对于已锁定的依赖关系图，等待时间门槛
+只在解析依赖关系图时生效；安装时会重放已提交的依赖项。
 
-External installers need a version that supports the flag mise passes:
+外部安装程序必须使用支持 mise 所传标志的版本：
 
-| Installer | Minimum version | Flag                                                                                          |
+| 安装程序  | 最低版本        | 标志                                                                                         |
 | --------- | --------------- | --------------------------------------------------------------------------------------------- |
 | pnpm      | 10.16.0         | `--config.minimum-release-age=<minutes>`                                                      |
 | Bun       | 1.3.0           | `--minimum-release-age <seconds>`                                                             |
 | npm       | 6.9.0           | `--before <timestamp>`; from 11.10.0, `--min-release-age=<days>` for windows of a day or more |
 
-Older versions may reject the flag.
+较旧版本可能不接受此标志。
 
-## Build scripts and supply-chain checks
+## 构建脚本与供应链检查 {#build-scripts-and-supply-chain-checks}
 
 <span id="lifecycle-scripts"></span>
 <span id="allow-builds"></span>
 
-Lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`) run code
-from the package and its dependencies during installation. By default mise does
-not run dependency scripts. Approve specific packages with `allow_builds`:
+生命周期脚本（`preinstall`、`install`、`postinstall`、`prepare`）会在安装时运行软件包及其
+依赖项中的代码。默认情况下，mise 不会运行依赖项脚本。可通过 `allow_builds` 批准指定软件包：
 
 ```toml
 [tools]
 "npm:some-tool" = { version = "latest", allow_builds = ["esbuild", "sharp"] }
 ```
 
-`allow_builds = true` allows every dependency script. How the option reaches
-each [installer](#choosing-an-installer):
+`allow_builds = true` 会允许运行所有依赖项脚本。此选项会按以下方式传递给各
+[安装程序](#choosing-an-installer)：
 
-| Installer               | Without `allow_builds`                    | `allow_builds = ["pkg"]`                    | `allow_builds = true`             |
+| 安装程序                | 未设置 `allow_builds`                      | `allow_builds = ["pkg"]`                    | `allow_builds = true`             |
 | ----------------------- | ----------------------------------------- | ------------------------------------------- | --------------------------------- |
-| embedded aube (default) | Dependency scripts do not run             | Written to the install's `aube.allowBuilds` | Every dependency script runs      |
-| `aube_cli`              | mise passes `--ignore-scripts`            | `--allow-build=<pkg>`                       | `--dangerously-allow-all-builds`  |
-| `pnpm` 10.4 or later    | pnpm's default; pnpm 10 skips them        | `--allow-build=<pkg>`                       | `--dangerously-allow-all-builds`  |
-| `npm` 11.16 or later    | mise passes `--ignore-scripts=true`       | `--allow-scripts=<pkg>`                     | `--dangerously-allow-all-scripts` |
-| older `npm`             | mise passes `--ignore-scripts=true`       | Not supported; mise warns                   | Not supported; mise warns         |
-| `bun`                   | Bun skips untrusted dependencies' scripts | Ignored                                     | Ignored                           |
+| 内置 aube（默认）       | 不运行依赖项脚本                          | 写入安装目录的 `aube.allowBuilds`            | 运行所有依赖项脚本                |
+| `aube_cli`              | mise 传入 `--ignore-scripts`              | `--allow-build=<pkg>`                       | `--dangerously-allow-all-builds`  |
+| `pnpm` 10.4 或更高版本  | 使用 pnpm 默认行为；pnpm 10 会跳过脚本    | `--allow-build=<pkg>`                       | `--dangerously-allow-all-builds`  |
+| `npm` 11.16 或更高版本  | mise 传入 `--ignore-scripts=true`         | `--allow-scripts=<pkg>`                     | `--dangerously-allow-all-scripts` |
+| 较旧版 `npm`            | mise 传入 `--ignore-scripts=true`         | 不支持；mise 会发出警告                     | 不支持；mise 会发出警告           |
+| `bun`                  | Bun 会跳过不受信任依赖项的脚本             | 忽略                                       | 忽略                              |
 
-Approvals for one installer do not change another's behavior. With npm 11.16 or
-later, mise drops `--ignore-scripts=true` when `allow_builds` is set, because
-npm's `ignore-scripts` setting would override the allowlist. With older npm,
-upgrade npm, switch to aube or pnpm, or accept every script in the install with
-`npm_args = "--ignore-scripts=false"`. mise installs with Bun globally and does
-not write Bun's `trustedDependencies` list; to trust every script, pass
-`bun_args = "--trust"`.
+对某个安装程序的批准不会改变其他安装程序的行为。使用 npm 11.16 或更高版本时，如果设置了
+`allow_builds`，mise 会移除 `--ignore-scripts=true`，因为 npm 的 `ignore-scripts` 设置会
+覆盖允许列表。使用较旧版 npm 时，请升级 npm、改用 aube 或 pnpm，或者通过
+`npm_args = "--ignore-scripts=false"` 接受此次安装中的所有脚本。mise 使用 Bun 全局安装，
+不会写入 Bun 的 `trustedDependencies` 列表；若要信任所有脚本，请传入
+`bun_args = "--trust"`。
 
-With pnpm, use `allow_builds` rather than running `pnpm approve-builds` from a
-`postinstall` hook: global `approve-builds -g` existed only in pnpm 10.4 to 10.x
-and was removed in pnpm 11.
+使用 pnpm 时，请通过 `allow_builds` 配置批准，不要在 `postinstall` 钩子中运行
+`pnpm approve-builds`：全局选项 `approve-builds -g` 仅存在于 pnpm 10.4 至 10.x，并已在
+pnpm 11 中移除。
 
-### Trust policy
+### 信任策略 {#trust-policy}
 
 <span id="trust-policy-excludes"></span>
 
-aube's `trustPolicy=no-downgrade` check fails an install when an earlier release
-of a dependency had stronger npm trusted-publisher, staged-publish or provenance
-evidence than the selected release. After reviewing such a dependency, exempt it
-with `trust_policy_excludes`. It applies to embedded aube (the default) and
-`aube_cli`:
+aube 的 `trustPolicy=no-downgrade` 检查会比较依赖项的已选版本与更早版本。如果更早版本有
+更强的 npm 可信发布者、分阶段发布或来源证明证据，安装就会失败。检查并确认相关依赖项后，
+可通过 `trust_policy_excludes` 将其排除。此设置适用于内置 aube（默认）和 `aube_cli`：
 
 ```toml
 [tools]
 "npm:some-tool" = { version = "latest", trust_policy_excludes = ["undici@^5 || >=6 <7"] }
 ```
 
-Use aube's package-version patterns to exempt only reviewed versions. A bare
-package name, such as `"undici"`, exempts every future version too. mise writes
-the list to the install's `.config/aube/config.toml` as `trustPolicyExclude`.
-See [investigating trust downgrades](#investigating-trust-downgrades) before you
-add an exception, and aube's
-[trust-policy documentation](https://aube.sh/security#trust-policy).
+请使用 aube 的软件包版本模式，只排除已经审核过的版本。若只填写软件包名称，例如
+`"undici"`，也会排除该软件包的所有未来版本。mise 会将列表以 `trustPolicyExclude` 的
+名称写入安装目录中的 `.config/aube/config.toml`。添加例外前，请先阅读[调查信任级别降级](#investigating-trust-downgrades)和
+aube 的[信任策略文档](https://aube.sh/security#trust-policy)。
 
-### Low-download and new packages
+### 下载量低或新发布的软件包 {#low-download-and-new-packages}
 
 <span id="allow-low-downloads"></span>
 
-aube refuses to add a package that has fewer weekly downloads than its
-`lowDownloadThreshold` (1000 by default), a name similar to a popular package, or
-a newly registered name:
+aube 会拒绝添加每周下载量低于 `lowDownloadThreshold`（默认为 1000）的软件包、名称与
+热门软件包相似的软件包，以及刚注册的软件包：
 
 ```text
 refusing to add some-tool: only 930 weekly downloads (threshold: 1000).
 ```
 
-After checking the package name and publisher, approve it with
-`allow_low_downloads`:
+确认软件包名称和发布者后，可通过 `allow_low_downloads` 批准安装：
 
 ```toml
 [tools]
 "npm:some-tool" = { version = "latest", allow_low_downloads = true }
 ```
 
-The exemption covers only the package you asked for. mise writes it to the
-install's `.config/aube/config.toml` under `allowedUnpopularPackages`; the
-thresholds stay unchanged, dependencies are still checked, and aube's
-malicious-package advisory check still runs. A tool resolved from `mise.lock`
-passes these three checks automatically, so the option is needed only for the
-first unlocked install. These are reputation signals, not proof that a package
-is unsafe. The option applies to embedded aube and `aube_cli`.
+此例外只适用于你明确指定的软件包。mise 会将其以 `allowedUnpopularPackages` 的名称写入
+安装目录中的 `.config/aube/config.toml`；下载量门槛不会改变，依赖项仍会接受检查，aube 的
+恶意软件公告检查也会继续运行。通过 `mise.lock` 解析出的工具会自动通过这三项检查，因此
+只有首次未锁定安装时才需要此选项。这些信号用于评估软件包声誉，并不能证明软件包不安全。
+此选项适用于内置 aube 和 `aube_cli`。
 
-### Dependencies from outside the registry
+### 来自注册表之外的依赖项 {#dependencies-from-outside-the-registry}
 
 <span id="allow-exotic-deps"></span>
 
-aube refuses dependencies that come from outside the npm registry (a `git+` URL,
-a `file:` path or a tarball URL), because the registry's protections never see
-them. Its [`blockExoticSubdeps`](https://aube.sh/settings/#setting-blockexoticsubdeps)
-setting fails the install with an error like:
+aube 会拒绝来自 npm 注册表之外的依赖项（例如 `git+` URL、`file:` 路径或 tarball URL），
+因为注册表无法为这些依赖项提供保护。aube 的
+[`blockExoticSubdeps`](https://aube.sh/settings/#setting-blockexoticsubdeps) 设置会因此
+导致安装失败，并显示类似错误：
 
 ```text
 registry error for xlsx: uses exotic specifier "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
 which is blocked by blockExoticSubdeps (declared by @gmickel/gno)
 ```
 
-Check where that dependency comes from, then allow it by name with
-`allow_exotic_deps`:
+请先检查该依赖项的来源，再通过 `allow_exotic_deps` 按名称允许它：
 
 ```toml
 [tools]
 "npm:@gmickel/gno" = { version = "2.3.0", allow_exotic_deps = ["xlsx"] }
 ```
 
-mise writes the list to the install's `.config/aube/config.toml` as
-`blockExoticSubdepsExclude`, so every other package is still checked, including
-ones a later version adds. `allow_exotic_deps = true` exempts the whole graph,
-future additions included, so prefer the list. If you can, ask the upstream
-project to depend on a registry release instead. The option applies to embedded
-aube and `aube_cli`; npm, pnpm and Bun do not enforce this check.
+mise 会将此列表以 `blockExoticSubdepsExclude` 的名称写入安装目录中的
+`.config/aube/config.toml`，因此其他软件包（包括后续版本新增的依赖项）仍会接受检查。
+`allow_exotic_deps = true` 会排除整个依赖关系图，包括未来加入的依赖项，因此建议优先使用
+明确列出的名称。如果可行，请联系上游项目，让它改为依赖注册表中发布的版本。此选项适用于
+内置 aube 和 `aube_cli`；npm、pnpm 和 Bun 不会执行这项检查。
 
-### Socket security scanner {#socket-security}
+### Socket 安全扫描器 {#socket-security}
 
 <span id="bun-compatible-security-scanner"></span>
 
-Embedded aube implements
-[Bun's Security Scanner API](https://bun.sh/docs/pm/security-scanner-api) and
-works with Socket's
+内置 aube 实现了
+[Bun 安全扫描器 API](https://bun.sh/docs/pm/security-scanner-api)，可以配合 Socket 的
 [`@socketsecurity/bun-security-scanner`](https://socket.dev/blog/socket-integrates-with-bun-1-3-security-scanner-api).
-Set `AUBE_SECURITY_SCANNER` to enable it:
+设置 `AUBE_SECURITY_SCANNER` 即可启用：
 
 ```sh
 MISE_NPM_PACKAGE_MANAGER=aube \
@@ -253,55 +231,47 @@ AUBE_SECURITY_SCANNER=/absolute/path/to/scanner.mjs \
   mise install npm:prettier@latest
 ```
 
-Setting `MISE_NPM_PACKAGE_MANAGER=aube` makes sure the scanner runs even if your
-settings select npm, Bun or pnpm.
+设置 `MISE_NPM_PACKAGE_MANAGER=aube` 后，即使配置选择了 npm、Bun 或 pnpm，也会运行该扫描器。
 
-The scanner runs after dependency resolution and before package tarballs are
-downloaded. It receives the resolved direct and transitive registry packages,
-and a fatal finding blocks the install. A configured scanner also fails closed
-if it cannot start or finish. See
-[aube's security scanner documentation](https://aube.sh/package-manager/security-scanner)
-for its configuration.
+扫描器会在解析依赖项之后、下载软件包 tarball 之前运行。它会接收已解析的直接依赖项和
+传递依赖项；如果发现严重问题，安装就会被阻止。配置了扫描器后，如果它无法启动或运行完成，
+安装也会按失败处理。配置方法请参阅
+[aube 安全扫描器文档](https://aube.sh/package-manager/security-scanner)。
 
-mise installs each `npm:` tool in a separate project directory, so a bare
-scanner package name does not resolve from that project's `node_modules`. Point
-the variable at an absolute module path instead. For example, install the Socket
-scanner in a separate, stable directory and put this wrapper next to that
-directory's `node_modules`:
+mise 会将每个 `npm:` 工具安装到独立的项目目录中，因此仅填写扫描器软件包名时，无法从
+该项目的 `node_modules` 解析到它。请改为将变量指向模块的绝对路径。例如，可将 Socket
+扫描器安装到单独且固定的目录，并将以下包装文件放在该目录的 `node_modules` 旁边：
 
 ```js
 // scanner.mjs
 export { scanner } from "@socketsecurity/bun-security-scanner";
 ```
 
-The scanner bridge needs Node.js 22.6 or newer. It inherits Socket variables
-such as `SOCKET_SECURITY_API_KEY`, while aube removes common npm and GitHub
-credentials from the scanner's environment.
+扫描器桥接程序需要 Node.js 22.6 或更高版本。它会继承 `SOCKET_SECURITY_API_KEY` 等
+Socket 环境变量；aube 则会从扫描器的环境中移除常见的 npm 和 GitHub 凭据。
 
-### Socket Firewall
+### Socket Firewall {#socket-firewall}
 
-[Socket Firewall](https://docs.socket.dev/docs/socket-firewall-free) can
-instead wrap mise itself:
+[Socket Firewall](https://docs.socket.dev/docs/socket-firewall-free) 也可以直接包装 mise：
 
 ```sh
 sfw mise install npm:prettier@latest
 sfw mise use -g npm:prettier
 ```
 
-This works at the network layer. mise's npm metadata client and embedded aube
-both use aube-registry, which honors `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
-and loads the `NODE_EXTRA_CA_CERTS` bundle. Socket does not list mise or aube as
-supported package managers, so Socket does not guarantee this setup.
+这种方式在网络层生效。mise 的 npm 元数据客户端和内置 aube 都使用 aube-registry；它会遵循
+`HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`，并载入 `NODE_EXTRA_CA_CERTS` 证书包。Socket
+没有将 mise 或 aube 列为支持的包管理器，因此不保证此配置有效。
 
 <a id="choosing-an-installer"></a>
 
 ## 选择安装程序
 
-Use [`npm.package_manager`](/dev-tools/backends/npm.html#npm.package_manager) to select the installer:
+使用 [`npm.package_manager`](/dev-tools/backends/npm.html#npm.package_manager) 选择安装程序：
 
 | 设置             | 安装程序                                             | 是否需要单独的可执行文件 |
 | ---------------- | ---------------------------------------------------- | ------------------------ |
-| `auto`（默认）   | 内置 aube，或在 `npm.shell_out = true` 时使用 npm     | 仅使用 npm 时需要        |
+| `auto`（默认）   | 内置 aube；`npm.shell_out = true` 时使用 npm          | 仅使用 npm 时需要        |
 | `aube`           | 内置 aube                                            | 否                       |
 | `aube_cli`       | `aube add --global`                                  | `aube`                   |
 | `pnpm`           | pnpm                                                 | `pnpm`                   |
@@ -315,38 +285,37 @@ Use [`npm.package_manager`](/dev-tools/backends/npm.html#npm.package_manager) to
 npm.package_manager = "pnpm"
 ```
 
-An explicit installer takes precedence over `npm.shell_out` for installation.
-Installer-specific options such as `pnpm_args` apply only to the selected
-installer.
+安装时，显式指定的安装程序优先于 `npm.shell_out`。`pnpm_args` 等安装程序专属选项只会应用于
+当前选定的安装程序。
 
-## Tool options
+## 工具选项 {#tool-options}
 
-Set these on the tool's entry in `[tools]`, or inline, as in
-`'npm:some-tool[allow_low_downloads=true]'`. Options every backend accepts are
-described under [tool options](/dev-tools/#tool-options).
+可以在 `[tools]` 中的工具条目里设置这些选项，也可以像
+`'npm:some-tool[allow_low_downloads=true]'` 一样内联设置。所有后端都接受的选项请参见
+[工具选项](/dev-tools/#tool-options)。
 
-| Option                  | Installers                                          | What it does                                                                                                                         |
+| 选项                    | 适用的安装程序                                      | 说明                                                                                                                                 |
 | ----------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `allow_builds`          | embedded aube, `aube_cli`, pnpm, npm 11.16 or later | Approves dependency build scripts; see [build scripts](#build-scripts-and-supply-chain-checks)                                       |
-| `trust_policy_excludes` | embedded aube, `aube_cli`                           | Exempts reviewed packages from the trust policy; see [trust policy](#trust-policy)                                                   |
-| `allow_low_downloads`   | embedded aube, `aube_cli`                           | Approves the requested package for reputation checks; see [low-download and new packages](#low-download-and-new-packages)            |
-| `allow_exotic_deps`     | embedded aube, `aube_cli`                           | Allows dependencies from outside the registry; see [dependencies from outside the registry](#dependencies-from-outside-the-registry) |
-| `aube_args`             | `aube_cli`                                          | Extra arguments for `aube add --global`                                                                                              |
-| `pnpm_args`             | pnpm                                                | Extra arguments for `pnpm add --global`                                                                                              |
-| `bun_args`              | Bun                                                 | Extra arguments for `bun install --global`                                                                                           |
-| `npm_args`              | npm                                                 | Extra arguments for `npm install -g`                                                                                                 |
-| `install_env`           | `aube_cli`, pnpm, Bun, npm                          | Environment variables for the installer; see below                                                                                   |
+| `allow_builds`          | 内置 aube、`aube_cli`、pnpm、npm 11.16 或更高版本   | 批准运行依赖项构建脚本；参见[构建脚本](#build-scripts-and-supply-chain-checks)                                                |
+| `trust_policy_excludes` | 内置 aube、`aube_cli`                               | 将已审核的软件包排除在信任策略之外；参见[信任策略](#trust-policy)                                                               |
+| `allow_low_downloads`   | 内置 aube、`aube_cli`                               | 批准所请求的软件包通过声誉检查；参见[低下载量和新软件包](#low-download-and-new-packages)                                     |
+| `allow_exotic_deps`     | 内置 aube、`aube_cli`                               | 允许从注册表之外获取依赖项；参见[注册表外依赖项](#dependencies-from-outside-the-registry)                                       |
+| `aube_args`             | `aube_cli`                                          | 传递给 `aube add --global` 的额外参数                                                                                                |
+| `pnpm_args`             | pnpm                                                | 传递给 `pnpm add --global` 的额外参数                                                                                                |
+| `bun_args`              | Bun                                                 | 传递给 `bun install --global` 的额外参数                                                                                             |
+| `npm_args`              | npm                                                 | 传递给 `npm install -g` 的额外参数                                                                                                   |
+| `install_env`           | `aube_cli`、pnpm、Bun、npm                          | 安装程序的环境变量；见下文                                                                                                           |
 
-### `aube_args`, `pnpm_args`, `bun_args` and `npm_args`
+### `aube_args`、`pnpm_args`、`bun_args` 和 `npm_args`
 
 <span id="aube-args"></span>
 <span id="pnpm-args"></span>
 <span id="bun-args"></span>
 <span id="npm-args"></span>
 
-Raw arguments added to the selected installer's command. Embedded aube ignores
-`aube_args` with a warning. `npm_args` applies with `npm.package_manager = "npm"`,
-or with `auto` and `npm.shell_out = true`. For example, to set pnpm's log level:
+这些原始参数会附加到所选安装程序的命令中。内置 aube 不支持 `aube_args`，并会发出警告。
+当 `npm.package_manager = "npm"`，或设置 `auto` 且 `npm.shell_out = true` 时，
+`npm_args` 才会生效。例如，设置 pnpm 的日志级别：
 
 ```toml
 [tools]
@@ -355,11 +324,10 @@ or with `auto` and `npm.shell_out = true`. For example, to set pnpm's log level:
 
 ### `install_env`
 
-Set environment variables for an external installer (`aube_cli`, `pnpm`, `bun`
-or `npm`). Embedded aube runs inside mise rather than as a separate process, so
-it ignores `install_env` with a warning. For install-scoped aube settings, use
-`allow_builds`, `allow_exotic_deps`, `allow_low_downloads` or
-`trust_policy_excludes`; set anything else in mise's own environment.
+为外部安装程序（`aube_cli`、`pnpm`、`bun` 或 `npm`）设置环境变量。内置 aube 在 mise
+进程内部运行，不会单独启动，因此不支持 `install_env`，并会发出警告。对于仅影响安装的
+aube 设置，请使用 `allow_builds`、`allow_exotic_deps`、`allow_low_downloads` 或
+`trust_policy_excludes`；其他环境变量请设置在 mise 自身的环境中。
 
 ```toml
 [settings]
@@ -369,45 +337,38 @@ npm.package_manager = "npm"
 "npm:some-tool" = { version = "latest", install_env = { NODE_OPTIONS = "--max-old-space-size=4096" } }
 ```
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="npm" :level="3" />
 
-## Troubleshooting
+## 故障排除 {#troubleshooting}
 
-| Symptom                                               | What to do                                                                                                             |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `node` is missing when the CLI starts                 | Add `node` to `[tools]`; the embedded installer does not add a runtime to your project.                                |
-| A native dependency is missing                        | Its build script did not run. Approve only that package with [`allow_builds`](#build-scripts-and-supply-chain-checks). |
-| Version listing works but installation fails          | Check which installer you selected and whether it can read the registry and credentials.                               |
-| aube refuses a package for trust, downloads or source | Read the error, then the matching section under [supply-chain checks](#build-scripts-and-supply-chain-checks).         |
+| 症状                                                    | 处理方法                                                                                                                       |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| CLI 启动时提示缺少 `node`                               | 将 `node` 添加到 `[tools]`；内置安装程序不会自动为项目添加运行时。                                                              |
+| 缺少原生依赖项                                          | 其构建脚本未运行。通过 [`allow_builds`](#build-scripts-and-supply-chain-checks) 仅批准该软件包。                              |
+| 版本列表可正常读取，但安装失败                          | 检查所选安装程序，以及它是否能读取注册表和凭据。                                                                               |
+| aube 因信任、下载量或来源问题拒绝安装软件包             | 阅读错误信息，再查看[供应链检查](#build-scripts-and-supply-chain-checks)下对应的章节。                                        |
 
-### Investigating trust downgrades
+### 调查信任级别降级 {#investigating-trust-downgrades}
 
-A `trustPolicy=no-downgrade` failure is a supply-chain signal, not an ordinary
-version-resolution error. It means an earlier release had stronger npm
-trusted-publisher, staged-publish or provenance evidence than the selected
-release. Before you add an exception:
+`trustPolicy=no-downgrade` 检查失败代表供应链风险信号，并非普通的版本解析错误。这表示
+某个较早版本拥有比当前选定版本更强的 npm 可信发布者、分阶段发布或来源证明证据。添加例外前：
 
-1. Inspect the npm release, its source tag or commit, the publisher identity
-   and the tarball. Compare the metadata with npmjs.org and confirm nothing
-   appears tampered with.
-2. Check whether the maintainer published manually, backported outside the
-   trusted workflow, skipped provenance, or used a registry that stripped
-   metadata.
-3. Report inconsistent evidence upstream. Release drift belongs with the
-   package's maintainer; metadata present on npmjs.org but missing from a proxy
-   or mirror belongs with that registry's operator.
-4. Exempt only the reviewed version, as `"<package>@<version>"` in
-   [`trust_policy_excludes`](#trust-policy). A bare package name exempts every
-   future version.
+1. 检查 npm 发行版、对应的源代码标签或提交、发布者身份及 tarball。将元数据与 npmjs.org
+   上的信息对照，确认内容没有遭到篡改。
+2. 确认维护者是否手动发布、是否在可信工作流之外回移了更改、是否跳过来源证明，或是否使用了
+   会剥除元数据的注册表。
+3. 将不一致的证据报告给上游。发行信息偏差应由软件包维护者处理；如果 npmjs.org 上有元数据，
+   但代理或镜像未提供，则应联系相应注册表运营方。
+4. 只排除已审核的版本，在 [`trust_policy_excludes`](#trust-policy) 中填写
+   `"<package>@<version>"`。只写软件包名称会排除所有未来版本。
 
-With the default `auto` installer, `mise settings npm.shell_out=true` switches
-to the npm CLI and skips this check entirely, so use it only as a last resort.
-An explicit `npm.package_manager = "aube_cli"` still installs with standalone
-aube and keeps the check.
+使用默认的 `auto` 安装程序时，`mise settings npm.shell_out=true` 会切换到 npm CLI，
+并完全跳过这项检查，因此只有在不得已时才应这样做。显式设置
+`npm.package_manager = "aube_cli"` 仍会使用独立的 aube 安装，并保留此检查。
 
-Implementation: [`src/backend/npm.rs`](https://github.com/jdx/mise/blob/main/src/backend/npm.rs).
+实现代码：[`src/backend/npm.rs`](https://github.com/jdx/mise/blob/main/src/backend/npm.rs)。

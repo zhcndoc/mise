@@ -3,170 +3,101 @@ description: "从 Git 仓库初始化机器：使用 --from 指定 bootstrap 项
 socialDescription: "使用 --from 或 --adopt 从 Git 仓库初始化机器。"
 ---
 
-# Bootstrap from a repository
+# 从仓库初始化
 
-`mise bootstrap` can clone a repository and run from the configuration in it.
-Use `--from` for a bootstrap project that lives apart from your global config,
-and `--adopt` to make a repository your global mise config or to restore a
-setup repository of tracked dotfiles.
+`mise bootstrap` 可以克隆仓库，并使用其中的配置运行。对于独立于全局配置的初始化项目，请使用 `--from`；如需将仓库设为全局 mise 配置，或恢复由仓库跟踪的 dotfiles，请使用 `--adopt`。
 
-## Choose `--from` or `--adopt`
+## 选择 `--from` 还是 `--adopt`
 
-The two flags differ in what the repository becomes on this machine.
+这两个选项会让仓库在当前机器上承担不同的用途。
 
-Use `--from` for a setup project that you apply but do not make your own
-configuration. A typical case is a workstation setup repository that a team
-maintains: its `mise.toml` installs the team's packages and tools and writes
-the files every machine needs. mise keeps a checkout of the project, runs
-bootstrap from it, and leaves your global config directory as it was. Your own
-configuration stays wherever you keep it, and you can apply the project again
-later.
+如果只是应用某个初始化项目，而不将它作为自己的配置，请使用 `--from`。常见情况是团队维护的工作站初始化仓库：其中的 `mise.toml` 会安装团队所需的软件包和工具，并写入每台机器都需要的文件。mise 会保留该项目的检出副本，并从中运行 bootstrap，同时保持全局配置目录不变。你自己的配置仍保存在原处，之后也可以再次应用该项目。
 
-Use `--adopt` when the repository should be this machine's own configuration
-from then on. That is either your global mise config, which every later mise
-command reads, or a setup repository of tracked dotfiles, which mise restores
-and keeps in sync with your other machines.
+如果此后要让仓库成为当前机器自己的配置，请使用 `--adopt`。仓库可以是后续所有 mise 命令都会读取的全局配置，也可以是包含受跟踪 dotfiles 的初始化仓库，由 mise 恢复这些文件并与其他机器保持同步。
 
-| Repository holds                                       | Command                        | Where the repository goes                        | Afterwards                                                          |
+| 仓库内容                                               | 命令                           | 仓库存放位置                                     | 后续行为                                                            |
 | ------------------------------------------------------ | ------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------- |
-| A bootstrap project: `mise.toml` and the files it uses | `mise bootstrap --from <url>`  | `$MISE_DATA_DIR/bootstrap-repo`, or `--from-dir` | Rerun with `--update` to apply new commits                          |
-| Global mise config: `config.toml`, `conf.d/`, `tasks/` | `mise bootstrap --adopt <url>` | A Git checkout at `~/.config/mise`               | Every later mise command reads it as your global config             |
-| A setup repository created with `mise dot origin set`  | `mise bootstrap --adopt <url>` | mise's history store; files go to their paths    | Later changes arrive through the history watcher or `mise dot pull` |
+| 初始化项目：`mise.toml` 及其引用的文件                 | `mise bootstrap --from <url>`  | `$MISE_DATA_DIR/bootstrap-repo`，或 `--from-dir` | 使用 `--update` 再次运行，以应用新的提交                           |
+| 全局 mise 配置：`config.toml`、`conf.d/`、`tasks/`      | `mise bootstrap --adopt <url>` | `~/.config/mise` 下的 Git 检出副本               | 后续每个 mise 命令都会将其作为全局配置读取                          |
+| 使用 `mise dot origin set` 创建的初始化仓库            | `mise bootstrap --adopt <url>` | mise 的历史存储；文件写入各自路径                | 后续更改通过历史监视器或 `mise dot pull` 同步                        |
 
-`--adopt` detects a setup repository by the `.mise-history/format.toml` file
-that `mise dot origin set` writes on the branch it adopts, so the same flag
-covers both kinds. `--from`
-and `--adopt` cannot be combined.
+`--adopt` 会通过 `.mise-history/format.toml` 文件识别初始化仓库；`mise dot origin set` 会将此文件写入它接管的分支，因此同一个选项可用于上述两种仓库。`--from` 和 `--adopt` 不能同时使用。
 
-Either way, the bootstrap runs from the repository's configuration, and mise
-trusts that configuration for this run. Review the repository before you run
-the command. Add `--dry-run` to preview, and `-E <env>` to select a
-[config environment](/configuration/environments.html), such as `-E work` for
-`mise.work.toml` in a bootstrap project or `config.work.toml` in global config.
+无论选择哪种方式，bootstrap 都会使用仓库配置运行，mise 也会在此次运行中信任该配置。执行命令前请先检查仓库。添加 `--dry-run` 可预览操作，添加 `-E <env>` 可选择[配置环境](/configuration/environments.html)，例如在初始化项目中为 `mise.work.toml` 选择 `-E work`，或在全局配置中为 `config.work.toml` 选择该环境。
 
-## Bootstrap project (`--from`) {#a-bootstrap-project}
+## 初始化项目（`--from`）{#a-bootstrap-project}
 
-A bootstrap project is a repository with a `mise.toml` and the source files it
-refers to, such as dotfiles and templates. mise clones it and runs
-`mise bootstrap` from the checkout:
+初始化项目是一个包含 `mise.toml` 及其引用源文件（例如 dotfiles 和模板）的仓库。mise 会克隆该仓库，并在检出目录中运行 `mise bootstrap`：
 
 ```sh
 mise bootstrap --from https://github.com/you/workstation.git
 mise -E work bootstrap --from git@github.com:you/workstation.git
 ```
 
-The checkout goes to `$MISE_DATA_DIR/bootstrap-repo`, normally
-`~/.local/share/mise/bootstrap-repo`, and stays there for later runs. Use
-`--from-dir <DIR>` to choose another directory.
+检出副本会放在 `$MISE_DATA_DIR/bootstrap-repo` 中，通常为 `~/.local/share/mise/bootstrap-repo`，之后的运行会继续使用该副本。使用 `--from-dir <DIR>` 可指定其他目录。
 
-The project does not replace your global config. mise still loads it, as it
-does for any directory, so a bootstrap from the project also applies what your
-global config declares, such as its `[bootstrap.packages]` and hooks.
+该项目不会替换全局配置。mise 仍会像处理其他目录一样加载全局配置，因此从该项目运行 bootstrap 时，也会应用全局配置中的设置，例如 `[bootstrap.packages]` 和钩子。
 
-To check out a branch, tag, or commit instead of the default branch, add
-`?ref=` to the URL. A `git::` prefix is accepted but not needed:
+如需检出分支、标签或提交，而不是默认分支，请在 URL 中添加 `?ref=`。`git::` 前缀可用，但不是必需的：
 
 ```sh
 mise bootstrap --from 'https://github.com/you/workstation.git?ref=v1'
 ```
 
-When the checkout already exists:
+如果检出副本已存在：
 
-- Its `origin` must be the URL you pass. mise uses the checkout as it is.
-- `--update` pulls new commits first, and accepts only a fast-forward.
-- With `?ref=`, `--update` looks the ref up on the remote again. A branch is
-  checked out and fast-forwarded, and a branch wins over a tag with the same
-  name. A tag moves to the commit it now names. A branch or tag that no longer
-  exists on the remote is an error.
+- 其 `origin` 必须与传入的 URL 一致。mise 会直接使用现有检出副本。
+- `--update` 会先拉取新提交，且只接受快进更新。
+- 使用 `?ref=` 时，`--update` 会重新查询远程仓库中的 ref。分支会被检出并快进更新；同名分支优先于标签。标签则会移动到其当前指向的提交。如果远程分支或标签已不存在，就会报错。
 
-`--dry-run` with no checkout yet prints the clone command and stops, because
-there is no configuration to preview until the checkout exists.
+尚无检出副本时使用 `--dry-run`，只会打印克隆命令后停止，因为检出仓库前没有可预览的配置。
 
-## Global configuration (`--adopt`) {#global-mise-configuration}
+## 全局配置（`--adopt`）{#global-mise-configuration}
 
-Use `--adopt` when the repository is your global mise config, with files such as
-`config.toml`, `config.work.toml`, `conf.d/`, and `tasks/`:
+当仓库是你的全局 mise 配置，并包含 `config.toml`、`config.work.toml`、`conf.d/` 和 `tasks/` 等文件时，请使用 `--adopt`：
 
 ```sh
 mise bootstrap --adopt you/mise-config
 ```
 
-`OWNER/REPO` expands to `https://github.com/OWNER/REPO.git`. HTTPS and SSH URLs
-and local paths work too. mise clones the repository's default branch into
-`$MISE_CONFIG_DIR`, normally `~/.config/mise`, and runs bootstrap from it. The
-files stay in place, so every later mise command reads them as your global
-config. If you set `$MISE_GLOBAL_CONFIG_FILE`, mise clones into that file's
-directory and loads that file.
+`OWNER/REPO` 会展开为 `https://github.com/OWNER/REPO.git`。HTTPS、SSH URL 和本地路径也都可用。mise 会将仓库的默认分支克隆到 `$MISE_CONFIG_DIR`（通常为 `~/.config/mise`），并从中运行 bootstrap。文件会保留在原处，因此之后的每个 mise 命令都会将它们作为全局配置读取。如果设置了 `$MISE_GLOBAL_CONFIG_FILE`，mise 会将仓库克隆到该文件所在目录，并加载该文件。
 
-To adopt another branch, such as one that holds a laptop's variant of your
-config, add `?ref=` to the repository:
+如需接管其他分支（例如保存了笔记本电脑专用配置的分支），请在仓库地址中添加 `?ref=`：
 
 ```sh
 mise bootstrap --adopt 'you/mise-config?ref=laptop'
 ```
 
-The ref must be a branch, because you keep pulling and committing in the
-checkout; a tag or a commit is refused. mise never moves an existing checkout
-to another branch: if it is on a different one, switch it with Git first.
-`--update` then fast-forwards the branch it is on. The same works for a setup
-repository and with [`mise bootstrap remote`](/bootstrap/remote.html).
+该 ref 必须是分支，因为你会继续在检出副本中拉取和提交；标签或提交会被拒绝。mise 不会将现有检出副本切换到其他分支：如果当前分支不同，请先使用 Git 切换。之后 `--update` 会快进更新当前分支。初始化仓库和[`mise bootstrap remote`](/bootstrap/remote.html)也采用相同规则。
 
-Cloning needs `git`, and an SSH URL such as `git@github.com:you/setup.git` also
-needs `ssh`. On a fresh machine that lacks them, mise offers to install them with
-the host package manager (apt, dnf, pacman, apk, zypper, Homebrew, scoop, or
-winget) before it clones. Pass `--yes` to accept without being asked. The
-repository's own `[bootstrap.packages]` can't do this, because it has not been
-cloned yet. With `--dry-run`, mise reports what is missing instead of
-installing it.
+克隆需要 `git`；SSH URL（例如 `git@github.com:you/setup.git`）还需要 `ssh`。新机器缺少这些程序时，mise 会在克隆前询问是否通过主机软件包管理器（apt、dnf、pacman、apk、zypper、Homebrew、scoop 或 winget）安装。传入 `--yes` 可直接同意，无需确认。仓库自身的 `[bootstrap.packages]` 无法安装这些依赖，因为此时仓库尚未克隆。使用 `--dry-run` 时，mise 会报告缺少哪些程序，而不会安装。
 
-The destination must be missing, empty, or already a Git checkout whose
-`origin` is the repository you name. Move an existing `~/.config/mise` aside
-before adopting into it. With an existing checkout, `--update` fast-forwards it
-before the bootstrap runs. The checkout is an ordinary Git repository: commit
-and pull in it as you would anywhere else.
+目标目录必须不存在、为空，或已是 `origin` 指向指定仓库的 Git 检出副本。接管到现有 `~/.config/mise` 前，请先将该目录移到别处。使用现有检出副本时，`--update` 会在运行 bootstrap 前快进更新。该检出副本是普通 Git 仓库，可以像其他仓库一样提交和拉取。
 
-[`mise dot origin set`](/cli/dotfiles/origin/set.html) does not sync this
-checkout. It needs a repository of its own, or a separate branch of this one;
-see [The origin and your global config](/dotfiles/sync.html#origin-and-global-config).
+[`mise dot origin set`](/cli/dotfiles/origin/set.html) 不会同步这个检出副本。它需要独立仓库，或使用当前仓库的另一个分支；详见[远程源与全局配置](/dotfiles/sync.html#origin-and-global-config)。
 
-## Setup repository (`--adopt`) {#shared-dotfile-history}
+## 初始化仓库（`--adopt`）{#shared-dotfile-history}
 
-A setup repository holds the history of your tracked dotfiles, shared with
-[`mise dot origin set`](/cli/dotfiles/origin/set.html). Adopting one restores
-your tracked files and runs bootstrap from the restored configuration:
+初始化仓库存放受跟踪 dotfiles 的历史，并与[`mise dot origin set`](/cli/dotfiles/origin/set.html)配合使用。接管后会恢复受跟踪的文件，并从恢复的配置运行 bootstrap：
 
 ```sh
 mise bootstrap --adopt you/setup
 ```
 
-mise does the following:
+mise 会依次执行以下操作：
 
-1. Fetches the repository's default branch, or the branch `?ref=` names, into
-   its own history store.
-2. Restores each tracked file to its path on this machine.
-3. Remembers the repository as the origin for later synchronization.
-4. Runs bootstrap from the restored mise configuration.
+1. 将仓库默认分支或 `?ref=` 指定的分支获取到 mise 自己的历史存储中。
+2. 将每个受跟踪文件恢复到当前机器上的原路径。
+3. 记住该仓库作为后续同步的远程源。
+4. 使用恢复后的 mise 配置运行 bootstrap。
 
-mise does not clone a setup repository into `$MISE_CONFIG_DIR`. If that
-directory is already a Git checkout, though, its `origin` must be the repository
-you adopt. Setup repositories always come from their latest commit, so
-`--update` only refreshes package metadata and `[bootstrap.repos]` in the
-bootstrap that follows.
+mise 不会将初始化仓库克隆到 `$MISE_CONFIG_DIR`。但是，如果该目录已经是 Git 检出副本，其 `origin` 必须指向你要接管的仓库。初始化仓库始终使用最新提交，因此 `--update` 只会刷新随后 bootstrap 中的软件包元数据和 `[bootstrap.repos]`。
 
-Track the mise configuration and any template sources on the first machine, so
-bootstrap can recreate tools and services and render templates here. If a file
-on this machine differs from the shared version, adoption pauses before it
-writes anything or runs bootstrap, so you can decide each file. `--dry-run`
-shows the files it would write and those held for a decision.
-`--replace-history` discards unrelated local history while adopting. It does
-not resolve files that differ; add `--take-remote-all` to take the repository's
-version of each.
+请在第一台机器上跟踪 mise 配置和所有模板源文件，这样 bootstrap 就能在此机器上重新创建工具和服务并渲染模板。如果此机器上的文件与共享版本不同，接管过程会在写入文件或运行 bootstrap 前暂停，让你逐个决定如何处理。`--dry-run` 会显示将要写入的文件以及等待处理的文件。
+接管时，`--replace-history` 会丢弃无关的本地历史，但不会处理版本不同的文件；添加 `--take-remote-all` 可统一采用仓库中的版本。
 
-[Set up a machine](/bootstrap/setup.html#set-up-another-machine) walks through
-adopting a setup repository, including files that already exist. For
-synchronization after that, see [Sync across machines](/dotfiles/sync.html).
+[配置新机器](/bootstrap/setup.html#set-up-another-machine)介绍如何接管初始化仓库，包括处理已存在的文件。后续同步方式请参阅[在机器之间同步](/dotfiles/sync.html)。
 
-## On other machines
+## 在其他机器上
 
-To adopt a repository on another machine over SSH, see
-[Remote hosts](/bootstrap/remote.html#private-configuration-repositories).
+如需通过 SSH 在其他机器上接管仓库，请参阅[远程主机](/bootstrap/remote.html#private-configuration-repositories)。

@@ -2,7 +2,7 @@
 description: "编写全局 mise 任务，为新项目添加工具和任务，例如 Python 与 uv 环境。"
 ---
 
-# Project scaffolding tasks
+# 项目脚手架任务
 
 A scaffolding task is a [file task](/tasks/file-tasks.html) in your global
 config that sets up a project with `mise use` and `mise tasks add`. To share

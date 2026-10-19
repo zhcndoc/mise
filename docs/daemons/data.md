@@ -1,44 +1,29 @@
 ---
-description: Find where daemon data and generated config live, keep data in a checkout, reset a database, and prune deleted projects.
-socialDescription: Find, reset, and prune daemon data.
+description: 查找 daemon 数据和生成配置的位置，将数据保存在检出目录中，重置数据库并清理已删除的项目。
+socialDescription: 查找、重置和清理 daemon 数据。
 ---
 
-# Data and cleanup <Badge type="warning" text="experimental" />
+# 数据与清理 <Badge type="warning" text="实验性" />
 
-By default, mise keeps each project's daemon state and preset data outside the
-project, under `$MISE_STATE_DIR/daemons/`, and never deletes it on its own. Use
-`mise daemons ls --json` to find it and `mise daemons prune` to remove what
-deleted projects and worktrees left behind.
+默认情况下，mise 会将每个项目的 daemon 状态和预设数据保存在项目目录之外的 `$MISE_STATE_DIR/daemons/` 下，并且不会自行删除。使用 `mise daemons ls --json` 查找这些数据，使用 `mise daemons prune` 清理已删除项目和 worktree 遗留的内容。
 
-::: warning Experimental
-Daemons are experimental. Enable them with `experimental = true` under
-`[settings]`; see [Requirements](/daemons.html#requirements).
+::: warning 实验性功能
+Daemon 功能仍处于实验阶段。请在 `[settings]` 下设置 `experimental = true` 启用；详见[要求](/daemons.html#requirements)。
 :::
 
-## Where data lives
+## 数据存放位置 {#where-data-lives}
 
-mise writes each project's generated pitchfork config to
-`$MISE_STATE_DIR/daemons/<project-hash>/` and registers it with pitchfork. See
-[Directories](/directories.html) for where `$MISE_STATE_DIR` is.
-By default, nothing is written into the project tree. A registered file
-overrides an ordinary pitchfork definition with the same daemon ID. To change a
-daemon, edit its `[daemons]` declaration, not the generated file.
+mise 会将每个项目生成的 pitchfork 配置写入 `$MISE_STATE_DIR/daemons/<project-hash>/`，并向 pitchfork 注册。`$MISE_STATE_DIR` 的位置请参阅[目录说明](/directories.html)。默认情况下，不会向项目目录树写入文件。已注册的文件会覆盖普通 pitchfork 配置中 ID 相同的 daemon 定义。若要修改 daemon，请编辑其 `[daemons]` 声明，而不是生成的文件。
 
-A preset keeps its data in `data/<daemon-name>/` beside the generated config.
-The data survives version request changes and the removal of the daemon's
-declaration. A new major version needs an explicit migration or reset:
-incompatible data fails before the daemon starts. Use the database's own
-migration tools to keep data across an incompatible upgrade.
+预设会将数据保存在生成配置旁边的 `data/<daemon-name>/` 目录中。即使版本请求变更或删除了 daemon 声明，数据也会保留。升级到新的主版本时，需要显式迁移或重置数据：遇到不兼容的数据时，daemon 会在启动前失败。若要跨越不兼容的版本升级保留数据，请使用数据库自身的迁移工具。
 
-If first-time initialization fails, mise moves no data into place, so the next
-start initializes again from scratch.
+如果首次初始化失败，mise 不会将数据移入目标目录，因此下次启动时会重新从头初始化。
 
-[Shared server providers](/daemons/sharing.html#shared-server-providers) keep
-their data separately, in `$MISE_STATE_DIR/daemon-providers/<name>/data`.
+[共享服务器 provider](/daemons/sharing.html#shared-server-providers) 会将数据单独保存在 `$MISE_STATE_DIR/daemon-providers/<name>/data` 中。
 
-## Keep data in the checkout
+## 将数据保存在检出目录中 {#keep-data-in-the-checkout}
 
-To keep a preset's data inside each checkout, set `data_dir`:
+若要将预设数据保存在每个检出目录内，请设置 `data_dir`：
 
 ```toml
 [daemons.postgres]
@@ -47,38 +32,27 @@ version = "18"
 data_dir = ".data/postgres"
 ```
 
-A relative path resolves from the declaring project's root; an absolute path
-also works, and `~/` expands to your home directory. Add `/.data/` to
-`.gitignore`. Each worktree then owns its data, while runtime state and the
-generated config stay in mise's state directory. Do not point two running
-instances at the same directory.
+相对路径以声明该项的项目根目录为基准；也可以使用绝对路径，`~/` 会展开为 home 目录。请将 `/.data/` 加入 `.gitignore`。这样每个 worktree 都有自己的数据，而运行时状态和生成配置仍保存在 mise 状态目录中。不要让两个运行中的实例指向同一个目录。
 
-Changing `data_dir` does not move existing data. Stop the daemon before you
-copy or migrate its data, and keep a backup until the new location works.
-`mise daemons prune` leaves data outside the state directory alone, but
-removing a worktree or cleaning ignored files deletes data stored inside it.
+更改 `data_dir` 不会移动现有数据。复制或迁移数据前请先停止 daemon，并保留备份，直到确认新位置可用。`mise daemons prune` 不会触碰状态目录以外的数据，但删除 worktree 或清理被忽略的文件会删除其中保存的数据。
 
-## Find daemon data
+## 查找 daemon 数据 {#find-daemon-data}
 
-Use `mise daemons ls --json` to locate a project's daemon data and check its
-size before you delete the project or a worktree. Each daemon row includes:
+删除项目或 worktree 前，使用 `mise daemons ls --json` 查找项目的 daemon 数据并检查其大小。每个 daemon 条目包含：
 
-| Field             | Value                                                                                     |
+| 字段              | 值                                                                                         |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| `root`            | Project directory                                                                         |
-| `data_dir`        | Resolved preset data directory (`null` for custom commands and provider consumers)        |
-| `state_dir`       | Directory with the generated config, state, and default data                              |
-| `data_size`       | Total size of default data under `state_dir` in bytes (excludes `data_dir` paths you set) |
-| `data_size_human` | The same size formatted for display                                                       |
+| `root`            | 项目目录                                                                                  |
+| `data_dir`        | 解析后的预设数据目录（自定义命令和 provider 使用方为 `null`）                               |
+| `state_dir`       | 存放生成配置、状态和默认数据的目录                                                        |
+| `data_size`       | `state_dir` 下默认数据的总字节数（不包括你设置的 `data_dir` 路径）                          |
+| `data_size_human` | 格式化后供人阅读的数据大小                                                                |
 
-Except for `data_dir`, these fields describe the whole project, so daemons of
-the same project report the same values.
+除 `data_dir` 外，这些字段描述的是整个项目，因此同一项目中的所有 daemon 会报告相同的值。
 
-## Reset a database
+## 重置数据库 {#reset-a-database}
 
-Stop the daemon, find its data directory, remove that directory, and start the
-daemon again. The next start initializes fresh data. Back up anything you want
-to keep first.
+停止 daemon，找到并删除其数据目录，然后重新启动。下次启动时会初始化全新数据。请先备份需要保留的内容。
 
 ```sh
 mise daemons stop db
@@ -87,24 +61,15 @@ rm -rf <that directory>
 mise daemons start db
 ```
 
-Remove the directory itself, not only its contents: mise refuses to start a
-preset whose data directory exists without the marker it writes during
-initialization.
+请删除整个目录，而不只是清空目录内容：如果预设的数据目录存在但缺少初始化时写入的标记，mise 会拒绝启动。
 
-This applies to a daemon that runs its own preset. A daemon that uses a
-[shared server provider](/daemons/sharing.html#shared-server-providers) has no
-data directory of its own, so its `data_dir` is `null`. Drop its database with
-the server's own client instead. Never remove the provider's data directory to
-reset one checkout: it holds every checkout's database.
+以上操作适用于自行运行预设的 daemon。使用[共享服务器 provider](/daemons/sharing.html#shared-server-providers)的 daemon 没有自己的数据目录，因此其 `data_dir` 为 `null`。请改用服务器自身的客户端删除数据库。切勿为了重置单个检出目录而删除 provider 的数据目录，因为其中保存了所有检出目录的数据库。
 
-## Clean up deleted projects
+## 清理已删除的项目 {#clean-up-deleted-projects}
 
-Each project, including each linked Git worktree, has its own daemon state and
-data. Deleting the project directory, for example with `git worktree remove`,
-leaves that data on disk and its daemons registered with pitchfork.
+每个项目（包括每个链接的 Git worktree）都有自己的 daemon 状态和数据。删除项目目录（例如使用 `git worktree remove`）后，磁盘上的数据仍会保留，daemon 也仍注册在 pitchfork 中。
 
-Use [`mise daemons prune`](/cli/daemons/prune.html) to clean up after deleted
-projects. It scans all project state under `$MISE_STATE_DIR/daemons/`:
+使用 [`mise daemons prune`](/cli/daemons/prune.html) 清理已删除项目的遗留内容。它会扫描 `$MISE_STATE_DIR/daemons/` 下所有项目状态：
 
 ```sh
 # Preview the projects, state directories, and sizes
@@ -114,39 +79,22 @@ mise daemons prune --dry-run
 mise daemons prune
 ```
 
-Pruning stops the affected daemons, unregisters their generated config, and
-deletes their config, state, and data. The confirmation prompt shows how many
-state directories it removes and their total size, and it defaults to no.
-Removal cannot be undone, so back up any data you want to keep.
+清理操作会停止受影响的 daemon、注销其生成配置，并删除对应配置、状态和数据。确认提示会显示将删除的状态目录数量及总大小，默认选择“否”。删除后无法恢复，因此请先备份需要保留的数据。
 
-State for projects that still exist is kept, even if they no longer declare any
-daemons. `mise daemons start` prints a reminder when it finds state that prune
-would remove; it does not delete anything itself.
+仍然存在的项目状态会保留，即使项目已不再声明任何 daemon。`mise daemons start` 发现可由 prune 清理的状态时会显示提醒，但不会自行删除任何内容。
 
-### Non-interactive cleanup
+### 非交互式清理 {#non-interactive-cleanup}
 
-Pass the global `--yes` flag to confirm ordinary removals without a prompt:
+传入全局 `--yes` 标志，即可在无需提示的情况下确认常规删除：
 
 ```sh
 mise daemons prune --yes
 ```
 
-If a missing project could be on an unmounted volume or behind a deleted
-symlink, mise asks about it separately, and `--yes` skips it. Run without
-`--yes` to review these entries, and confirm only if the project itself was
-deleted. This extra check applies when a parent directory was deleted, an
-ancestor is empty or unreadable, the project is rooted at a mount point such as
-`/Volumes/Disk`, or the recorded path differs from the one used to create the
-state directory.
+如果项目缺失可能是因为卷尚未挂载或符号链接已删除，mise 会单独询问；使用 `--yes` 时会跳过该项目。请在不加 `--yes` 的情况下检查这些条目，只有确认项目本身已删除时才确认清理。当父目录已删除、某个上级目录为空或不可读、项目位于 `/Volumes/Disk` 等挂载点，或记录路径与创建状态目录时使用的路径不同时，会执行此额外检查。
 
-### When state is kept
+### 保留状态的情况 {#when-state-is-kept}
 
-Pruning requires pitchfork. mise keeps a project's state, and says why, when it
-cannot read the project path or state file, take the project lock, confirm that
-the daemons have stopped, or unregister their config. It also keeps state if
-the project directory reappears before removal.
+清理需要 pitchfork。遇到无法读取项目路径或状态文件、无法取得项目锁、无法确认 daemon 已停止，或无法注销配置时，mise 会保留项目状态并说明原因。如果项目目录在删除前重新出现，mise 也会保留其状态。
 
-A database's PID or lock file can also block removal. A PID file naming a live
-process blocks pruning; a stale PID does not. An unreadable marker, or one
-without a valid PID, counts as possibly active. Resolve the reported condition
-and run `mise daemons prune` again.
+数据库的 PID 文件或锁文件也可能阻止删除。PID 文件指向仍在运行的进程时会阻止清理；过期 PID 则不会。无法读取的标记文件或不含有效 PID 的文件会被视为进程可能仍在活动。请先解决报告的问题，再次运行 `mise daemons prune`。

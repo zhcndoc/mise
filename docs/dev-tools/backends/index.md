@@ -4,19 +4,14 @@ description: "选择工具后端、编写后端标识，并控制工具简称使
 
 # 后端
 
-A backend is the source mise installs a tool from. It lists the tool's
-versions, downloads or builds the version you ask for, and tells mise where the
-executables are. A registry short name such as `ripgrep` picks a backend for
-you; write an identifier such as `github:BurntSushi/ripgrep` to pick one
-yourself.
+后端是 mise 安装工具时使用的来源。它会列出工具版本、下载或构建你指定的版本，并告知 mise 可执行文件的位置。注册表中的简称（如 `ripgrep`）会替你选择后端；也可以写出 `github:BurntSushi/ripgrep` 这样的标识符来指定后端。
 
-## Backend identifiers {#identifiers}
+## 后端标识符 {#identifiers}
 
 <span id="what-are-backends"></span>
 <span id="backend-specific-settings"></span>
 
-An identifier is a backend name, a colon, and the tool's name within that
-backend. A version request can follow `@`:
+标识符由后端名称、冒号以及该后端中的工具名称组成。可以在末尾加上 `@` 和版本请求：
 
 ```sh
 mise ls-remote github:BurntSushi/ripgrep
@@ -24,113 +19,76 @@ mise use github:BurntSushi/ripgrep@15
 mise exec -- rg --version
 ```
 
-In `github:BurntSushi/ripgrep@15`, `github` is the backend,
-`BurntSushi/ripgrep` is the project, and `15` is the version request. `mise use`
-installs ripgrep from its GitHub releases and writes the identifier to
-`mise.toml`:
+在 `github:BurntSushi/ripgrep@15` 中，`github` 是后端，`BurntSushi/ripgrep` 是项目，`15` 是版本请求。`mise use` 会从该项目的 GitHub Releases 安装 ripgrep，并将标识符写入 `mise.toml`：
 
 ```toml
 [tools]
 "github:BurntSushi/ripgrep" = "15"
 ```
 
-The part after the colon is whatever the backend uses to find the tool: an
-`owner/repo` for `github:`, a package name for `npm:`, a module path for `go:`.
-Each backend's page lists its forms. Tool options can follow the name in
-brackets, such as `'pypi:black[extras=jupyter]'`. Options belong to a backend:
-one that `pypi:` understands means nothing to `aqua:`, so check the backend's
-page before you add one.
+冒号后面的部分由后端用来查找工具，例如 `github:` 使用 `owner/repo`，`npm:` 使用包名，`go:` 使用模块路径。各后端的文档会列出可用格式。工具名称后还可以用方括号指定选项，例如 `'pypi:black[extras=jupyter]'`。选项因后端而异：`pypi:` 支持的选项对 `aqua:` 没有意义，添加前请查看对应后端的文档。
 
-Any identifier works in `mise.toml` without a registry entry; the
-[registry](/registry.html) only adds short names. Run `mise backends ls` to list
-the backends your mise supports. Tools with built-in support, such as Node.js
-and Python, use the `core` backend (`core:node`); see
-[core tools](/core-tools.html).
+任何标识符都可以直接写入 `mise.toml`，不需要注册表条目；[注册表](/registry.html)只负责提供简称。运行 `mise backends ls` 可查看当前 mise 支持的后端。Node.js、Python 等内置支持的工具使用 `core` 后端（例如 `core:node`），详见[核心工具](/core-tools.html)。
 
-Versions are not necessarily semantic versions. Each backend decides what
-`latest` and a prefix such as `20` mean; see
-[version requests](/dev-tools/versions.html).
+版本不一定遵循语义化版本规范。每个后端会自行定义 `latest` 和 `20` 这样的版本前缀分别表示什么，详见[版本请求](/dev-tools/versions.html)。
 
-## Which backend to use {#which-backend-to-use}
+## 选择哪个后端 {#which-backend-to-use}
 
 <span id="choose-an-installation-source"></span>
 <span id="backend-types"></span>
 <span id="when-to-use-each-backend"></span>
 <span id="backend-capabilities-comparison"></span>
 
-Start with the tool's registry short name. When you choose a backend yourself,
-prefer one that installs the publisher's own prebuilt release:
+优先使用工具在注册表中的简称。如果要自行选择后端，优先选择能直接安装发布方预构建版本的后端：
 
-1. `packslip:` when the publisher signs its releases with packslip manifests.
-   mise checks the signer and every artifact digest.
-2. `aqua:` when the aqua registry has an entry for the tool, or `github:`,
-   `gitlab:` or `forgejo:` for release assets on those forges.
-3. `http:` or `s3:` for archives you host yourself.
-4. A language package backend when the tool ships only as a package, or when
-   you need package options such as Cargo features or Python extras. You then
-   supply that language's runtime.
-5. A plugin only when installing the tool needs custom logic.
+1. 发布方使用 packslip 清单签署发行包时，选择 `packslip:`。mise 会检查签名者和每个制品的摘要。
+2. 工具已收录在 aqua 注册表中时选择 `aqua:`；也可以为托管在相应代码托管平台的发行资源选择 `github:`、`gitlab:` 或 `forgejo:`。
+3. 自行托管归档文件时选择 `http:` 或 `s3:`。
+4. 工具只以语言包形式发布，或需要 Cargo features、Python extras 等包选项时，选择对应的语言包后端。此时还需要提供该语言的运行时。
+5. 只有安装工具确实需要自定义逻辑时才使用插件。
 
-| Backend                                                                                                                           | Installs                                      | Example                            | Needs                                            |
+| 后端                                                                                                                              | 安装内容                                       | 示例                               | 依赖条件                                          |
 | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------- | ------------------------------------------------ |
-| [packslip](/dev-tools/backends/packslip.html)                                                                                     | Releases with signed manifests                | `packslip:github.com/jdx/hk`       | A publisher that ships packslip manifests        |
-| [aqua](/dev-tools/backends/aqua.html)                                                                                             | Release assets described by the aqua registry | `aqua:BurntSushi/ripgrep`          | An aqua registry entry for the tool              |
-| [github](/dev-tools/backends/github.html), [gitlab](/dev-tools/backends/gitlab.html), [forgejo](/dev-tools/backends/forgejo.html) | Release assets from a forge                   | `github:BurntSushi/ripgrep`        | A release asset for your OS and architecture     |
-| [http](/dev-tools/backends/http.html), [s3](/dev-tools/backends/s3.html)                                                          | Archives at URLs you provide                  | `http:my-tool` with a `url` option | Download URLs; S3 also needs AWS credentials     |
-| [cargo](/dev-tools/backends/cargo.html)                                                                                           | Rust crates                                   | `cargo:eza`                        | Rust; cargo-binstall for prebuilt binaries       |
-| [go](/dev-tools/backends/go.html)                                                                                                 | Go modules                                    | `go:github.com/DarthSim/hivemind`  | Go                                               |
-| [npm](/dev-tools/backends/npm.html)                                                                                               | npm packages                                  | `npm:prettier`                     | Node.js to run most packages                     |
-| [pypi](/dev-tools/backends/pypi.html) (also `pipx:`)                                                                              | Python packages                               | `pypi:black`                       | uv or pipx, and Python                           |
-| [gem](/dev-tools/backends/gem.html)                                                                                               | Ruby gems                                     | `gem:rubocop`                      | Ruby                                             |
-| [dotnet](/dev-tools/backends/dotnet.html)                                                                                         | .NET tools from NuGet                         | `dotnet:GitVersion.Tool`           | The .NET SDK and the tool's runtime              |
-| [spm](/dev-tools/backends/spm.html)                                                                                               | Swift package executables                     | `spm:nicklockwood/SwiftFormat`     | Swift                                            |
-| [conda](/dev-tools/backends/conda.html)                                                                                           | Conda packages and their dependencies         | `conda:ffmpeg`                     | Nothing else                                     |
-| [spinel](/dev-tools/backends/spinel.html) (experimental)                                                                          | Ruby programs compiled to native executables  | `spinel:tobi/try`                  | `experimental = true`, Spinel, Git, a C compiler |
-| [vfox](/dev-tools/backends/vfox.html)                                                                                             | Tools installed by a Lua plugin               | `vfox:version-fox/vfox-cmake`      | Trust in the plugin's code                       |
-| [asdf](/dev-tools/backends/asdf.html) (legacy)                                                                                    | Tools installed by a shell-script plugin      | `asdf:MetricMike/asdf-awscli`      | Bash and Unix tools; not available on Windows    |
-| [ubi](/dev-tools/backends/ubi.html) (deprecated)                                                                                  | GitHub and GitLab release assets              | `ubi:BurntSushi/ripgrep`           | Migrate to `github:`                             |
-| core                                                                                                                              | Tools built into mise                         | `core:node`                        | See [core tools](/core-tools.html)               |
+| [packslip](/dev-tools/backends/packslip.html)                                                                                     | 带签名清单的发行包                             | `packslip:github.com/jdx/hk`       | 发布方提供 packslip 清单                           |
+| [aqua](/dev-tools/backends/aqua.html)                                                                                             | aqua 注册表描述的发行资源                      | `aqua:BurntSushi/ripgrep`          | 注册表中有该工具的条目                              |
+| [github](/dev-tools/backends/github.html)、[gitlab](/dev-tools/backends/gitlab.html)、[forgejo](/dev-tools/backends/forgejo.html) | 代码托管平台上的发行资源                         | `github:BurntSushi/ripgrep`        | 有适用于当前操作系统和架构的发行资源                  |
+| [http](/dev-tools/backends/http.html)、[s3](/dev-tools/backends/s3.html)                                                          | 指定 URL 上的归档文件                           | 使用 `url` 选项的 `http:my-tool`   | 下载 URL；S3 还需要 AWS 凭据                        |
+| [cargo](/dev-tools/backends/cargo.html)                                                                                           | Rust crate                                    | `cargo:eza`                        | Rust；预构建二进制需要 cargo-binstall                |
+| [go](/dev-tools/backends/go.html)                                                                                                 | Go 模块                                       | `go:github.com/DarthSim/hivemind`  | Go                                               |
+| [npm](/dev-tools/backends/npm.html)                                                                                               | npm 包                                        | `npm:prettier`                     | 运行大多数包需要 Node.js                            |
+| [pypi](/dev-tools/backends/pypi.html)（也支持 `pipx:`）                                                                           | Python 包                                     | `pypi:black`                       | uv 或 pipx，以及 Python                            |
+| [gem](/dev-tools/backends/gem.html)                                                                                               | Ruby gem                                      | `gem:rubocop`                      | Ruby                                             |
+| [dotnet](/dev-tools/backends/dotnet.html)                                                                                         | NuGet 上的 .NET 工具                          | `dotnet:GitVersion.Tool`           | .NET SDK 和工具的运行时                            |
+| [spm](/dev-tools/backends/spm.html)                                                                                               | Swift 包中的可执行文件                         | `spm:nicklockwood/SwiftFormat`     | Swift                                            |
+| [conda](/dev-tools/backends/conda.html)                                                                                           | Conda 包及其依赖                              | `conda:ffmpeg`                     | 无其他依赖                                        |
+| [spinel](/dev-tools/backends/spinel.html)（实验性）                                                                               | 编译为原生可执行文件的 Ruby 程序                | `spinel:tobi/try`                  | `experimental = true`、Spinel、Git、C 编译器      |
+| [vfox](/dev-tools/backends/vfox.html)                                                                                             | 由 Lua 插件安装的工具                           | `vfox:version-fox/vfox-cmake`      | 信任插件代码                                      |
+| [asdf](/dev-tools/backends/asdf.html)（旧版）                                                                                    | 由 shell 脚本插件安装的工具                     | `asdf:MetricMike/asdf-awscli`      | Bash 和 Unix 工具；Windows 不支持                  |
+| [ubi](/dev-tools/backends/ubi.html)（已弃用）                                                                                     | GitHub 和 GitLab 发行资源                      | `ubi:BurntSushi/ripgrep`           | 请迁移到 `github:`                                |
+| core                                                                                                                              | mise 内置工具                                  | `core:node`                        | 参见[核心工具](/core-tools.html)                   |
 
-Language package backends (cargo, go, npm, pypi, gem, dotnet) install
-command-line tools, each into its own directory. They do not manage your
-project's dependencies: keep those in `package.json`, `Cargo.toml`, `go.mod`,
-`Gemfile` or `pyproject.toml`, or see
-[project dependencies](/dev-tools/deps.html).
+语言包后端（cargo、go、npm、pypi、gem、dotnet）会将命令行工具分别安装到独立目录。它们不管理项目依赖；请继续在 `package.json`、`Cargo.toml`、`go.mod`、`Gemfile` 或 `pyproject.toml` 中管理依赖，或参阅[项目依赖](/dev-tools/deps.html)。
 
-Verification differs by backend and by tool. A backend can check a signature or
-provenance only when the publisher provides one, so read
-[security](/security.html) before you rely on a particular check.
+验证方式因后端和工具而异。只有发布方提供签名或来源证明时，后端才能进行相应检查。依赖某项检查前，请阅读[安全说明](/security.html)。
 
-`ubi:` is deprecated: mise warns when it uses it, and mise 2027.1.0 removes it.
-Use the `github:` backend (or `gitlab:` or `http:` for other hosts); see the
-[ubi migration guide](/dev-tools/backends/ubi.html).
+`ubi:` 已弃用：mise 使用它时会发出警告，并将在 mise 2027.1.0 中移除。请改用 `github:` 后端（其他托管服务可使用 `gitlab:` 或 `http:`），详见 [ubi 迁移指南](/dev-tools/backends/ubi.html)。
 
-[Backend plugins](/backend-plugin-development.html) add a backend of your own
-that manages a family of tools under its own prefix. The registry has stricter
-rules for which backends a new short name can use; see
-[backend acceptance tiers](/contributing/registry.html#backend-acceptance-tiers).
+[后端插件](/backend-plugin-development.html)可以添加自定义后端，并用专属前缀管理一类工具。注册表对新简称可使用的后端有更严格的规定，详见[后端准入等级](/contributing/registry.html#backend-acceptance-tiers)。
 
-## How mise picks a backend {#how-backend-selection-works}
+## mise 如何选择后端 {#how-backend-selection-works}
 
-An identifier with a backend prefix, such as `aqua:BurntSushi/ripgrep`, always
-uses that backend. For a short name such as `ripgrep`, mise uses the first of
-these that applies:
+带有后端前缀的标识符（如 `aqua:BurntSushi/ripgrep`）始终使用指定后端。对于 `ripgrep` 这样的简称，mise 会按以下顺序使用第一个适用的来源：
 
 1. A [`MISE_BACKENDS_<TOOL>`](#environment-variable-overrides) environment
    variable.
 2. A [`[tool_alias]`](/dev-tools/aliases.html) entry that names a backend, such
    as `node = "core:node"`.
-3. A plugin URL for the tool under `[plugins]` in a config file.
-4. The backend recorded for the tool in [`mise.lock`](/dev-tools/mise-lock.html),
-   when that backend can serve the requested version.
-5. An installed plugin with the same name, unless its backend is disabled.
-6. The first backend in the tool's registry entry that runs on this platform,
-   is not listed in [`disable_backends`](#disable-backends), and supports the
-   requested version. Experimental backends count only with
-   [`experimental = true`](/configuration/settings.html#experimental).
+3. 配置文件 `[plugins]` 中为该工具指定的插件 URL。
+4. [`mise.lock`](/dev-tools/mise-lock.html) 中记录的工具后端，前提是该后端支持所请求的版本。
+5. 同名的已安装插件，除非其后端已禁用。
+6. 工具注册表条目中第一个满足以下条件的后端：可在当前平台运行、未列入 [`disable_backends`](#disable-backends)，并支持所请求的版本。实验性后端只有在设置 [`experimental = true`](/configuration/settings.html#experimental) 后才会参与选择。
 
-`mise tool` shows the result, and `mise registry` shows the registry's list in
-order:
+`mise tool` 会显示最终结果，`mise registry` 会按顺序显示注册表中的后端列表：
 
 ```sh
 mise tool ripgrep --backend
@@ -139,41 +97,28 @@ mise registry ripgrep
 # aqua:BurntSushi/ripgrep asdf:https://gitlab.com/wt0f/asdf-ripgrep cargo:ripgrep
 ```
 
-When the registry moves a tool to another backend, a lockfile keeps the tool on
-the backend it recorded, and mise warns that the registry has a newer one.
-[`mise backends switch`](/cli/backends/switch.html) moves those lock entries to
-the registry's current backend and reinstalls the affected versions.
+注册表将工具切换到另一个后端时，锁文件会让工具继续使用其中记录的后端，同时 mise 会提示注册表已有更新的后端。运行 [`mise backends switch`](/cli/backends/switch.html) 可将这些锁定条目切换到注册表当前使用的后端，并重新安装受影响的版本。
 
-### Version-specific backends {#version-specific-backends}
+### 按版本选择后端 {#version-specific-backends}
 
-A registry entry can limit a backend to part of a tool's version range. hk's
-entry starts packslip at 1.58.1, so `mise use hk@1.58.0` installs from aqua and
-`mise use hk@1.58.1` installs from packslip. A prefix entirely below the
-boundary, such as `hk@1.57`, also uses aqua. `latest` and prefixes that span the
-boundary, such as `hk@1.58`, keep the normal order.
+注册表条目可以限制某个后端适用的工具版本范围。hk 的条目规定从 1.58.1 起使用 packslip，因此 `mise use hk@1.58.0` 会从 aqua 安装，而 `mise use hk@1.58.1` 会从 packslip 安装。完全低于边界的前缀（如 `hk@1.57`）也会使用 aqua。`latest` 以及跨越边界的前缀（如 `hk@1.58`）仍按常规顺序选择。
 
-A backend can also set an exclusive `max_version`, so that requests below it use
-that backend and newer ones use the next backend in the list. These
-boundaries apply only to short names: an explicit identifier ignores them, and a
-matching lockfile entry keeps its recorded backend. For the registry format,
-see [minimum backend versions](/contributing/registry.html#minimum-backend-versions).
+后端还可以设置不包含在内的 `max_version`：低于该版本的请求使用此后端，更新的版本则使用列表中的下一个后端。这些边界只适用于简称：显式标识符会忽略边界，匹配的锁文件条目则继续使用其中记录的后端。注册表格式详见[后端最低版本](/contributing/registry.html#minimum-backend-versions)。
 
-## Choose a backend yourself {#choose-a-backend-yourself}
+## 手动选择后端 {#choose-a-backend-yourself}
 
 <span id="configuration-and-overrides"></span>
 <span id="force-backend-for-tool"></span>
 <span id="registry-system"></span>
 
-To use a particular source in one project, write its identifier as the key:
+要在某个项目中使用指定来源，请将它的标识符写作键名：
 
 ```toml [mise.toml]
 [tools]
 "aqua:BurntSushi/ripgrep" = "15"
 ```
 
-To keep the short name in `[tools]` and change only its backend, add a
-[tool alias](/dev-tools/aliases.html). Teammates get the same backend because
-the alias lives in the same file:
+如果希望在 `[tools]` 中保留简称、只切换后端，可以添加[工具别名](/dev-tools/aliases.html)。别名与工具配置位于同一文件，团队成员也会使用相同的后端：
 
 ```toml [mise.toml]
 [tool_alias]
@@ -183,48 +128,37 @@ node = "core:node"
 node = "24"
 ```
 
-### Environment variable override {#environment-variable-overrides}
+### 环境变量覆盖 {#environment-variable-overrides}
 
-`MISE_BACKENDS_<TOOL>` overrides the backend for one short name, ahead of
-aliases, the lockfile and the registry. Use it for a single command or CI job:
+`MISE_BACKENDS_<TOOL>` 可以为某个简称指定后端，其优先级高于别名、锁文件和注册表。可在单条命令或 CI 任务中使用：
 
 ```sh
-# install ripgrep from GitHub releases instead of aqua
+# 从 GitHub Releases 安装 ripgrep，而不是使用 aqua
 MISE_BACKENDS_RIPGREP='github:BurntSushi/ripgrep' mise install ripgrep@15
 ```
 
-Write the tool name in uppercase with `-` replaced by `_`: `my-tool` becomes
-`MISE_BACKENDS_MY_TOOL`. An exported override applies to every later command in
-that shell, so check your environment when two machines resolve the same short
-name differently.
+将工具名称转成大写，并把 `-` 替换为 `_`：`my-tool` 对应 `MISE_BACKENDS_MY_TOOL`。导出的覆盖变量会影响该 shell 中之后运行的所有命令；如果两台机器对同一简称的解析结果不同，请检查环境变量。
 
-### Disable backends {#disable-backends}
+### 禁用后端 {#disable-backends}
 
-Set [`disable_backends`](/configuration/settings.html#disable_backends) to stop
-mise from resolving or installing tools through those backends. To apply it
-everywhere, put it in your global config:
+设置 [`disable_backends`](/configuration/settings.html#disable_backends)，即可阻止 mise 通过指定后端解析或安装工具。若要全局生效，请将它写入全局配置：
 
 ```toml [~/.config/mise/config.toml]
 [settings]
 disable_backends = ["asdf", "vfox"]
 ```
 
-`mise settings disable_backends=asdf,vfox` writes the same setting to your
-global config. It replaces the whole list, so name every backend you want
-disabled.
+运行 `mise settings disable_backends=asdf,vfox` 也会将相同设置写入全局配置。该命令会替换整个列表，因此要列出所有想禁用的后端。
 
-Short names then skip those backends in their registry list, and installing an
-explicit identifier such as `asdf:owner/asdf-tool` fails. Versions already
-installed stay on disk and work again if you enable the backend. mise never
-uses the asdf backend on Windows, whatever this setting says.
+之后解析简称时会跳过注册表中的这些后端；安装 `asdf:owner/asdf-tool` 这样的显式标识符则会失败。已安装的版本会保留在磁盘上，重新启用后端即可继续使用。无论此设置如何，mise 在 Windows 上都不会使用 asdf 后端。
 
-## Troubleshooting {#troubleshooting}
+## 故障排查 {#troubleshooting}
 
 <span id="verify-the-result"></span>
 <span id="troubleshooting-backend-issues"></span>
 <span id="debug-backend-selection"></span>
 
-These commands show why a short name resolved the way it did:
+运行以下命令可以查看简称的解析原因：
 
 ```sh
 mise tool node --backend   # the backend mise uses
@@ -234,13 +168,6 @@ mise config ls             # config files that apply in this directory
 mise ls --current          # selected versions and where each was set
 ```
 
-A version listed by `mise ls-remote` can still lack a build for your OS and
-architecture. After `mise use`, run the tool with
-`mise exec -- <command> --version`. If mise cannot find a matching asset, the
-backend's page lists its platform and asset options. If selection is right but
-installation fails, check the backend's requirements and authentication.
-`MISE_DEBUG=1 mise install <tool>` adds diagnostic output; remove credentials
-from it before you share it.
+`mise ls-remote` 列出的版本仍可能没有适用于当前操作系统和架构的构建产物。运行 `mise use` 后，可用 `mise exec -- <command> --version` 启动工具。如果 mise 找不到匹配的资源，请查看对应后端文档中的平台和资源选项。如果后端选择正确但安装失败，请检查依赖条件和身份验证。设置 `MISE_DEBUG=1 mise install <tool>` 可输出诊断信息；分享之前请移除其中的凭据。
 
-To make installs reproducible, record resolved versions and checksums in
-[`mise.lock`](/dev-tools/mise-lock.html).
+为确保安装结果可复现，请将解析后的版本和校验和记录在 [`mise.lock`](/dev-tools/mise-lock.html) 中。

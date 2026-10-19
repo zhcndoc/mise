@@ -2,11 +2,9 @@
 description: "查找社区发布的 mise 相关文章、播客和视频，以及作者开发的其他配套工具。"
 ---
 
-# External resources
+# 外部资源
 
-Older community posts about mise may use commands or options that have since
-changed; check the [configuration](/configuration.html) and
-[CLI reference](/cli/) when you adapt them.
+社区较早发布的 mise 文章可能使用了后来已变更的命令或选项；参考时请同时核对[配置](/configuration.html)和 [CLI 参考](/cli/)。
 
 ## 文章和教程
 
@@ -28,18 +26,13 @@ changed; check the [configuration](/configuration.html) and
 
 ## 相关工具
 
-These tools come from mise's author and work alongside it:
+以下工具由 mise 作者开发，可与 mise 配合使用：
 
-- [aube](https://aube.sh/): a JavaScript package manager; mise embeds it to
-  install tools for the [npm backend](/dev-tools/backends/npm.html).
-- [fnox](https://fnox.jdx.dev/): store and load secrets; mise can use it as a
-  [secrets source](/environments/secrets/fnox.html).
-- [hk](https://hk.jdx.dev/): run Git hooks and project lint checks.
-- [Mr Boxington](https://mr-boxington.jdx.dev/): share one Cargo build cache
-  across checkouts and CI.
-- [pitchfork](https://pitchfork.jdx.dev/): supervise long-running development
-  processes.
-- [usage](https://usage.jdx.dev/): define CLI arguments, help, and completions;
-  mise uses it for [task arguments](/tasks/task-arguments.html).
+- [aube](https://aube.sh/)：JavaScript 包管理器；mise 内嵌了它，用于通过 [npm 后端](/dev-tools/backends/npm.html)安装工具。
+- [fnox](https://fnox.jdx.dev/)：存储和读取密钥；mise 可将它用作[密钥来源](/environments/secrets/fnox.html)。
+- [hk](https://hk.jdx.dev/)：运行 Git hooks 和项目 lint 检查。
+- [Mr Boxington](https://mr-boxington.jdx.dev/)：在多个检出目录和 CI 之间共享 Cargo 构建缓存。
+- [pitchfork](https://pitchfork.jdx.dev/)：管理长期运行的开发进程。
+- [usage](https://usage.jdx.dev/)：定义 CLI 参数、帮助信息和补全；mise 使用它实现[任务参数](/tasks/task-arguments.html)。
 
 如需建议添加资源或更正链接，请参阅[贡献](/contributing.html)。

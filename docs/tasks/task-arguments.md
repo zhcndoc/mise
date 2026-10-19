@@ -3,19 +3,13 @@ description: "通过 usage 规范定义任务参数和选项，以支持解析�
 socialDescription: "通过 usage 规范定义任务参数和选项，以支持校验、--help 和补全。"
 ---
 
-# Task arguments
+# 任务参数
 
-Define arguments when a task needs named inputs, validation, `--help` output, or
-shell completions. mise parses the command line against the task's
-[usage](https://usage.jdx.dev) spec and passes each value to the script as a
-`usage_*` environment variable. Without a spec, mise
-[forwards extra arguments](/tasks/running-tasks.html#pass-arguments) to the
-command unchanged.
+当任务需要命名输入、参数校验、`--help` 帮助信息或 shell 补全时，可以为它定义参数。mise 会根据任务的 [usage](https://usage.jdx.dev) 规范解析命令行，并将每个值作为 `usage_*` 环境变量传给脚本。如果没有定义规范，mise 会将[额外参数](/tasks/running-tasks.html#pass-arguments)原样传给命令。
 
-## Define arguments {#usage-field}
+## 定义参数 {#usage-field}
 
-Write the spec in a TOML task's `usage` field or in `#USAGE` comments in a
-[file task](/tasks/file-tasks.html). Both forms define the same spec:
+可以在 TOML 任务的 `usage` 字段或[文件任务](/tasks/file-tasks.html)的 `#USAGE` 注释中编写规范。两种写法定义的是同一套规范：
 
 ::: code-group
 
@@ -32,61 +26,60 @@ flag "--region <region>" help="AWS 区域" default="us-east-1" env="AWS_REGION"
 run = '''
 #!/usr/bin/env bash
 if [ "${usage_verbose:-false}" = "true" ]; then
-  echo "Verbose mode enabled"
+  echo "已启用详细模式"
 fi
-echo "Deploying to ${usage_environment?} in ${usage_region?}"
+echo "正在将应用部署到 ${usage_environment?}（${usage_region?}）"
 '''
 ```
 
 ```bash [mise-tasks/deploy]
 #!/usr/bin/env bash
-#MISE description="Deploy application"
-#USAGE arg "<environment>" help="Target environment" {
+#MISE description="部署应用程序"
+#USAGE arg "<environment>" help="目标环境" {
 #USAGE   choices "dev" "staging" "prod"
 #USAGE }
-#USAGE flag "-v --verbose" help="Enable verbose output"
-#USAGE flag "--region <region>" help="AWS region" default="us-east-1" env="AWS_REGION"
+#USAGE flag "-v --verbose" help="启用详细输出"
+#USAGE flag "--region <region>" help="AWS 区域" default="us-east-1" env="AWS_REGION"
 
 if [ "${usage_verbose:-false}" = "true" ]; then
-  echo "Verbose mode enabled"
+  echo "已启用详细模式"
 fi
-echo "Deploying to ${usage_environment?} in ${usage_region?}"
+echo "正在将应用部署到 ${usage_environment?}（${usage_region?}）"
 ```
 
 :::
 
-Each value reaches the script as a `usage_*` variable:
+每个值都会作为 `usage_*` 变量传给脚本：
 
 ```sh
 mise run deploy staging --verbose --region us-west-2
 ```
 
 ```text
-Verbose mode enabled
-Deploying to staging in us-west-2
+已启用详细模式
+正在将应用部署到 staging（us-west-2）
 ```
 
-`mise run deploy --help` prints help generated from the spec:
+`mise run deploy --help` 会根据规范生成并显示帮助信息：
 
 ```text
-Deploy application
+部署应用程序
 
 Usage: deploy [-v --verbose] [--region <region>] <environment>
 
 Arguments:
-  <environment>  Target environment
+  <environment>  目标环境
                  [possible values: dev, staging, prod]
 
 Flags:
-  -v, --verbose          Enable verbose output
-      --region <region>  AWS region
+  -v, --verbose          启用详细输出
+      --region <region>  AWS 区域
                          [env: AWS_REGION]
                          (default: us-east-1)
   -h, --help             Print help
 ```
 
-A missing required argument or a value outside the choices fails before the
-script starts:
+缺少必需参数或指定了选项之外的值时，任务会在脚本启动前失败：
 
 ```sh
 mise run deploy qa
@@ -97,48 +90,38 @@ mise ERROR failed to validate task deploy
 mise ERROR Invalid choice for arg environment: qa, expected one of dev, staging, prod
 ```
 
-With mise's [shell completions](/shell-setup.html) enabled,
-`mise run deploy <Tab>` offers the choices. The separate `usage` CLI is not
-needed. [`mise generate task-docs`](/cli/generate/task-docs.html) renders
-Markdown documentation from the same spec.
+启用 mise 的 [shell 补全](/shell-setup.html)后，输入 `mise run deploy <Tab>` 就会显示可选值。无需单独使用 `usage` CLI。运行 [`mise generate task-docs`](/cli/generate/task-docs.html) 可根据同一规范生成 Markdown 文档。
 
-### Comment syntax in file tasks {#file-task-headers}
+### 文件任务中的注释语法 {#file-task-headers}
 
-In a file task, `#USAGE` lines hold the usage spec and `#MISE` lines hold task
-properties as TOML. The comment marker can be `#`, `//`, or `::`, and
-whitespace may follow it. The keyword can also be bracketed: `#USAGE`,
-`# USAGE`, `// USAGE`, and `# [USAGE]` all work, so formatters that add a space
-do not break them. [File tasks](/tasks/file-tasks.html#configure-with-mise-comments)
-describes `#MISE` lines.
+在文件任务中，`#USAGE` 行用于编写 usage 规范，`#MISE` 行以 TOML 格式设置任务属性。注释符可以是 `#`、`//` 或 `::`，后面允许有空格。关键字也可以加方括号：`#USAGE`、`# USAGE`、`// USAGE` 和 `# [USAGE]` 均有效，因此格式化工具插入空格也不会导致失效。[文件任务](/tasks/file-tasks.html#configure-with-mise-comments)一节介绍了 `#MISE` 行。
 
-## Spec quick reference
+## 规范速查
 
-| Spec                                               | Meaning                                                                                   |
+| 规范                                               | 含义                                                                                      |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `arg "<file>"`                                     | Required positional argument                                                              |
-| `arg "[file]"`                                     | Optional positional argument                                                              |
-| `default="config.toml"`                            | Value used when the argument or flag is not given                                         |
-| `arg "[files]" var=#true`                          | Zero or more values; `arg "<files>" var=#true` needs at least one                         |
-| `var_min=2`, `var_max=5`                           | Limits on the number of values for a variadic argument                                    |
-| `arg "<level>" { choices "debug" "info" "warn" }`  | Accept only the listed values                                                             |
-| `env="API_TOKEN"`                                  | Take the value from an environment variable; see [backing](#environment-variable-backing) |
-| `flag "-f --force"`                                | Boolean flag; also `flag "-f"` or `flag "--force"` alone                                  |
-| `flag "-o --output <file>"`                        | Flag that takes a value                                                                   |
-| `required=#true`                                   | Fail unless the flag is passed                                                            |
-| `flag "-v --verbose" count=#true`                  | Repeatable flag whose value is the count, such as `3` for `-vvv`                          |
-| `flag "--color" negate="--no-color" default=#true` | Boolean flag that `--no-color` turns off                                                  |
-| `help="…"`                                         | One-line help                                                                             |
-| `long_help="…"`                                    | Longer help that replaces `help` in `--help` output                                       |
-| `hide=#true`                                       | Hide the argument or flag from help                                                       |
-| `double_dash="required"`                           | Accept the argument's values only after `--`                                              |
-| `arg "<file>"`, `arg "<dir>"`                      | An argument named `file` or `path` completes file names; `dir` completes directories      |
-| `complete "user" run="mycli users"`                | Complete the `user` argument or flag from a command's output, one value per line          |
+| `arg "<file>"`                                     | 必需的位置参数                                                                             |
+| `arg "[file]"`                                     | 可选的位置参数                                                                             |
+| `default="config.toml"`                            | 未提供参数或选项时使用的值                                                                  |
+| `arg "[files]" var=#true`                          | 零个或多个值；`arg "<files>" var=#true` 至少需要一个值                                      |
+| `var_min=2`、`var_max=5`                            | 限制可变参数的值数量                                                                        |
+| `arg "<level>" { choices "debug" "info" "warn" }`  | 只接受列出的值                                                                             |
+| `env="API_TOKEN"`                                  | 从环境变量读取值；参见[环境变量回退](#environment-variable-backing)                         |
+| `flag "-f --force"`                                | 布尔选项；也可以只写 `flag "-f"` 或 `flag "--force"`                                      |
+| `flag "-o --output <file>"`                        | 需要提供值的选项                                                                            |
+| `required=#true`                                   | 未传入该选项时任务失败                                                                      |
+| `flag "-v --verbose" count=#true`                  | 可重复传入的选项，其值为传入次数，例如 `-vvv` 对应 `3`                                      |
+| `flag "--color" negate="--no-color" default=#true` | 布尔选项；传入 `--no-color` 可将其关闭                                                      |
+| `help="…"`                                         | 单行帮助文本                                                                               |
+| `long_help="…"`                                    | 较长的帮助文本，在 `--help` 输出中取代 `help`                                               |
+| `hide=#true`                                       | 在帮助信息中隐藏该参数或选项                                                                |
+| `double_dash="required"`                           | 仅接受 `--` 后面的参数值                                                                    |
+| `arg "<file>"`、`arg "<dir>"`                      | 参数名为 `file` 或 `path` 时补全文件名；参数名为 `dir` 时补全目录名                         |
+| `complete "user" run="mycli users"`                | 根据命令输出补全 `user` 参数或选项；每行一个候选值                                          |
 
-Properties can also go in a block, one per line, as `choices` and `long_help`
-do in the next example. See the [usage spec](https://usage.jdx.dev/spec/) for
-every option.
+属性也可以像下一例中的 `choices` 和 `long_help` 一样，每行一个写在代码块中。所有选项详见 [usage 规范](https://usage.jdx.dev/spec/)。
 
-### Long help
+### 长帮助文本
 
 ```mise-toml
 [tasks.complex]
@@ -172,28 +155,27 @@ flag "--format <fmt>" {
 run = 'process-data "${usage_input?}" --format "${usage_format?}"'
 ```
 
-### Double dash
+### 双连字符
 
-`double_dash` controls how an argument relates to `--`:
+`double_dash` 用于控制参数与 `--` 的关系：
 
 ```kdl
-// Values only after --: mycli -- file.txt
+// 仅接受 -- 后的值：mycli -- file.txt
 arg "<file>" double_dash="required"
 
-// Both work: mycli file.txt or mycli -- file.txt
+// 两种写法均有效：mycli file.txt 或 mycli -- file.txt
 arg "<file>" double_dash="optional"
 
-// After the first value, the rest are treated as if -- was used
+// 第一个值之后的内容都按 -- 后的参数处理
 arg "<files>" double_dash="automatic"
 
-// Keep -- as a value in a variadic argument
+// 在可变参数中将 -- 保留为一个值
 arg "<args>..." double_dash="preserve"
 ```
 
-### Completions with descriptions
+### 带说明的补全
 
-With `descriptions=#true`, each line of the command's output is split at the
-first `:` into a value and its description:
+设置 `descriptions=#true` 后，命令输出的每一行会在第一个 `:` 处分成值和说明：
 
 ```kdl
 arg "<plugin>"
@@ -206,22 +188,18 @@ python:Python language
 ruby:Ruby language
 ```
 
-## Read argument values
+## 读取参数值
 
-### Environment variables
+### 环境变量
 
-Each argument and flag becomes a `usage_<name>` variable, with `-` in the name
-replaced by `_`: `--dry-run` becomes `usage_dry_run`, and `<api-key>` becomes
-`usage_api_key`.
+每个参数和选项都会生成一个 `usage_<name>` 变量，名称中的 `-` 会替换为 `_`：`--dry-run` 会生成 `usage_dry_run`，`<api-key>` 会生成 `usage_api_key`。
 
-- A boolean flag is `true` when passed. Without a `default`, it is unset when
-  not passed.
-- A count flag holds the number of times it was passed, and is unset when not
-  passed.
-- An optional argument without a `default` is unset when not given.
-- A variadic argument arrives as one shell-quoted string, such as `a 'b c'`.
+- 传入布尔选项时，其值为 `true`；如果没有设置 `default`，未传入时该变量未设置。
+- 计数选项的值为传入次数，未传入时变量未设置。
+- 未设置 `default` 的可选参数在未提供时变量未设置。
+- 可变参数会作为一个经过 shell 引用的字符串传入，例如 `a 'b c'`。
 
-To use a variadic value as a Bash array, `eval` it, then quote each element:
+如需将可变参数作为 Bash 数组使用，请通过 `eval` 解析，然后为每个元素加引号：
 
 ```mise-toml
 [tasks.process]
@@ -235,92 +213,75 @@ done
 '''
 ```
 
-### The `usage` map in templates
+### 模板中的 `usage` 映射
 
-Run scripts can also read values through the `usage` map in
-[Tera templates](/templates.html). It uses the same snake_case keys, so
-`--dry-run` is <span v-pre>`{{ usage.dry_run }}`</span>. Variadic arguments and
-flags are arrays that work with Tera's `for` loops and filters such as
-`length`:
+运行脚本也可以通过 [Tera 模板](/templates.html)中的 `usage` 映射读取参数值。键名同样使用 snake_case，因此 `--dry-run` 对应 <span v-pre>`{{ usage.dry_run }}`</span>。可变参数和选项会作为数组传入，可用于 Tera 的 `for` 循环以及 `length` 等过滤器：
 
 ```mise-toml [mise.toml]
 [tasks.deploy]
-description = "Deploy application"
+description = "部署应用程序"
 usage = '''
-arg "<environment>" help="Target environment"
-flag "-v --verbose" help="Enable verbose output"
-flag "--region <region>" help="AWS region" default="us-east-1"
+arg "<environment>" help="目标环境"
+flag "-v --verbose" help="启用详细输出"
+flag "--region <region>" help="AWS 区域" default="us-east-1"
 '''
 run = '''
-echo "Deploying to {{ usage.environment }} in {{ usage.region }}"
+echo "正在将应用部署到 {{ usage.environment }}（{{ usage.region }}）"
 {% if usage.verbose %}
-  echo "Verbose mode enabled"
+  echo "已启用详细模式"
 {% endif %}
 '''
 ```
 
-The `usage` map is separate from the deprecated `arg()`, `option()`, and
-`flag()` functions described in [the migration guide](#tera-templates). Do not
-mix the two in one task.
+`usage` 映射与[迁移指南](#tera-templates)中介绍的已弃用 `arg()`、`option()` 和 `flag()` 函数相互独立。请勿在同一个任务中混用两种方式。
 
-<span v-pre>`{{ usage.* }}`</span> also works in `depends`, `depends_post`, and
-`wait_for`, to pass the task's arguments on to its dependencies. See
-[Passing parent task arguments to dependencies](/tasks/task-configuration.html#passing-parent-task-arguments-to-dependencies).
+在 `depends`、`depends_post` 和 `wait_for` 中也可以使用 <span v-pre>`{{ usage.* }}`</span>，将任务参数传给依赖任务。详见[向依赖任务传递父任务参数](/tasks/task-configuration.html#passing-parent-task-arguments-to-dependencies)。
 
-### Inherited `usage_*` variables
+### 继承的 `usage_*` 变量
 
-mise clears `usage_*` variables inherited from the calling environment, even for
-tasks without a usage spec. Tasks with [`raw_args = true`](/tasks/task-configuration.html#raw-args)
-keep them. To pass a value in deliberately, use a separately named variable,
-for example through `env=`:
+mise 会清除从调用环境继承的 `usage_*` 变量，即使任务没有 usage 规范也是如此。设置 [`raw_args = true`](/tasks/task-configuration.html#raw-args) 的任务会保留这些变量。如需主动传入值，请使用其他名称的变量，例如通过 `env=` 传递：
 
 ```mise-toml [mise.toml]
 [tasks.deploy]
 usage = 'arg "[environment]" env="DEPLOY_ENV"'
-run = 'echo "Deploying to ${usage_environment:-default}"'
+run = 'echo "正在部署到 ${usage_environment:-默认环境}"'
 ```
 
 ```sh
 DEPLOY_ENV=staging mise run deploy
-# Deploying to staging
+# 正在部署到 staging
 ```
 
-## Bash variable expansion {#bash-variable-expansion}
+## Bash 变量展开 {#bash-variable-expansion}
 
-Parameter expansion lets [shellcheck](https://www.shellcheck.net/) see that a
-`usage_*` variable may be unset, and supplies defaults for flags:
+参数展开可以让 [shellcheck](https://www.shellcheck.net/) 知道 `usage_*` 变量可能未设置，也可以为选项提供默认值：
 
-| Syntax            | Behavior                              | Use case                                                    | Example                       |
+| 语法               | 行为                                   | 适用情况                                                    | 示例                          |
 | ----------------- | ------------------------------------- | ----------------------------------------------------------- | ----------------------------- |
-| `${var?}`         | Error if unset                        | Required arguments, and arguments or flags with a `default` | `${usage_profile?}`           |
-| `${var:?}`        | Error if unset or empty               | Values that must not be empty                               | `${usage_target:?}`           |
-| `${var:-default}` | Use default if unset or empty         | Boolean flags and optional arguments without a `default`    | `${usage_clean:-false}`       |
-| `${var:=default}` | Set and use default if unset or empty | A default you want to reuse later in the script             | `${usage_dir:=.}`             |
-| `${var:+value}`   | Use value if set and non-empty        | Optional string values                                      | `${usage_output:+has-output}` |
+| `${var?}`         | 未设置时出错                           | 必需参数以及设有 `default` 的参数或选项                      | `${usage_profile?}`           |
+| `${var:?}`        | 未设置或为空时出错                      | 不能为空的值                                                  | `${usage_target:?}`           |
+| `${var:-default}` | 未设置或为空时使用默认值                 | 布尔选项和未设置 `default` 的可选参数                         | `${usage_clean:-false}`       |
+| `${var:=default}` | 未设置或为空时赋值并使用默认值            | 需要在脚本后续部分复用的默认值                                 | `${usage_dir:=.}`             |
+| `${var:+value}`   | 已设置且非空时使用指定值                  | 可选字符串值                                                  | `${usage_output:+has-output}` |
 
-Follow three rules:
+请遵循以下三条规则：
 
-- Use `${usage_x?}` for an argument that is required or has a `default`; mise
-  has already checked it.
-- Use `${usage_x:-false}` for a boolean flag without a `default`, and
-  `${usage_x:-}` for an optional argument without one.
-- Compare booleans with `= "true"`. `${usage_x:+…}` also expands for the string
-  `false`, so it does not test whether a flag is on.
+- 对于必需参数或设置了 `default` 的参数，使用 `${usage_x?}`；mise 已经完成相应检查。
+- 对于未设置 `default` 的布尔选项，使用 `${usage_x:-false}`；对于未设置 `default` 的可选参数，使用 `${usage_x:-}`。
+- 使用 `= "true"` 比较布尔值。`${usage_x:+…}` 在变量值为字符串 `false` 时也会展开，因此不能用它判断选项是否启用。
 
 ```bash
 #!/usr/bin/env bash
-# --profile has default="dev"; --clean has no default
+# --profile 默认值为 "dev"；--clean 没有默认值
 cargo build --profile "${usage_profile?}"
 if [ "${usage_clean:-false}" = "true" ]; then
   cargo clean
 fi
 ```
 
-## Environment variable backing {#environment-variable-backing}
+## 环境变量回退 {#environment-variable-backing}
 
-An argument or flag with `env="NAME"` takes its value from that environment
-variable when it is not on the command line. The precedence is the command
-line, then the environment variable, then the `default`:
+带有 `env="NAME"` 的参数或选项在命令行未提供值时，会从指定环境变量读取。优先级依次为命令行、环境变量、`default`：
 
 ```mise-toml [mise.toml]
 [tasks.deploy]
@@ -343,47 +304,42 @@ DEPLOY_ENV=staging mise run deploy production
 # env=production profile=dev verbose=false
 ```
 
-A boolean flag counts as passed when its variable is `true` or `1`. The
-variable also satisfies a required argument:
+布尔选项对应的环境变量为 `true` 或 `1` 时，mise 会将该选项视为已传入。环境变量也可以满足必需参数：
 
 ```mise-toml [mise.toml]
 [tasks.publish]
-usage = 'arg "<api-key>" env="API_KEY" help="API key for publishing"'
+usage = 'arg "<api-key>" env="API_KEY" help="发布用 API 密钥"'
 run = 'publish --api-key "${usage_api_key?}"'
 ```
 
-`mise run publish` fails with `Missing required arg: <api-key>` unless `API_KEY`
-is set or the key is passed on the command line. `mise run publish --help`
-shows `[env: API_KEY]` next to the argument. File tasks use the same syntax in
-`#USAGE` lines.
+除非设置了 `API_KEY` 或在命令行传入密钥，否则 `mise run publish` 会因 `Missing required arg: <api-key>` 而失败。运行 `mise run publish --help` 时，参数旁会显示 `[env: API_KEY]`。文件任务的 `#USAGE` 行也使用相同语法。
 
-## Share flags between tasks {#shared-flags}
+## 在任务间共享选项 {#shared-flags}
 
-在 .usage.kdl 文件中定义一次共享标志，使任务之间的名称、帮助文本和验证保持一致。include 会加载文件，use 会将命名的 flagset 添加到任务参数中。
+在 `.usage.kdl` 文件中定义一次共享选项，使多个任务使用相同的名称、帮助文本和校验规则。`include` 用于加载文件，`use` 会将具名的 `flagset` 添加到任务参数中。
 
-例如，在项目根目录保存以下 flagset：
+例如，在项目根目录中保存以下 `flagset`：
 
 ~~~kdl [shared.usage.kdl]
 flagset "common" {
-  flag "--env <env>" help="Target environment" {
+  flag "--env <env>" help="目标环境" {
     arg "<env>" {
       choices "dev" "staging" "prod"
     }
   }
-  flag "--dry-run" help="Print what would happen"
+  flag "--dry-run" help="只显示将要执行的操作"
 }
 ~~~
 
-### Include shared flags in a task
+### 在任务中引入共享选项
 
-In a file task, include the file from a `#USAGE` comment. Use
-`$MISE_CONFIG_ROOT` to locate it relative to the task's config root:
+在文件任务的 `#USAGE` 注释中引入该文件。使用 `$MISE_CONFIG_ROOT` 从任务的配置根目录定位文件：
 
 ~~~bash [mise-tasks/deploy]
 #!/usr/bin/env bash
 #USAGE include file="$MISE_CONFIG_ROOT/shared.usage.kdl"
 #USAGE use "common"
-#USAGE flag "--replicas <n>" help="How many to run"
+#USAGE flag "--replicas <n>" help="要运行的副本数"
 echo "env=$usage_env replicas=$usage_replicas"
 ~~~
 
@@ -394,57 +350,43 @@ echo "env=$usage_env replicas=$usage_replicas"
 usage = """
 include file="{{ config_root }}/shared.usage.kdl"
 use "common"
-flag "--replicas <n>" help="How many to run"
+flag "--replicas <n>" help="要运行的副本数"
 """
 run = 'echo "env=$usage_env replicas=$usage_replicas"'
 ```
 
-Use either definition. Both accept `--env`, `--dry-run`, and `--replicas`, and
-reject values outside the choices for `--env`:
+选择任一写法都可以。两者都会接受 `--env`、`--dry-run` 和 `--replicas`，并拒绝 `--env` 可选值范围之外的输入：
 
 ```sh
 mise run deploy --env staging --replicas 3
 mise run deploy --help
 ```
 
-Shared flags appear in `--help` where the `use` node is written. Including a
-flag defines its interface; the task's script must implement its behavior.
-These examples only print the selected environment and replica count.
+共享选项会显示在 `use` 节点所在位置的 `--help` 输出中。引入选项只定义了任务接口，任务脚本仍需实现相应行为。此处的示例只会打印所选环境和副本数。
 
-### Include paths in file tasks
+### 文件任务中的引入路径
 
-Relative paths resolve from the directory that contains the task file, whatever
-directory you run mise from. For `mise-tasks/deploy`, this includes
-`shared.usage.kdl` from the project root:
+相对路径始终以任务文件所在目录为基准，与运行 mise 时所在的目录无关。对于 `mise-tasks/deploy`，下面的写法会从项目根目录引入 `shared.usage.kdl`：
 
 ~~~bash
 #USAGE include file="../shared.usage.kdl"
 ~~~
 
-Include paths also expand `$NAME` and `${NAME}` references to environment
-variables, with `$$` for a literal dollar sign. When mise parses a file task's
-usage spec, these variables are available:
+引入路径还会展开 `$NAME` 和 `${NAME}` 环境变量引用，使用 `$$` 表示字面量美元符号。mise 解析文件任务的 usage 规范时，可以使用以下变量：
 
-- Variables inherited when mise starts.
-- `MISE_CONFIG_ROOT` and `MISE_PROJECT_ROOT`, when the corresponding roots are
-  available.
-- `MISE_TASK_DIR` and `MISE_TASK_FILE`, for the task's directory and file path.
+- mise 启动时继承的变量。
+- 对应根目录可用时的 `MISE_CONFIG_ROOT` 和 `MISE_PROJECT_ROOT`。
+- 表示任务目录和任务文件路径的 `MISE_TASK_DIR` 和 `MISE_TASK_FILE`。
 
-These paths resolve the same way for execution, help, task listing, and
-validation. File-task `#USAGE` comments are not rendered as Tera templates, so
-use `$MISE_CONFIG_ROOT` rather than <span v-pre>`{{ config_root }}`</span>.
+这些路径在任务执行、帮助信息、任务列表和校验中都以相同方式解析。文件任务的 `#USAGE` 注释不会作为 Tera 模板渲染，因此应使用 `$MISE_CONFIG_ROOT`，而不是 <span v-pre>`{{ config_root }}`</span>。
 
-Task and project `env` directives are applied after mise parses the usage spec,
-so they cannot supply variables for include paths. If an include references an
-undefined variable, mise reports an invalid usage spec. The task still loads,
-but without its argument parsing, help, and validation.
+mise 解析 usage 规范后才会应用任务和项目的 `env` 指令，因此这些指令不能为引入路径提供变量。如果引入路径引用了未定义的变量，mise 会报告 usage 规范无效。任务仍会加载，但不再解析参数、显示帮助或校验输入。
 
-To share tools, environment variables, or dependencies between tasks in the
-same project, use [task templates](/tasks/templates.html).
+如需在同一项目的多个任务间共享工具、环境变量或依赖，请使用[任务模板](/tasks/templates.html)。
 
-## Mount a spec from another CLI
+## 挂载其他 CLI 生成的规范
 
-A file task that wraps another CLI can mount the usage spec that CLI generates:
+封装其他 CLI 的文件任务可以挂载该 CLI 生成的 usage 规范：
 
 ```bash [mise-tasks/run-release]
 #!/usr/bin/env bash
@@ -453,21 +395,13 @@ A file task that wraps another CLI can mount the usage spec that CLI generates:
 exec ./target/release/mycli "$@"
 ```
 
-The mount command runs when shell completion asks for the task's spec, so it
-must work outside the task's own process. Calling the task itself, as shown,
-lets mise apply the task's configuration before it forwards `--usage-spec`.
+shell 补全请求任务规范时会运行挂载命令，因此该命令必须能在任务进程之外独立运行。如示例所示，调用任务本身可以让 mise 先应用任务配置，再转发 `--usage-spec`。
 
-## Migrate from Tera argument functions <Badge type="danger" text="deprecated" /> {#tera-templates}
+## 从 Tera 参数函数迁移 <Badge type="danger" text="已弃用" /> {#tera-templates}
 
-`arg()`, `option()`, and `flag()` in run scripts are deprecated, and mise warns
-when a task uses them. They will be removed in mise 2027.5.0. They render as
-empty strings while mise collects the spec, and their quoting differs by shell.
-Rewrite them as a `usage` spec, as in the examples below.
+运行脚本中的 `arg()`、`option()` 和 `flag()` 已弃用，任务使用这些函数时 mise 会发出警告。它们将在 mise 2027.5.0 中移除。mise 收集规范时，这些函数会渲染为空字符串，而且不同 shell 的引用规则也不相同。请参照以下示例，将它们改写为 `usage` 规范。
 
-To stop mise from reading these functions now, set
-[`task.disable_spec_from_run_scripts`](/configuration/settings.html#task.disable_spec_from_run_scripts)
-(`MISE_TASK_DISABLE_SPEC_FROM_RUN_SCRIPTS=1`). mise then builds the spec only
-from the `usage` field:
+如需现在就阻止 mise 读取这些函数，请设置 [`task.disable_spec_from_run_scripts`](/configuration/settings.html#task.disable_spec_from_run_scripts)（`MISE_TASK_DISABLE_SPEC_FROM_RUN_SCRIPTS=1`）。之后 mise 只会根据 `usage` 字段构建规范：
 
 ```toml
 # ~/.config/mise/config.toml
@@ -475,17 +409,17 @@ from the `usage` field:
 task.disable_spec_from_run_scripts = true
 ```
 
-### Example 1: Simple arguments
+### 示例 1：简单参数
 
 ::: code-group
 
-```mise-toml [Usage]
+```mise-toml [新写法]
 [tasks.test]
-usage = 'arg "<file>" help="Test file" default="all"'
+usage = 'arg "<file>" help="测试文件" default="all"'
 run = 'cargo test "${usage_file?}"'
 ```
 
-```mise-toml [Deprecated]
+```mise-toml [旧写法]
 [tasks.test]
 run = '''
 cargo test {{arg(
@@ -498,11 +432,11 @@ cargo test {{arg(
 
 :::
 
-### Example 2: Multiple arguments with flags
+### 示例 2：带选项的多个参数
 
 ::: code-group
 
-```mise-toml [Usage]
+```mise-toml [新写法]
 [tasks.build]
 usage = '''
 arg "<profile>" default="dev"
@@ -519,7 +453,7 @@ cargo build --profile "${usage_profile?}"
 '''
 ```
 
-```mise-toml [Deprecated]
+```mise-toml [旧写法]
 [tasks.build]
 run = [
   'cargo build --profile {{arg(name="profile", default="dev")}}',
@@ -529,11 +463,11 @@ run = [
 
 :::
 
-### Example 3: Options with choices
+### 示例 3：带可选值的选项
 
 ::: code-group
 
-```mise-toml [Usage]
+```mise-toml [新写法]
 [tasks.deploy]
 usage = '''
 flag "--env <env>" required=#true {
@@ -551,7 +485,7 @@ deploy "${args[@]}"
 '''
 ```
 
-```mise-toml [Deprecated]
+```mise-toml [旧写法]
 [tasks.deploy]
 run = '''
 deploy {{option(
@@ -563,11 +497,11 @@ deploy {{option(
 
 :::
 
-### Example 4: Variadic arguments
+### 示例 4：可变参数
 
 ::: code-group
 
-```mise-toml [Usage]
+```mise-toml [新写法]
 [tasks.lint]
 usage = 'arg "<files>" var=#true'
 run = '''
@@ -577,7 +511,7 @@ eslint "${files[@]}"
 '''
 ```
 
-```mise-toml [Deprecated]
+```mise-toml [旧写法]
 [tasks.lint]
 run = 'eslint {{arg(name="files", var=true)}}'
 ```

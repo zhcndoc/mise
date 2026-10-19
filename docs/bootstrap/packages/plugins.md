@@ -2,7 +2,7 @@
 description: "通过插件扩展 bootstrap packages，以管理 VS Code 扩展、Helm 插件及类似资源。"
 ---
 
-# Package manager plugins
+# 软件包管理器插件
 
 Package manager plugins add managers to
 [`[bootstrap.packages]`](/bootstrap/packages/) for machine-wide state that

@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Arch Linux 软件包，并通过 pacman 安装或移除。"
 ---
 
-# Arch Linux packages (pacman)
+# Arch Linux 软件包（pacman）
 
 The `pacman` manager installs and removes packages on Arch Linux, Manjaro,
 EndeavourOS, and other Arch-based distributions. It uses

@@ -4,31 +4,24 @@ description: "通过 dotnet tool install 从 NuGet 安装 .NET 命令行工具�
 
 # dotnet 后端
 
-The `dotnet` backend installs .NET command-line tool packages from
-[NuGet](https://www.nuget.org/) with `dotnet tool install`. The unprefixed
-`dotnet` tool installs the SDK itself; see the [.NET guide](/lang/dotnet.html)
-for SDK versions and `global.json`.
+`dotnet` 后端使用 `dotnet tool install` 从 [NuGet](https://www.nuget.org/) 安装 .NET 命令行工具包。不带前缀的 `dotnet` 工具安装的是 SDK 本身；有关 SDK 版本和 `global.json`，请参阅 [.NET 指南](/lang/dotnet.html)。
 
-## Requirements
+## 要求
 
 <span id="dependencies"></span>
 
-Install a .NET SDK, plus the runtime the tool package targets. A newer SDK does
-not guarantee that an older tool runs, because .NET's runtime selection rules
-still apply. Run `mise exec -- dotnet --list-runtimes` to see what is installed.
-When `dotnet` is in your config, mise installs it before your .NET tools.
+请安装 .NET SDK，以及工具包面向的运行时。较新的 SDK 不一定能运行面向旧版运行时的工具，因为 .NET 仍会按照运行时选择规则工作。运行 `mise exec -- dotnet --list-runtimes` 可查看已安装的运行时。配置中包含 `dotnet` 时，mise 会先安装它，再安装 .NET 工具。
 
 ## 用法
 
-Install .NET 8 and a GitVersion release built for it:
+安装 .NET 8 和面向该版本构建的 GitVersion 发行版：
 
 ```sh
 mise use dotnet@8 dotnet:GitVersion.Tool@6.0.5
 mise exec -- dotnet-gitversion /version
 ```
 
-This writes both entries to `mise.toml`. Add `-g` to `mise use` for your global
-config.
+这会将两个条目写入 `mise.toml`。若要写入全局配置，请在 `mise use` 后添加 `-g`。
 
 ```toml
 [tools]
@@ -36,21 +29,13 @@ dotnet = "8"
 "dotnet:GitVersion.Tool" = "6.0.5"
 ```
 
-To choose another release, run `mise ls-remote dotnet:GitVersion.Tool` and
-check that release's runtime requirements. `mise use dotnet:GitVersion.Tool`
-without a version records `latest`.
+若要选择其他发行版，请运行 `mise ls-remote dotnet:GitVersion.Tool`，并检查该发行版的运行时要求。不带版本运行 `mise use dotnet:GitVersion.Tool` 会记录 `latest`。
 
-mise installs each tool into its own directory with `--tool-path`. It does not
-create or update a project's `.config/dotnet-tools.json` manifest.
+mise 会使用 `--tool-path` 将每个工具安装到独立目录。它不会创建或更新项目的 `.config/dotnet-tools.json` 清单。
 
-## 私有源
+## 私有软件源
 
-mise lists versions from the NuGet service index in
-[`dotnet.registry_url`](/configuration/settings.html#dotnet.registry_url), but
-`dotnet tool install` downloads the package using its own `NuGet.Config` and
-credentials. For a private feed, add it to `NuGet.Config` and point
-`dotnet.registry_url` at its service index; changing the setting alone does not
-add an install source.
+mise 会从 [`dotnet.registry_url`](/configuration/settings.html#dotnet.registry_url) 指定的 NuGet 服务索引列出版本，但 `dotnet tool install` 使用自己的 `NuGet.Config` 和凭据下载软件包。使用私有源时，请将其添加到 `NuGet.Config`，并将 `dotnet.registry_url` 指向对应的服务索引；仅更改此设置不会添加安装源。
 
 这两个步骤分别进行身份验证。mise 列出版本时会通过 HTTP Basic 身份验证，将 [netrc](/configuration/settings.html#netrc) 凭据发送到匹配的主机，因此受密码保护的 Nexus 或 Artifactory 软件源需要在 `~/.netrc` 中添加对应条目：
 
@@ -62,15 +47,13 @@ machine nexus.example.com
 
 `dotnet tool install` 不会读取 netrc。请在 `NuGet.Config` 中向 NuGet 提供软件源凭据，可以添加 `packageSourceCredentials` 条目，也可以使用 `dotnet nuget add source`。
 
-## Tool options
+## 工具选项
 
-Set these on the tool's entry in `[tools]`, or inline, as in
-`'dotnet:GitVersion.Tool[prerelease=true]'`. Options every backend accepts are
-described under [tool options](/dev-tools/#tool-options).
+请在 `[tools]` 中的工具条目下设置这些选项，也可以内联指定，例如 `'dotnet:GitVersion.Tool[prerelease=true]'`。所有后端均接受的选项见[工具选项](/dev-tools/#tool-options)。
 
 ### `install_env`
 
-Set environment variables for `dotnet tool install`:
+为 `dotnet tool install` 设置环境变量：
 
 ```toml
 [tools]
@@ -79,36 +62,32 @@ Set environment variables for `dotnet tool install`:
 
 ### `prerelease`
 
-By default, NuGet prerelease versions are left out of `mise ls-remote` and
-`latest`. Set `prerelease = true` to include them:
+默认情况下，`mise ls-remote` 和 `latest` 不会包含 NuGet 预发行版本。设置 `prerelease = true` 可将其纳入：
 
 ```toml
 [tools]
 "dotnet:GitVersion.Tool" = { version = "latest", prerelease = true }
 ```
 
-To include prereleases for every tool, set the
-[`prereleases`](/configuration/settings.html#prereleases) setting instead.
+若要为所有工具包含预发行版本，请改为设置 [`prereleases`](/configuration/settings.html#prereleases)。
 
-## Settings
+## 设置
 
-Two settings apply to `dotnet:` tools. The other `dotnet.*` settings configure
-the .NET SDK; see the [.NET guide](/lang/dotnet.html#settings).
+有两个设置适用于 `dotnet:` 工具。其他 `dotnet.*` 设置用于配置 .NET SDK；参见 [.NET 指南](/lang/dotnet.html#settings)。
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="dotnet" :keys="['registry_url', 'package_flags']" :level="3" />
 
-mise 2026.11.0 and later warn when `dotnet.package_flags` is set, and mise
-2027.11.0 removes it.
+从 mise 2026.11.0 起，设置 `dotnet.package_flags` 时会显示警告；mise 2027.11.0 将移除此设置。
 
 ## 故障排除
 
-| Symptom                    | What to check                                                                                            |
+| 现象                       | 检查内容                                                                                                 |
 | -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| SDK not found              | Run `mise exec -- dotnet --info` and check any `global.json` that constrains SDK selection.              |
-| Required framework missing | Install a runtime or SDK the tool supports, or choose a tool release that targets the runtime you have.  |
-| Package not found          | Check that the package is a .NET tool and that both version listing and installation can reach its feed. |
+| 找不到 SDK                  | 运行 `mise exec -- dotnet --info`，并检查是否有 `global.json` 限制 SDK 选择。                              |
+| 缺少所需框架                | 安装工具支持的运行时或 SDK，或选择面向现有运行时构建的工具发行版。                                       |
+| 找不到软件包                | 确认该软件包是 .NET 工具，并且版本列表和安装操作都能访问其软件源。                                       |
 
 实现：[`src/backend/dotnet.rs`](https://github.com/jdx/mise/blob/main/src/backend/dotnet.rs)。

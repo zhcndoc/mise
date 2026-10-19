@@ -2,7 +2,7 @@
 description: "使用项目的工具和环境运行构建、测试和部署。"
 ---
 
-# Tasks
+# 任务
 
 A task is a named command or script that runs with your project's tools and
 environment variables. Use tasks for builds, tests, linters, development

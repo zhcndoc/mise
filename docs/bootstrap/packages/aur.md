@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Arch User Repository 软件包，并通过 yay 或 paru 助手安装。"
 ---
 
-# Arch User Repository packages (aur)
+# Arch User Repository（AUR）软件包
 
 The `aur` manager builds and installs packages from the
 [Arch User Repository](https://aur.archlinux.org/) with the `yay` or `paru`

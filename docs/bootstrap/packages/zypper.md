@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 openSUSE 和 SUSE Linux Enterprise 软件包，并通过 zypper 安装或移除。"
 ---
 
-# openSUSE and SUSE packages (zypper)
+# openSUSE 和 SUSE 软件包（zypper）
 
 The `zypper` manager installs and removes packages on openSUSE and SUSE Linux
 Enterprise with `zypper`. It uses [sudo](/bootstrap/packages/#sudo) when mise

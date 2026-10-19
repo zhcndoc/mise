@@ -2,7 +2,7 @@
 description: "使用 age 加密 mise.toml 中的环境变量，并在 mise 加载环境时解密。"
 ---
 
-# age values <Badge type="warning" text="experimental" />
+# age 密钥值 <Badge type="warning" text="实验性" />
 
 Store individual secrets in `mise.toml` as [age](https://age-encryption.org)
 encrypted values. mise encrypts and decrypts them itself, so you need only an

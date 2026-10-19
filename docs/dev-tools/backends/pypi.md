@@ -2,42 +2,38 @@
 description: "从 PyPI 或 Git 安装 Python 命令行应用，每个应用都使用隔离环境。"
 ---
 
-# pypi backend
+# PyPI 后端
 
-The `pypi` backend installs Python command-line applications from PyPI or a Git
-repository, each into its own virtual environment with its own dependencies. It
-installs with uv, or with pipx when uv is not available. Keep your application's
-libraries, such as NumPy and requests, in a project environment managed with uv
-or pip.
+`pypi` 后端会从 PyPI 或 Git 仓库安装 Python 命令行应用，每个应用都使用独立虚拟环境和依赖。
+它通过 uv 安装；uv 不可用时则使用 pipx。应用所需的 NumPy、requests 等库应放在由 uv 或 pip
+管理的项目环境中。
 
-`pipx:` is another name for this backend: `pipx:black` and `pypi:black` install
-the same package. See [compatibility with `pipx:`](#compatibility-with-pipx).
+`pipx:` 是此后端的另一种名称：`pipx:black` 和 `pypi:black` 安装的是同一个软件包。参阅
+[`pipx:` 兼容性](#compatibility-with-pipx)。
 
-## Requirements
+## 前置条件
 
 <span id="dependencies"></span>
 
-Install uv, or pipx. Add Python as well: pipx needs one to run, and installs
-from a [dependency graph](#dependency-locking) need an installed interpreter
-rather than one uv downloads. When `uv`, `pipx` or `python` is in your config,
-mise installs it before your Python tools. The [`with`](#with),
+安装 uv 或 pipx，并同时安装 Python：pipx 运行时需要 Python；从[依赖关系图](#dependency-locking)
+安装时也需要使用已安装的解释器，而不是由 uv 下载的解释器。如果配置中包含 `uv`、`pipx` 或
+`python`，mise 会在 Python 工具之前安装它们。`with`、
 [`expose`](#expose) and [`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases)
-options need uv.
+选项需要 uv。
 
-## Usage {#usage}
+## 用法 {#usage}
 
 <span id="quick-start"></span>
 <span id="project-configuration"></span>
 
-Install uv, Python and Black in the current project:
+在当前项目中安装 uv、Python 和 Black：
 
 ```sh
 mise use python@3.14 uv pypi:black
 mise exec -- black --version
 ```
 
-This writes the following to `mise.toml`. Add `-g` to `mise use` for your
-global config.
+这会将以下内容写入 `mise.toml`。若要写入全局配置，请在 `mise use` 后添加 `-g`。
 
 ```toml
 [tools]
@@ -46,88 +42,74 @@ uv = "latest"
 "pypi:black" = "latest"
 ```
 
-When `mise.lock` records a tool's full dependency graph (see
-[dependency locking](#dependency-locking)), mise installs it with
-`uv sync --frozen`. Otherwise the lockfile records only the tool's version, a
-_version-only_ install, and mise runs `uv tool install`, or `pipx install` when
-uv is not available. To choose pipx yourself, see
-[using pipx instead of uv](#using-pipx).
+如果 `mise.lock` 记录了工具的完整依赖关系图（参阅[依赖锁定](#dependency-locking)），mise 会
+使用 `uv sync --frozen` 安装。否则锁文件只记录工具版本，即“仅锁定版本”安装；mise 会运行
+`uv tool install`，uv 不可用时则运行 `pipx install`。若要自行选择 pipx，请参阅
+[使用 pipx 代替 uv](#using-pipx)。
 
 ## 软件包源 {#supported-pipx-syntax}
 
-Use `pypi:black` for the PyPI distribution or `pypi:psf/black` for its GitHub
-repository. Their releases and installation requirements can differ.
+PyPI 软件包使用 `pypi:black`；其 GitHub 仓库使用 `pypi:psf/black`。两种来源的发布版本和安装
+要求可能不同。
 
 | 源                      | 示例                                             |
 | ----------------------- | ------------------------------------------------ |
-| PyPI，最新版本          | pypi:black                                      |
-| PyPI，特定版本          | pypi:black@24.3.0                               |
-| GitHub，最新发行版      | pypi:psf/black                                  |
-| GitHub，特定发行版      | pypi:psf/black@24.3.0                           |
-| Git 仓库                | pypi:git+https://github.com/psf/black.git       |
-| Git 分支                | pypi:git+https://github.com/psf/black.git@main |
-| Git 子目录              | pypi:git+https://github.com/o/repo#subdirectory=cli |
+| PyPI 最新版本           | `pypi:black`                                    |
+| PyPI 特定版本           | `pypi:black@24.3.0`                             |
+| GitHub 最新发行版       | `pypi:psf/black`                                |
+| GitHub 特定发行版       | `pypi:psf/black@24.3.0`                         |
+| Git 仓库                | `pypi:git+https://github.com/psf/black.git`     |
+| Git 分支                | `pypi:git+https://github.com/psf/black.git@main` |
+| Git 子目录              | `pypi:git+https://github.com/o/repo#subdirectory=cli` |
 
-Other forms, including direct HTTPS archive URLs, are not supported.
+不支持其他形式，包括直接使用 HTTPS 压缩包 URL。
 
-For GitHub sources, `latest` selects the newest GitHub release, and installs
-from the default branch only when the repository has no releases. For other Git
-URLs, `latest` resolves the default branch's HEAD to a commit. You can request
-any branch, tag or commit explicitly.
+对于 GitHub 来源，`latest` 会选择最新的 GitHub 发行版；仅当仓库没有发行版时才会从默认分支
+安装。对于其他 Git URL，`latest` 会将默认分支的 HEAD 解析为提交。也可以明确指定分支、标签或
+提交。
 
 ### Monorepo 子目录 {#git-subdirectory}
 
-For a package in a subdirectory of a Git repository, add the same
-`#subdirectory=` fragment that pip and uv accept. The `.git` suffix is optional,
-and the fragment also works with the GitHub shorthand:
+若软件包位于 Git 仓库的子目录中，可添加与 pip 和 uv 相同的 `#subdirectory=` 片段。`.git`
+后缀可省略，GitHub 简写形式也支持此片段：
 
 ~~~sh
 mise use 'pypi:git+https://github.com/runpantheon/ltui#subdirectory=ltui@main'
 mise use 'pypi:runpantheon/ltui#subdirectory=jtui@main'
 ~~~
 
-Quote the argument so the shell does not treat `#` specially. The fragment is
-part of the tool name, so each subdirectory is a separate tool, and the version
-still goes after `@`. Other fragment keys pass through unchanged, except that
-mise reads `[...]` in a tool name as tool options; use the [`extras`](#extras)
-option instead of `#egg=pkg[extra]`.
+请为参数加引号，避免 Shell 对 `#` 作特殊处理。该片段是工具名称的一部分，因此每个子目录都算作
+独立工具，版本仍写在 `@` 后。其他片段键会原样传递，但 mise 会将工具名中的 `[...]` 解析为工具
+选项；请使用 [`extras`](#extras) 选项，而不是 `#egg=pkg[extra]`。
 
-Versions come from the whole repository, so `latest` selects the newest release
-even if the subdirectory did not exist at that tag. Pin a branch or commit when
-a repository's releases predate the subdirectory. With [`extras`](#extras), mise
-guesses the distribution name from the subdirectory; set
-[`package_name`](/dev-tools/backends/pypi.html#package-name) if the name differs.
+版本信息取自整个仓库，因此即使该子目录在某个标签中尚不存在，`latest` 仍会选择最新发行版。
+如果仓库的发行版本早于该子目录，请固定分支或提交。使用 [`extras`](#extras) 时，mise 会根据
+子目录推测发行包名称；若名称不同，请设置 [`package_name`](/dev-tools/backends/pypi.html#package-name)。
 
-使用 **uv 0.12.10 或更高版本**时，新建的 `mise.lock` 文件会记录完整的 Python 依赖关系图，包括 wheel 哈希和 Python／平台标记。锁定安装会复用该关系图，而不会再次解析依赖。
-
-With uv 0.12.10 or newer, `mise lock` records each tool's full dependency graph,
-including wheel hashes and Python and platform markers, and
-`mise install --locked` replays it without resolving again. Create a lockfile,
-or upgrade a version-only one, then install:
+使用 uv 0.12.10 或更高版本时，`mise lock` 会记录每个工具的完整依赖关系图，包括 wheel 哈希及
+Python 和平台标记；`mise install --locked` 会直接重放该关系图，不再重新解析。请创建锁文件或
+升级仅锁定版本的锁文件，然后安装：
 
 ```sh
 mise lock --upgrade
 mise install --locked
 ```
 
-Commit `mise.lock` together with each tool's sidecar directory, which holds the
-native `pyproject.toml` and `uv.lock`; see
-[dependency graphs](/dev-tools/mise-lock.html#dependency-graphs). Existing
-lockfiles keep version-only installs until you upgrade them.
+请将 `mise.lock` 与各工具的旁文件目录一并提交；目录中包含原生的 `pyproject.toml` 和
+`uv.lock`。详见[依赖关系图](/dev-tools/mise-lock.html#dependency-graphs)。已有锁文件会继续使用
+仅锁定版本的安装方式，直到你将其升级。
 
 <a id="dependency-locking"></a>
 
 ### 更新依赖
 
-Ordinary `mise lock` reuses the recorded graph. To refresh a tool's dependencies
-when its own version has not changed:
+普通的 `mise lock` 会复用已记录的依赖关系图。若工具本身的版本未变，但要更新其依赖：
 
 ```sh
 mise lock --bump pypi:black
 ```
 
-You can also inspect or edit a sidecar with uv. For a tool locked to Black
-24.10.0 in the default sidecar layout:
+也可以使用 uv 检查或编辑旁文件。以下示例针对默认旁文件布局中锁定为 Black 24.10.0 的工具：
 
 ```sh
 uv tree --project .mise/locks/pypi-black/24.10.0
@@ -135,56 +117,46 @@ uv lock --project .mise/locks/pypi-black/24.10.0 --upgrade-package click
 mise lock
 ```
 
-Run `mise lock` after editing a sidecar to accept its new digest before you use
-`mise install --locked`.
+编辑旁文件后，请先运行 `mise lock` 接受其新摘要，再使用 `mise install --locked`。
 
 ### 要求和限制
 
-A dependency graph needs a published wheel for every dependency on the target
-Python and platform. `mise lock` and locked installs never build source
-distributions; a plain `mise install` falls back to a version-only uv install
-when it cannot produce a wheel-only graph.
+依赖关系图要求目标 Python 版本和平台上的每个依赖项都有已发布的 wheel。`mise lock` 和锁定安装
+不会构建源代码分发包；若无法生成只含 wheel 的依赖关系图，普通的 `mise install` 会退回到仅锁定
+版本的 uv 安装。
 
-Git sources and pipx installs always use version-only locking, and pipx cannot
-replay a uv graph. `uvx_args` and `pipx_args` cannot be locked: a plain
-`mise install` falls back to version-only, and `mise lock` rejects them. Use
-[`with`](#with), [`expose`](#expose) and
-[`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases) instead, which are locked
-with the tool, and configure [Python](#choosing-python) and the
-[registry URL](#registry-url) directly.
+Git 来源和 pipx 安装始终只锁定版本；pipx 也无法重放 uv 生成的依赖关系图。`uvx_args` 和
+`pipx_args` 无法写入锁文件：普通的 `mise install` 会退回到仅锁定版本的方式，而 `mise lock` 会
+拒绝这些参数。请改用与工具一同锁定的 [`with`](#with)、[`expose`](#expose) 和
+[`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases)，并直接配置
+[Python](#choosing-python) 和[注册表 URL](#registry-url)。
 
 `mise lock` 可以根据软件包元数据解析依赖关系图，无需先安装所选解释器。根据依赖关系图安装时会使用所选的 mise Python，不会另行下载 Python。如果锁文件格式为 2 或更高版本，但缺少该工具的依赖关系图，锁定安装会失败；请运行 `mise lock` 创建依赖关系图。
 
-The graph covers the Python range that every locked requirement supports,
-starting at Python 3.8, and keeps every published wheel target, so sidecars can
-be large. Locked installs reuse uv's artifact cache. Different graphs and Python
-interpreters get separate installs; `mise ls` still shows the package version.
+依赖关系图覆盖所有已锁定要求支持的 Python 版本范围（从 Python 3.8 起），并保留每个已发布的
+wheel 平台，因此旁文件可能较大。锁定安装会复用 uv 的制品缓存。不同的依赖关系图和 Python
+解释器会使用独立安装目录；`mise ls` 仍显示软件包版本。
 
-## Private indexes
+## 私有索引
 
 <span id="private-indexes-and-release-age"></span>
 
-To use another index for every tool, set
-[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url): mise lists versions from it and
-passes its simple index to uv and pip for installs. The per-tool
-[`registry_url`](#registry-url) option changes version listing and dependency
-locking for one tool; its version-only installs also need the index in
-`uvx_args` or `pipx_args`. Simple-only indexes must provide
-`data-requires-python` metadata on the selected release's wheel links. Keep
-registry credentials in the installer's environment or credential provider: a
-URL containing credentials or a query string cannot be recorded in the
-lockfile.
+若要让所有工具都使用另一个索引，请设置
+[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url)：mise 会从该索引列出版本，并在安装时
+将其简单索引传给 uv 和 pip。单个工具的 [`registry_url`](#registry-url) 选项会更改该工具的版本列表
+和依赖锁定；仅锁定版本的安装还需在 `uvx_args` 或 `pipx_args` 中指定索引。仅提供简单索引的服务
+必须在所选发行版的 wheel 链接中提供 `data-requires-python` 元数据。请将注册表凭据放在安装器的
+环境或凭据提供程序中：包含凭据或查询字符串的 URL 无法写入锁文件。
 
-## Minimum release age
+## 最低发行时长
 
-[`minimum_release_age`](/configuration/settings.html#minimum_release_age) filters
-the tool's dependencies when mise resolves a graph, not when it replays one. For
-version-only installs, mise passes uv's `--exclude-newer` flag (uv 0.2.22 or
-newer) or, through pipx, pip's `--uploaded-prior-to` flag.
+mise 解析依赖关系图时， [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 会筛选该工具的依赖项；
+重放已有依赖关系图时则不会筛选。对于仅锁定版本的安装，mise 会向 uv 传递 `--exclude-newer`
+（需 uv 0.2.22 或更新版本），或通过 pipx 向 pip 传递 `--uploaded-prior-to`。
 
-## Choosing Python
+## 选择 Python
 
-Configure the interpreter in mise:
+在 mise 中配置解释器：
 
 ```toml
 [tools]
@@ -193,12 +165,11 @@ uv = "0.12.10"
 "pypi:black" = "latest"
 ```
 
-Graph-locked installs use the Python configured in mise, or the first one on
-`PATH` when mise manages none. For uv version-only installs, mise passes
-`--python <mise python>` to `uv tool install` when mise manages Python, so the
-tool's environment does not depend on a Python uv downloaded itself; pass your
-own `--python` in [`uvx_args`](/dev-tools/backends/pypi.html#uvx-args) to choose another. pipx uses its own
-default interpreter; pass `--python` in [`pipx_args`](/dev-tools/backends/pypi.html#pipx-args) to choose one.
+依赖图锁定安装会使用 mise 配置的 Python；若 mise 未管理 Python，则使用 `PATH` 中找到的第一个
+版本。对于 uv 的仅锁定版本安装，如果 mise 管理了 Python，它会向 `uv tool install` 传递
+`--python <mise python>`，避免工具环境依赖 uv 自行下载的 Python；如需选择其他版本，可在
+[`uvx_args`](/dev-tools/backends/pypi.html#uvx-args) 中传入自己的 `--python`。pipx 使用自身的默认解释器；
+若要指定版本，请在 [`pipx_args`](/dev-tools/backends/pypi.html#pipx-args) 中传入 `--python`。
 
 若要让某个工具使用独立于默认 Python 的版本，请将其 `python` 选项设为数字形式的 CPython 次版本号或精确补丁版本号。mise 会将该运行时解析并安装为工具的私有依赖，不会把 Python 添加到 Shell 的活动工具中。所选运行时会作为普通的 `python` 条目记录在同一锁文件范围内，因此使用锁定安装前请先提交更新后的锁文件。这需要支持 PyPI 工具 `python` 选项的 mise 版本。
 
@@ -214,24 +185,21 @@ default interpreter; pass `--python` in [`pipx_args`](/dev-tools/backends/pypi.h
 
 ## Python 升级
 
-When [`mise upgrade`](/cli/upgrade.html) upgrades `python`, mise reinstalls every
-installed PyPI tool automatically. On Unix, tools installed without a dependency
-graph reach mise's Python through its minor-version path (for example
-`.../python/3.14/bin/python`), so patch upgrades keep working without a
-reinstall. Graph-locked installs, and minor-version changes made some other way,
-need a manual reinstall:
+使用 [`mise upgrade`](/cli/upgrade.html) 升级 `python` 时，mise 会自动重新安装所有已安装的 PyPI 工具。
+在 Unix 上，未使用依赖关系图安装的工具会通过 Python 次版本路径（例如 `.../python/3.14/bin/python`）
+调用 mise 管理的 Python，因此升级补丁版本无需重新安装即可继续工作。使用依赖图锁定的安装，以及
+通过其他方式进行的次版本升级，则需要手动重新安装：
 
 ```sh
 mise install --force pypi:black
 mise exec -- black --version
 ```
 
-Check which Python is active before reinstalling: a tool's environment and its
-native extensions stop working when their interpreter is removed or changed.
+重新安装前请确认当前使用的 Python：解释器被移除或更改后，工具环境及其原生扩展将无法继续工作。
 
-## Using pipx instead of uv {#using-pipx}
+## 使用 pipx 代替 uv {#using-pipx}
 
-To install a tool with pipx, add Python and pipx and turn uv off for the tool:
+若要使用 pipx 安装工具，请添加 Python 和 pipx，并为该工具关闭 uv：
 
 ```toml
 [tools]
@@ -240,11 +208,10 @@ pipx = "latest"
 "pypi:black" = { version = "latest", uvx = false }
 ```
 
-To use pipx for every Python tool, set [`pypi.uvx = false`](/dev-tools/backends/pypi.html#pypi.uvx). pipx
-installs are version-only, and `with`, `expose` and `dependency_prereleases`
-need uv. If a registry short name sets one of these (`ansible` sets `expose`),
-clear it with an empty value. An explicit identifier such as `pypi:ansible`
-does not carry the registry's options, so this applies only to the short name:
+若要对所有 Python 工具使用 pipx，请设置 [`pypi.uvx = false`](/dev-tools/backends/pypi.html#pypi.uvx)。pipx
+安装只锁定版本；`with`、`expose` 和 `dependency_prereleases` 则需要 uv。如果注册表短名称设置了
+其中一项（例如 `ansible` 会设置 `expose`），请将其设为空值以清除。显式标识符（如
+`pypi:ansible`）不会继承注册表选项，因此这只适用于短名称：
 
 ```toml
 [tools]
@@ -255,48 +222,45 @@ ansible = { version = "latest", uvx = false, expose = [], pipx_args = "--include
 
 ### 与 `pipx:` 的兼容性
 
-The `pipx:` prefix still works, and existing configurations do not need to
-change. However, `pypi:black` and `pipx:black` are different tools to mise:
-switching the prefix installs a separate copy and adds a separate lockfile
-entry. mise keeps an explicit `pipx:` name in output and lockfiles.
+`pipx:` 前缀仍然有效，已有配置无需更改。不过，对 mise 来说，`pypi:black` 和 `pipx:black` 是
+两个不同的工具：切换前缀会单独安装一份副本，并新增独立的锁文件条目。mise 会在输出和锁文件中
+保留显式指定的 `pipx:` 名称。
 
-The option names `uvx` and `uvx_args` control installs with uv; they do not
-mean mise runs the `uvx` command.
+`uvx` 和 `uvx_args` 这两个选项名称用于控制通过 uv 进行的安装；它们并不表示 mise 会运行
+`uvx` 命令。
 
-## Tool options
+## 工具选项
 
-Set these on the tool's entry in `[tools]`, or inline, as in
-`'pypi:psf/black[extras=jupyter]@latest'`. Options every backend accepts are
-described under [tool options](/dev-tools/#tool-options).
+可在 `[tools]` 中的工具条目上设置这些选项，也可以像
+`'pypi:psf/black[extras=jupyter]@latest'` 这样直接写在工具标识中。所有后端通用的选项请参阅
+[工具选项](/dev-tools/#tool-options)。
 
-| Option                   | Installer                 |
+| 选项                     | 安装器                    |
 | ------------------------ | ------------------------- |
-| `registry_url`           | uv and pipx               |
-| `install_env`            | uv and pipx               |
-| `extras`                 | uv and pipx               |
-| `package_name`           | uv and pipx               |
+| `registry_url`           | uv 和 pipx                |
+| `install_env`            | uv 和 pipx                |
+| `extras`                 | uv 和 pipx                |
+| `package_name`           | uv 和 pipx                |
 | `with`                   | uv                        |
-| `expose`                 | uv 0.8.5 or later         |
+| `expose`                 | uv 0.8.5 或更新版本       |
 | `dependency_prereleases` | uv                        |
-| `python`                 | uv and pipx               |
-| `uvx_args`               | uv, version-only installs |
-| `uvx`                    | chooses pipx when `false` |
+| `python`                 | uv 和 pipx                |
+| `uvx_args`               | uv，仅锁定版本的安装      |
+| `uvx`                    | 设为 `false` 时选择 pipx  |
 | `pipx_args`              | pipx                      |
 
 ### `registry_url` {#registry-url}
 
-Set the registry URL used to list this tool's versions. Include a `{}`
-placeholder for the package name. This overrides the
-[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url) setting for this tool.
+设置用于列出该工具版本的注册表 URL。请在软件包名称的位置加入 `{}` 占位符。此设置会覆盖该工具的
+[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url) 配置。
 
 ```toml
 [tools]
 "pypi:my-tool" = { version = "latest", registry_url = "https://packages.example.com/pypi/{}/json" }
 ```
 
-Dependency locking also derives the install index from this URL. For
-version-only installs, set the install index separately in `uvx_args` or
-`pipx_args`. For example, with pipx:
+依赖锁定也会根据此 URL 推导安装索引。对于仅锁定版本的安装，请在 `uvx_args` 或 `pipx_args` 中
+单独设置安装索引。以下为 pipx 示例：
 
 ```toml
 [tools."pypi:my-tool"]
@@ -308,9 +272,8 @@ pipx_args = "--pip-args='--index-url https://packages.example.com/pypi/simple'"
 
 ### `install_env`
 
-Set environment variables for the installer. mise still sets the tool
-directory, the bin directory and the configured package index variables after
-applying `install_env`. For uv, for example:
+为安装器设置环境变量。应用 `install_env` 后，mise 仍会设置工具目录、可执行文件目录以及已配置的
+软件包索引变量。以下为 uv 示例：
 
 ```toml
 [tools]
@@ -319,8 +282,7 @@ applying `install_env`. For uv, for example:
 
 ### `extras`
 
-Install optional dependencies (Python package extras), as a comma-separated
-string or an array. Extras also work with Git sources:
+安装可选依赖（Python 软件包 extras），值可以是逗号分隔的字符串或数组。Git 来源也支持 extras：
 
 ```toml
 [tools]
@@ -328,7 +290,7 @@ string or an array. Extras also work with Git sources:
 "pypi:psf/black" = { version = "latest", extras = "jupyter" }
 ```
 
-Inline, use mise's `key=value` option syntax:
+直接写在工具标识中时，请使用 mise 的 `key=value` 选项语法：
 
 ```sh
 mise use 'pypi:psf/black[extras=jupyter]@latest'
@@ -336,8 +298,8 @@ mise use 'pypi:psf/black[extras=jupyter]@latest'
 
 ### `package_name`
 
-Set the Python distribution name when a Git repository's name differs from it.
-mise needs it to build the requirement that selects `extras` from a Git source:
+如果 Git 仓库名称与 Python 发行包名称不同，请设置此项。mise 需要该名称，才能为 Git 来源构建
+选择 `extras` 的依赖声明：
 
 ```toml
 [tools]
@@ -346,26 +308,23 @@ mise needs it to build the requirement that selects `extras` from a Git source:
 
 ### `with`
 
-Install additional Python requirements into the tool's environment. This option
-needs uv and is locked with the tool.
+将其他 Python 依赖安装到工具的环境中。此选项需要 uv，并会与工具一同锁定。
 
 ```toml
 [tools]
 "pypi:azure-cli" = { version = "latest", with = ["pip"] }
 ```
 
-A requirement pinned to an exact version narrows the locked Python range to the
-versions that release supports: its own `requires-python` raises the range's
-floor, so the tool may need a newer interpreter than it declares on its own.
-Guard the pin with an interpreter marker, such as
-`"legacy==1.0.0; python_version < '3.12'"`, to keep the wider range when the
-requirement is only needed on some versions. mise leaves such a pin out of the
-range calculation.
+将依赖固定到精确版本，会把锁定的 Python 版本范围缩小为该发行版支持的范围：依赖自身的
+`requires-python` 会提高范围下限，因此工具可能需要比其自身声明更新的解释器。如果仅在某些
+版本中需要此依赖，可使用解释器标记限制固定版本，例如
+`"legacy==1.0.0; python_version < '3.12'"`，以保留较宽的版本范围。mise 不会在版本范围计算中
+纳入这类固定依赖。
 
 ### `expose`
 
-Install additional Python requirements and put their executables on `PATH` as
-well. This option needs uv 0.8.5 or newer and is locked with the tool.
+安装其他 Python 依赖，并将其可执行文件也加入 `PATH`。此选项需要 uv 0.8.5 或更高版本，且会与
+工具一同锁定。
 
 ```toml
 [tools]
@@ -374,9 +333,8 @@ well. This option needs uv 0.8.5 or newer and is locked with the tool.
 
 ### `dependency_prereleases`
 
-Set uv's prerelease policy for dependencies: `disallow`, `allow`,
-`if-necessary` or `explicit`. This option needs uv and applies both when
-locking a graph and in version-only installs.
+设置 uv 对依赖项预发布版本的策略：`disallow`、`allow`、`if-necessary` 或 `explicit`。此选项需要
+uv，在锁定依赖关系图和仅锁定版本的安装中都会生效。
 
 ```toml
 [tools]
@@ -385,10 +343,9 @@ locking a graph and in version-only installs.
 
 ### `uvx_args`
 
-Additional arguments for `uv tool install` in version-only installs. They
-cannot be used with dependency graphs; prefer [`with`](#with),
-[`expose`](#expose) and [`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases) when
-they cover what you need.
+仅锁定版本安装时，传给 `uv tool install` 的附加参数。它们不能与依赖关系图同时使用；如果满足
+需求，请优先使用 [`with`](#with)、[`expose`](#expose) 和
+[`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases)。
 
 ```toml
 [tools]
@@ -397,34 +354,32 @@ they cover what you need.
 
 ### `uvx`
 
-Set to `false` to install this tool with pipx instead of uv. This also turns off
-dependency graph locking, and pipx must be installed. See
-[using pipx instead of uv](#using-pipx).
+设为 `false` 后会改用 pipx 而不是 uv 安装该工具，同时关闭依赖关系图锁定；此时必须安装 pipx。参阅
+[使用 pipx 代替 uv](#using-pipx)。
 
 ### `pipx_args`
 
-Additional arguments for `pipx install`. They apply only to pipx installs and
-cannot be used with dependency graphs.
+传给 `pipx install` 的附加参数。它们仅适用于 pipx 安装，且不能与依赖关系图同时使用。
 
 ```toml
 [tools]
 ansible = { version = "latest", uvx = false, expose = [], pipx_args = "--include-deps" }
 ```
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';
 </script>
 <Settings child="pypi" :level="3" />
 
-## Troubleshooting
+## 故障排除
 
-| Message                                                                  | What to do                                                                                |
+| 提示                                                                     | 处理方法                                                                                  |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `<tool> has no uv dependency graph; run mise lock`                       | The lockfile has no graph for the tool. Run `mise lock`, then install again.              |
-| `semantic options (with, expose, and dependency_prereleases) require uv` | Add `uv` to `[tools]`, and make sure neither `uvx = false` nor `pypi.uvx = false` is set. |
-| `pipx is required to install <tool> but was not found`                   | Add `pipx` to `[tools]`, or `uv` unless the tool sets `uvx = false`.                      |
-| A tool stops working after a Python change                               | Reinstall it; see [Python upgrades](#python-upgrades).                                    |
+| `<tool> has no uv dependency graph; run mise lock`                       | 锁文件中没有该工具的依赖关系图。运行 `mise lock`，然后重新安装。                           |
+| `semantic options (with, expose, and dependency_prereleases) require uv` | 将 `uv` 加入 `[tools]`，并确认没有设置 `uvx = false` 或 `pypi.uvx = false`。               |
+| `pipx is required to install <tool> but was not found`                   | 将 `pipx` 加入 `[tools]`；若工具未设置 `uvx = false`，也可以添加 `uv`。                    |
+| Python 更改后工具无法运行                                                 | 重新安装工具；参阅 [Python 升级](#python-upgrades)。                                       |
 
 实现：[`src/backend/pipx.rs`](https://github.com/jdx/mise/blob/main/src/backend/pipx.rs)。

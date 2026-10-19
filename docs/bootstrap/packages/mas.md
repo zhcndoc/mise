@@ -2,7 +2,7 @@
 description: "在 mise.toml 中使用数字 App Store ID 声明应用，并通过 mas 命令安装 Mac App Store 应用。"
 ---
 
-# Mac App Store apps (mas)
+# Mac App Store 应用
 
 The `mas` manager installs Mac App Store apps with the
 [`mas`](https://github.com/mas-cli/mas) command. Each package name is the

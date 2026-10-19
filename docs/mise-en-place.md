@@ -3,18 +3,13 @@ description: "观看 mise run 音乐视频和 mise 主题曲视频并阅读歌�
 socialDescription: "观看 mise run 音乐视频、阅读歌词，并下载视频或 MP3。"
 ---
 
-# mise run: the song
+# mise run：主题曲
 
-**mise run** is the mise theme song, and this is its music video. Captions are
-available from the player. You can also download the video in
-[1080p](https://mise.jdx.dev/mise-run.mp4) or
-[4K (HEVC)](https://mise.jdx.dev/mise-run-4k.mp4), both at 120 fps, or
-[download the MP3](/mise-run.mp3). The [lyrics](#lyrics) are also available as
-text. To set up mise, start with [Getting started](/getting-started.html).
+**mise run** 是 mise 的主题曲，本页提供其音乐视频。可在播放器中开启字幕，也可以下载 [1080p](https://mise.jdx.dev/mise-run.mp4) 或 [4K（HEVC）](https://mise.jdx.dev/mise-run-4k.mp4) 视频（均为 120 fps），或[下载 MP3](/mise-run.mp3)。[歌词](#lyrics)也提供了文本版本。开始使用 mise，请先阅读[入门指南](/getting-started.html)。
 
 <video controls preload="metadata" playsinline poster="/mise-run.jpg" width="1920" height="1080" style="width: 100%; height: auto; border-radius: 8px;">
   <source src="https://mise.jdx.dev/mise-run.mp4" type="video/mp4">
-  <track kind="captions" src="/mise-run.en.vtt" srclang="en" label="English">
+  <track kind="captions" src="/mise-run.en.vtt" srclang="en" label="英语">
   <a href="https://mise.jdx.dev/mise-run.mp4">下载 MP4</a>
 </video>
 

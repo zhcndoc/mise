@@ -3,13 +3,9 @@ description: "在 mise.toml 的 vars 中定义可复用值，并在 Tera 模板�
 socialDescription: "在 mise.toml 的 vars 中定义可复用值，并在模板中使用，而不导出给命令。"
 ---
 
-# Config variables
+# 配置变量
 
-Define shared values in `[vars]` and reference them with
-<span v-pre>`{{ vars.NAME }}`</span> in a [Tera template](/templates.html). Use
-vars for values that mise needs to render config; use
-[`[env]`](/environments/) for values that commands need as environment
-variables. mise does not export vars to child processes.
+在 `[vars]` 中定义共用值，并在 [Tera 模板](/templates.html)中通过 <span v-pre>`{{ vars.NAME }}`</span> 引用。mise 需要用于渲染配置的值应放在 vars 中；命令需要作为环境变量读取的值则应放在 [`[env]`](/environments/) 中。mise 不会将 vars 导出到子进程。
 
 ```mise-toml
 [vars]
@@ -23,39 +19,29 @@ node = "{{ vars.node_version }}"
 run = "echo {{ vars.test_mode | quote }}"
 ```
 
-`mise run test` prints `headless`. The task reads `test_mode` through the `vars`
-template map; there is no `$test_mode` environment variable. The `quote` filter
-quotes for POSIX shells; see [template quoting](/templates.html#string-manipulation).
+`mise run test` 会输出 `headless`。任务通过模板映射 `vars` 读取 `test_mode`；系统中不会存在名为 `$test_mode` 的环境变量。`quote` 过滤器会按 POSIX Shell 规则添加引号；详见[模板转义](/templates.html#string-manipulation)。
 
-Vars are available wherever mise renders templates in config, such as tool
-versions and options, task definitions, [hooks](/hooks.html),
-[`watch_files`](/hooks.html#watch-files-hook),
-[task includes](/tasks/task-discovery.html), and
-[dotfile templates](/dotfiles.html).
+mise 在配置中渲染模板的任何位置都可以使用 vars，例如工具版本和选项、任务定义、[钩子](/hooks.html)、[`watch_files`](/hooks.html#watch-files-hook)、[任务引入](/tasks/task-discovery.html)和 [dotfile 模板](/dotfiles.html)。
 
 可用的文件、来源和插件提供的指令形式请参阅 [`env._` 指令参考](/environments/#env-directives)。在 `[vars]` 下使用时，这些指令会填充 `vars`，而不是将值导出为环境变量。
 
-Vars follow the [config file hierarchy](/configuration.html#configuration-hierarchy):
-a higher-precedence file overrides a var of the same name. Define a default in
-global config:
+Vars 遵循[配置文件层级](/configuration.html#configuration-hierarchy)：优先级更高的文件会覆盖同名变量。可在全局配置中定义默认值：
 
 ```mise-toml [~/.config/mise/config.toml]
 [vars]
 test_mode = "headless"
 ```
 
-Then override it for your own checkout:
+然后为自己的检出目录覆盖该值：
 
 ```mise-toml [mise.local.toml]
 [vars]
 test_mode = "headed"
 ```
 
-## Value directives
+## 值指令
 
-Vars accept the same value directives as [`[env]`](/environments/), including
-defaults, required values, redaction, files, sources, and
-[secrets](/environments/secrets/):
+Vars 支持与 [`[env]`](/environments/) 相同的值指令，包括默认值、必填值、脱敏、文件、来源和[密钥](/environments/secrets/)：
 
 ```mise-toml
 [vars]
@@ -64,23 +50,15 @@ api_token = { required = "Set api_token in mise.local.toml" }
 _.file = { path = ".env.secret", redact = true }
 ```
 
-- `default` uses a process environment variable with the same name when it is
-  set and not empty, and the given value otherwise. Values from `[env]` are not
-  used for this lookup.
-- `required` fails when no value is supplied by the process environment or a
-  higher-precedence config file, such as `mise.local.toml`. The string is shown
-  as help in the error.
-- `redact = true` hides the value in task output; here it applies to every
-  value loaded from `.env.secret`.
+- `default` 会优先使用同名且非空的进程环境变量，否则使用指定值。此处不会读取 `[env]` 中的值。
+- 如果进程环境或优先级更高的配置文件（例如 `mise.local.toml`）都未提供值，`required` 会使配置失败。该字符串会作为错误提示显示。
+- `redact = true` 会在任务输出中隐藏值；此例中，它会应用于从 `.env.secret` 读取的所有值。
 
-See the [`env._` directive reference](/environments/#env-directives) for the
-file, source, and plugin directive forms. Under `[vars]`, these directives fill
-`vars` instead of exporting environment variables.
+文件、来源和插件指令的形式请参阅 [`env._` 指令参考](/environments/#env-directives)。在 `[vars]` 下使用时，这些指令会填充 `vars`，而不是导出环境变量。
 
-## Ask once and remember {#prompt}
+## 提示一次并记住答案 {#prompt}
 
-`prompt` makes a var a per-machine answer. Pair it with a `default` to offer a
-suggestion, or with `required` when there is none:
+`prompt` 会将变量设为每台机器单独填写的答案。可将它与 `default` 搭配以提供建议值；没有默认值时则与 `required` 搭配：
 
 ```mise-toml
 [vars.git_name]
@@ -92,11 +70,7 @@ required = "Run mise vars prompt to set git_email"
 prompt = "Git email"
 ```
 
-Run `mise vars prompt` to be asked for each of these vars that has no answer
-yet; name vars to ask only for those (`mise vars prompt git_name`). Enter accepts
-the default. mise saves every answer, including an accepted default, in
-`$MISE_STATE_DIR/vars.toml`, so it is never asked again, never lands in your
-config or dotfiles history, and is available to every command that reads vars from then on.
+运行 `mise vars prompt` 会提示填写尚未设置答案的变量；也可指定变量名，只提示相应变量（`mise vars prompt git_name`）。按 Enter 可接受默认值。mise 会将所有答案（包括接受的默认值）保存到 `$MISE_STATE_DIR/vars.toml`，因此之后不会再次询问，也不会写入配置或 dotfiles 历史记录，并且此后所有读取 vars 的命令都可使用这些答案。
 
 ```sh
 mise vars                       # list every var and where it comes from
@@ -106,14 +80,9 @@ mise vars prompt                # ask for every unanswered prompt var
 mise vars unset git_name        # forget a saved value, to be asked again
 ```
 
-`mise bootstrap --prompt-vars` does the same inside a bootstrap run, which is how
-a fresh machine answers them with `mise bootstrap --adopt owner/dotfiles`: the
-config that declares the vars only exists once the checkout has been fetched. A
-`--dry-run` still saves the answers it asks for.
+`mise bootstrap --prompt-vars` 会在 bootstrap 运行过程中执行相同操作。这让新机器可以通过 `mise bootstrap --adopt owner/dotfiles` 填写答案：只有检出配置仓库后，声明这些变量的配置才会出现。即使使用 `--dry-run`，提示输入的答案仍会保存。
 
-Only `mise vars prompt` and `--prompt-vars` ever ask. Everything else, including
-shell activation, tasks, and runs without a terminal, uses the saved answer and
-otherwise falls back to `default`, or fails as any other `required` var does.
+只有 `mise vars prompt` 和 `--prompt-vars` 会提示输入。其他所有操作（包括 Shell 激活、任务以及无终端的运行）都会使用已保存的答案；如果没有答案，则回退到 `default`，或像其他 `required` 变量一样报错。
 
 A var resolves in this order, highest first: the process environment, a value
 in a higher-precedence config file such as `mise.local.toml`, the saved answer,
@@ -122,10 +91,9 @@ name share one answer on a machine. A value saved with `mise vars NAME=VALUE`
 works for any var name, with or without a `prompt`, and replaces that var's
 `default` on this machine. `prompt` works only in `[vars]`, not `[env]`.
 
-## Task-local vars
+## 任务局部变量
 
-TOML tasks can define their own vars. A task-local value overrides a config var
-while that task is rendered, without changing the value anywhere else:
+TOML 任务可以定义自己的 vars。渲染该任务时，任务局部值会覆盖配置变量，但不会改变其他位置的值：
 
 ```mise-toml
 [vars]
@@ -136,15 +104,11 @@ vars = { test_mode = "headed" }
 run = "echo {{ vars.test_mode | quote }}"
 ```
 
-`mise run test` prints `headed`; other tasks still see `headless` unless they
-define their own value. See [task `vars`](/tasks/task-configuration.html#task-vars).
+`mise run test` 会输出 `headed`；除非其他任务定义自己的值，否则仍会读取 `headless`。详见[任务的 `vars`](/tasks/task-configuration.html#task-vars)。
 
-## When vars are resolved
+## 变量的解析时机
 
-mise resolves top-level `[vars]` entries while it loads config, before any
-task-local vars apply. Each entry can reference the entries resolved before it.
-The result is stored as a string, so later references do not evaluate the
-template again:
+mise 加载配置时会解析顶层 `[vars]` 条目，此时任务局部 vars 尚未生效。每个条目都可以引用此前已解析的条目。结果会以字符串保存，因此后续引用不会再次计算模板：
 
 ```mise-toml
 [vars]
@@ -152,16 +116,11 @@ mode = "headless"
 args = "--mode={{ vars.mode }}"
 ```
 
-`args` resolves to `--mode=headless`. If a higher-precedence file such as
-`mise.local.toml` sets `mode = "headed"`, <span v-pre>`{{ vars.mode }}`</span>
-renders `headed`, but `args` stays `--mode=headless`. To change `args`, override
-`args` itself or build the string in the task that uses it.
+`args` 会解析为 `--mode=headless`。如果优先级更高的文件（例如 `mise.local.toml`）将 `mode` 设为 `"headed"`，<span v-pre>`{{ vars.mode }}`</span> 会渲染为 `headed`，但 `args` 仍为 `--mode=headless`。若要更改 `args`，请直接覆盖 `args`，或在使用该值的任务中构造字符串。
 
-### What a task-local var can change
+### 任务局部变量可以更改的内容
 
-A task-local override changes direct references to that var in the task's
-templated fields, including fields inherited from a task template. It does not
-recalculate top-level vars that used the original value:
+任务局部覆盖会更改任务模板字段中对此变量的直接引用，包括从任务模板继承的字段。但它不会重新计算使用了原始值的顶层 vars：
 
 ```mise-toml
 [vars]
@@ -173,13 +132,13 @@ vars = { mode = "headed" }
 run = "echo {{ vars.args }} / {{ vars.mode }}"
 ```
 
-`mise run test` prints:
+`mise run test` 会输出：
 
 ```text
 --mode=headless / headed
 ```
 
-To make the argument follow the task's mode, build it in `run`:
+若要让参数随任务模式变化，请在 `run` 中构造它：
 
 ```mise-toml
 [tasks.test]
@@ -187,15 +146,11 @@ vars = { mode = "headed" }
 run = "echo --mode={{ vars.mode }}"
 ```
 
-This prints `--mode=headed`. When several tasks share the same command, put
-`run` in a [task template](/tasks/templates.html#parameterizing-a-template-with-vars)
-and let each task supply its vars.
+此配置会输出 `--mode=headed`。如果多个任务共用同一条命令，可将 `run` 放进[任务模板](/tasks/templates.html#parameterizing-a-template-with-vars)，再由每个任务提供自己的 vars。
 
-### Missing vars and defaults
+### 缺少变量时使用默认值
 
-A top-level var cannot reference a value that exists only in a task's `vars`.
-Without a fallback, the reference fails when mise loads the config. The Tera
-`default` filter supplies a fallback where the expression is rendered:
+顶层变量不能引用仅存在于任务 `vars` 中的值。若没有备用值，mise 加载配置时就会因引用失败。Tera 的 `default` 过滤器可在渲染表达式的位置提供备用值：
 
 ```mise-toml
 [vars]
@@ -206,6 +161,4 @@ vars = { mode = "headed" }
 run = "echo {{ vars.args }} / {{ vars.mode }}"
 ```
 
-This also prints `--mode=headless / headed`: the filter supplies `headless`
-while `[vars]` loads, and does not wait for the task to supply `mode`. Put
-expressions that depend on task-local values in the task or its template.
+此配置同样会输出 `--mode=headless / headed`：过滤器会在加载 `[vars]` 时提供 `headless`，不会等到任务提供 `mode`。依赖任务局部值的表达式应放在任务或其模板中。

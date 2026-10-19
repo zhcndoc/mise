@@ -2,41 +2,29 @@
 description: "通过自托管缓存服务器，在 CI 和开发者机器之间共享任务缓存结果。"
 ---
 
-# Remote task cache <Badge type="warning" text="experimental" />
+# 远程任务缓存 <Badge type="warning" text="实验性" />
 
-A remote cache lets CI jobs and developer machines reuse each other's task
-results. mise looks up entries on the server when the local
-[artifact cache](/tasks/caching.html#enable-artifact-caching) misses, and
-uploads new results from trusted CI jobs. Get the local cache working for your
-tasks before you add a server.
+远程缓存可让 CI 作业和开发者机器复用彼此的任务结果。本地[制品缓存](/tasks/caching.html#enable-artifact-caching)未命中时，mise 会查询服务器；受信任的 CI 作业还会上传新结果。接入服务器前，请先确认任务的本地缓存正常工作。
 
-::: warning Experimental
-The remote cache is part of the artifact cache and requires `experimental = true`.
+::: warning 实验性功能
+远程缓存属于制品缓存，需要设置 `experimental = true`。
 :::
 
-## Choose a server
+## 选择服务器
 
-mise speaks version 1 of the [remote cache protocol](/tasks/remote-cache-protocol.html)
-over HTTPS. Any server that implements it works.
+mise 通过 HTTPS 使用第 1 版[远程缓存协议](/tasks/remote-cache-protocol.html)。任何实现该协议的服务器都可以使用。
 
-The reference server is `mbx-cache`, the cache server for Mr Boxington. Its
-source is [`jdx/mr-boxington-cache`](https://github.com/jdx/mr-boxington-cache).
-It stores blobs on the filesystem or in S3-compatible storage, keeps metadata in
-memory or in PostgreSQL, grants per-namespace read and write access to static
-tokens and OIDC identities, and ships a Docker Compose file and a Helm chart.
-It has no release yet, so install it from the repository:
+参考服务器是 Mr Boxington 的缓存服务器 `mbx-cache`，源码位于 [`jdx/mr-boxington-cache`](https://github.com/jdx/mr-boxington-cache)。它可以将数据块存储在文件系统或兼容 S3 的存储中，将元数据保存在内存或 PostgreSQL 中，并支持为静态令牌和 OIDC 身份按命名空间授予读写权限。仓库还提供 Docker Compose 文件和 Helm chart。目前尚无正式发布版本，请从仓库安装：
 
 ```sh
 cargo install --git https://github.com/jdx/mr-boxington-cache
 ```
 
-The `mise-cache` 0.1 releases from the same repository, published when it was
-named `jdx/mise-cache`, expect `mise-cache-*` request headers instead of the
-`mbx-cache-*` headers that mise sends, so they reject mise's requests.
+同一仓库曾以 `jdx/mise-cache` 名称发布 `mise-cache` 0.1 版本。这些版本预期接收 `mise-cache-*` 请求头，而 mise 发送的是 `mbx-cache-*`，因此会拒绝 mise 的请求。
 
-## Configure mise
+## 配置 mise
 
-Point mise at the server and choose a namespace:
+将 mise 指向服务器，并选择一个命名空间：
 
 ```toml
 [settings]
@@ -45,86 +33,53 @@ task.cache.remote_url = "https://cache.example.com/"
 task.cache.remote_namespace = "acme/widgets"
 ```
 
-- [`task.cache.remote_url`](/configuration/settings.html#task.cache.remote_url)
-  is the server's base URL. mise appends `v1/...` to it.
-- [`task.cache.remote_namespace`](/configuration/settings.html#task.cache.remote_namespace)
-  is required. The server uses it to keep entries apart and to decide who may
-  read and write them. It is an identifier, such as a repository name, not a
-  secret or a credential.
-- [`task.cache.remote_mode`](/configuration/settings.html#task.cache.remote_mode)
-  limits what mise does with the server: `read-write` (the default),
-  `read-only`, or `write-only`.
+- [`task.cache.remote_url`](/configuration/settings.html#task.cache.remote_url) 是服务器的基础 URL，mise 会在其后追加 `v1/...`。
+- [`task.cache.remote_namespace`](/configuration/settings.html#task.cache.remote_namespace) 为必填项。服务器用它隔离缓存条目，并据此决定谁可以读写。它是一个标识符，例如仓库名称，不是秘密或凭据。
+- [`task.cache.remote_mode`](/configuration/settings.html#task.cache.remote_mode) 用于限制 mise 如何使用服务器：`read-write`（默认值）、`read-only` 或 `write-only`。
 
-These settings can live in the project's `mise.toml`. Credentials cannot; see
-[Credentials](#credentials).
+这些设置可以写在项目的 `mise.toml` 中，但凭据不能；详见[凭据](#credentials)。
 
-Use a separate namespace wherever one group of writers should not be able to
-affect another group's entries, and when a change to how tasks behave could
-collide with entries written under a different policy.
+如果不同写入者不应影响彼此的缓存条目，或任务行为发生变化可能与采用其他策略写入的条目冲突，请使用不同的命名空间。
 
-With a remote configured, a lookup checks the local cache first and then the
-server. mise verifies a remote hit, copies it into the local cache, and restores
-it from there. After a successful run, mise stores the result locally and, when
-the run may write, uploads it. A server that cannot be reached produces a
-warning, and mise continues with the local cache only. To skip the server for
-one run, use [`mise run --task-cache local-only`](/cli/run.html).
+配置远程服务器后，查询会先检查本地缓存，再检查服务器。远程命中后，mise 会验证条目、将其复制到本地缓存，再从本地恢复。任务成功运行后，mise 会在本地保存结果；如果此次运行允许写入，也会上传结果。无法连接服务器时，mise 会发出警告并仅使用本地缓存继续运行。若只想在某次运行中跳过服务器，请使用[`mise run --task-cache local-only`](/cli/run.html)。
 
-## Who can write
+## 写入权限
 
-mise uploads results only from CI jobs that build a protected branch. Every
-other run can read from the server but does not write to it:
+mise 只会从构建受保护分支的 CI 作业上传结果。其他所有运行都可以从服务器读取，但不会写入：
 
-| Where mise runs                                                                                                                                    | Reads | Writes |
+| mise 的运行场景                                                                                                                                    | 可读取 | 可写入 |
 | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------ |
-| GitHub Actions `push` to a protected branch (`GITHUB_EVENT_NAME=push`, `GITHUB_REF_TYPE=branch`, `GITHUB_REF_PROTECTED=true`)                      | Yes   | Yes    |
-| GitLab CI push pipeline for a protected branch (`CI_PIPELINE_SOURCE=push`, `CI_COMMIT_REF_PROTECTED=true`, no `CI_COMMIT_TAG` or merge request ID) | Yes   | Yes    |
-| Pull requests, merge requests, tags, unprotected branches, other CI systems, and local runs                                                        | Yes   | No     |
+| GitHub Actions 向受保护分支执行 `push`（`GITHUB_EVENT_NAME=push`、`GITHUB_REF_TYPE=branch`、`GITHUB_REF_PROTECTED=true`）                           | 是     | 是      |
+| GitLab CI 向受保护分支执行 push 流水线（`CI_PIPELINE_SOURCE=push`、`CI_COMMIT_REF_PROTECTED=true`，且没有 `CI_COMMIT_TAG` 或合并请求 ID）             | 是     | 是      |
+| 拉取请求、合并请求、标签、未受保护的分支、其他 CI 系统和本地运行                                                                                     | 是     | 否      |
 
-With `remote_mode = "write-only"`, mise turns the remote off entirely in the
-read-only contexts instead of reading from it.
+设置 `remote_mode = "write-only"` 后，在只读场景中 mise 会完全停用远程缓存，而不是从中读取。
 
-This check is defense in depth. The server must enforce write access itself,
-because anyone who can write to a namespace can publish entries that its
-readers restore. The [protocol](/tasks/remote-cache-protocol.html#authentication-and-namespace-policy)
-describes what a server must check. Checksums detect corruption, and HTTPS
-authenticates the server, but a checksum is not a signature from the job that
-produced the entry.
+这项检查是纵深防御的一部分。服务器必须自行限制写入权限，因为任何能写入某个命名空间的人，都可以发布该命名空间读取者会恢复的缓存条目。[协议说明](/tasks/remote-cache-protocol.html#authentication-and-namespace-policy)列出了服务器必须执行的检查。校验和可检测数据损坏，HTTPS 可验证服务器身份，但校验和并不是生成该条目的作业签名。
 
-To keep untrusted jobs from publishing:
+为防止不受信任的作业发布条目：
 
-- Give pull-request jobs read-only credentials, or none.
-- Run them with `mise run --task-cache read-only`.
-- Put less-trusted writers in their own namespace.
+- 为拉取请求作业提供只读凭据，或不提供任何凭据。
+- 使用 `mise run --task-cache read-only` 运行这些作业。
+- 将可信度较低的写入者放到单独的命名空间中。
 
-## Credentials
+## 凭据
 
-mise sends a bearer token when you provide one. Set it in the job's environment
-or in your global config; project config cannot set these settings.
+提供 bearer token 后，mise 会在请求中发送该令牌。请在作业环境或全局配置中设置凭据；项目配置不能设置这些凭据项。
 
-| Variable                               | Setting                                                                                           | What it does                                                            |
+| 环境变量                               | 设置项                                                                                           | 作用                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `MISE_TASK_CACHE_REMOTE_TOKEN`         | [`task.cache.remote_token`](/configuration/settings.html#task.cache.remote_token)                 | Sends this token                                                        |
-| `MISE_TASK_CACHE_REMOTE_TOKEN_FILE`    | [`task.cache.remote_token_file`](/configuration/settings.html#task.cache.remote_token_file)       | Rereads the token from this file before every request                   |
-| `MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE` | [`task.cache.remote_oidc_audience`](/configuration/settings.html#task.cache.remote_oidc_audience) | Requests a GitHub Actions OIDC token for this audience and refreshes it |
+| `MISE_TASK_CACHE_REMOTE_TOKEN`         | [`task.cache.remote_token`](/configuration/settings.html#task.cache.remote_token)                 | 发送此 token                                                            |
+| `MISE_TASK_CACHE_REMOTE_TOKEN_FILE`    | [`task.cache.remote_token_file`](/configuration/settings.html#task.cache.remote_token_file)       | 每次请求前重新从此文件读取 token                                         |
+| `MISE_TASK_CACHE_REMOTE_OIDC_AUDIENCE` | [`task.cache.remote_oidc_audience`](/configuration/settings.html#task.cache.remote_oidc_audience) | 为此 audience 申请并刷新 GitHub Actions OIDC token                       |
 
-When more than one is set, mise uses the token, then the token file, then OIDC.
-A static token can therefore override workload identity in an emergency without
-a change to project configuration. The token file suits rotating credentials
-such as Kubernetes projected service account tokens. CI systems other than
-GitHub Actions can pass the OIDC token they issue through
-`MISE_TASK_CACHE_REMOTE_TOKEN`.
+如果同时设置多项，mise 会依次使用 token、token 文件和 OIDC。因此，紧急情况下可以通过静态 token 覆盖工作负载身份，而无需更改项目配置。token 文件适合存放轮换中的凭据，例如 Kubernetes 投射的服务账户令牌。GitHub Actions 以外的 CI 系统可以通过 `MISE_TASK_CACHE_REMOTE_TOKEN` 传递其签发的 OIDC token。
 
-A request that carries a credential must use HTTPS, except to `localhost`,
-`127.0.0.0/8`, or `::1`. A cache-enabled task with a credential and a plain
-`http://` URL to any other host fails with
-`remote cache URL must use HTTPS except for loopback development servers`.
-Without a credential, plain HTTP works, but mise warns that cache traffic can be
-read or modified in transit.
+携带凭据的请求必须使用 HTTPS；目标为 `localhost`、`127.0.0.0/8` 或 `::1` 时除外。启用了缓存的任务若携带凭据，却使用指向其他主机的普通 `http://` URL，将会因 `remote cache URL must use HTTPS except for loopback development servers` 而失败。不携带凭据时可以使用普通 HTTP，但 mise 会警告缓存流量可能在传输过程中被读取或篡改。
 
 ### GitHub Actions OIDC
 
-In GitHub Actions, mise can request and refresh a short-lived OIDC token itself.
-Let the workflow request an identity token and set the audience:
+在 GitHub Actions 中，mise 可以自行申请并刷新短时有效的 OIDC token。请在工作流中授予身份令牌权限并设置 audience：
 
 ```yaml
 permissions:
@@ -142,62 +97,34 @@ jobs:
       - run: mise run test
 ```
 
-mise keeps the token in memory and refreshes it before it expires. Configure the
-server to trust GitHub's issuer (`https://token.actions.githubusercontent.com`),
-accept the same audience, and grant the workflow's identity claims, such as its
-repository, access to the namespace.
+mise 会将 token 保存在内存中，并在过期前刷新。请配置服务器信任 GitHub 的签发者（`https://token.actions.githubusercontent.com`）、接受相同的 audience，并允许工作流的身份声明（例如所属仓库）访问该命名空间。
 
-Without `id-token: write`, cache-enabled tasks fail with
+未授予 `id-token: write` 时，启用了缓存的任务会因以下错误而失败：
 ``remote cache OIDC audience requires GitHub Actions OIDC; grant `id-token: write` or set MISE_TASK_CACHE_REMOTE_TOKEN``.
 
-## What an entry contains
+## 缓存条目包含的内容
 
-Every reader of a namespace can read everything in its entries. An uploaded
-entry contains:
+命名空间中的所有读取者都可以读取其中缓存条目的全部内容。上传的条目包括：
 
-- The action description that mise hashes into the cache key. It holds the
-  task's name, `run` entries, arguments, shell, output patterns, directory,
-  source hash, resolved tool versions, operating system, and architecture. It
-  lists the cache keys of cached dependencies and the text of each
-  `cache.command_inputs` command, with hashes of the command's output. It also
-  holds the values of the task's own `env` entries, of every variable named in
-  `cache.env` or `task_config.global_env`, and of every mise variable the task
-  can see, from `[vars]` and the task's `vars`.
-- The task's captured stdout and stderr, after mise applies
-  [redactions](/environments/secrets/#redaction).
-- Every declared output file.
+- mise 用于计算缓存键的操作描述。它包含任务名称、`run` 条目、参数、Shell、输出模式、目录、源文件哈希、解析后的工具版本、操作系统和体系结构。它还会列出已缓存依赖项的缓存键，以及每个 `cache.command_inputs` 命令的文本和命令输出哈希。此外还包含任务自身 `env` 条目的值、`cache.env` 或 `task_config.global_env` 中列出的所有变量值，以及任务可以访问的所有 mise 变量值，包括 `[vars]` 和任务的 `vars`。
+- 任务捕获的 stdout 和 stderr；mise 会先应用[脱敏规则](/environments/secrets/#redaction)。
+- 每个已声明的输出文件。
 
-Source files are not uploaded; only a hash of them is.
+源文件不会上传，只会上传其哈希值。
 
-::: danger Secrets in the action description
-mise writes the variable values and command input text in the action
-description verbatim. It does not apply `redact = true` or `redactions` to them.
-Do not put secrets in a cached task's `env`, in the `env` of a `{ task = ... }`
-run entry, in a variable named in `cache.env` or `task_config.global_env`, in
-`vars`, or in a command input. Provide credentials through the job's
-environment instead, and list them in
-[`pass_through_env`](/tasks/caching.html#environment-variables-and-cache-keys)
-when the task runs in an environment sandbox.
+::: danger 操作描述中包含秘密信息
+mise 会将变量值和命令输入文本原样写入操作描述，不会对它们应用 `redact = true` 或 `redactions`。不要将秘密放在已缓存任务的 `env`、`{ task = ... }` 运行条目的 `env`、`cache.env` 或 `task_config.global_env` 中列出的变量、`vars`，或命令输入中。请改为通过作业环境提供凭据；如果任务运行在环境沙箱中，请将对应变量列入 [`pass_through_env`](/tasks/caching.html#environment-variables-and-cache-keys)。
 :::
 
-Redactions on the log catch only values mise knows about. A task can still
-print an unknown credential or write one into an output file, so cache such a
-task only when its log and outputs are safe to share with everyone who can read
-the namespace.
+日志脱敏只能捕获 mise 已知的值。任务仍可能打印未知凭据或将其写入输出文件，因此只有在日志和输出可安全地与命名空间中所有读取者共享时，才应缓存此类任务。
 
-[`mise cache clear`](/cli/cache/clear.html) removes local entries only. Use the
-server's retention and deletion controls to remove uploaded copies.
+[`mise cache clear`](/cli/cache/clear.html) 只会清除本地条目。若要删除已上传的副本，请使用服务器的保留和删除控制功能。
 
-## Share entries between machines
+## 在机器之间共享条目
 
-An entry matches only when every [cache-key input](/tasks/caching.html#what-goes-into-the-cache-key)
-matches, so:
+只有所有[缓存键输入](/tasks/caching.html#what-goes-into-the-cache-key)都相同时，条目才会命中。因此：
 
-- Machines must run the same operating system and architecture.
-- Resolved tool versions must be the same. A [lockfile](/dev-tools/mise-lock.html)
-  keeps them aligned.
-- Source paths are relative to the outermost config root, so different checkout
-  locations share entries. A source outside that root is keyed by its absolute
-  path and is shared only by checkouts at the same location.
-- A variable named in `cache.env` that has a different value in CI, such as
-  `CI=true`, produces a different key.
+- 机器必须运行相同的操作系统和体系结构。
+- 解析出的工具版本必须相同。使用[锁文件](/dev-tools/mise-lock.html)可以确保版本一致。
+- 源文件路径相对于最外层配置根目录，因此检出目录不同的机器也能共享条目。根目录之外的源文件会使用绝对路径作为缓存键的一部分，只有检出位置相同的机器才能共享。
+- `cache.env` 中变量的值若在 CI 中不同（例如 `CI=true`），就会生成不同的缓存键。

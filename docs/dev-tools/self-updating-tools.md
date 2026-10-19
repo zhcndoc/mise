@@ -1,9 +1,9 @@
 ---
-description: How a tool that updates itself, such as a coding agent, checks for and installs updates through mise and switches running sessions to the new version.
-socialDescription: Let mise update your tool, and move running sessions onto the new version.
+description: 了解会自我更新的工具（例如编程代理）如何通过 mise 检查并安装更新，以及如何将运行中的会话切换到新版本。
+socialDescription: 通过 mise 更新工具，并将运行中的会话切换到新版本。
 ---
 
-# Self-updating tools
+# 自动更新工具
 
 This page is for authors of tools that update themselves, such as coding
 agents, editors, and long-running CLIs. When mise installed your tool, update

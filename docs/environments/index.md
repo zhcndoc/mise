@@ -4,16 +4,14 @@ description: "在 mise.toml 中设置项目环境变量，从文件和脚本载�
 
 # 环境变量
 
-Set project environment variables under `[env]` in `mise.toml`. mise applies
-them to commands run with `mise exec`, to tasks, to shims, and to shells where
-mise is activated.
+在 `mise.toml` 的 `[env]` 下设置项目环境变量。mise 会将这些变量应用于通过 `mise exec`
+运行的命令、任务、shim，以及已激活 mise 的 Shell。
 
-For separate files per deployment, such as `mise.production.toml`, see
-[Config environments](/configuration/environments.html). For values that only
-templates need, use [`[vars]`](/configuration/vars.html). To keep secret values
-out of plaintext config, see [Secrets](/environments/secrets/).
+若要为不同部署使用独立配置文件，例如 `mise.production.toml`，请参阅
+[配置环境](/configuration/environments.html)。只供模板使用的值应放在 [`[vars]`](/configuration/vars.html)。
+若要避免机密以明文形式写入配置，请参阅[机密](/environments/secrets/)。
 
-## Set and unset variables {#set-and-unset}
+## 设置和取消设置变量 {#set-and-unset}
 
 ```toml [mise.toml]
 [env]
@@ -27,46 +25,42 @@ mise exec -- sh -c 'echo "$NODE_ENV"'
 # production
 ```
 
-A value can be a string or an integer; `true` becomes the string `"true"`. Set a
-variable to `false` to unset it, for example one that your shell or a parent
-directory's config sets:
+值可以是字符串或整数；`true` 会转换为字符串 `"true"`。将变量设为 `false` 可取消设置，
+例如取消 Shell 或父目录配置中设置的变量：
 
 ```toml [mise.toml]
 [env]
 NODE_ENV = false
 ```
 
-[`mise set`](/cli/set.html) and [`mise unset`](/cli/unset.html) edit `[env]`
-from the command line:
+[`mise set`](/cli/set.html) 和 [`mise unset`](/cli/unset.html) 可在命令行中编辑 `[env]`：
 
 ```sh
-mise set NODE_ENV=development   # writes NODE_ENV = "development" under [env]
-mise set NODE_ENV               # prints development
-mise set                        # lists each variable, its value, and the file it comes from
-mise unset NODE_ENV             # removes it
+mise set NODE_ENV=development   # 在 [env] 下写入 NODE_ENV = "development"
+mise set NODE_ENV               # 打印 development
+mise set                        # 列出各变量、取值及其来源文件
+mise unset NODE_ENV             # 移除变量
 ```
 
-`mise set` writes to the nearest directory that has config. When that directory
-has both `mise.toml` and `mise.local.toml`, it writes `mise.toml`; see
-[which file a write uses](/configuration.html#target-file-for-write-operations).
-Pass `-E staging` to write `mise.staging.toml`, `-g` to write the global config,
-and `--prompt` or `--stdin` to keep a value out of your shell history.
+`mise set` 会写入最近的配置目录。如果该目录同时有 `mise.toml` 和 `mise.local.toml`，则
+写入 `mise.toml`；参见[写入操作使用哪个文件](/configuration.html#target-file-for-write-operations)。
+传入 `-E staging` 可写入 `mise.staging.toml`，传入 `-g` 可写入全局配置；传入 `--prompt`
+或 `--stdin` 可避免将值留在 Shell 历史记录中。
 
-To print the resolved environment, including `PATH` entries and variables that
-tools set, run [`mise env`](/cli/env.html). Add `--json` or `--dotenv` for other
-formats.
+要打印解析后的环境，包括 `PATH` 条目和工具设置的变量，请运行 [`mise env`](/cli/env.html)。
+添加 `--json` 或 `--dotenv` 可选择其他格式。
 
-## Where variables apply {#using-environment-variables}
+## 变量的生效范围 {#using-environment-variables}
 
-| How you run a command                                | Receives `[env]`                                                     |
-| ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `mise exec -- <command>`                             | Yes                                                                  |
-| `mise run <task>`                                    | Yes, plus the task's own `env`                                       |
-| A shell where [mise is activated](/shell-setup.html) | Yes, updated each time you change directories                        |
-| A [shim](/dev-tools/shims.html)                      | Yes, for the program the shim runs                                   |
-| [`mise en`](/cli/en.html)                            | Yes, in a new shell that does not update when you change directories |
+| 命令的运行方式                                      | 是否接收 `[env]`                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------- |
+| `mise exec -- <command>`                            | 是                                                                     |
+| `mise run <task>`                                   | 是，并叠加任务自身的 `env`                                             |
+| [已激活 mise](/shell-setup.html) 的 Shell           | 是；每次切换目录时都会更新                                             |
+| [shim](/dev-tools/shims.html)                       | 是，应用于 shim 启动的程序                                             |
+| [`mise en`](/cli/en.html)                           | 是；在新 Shell 中生效，但切换目录时不会更新                            |
 
-Variables combine with [tools](/dev-tools/) in the same file:
+同一文件中的变量和[工具](/dev-tools/)配置会共同生效：
 
 ```sh
 mise use node@24
@@ -75,10 +69,9 @@ mise exec -- node -p process.env.MY_VAR
 # 123
 ```
 
-### Task-specific variables {#environment-in-tasks}
+### 任务专属变量 {#environment-in-tasks}
 
-A task's own `env` applies only to that task and accepts the same values and
-directives as `[env]`:
+任务自身的 `env` 只应用于该任务，并接受与 `[env]` 相同的值和指令：
 
 ```mise-toml [mise.toml]
 [tasks.print]
@@ -86,30 +79,27 @@ env = { MY_VAR = "my variable", _.file = ".env.print" }
 run = "echo $MY_VAR"
 ```
 
-See [task `env`](/tasks/task-configuration.html#env).
+参见[任务的 `env`](/tasks/task-configuration.html#env)。
 
-## Defaults and required variables {#defaults-and-required}
+## 默认值与必需变量 {#defaults-and-required}
 
-### Defaults {#defaults}
+### 默认值 {#defaults}
 
-`default` sets a fallback and keeps a value that is already there:
+`default` 用于设置回退值；如果变量已有值，则予以保留：
 
 ```toml [mise.toml]
 [env]
 NODE_ENV = { default = "development" }
 ```
 
-mise keeps `NODE_ENV` when it is already set to a non-empty value, either in the
-environment mise started with or by a lower-precedence config file such as the
-global config. Otherwise it sets `NODE_ENV` to `development`. A default must be a
-string or an integer.
+如果 `NODE_ENV` 已在 mise 启动时继承的环境或优先级较低的配置文件（例如全局配置）中设为
+非空值，mise 会保留该值。否则会将 `NODE_ENV` 设为 `development`。默认值必须是字符串或整数。
 
-### Required variables {#required-variables}
+### 必需变量 {#required-variables}
 
-`required = true` declares a variable that something else must set. mise checks
-that it is set but never assigns it. The check passes when the variable is in
-the environment mise started with, or when any other config file sets it, such
-as `mise.local.toml`, a parent directory's config or the global config:
+`required = true` 用于声明必须由其他来源设置的变量。mise 会检查它是否已设置，但不会为其
+赋值。如果该变量存在于 mise 启动时继承的环境，或由其他配置文件设置（例如 `mise.local.toml`、
+父目录配置或全局配置），检查就会通过：
 
 ```toml [mise.toml]
 [env]
@@ -121,34 +111,29 @@ DATABASE_URL = { required = true }
 DATABASE_URL = "postgres://localhost/app"
 ```
 
-Give `required` a string instead of `true` to show help text when the variable
-is missing:
+如果将字符串而非 `true` 赋给 `required`，变量缺失时会显示相应的提示文本：
 
 ```toml [mise.toml]
 [env]
-DATABASE_URL = { required = "Set DATABASE_URL to your PostgreSQL connection string" }
+DATABASE_URL = { required = "请将 DATABASE_URL 设置为 PostgreSQL 连接字符串" }
 ```
 
-When a required variable is missing, `mise exec`, `mise run`, `mise env` and
-`mise set` stop with an error that includes the help text. An activated shell
-prints a warning instead and keeps going, so a missing value does not break your
-prompt:
+缺少必需变量时，`mise exec`、`mise run`、`mise env` 和 `mise set` 会报错并附上提示文本。
+已激活的 Shell 则会发出警告并继续运行，避免缺失值影响提示符：
 
 ```text
 mise WARN  Required environment variable 'DATABASE_URL' is not defined. It must be set before mise runs or in a later config file. (Required in: ~/src/app/mise.toml)
-Help: Set DATABASE_URL to your PostgreSQL connection string
+Help: 请将 DATABASE_URL 设置为 PostgreSQL 连接字符串
 ```
 
-`required` cannot be combined with `value` or `default`.
+`required` 不能与 `value` 或 `default` 同时使用。
 
-To mask a value in task output, including one a caller supplies for a
-`required` variable, mark it with `redact = true`; see
-[Redaction and CI masking](/environments/secrets/#redaction).
+若要在任务输出中隐藏变量值（包括调用方为必需变量提供的值），请设置 `redact = true`；参见
+[隐藏值与 CI 脱敏](/environments/secrets/#redaction)。
 
-## Reference other values {#reference-other-values}
+## 引用其他值 {#reference-other-values}
 
-Values are [Tera templates](/templates.html), and they also support shell-style
-`$VAR` expansion:
+值支持 [Tera 模板](/templates.html)和 Shell 风格的 `$VAR` 展开：
 
 ```toml [mise.toml]
 [env]
@@ -156,35 +141,32 @@ PROJECT_LIB = "{{config_root}}/lib"
 LD_LIBRARY_PATH = "{{env.PROJECT_LIB}}:${LD_LIBRARY_PATH:-}"
 ```
 
-A value can use only variables defined above it in the same file, in a
-lower-precedence config file, or in the environment mise started with.
+一个值只能引用同一文件中位于其上方的变量、优先级较低的配置文件中的变量，或 mise 启动时
+继承的环境变量。
 
-### Templates {#templates}
+### 模板 {#templates}
 
-<span v-pre>`{{config_root}}`</span> is the project directory and
-<span v-pre>`{{env.NAME}}`</span> reads a variable. See
-[Tera templates](/templates.html) for the full context and filters.
+<span v-pre>`{{config_root}}`</span> 表示项目目录，<span v-pre>`{{env.NAME}}`</span>
+用于读取变量。完整的上下文和过滤器列表请参阅 [Tera 模板](/templates.html)。
 
-### Shell-style expansion {#shell-style-variable-expansion}
+### Shell 风格的变量展开 {#shell-style-variable-expansion}
 
-| Syntax            | Result                                                           |
+| 语法              | 结果                                                             |
 | ----------------- | ---------------------------------------------------------------- |
-| `$VAR`            | The value of `VAR`                                               |
-| `${VAR}`          | The same; use it before letters or digits, as in `${VAR}_suffix` |
-| `${VAR:-default}` | `default` when `VAR` is unset or empty                           |
-| `${VAR:-}`        | An empty string when `VAR` is unset, without a warning           |
+| `$VAR`            | `VAR` 的值                                                       |
+| `${VAR}`          | 与上者相同；当变量后紧跟字母或数字时使用，例如 `${VAR}_suffix`    |
+| `${VAR:-default}` | `VAR` 未设置或为空时使用 `default`                                |
+| `${VAR:-}`        | `VAR` 未设置时展开为空字符串，且不发出警告                       |
 
-Expansion runs after template rendering, so a value can mix both. A variable
-that is not defined and has no default stays as written, and mise prints a
-warning. Turn expansion off with
-[`env_shell_expand = false`](/configuration/settings.html#env_shell_expand).
+模板渲染后才会展开变量，因此一个值中可以同时使用两种形式。变量未定义且没有默认值时，会保留
+原样并由 mise 发出警告。若要关闭展开，请将 [`env_shell_expand`](/configuration/settings.html#env_shell_expand)
+设为 `false`。
 
-## Use values that tools set {#lazy-eval}
+## 使用工具提供的值 {#lazy-eval}
 
-mise resolves `[env]` before it loads tools, so values can configure tool
-installation, for example `CFLAGS` for a source build. To use something a tool
-provides, such as its version or its `PATH` entries, add `tools = true`. mise
-then resolves that entry after tools load:
+mise 会先解析 `[env]`，再加载工具，因此变量可用于配置工具安装，例如源码构建时使用的
+`CFLAGS`。若要引用工具提供的值（例如版本或 `PATH` 条目），请添加 `tools = true`。mise
+随后会在工具加载完成后再解析该条目：
 
 ```toml [mise.toml]
 [env]
@@ -192,36 +174,30 @@ NODE_VERSION = { value = "{{ tools.node.version }}", tools = true }
 _.path = { path = "{{env.GEM_HOME}}/bin", tools = true }
 ```
 
-`tools = true` works on variables, `_.file`, `_.path`, `_.source` and
-[plugin directives](#plugin-directives). `_.python.venv` always resolves after
-tools and does not accept the option.
+`tools = true` 可用于变量、`_.file`、`_.path`、`_.source` 和[插件指令](#plugin-directives)。
+`_.python.venv` 总是在工具加载后解析，因此不接受此选项。
 
-## Precedence {#precedence}
+## 优先级 {#precedence}
 
-When several config files set the same variable, the more specific file wins:
+多个配置文件设置同一变量时，较具体的文件优先：
 
-- `mise.local.toml` wins over `mise.toml`.
-- With `MISE_ENV=dev`, `mise.dev.toml` wins over `mise.toml`, `mise.local.toml`
-  wins over `mise.dev.toml`, and `mise.dev.local.toml` wins over all three.
-- A project's config wins over a parent directory's config.
-- Any project config wins over the global config
-  (`~/.config/mise/config.toml`).
+- `mise.local.toml` 优先于 `mise.toml`。
+- 设置 `MISE_ENV=dev` 时，`mise.dev.toml` 优先于 `mise.toml`，`mise.local.toml` 优先于
+  `mise.dev.toml`，而 `mise.dev.local.toml` 优先级最高。
+- 项目配置优先于父目录配置。
+- 任意项目配置都优先于全局配置（`~/.config/mise/config.toml`）。
 
-See [config files](/configuration.html#mise-toml) for the full list of
-locations.
+完整的配置文件位置列表请参阅[配置文件](/configuration.html#mise-toml)。
 
-mise evaluates config files from the lowest precedence to the highest, and the
-entries in each file in the order you write them, so each value can reference
-anything set before it. A value in `[env]` replaces a variable of the same name
-in the environment mise started with; `default` and `required` are the
-exceptions described above.
+mise 会从优先级最低的配置文件开始解析，再处理优先级较高的文件；每个文件中的条目则按书写
+顺序解析，因此每个值都可以引用之前设置的值。`[env]` 中的值会覆盖 mise 启动时继承环境中
+同名的变量；上文所述的 `default` 和 `required` 是例外。
 
-## Env directives {#env-directives}
+## 环境指令 {#env-directives}
 
-Directives load variables from files and scripts and add `PATH` entries. They
-live in a table named `_`, because a variable cannot contain a nested table.
-`_.file`, `_.path` and `_.source` each take a path, a table with `path` and
-options, or an array of either:
+指令可从文件和脚本载入变量，也可添加 `PATH` 条目。由于变量不能包含嵌套表格，这些指令
+放在名为 `_` 的表格中。`_.file`、`_.path` 和 `_.source` 的值可以是路径、包含 `path` 和
+选项的表格，或上述两种值组成的数组：
 
 ```toml [mise.toml]
 [env]
@@ -230,39 +206,34 @@ _.path = ["bin", "node_modules/.bin"]
 _.source = { path = "scripts/env.sh", redact = true }
 ```
 
-Relative paths resolve against the project directory, even when the config file
-is in `.config/mise/` or `.mise/` (see
-[`config_root`](/configuration.html#config-root)). Paths can use templates,
-`$VAR` and `~`. Directives run in the order you write them, so `_.path` can use
-a variable that `_.source` set above it; `_.python.venv` always runs last.
+相对路径始终相对于项目目录解析，即使配置文件位于 `.config/mise/` 或 `.mise/` 中也是如此
+（参见[`config_root`](/configuration.html#config-root)）。路径支持模板、`$VAR` 和 `~`。
+各指令按书写顺序执行，因此 `_.path` 可以使用前面的
+`_.source` 设置的变量；`_.python.venv` 始终最后执行。
 
-| Option    | `_.file` | `_.source` | `_.path` | Effect                                                                   |
-| --------- | -------- | ---------- | -------- | ------------------------------------------------------------------------ |
-| `path`    | Yes      | Yes        | Yes      | One path or a list of paths                                              |
-| `tools`   | Yes      | Yes        | Yes      | Resolve after tools load ([details](#lazy-eval))                         |
-| `redact`  | Yes      | Yes        | No       | Mark every loaded value as [sensitive](/environments/secrets/#redaction) |
-| `expand`  | Yes      | No         | No       | Let the file use values loaded before it                                 |
-| `find_up` | Yes      | No         | No       | 从当前目录及其父目录中搜索相对路径                                     |
+| 选项      | `_.file` | `_.source` | `_.path` | 作用                                                                    |
+| --------- | -------- | ---------- | -------- | ----------------------------------------------------------------------- |
+| `path`    | 是       | 是         | 是       | 一个路径或路径列表                                                      |
+| `tools`   | 是       | 是         | 是       | 在工具加载后解析（[详情](#lazy-eval)）                                  |
+| `redact`  | 是       | 是         | 否       | 将所有载入的值标记为[敏感信息](/environments/secrets/#redaction)       |
+| `expand`  | 是       | 否         | 否       | 允许文件引用此前载入的值                                                |
+| `find_up` | 是       | 否         | 否       | 从当前目录及其父目录中搜索相对路径                                      |
 
 ### `env._.file` {#env-file}
 
-Load variables from a file:
+从文件载入变量：
 
 ```toml [mise.toml]
 [env]
 _.file = ".env"
 ```
 
-- The extension selects the format. `.json`, `.yaml` and `.toml` files are
-  parsed as structured files whose top-level keys become variables. Any other
-  name, including `.yml` and `.env`, is parsed as dotenv.
-- YAML values are read as written: `VERSION: 1.10` sets `1.10`, and
-  `ZIP: 02134` keeps its leading zero.
-- The path can be a glob pattern such as `.env.*`; every matching file is
-  loaded.
-- A path that matches no file is skipped without an error, so `_.file` can
-  point at an optional, untracked `.env`.
-- Values from the file replace variables already in the environment.
+- 文件扩展名决定解析格式。`.json`、`.yaml` 和 `.toml` 文件会按结构化格式解析，其顶层键会
+  成为环境变量。其他名称（包括 `.yml` 和 `.env`）则按 dotenv 格式解析。
+- YAML 值会按原样读取：`VERSION: 1.10` 会设置为 `1.10`，`ZIP: 02134` 会保留开头的零。
+- 路径可以是 glob 模式，例如 `.env.*`；所有匹配的文件都会载入。
+- 没有匹配文件时会跳过而不报错，因此 `_.file` 可以指向可选且未跟踪的 `.env` 文件。
+- 文件中的值会覆盖环境中已有的同名变量。
 
 ```toml [mise.toml]
 [env]
@@ -273,17 +244,14 @@ _.file = [
 ]
 ```
 
-Dotenv files use `KEY=value` lines, with `#` comments and quoted values.
-Quoting works as in a shell: single-quoted text is literal, and quoted and
-unquoted parts next to each other are joined with their quotes removed, so
-`'it'\''s'` is `it's`. A quote with no partner later on its line, as in
-`O'Brien`, is kept as written. A partner in a trailing comment still counts, so
-write `NAME="O'Brien" # owner's name`. Single-quote a value that must keep its
-own quotes, such as JSON: `CONFIG='{"debug": true}'`. A dotenv value can
-reference variables assigned earlier in the same file, then variables from the
-environment mise started with. JSON, YAML and TOML values are read literally, so a `$` stays a `$`. Set `expand = true` to let a file of
-any format reference values loaded before it, from earlier files or earlier
-`[env]` entries:
+dotenv 文件使用 `KEY=value` 格式的行，支持 `#` 注释和带引号的值。引号规则与 Shell 类似：
+单引号中的文本按字面值处理；相邻的带引号和未加引号部分会去掉引号后拼接，因此
+`'it'\''s'` 会得到 `it's`。如果一行中没有配对的后续引号，例如 `O'Brien`，则会保留原样。
+行尾注释中的引号也会参与配对，因此可以写成 `NAME="O'Brien" # owner's name`。若值本身
+必须保留引号（例如 JSON），请使用单引号：`CONFIG='{"debug": true}'`。dotenv 值可以引用
+同一文件中更早赋值的变量，以及 mise 启动时继承环境中的变量。JSON、YAML 和 TOML 的值会
+按字面值读取，因此 `$` 仍是 `$`。设置 `expand = true` 后，任何格式的文件都可以引用此前
+载入的值，包括更早载入的文件或更早出现的 `[env]` 条目：
 
 ```toml [mise.toml]
 [env]
@@ -291,11 +259,11 @@ BASE = "/opt/project"
 _.file = { path = ".env.json", expand = true }
 ```
 
-`expand = true` has no effect when
-[`env_shell_expand`](/configuration/settings.html#env_shell_expand) is `false`.
+如果 [`env_shell_expand`](/configuration/settings.html#env_shell_expand) 设为 `false`，
+则 `expand = true` 不会生效。
 
-mise decrypts SOPS-encrypted JSON, YAML and TOML files as it loads them; see
-[SOPS files](/environments/secrets/sops.html).
+mise 会在载入文件时解密通过 SOPS 加密的 JSON、YAML 和 TOML 文件；参见
+[SOPS 文件](/environments/secrets/sops.html)。
 
 `_.file` 会相对于配置根目录（通常是项目目录）解析相对路径。若要改为从当前目录及其所有父目录加载文件，请设置 `find_up = true`。此选项也适用于全局配置，因此一个条目即可覆盖所有项目：
 
@@ -320,7 +288,7 @@ _.file = { path = [".env", ".env.local"], find_up = true }
 
 ### `env._.path` {#env-path}
 
-Add directories to `PATH`, ahead of the directories already in it:
+将目录添加到 `PATH` 开头，排在已有目录之前：
 
 ```toml [mise.toml]
 [env]
@@ -331,118 +299,102 @@ _.path = [
 ]
 ```
 
-Use `_.path` for `PATH`. A `PATH` key in `[env]` is ignored by `mise exec`,
-`mise env` and activated shells.
+请使用 `_.path` 修改 `PATH`。`[env]` 中的 `PATH` 键会被 `mise exec`、`mise env` 和已激活的
+Shell 忽略。
 
 ### `env._.source` {#env-source}
 
-Run a bash script and take the variables it exports:
+运行 bash 脚本，并读取脚本导出的变量：
 
 ```toml [mise.toml]
 [env]
 _.source = "scripts/env.sh"
 ```
 
-mise runs the script with bash, as if you ran `source scripts/env.sh`, and
-ignores its shebang. For another language, use a task or an
-[environment plugin](/env-plugin-development.html).
+mise 会使用 bash 运行脚本，效果相当于执行 `source scripts/env.sh`，并忽略脚本中的 shebang。
+若要使用其他语言，请改用任务或[环境插件](/env-plugin-development.html)。
 
-- Variables the script exports or changes are added, and variables it unsets
-  are removed.
-- The path can be a glob pattern, and a path that matches no file is skipped,
-  as with `_.file`.
-- The script runs each time mise computes the environment, so keep it fast and
-  safe to run more than once.
-- [Safe mode](/security.html#safe-mode) never runs it, not even from the global
-  config.
+- 脚本导出或更改的变量会被加入环境；脚本取消设置的变量则会被移除。
+- 路径可以是 glob 模式；与 `_.file` 一样，没有匹配文件时会跳过。
+- 每次 mise 计算环境时都会运行脚本，因此应确保脚本执行迅速且可重复运行。
+- [安全模式](/security.html#safe-mode)下绝不会运行此脚本，即使它来自全局配置也一样。
 
-A script can prepend to `PATH`:
+脚本可以将目录添加到 `PATH` 开头：
 
 ```sh
 export PATH="/new/bin:$PATH"
 ```
 
-mise ignores other `PATH` changes, such as appending, removing or reordering
-entries, because it manages `PATH` entries itself so it can remove them cleanly
-when you leave the directory. Relative prepended entries resolve against the
-project directory, and empty entries are ignored.
+mise 会忽略其他 `PATH` 更改，例如追加、移除或重新排列条目，因为 mise 会自行管理 `PATH`
+条目，以便离开目录时可以彻底移除它们。添加的相对路径会以项目目录为基准解析，空条目则会
+被忽略。
 
-On Windows, `_.source` needs a POSIX bash such as
-[Git for Windows](https://gitforwindows.org/) or MSYS2. mise finds it the same
-way it does for bash tasks, including common install locations that are not on
-`PATH`; set `MISE_BASH_PATH` to choose one. mise never uses the WSL launcher at
-`C:\Windows\System32\bash.exe`, because WSL cannot read Windows script paths.
-`PATH` entries the script prepends in `/c/...` or `/cygdrive/c/...` form are
-converted to Windows form.
+在 Windows 上，`_.source` 需要 POSIX bash，例如
+[Git for Windows](https://gitforwindows.org/) 或 MSYS2。mise 会像查找 bash 任务所用的 bash
+一样查找它，也会搜索常见的非 `PATH` 安装位置；设置 `MISE_BASH_PATH` 可指定使用的 bash。
+mise 不会使用 WSL 启动器 `C:\Windows\System32\bash.exe`，因为 WSL 无法读取 Windows 脚本路径。
+脚本以 `/c/...` 或 `/cygdrive/c/...` 形式添加到 `PATH` 的条目会转换为 Windows 路径格式。
 
 ### `env._.python.venv` {#env-python-venv}
 
-Create and activate a Python virtual environment:
+创建并激活 Python 虚拟环境：
 
 ```toml [mise.toml]
 [env]
 _.python.venv = { path = ".venv", create = true }
 ```
 
-See [Automatic virtualenv activation](/lang/python.html#automatic-virtualenv-activation)
-for all options.
+所有选项请参阅[自动激活虚拟环境](/lang/python.html#automatic-virtualenv-activation)。
 
-### Directives from plugins {#plugin-directives}
+### 插件提供的指令 {#plugin-directives}
 
-An environment plugin adds its own directive.
-[Install the plugin](/plugins.html#environment-plugins), then name it under `_`
-with the options the plugin documents:
+环境插件可以添加自己的指令。先[安装插件](/plugins.html#environment-plugins)，再在
+`_` 下使用插件记录的名称及选项：
 
 ```toml [mise.toml]
 [env]
 _.my-env-plugin = { api_url = "https://api.example.com" }
 ```
 
-`tools` and `redact` also work on plugin directives. If the plugin is not
-installed and mise has no source to install it from, mise warns and skips the
-directive. To write an environment plugin, see
-[Environment plugins](/env-plugin-development.html).
+`tools` 和 `redact` 也适用于插件指令。如果插件尚未安装，且 mise 没有可用于安装它的
+来源，mise 会发出警告并跳过该指令。编写环境插件的方法请参阅
+[环境插件](/env-plugin-development.html)。
 
-## Variables that configure mise {#mise-variables}
+## 用于配置 mise 的变量 {#mise-variables}
 
-mise reads `MISE_*` variables such as `MISE_DATA_DIR` when it starts, before it
-loads `[env]`, so setting one in `[env]` does not change how that mise process
-behaves. Set them in your shell or CI environment, or use
-[`[settings]`](/configuration/settings.html). See
-[`MISE_*` variables](/configuration/environment-variables.html).
+mise 会在启动时、载入 `[env]` 之前读取 `MISE_DATA_DIR` 等 `MISE_*` 变量，因此在 `[env]`
+中设置这些变量不会改变该 mise 进程的行为。请在 Shell 或 CI 环境中设置，或使用
+[`[settings]`](/configuration/settings.html) 和
+[`MISE_*` 变量](/configuration/environment-variables.html)。
 
-The SOPS key variables are the exception: mise reads `MISE_SOPS_AGE_KEY` and
-`MISE_SOPS_AGE_KEY_FILE` from `[env]` to decrypt encrypted files listed after
-them; see [SOPS files](/environments/secrets/sops.html#environment-variables).
+SOPS 密钥变量是例外：mise 会从 `[env]` 中读取 `MISE_SOPS_AGE_KEY` 和
+`MISE_SOPS_AGE_KEY_FILE`，用于解密在这些条目之后列出的加密文件；参见
+[SOPS 文件](/environments/secrets/sops.html#environment-variables)。
 
-## Turn off config env {#no-env}
+## 关闭配置环境变量 {#no-env}
 
-`mise --no-env`, `MISE_NO_ENV=1` or the
-[`no_env`](/configuration/settings.html#no_env) setting skips `[env]` and env
-directives from every config file.
+使用 `mise --no-env`、`MISE_NO_ENV=1`，或将
+[`no_env`](/configuration/settings.html#no_env) 设为启用状态，即可跳过所有配置文件中的
+`[env]` 和环境指令。
 
-In [safe mode](/security.html#safe-mode) (`MISE_SAFE=1`), mise ignores `[env]`
-and env directives from project config, and never runs `_.source`.
+在[安全模式](/security.html#safe-mode)（`MISE_SAFE=1`）下，mise 会忽略项目配置中的 `[env]`
+和环境指令，并且绝不会运行 `_.source`。
 
-## Next steps {#next-steps}
+## 后续阅读 {#next-steps}
 
-- [Secrets](/environments/secrets/): encrypt values or fetch them from a secret
-  manager, and mask them in output.
-- [Config environments](/configuration/environments.html): switch sets of values
-  with `MISE_ENV`.
-- [Hooks](/hooks.html): run commands when you enter or leave a project.
-- [Tera templates](/templates.html): the functions and filters values can use.
+- [机密](/environments/secrets/)：加密变量、从机密管理器获取变量，并在输出中隐藏变量值。
+- [配置环境](/configuration/environments.html)：通过 `MISE_ENV` 切换不同的变量组。
+- [钩子](/hooks.html)：在进入或离开项目时运行命令。
+- [Tera 模板](/templates.html)：查看变量值可用的函数和过滤器。
 
-## Deprecated syntax {#deprecated-syntax}
+## 已弃用语法 {#deprecated-syntax}
 
-| Deprecated                                                      | Use instead  | Removed in |
+| 已弃用语法                                                       | 替代写法     | 移除版本   |
 | --------------------------------------------------------------- | ------------ | ---------- |
 | `env.mise.*`                                                    | `env._.*`    | 2026.12.0  |
-| `value` or `values` in a `_.file`, `_.path` or `_.source` table | `path`       | 2026.12.0  |
-| Top-level `env_file` or `dotenv`                                | `env._.file` | 2027.4.0   |
-| Top-level `env_path`                                            | `env._.path` | 2027.4.0   |
+| `_.file`、`_.path` 或 `_.source` 表中的 `value` 或 `values`       | `path`       | 2026.12.0  |
+| 顶层 `env_file` 或 `dotenv`                                     | `env._.file` | 2027.4.0   |
+| 顶层 `env_path`                                                 | `env._.path` | 2027.4.0   |
 
-The `value` and `values` rule also applies to directives under `vars._`. It does
-not affect `value` in an ordinary variable table, such as
-`SECRET = { value = "...", redact = true }`, or the options of plugin
-directives.
+`value` 和 `values` 规则也适用于 `vars._` 下的指令，但不会影响普通变量表中的 `value`
+（例如 `SECRET = { value = "...", redact = true }`），也不会影响插件指令的选项。

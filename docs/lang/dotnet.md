@@ -4,14 +4,12 @@ description: "使用 mise 安装 .NET SDK 和运行时，可通过 global.json �
 
 # .NET
 
-mise installs .NET SDKs, or only a .NET runtime, with Microsoft's
-`dotnet-install` script. By default all SDKs share one `DOTNET_ROOT`, and .NET
-picks an SDK using the project's `global.json`.
+mise 使用 Microsoft 的 `dotnet-install` 脚本安装 .NET SDK，也可以只安装 .NET 运行时。默认情况
+下，所有 SDK 共用一个 `DOTNET_ROOT`；.NET 会根据项目的 `global.json` 选择 SDK。
 
-## Quick start
+## 快速开始
 
-Install the newest .NET 10 SDK for the current project and check which SDK
-.NET selects:
+为当前项目安装最新的 .NET 10 SDK，并检查 .NET 实际选择的 SDK：
 
 ```sh
 mise use dotnet@10
@@ -19,55 +17,50 @@ mise exec -- dotnet --version
 mise exec -- dotnet --list-sdks
 ```
 
-Use `mise use -g dotnet@10` for a personal default. To install another SDK
-without changing the project's version request, run `mise install`:
+使用 `mise use -g dotnet@10` 设置个人默认版本。若要安装其他 SDK，但不修改项目的版本请求，请运行
+`mise install`：
 
 ```sh
 mise install dotnet@8
 ```
 
-In the default shared mode, `dotnet --list-sdks` lists every SDK you installed
-through mise, and .NET, not `mise.toml`, decides which one runs. For a project
-that must build with a particular SDK, add a [`global.json`](#version-files) or
-enable [isolated mode](#isolated-mode) before installing.
+在默认的共享模式下，`dotnet --list-sdks` 会列出通过 mise 安装的所有 SDK，由 .NET 而非
+`mise.toml` 决定实际运行哪个 SDK。如果项目必须使用特定 SDK 构建，请在安装前添加
+[`global.json`](#version-files)，或启用[隔离模式](#isolated-mode)。
 
-To install .NET global tools such as `dotnet-ef`, use the
-[`dotnet:` backend](/dev-tools/backends/dotnet.html), for example
-`mise use dotnet:dotnet-ef`.
+若要安装 `dotnet-ef` 等 .NET 全局工具，请使用
+[`dotnet:` 后端](/dev-tools/backends/dotnet.html)，例如 `mise use dotnet:dotnet-ef`。
 
-## Choosing a version
+## 选择版本
 
-| Request                             | Installs                             |
+| 版本请求                            | 安装内容                             |
 | ----------------------------------- | ------------------------------------ |
-| `dotnet@10`                         | The newest .NET 10 SDK               |
+| `dotnet@10`                         | 最新的 .NET 10 SDK                   |
 | `dotnet@lts`                        | 当前 LTS 通道中的最新 SDK            |
 | `dotnet@sts`                        | 当前 STS 通道中的最新 SDK            |
-| `dotnet@8.0.425`                    | That SDK release                     |
-| `dotnet[runtime=dotnet]@8.0.14`     | Only the .NET runtime 8.0.14         |
-| `dotnet[runtime=aspnetcore]@8.0.14` | Only the ASP.NET Core runtime 8.0.14 |
+| `dotnet@8.0.425`                    | 指定 SDK 发行版                      |
+| `dotnet[runtime=dotnet]@8.0.14`     | 仅安装 .NET 8.0.14 运行时            |
+| `dotnet[runtime=aspnetcore]@8.0.14` | 仅安装 ASP.NET Core 8.0.14 运行时    |
 
 `lts` 和 `sts` 依据 Microsoft 发布索引解析到相应类型中最新且处于 `active` 或 `maintenance` 支持阶段的通道，因此会跳过预览版、`go-live` 版本和已停止支持的通道。它们会解析为该通道中的 SDK；如果你在 `[tool_alias.dotnet.versions]` 中定义了同名版本，则优先使用该别名。它们不适用于[仅安装运行时](#runtime-only-installs)，此类安装需要指定精确版本。
 
-mise lists SDK versions from its
-[versions host](/configuration/settings.html#use_versions_host), or from
-Microsoft's release metadata when `use_versions_host` is off. List them with
-`mise ls-remote dotnet`. `dotnet-core` is an alias for `dotnet`. See
-[runtime-only installs](#runtime-only-installs) for the runtime form.
+mise 会从[版本列表主机](/configuration/settings.html#use_versions_host)获取 SDK 版本；关闭
+`use_versions_host` 后，则从 Microsoft 的发布元数据获取。运行 `mise ls-remote dotnet` 查看
+版本。`dotnet-core` 是 `dotnet` 的别名。运行时请求的写法请参见[仅安装运行时](#runtime-only-installs)。
 
-## Version files
+## 版本文件
 
-mise can read the SDK version from `global.json`. Enable it for .NET.
-`settings add` appends to any tools already enabled:
+mise 可以从 `global.json` 读取 SDK 版本。请为 .NET 启用此功能。`settings add` 会在已启用的工具
+列表末尾追加内容：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools dotnet
 ```
 
-This changes your global config. Add `--local` to enable it in the project's
-`mise.toml` instead, so teammates get the same behavior. See
-[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
+这会修改全局配置。添加 `--local` 可改为在项目的 `mise.toml` 中启用，让团队成员也获得相同的
+行为。参见[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)。
 
-For example, this file requests an exact SDK and disables .NET's roll-forward:
+例如，以下文件请求一个精确 SDK 版本，并关闭 .NET 的滚动前进机制：
 
 ```json [global.json]
 {
@@ -78,115 +71,96 @@ For example, this file requests an exact SDK and disables .NET's roll-forward:
 }
 ```
 
-Run `mise install`, then `mise exec -- dotnet --version` from the project.
-mise reads `sdk.version` to install that SDK. .NET itself applies
-`rollForward` and the rest of its SDK selection policy; see Microsoft's
-[`global.json` reference](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json).
-When `global.json` is the project's version source, do not also keep a
-different `dotnet` version in `mise.toml`.
+运行 `mise install`，然后在项目目录中运行 `mise exec -- dotnet --version`。mise 会读取
+`sdk.version` 并安装对应 SDK。`rollForward` 和其他 SDK 选择策略由 .NET 自行处理；参见
+Microsoft 的 [`global.json` 参考文档](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json)。
+如果项目使用 `global.json` 指定版本，就不要同时在 `mise.toml` 中保留不同的 `dotnet` 版本。
 
-## Shared and isolated installs {#isolated-mode}
+## 共享安装与隔离安装 {#isolated-mode}
 
-By default mise installs every SDK into one shared directory, which is how .NET
-expects SDKs to coexist. mise links its own install directory for each version
-to that shared root, so `mise ls` still tracks the versions. Without
-`global.json`, .NET uses the newest installed SDK, whatever version `mise.toml`
-names.
+默认情况下，mise 会将所有 SDK 安装到同一个共享目录，这是 .NET 管理多个 SDK 的预期方式。mise
+会将每个版本自己的安装目录链接到共享根目录，因此 `mise ls` 仍会跟踪这些版本。若没有
+`global.json`，无论 `mise.toml` 指定了哪个版本，.NET 都会使用最新安装的 SDK。
 
-To give each SDK version its own directory, as mise does for most tools, enable
-isolated mode before installing:
+若要像 mise 管理大多数工具那样，为每个 SDK 版本分别使用独立目录，请在安装前启用隔离模式：
 
 ```sh
 mise settings dotnet.isolated=true
 ```
 
-Changing the setting does not move SDKs that are already installed in the
-shared root, so choose the mode before you install the versions you need.
+更改此设置不会移动已安装在共享根目录中的 SDK，因此请在安装所需版本前选好模式。
 
-|                      | Shared (default)        | Isolated                                        |
+|                      | 共享（默认）             | 隔离                                            |
 | -------------------- | ----------------------- | ----------------------------------------------- |
-| `dotnet --list-sdks` | Every installed SDK     | The selected SDK only                           |
-| Install location     | The shared root         | `~/.local/share/mise/installs/dotnet/<version>` |
-| Multi-targeting      | Works without switching | Requires switching versions                     |
+| `dotnet --list-sdks` | 列出所有已安装的 SDK     | 仅列出当前选择的 SDK                            |
+| 安装位置             | 共享根目录              | `~/.local/share/mise/installs/dotnet/<version>` |
+| 多目标构建           | 无需切换即可使用        | 需要切换版本                                    |
 
-The shared root is [`dotnet.dotnet_root`](/lang/dotnet.html#dotnet.dotnet_root) when set. If it
-is unset, mise uses the `DOTNET_ROOT` already in your environment, and then
-`~/.local/share/mise/dotnet-root`.
+设置[`dotnet.dotnet_root`](/lang/dotnet.html#dotnet.dotnet_root) 后，它会作为共享根目录。若未设置，
+mise 会依次使用环境中已有的 `DOTNET_ROOT` 和 `~/.local/share/mise/dotnet-root`。
 
-## Runtime-only installs
+## 仅安装运行时
 
-To run .NET applications without building them, install only a runtime with
-the `runtime` option:
+若要运行 .NET 应用而不构建它们，请使用 `runtime` 选项仅安装运行时：
 
 ```sh
 mise use "dotnet[runtime=dotnet]@8.0.14"
 mise exec -- dotnet --list-runtimes
 ```
 
-| `runtime` value  | Framework                      | Use for                 |
+| `runtime` 的值   | 框架                           | 适用场景                |
 | ---------------- | ------------------------------ | ----------------------- |
-| `dotnet`         | `Microsoft.NETCore.App`        | Console apps, libraries |
-| `aspnetcore`     | `Microsoft.AspNetCore.App`     | ASP.NET Core web apps   |
-| `windowsdesktop` | `Microsoft.WindowsDesktop.App` | WPF and WinForms apps   |
+| `dotnet`         | `Microsoft.NETCore.App`        | 控制台应用、类库         |
+| `aspnetcore`     | `Microsoft.AspNetCore.App`     | ASP.NET Core Web 应用   |
+| `windowsdesktop` | `Microsoft.WindowsDesktop.App` | WPF 和 WinForms 应用    |
 
-The version in a runtime-only request is a .NET runtime version, not an SDK
-version: `8.0.14` means .NET Runtime 8.0.14 (see the
-[.NET release notes](https://github.com/dotnet/core/tree/main/release-notes)).
-It must be exact. `dotnet[runtime=dotnet]@8` does not work, because a prefix
-resolves against SDK versions. A runtime-only install has no SDK, so
-`dotnet build`, `dotnet publish` and `dotnet --version` are unavailable.
+仅运行时请求中的版本号是 .NET 运行时版本，而非 SDK 版本：`8.0.14` 表示 .NET Runtime 8.0.14
+（参见 [.NET 发布说明](https://github.com/dotnet/core/tree/main/release-notes)）。必须指定精确版本。
+`dotnet[runtime=dotnet]@8` 无效，因为前缀会按 SDK 版本解析。仅安装运行时不包含 SDK，因此不能使用
+`dotnet build`、`dotnet publish` 和 `dotnet --version`。
 
-You can install an SDK for development next to a runtime for a
-production-like environment:
+你可以同时安装供开发使用的 SDK 和用于模拟生产环境的运行时：
 
 ```toml [mise.toml]
 [tools]
 dotnet = ["10", { version = "8.0.14", runtime = "dotnet" }]
 ```
 
-## Environment variables
+## 环境变量
 
-mise sets these variables for the selected .NET and puts `DOTNET_ROOT` on
-`PATH`:
+mise 会为所选 .NET 设置以下变量，并将 `DOTNET_ROOT` 加入 `PATH`：
 
-| Variable                      | Value                                                                                                       |
+| 变量                          | 值                                                                                                          |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `DOTNET_ROOT`                 | The shared root, or the version's install directory in isolated mode                                        |
-| `DOTNET_MULTILEVEL_LOOKUP`    | `0`, so .NET does not look for SDKs outside `DOTNET_ROOT`                                                   |
-| `DOTNET_CLI_TELEMETRY_OPTOUT` | `1` or `0`, only when [`dotnet.cli_telemetry_optout`](/lang/dotnet.html#dotnet.cli_telemetry_optout) is set |
+| `DOTNET_ROOT`                 | 共享根目录；隔离模式下则为所选版本的安装目录                                                               |
+| `DOTNET_MULTILEVEL_LOOKUP`    | `0`，使 .NET 不会在 `DOTNET_ROOT` 之外查找 SDK                                                            |
+| `DOTNET_CLI_TELEMETRY_OPTOUT` | 仅在设置[`dotnet.cli_telemetry_optout`](/lang/dotnet.html#dotnet.cli_telemetry_optout) 时为 `1` 或 `0`     |
 
-## How mise installs .NET
+## mise 如何安装 .NET
 
-For each install, mise downloads the current `dotnet-install` script from
-`dot.net` (`dotnet-install.sh`, or `dotnet-install.ps1` on Windows) and runs it
-with the requested version and install directory. The script downloads the
-SDK or runtime itself. After an SDK install, mise runs `dotnet --list-sdks` and
-checks that the new SDK is listed. Uninstalling a version from the shared root
-removes only that SDK or runtime directory.
+每次安装时，mise 都会从 `dot.net` 下载当前版本的 `dotnet-install` 脚本（Windows 上为
+`dotnet-install.ps1`，其他平台为 `dotnet-install.sh`），并传入请求的版本和安装目录来运行。SDK
+或运行时由该脚本下载。安装 SDK 后，mise 会运行 `dotnet --list-sdks` 并检查列表中是否包含新
+SDK。从共享根目录卸载某个版本时，只会删除对应的 SDK 或运行时目录。
 
-An installed plugin named `dotnet` takes precedence over the built-in
-installer. If mise behaves differently from this page, check
-[`mise plugins ls`](/cli/plugins/ls.html) and see
-[selecting another implementation](/core-tools.html#selecting-another-implementation).
+如果已安装名为 `dotnet` 的插件，它的优先级高于内置安装器。如果 mise 的行为与本文不符，请检查
+[`mise plugins ls`](/cli/plugins/ls.html)，并参见[选择其他实现](/core-tools.html#selecting-another-implementation)。
 
-## Tool options
+## 工具选项
 
 ### `runtime`
 
-Installs only the named runtime instead of an SDK. See
-[runtime-only installs](#runtime-only-installs).
+仅安装指定的运行时，不安装 SDK。参见[仅安装运行时](#runtime-only-installs)。
 
 ### `install_env`
 
-Sets environment variables for the `dotnet-install` script and the
-`dotnet --list-sdks` check. It does not reach mise's own download of the
-script, so set a proxy with `https_proxy` in the environment that runs mise.
-Both that download and the script's downloads then use it (see the
-[FAQ](/faq.html#how-do-i-use-mise-with-http-proxies)).
+为 `dotnet-install` 脚本和 `dotnet --list-sdks` 检查设置环境变量。该选项不会影响 mise 自己
+下载脚本的过程，因此请在运行 mise 的环境中通过 `https_proxy` 设置代理。mise 下载脚本和脚本自行
+下载内容时都会使用该代理（参见[常见问题](/faq.html#how-do-i-use-mise-with-http-proxies)）。
 
-To opt out of .NET CLI telemetry, set
-[`dotnet.cli_telemetry_optout`](/lang/dotnet.html#dotnet.cli_telemetry_optout) instead. Other
-generic options are described in [tool options](/dev-tools/#tool-options).
+若要关闭 .NET CLI 遥测，请改为设置
+[`dotnet.cli_telemetry_optout`](/lang/dotnet.html#dotnet.cli_telemetry_optout)。其他通用选项
+参见[工具选项](/dev-tools/#tool-options)。
 
 <a id="settings"></a>
 

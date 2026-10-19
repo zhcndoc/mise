@@ -3,28 +3,23 @@ description: "查看 mise 常用命令、脚本、配置、Shell 提示符以及
 socialDescription: "通过简明示例了解 mise 常用命令、脚本、配置和 Shell 提示符。"
 ---
 
-# Tips and tricks
+# 使用技巧
 
-Short recipes for everyday mise use. Each one links to the full guide.
+这里收录了一些 mise 日常用法示例，每篇都链接到对应的完整指南。
 
-## Everyday commands
+## 常用命令
 
-For running tasks, including the `mise <task>` shorthand and rerunning a task
-when files change, see [Running tasks](/tasks/running-tasks.html).
+关于运行任务（包括 `mise <task>` 简写和文件变更后重新运行任务），请参阅[运行任务](/tasks/running-tasks.html)。
 
-### Open a shell with the project environment {#mise-en}
+### 在项目环境中打开 Shell {#mise-en}
 
-[`mise en`](/cli/en.html) starts a new shell with the project's tools and
-environment variables loaded, without shell activation. Exit that shell to
-return to your session. Changing directories inside it does not update the
-environment, and the new shell's startup files can still activate mise. To skip
-Bash's startup file:
+[`mise en`](/cli/en.html) 会启动一个新的 Shell，并载入项目工具和环境变量，无需激活 Shell。退出该 Shell 即可返回原会话。在其中切换目录不会更新环境；新 Shell 的启动文件仍可能激活 mise。如需跳过 Bash 启动文件，请运行：
 
 ```sh
 mise en -s "bash --norc"
 ```
 
-### Find where a tool or setting comes from {#mise-tool-tool}
+### 查看工具或设置的来源 {#mise-tool-tool}
 
 <a id="mise-cfg"></a>
 
@@ -36,99 +31,63 @@ mise config ls         # config files in use and the tools each one sets
 mise settings ls       # settings set in config files, and the file that set each
 ```
 
-See [`mise tool`](/cli/tool.html), [`mise registry`](/cli/registry.html),
-[`mise which`](/cli/which.html), [`mise config ls`](/cli/config/ls.html) and
-[`mise settings ls`](/cli/settings/ls.html). For the order in which config files
-apply, see [config file locations](/configuration.html#mise-toml). To trace an
-environment variable, see [See which variables mise set](#see-which-variables-mise-set).
+请参阅[`mise tool`](/cli/tool.html)、[`mise registry`](/cli/registry.html)、[`mise which`](/cli/which.html)、[`mise config ls`](/cli/config/ls.html) 和[`mise settings ls`](/cli/settings/ls.html)。关于配置文件的生效顺序，请参阅[配置文件位置](/configuration.html#mise-toml)。如需追踪环境变量，请参阅[查看 mise 设置的变量](#see-which-variables-mise-set)。
 
-## Scripts and wrappers
+## 脚本与包装器
 
-### Pin a tool in a shebang {#shebang}
+### 在 shebang 中固定工具版本 {#shebang}
 
-A script can name the tool and version it runs with, without a `mise.toml`:
+无需 `mise.toml`，脚本也可以在 shebang 中指定要使用的工具和版本：
 
 ```js [script.js]
 #!/usr/bin/env -S mise exec node@24 -- node
 console.log(`Running node: ${process.version}`);
 ```
 
-`env -S` splits the rest of the line into separate arguments. Run
-`chmod +x script.js`, then `./script.js`; [`mise exec`](/cli/exec.html)
-installs Node.js 24 the first time if it is missing. This needs mise on `PATH`
-and an `env` that supports `-S`, but not shell activation. Windows does not run
-shebang lines. To commit one wrapper per tool with more install options, use
-[tool stubs](/dev-tools/tool-stubs.html).
+`env -S` 会将该行其余部分拆分为多个参数。运行 `chmod +x script.js`，然后执行 `./script.js`；如果尚未安装 Node.js 24，[`mise exec`](/cli/exec.html) 会在首次运行时安装它。此方式要求 mise 位于 `PATH` 中，且 `env` 支持 `-S`，但不要求激活 Shell。Windows 不会执行 shebang 行。如需为每个工具提交一个提供更多安装选项的包装器，请使用[工具存根](/dev-tools/tool-stubs.html)。
 
-### Let contributors run tasks without installing mise {#bootstrap-script}
+### 让贡献者无需安装 mise 即可运行任务 {#bootstrap-script}
 
 <a id="project-local-task-entrypoints"></a>
 
-Commit a `bin/mise` wrapper that downloads a pinned mise on first use, plus one
-script per task:
+提交一个 `bin/mise` 包装器，在首次使用时下载固定版本的 mise，并为每个任务提交一个脚本：
 
 ```sh
 mise generate install-script --localize --write bin/mise --windows
 mise generate task-stubs --mise-bin ./bin/mise
 ```
 
-Commit `bin/` and add `.mise/` to `.gitignore`; the localized wrapper keeps
-mise, its tools and its cache there. Contributors then run `./bin/test` from
-the project root, or `.\bin\test.cmd` on Windows. `--windows` also writes
-`bin/mise.cmd`, which checks the downloaded `mise.exe` against a checksum
-recorded when you generated it. Regenerate the wrapper to move to a newer mise.
+将 `bin/` 提交到仓库，并把 `.mise/` 加入 `.gitignore`；本地化后的包装器会将 mise、工具和缓存保存在该目录。贡献者随后可在项目根目录运行 `./bin/test`；Windows 用户则运行 `.\bin\test.cmd`。`--windows` 还会生成 `bin/mise.cmd`，并使用生成该包装器时记录的校验和检查下载的 `mise.exe`。如需升级 mise，请重新生成包装器。
 
-[`mise generate task-stubs`](/cli/generate/task-stubs.html) writes a stub for
-every task mise loads except hidden tasks and tasks from your global config.
-Stubs that an older mise wrote for those stay in `bin/` until you delete them.
-On Windows the default `.cmd`
-launchers can alter arguments that contain `& ^ | " %`; generate with
-`--windows-launcher exe` on Windows when arguments must arrive unchanged. For
-the wrapper's version pinning and directories, see
-[CI bootstrapping](/continuous-integration.html#bootstrapping).
+[`mise generate task-stubs`](/cli/generate/task-stubs.html) 会为 mise 加载的每个任务生成存根，但隐藏任务和全局配置中的任务除外。旧版 mise 为这些任务生成的存根会继续留在 `bin/` 中，直到你手动删除。Windows 默认的 `.cmd` 启动器可能会修改包含 `& ^ | " %` 的参数；如果必须原样传递参数，请在 Windows 上使用 `--windows-launcher exe` 生成启动器。关于包装器的版本固定和目录设置，请参阅 [CI 引导配置](/continuous-integration.html#bootstrapping)。
 
-## Configuration
+## 配置
 
-### Install tools when you enter a project {#auto-install-when-entering-a-project}
+### 进入项目时安装工具 {#auto-install-when-entering-a-project}
 
-In a shell with [`mise activate`](/cli/activate.html), an
-[`enter` hook](/hooks.html) can install missing tools when you `cd` into the
-project:
+在已运行 [`mise activate`](/cli/activate.html) 的 Shell 中，可以使用 [`enter` 钩子](/hooks.html)在 `cd` 进入项目时安装缺失的工具：
 
 ```toml [mise.toml]
 [hooks]
 enter = "mise install --quiet"
 ```
 
-The tools are on `PATH` from the next prompt. The hook downloads tools and runs
-their install scripts whenever you enter the directory with something missing;
-run `mise install` yourself if you prefer to choose when that happens.
+从下一个提示符开始，工具就会出现在 `PATH` 中。每次进入缺少工具的目录时，该钩子都会下载工具并运行安装脚本；如果你想自行决定何时安装，请手动运行 `mise install`。
 
-### Read a version from another tool's file {#using-tera-to-read-unsupported-version-files}
+### 从其他工具的文件中读取版本 {#using-tera-to-read-unsupported-version-files}
 
-mise reads many version files directly once you enable them as
-[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files). For
-another format, read the file with a [template](/templates.html). For example,
-the Hugo Version Manager writes `.hvm` with a version tag and an optional
-edition, such as `v0.152.2/extended`:
+启用[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)后，mise 可以直接读取许多格式的版本文件。若要读取其他格式，可使用[模板](/templates.html)。例如，Hugo Version Manager 会将版本标签和可选的发行版写入 `.hvm` 文件，如 `v0.152.2/extended`：
 
 ```toml [mise.toml]
 [tools]
 hugo-extended = "{{ read_file(path=config_root ~ '/.hvm') | trim | split(pat='/') | first | trim_start(pat='v') }}"
 ```
 
-This keeps `0.152.2`. mise installs Hugo's editions as separate tools (`hugo`,
-`hugo-extended` and `hugo-extended-withdeploy`), so use the one that matches the
-project's edition. `config_root` keeps the path relative to the config file
-when you run mise from a subdirectory.
+这样会得到 `0.152.2`。mise 将 Hugo 的不同发行版作为独立工具安装（`hugo`、`hugo-extended` 和 `hugo-extended-withdeploy`），因此应选择与项目发行版相符的工具。`config_root` 可确保即使从子目录运行 mise，路径仍相对于配置文件解析。
 
-### Share tasks across repositories {#share-task-catalogs}
+### 在多个仓库之间共享任务 {#share-task-catalogs}
 
-[`task_config.includes`](/tasks/task-discovery.html#include-task-files-and-directories)
-chooses where tasks are loaded from: directories, `tasks.toml` files, or remote
-git repositories. Setting it replaces the default task directories, so list any
-default directory (such as `.mise/tasks`) you still use. Remote includes run
-code from that repository, so pin a tag or commit you trust:
+[`task_config.includes`](/tasks/task-discovery.html#include-task-files-and-directories) 用于指定任务的加载来源：目录、`tasks.toml` 文件或远程 git 仓库。设置该选项后，默认任务目录会被替换，因此仍要使用的默认目录（例如 `.mise/tasks`）也必须列出。远程 include 会运行该仓库中的代码，请固定到你信任的标签或提交：
 
 ```toml [mise.toml]
 [task_config]
@@ -139,14 +98,11 @@ includes = [
 ]
 ```
 
-An included `tasks.toml` holds tasks written as under `[tasks]`, without the
-`tasks.` prefix. See [remote git includes](/tasks/task-discovery.html#remote-git-includes)
-for the URL syntax and caching.
+被 include 的 `tasks.toml` 中，任务写法与 `[tasks]` 下相同，但省略 `tasks.` 前缀。URL 语法和缓存说明请参阅[远程 git include](/tasks/task-discovery.html#remote-git-includes)。
 
-### Reuse task settings with templates {#reuse-task-definitions-with-templates}
+### 使用模板复用任务设置 {#reuse-task-definitions-with-templates}
 
-A [task template](/tasks/templates.html) holds tools, environment variables and
-commands that several tasks share:
+多个任务共用的工具、环境变量和命令可以写在[任务模板](/tasks/templates.html)中：
 
 ```toml [mise.toml]
 [task_templates."node:test"]
@@ -161,13 +117,11 @@ extends = "node:test"
 run = "pnpm test --watch"
 ```
 
-Tasks inherit the template's fields and override the ones they set.
+任务会继承模板中的字段，并覆盖自身设置的字段。
 
-### Redact secrets from task output {#redact-secrets-from-task-output}
+### 对任务输出中的秘密信息脱敏 {#redact-secrets-from-task-output}
 
-To mask values in task output, list their variables in the top-level
-`redactions` array, or mark one variable with `redact = true`, which also works
-in a task's `env`:
+如需屏蔽任务输出中的变量值，可将变量名列入顶层 `redactions` 数组，或为单个变量设置 `redact = true`；任务的 `env` 中也支持此设置：
 
 ```toml [mise.toml]
 redactions = ["API_KEY", "SECRETS_*"]
@@ -177,55 +131,41 @@ env = { TOKEN = { value = "{{ env.DEPLOY_TOKEN }}", redact = true } }
 run = "./deploy.sh"
 ```
 
-mise prints `[redacted]` in place of matching values. Raw and interactive tasks
-bypass redaction, and the commands still receive the real values. See
-[redaction](/environments/secrets/#redaction) for what it covers.
+mise 会用 `[redacted]` 替换匹配的值。原始任务和交互式任务不会进行脱敏，但命令仍会收到真实值。脱敏范围请参阅[脱敏说明](/environments/secrets/#redaction)。
 
-### Use prebuilt binaries for `cargo:` tools {#cargo-binstall}
+### 为 `cargo:` 工具使用预构建二进制文件 {#cargo-binstall}
 
-Install [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), and mise
-uses it for [`cargo:` tools](/dev-tools/backends/cargo.html), which downloads a
-prebuilt binary when the crate publishes one instead of compiling it:
+安装 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 后，mise 会用它安装 [`cargo:` 工具](/dev-tools/backends/cargo.html)：如果 crate 发布了预构建二进制文件，mise 会直接下载，而不必从源码编译：
 
 ```sh
 mise use -g cargo-binstall
 ```
 
-When no prebuilt binary exists, mise falls back to `cargo install`. The
-[`cargo.binstall`](/configuration/settings.html#cargo.binstall) setting turns
-this off.
+如果没有预构建二进制文件，mise 会退回到 `cargo install`。设置 [`cargo.binstall`](/configuration/settings.html#cargo.binstall) 可关闭此功能。
 
-## Shell prompt {#shell-prompt}
+## Shell 提示符 {#shell-prompt}
 
-mise has no prompt segment of its own. In a shell with
-[`mise activate`](/cli/activate.html), it can print what it loads when you
-change directories, and it exports `[env]` variables that your prompt can read.
+mise 没有自带的提示符片段。在已运行 [`mise activate`](/cli/activate.html) 的 Shell 中，切换目录时可以打印 mise 加载的内容；mise 也会导出提示符可以读取的 `[env]` 变量。
 
-### Print what changes when you enter a project {#print-what-changes-when-you-enter-a-project}
+### 打印进入项目时发生的变化 {#print-what-changes-when-you-enter-a-project}
 
 ```sh
 mise settings status.show_tools=true
 mise settings status.show_env=true
 ```
 
-These commands write to your global config. Entering a project then prints
-lines such as:
+这些命令会修改全局配置。进入项目时会打印类似以下内容：
 
 ```text
 mise +node@24.21.0
 mise +API_KEY +NODE_ENV
 ```
 
-[`status.show_tools`](/configuration/settings.html#status.show_tools) lists the
-tools that became active (`+`) or inactive (`-`).
-[`status.show_env`](/configuration/settings.html#status.show_env) lists the
-names of variables that mise added (`+`), changed (`~`) or removed (`-`), without
-their values.
+[`status.show_tools`](/configuration/settings.html#status.show_tools) 会列出刚刚启用（`+`）或停用（`-`）的工具。[`status.show_env`](/configuration/settings.html#status.show_env) 会列出 mise 新增（`+`）、更改（`~`）或移除（`-`）的变量名称，但不会显示变量值。
 
-### Show the project and environment in your prompt {#show-the-project-and-environment-in-your-prompt}
+### 在提示符中显示项目和环境 {#show-the-project-and-environment-in-your-prompt}
 
-Set variables for the prompt in the project's `mise.toml`. mise exports them
-while you are in the project and removes them when you leave:
+在项目的 `mise.toml` 中为提示符设置变量。进入项目后 mise 会导出这些变量，离开时则会将它们移除：
 
 ```toml [mise.toml]
 [env]
@@ -233,53 +173,36 @@ PROMPT_PROJECT = "{{ config_root | basename }}"
 PROMPT_MISE_ENV = "{{ mise_env | default(value=[]) | join(sep=',') }}"
 ```
 
-`config_root` is the directory that holds the config file. `mise_env` lists the
-active [config environments](/configuration/environments.html), whether they
-come from `MISE_ENV` or `.miserc.toml`. Then read the variables in your shell
-startup file. For Zsh, in `~/.zshrc`:
+`config_root` 是配置文件所在的目录。`mise_env` 列出当前生效的[配置环境](/configuration/environments.html)，无论它们来自 `MISE_ENV` 还是 `.miserc.toml`。然后在 Shell 启动文件中读取这些变量。Zsh 用户可将以下内容写入 `~/.zshrc`：
 
 ```zsh
 setopt PROMPT_SUBST
 PROMPT='${PROMPT_PROJECT:+[$PROMPT_PROJECT${PROMPT_MISE_ENV:+:$PROMPT_MISE_ENV}] }%~ %# '
 ```
 
-For Bash, in `~/.bashrc`:
+Bash 用户可将以下内容写入 `~/.bashrc`：
 
 ```sh
 PS1='${PROMPT_PROJECT:+[$PROMPT_PROJECT${PROMPT_MISE_ENV:+:$PROMPT_MISE_ENV}] }\w \$ '
 ```
 
-In a project named `web` with the `staging` environment, the prompt starts with
-`[web:staging]`. Prompt themes that show an environment variable work the same
-way. For [powerline-go](https://github.com/justjanne/powerline-go), add
-`shell-var` to `-modules` and pass
-`-shell-var PROMPT_MISE_ENV -shell-var-no-warn-empty`.
+在名为 `web` 且使用 `staging` 环境的项目中，提示符会以 `[web:staging]` 开头。支持显示环境变量的提示符主题也可采用同样方式配置。对于 [powerline-go](https://github.com/justjanne/powerline-go)，请将 `shell-var` 加入 `-modules`，并传入 `-shell-var PROMPT_MISE_ENV -shell-var-no-warn-empty`。
 
-Read `PROMPT_MISE_ENV` rather than `MISE_ENV`. An environment selected in
-`.miserc.toml` does not set the shell's `MISE_ENV`, and exporting `MISE_ENV`
-yourself overrides the `.miserc.toml` selection in every project.
+请读取 `PROMPT_MISE_ENV`，不要读取 `MISE_ENV`。`.miserc.toml` 中选择的环境不会设置 Shell 的 `MISE_ENV`；如果自行导出 `MISE_ENV`，则会覆盖所有项目中的 `.miserc.toml` 选择。
 
-### See which variables mise set {#see-which-variables-mise-set}
+### 查看 mise 设置的变量 {#see-which-variables-mise-set}
 
 ```sh
 mise env --json-extended
 ```
 
-[`mise env --json-extended`](/cli/env.html) lists every variable mise sets in
-the current directory with its value and the config file that set it as
-`source`. Variables that a tool sets, such as Java's `JAVA_HOME`, also name the
-`tool`. The output contains real values, including values marked for
-redaction, so redact it before you share it. For other problems, start with
-[`mise doctor`](/cli/doctor.html).
+[`mise env --json-extended`](/cli/env.html) 会列出 mise 在当前目录设置的所有变量、变量值和设置它的配置文件（`source`）。工具设置的变量（例如 Java 的 `JAVA_HOME`）还会标明对应的 `tool`。输出包含真实值，包括标记为脱敏的值，因此分享前请先处理敏感信息。遇到其他问题时，请先运行[`mise doctor`](/cli/doctor.html)。
 
-## Platforms
+## 平台
 
-### Run Intel tools on Apple silicon {#macos-rosetta}
+### 在 Apple 芯片设备上运行 Intel 工具 {#macos-rosetta}
 
-To install the Intel build of a tool on an Apple silicon Mac, set
-[`arch`](/configuration/settings.html#arch) to `x64` with `MISE_ARCH`. Give those
-installs their own data directory so they do not replace the native ones, and
-use the same two variables when you run the tools:
+如需在 Apple 芯片 Mac 上安装工具的 Intel 构建版本，请使用 `MISE_ARCH` 将 [`arch`](/configuration/settings.html#arch) 设置为 `x64`。请为这些安装指定单独的数据目录，以免覆盖原生版本；运行工具时也要使用这两个变量：
 
 ```sh
 export MISE_DATA_DIR="$HOME/.local/share/mise-x64"
@@ -288,14 +211,9 @@ mise install node@24
 mise exec node@24 -- node --version
 ```
 
-Rosetta must be installed to run Intel binaries. Tools that mise compiles from
-source also need an Intel toolchain and libraries; see the tool's
-[language guide](/core-tools.html).
+运行 Intel 二进制文件需要安装 Rosetta。mise 从源码编译的工具还需要 Intel 工具链和库；详见对应的[语言指南](/core-tools.html)。
 
-If a backend needs mise itself to run as an Intel process, install the Intel
-build of mise next to the native one with the installer's
-[`MISE_INSTALL_ARCH`](/installing-mise.html#installer-options) variable, and use
-the same `MISE_DATA_DIR` with it:
+如果某个后端要求 mise 本身以 Intel 进程运行，可使用安装器的 [`MISE_INSTALL_ARCH`](/installing-mise.html#installer-options) 变量，将 Intel 版 mise 安装在原生版本旁边，并为它指定相同的 `MISE_DATA_DIR`：
 
 ```sh
 curl -fsSL https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise-x64" MISE_INSTALL_ARCH=x64 sh

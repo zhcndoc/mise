@@ -2,45 +2,32 @@
 description: "将编辑器、语言服务器、调试器和开发容器接入 mise 管理的工具。"
 ---
 
-# Editors and IDEs
+# 编辑器和 IDE
 
-An editor's integrated terminal, language servers, debugger and extensions can
-each run with a different environment. Find out which process needs the tool or
-variable, then pick an integration:
+编辑器的集成终端、语言服务器、调试器和扩展可能分别运行在不同环境中。先确认哪个进程需要工具或环境变量，再选择相应的集成方式：
 
-| 需求                                              | 集成方式                               | 预期效果                                                                                                                |
+| 需求                                              | 集成方式                               | 效果                                                                                                                     |
 | ------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| A fixed executable or SDK directory               | `mise which node` or `mise where java` | Selects an installed path; update the IDE setting after changing versions.                                                |
-| A tool that follows the current project           | [Shims](/dev-tools/shims.html)         | Resolves the tool and loads mise environment variables when the shim runs. The process must run in the project directory. |
-| A command with the project environment            | `mise exec -- command`                 | Loads tools and variables for that command and its children.                                                              |
-| Editor features that follow configuration changes | An [editor plugin](#ide-plugins)       | Support depends on the editor, extension and language.                                                                    |
+| 固定的可执行文件或 SDK 目录                         | `mise which node` 或 `mise where java` | 选择已安装路径；更改版本后需更新 IDE 设置。                                                                                |
+| 随当前项目切换的工具                                | [Shims](/dev-tools/shims.html)         | shim 运行时解析工具并加载 mise 环境变量。进程必须在项目目录中运行。                                                         |
+| 使用项目环境运行的命令                              | `mise exec -- command`                 | 为该命令及其子进程加载工具和环境变量。                                                                                   |
+| 随配置变化而更新的编辑器功能                        | [编辑器插件](#ide-plugins)             | 支持情况取决于编辑器、扩展和语言。                                                                                       |
 
-Run `mise install` in the project first. Selecting an SDK path alone does not
-load `[env]`. Shims also do not change the environment of an editor that is
-already running, so restart affected language servers or the editor after
-changing an inherited environment or a fixed SDK path.
+请先在项目中运行 `mise install`。仅指定 SDK 路径不会加载 `[env]`。Shims 也不会更改已运行编辑器的环境，因此修改继承的环境或固定 SDK 路径后，请重启相关语言服务器或编辑器。
 
-## A fixed path to the global version {#global-version-link}
+## 指向全局版本的固定路径 {#global-version-link}
 
-A setting that takes an installation directory, such as an IDE's Maven or JDK
-home, needs a path that survives version changes. Each tool's install directory
-has a `global` link to the version global and system config select:
+IDE 中的 Maven 或 JDK 主目录等设置需要填写安装目录，因此需要一个在版本切换后仍有效的路径。每个工具的安装目录都有一个 `global` 链接，指向由全局配置和系统配置选定的版本：
 
 ```sh
 ~/.local/share/mise/installs/maven/global -> ./3.9.16
 ```
 
-mise updates it whenever it rebuilds the other runtime symlinks (`latest`, `3`),
-such as after `mise use -g` or `mise install`. Project config and `MISE_*_VERSION`
-variables do not change it, and a tool no global config selects has no link.
-mise leaves a real directory named `global` alone.
+每当 mise 重建其他运行时符号链接（`latest`、`3`）时，例如运行 `mise use -g` 或 `mise install` 后，它也会更新此链接。项目配置和 `MISE_*_VERSION` 变量不会更改它；未被全局或系统配置选中的工具没有该链接。若 `global` 是实际目录，mise 不会修改它。
 
-## Put shims on PATH for GUI editors {#adding-shims-to-path-default-shell}
+## 将 shims 加入 GUI 编辑器的 PATH {#adding-shims-to-path-default-shell}
 
-Editors started from the desktop, including VS Code and JetBrains IDEs, read the
-environment of your login shell. Add mise's [shims](/dev-tools/shims.html) to
-that shell's login profile so that these editors find mise tools without a
-prompt hook. Find your login shell with:
+从桌面启动的编辑器（包括 VS Code 和 JetBrains IDE）会读取登录 shell 的环境。将 mise [shims](/dev-tools/shims.html) 加入登录 shell 的 profile 后，这些编辑器无需提示符钩子也能找到 mise 工具。运行以下命令查看登录 shell：
 
 ::: code-group
 
@@ -54,66 +41,43 @@ getent passwd $USER | cut -d: -f7
 
 :::
 
-Then add `mise activate --shims` to that shell's login profile as shown in
-[How to add mise shims to PATH](/dev-tools/shims.html#how-to-add-mise-shims-to-path),
-which also explains which file Bash reads. If `mise` is not on `PATH` when the
-profile runs, use its absolute path, for example
-`eval "$($HOME/.local/bin/mise activate zsh --shims)"`.
+接着按照[如何将 mise shims 加入 PATH](/dev-tools/shims.html#how-to-add-mise-shims-to-path)中的说明，将 `mise activate --shims` 加入该 shell 的登录 profile；其中也介绍了 Bash 会读取哪个文件。如果运行 profile 时 `mise` 不在 `PATH` 中，请使用绝对路径，例如 `eval "$($HOME/.local/bin/mise activate zsh --shims)"`。
 
-Restart the editor after editing the profile. Some desktop environments read a
-login profile only when you log in, so you may need to log out and back in. If
-the editor does not read your shell profile at all, check its environment
-settings. VS Code's
-[environment resolution](https://code.visualstudio.com/docs/terminal/advanced#_environment-inheritance)
-and its [task terminal profile](#vscode-automation-profile-for-macos) are
-separate mechanisms.
+修改 profile 后请重启编辑器。有些桌面环境只在登录时读取登录 profile，因此你可能需要注销后重新登录。如果编辑器完全不读取 shell profile，请检查它的环境设置。VS Code 的[环境解析](https://code.visualstudio.com/docs/terminal/advanced#_environment-inheritance)和[任务终端 profile](#vscode-automation-profile-for-macos)是两套独立机制。
 
-VS Code and IntelliJ using the `node` that mise provides through shims:
+VS Code 和 IntelliJ 通过 shims 使用 mise 提供的 `node`：
 
 ::: tabs
 == VS Code
 
-![VS Code using shims](./shims-vscode.png)
+![VS Code 通过 shims 使用工具](./shims-vscode.png)
 
 == IntelliJ
-![IntelliJ using shims](./shims-intellij.png)
+![IntelliJ 通过 shims 使用工具](./shims-intellij.png)
 :::
 
-Shims set `[env]` variables only for the tool process they start. The editor
-itself, and features that read the environment directly, do not see them; use
-an [editor plugin](#ide-plugins) for those.
+Shims 只会为它启动的工具进程设置 `[env]` 变量。编辑器本身及直接读取环境变量的功能无法获取这些变量；这类场景请使用[编辑器插件](#ide-plugins)。
 
-## Editor plugins {#ide-plugins}
+## 编辑器插件 {#ide-plugins}
 
-These community plugins integrate with mise:
+以下社区插件可以与 mise 集成：
 
-| Editor         | Plugin                                                                                 | What it does                                                                                                                        |
+| 编辑器          | 插件                                                                                     | 功能                                                                                                                                |
 | -------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| VS Code        | [mise-vscode](https://marketplace.visualstudio.com/items?itemName=hverlin.mise-vscode) | Manages tools and tasks, loads the project environment, helps edit config, and can configure language extensions to use mise tools. |
-| JetBrains IDEs | [intellij-mise](https://github.com/134130/intellij-mise)                               | Configures the IDE's SDKs from mise, runs mise tasks, and loads environment variables in run configurations.                        |
-| Neovim         | [miser.nvim](https://github.com/carldaws/miser.nvim)                                   | Starts language servers and formatters for the tools in `mise.toml`, and runs mise tasks from Neovim.                               |
-| Emacs          | [mise.el](https://github.com/eki3z/mise.el)                                            | Loads the mise environment for each buffer.                                                                                         |
+| VS Code        | [mise-vscode](https://marketplace.visualstudio.com/items?itemName=hverlin.mise-vscode) | 管理工具和任务、加载项目环境、辅助编辑配置，也可设置语言扩展使用 mise 工具。                                                       |
+| JetBrains IDE  | [intellij-mise](https://github.com/134130/intellij-mise)                               | 根据 mise 配置 IDE 的 SDK、运行 mise 任务，并在运行配置中加载环境变量。                                                            |
+| Neovim         | [miser.nvim](https://github.com/carldaws/miser.nvim)                                   | 为 `mise.toml` 中的工具启动语言服务器和格式化程序，并可在 Neovim 中运行 mise 任务。                                                |
+| Emacs          | [mise.el](https://github.com/eki3z/mise.el)                                            | 为每个缓冲区加载 mise 环境。                                                                                                        |
 
 ## VS Code {#vscode}
 
-The [mise-vscode extension](https://hverlin.github.io/mise-vscode/) can
-configure
-[supported language extensions](https://hverlin.github.io/mise-vscode/reference/supported-extensions/)
-to use mise tools. That is off by default; enable
-[`mise.configureExtensionsAutomatically`](https://hverlin.github.io/mise-vscode/reference/settings/#miseconfigureextensionsautomatically)
-to turn it on. See the extension's documentation for its environment and task
-settings.
+[`mise-vscode` 扩展](https://hverlin.github.io/mise-vscode/)可以配置[受支持的语言扩展](https://hverlin.github.io/mise-vscode/reference/supported-extensions/)以使用 mise 工具。该功能默认关闭；启用 [`mise.configureExtensionsAutomatically`](https://hverlin.github.io/mise-vscode/reference/settings/#miseconfigureextensionsautomatically) 即可开启。环境和任务设置请参阅扩展文档。
 
-Install mise on the machine that runs the extension. A local installation does
-not provide tools inside an SSH host, a WSL distribution or a
-[dev container](#dev-containers).
+请在运行扩展的机器上安装 mise。本地安装不会向 SSH 主机、WSL 发行版或[开发容器](#dev-containers)提供工具。
 
-### Task and debug terminals {#vscode-automation-profile-for-macos}
+### 任务和调试终端 {#vscode-automation-profile-for-macos}
 
-VS Code runs tasks and debug sessions in an automation terminal. To make it
-start a login shell that reads your profile, and with it the shims, add an
-[automation profile](https://code.visualstudio.com/docs/terminal/profiles#_configuring-the-taskdebug-profile)
-to `settings.json`:
+VS Code 会在自动化终端中运行任务和调试会话。若要让它启动会读取 profile 的登录 shell，并一并加载 shims，请在 `settings.json` 中添加[自动化 profile](https://code.visualstudio.com/docs/terminal/profiles#_configuring-the-taskdebug-profile)：
 
 ::: code-group
 
@@ -137,17 +101,11 @@ to `settings.json`:
 
 :::
 
-The automation profile does not configure the extension host or every language
-server. Keep the shims in your login profile; adding `--interactive` also loads
-your interactive startup file, including prompt customization that a build does
-not need.
+自动化 profile 不会配置扩展宿主或所有语言服务器。请将 shims 保留在登录 profile 中；加入 `--interactive` 还会加载交互式启动文件及提示符定制，而构建任务通常不需要这些内容。
 
-### Debug with mise exec in launch.json {#use-mise-exec-in-launch-configuration}
+### 在 launch.json 中通过 mise exec 调试 {#use-mise-exec-in-launch-configuration}
 
-To debug Node.js with the project's tools, run the runtime through
-[`mise exec`](/cli/exec.html) in `launch.json`. Set `cwd` to the directory that
-holds `mise.toml`. If the editor cannot find `mise`, set `runtimeExecutable` to
-its absolute path. This example is for macOS and Linux:
+如需使用项目工具调试 Node.js，可在 `launch.json` 中通过 [`mise exec`](/cli/exec.html) 启动运行时。将 `cwd` 设置为包含 `mise.toml` 的目录。如果编辑器找不到 `mise`，请将 `runtimeExecutable` 设为其绝对路径。以下示例适用于 macOS 和 Linux：
 
 ```json
 {
@@ -156,7 +114,7 @@ its absolute path. This example is for macOS and Linux:
     {
       "type": "node",
       "request": "launch",
-      "name": "Launch Program",
+      "name": "启动程序",
       "program": "${file}",
       "cwd": "${workspaceFolder}",
       "runtimeExecutable": "mise",
@@ -166,63 +124,53 @@ its absolute path. This example is for macOS and Linux:
 }
 ```
 
-## JetBrains IDEs {#jetbrains-editors-intellij-rustrover-pycharm-webstorm-rubymine-goland-etc}
+## JetBrains IDE {#jetbrains-editors-intellij-rustrover-pycharm-webstorm-rubymine-goland-etc}
 
-These apply to IntelliJ IDEA, PyCharm, WebStorm, GoLand, RubyMine, RustRover and
-other JetBrains IDEs. The [intellij-mise plugin](https://github.com/134130/intellij-mise)
-configures SDKs from mise automatically.
+以下说明适用于 IntelliJ IDEA、PyCharm、WebStorm、GoLand、RubyMine、RustRover 等 JetBrains IDE。[intellij-mise 插件](https://github.com/134130/intellij-mise)可以自动根据 mise 配置 SDK。
 
-### Direct SDK selection
+### 直接选择 SDK
 
-IntelliJ IDEA's Java SDK picker detects JDKs that mise installed:
+IntelliJ IDEA 的 Java SDK 选择器可以检测 mise 安装的 JDK：
 
-![SDK settings](./intellij-sdk-selection.png)
+![SDK 设置](./intellij-sdk-selection.png)
 
-### SDK selection using asdf layout
+### 使用 asdf 目录布局选择 SDK
 
-Some language plugins cannot find SDKs that mise installed but can find asdf's.
-Prefer direct SDK selection when it is available. If a plugin needs an asdf
-directory and `~/.asdf` does not exist, a symlink exposes mise's layout. Do not
-replace an existing asdf installation, and do not use asdf to change installs
-that mise manages:
+有些语言插件无法找到 mise 安装的 SDK，但可以识别 asdf 的目录结构。若可以直接选择 SDK，请优先使用该方式。如果插件需要 asdf 目录且 `~/.asdf` 不存在，可以通过符号链接公开 mise 的目录布局。不要替换现有的 asdf 安装，也不要使用 asdf 修改由 mise 管理的安装：
 
 ```sh
 ln -s ~/.local/share/mise ~/.asdf
 ```
 
-The SDKs then appear in Project Settings:
+之后即可在 Project Settings 中看到这些 SDK：
 
-![project settings](https://github.com/jdx/mise-docs/assets/216188/b34a0e3f-7af8-45c9-85b8-2c72bd1dc226)
+![项目设置](https://github.com/jdx/mise-docs/assets/216188/b34a0e3f-7af8-45c9-85b8-2c72bd1dc226)
 
-For Node.js and some other languages, the setting is under "Languages &
-Frameworks":
+对于 Node.js 和其他一些语言，该设置位于“Languages & Frameworks”下：
 
-![languages & frameworks](https://github.com/jdx/mise-docs/assets/216188/9926be1c-ab88-451a-8ace-edf2dac564b5)
+![Languages & Frameworks 设置](https://github.com/jdx/mise-docs/assets/216188/9926be1c-ab88-451a-8ace-edf2dac564b5)
 
 ## Neovim {#neovim}
 
-The Vim, Neovim and Emacs snippets below use the default data directory. If you
-set `MISE_DATA_DIR`, use `$MISE_DATA_DIR/shims` instead.
+以下 Vim、Neovim 和 Emacs 代码片段使用默认数据目录。如果设置了 `MISE_DATA_DIR`，请改用 `$MISE_DATA_DIR/shims`。
 
 ```lua
--- Prepend mise shims to PATH
+-- 将 mise shims 加到 PATH 前面
 vim.env.PATH = vim.env.HOME .. "/.local/share/mise/shims:" .. vim.env.PATH
 ```
 
-For Treesitter and language server setup, see the
-[Neovim cookbook](/mise-cookbook/neovim.html), or use
-[miser.nvim](https://github.com/carldaws/miser.nvim).
+Treesitter 和语言服务器的设置方式参见 [Neovim 指南](/mise-cookbook/neovim.html)，也可以使用 [miser.nvim](https://github.com/carldaws/miser.nvim)。
 
 ## Vim {#vim}
 
 ```vim
-" Prepend mise shims to PATH
+" 将 mise shims 加到 PATH 前面
 let $PATH = $HOME . '/.local/share/mise/shims:' . $PATH
 ```
 
 ## Emacs {#emacs}
 
-To use shims:
+如需使用 shims：
 
 ```lisp
 (let ((mise-shims (expand-file-name "~/.local/share/mise/shims")))
@@ -230,9 +178,7 @@ To use shims:
   (add-to-list 'exec-path mise-shims))
 ```
 
-To load each buffer's mise environment instead, install
-[mise.el](https://github.com/eki3z/mise.el) following its README, then enable
-it:
+如果希望为每个缓冲区加载 mise 环境，请按照 README 安装 [mise.el](https://github.com/eki3z/mise.el)，然后启用它：
 
 ```lisp
 (require 'mise)
@@ -241,68 +187,41 @@ it:
 
 ## Xcode {#xcode}
 
-Xcode build phases do not run your interactive shell startup files. Use an
-absolute mise path and select the project directory explicitly. For a project
-that declares SwiftLint:
+Xcode 构建阶段不会运行交互式 shell 启动文件。请使用 mise 的绝对路径，并明确指定项目目录。对于声明了 SwiftLint 的项目：
 
 ```sh
 "$HOME/.local/bin/mise" --cd "$SRCROOT" exec -- swiftlint lint
 ```
 
-Install the project's tools before building. Adjust the mise path if a package
-manager installed it.
+构建前请先安装项目工具。如果 mise 是由包管理器安装的，请相应调整其路径。
 
-When User Script Sandboxing is on, declare the script's inputs and outputs in the
-build phase. `$(SRCROOT)/mise.toml` is one input, but mise and the tool may also
-read other config files, installed executables and data directories, so
-allowing only `mise.toml` is not enough for every tool. Use the sandbox denial in
-the build log to find what is missing. For Xcode Cloud, see
-[Continuous integration](/continuous-integration.html#xcode-cloud).
+启用 User Script Sandboxing 后，请在构建阶段声明脚本的输入和输出。`$(SRCROOT)/mise.toml` 是一个输入，但 mise 和工具也可能读取其他配置文件、已安装的可执行文件及数据目录，因此仅允许访问 `mise.toml` 对某些工具并不足够。请根据构建日志中的沙盒拒绝记录查找缺失项。Xcode Cloud 的设置方式参见[持续集成](/continuous-integration.html#xcode-cloud)。
 
-## Dev containers {#dev-containers}
+## 开发容器 {#dev-containers}
 
-[`mise generate devcontainer`](/cli/generate/devcontainer.html) creates a
-starting `.devcontainer/devcontainer.json` that adds the mise dev container
-feature and the mise-vscode extension:
+[`mise generate devcontainer`](/cli/generate/devcontainer.html) 会创建初始配置 `.devcontainer/devcontainer.json`，其中包含 mise 开发容器功能和 mise-vscode 扩展：
 
 ```sh
 mise generate devcontainer --write
 ```
 
-The file sets `postCreateCommand` to `mise install`, so a new container installs
-the project's tools. `--mount-mise-data` adds a named volume for mise's data
-directory, so installed tools survive rebuilds of the container. Review the
-image and mounts before you build it. To pre-install tools in an image whose home
-directory is mounted from the host, see
-[Docker](/mise-cookbook/docker.html#devcontainers-with-home-directory-mounts).
+该文件会将 `postCreateCommand` 设为 `mise install`，以便新容器安装项目工具。`--mount-mise-data` 会为 mise 数据目录添加命名卷，使已安装工具在容器重建后仍可保留。构建前请检查镜像和挂载设置。如需在 home 目录从主机挂载的镜像中预装工具，请参阅 [Docker 指南](/mise-cookbook/docker.html#devcontainers-with-home-directory-mounts)。
 
 ## Windows {#windows}
 
-Add `%LOCALAPPDATA%\mise\shims` to your user `Path` so that editors find mise
-tools, as shown in [Windows shells](/shell-setup.html#windows), then restart the
-editor. If an extension reports `spawn EINVAL`, see the
-[troubleshooting guide](/troubleshooting.html#vscode-for-windows-extension-with-error-spawn-einval).
+按照 [Windows shell](/shell-setup.html#windows) 一节所述，将 `%LOCALAPPDATA%\mise\shims` 加入用户 `Path`，让编辑器找到 mise 工具，然后重启编辑器。如果扩展报告 `spawn EINVAL`，请参阅[故障排查指南](/troubleshooting.html#vscode-for-windows-extension-with-error-spawn-einval)。
 
-## AI coding assistants {#ai-coding-assistants}
+## AI 编程助手 {#ai-coding-assistants}
 
-Assistants that run commands in a terminal get mise tools the same way as other
-processes: through activation, shims or `mise exec`. To let an assistant read
-the project's tools, tasks and environment and run its tasks, connect it to the
-[mise MCP server](/mcp.html). Tools installed through packslip can also provide
-agent skills; see [Man pages, completions, and skills](/dev-tools/packslip-resources.html).
+在终端中运行命令的助手与其他进程一样，通过激活、shims 或 `mise exec` 获取 mise 工具。如需让助手读取项目工具、任务和环境并运行任务，请将它连接到 [mise MCP 服务器](/mcp.html)。通过 packslip 安装的工具也可以提供 agent skill；详见[手册页、补全和技能](/dev-tools/packslip-resources.html)。
 
 ## 诊断编辑器不匹配问题
 
-From the project directory, compare the selected executable with what the editor
-uses:
+在项目目录中运行以下命令，将 mise 选中的可执行文件与编辑器实际使用的文件进行比较：
 
 ```sh
 mise which node
 mise exec -- node --version
 ```
 
-Check the language server or debugger log for its executable path and working
-directory. If these commands work but the editor selects another version,
-correct that process's SDK setting, `PATH` or working directory. A working
-integrated terminal does not show that a language extension uses the same
-environment.
+请在语言服务器或调试器日志中查看其可执行文件路径和工作目录。如果以上命令正常，但编辑器选择了其他版本，请修正该进程的 SDK 设置、`PATH` 或工作目录。集成终端运行正常，并不能证明语言扩展使用了相同的环境。

@@ -5,19 +5,15 @@ socialDescription: 在锁文件变化或输出文件缺失时安装项目依赖�
 
 # 项目依赖 <Badge type="warning" text="experimental" />
 
-`mise deps` installs a project's packages, such as `node_modules` or a Python
-virtual environment, by running the package manager's install command when the
-files it tracks change or its outputs go missing. Use `[tools]` to install the
-package manager itself and `[deps]` to install the project's packages.
+`mise deps` 会在所跟踪的文件发生变化或输出文件缺失时，运行包管理器的安装命令来安装项目依赖，例如 `node_modules` 或 Python 虚拟环境。使用 `[tools]` 安装包管理器本身，使用 `[deps]` 安装项目依赖。
 
-::: warning Experimental
-`mise deps` is experimental. Enable it with `experimental = true` under
-`[settings]`, as in the examples below, or with `MISE_EXPERIMENTAL=1`.
+::: warning 实验性功能
+`mise deps` 目前仍是实验性功能。可像下方示例一样，在 `[settings]` 下设置 `experimental = true`，或设置环境变量 `MISE_EXPERIMENTAL=1` 来启用。
 :::
 
-## Quick start
+## 快速开始
 
-For an npm project with `package.json` and `package-lock.json`, add:
+对于包含 `package.json` 和 `package-lock.json` 的 npm 项目，添加以下配置：
 
 ```toml [mise.toml]
 [settings]
@@ -30,8 +26,7 @@ node = "24"
 auto = true
 ```
 
-Install Node.js, check that mise sees the provider, install the packages, and
-ask why the provider is now fresh:
+安装 Node.js，确认 mise 能识别该提供程序，然后安装依赖并查看提供程序为何已是最新：
 
 ```sh
 mise install
@@ -40,35 +35,28 @@ mise deps install npm
 mise deps install npm --explain
 ```
 
-With `auto = true`, `mise exec` and `mise run` also run the provider first
-whenever it is stale. A provider stays inactive until its input files exist, so
-if the project has no lockfile yet, create one with the package manager first,
-for example `mise exec --no-deps -- npm install`.
+设置 `auto = true` 后，每当提供程序过期，`mise exec` 和 `mise run` 也会先运行该提供程序。只有输入文件存在时提供程序才会启用，因此如果项目还没有锁文件，请先用包管理器生成一个，例如运行 `mise exec --no-deps -- npm install`。
 
-## Enable and disable providers {#configuration}
+## 启用和禁用提供程序 {#configuration}
 
-Configure only the providers your project uses; mise does not detect them on its
-own. An empty table enables a built-in provider without making it automatic:
+只配置项目实际使用的提供程序；mise 不会自动检测它们。空表可以启用内置提供程序，但不会让它自动运行：
 
 ```toml
 [deps.uv]
 ```
 
-To turn off a provider, for example one inherited from another config file:
+要关闭某个提供程序（例如从其他配置文件继承的提供程序），请使用：
 
 ```toml
 [deps]
 disable = ["npm"]
 ```
 
-This stops the provider from running; it does not remove installed packages.
-Run `mise deps install --list` to see the effective providers and whether each
-is active.
+此配置会阻止提供程序运行，但不会移除已安装的依赖。运行 `mise deps install --list` 可查看生效的提供程序及其启用状态。
 
-## Built-in providers
+## 内置提供程序
 
-Each built-in provider supplies default sources, outputs, and an install
-command:
+每个内置提供程序都预设了源文件、输出和安装命令：
 
 | 提供程序        | 源文件                                                 | 受跟踪的输出                     | 默认命令                                                       |
 | --------------- | ------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------- |
@@ -88,34 +76,22 @@ command:
 | `flutter`       | `pubspec.yaml`、`pubspec.lock`                         | `.dart_tool/package_config.json` | `flutter pub get`                                               |
 | `git-submodule` | `.gitmodules`                                          | 声明的子模块目录                 | `git submodule update --init --recursive`                       |
 
-A provider is active only when its required project input exists. Most need
-their lockfile; the exceptions are `go` (`go.mod`), `pip` (`requirements.txt`),
-`dart` and `flutter` (`pubspec.yaml`), and `git-submodule` (a non-empty
-`.gitmodules`). Members of a pub workspace track the workspace's package
-configuration file.
+只有项目中存在所需输入文件时，提供程序才会启用。大多数提供程序需要对应的锁文件；例外包括 `go`（`go.mod`）、`pip`（`requirements.txt`）、`dart` 和 `flutter`（`pubspec.yaml`），以及 `git-submodule`（非空的 `.gitmodules`）。pub 工作区中的成员会跟踪工作区的包配置文件。
 
-mise checks an optional output for deletion only after it has seen that output
-following a successful run. This supports package managers that install outside
-the project by default. The `pip` provider does not create or select a virtual
-environment: set up [Python virtualenv activation](/lang/python.html#automatic-virtualenv-activation)
-first if pip should install into `.venv`.
+只有在提供程序成功运行后，mise 才会开始检查可选输出是否被删除。这让默认将依赖安装到项目目录之外的包管理器也能正常使用。`pip` 提供程序不会创建或选择虚拟环境；如果希望 pip 将依赖安装到 `.venv`，请先配置 [Python 虚拟环境激活](/lang/python.html#automatic-virtualenv-activation)。
 
-The default commands are ordinary installs, not necessarily frozen-lockfile
-installs. To require npm's clean install from the lockfile, override `run`:
+默认命令执行普通安装，不一定会严格使用锁文件。若要求 npm 根据锁文件执行干净安装，请覆盖 `run`：
 
 ```toml
 [deps.npm]
 run = "npm ci"
 ```
 
-The freshness check still decides whether the command runs. Pass `--force` to
-run it even when nothing it tracks has changed.
+命令是否运行仍由新鲜度检查决定。即使所跟踪内容没有变化，也可以传入 `--force` 强制运行。
 
-## Custom providers
+## 自定义提供程序
 
-Define a provider for any project-specific step that turns input files into
-outputs. These examples assume `@graphql-codegen/cli` and `prisma` are already
-project dependencies and that their scripts and configuration exist:
+你可以为任何将输入文件转换为输出的项目专属步骤定义提供程序。以下示例假设 `@graphql-codegen/cli` 和 `prisma` 已是项目依赖，并且相应脚本和配置均已存在：
 
 ```toml
 [deps.codegen]
@@ -130,31 +106,25 @@ outputs = ["node_modules/.prisma/"]
 run = "npx prisma generate"
 ```
 
-### Provider options
+### 提供程序选项
 
-These options apply to custom and built-in providers:
+以下选项适用于自定义和内置提供程序：
 
-| Option        | Type     | Description                                                                |
+| 选项          | 类型     | 描述                                                                       |
 | ------------- | -------- | -------------------------------------------------------------------------- |
-| `auto`        | bool     | Run before `mise exec` and `mise run` when stale (default: `false`).       |
-| `sources`     | string[] | Files or glob patterns whose contents decide freshness.                    |
-| `outputs`     | string[] | Files or directories that must exist for the provider to be fresh.         |
-| `run`         | string   | Command to run when the provider is stale.                                 |
-| `env`         | table    | Environment variables for the command.                                     |
-| `dir`         | string   | Base directory for sources, outputs, and the command.                      |
-| `description` | string   | Description shown in output.                                               |
-| `depends`     | string[] | Providers that must finish successfully first.                             |
-| `timeout`     | string   | Time limit for the command, such as `"30s"` or `"5m"` (default: no limit). |
+| `auto`        | bool     | 过期时在 `mise exec` 和 `mise run` 前运行（默认值：`false`）。              |
+| `sources`     | string[] | 用于判断新鲜度的文件或 glob 模式。                                          |
+| `outputs`     | string[] | 提供程序保持最新所必须存在的文件或目录。                                    |
+| `run`         | string   | 提供程序过期时要运行的命令。                                                |
+| `env`         | table    | 命令使用的环境变量。                                                        |
+| `dir`         | string   | 源文件、输出和命令所使用的基准目录。                                        |
+| `description` | string   | 输出中显示的描述。                                                          |
+| `depends`     | string[] | 必须先成功完成的其他提供程序。                                              |
+| `timeout`     | string   | 命令的最长运行时间，例如 `"30s"` 或 `"5m"`（默认不设限制）。              |
 
-On a built-in provider, setting `sources` or `outputs` replaces that provider's
-defaults instead of adding to them. An empty array, such as `outputs = []`,
-turns off that kind of path tracking, including any optional outputs the
-built-in provider supplies.
+对于内置提供程序，设置 `sources` 或 `outputs` 会替换其默认值，而不是在默认值上追加。空数组（如 `outputs = []`）会关闭相应的路径跟踪，也会关闭该内置提供程序提供的所有可选输出跟踪。
 
-Relative paths and glob patterns resolve from the provider's config root after
-applying `dir`; absolute paths are used as written. For example, a pnpm
-workspace that keeps installed packages under an application directory can
-override the root-level defaults:
+相对路径和 glob 模式会在应用 `dir` 后，以提供程序的配置根目录为基准解析；绝对路径则按原样使用。例如，pnpm 工作区将已安装的依赖放在某个应用目录下时，可以覆盖根目录级别的默认值：
 
 ```toml
 [deps.pnpm]
@@ -162,15 +132,9 @@ sources = ["pnpm-lock.yaml", "packages/app/package.json"]
 outputs = ["packages/app/node_modules"]
 ```
 
-### Templates and environment variables
+### 模板和环境变量
 
-String values in provider configuration accept [Tera templates](/templates.html)
-such as <span v-pre>`{{ config_root }}`</span>,
-<span v-pre>`{{ env.NAME }}`</span>, and <span v-pre>`{{ vars.name }}`</span>.
-Shell-style variables such as `$NAME` and `${NAME:-default}` are expanded after
-the templates, following the same
-[`env_shell_expand`](/configuration/settings.html#env_shell_expand) setting as
-`[env]` values.
+提供程序配置中的字符串值支持 [Tera 模板](/templates.html)，例如 <span v-pre>`{{ config_root }}`</span>、<span v-pre>`{{ env.NAME }}`</span> 和 <span v-pre>`{{ vars.name }}`</span>。模板处理完成后，还会展开 `$NAME` 和 `${NAME:-default}` 等 shell 风格变量，使用的规则与 `[env]` 值相同，由 [`env_shell_expand`](/configuration/settings.html#env_shell_expand) 设置控制。
 
 ```toml
 [vars]
@@ -183,25 +147,13 @@ env = { OUTPUT_PACKAGE = "{{ vars.package }}" }
 run = 'npm run codegen -- "$OUTPUT_PACKAGE"'
 ```
 
-`$SCHEMA_NAME` comes from your environment, and `${SCHEMA_NAME:-default}` falls
-back to `default` when it is unset. An undefined variable without a default is
-left as written, with a warning; use `${NAME:-}` to default it to an empty
-string.
+`$SCHEMA_NAME` 的值来自环境变量；如果 `${SCHEMA_NAME:-default}` 未设置，则会回退为 `default`。没有默认值的未定义变量会保持原样并给出警告；使用 `${NAME:-}` 可以将其默认设为空字符串。
 
-In `run`, Tera expressions are rendered when the configuration loads, but `$VAR`
-expressions are left for the provider's shell to expand when the command runs,
-so `run` can use values from the provider's `env` table. Quote shell expansions
-that should stay one argument. Provider IDs and environment variable names are
-not templated. An invalid Tera template is reported as a configuration error
-before any provider command starts.
+在 `run` 中，配置加载时会渲染 Tera 表达式；`$VAR` 表达式则留给提供程序的 shell 在命令运行时展开，因此 `run` 可以使用提供程序 `env` 表中的值。需要作为单个参数传递的 shell 展开式应加引号。提供程序 ID 和环境变量名称不使用模板。Tera 模板无效时，会在任何提供程序命令启动前作为配置错误报告。
 
-## Order and parallelism
+## 执行顺序与并行
 
-Providers without `depends` run in parallel, up to the
-[`jobs`](/configuration/settings.html#jobs) setting. A provider with `depends`
-waits until those providers succeed. If one fails, the providers that depend on
-it are skipped. A dependency cycle is reported with a warning, and the providers
-in it are skipped.
+没有 `depends` 的提供程序会并行运行，最多并行数由 [`jobs`](/configuration/settings.html#jobs) 设置决定。包含 `depends` 的提供程序会等待其依赖项成功完成后再运行。如果依赖项失败，依赖它的提供程序会被跳过。检测到循环依赖时会发出警告，并跳过循环中的提供程序。
 
 ```toml
 [deps.uv]
@@ -215,83 +167,61 @@ sources = ["requirements.yml"]
 outputs = [".galaxy-installed"]
 ```
 
-This assumes the uv project declares `ansible-core` and that its virtual
-environment is on `PATH`, for example through `_.python.venv`. The
-`ansible-galaxy` provider starts after `uv` finishes. `depends` only orders
-configured providers; it does not enable a provider or install a package
-manager.
+此配置假设 uv 项目声明了 `ansible-core`，且其虚拟环境已加入 `PATH`，例如通过 `_.python.venv` 实现。`uv` 完成后才会启动 `ansible-galaxy` 提供程序。`depends` 只控制已配置提供程序的执行顺序；它不会启用提供程序，也不会安装包管理器。
 
-## Run providers automatically {#auto-install}
+## 自动运行提供程序 {#auto-install}
 
-A provider with `auto = true` runs, when it is stale, before:
+设置 `auto = true` 的提供程序过期时，会在以下命令执行前运行：
 
 - [`mise run`](/cli/run.html) runs a task
 - [`mise exec`](/cli/exec.html) runs a command
 
-These automatic runs use the same sources and outputs as `mise deps`. They
-handle tracked changes before your command starts; they do not upgrade packages
-to newer upstream versions. To skip them for one invocation:
+这些自动运行使用与 `mise deps` 相同的源文件和输出。它们会在命令启动前处理已跟踪文件的变化，但不会将依赖升级到更新的上游版本。要在某次调用中跳过自动运行：
 
 ```sh
 mise run --no-deps build
 mise exec --no-deps -- npm test
 ```
 
-### Staleness warnings
+### 过期警告
 
-In an [activated shell](/shell-setup.html), mise warns when an `auto = true`
-provider is stale, naming each provider and the reason:
+在[已激活的 shell](/shell-setup.html)中，`auto = true` 的提供程序过期时，mise 会列出提供程序名称和过期原因并发出警告：
 
 ```text
 mise WARN  deps: npm (package-lock.json changed) — run `mise deps`
 ```
 
-To turn the warning off, set
-[`status.show_deps_stale`](/configuration/settings.html#status.show_deps_stale)
-to `false`:
+要关闭此警告，请将 [`status.show_deps_stale`](/configuration/settings.html#status.show_deps_stale) 设为 `false`：
 
 ```toml
 [settings]
 status.show_deps_stale = false
 ```
 
-## How freshness is checked {#freshness-checking}
+## 新鲜度检查方式 {#freshness-checking}
 
-A provider is fresh when its required outputs exist and nothing it tracks has
-changed since its last successful run: the contents of its `sources`, and its
-effective command (the `run` string, shell, `env`, and `dir`). Otherwise it is
-stale and mise runs it.
+当所需输出均存在，且自上次成功运行以来所跟踪的内容均未改变时，提供程序即为最新状态。跟踪内容包括 `sources` 中各文件的内容，以及生效命令（`run` 字符串、shell、`env` 和 `dir`）。否则提供程序会被视为过期，mise 将运行它。
 
-- A provider with sources is stale on its first run.
-- An optional output must keep existing once mise has seen it.
+- 首次运行时，带有源文件的提供程序处于过期状态。
+- mise 首次检测到可选输出后，该输出就必须持续存在。
 - mise 创建的虚拟环境（例如通过 `python.uv_venv_auto` 创建）会使跟踪它的每个 provider 持续处于过期状态，直到该 provider 运行。
-- A custom provider with outputs but no sources is fresh while its outputs
-  exist; editing its command alone does not rerun it.
-- A provider with neither sources nor outputs runs every time.
+- 具有输出但没有源文件的自定义提供程序，只要输出存在就会保持最新；仅修改命令不会触发重新运行。
+- 既没有源文件也没有输出的提供程序每次都会运行。
 
-mise does not check installed packages one by one, look for newer upstream
-releases, or notice when an untracked external package cache is removed. List
-the input files a command's result depends on in `sources`. It keeps this state
-in `$MISE_STATE_DIR/deps/`, not in the project, and stores hashes, not the
-command or environment values.
+mise 不会逐个检查已安装的依赖，不会查找更新的上游版本，也不会发现未跟踪的外部包缓存被删除。请在 `sources` 中列出命令结果所依赖的输入文件。状态保存在 `$MISE_STATE_DIR/deps/`，而非项目目录中；其中只保存哈希值，不保存命令或环境变量的值。
 
-To see the decision, or what would run, use:
+要查看新鲜度判断结果或即将运行的命令，请使用：
 
 ```sh
 mise deps install npm --explain
 mise deps install --dry-run
 ```
 
-`--explain` exits 0 only when the provider is fresh. It exits non-zero when the
-provider is stale or inactive (for example, its lockfile is missing), so it can
-serve as a CI check. To run a provider whose files changed outside the tracked
-state, pass `--force`.
+只有提供程序处于最新状态时，`--explain` 才会以状态码 0 退出。如果提供程序过期或未启用（例如缺少锁文件），则会以非零状态码退出，因此可用于 CI 检查。若要运行因跟踪状态未能发现文件变化的提供程序，请传入 `--force`。
 
-## Monorepos
+## Monorepo
 
-By default, `mise deps` runs only the providers defined in the current project's
-config files, plus any in your global config. To run the providers of every
-explicitly configured monorepo root, pass `--monorepo`:
+默认情况下，`mise deps` 只会运行当前项目配置文件中定义的提供程序，以及全局配置中的提供程序。要运行所有显式配置的 monorepo 根目录中的提供程序，请传入 `--monorepo`：
 
 ```toml
 monorepo_root = true
@@ -304,42 +234,29 @@ config_roots = ["apps/*", "packages/*"]
 mise deps --monorepo
 ```
 
-This requires explicit
-[`[monorepo].config_roots`](/tasks/monorepo.html#explicit-config-roots); mise
-does not search arbitrary subdirectories for providers. Providers in the
-monorepo root's config are included too, because that config is part of every
-selected config root's hierarchy, as with `mise install --monorepo`.
+此功能要求显式设置 [`[monorepo].config_roots`](/tasks/monorepo.html#explicit-config-roots)；mise 不会在任意子目录中搜索提供程序。monorepo 根目录配置中的提供程序也会包含在内，因为该配置属于每个选定配置根目录的层级结构，这与 `mise install --monorepo` 的行为相同。
 
-Monorepo provider IDs include their config root, so the same provider can
-appear in several projects. For example, two uv providers are named
-`//apps/api:uv` and `//apps/worker:uv`. Use the qualified name with `--only`,
-`--skip`, or the provider argument:
+Monorepo 提供程序 ID 会包含其配置根目录，因此同一个提供程序可以出现在多个项目中。例如，两个 uv 提供程序分别命名为 `//apps/api:uv` 和 `//apps/worker:uv`。使用限定名称配合 `--only`、`--skip` 或提供程序参数：
 
 ```sh
 mise deps --monorepo --only //apps/api:uv
 mise deps install //apps/worker:uv --monorepo
 ```
 
-A `depends` entry without a `//` prefix resolves within the same config root, so
-a provider in `apps/api` with `depends = ["uv"]` depends on `//apps/api:uv`.
+不带 `//` 前缀的 `depends` 项会在同一配置根目录内解析，因此 `apps/api` 中配置 `depends = ["uv"]` 的提供程序依赖的是 `//apps/api:uv`。
 
-When `mise run` runs a task from another config root, such as
-`mise run //apps/api:build`, the `auto = true` providers of that config root run
-first, along with those of the project you run it from (the monorepo root when
-you run it there) and your global config.
+当 `mise run` 运行另一个配置根目录中的任务（例如 `mise run //apps/api:build`）时，该配置根目录中 `auto = true` 的提供程序会先运行。同时还会运行当前项目（若从 monorepo 根目录调用，则为根目录项目）和全局配置中的自动提供程序。
 
-For a single nested project, the `dir` option is simpler:
+如果只涉及一个嵌套项目，使用 `dir` 选项会更简单：
 
 ```toml
 [deps.uv]
 dir = "apps/api"
 ```
 
-## Add and remove packages {#adding-and-removing-packages}
+## 添加和移除依赖 {#adding-and-removing-packages}
 
-`mise deps add` and `mise deps remove` run a package manager's add and remove
-commands, which update the project's manifest, such as `package.json`, and its
-lockfile. Name each package as `ecosystem:package`:
+`mise deps add` 和 `mise deps remove` 会运行包管理器相应的添加和移除命令，并更新项目清单（例如 `package.json`）及锁文件。依赖名称需采用 `ecosystem:package` 格式：
 
 ```sh
 mise deps add npm:react
@@ -348,17 +265,11 @@ mise deps add -D npm:vitest        # dev dependency
 mise deps remove npm:lodash
 ```
 
-These commands support `npm`, `yarn`, `pnpm`, `bun`, `deno`, `aube`, `dart`, and
-`flutter`. They install missing tools from `[tools]` first, and they do not need
-a `[deps]` entry, but they use the provider's `dir` when one is configured. For
-the other providers, run the package manager directly, for example
-`mise exec -- uv add httpx`.
+这些命令支持 `npm`、`yarn`、`pnpm`、`bun`、`deno`、`aube`、`dart` 和 `flutter`。它们会先安装 `[tools]` 中缺失的工具，不需要配置 `[deps]` 条目，但如果已配置提供程序的 `dir`，则会使用该目录。其他提供程序请直接运行包管理器，例如 `mise exec -- uv add httpx`。
 
-## Full-stack example {#example-full-stack-project}
+## 全栈项目示例 {#example-full-stack-project}
 
-This example assumes a repository with npm and uv projects at its root, both
-lockfiles committed, Prisma installed as a project dependency, and an npm
-`codegen` script:
+此示例假设仓库根目录包含 npm 和 uv 项目，两个锁文件均已提交，Prisma 已作为项目依赖安装，并且 npm 中定义了 `codegen` 脚本：
 
 ```toml [mise.toml]
 [settings]
@@ -389,12 +300,6 @@ outputs = ["src/generated/"]
 run = "npm run codegen"
 ```
 
-`mise deps` runs stale `npm` and `uv` providers in parallel. `prisma` and
-`frontend-codegen` wait for `npm` and can then run in parallel with each other.
-`frontend-codegen` has no `auto = true`, so it runs only when you run
-`mise deps`, not before every `mise exec` or task.
+`mise deps` 会并行运行过期的 `npm` 和 `uv` 提供程序。`prisma` 和 `frontend-codegen` 会等待 `npm` 完成，之后两者可以并行运行。`frontend-codegen` 没有设置 `auto = true`，因此只会在运行 `mise deps` 时执行，不会在每次 `mise exec` 或任务启动前运行。
 
-For every flag, see [`mise deps`](/cli/deps.html),
-[`mise deps install`](/cli/deps/install.html),
-[`mise deps add`](/cli/deps/add.html), and
-[`mise deps remove`](/cli/deps/remove.html).
+所有可用参数请参阅 [`mise deps`](/cli/deps.html)、[`mise deps install`](/cli/deps/install.html)、[`mise deps add`](/cli/deps/add.html) 和 [`mise deps remove`](/cli/deps/remove.html)。

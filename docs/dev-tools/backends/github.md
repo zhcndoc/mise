@@ -2,170 +2,117 @@
 description: "从 GitHub Releases 安装预编译工具，并了解与 GitLab、Forgejo 后端共享的资源选项。"
 ---
 
-# github backend
+# GitHub 后端
 
-The `github` backend installs a tool from the files attached to a GitHub
-repository's releases. mise picks the asset for your OS and architecture,
-verifies it, and extracts it. The [gitlab](/dev-tools/backends/gitlab.html) and
-[forgejo](/dev-tools/backends/forgejo.html) backends share this implementation
-and accept the options on this page.
+`github` 后端会从 GitHub 仓库发行版附带的文件中安装工具。mise 会根据你的操作系统和架构选择资源文件、验证并解压。[gitlab](/dev-tools/backends/gitlab.html) 和 [forgejo](/dev-tools/backends/forgejo.html) 后端共用此实现，也接受本页介绍的选项。
 
-If the tool has a [registry](/registry.html) shorthand, such as `ripgrep`, prefer
-it: the registry entry already names a backend and the options the tool needs.
-Use `github:owner/repo` for a tool without a shorthand, or to choose this
-backend yourself.
+如果工具在[注册表](/registry.html)中有 `ripgrep` 这样的简写，建议优先使用：注册表条目已经指定后端和工具所需的选项。对于没有简写的工具，或你希望自行选择此后端时，请使用 `github:owner/repo`。
 
 <a id="usage"></a>
 
 ## 用法
 
-Install ripgrep in the current project, then run it:
+在当前项目中安装 ripgrep，然后运行：
 
 ```sh
 mise use github:BurntSushi/ripgrep
 mise exec -- rg --version
 ```
 
-This writes the following to `mise.toml`. Add `-g` to `mise use` for a global
-tool.
+这会将以下内容写入 `mise.toml`。若要全局安装工具，可给 `mise use` 添加 `-g`。
 
 ```toml
 [tools]
 "github:BurntSushi/ripgrep" = "latest"
 ```
 
-List the available versions and pin one:
+列出可用版本并固定其中一个：
 
 ```sh
 mise ls-remote github:BurntSushi/ripgrep
 mise use github:BurntSushi/ripgrep@14.1.1
 ```
 
-A version is the release tag without its leading `v`; see
-[`version_prefix`](#version-prefix) for other tag formats.
+版本号是去掉开头 `v` 的发行版标签；其他标签格式请参阅 [`version_prefix`](#version-prefix)。
 
-To pass [tool options](#tool-options) on the command line, append them in
-brackets. Quote the argument so the shell does not expand the brackets:
+要在命令行传入[工具选项](#tool-options)，请将其附加在方括号中。将参数括起来，避免 Shell 展开方括号：
 
 ```sh
 mise use 'github:oxc-project/oxc[matching=oxlint,rename_exe=oxlint]@apps_v1.69.0'
 ```
 
-mise writes the options into the tool's entry in `mise.toml`. Public releases
-need no token. For private repositories, GitHub Enterprise Server or rate-limit
-errors, see [GitHub tokens](/dev-tools/github-tokens.html).
+mise 会将选项写入 `mise.toml` 中该工具的条目。公开发行版无需令牌。有关私有仓库、GitHub Enterprise Server 或速率限制错误，请参阅 [GitHub 令牌](/dev-tools/github-tokens.html)。
 
-## How mise picks an asset {#asset-autodetection}
+## mise 如何选择资源文件 {#asset-autodetection}
 
-For each install, mise downloads one release asset:
+每次安装时，mise 会下载一个发行版资源文件：
 
-1. If a [`url`](#platform-specific-urls) is set for the platform, mise downloads
-   that URL and selects no asset.
-2. If [`asset_pattern`](#asset-pattern) is set, mise downloads the asset whose
-   name matches it.
-3. Otherwise mise keeps the assets that pass [`matching`](#matching) and
-   [`matching_regex`](#matching-regex), if set, and scores each one. The score
-   rewards a match for your OS, CPU architecture and C library (glibc or musl on
-   Linux, MSVC on Windows), archive formats it extracts well, and names
-   that start with the repository name. It penalizes debug and test builds,
-   checksum and signature files, and macOS `.app` bundles on other systems or
-   with [`no_app`](#no-app). The highest score wins, and a tie goes to the
-   shortest name.
+1. 如果为该平台设置了 [`url`](#platform-specific-urls)，mise 会下载此 URL，不再选择资源文件。
+2. 如果设置了 [`asset_pattern`](#asset-pattern)，mise 会下载名称匹配该模式的资源文件。
+3. 否则，mise 会保留通过 [`matching`](#matching) 和（如果已设置）[`matching_regex`](#matching-regex) 筛选的资源文件，并为每个文件评分。与操作系统、CPU 架构和 C 库（Linux 上的 glibc 或 musl，Windows 上的 MSVC）相符、便于解压的归档格式，以及以仓库名称开头的文件名会获得较高分。调试版和测试版、校验和与签名文件，以及其他系统上的 macOS `.app` 包或启用 [`no_app`](#no-app) 时的 `.app` 包会被扣分。分数最高者胜出；若平分，则选择名称较短的文件。
 
-Most tools install without any option:
+大多数工具无需任何选项即可安装：
 
 ```sh
 mise install github:user/repo
 ```
 
-If mise picks the wrong asset, narrow the candidates with
-[`matching`](#matching) or name the asset with
-[`asset_pattern`](#asset-pattern). When nothing matches, the error lists the
-release's assets.
+如果 mise 选错了资源文件，可用 [`matching`](#matching) 缩小候选范围，或用 [`asset_pattern`](#asset-pattern) 指定资源文件名称。没有任何匹配项时，错误消息会列出该发行版的所有资源文件。
 
-mise then verifies the download. It checks the digest GitHub reports for the
-asset, or a checksum file published in the same release, and on public GitHub
-it checks [GitHub artifact attestations](#github-attestations) when the release
-has them. See [Verification](#verification).
+随后，mise 会验证下载内容：检查 GitHub 为资源文件报告的摘要，或同一发行版中发布的校验和文件；如果公开 GitHub 上的发行版附带 [GitHub 产物证明](#github-attestations)，mise 也会进行检查。参阅[验证](#verification)。
 
-## Tool options
+## 工具选项
 
-Set these options on the tool's entry in `[tools]`, or inline as
-`github:owner/repo[key=value]`. The `gitlab` and `forgejo` backends accept all
-of them except the GitHub-only verification options; the
-[gitlab](/dev-tools/backends/gitlab.html#differences-from-the-github-backend)
-and [forgejo](/dev-tools/backends/forgejo.html#differences-from-the-github-backend)
-pages list what behaves differently there. Options that every backend accepts,
-such as `postinstall` and `os`, are described in
-[tool options](/dev-tools/#tool-options).
+可在 `[tools]` 中该工具的条目设置这些选项，也可直接写成 `github:owner/repo[key=value]`。`gitlab` 和 `forgejo` 后端接受这些选项，但不接受仅适用于 GitHub 的验证选项；两者的差异分别列于 [gitlab](/dev-tools/backends/gitlab.html#differences-from-the-github-backend) 和 [forgejo](/dev-tools/backends/forgejo.html#differences-from-the-github-backend)。所有后端都接受的选项（例如 `postinstall` 和 `os`）见[工具选项](/dev-tools/#tool-options)。
 
-| Option                                                                                       | Use it to                                                          |
+| 选项                                                                                         | 用途                                                               |
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`asset_pattern`](#asset-pattern)                                                            | Name the asset to download                                         |
-| [`matching`](#matching), [`matching_regex`](#matching-regex)                                 | Narrow the assets that autodetection chooses from                  |
-| [`no_app`](#no-app)                                                                          | Prefer a command-line archive over a macOS `.app` bundle           |
-| [`additional_asset_patterns`](#additional-asset-patterns)                                    | Extract more archives from the same release into the install       |
-| [`version_prefix`](#version-prefix)                                                          | Read versions from tags with a prefix other than `v`               |
-| [`prerelease`](#prerelease)                                                                  | Include prereleases                                                |
-| [`version_order`](#version-order)                                                            | Order versions by semantic version                                 |
-| [`url`](#platform-specific-urls)                                                             | Download a URL instead of a release asset on one platform          |
-| [`format`](#format)                                                                          | Set the archive format                                             |
-| [`strip_components`](#strip-components)                                                      | Remove leading directories when extracting                         |
-| [`bin_path`](#bin-path)                                                                      | Name the directory that holds the executables                      |
-| [`bin`](#bin)                                                                                | Name a single-file download                                        |
-| [`rename_exe`](#rename-exe)                                                                  | Rename executables extracted from an archive                       |
-| [`filter_bins`](#filter-bins)                                                                | Put only some executables on `PATH`                                |
-| [`checksum`](#checksum), [`size`](#size)                                                     | Pin the artifact's digest and size                                 |
-| [`github_attestations`](#github-attestations)                                                | Skip GitHub artifact attestation checks for one tool (GitHub only) |
-| [`slsa_signer_identity`, `slsa_signer_issuer`](#slsa-signer-identity-and-slsa-signer-issuer) | Verify SLSA provenance (GitHub only)                               |
-| [`api_url`](#api-url)                                                                        | Use GitHub Enterprise Server or another forge host                 |
+| [`asset_pattern`](#asset-pattern)                                                            | 指定要下载的资源文件名称                                           |
+| [`matching`](#matching), [`matching_regex`](#matching-regex)                                 | 缩小自动检测的候选范围                                             |
+| [`no_app`](#no-app)                                                                          | 优先使用命令行归档，而非 macOS `.app` 包                            |
+| [`additional_asset_patterns`](#additional-asset-patterns)                                    | 从同一发行版解压其他归档到安装目录                                 |
+| [`version_prefix`](#version-prefix)                                                          | 读取前缀不是 `v` 的标签版本                                        |
+| [`prerelease`](#prerelease)                                                                  | 包含预发行版                                                       |
+| [`version_order`](#version-order)                                                            | 按语义化版本排序                                                   |
+| [`url`](#platform-specific-urls)                                                             | 在某个平台下载指定 URL，而非发行版资源文件                         |
+| [`format`](#format)                                                                          | 指定归档格式                                                       |
+| [`strip_components`](#strip-components)                                                      | 解压时移除开头的目录                                               |
+| [`bin_path`](#bin-path)                                                                      | 指定可执行文件所在目录                                             |
+| [`bin`](#bin)                                                                                | 指定单文件下载的名称                                               |
+| [`rename_exe`](#rename-exe)                                                                  | 重命名从归档中解压出的可执行文件                                   |
+| [`filter_bins`](#filter-bins)                                                                | 仅将部分可执行文件加入 `PATH`                                      |
+| [`checksum`](#checksum), [`size`](#size)                                                     | 固定产物的摘要和大小                                               |
+| [`github_attestations`](#github-attestations)                                                | 对单个工具跳过 GitHub 产物证明检查（仅 GitHub）                    |
+| [`slsa_signer_identity`, `slsa_signer_issuer`](#slsa-signer-identity-and-slsa-signer-issuer) | 验证 SLSA 来源信息（仅 GitHub）                                    |
+| [`api_url`](#api-url)                                                                        | 使用 GitHub Enterprise Server 或其他 Forge 主机                   |
 
-### Selecting assets
+### 选择资源文件
 
 #### `asset_pattern` {#asset-pattern}
 
-The name of the asset to download, with `*` matching any run of characters and
-`?` matching one character. The pattern must match the whole name, and when it
-matches several assets, mise picks the shortest name. It replaces
-autodetection, so a pattern that names one platform, as below, works only on
-that platform:
+要下载的资源文件名称；`*` 匹配任意长度的字符，`?` 匹配单个字符。模式必须匹配完整名称。若匹配多个资源文件，mise 会选择名称最短的一个。此选项会取代自动检测，因此像下面这样指定某个平台的模式后，只能在该平台上使用：
 
 ```toml
 [tools]
 "github:cli/cli" = { version = "latest", asset_pattern = "gh_*_linux_amd64.tar.gz" }
 ```
 
-For a configuration that works everywhere, set the pattern
-[per platform](#per-platform-options) or use [`matching`](#matching). The
-pattern is a [template](#templates), so it can include the version, OS and
-architecture.
+要让配置适用于所有平台，请[按平台](#per-platform-options)设置模式，或使用 [`matching`](#matching)。模式支持[模板](#templates)，因此可以包含版本、操作系统和架构。
 
 #### `matching`
 
-Keeps only assets whose names contain this text, then lets autodetection pick
-your OS and architecture from what is left. Use it when a release ships several
-tools for each platform, such as `oxlint-*` and `oxfmt-*` archives: one
-configuration then works on every platform.
+仅保留名称包含指定文本的资源文件，然后由自动检测从中选择适用于当前操作系统和架构的文件。如果某个发行版为每个平台提供多个工具（例如 `oxlint-*` 和 `oxfmt-*` 归档），可使用此选项，让同一份配置适用于所有平台。
 
 ```toml
 [tools]
 "github:oxc-project/oxc" = { version = "apps_v1.69.0", matching = "oxlint", rename_exe = "oxlint" }
 ```
 
-The test is a case-sensitive substring, so `matching = "tool"` also keeps
-`tool-extras-*` assets. Use [`matching_regex`](#matching-regex) with an anchor
-for an exact prefix. If no asset for your platform passes the filter, the
-install fails with an error that names the filter. When `asset_pattern` is also
-set, mise uses it and ignores `matching` and `matching_regex` without a warning.
-SLSA provenance lookups use the same filter, so each binary of a multi-binary
-release is verified against its own provenance file.
+此选项按区分大小写的子字符串匹配，因此 `matching = "tool"` 也会保留 `tool-extras-*` 资源文件。若要精确匹配前缀，可在 [`matching_regex`](#matching-regex) 中使用锚点。如果当前平台没有资源文件通过筛选，安装会失败，并在错误中指出该筛选条件。同时设置 `asset_pattern` 时，mise 会使用它并静默忽略 `matching` 和 `matching_regex`。查询 SLSA 来源信息时也会使用相同筛选条件，因此多二进制发行版中的每个二进制文件都会针对自己的来源文件进行验证。
 
 #### `matching_regex` {#matching-regex}
 
-Like [`matching`](#matching), but the asset name must match a regular
-expression. The match is case-sensitive; start the expression with `(?i)` to
-ignore case. When both options are set, an asset must pass both. An invalid
-expression fails the install.
+与 [`matching`](#matching) 类似，但资源文件名称必须匹配正则表达式。匹配区分大小写；在表达式开头添加 `(?i)` 可忽略大小写。同时设置两个选项时，资源文件必须通过两项筛选。表达式无效会导致安装失败。
 
 ```toml
 [tools]
@@ -174,9 +121,7 @@ expression fails the install.
 
 #### `no_app` {#no-app}
 
-On macOS, prefers a standalone archive over a `.app` bundle, such as an Xcode
-extension, during autodetection. mise already avoids `.app` bundles on other
-systems. It has no effect when `asset_pattern` is set.
+在 macOS 上自动检测时，优先选择独立归档，而不是 Xcode 扩展等 `.app` 包。mise 在其他系统上本来就会避开 `.app` 包。设置 `asset_pattern` 后，此选项无效。
 
 ```toml
 [tools."github:nicklockwood/SwiftFormat"]
@@ -187,10 +132,7 @@ no_app = true # use swiftformat.zip, not SwiftFormat.for.Xcode.app.zip
 
 #### `additional_asset_patterns` {#additional-asset-patterns}
 
-Downloads more archives from the same release and extracts them into the primary
-asset's install directory, in the order listed. Use it when a project splits one
-installation across a base archive and add-on archives. For example, Ollama's
-ROCm support for Linux on x64 is an archive laid over the normal Ollama archive:
+从同一发行版下载更多归档，并按列出的顺序解压到主资源文件的安装目录中。如果项目将一次安装拆分为基础归档和附加归档，可使用此选项。例如，Ollama 在 Linux x64 上的 ROCm 支持以单独归档的形式叠加到常规 Ollama 归档之上：
 
 ```toml
 [tools."github:ollama/ollama"]
@@ -202,77 +144,50 @@ linux-x64 = {
 }
 ```
 
-Each pattern uses the same wildcards and [templates](#templates) as
-`asset_pattern`. If a pattern matches several assets, mise picks the shortest
-name, so make each pattern specific to one archive. The value is an array or a
-comma-separated string.
+每个模式都使用与 `asset_pattern` 相同的通配符和[模板](#templates)。若一个模式匹配多个资源文件，mise 会选择名称最短的文件，因此每个模式都应精确对应一个归档。此值可以是数组或逗号分隔的字符串。
 
-The extra assets must be archives. mise extracts them without the primary
-asset's `strip_components`, `bin` and `rename_exe`, and a file in a later
-archive replaces the same path from an earlier one. `mise lock` records the URL
-and checksum of every extra archive, and `mise install --locked` fails when one
-is missing from the lockfile.
+附加资源文件必须是归档。mise 解压它们时不会应用主资源文件的 `strip_components`、`bin` 和 `rename_exe`；后续归档中的文件会覆盖较早归档中的同一路径。`mise lock` 会记录每个附加归档的 URL 和校验和；如果锁文件缺少其中任一项，`mise install --locked` 就会失败。
 
-### Choosing versions
+### 选择版本
 
 #### `version_prefix` {#version-prefix}
 
-The text in front of the version in release tags. Without it, mise removes a
-leading `v` from each tag, and on GitHub it also removes a prefix that repeats
-the repository name, as in the tag `tectonic@0.15.0`. Set it when a repository
-uses another prefix:
+发行版标签中位于版本号前面的文本。未设置时，mise 会移除每个标签开头的 `v`；在 GitHub 上，还会移除重复仓库名称的前缀，例如标签 `tectonic@0.15.0`。如果仓库使用其他前缀，请设置此选项：
 
 ```toml
 [tools]
 "github:user/repo" = { version = "latest", version_prefix = "release-" }
 ```
 
-With `version_prefix = "release-"`, mise lists only tags that start with
-`release-`, shows the tag `release-1.0.0` as `1.0.0`, and installs that tag for
-`mise use github:user/repo@1.0.0`. Set `version_prefix = ""` to keep tags
-exactly as published, including a leading `v`.
+设置 `version_prefix = "release-"` 后，mise 只会列出以 `release-` 开头的标签，将 `release-1.0.0` 显示为 `1.0.0`，并在运行 `mise use github:user/repo@1.0.0` 时安装对应标签。设置 `version_prefix = ""` 可保留标签发布时的原样内容，包括开头的 `v`。
 
 #### `prerelease`
 
-By default, mise leaves releases that GitHub marks as prereleases out of
-`mise ls-remote`, `latest` and version prefixes. Set `prerelease = true` to
-include them:
+默认情况下，mise 会在 `mise ls-remote`、`latest` 和版本前缀解析中排除 GitHub 标记为预发行版的发行版。设置 `prerelease = true` 可将其纳入：
 
 ```toml
 [tools]
 "github:myorg/mytool" = { version = "latest", prerelease = true }
 ```
 
-`latest` then resolves to the newest release, prereleases included, instead of
-the release GitHub marks as Latest, and a prefix such as `1.2` also matches
-prerelease tags under it. Use it for a repository whose active releases are all
-prereleases, or to follow release candidates. Draft releases are never listed.
+此时，`latest` 会解析为最新发行版（包括预发行版），而不是 GitHub 标记为 Latest 的发行版；`1.2` 这样的前缀也会匹配其下的预发行版标签。可用于活跃发行版全是预发行版的仓库，或跟踪候选发行版。草稿发行版永远不会列出。
 
-To include prereleases for every tool, set the
-[`prereleases`](/configuration/settings.html#prereleases) setting
-(`MISE_PRERELEASES=1`). For a single listing, run `mise ls-remote --prerelease`.
+若要对所有工具包含预发行版，请设置 [`prereleases`](/configuration/settings.html#prereleases)（`MISE_PRERELEASES=1`）。只需在单次查询中包含时，可运行 `mise ls-remote --prerelease`。
 
 #### `version_order` {#version-order}
 
-By default, `mise ls-remote` lists releases in the order they were published.
-Set `version_order = "semver"` when a repository publishes backports after
-newer releases, so that the list and prefixes such as `1.2` follow semantic
-version order:
+默认情况下，`mise ls-remote` 按发行版发布时间列出版本。如果仓库在发布较新版本后又发布了旧版本分支的回移修复，可设置 `version_order = "semver"`，让列表和 `1.2` 这样的前缀按语义化版本排序：
 
 ```toml
 [tools]
 "github:owner/tool" = { version = "1.2", version_order = "semver" }
 ```
 
-`latest` still resolves to the release GitHub or Forgejo marks as latest when
-there is one. See [version ordering](/dev-tools/versions.html#version-ordering).
+如果 GitHub 或 Forgejo 标记了 Latest，`latest` 仍会解析到该发行版。参阅[版本排序](/dev-tools/versions.html#version-ordering)。
 
-### Per-platform options
+### 按平台设置选项
 
-Set an option under `platforms.<os>-<arch>` to use it on that platform only. A
-platform value overrides the top-level one. The key uses mise's names, `linux`,
-`macos` or `windows` and `x64` or `arm64`; mise also accepts `darwin`, `amd64`,
-`x86_64` and `aarch64`.
+要仅在特定平台使用某个选项，请将其设在 `platforms.<os>-<arch>` 下。平台级的值会覆盖顶层值。键名使用 mise 的命名方式：操作系统为 `linux`、`macos` 或 `windows`，架构为 `x64` 或 `arm64`；mise 也接受 `darwin`、`amd64`、`x86_64` 和 `aarch64`。
 
 ```toml
 [tools."github:cli/cli"]
@@ -289,18 +204,14 @@ macos-arm64 = {
 }
 ```
 
-These options can be set per platform: `asset_pattern`,
-`additional_asset_patterns`, `url`, `no_app`, `format`, `strip_components`,
-`bin_path`, `bin`, `rename_exe`, `filter_bins`, `checksum` and `size`. The other
-options apply to every platform.
+以下选项可以按平台分别设置：`asset_pattern`、`additional_asset_patterns`、`url`、`no_app`、`format`、`strip_components`、`bin_path`、`bin`、`rename_exe`、`filter_bins`、`checksum` 和 `size`。其他选项适用于所有平台。
 
 #### `url` {#platform-specific-urls}
 
-Set `platforms.<os>-<arch>.url` to download that URL instead of selecting a
-release asset. The URL is a [template](#templates):
+设置 `platforms.<os>-<arch>.url` 可直接下载该 URL，而不从发行版中选择资源文件。URL 支持[模板](#templates)：
 
 ::: v-pre
-`{{ version }}` is the resolved version, even when you request `latest`.
+`{{ version }}` 表示解析后的版本，即使你请求的是 `latest` 也是如此。
 :::
 
 ~~~toml
@@ -309,21 +220,13 @@ version = "latest"
 platforms.macos-arm64.url = "https://downloads.example.com/tool/{{ version }}/tool-macos-arm64.tar.gz"
 ~~~
 
-Include any tag prefix, such as `v`, in the URL yourself. This backend ignores a
-top-level `url`, so set it under each platform. mise extracts the download but
-never builds it, so the URL must point to a prebuilt archive or binary. You can
-lay release assets over it with
-[`additional_asset_patterns`](#additional-asset-patterns). When every platform
-you support sets `url`, mise lists releases even if they have no assets; see
-[How versions are listed](#version-listing).
+URL 中必须自行包含 `v` 等标签前缀。此后端会忽略顶层的 `url`，因此应在每个平台下分别设置。mise 只解压下载内容，不会构建，因此 URL 必须指向预编译归档或二进制文件。你可以使用 [`additional_asset_patterns`](#additional-asset-patterns) 在其上叠加发行版资源文件。如果所有受支持的平台都设置了 `url`，即使发行版没有资源文件，mise 也会列出这些版本；参阅[版本列表的生成方式](#version-listing)。
 
-### Extracting and naming executables
+### 解压和命名可执行文件
 
 #### `format`
 
-The archive format, such as `tar.gz`, `tar.xz` or `zip`. Set it when an asset
-name has no extension or a misleading one; otherwise mise detects the format
-from the name. Use `raw` for a file that is not an archive.
+归档格式，例如 `tar.gz`、`tar.xz` 或 `zip`。如果资源文件没有扩展名，或扩展名不正确，请设置此选项；否则 mise 会根据文件名检测格式。对于非归档文件，请使用 `raw`。
 
 ```toml
 [tools]
@@ -332,88 +235,71 @@ from the name. Use `raw` for a file that is not an archive.
 
 #### `strip_components` {#strip-components}
 
-The number of leading directories to remove when extracting an archive:
+解压归档时要移除的开头目录层数：
 
 ```toml
 [tools]
 "github:cli/cli" = { version = "latest", strip_components = 1 }
 ```
 
-When neither `strip_components` nor `bin_path` is set, mise removes one level by
-itself if the archive holds a single top-level directory and no files, as
-ripgrep's archives do (`ripgrep-14.1.1-x86_64-unknown-linux-musl/rg`).
+未设置 `strip_components` 和 `bin_path` 时，如果归档只包含一个顶层目录且没有其他文件（例如 ripgrep 归档中的 `ripgrep-14.1.1-x86_64-unknown-linux-musl/rg`），mise 会自动移除这一层目录。
 
 #### `bin_path` {#bin-path}
 
-The directory, relative to the install directory, that holds the executables.
-Set it when mise does not find them. mise applies it after `strip_components`,
-and setting it turns off the automatic stripping.
+相对于安装目录、用于存放可执行文件的目录。如果 mise 没有找到可执行文件，请设置此选项。mise 会在应用 `strip_components` 后再应用该路径；设置此选项后会关闭自动移除目录。
 
 ::: v-pre
-For an archive laid out as `tool-1.0.0/bin/tool`, set `strip_components = 1`
-and `bin_path = "bin"`, as below, or keep the outer directory with
-`bin_path = "tool-{{ version }}/bin"`.
+对于目录结构为 `tool-1.0.0/bin/tool` 的归档，可像下面这样设置 `strip_components = 1` 和 `bin_path = "bin"`，也可以通过 `bin_path = "tool-{{ version }}/bin"` 保留外层目录。
 :::
 
 ```toml
 [tools."github:cli/cli"]
 version = "latest"
 strip_components = 1
-bin_path = "bin" # after the archive's outer directory is removed
+bin_path = "bin" # 移除归档最外层目录后
 ```
 
-`bin_path` is a [template](#templates), for when the directory name includes the
-version, OS or architecture:
+`bin_path` 支持[模板](#templates)，以便在目录名中包含版本、操作系统或架构时使用：
 
 ```toml
 [tools."github:pizlonator/fil-c"]
 version = "latest"
-# such as filc-0.681-linux-x86_64/build/bin
+# 例如 filc-0.681-linux-x86_64/build/bin
 strip_components = 0
 bin_path = 'filc-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}/build/bin'
 ```
 
-When `bin_path` is not set, mise puts these directories on `PATH`, using the
-first rule that applies:
+未设置 `bin_path` 时，mise 会按以下规则中第一个适用的规则将相应目录加入 `PATH`：
 
-1. `bin/` in the install directory, if it exists.
-2. `Contents/MacOS` in the install directory, for a `.app` bundle whose outer
-   directory was stripped.
-3. The install directory, if it directly contains an executable file.
-4. Every immediate subdirectory that qualifies: a `*.app` directory contributes
-   its `Contents/MacOS`, and any other subdirectory contributes its `bin/`, or
-   itself if it directly contains an executable.
-5. The install directory.
+1. 如果存在，则使用安装目录中的 `bin/`。
+2. 对于已移除外层目录的 `.app` 包，使用安装目录中的 `Contents/MacOS`。
+3. 如果安装目录直接包含可执行文件，则使用安装目录本身。
+4. 使用符合条件的所有直接子目录：`*.app` 目录对应其 `Contents/MacOS`；其他子目录对应其 `bin/`，若目录直接包含可执行文件则使用该目录本身。
+5. 使用安装目录本身。
 
-When [`filter_bins`](#filter-bins) is set, only its `.mise-bins` directory goes
-on `PATH`.
+设置 [`filter_bins`](#filter-bins) 后，只会将其 `.mise-bins` 目录加入 `PATH`。
 
-#### Naming the executable
+#### 命名可执行文件
 
-| Download                            | Option                      | Example                                                     |
+| 下载内容                            | 选项                        | 示例                                                        |
 | ----------------------------------- | --------------------------- | ----------------------------------------------------------- |
-| A single binary file                | [`bin`](#bin)               | `bin = "mytool"`                                            |
-| An archive with one executable      | [`rename_exe`](#rename-exe) | `rename_exe = "yt-dlp"`                                     |
-| An archive with several executables | `rename_exe` as a table     | `rename_exe = { "ols-*" = "ols", "odinfmt-*" = "odinfmt" }` |
+| 单个二进制文件                      | [`bin`](#bin)               | `bin = "mytool"`                                            |
+| 仅包含一个可执行文件的归档          | [`rename_exe`](#rename-exe) | `rename_exe = "yt-dlp"`                                     |
+| 包含多个可执行文件的归档            | 使用表格形式的 `rename_exe` | `rename_exe = { "ols-*" = "ols", "odinfmt-*" = "odinfmt" }` |
 
 #### `bin`
 
-The name to give a downloaded single-file binary. It can include a directory,
-such as `bin/mytool`. mise already removes OS and architecture suffixes from
-single-binary downloads, so `docker-compose-linux-x86_64` installs as
-`docker-compose` with no option. Set `bin` only when you want another name:
+为下载的单文件二进制指定名称。名称可以包含目录，例如 `bin/mytool`。mise 会自动移除单文件下载名称中的操作系统和架构后缀，因此 `docker-compose-linux-x86_64` 无需设置选项即可安装为 `docker-compose`。只有想使用其他名称时才设置 `bin`：
 
 ```toml
 [tools."github:owner/repo"]
 version = "1.0.0"
-bin = "mytool" # install the downloaded file as mytool
+bin = "mytool" # 将下载的文件安装为 mytool
 ```
 
 #### `rename_exe` {#rename-exe}
 
-Renames an executable after an archive is extracted. The string form renames
-the tool's main executable: the one named after the repository, else one whose
-name contains the repository name, else the first executable mise finds.
+解压归档后重命名可执行文件。字符串形式会重命名工具的主可执行文件：优先选择与仓库同名的文件，其次选择名称中包含仓库名的文件，最后选择 mise 找到的第一个可执行文件。
 
 ```toml
 [tools."github:yt-dlp/yt-dlp"]
@@ -422,27 +308,20 @@ asset_pattern = "yt-dlp_linux.zip"
 rename_exe = "yt-dlp"
 ```
 
-When an archive ships several executables that you want under plain names, use
-the table form. Each key is an exact file name or a glob, and each value is the
-new name:
+如果归档中包含多个可执行文件，并且你希望将它们改为简单名称，请使用表格形式。每个键可以是准确的文件名或 glob 模式，每个值是新名称：
 
 ```toml
 [tools."github:DanielGavin/ols"]
 version = "latest"
-# the archive holds ols-x86_64-unknown-linux-gnu and odinfmt-x86_64-unknown-linux-gnu
+# 归档中包含 ols-x86_64-unknown-linux-gnu 和 odinfmt-x86_64-unknown-linux-gnu
 rename_exe = { "ols-*" = "ols", "odinfmt-*" = "odinfmt" }
 ```
 
-mise warns about a key that matches nothing, and restores the executable bit
-that some archives, such as ZIP files, drop.
+如果某个键没有匹配任何文件，mise 会发出警告；mise 还会恢复 ZIP 等某些归档可能移除的可执行权限位。
 
 #### `filter_bins` {#filter-bins}
 
-Puts only the named executables on `PATH`. mise links them into a `.mise-bins`
-directory inside the install and puts only that directory on `PATH`, so other
-executables in the archive, such as `pandoc-lua` and `pandoc-server`, stay
-hidden. The value is an array or a comma-separated string, and mise warns about
-a name it cannot find.
+仅将指定的可执行文件加入 `PATH`。mise 会在安装目录中创建 `.mise-bins` 目录并在其中创建链接，随后只将该目录加入 `PATH`，这样归档中的其他可执行文件（例如 `pandoc-lua` 和 `pandoc-server`）就不会暴露。此值可以是数组或逗号分隔的字符串；如果找不到指定名称，mise 会发出警告。
 
 ```toml
 [tools]
@@ -450,30 +329,15 @@ a name it cannot find.
 "github:owner/repo" = { version = "latest", filter_bins = ["tool", "helper"] }
 ```
 
-On Windows, name the file with its extension (`filter_bins = "pandoc.exe"`).
-The entries in `.mise-bins` are copies there, so `mise x` and shims start the
-installed file instead, and it finds the DLLs and data beside it. A shell that
-finds the copy on `PATH` by itself, as with `mise activate`, still runs the
-copy. Each copy records which file it came from when it is installed, so
-reinstall a tool installed by an older mise (`mise install --force`) to get
-this.
+在 Windows 上，名称需包含扩展名（`filter_bins = "pandoc.exe"`）。`.mise-bins` 中的条目是文件副本，因此 `mise x` 和 shims 会启动副本，而副本仍能找到旁边的 DLL 和数据文件。通过 `mise activate` 等方式直接从 `PATH` 找到副本的 Shell 也会运行该副本。每个副本会在安装时记录其源文件，因此要让旧版 mise 安装的工具采用此行为，请重新安装（`mise install --force`）。
 
-### Verification
+### 验证
 
-When GitHub reports a digest for the asset, or the release publishes a checksum
-file that lists it, mise checks the download against it. When lockfiles are
-enabled, mise records the checksum in [mise.lock](/dev-tools/mise-lock.html)
-and checks later installs against it. On public GitHub mise also checks GitHub
-artifact attestations. The options below pin values by hand, add SLSA
-provenance checks, or turn the attestation check off.
+如果 GitHub 为资源文件报告了摘要，或发行版发布了列出该文件校验和的文件，mise 会据此检查下载内容。启用锁文件时，mise 会将校验和记录到 [mise.lock](/dev-tools/mise-lock.html)，并在之后的安装中进行核对。对于公开 GitHub，mise 还会检查 GitHub 产物证明。以下选项可手动固定值、添加 SLSA 来源信息检查，或关闭证明检查。
 
 #### `checksum`
 
-Usually you do not need this: [`mise lock`](/dev-tools/mise-lock.html) records
-the URL and checksum for every platform. Set `checksum` to pin one artifact by
-hand, as `<algorithm>:<hash>` with an algorithm such as `sha256`, `sha512` or
-`blake3`. A checksum describes one version and one asset, so pin the version,
-and set it [per platform](#per-platform-options) when you support several:
+通常无需设置此项：[`mise lock`](/dev-tools/mise-lock.html) 会记录每个平台的 URL 和校验和。若要手动固定某个产物，可将 `checksum` 设为 `<algorithm>:<hash>`，其中算法可以是 `sha256`、`sha512` 或 `blake3`。校验和对应单个版本和单个资源文件，因此应固定版本；若支持多个平台，还应[按平台分别设置](#per-platform-options)：
 
 ```toml
 [tools."github:owner/repo"]
@@ -484,9 +348,7 @@ checksum = "sha256:REPLACE_WITH_THE_64_HEX_DIGIT_DIGEST"
 
 #### `size`
 
-The expected size of the asset in bytes. The install fails when the download has
-a different size. A size check catches truncated downloads, but it does not
-replace a checksum.
+资源文件预期的字节数。如果下载大小不符，安装会失败。大小检查可以发现下载截断，但不能代替校验和。
 
 ```toml
 [tools]
@@ -495,27 +357,18 @@ replace a checksum.
 
 #### `github_attestations` {#github-attestations}
 
-By default, mise checks GitHub artifact attestations when a release asset has
-them. Set `github_attestations = false` to skip that check for one tool while
-keeping it on for the others:
+默认情况下，如果发行版资源文件带有 GitHub 产物证明，mise 就会检查。设置 `github_attestations = false` 可对单个工具跳过检查，同时仍为其他工具启用：
 
 ```toml
 [tools]
 "github:myorg/mytool" = { version = "latest", github_attestations = false }
 ```
 
-Use it as a temporary workaround when GitHub's attestation service or trusted
-root data makes installs fail. Checksums, and SLSA provenance when it is
-configured, are still checked. If `mise.lock` records `github-attestations`
-provenance for the tool, run `mise lock` again after setting this option:
-otherwise the install fails, because the lockfile requires a check the tool has
-turned off. The [`github.github_attestations`](/configuration/settings.html#github.github_attestations)
-setting turns the check off for every tool. This option is GitHub only.
+如果 GitHub 证明服务或受信任根数据导致安装失败，可将此选项作为临时解决办法。校验和以及已配置的 SLSA 来源信息仍会检查。如果 `mise.lock` 为该工具记录了 `github-attestations` 来源信息，设置此选项后请重新运行 `mise lock`；否则安装会失败，因为锁文件要求执行已关闭的检查。设置 [`github.github_attestations`](/configuration/settings.html#github.github_attestations) 可对所有工具关闭检查。此选项仅适用于 GitHub。
 
-#### `slsa_signer_identity` and `slsa_signer_issuer` {#slsa-signer-identity-and-slsa-signer-issuer}
+#### `slsa_signer_identity` 与 `slsa_signer_issuer` {#slsa-signer-identity-and-slsa-signer-issuer}
 
-To verify SLSA provenance published with a release, set the certificate
-identity and the OIDC issuer that you expect for the release workflow:
+若要验证随发行版发布的 SLSA 来源信息，请设置你预期的发行工作流证书身份和 OIDC 颁发者：
 
 ```toml
 [tools."github:myorg/mytool"]
@@ -525,45 +378,31 @@ slsa_signer_issuer = "https://token.actions.githubusercontent.com"
 ```
 
 ::: v-pre
-The identity must match the workflow ref in the certificate exactly. It is a
-[template](#templates), so `{{ version }}` is the resolved version.
+身份必须与证书中的工作流引用完全一致。此值支持[模板](#templates)，其中 `{{ version }}` 表示解析后的版本。
 :::
 
-Without both options, mise skips SLSA provenance and uses the other checks. A
-lockfile entry that records a checksum and SLSA provenance installs without
-verifying again, unless
-[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)
-is set; that setting also makes missing signer options an error. These options
-are GitHub only.
+如果没有同时设置这两个选项，mise 会跳过 SLSA 来源信息验证，并使用其他检查。锁文件条目同时记录校验和与 SLSA 来源信息时，安装会跳过重复验证；设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 后则会重新验证，且未设置签名者选项也会报错。这些选项仅适用于 GitHub。
 
-### Templates
+### 模板
 
-`asset_pattern`, `additional_asset_patterns`, `url`, `bin_path` and
-`slsa_signer_identity` are [Tera templates](/templates.html). Write values in
-double braces:
+`asset_pattern`、`additional_asset_patterns`、`url`、`bin_path` 和 `slsa_signer_identity` 都支持 [Tera 模板](/templates.html)。请用双花括号书写变量：
 
 ::: v-pre
 
-- `{{ version }}`: the resolved version, without the tag prefix
-- `{{ os() }}`: `linux`, `macos` or `windows`
-- `{{ arch() }}`: `x64` or `arm64`
+- `{{ version }}`：解析后的版本，不带标签前缀
+- `{{ os() }}`：`linux`、`macos` 或 `windows`
+- `{{ arch() }}`：`x64` 或 `arm64`
 
-`os` and `arch` are functions, so include the parentheses. Each takes keyword
-arguments that rename a value, for a project that uses other names:
-`{{ os(macos="darwin") }}` or `{{ arch(x64="x86_64", arm64="aarch64") }}`. Use
-a single-quoted TOML string when the template contains double quotes, as in the
-`bin_path` example above.
+`os` 和 `arch` 是函数，因此必须包含括号。对于采用其他命名方式的项目，可以通过关键字参数重命名其值，例如 `{{ os(macos="darwin") }}` 或 `{{ arch(x64="x86_64", arm64="aarch64") }}`。如果模板中包含双引号，请使用单引号括起 TOML 字符串，如上面的 `bin_path` 示例。
 
 :::
 
-#### Single-brace placeholders <Badge type="danger" text="deprecated" />
+#### 单花括号占位符 <Badge type="danger" text="已弃用" />
 
 ::: v-pre
-Single-brace placeholders such as `{version}` and `{x86_64_arch}` are
-deprecated. mise has warned about them since 2026.3.0 and will stop accepting
-them in 2027.3.0. Replace them as follows:
+`{version}` 和 `{x86_64_arch}` 这样的单花括号占位符已弃用。mise 从 2026.3.0 开始对此发出警告，并将在 2027.3.0 停止接受。请按下表替换：
 
-| Deprecated      | Replacement                                 |
+| 已弃用写法      | 替代写法                                    |
 | --------------- | ------------------------------------------- |
 | `{version}`     | `{{ version }}`                             |
 | `{os}`          | `{{ os() }}`                                |
@@ -575,12 +414,9 @@ them in 2027.3.0. Replace them as follows:
 
 :::
 
-## Installing several tools from one release {#multiple-assets-from-the-same-release}
+## 从同一发行版安装多个工具 {#multiple-assets-from-the-same-release}
 
-If the assets make up one installation, such as a base archive and an add-on,
-use [`additional_asset_patterns`](#additional-asset-patterns). If they are
-separate tools, give each one a [tool alias](/dev-tools/aliases.html) that
-points at the same repository, and select its asset with `matching`:
+如果多个资源文件共同组成一次安装（例如基础归档和附加组件），请使用 [`additional_asset_patterns`](#additional-asset-patterns)。如果它们是彼此独立的工具，请为每个工具设置指向同一仓库的[工具别名](/dev-tools/aliases.html)，并使用 `matching` 选择其资源文件：
 
 ```toml
 [tool_alias]
@@ -598,53 +434,34 @@ matching = "oxfmt"
 rename_exe = "oxfmt"
 ```
 
-Each alias is a separate tool with its own version and install directory. If one
-binary's name is part of another's, use `matching_regex` with an anchor, such as
-`^oxlint-`, instead of `matching`.
+每个别名都是独立工具，拥有自己的版本和安装目录。如果一个二进制文件的名称是另一个名称的子串，请使用带锚点的 `matching_regex`（例如 `^oxlint-`），而不要使用 `matching`。
 
-Two entries for the same `github:owner/repo` with different `matching` values do
-not work: mise treats them as one tool, uses the first entry's options, and
-never installs the other binary.
+不要为同一个 `github:owner/repo` 创建带不同 `matching` 值的两个条目：mise 会将它们视为一个工具，只使用第一个条目的选项，而不会安装另一个二进制文件。
 
 ## GitHub Enterprise Server {#self-hosted-github}
 
-Set `api_url` to your server's API, and provide a token for that host as
-described in [GitHub tokens](/dev-tools/github-tokens.html#github-enterprise).
-mise lists releases, looks up assets and downloads them through that API.
-GitHub artifact attestations are not checked for a custom `api_url`, because
-GitHub Enterprise Server does not serve them.
+将 `api_url` 设为服务器的 API 地址，并按照 [GitHub 令牌](/dev-tools/github-tokens.html#github-enterprise)中的说明为该主机提供令牌。mise 会通过此 API 列出发行版、查找资源文件并下载。自定义 `api_url` 时不会检查 GitHub 产物证明，因为 GitHub Enterprise Server 不提供此类证明。
 
 ### `api_url` {#api-url}
 
-The base URL of the API. It defaults to `https://api.github.com` here,
-`https://gitlab.com/api/v4` on the `gitlab` backend and
-`https://codeberg.org/api/v1` on the `forgejo` backend.
+API 的基础 URL。此处默认值为 `https://api.github.com`；`gitlab` 后端的默认值为 `https://gitlab.com/api/v4`，`forgejo` 后端的默认值为 `https://codeberg.org/api/v1`。
 
 ```toml
 [tools]
 "github:myorg/mytool" = { version = "latest", api_url = "https://github.mycompany.com/api/v3" }
 ```
 
-## How versions are listed {#version-listing}
+## 版本列表的生成方式 {#version-listing}
 
-`mise ls-remote` lists the repository's releases that have at least one asset
-attached. mise installs from release assets and never from GitHub's generated
-source archives, so a release without assets has nothing to install. A release
-whose assets do not cover your platform is still listed, so the version list is
-the same on every machine and cross-platform lockfiles work. Draft releases are
-never listed, and prereleases only with [`prerelease`](#prerelease).
+`mise ls-remote` 会列出仓库中至少附带一个资源文件的发行版。mise 从发行版资源文件安装，绝不会使用 GitHub 自动生成的源代码归档，因此没有资源文件的发行版无法安装。即使某个发行版的资源文件不支持你的平台，它仍会列出，这样所有机器上的版本列表一致，跨平台锁文件也能正常工作。草稿发行版永远不会列出；预发行版仅在设置 [`prerelease`](#prerelease) 后列出。
 
-If every platform you support sets [`url`](#platform-specific-urls), mise lists
-releases whether or not they have assets. A `url` for only some platforms also
-lists asset-less releases everywhere, and installing one of them on a platform
-without a `url` fails.
+如果所有受支持的平台都设置了 [`url`](#platform-specific-urls)，那么无论发行版是否附带资源文件，mise 都会列出它们。如果只为部分平台设置 `url`，mise 也会在所有平台上列出没有资源文件的发行版；在没有设置 `url` 的平台上安装此类发行版会失败。
 
 mise 每次读取一页（100 个）发行版。只有尚未找到带有资源文件的稳定发行版时，它才会继续读取，最多读取三页。设置 `MISE_LIST_ALL_VERSIONS=1` 可读取所有页面。对于公开仓库，mise 会从 [mise-versions](https://mise-versions.jdx.dev) 读取发行版列表；只有 mise-versions 无法响应时，才会查询 GitHub API，但 [`use_versions_host`](/configuration/settings.html#use_versions_host) 关闭时除外。mise-versions 为每个仓库提供最新的 1,000 个发行版；若要列出更早的发行版，请关闭 `use_versions_host`。
 
 ## 设置
 
-The other settings in the `github` group choose and create tokens; see
-[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html).
+`github` 组中的其他设置用于选择和创建令牌；参阅 [GitHub、GitLab 和 Forgejo 令牌](/dev-tools/github-tokens.html)。
 
 <script setup>
 import Settings from '/components/settings.vue';
@@ -652,4 +469,4 @@ import Settings from '/components/settings.vue';
 
 <Settings child="github" :keys="['github_attestations', 'slsa']" :level="3" />
 
-Implementation: [`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs).
+实现位置：[`src/backend/github.rs`](https://github.com/jdx/mise/blob/main/src/backend/github.rs)。

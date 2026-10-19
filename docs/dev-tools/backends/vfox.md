@@ -2,7 +2,7 @@
 description: "通过 vfox 插件安装工具：此类 Lua 插件可在 Linux、macOS 和 Windows 上运行。"
 ---
 
-# vfox backend
+# vfox 后端
 
 The `vfox` backend runs [vfox](https://github.com/version-fox/vfox) plugins:
 Lua plugins that list a tool's versions and install it. The Lua runtime is

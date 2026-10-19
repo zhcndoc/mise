@@ -3,25 +3,17 @@ description: "通过扩展命名任务模板，在多个任务间共享命令、
 socialDescription: "通过任务模板在多个任务间共享命令、工具和依赖。"
 ---
 
-# Task templates
+# 任务模板
 
-Define a task template when several tasks share commands, tools, environment
-variables, or dependencies. Each task names its template with `extends` and
-sets only what differs. A template is not a task: declaring one does not create
-anything you can run.
+多个任务需要共享命令、工具、环境变量或依赖项时，可以定义任务模板。每个任务通过 `extends` 指定模板，只设置与模板不同的部分。模板本身不是任务：声明模板不会创建可运行的任务。
 
-Task templates are different from [Tera templates](/templates.html). A task
-template supplies whole task properties that a task inherits; Tera renders
-expressions inside a value, including values that come from a task template.
+任务模板与 [Tera 模板](/templates.html)不同。任务模板提供任务继承的完整属性；Tera 则负责渲染值中的表达式，包括来自任务模板的值。
 
-The Python examples assume a uv project with `pytest` and `pytest-cov` in its
-dev dependencies.
+下方 Python 示例假定 uv 项目的开发依赖中包含 `pytest` 和 `pytest-cov`。
 
-## Defining templates
+## 定义模板
 
-Add a named template under `[task_templates.<name>]` in `mise.toml`. A template
-accepts the same properties as a task, with the exceptions listed under
-[merge semantics](#merge-semantics):
+在 `mise.toml` 的 `[task_templates.<name>]` 下添加命名模板。模板支持与任务相同的属性，但[合并规则](#merge-semantics)中列出的属性除外：
 
 ```mise-toml
 [task_templates."python:build"]
@@ -37,13 +29,11 @@ tools = { python = "3.14", uv = "latest" }
 depends = ["build"]
 ```
 
-Template names are free-form. Group them with `:` the way you group task names,
-for example `python:build` or `rust:cargo:build`.
+模板名称可以自由命名。可以像任务名称一样使用 `:` 分组，例如 `python:build` 或 `rust:cargo:build`。
 
-## Extending templates
+## 扩展模板
 
-Set `extends` to the template name. Properties the task omits come from the
-template; properties set on both follow the [merge rules](#merge-semantics):
+将 `extends` 设置为模板名称。任务未设置的属性会从模板继承；双方都设置的属性则遵循[合并规则](#merge-semantics)：
 
 ```mise-toml
 [tasks.build]
@@ -54,8 +44,7 @@ extends = "python:test"
 run = "uv run pytest --cov" # replaces run, keeps tools and depends
 ```
 
-[File tasks](/tasks/file-tasks.html) extend a template from their `#MISE`
-header:
+[文件任务](/tasks/file-tasks.html)可在 `#MISE` 文件头中扩展模板：
 
 ```bash [mise-tasks/build]
 #!/usr/bin/env bash
@@ -63,26 +52,17 @@ header:
 uv build
 ```
 
-Run [`mise tasks info <task>`](/cli/tasks/info.html) to see the task that
-results from the merge.
+运行[`mise tasks info <task>`](/cli/tasks/info.html)可查看合并后生成的任务。
 
-## Template scope
+## 模板作用范围
 
-mise collects templates from every config file it loads, including global and
-parent configs, into one set of names. When several config files define a
-template with the same name, the one from the highest-precedence config, the
-one nearest the current directory, wins. Every task that names it uses that
-definition, including tasks defined in a parent or global config.
+mise 会从所加载的所有配置文件（包括全局配置和父级配置）中收集模板，并将它们放入同一名称集合。如果多个配置文件定义了同名模板，则优先级最高、也就是最接近当前目录的配置文件生效。所有指定该模板的任务都会使用这个定义，包括父级配置和全局配置中的任务。
 
-Keep templates that teammates and CI need in the repository. A template in your
-global config works for personal tasks, but another machine needs the same
-definition to resolve `extends`.
+团队成员和 CI 需要使用的模板应保存在仓库中。全局配置中的模板适用于个人任务，但其他机器必须有相同定义才能解析 `extends`。
 
-## Parameterizing a template with vars
+## 使用变量参数化模板
 
-Put a shared command in the template's `run` and use `vars` for the values that
-differ between tasks. mise merges the template into each task before it renders
-the task, so the inherited command sees that task's vars.
+可将共用命令写在模板的 `run` 中，并通过 `vars` 指定不同任务的变量值。mise 会先将模板合并到各任务中，再渲染任务，因此继承的命令可以读取该任务的变量。
 
 ```mise-toml
 [task_templates.e2e]
@@ -97,48 +77,37 @@ vars = { mode = "headed" }
 extends = "e2e"
 ```
 
-`mise run test` prints `--mode=headed`. `mise run test:ci` inherits the
-template's default and prints `--mode=headless`.
+`mise run test` 会输出 `--mode=headed`。`mise run test:ci` 会继承模板默认值，并输出 `--mode=headless`。
 
-Template vars and task-local vars are combined, and the task's value wins for
-the same name. Use a Tera fallback in `run`, such as
-<code v-pre>{{ vars.mode | default(value='headless') }}</code>, when the var is
-optional.
+模板变量和任务局部变量会合并；同名变量以任务中的值为准。如果变量是可选的，可在 `run` 中使用 Tera 默认值，例如
+<code v-pre>{{ vars.mode | default(value='headless') }}</code>；变量为可选项时可使用默认值。
 
-Keep expressions that depend on task-local vars in the task or its template. A
-top-level `[vars]` entry is resolved during config loading, and task-local
-overrides do not recalculate that stored value. See
-[when vars are resolved](/configuration/vars.html#when-vars-are-resolved).
+依赖任务局部变量的表达式应放在任务或其模板中。顶层 `[vars]` 条目会在加载配置时解析，任务局部覆盖不会重新计算已保存的值。详见[变量的解析时机](/configuration/vars.html#when-vars-are-resolved)。
 
-## Merge semantics
+## 合并规则
 
-The task inherits every property it omits. When both the template and the task
-set a property, these rules apply:
+任务会继承其未设置的所有属性。模板和任务都设置同一属性时，遵循以下规则：
 
-| Property                                                                                      | Result                                                                                                                          |
+| 属性                                                                                          | 合并结果                                                                                                                        |
 | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `run`, `run_windows`                                                                          | The task's value replaces the template's. Ignored when the task or the template sets `file`.                                    |
-| `file`                                                                                        | The task's value, else the template's.                                                                                          |
-| `tools`, `env`, `vars`                                                                        | Merged by key. The task's entries add to the template's and win for the same key.                                               |
-| `depends`, `depends_post`, `wait_for`                                                         | The task's list replaces the template's.                                                                                        |
-| `alias`, `sources`, `outputs`                                                                 | The task's value replaces the template's.                                                                                       |
-| `dir`                                                                                         | The task's value, else the template's, else `task_config.dir`, else the task's config root.                                     |
-| `usage`                                                                                       | Both specs, the template's first.                                                                                               |
-| `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`                                 | On when either sets it. A task cannot turn off a template's restriction.                                                        |
-| `allow_read`, `allow_write`, `allow_net`, `allow_env`, `pass_through_env`                     | The template's entries followed by the task's.                                                                                  |
-| `description`, `shell`, `timeout`, `output`, `silent`, `confirm`, `cache`, `watch`, `daemons` | The task's value if set, else the template's.                                                                                   |
-| `quiet`, `hide`, `raw`, `interactive`, `raw_args`, `extends`                                  | Not accepted in templates; mise warns about an unknown field. Set them on each task. A template cannot extend another template. |
-| `secrets`                                                                                     | Not allowed in templates; mise reports a config error.                                                                          |
+| `run`、`run_windows`                                                                          | 任务值替代模板值。任务或模板设置了 `file` 时忽略此项。                                                                            |
+| `file`                                                                                        | 使用任务值；未设置时使用模板值。                                                                                                 |
+| `tools`、`env`、`vars`                                                                        | 按键合并。任务条目会追加到模板条目中，同名键以任务条目为准。                                                                      |
+| `depends`、`depends_post`、`wait_for`                                                         | 任务列表替代模板列表。                                                                                                           |
+| `alias`、`sources`、`outputs`                                                                 | 任务值替代模板值。                                                                                                               |
+| `dir`                                                                                         | 依次采用任务值、模板值、`task_config.dir`，或任务的配置根目录。                                                                  |
+| `usage`                                                                                       | 两份规范都会合并，模板规范在前。                                                                                                 |
+| `deny_all`、`deny_read`、`deny_write`、`deny_net`、`deny_env`                                | 任一方设置即启用。任务不能关闭模板设置的限制。                                                                                   |
+| `allow_read`、`allow_write`、`allow_net`、`allow_env`、`pass_through_env`                    | 先列出模板条目，再列出任务条目。                                                                                                 |
+| `description`、`shell`、`timeout`、`output`、`silent`、`confirm`、`cache`、`watch`、`daemons` | 如果任务已设置，则采用任务值；否则采用模板值。                                                                                   |
+| `quiet`、`hide`、`raw`、`interactive`、`raw_args`、`extends`                                 | 模板不接受这些属性；mise 会将其视为未知字段并发出警告。请在每个任务上分别设置。模板不能扩展其他模板。                            |
+| `secrets`                                                                                     | 模板不允许设置此项；mise 会报告配置错误。                                                                                         |
 
-### Empty lists {#empty-lists-and-file-tasks}
+### 空列表 {#empty-lists-and-file-tasks}
 
-An empty list on the task inherits the template's value for `run`,
-`run_windows`, `depends`, `depends_post`, `wait_for`, and `sources`, so
-`depends = []` does not clear the template's dependencies. Use a separate
-template for tasks that need none. `outputs = []` does declare that the task
-writes no files, and `cache = { enabled = false }` turns off inherited caching.
+任务的空列表会继承模板中的 `run`、`run_windows`、`depends`、`depends_post`、`wait_for` 和 `sources` 值，因此 `depends = []` 不会清除模板依赖项。需要移除全部依赖项的任务应使用单独的模板。`outputs = []` 则会声明任务不写入任何文件；`cache = { enabled = false }` 会关闭继承的缓存设置。
 
-### Example: deep merge for tools
+### 示例：深度合并工具
 
 ```toml
 [task_templates."fullstack:build"]
@@ -150,7 +119,7 @@ tools = { node = "24" } # overrides node, keeps python
 # Result: tools = { python = "3.14", node = "24" }
 ```
 
-### Example: deep merge for env
+### 示例：深度合并环境变量
 
 ```toml
 [task_templates."python:build"]
@@ -162,10 +131,9 @@ env = { DEBUG = "1" } # overrides DEBUG, keeps PYTHONPATH
 # Result: env = { PYTHONPATH = "src", DEBUG = "1" }
 ```
 
-### Example: shared arguments
+### 示例：共享参数
 
-A template's `usage` spec holds the flags and arguments its tasks have in
-common. A task that extends it adds its own without repeating the shared ones:
+模板的 `usage` 规范包含多个任务共用的标志和参数。扩展该模板的任务只需添加自己的参数，无需重复共享部分：
 
 ```mise-toml
 [task_templates.deploy]
@@ -180,11 +148,9 @@ usage = 'flag "--replicas <n>" help="How many to run"'
 run = 'echo "env=$usage_env replicas=$usage_replicas"'
 ```
 
-`mise run deploy-api --help` lists `--env`, `--dry-run`, and `--replicas`, in
-that order. Declare each flag in one place: a flag written in both the template
-and the task is two declarations and appears twice in `--help`.
+`mise run deploy-api --help` 会按顺序列出 `--env`、`--dry-run` 和 `--replicas`。每个标志只应声明一次：如果在模板和任务中都写了同一个标志，这会被视为两次声明，因此 `--help` 中也会出现两次。
 
-### Example: complete override for depends
+### 示例：完整替换 depends
 
 ```toml
 [task_templates."python:test"]
@@ -196,12 +162,9 @@ depends = ["build"] # replaces the template's depends
 # Result: depends = ["build"]; lint and typecheck do not run
 ```
 
-## Tera templating
+## Tera 模板表达式
 
-Tera expressions in a template render in the context of the task that extends
-it, even when the template is defined in a parent or global config.
-<code v-pre>{{ config_root }}</code> is the config root of that task, not of the
-file that defines the template:
+即使模板定义在父级或全局配置中，其中的 Tera 表达式也会在扩展该模板的任务上下文中渲染。<code v-pre>{{ config_root }}</code> 表示该任务的配置根目录，而不是定义模板的文件所在目录：
 
 ```mise-toml
 [task_templates."python:build"]
@@ -209,25 +172,18 @@ run = "uv build --out-dir {{ config_root }}/dist"
 env = { PROJECT = "{{ config_root | basename }}" }
 ```
 
-Templates use the same variables as regular tasks:
+模板使用与常规任务相同的变量：
 
-- <code v-pre>{{ config_root }}</code>: the config root of the task that uses
-  the template
-- <code v-pre>{{ env.VAR }}</code>: environment variables
-- <code v-pre>{{ cwd }}</code>: the current working directory
-- <code v-pre>{{ vars.NAME }}</code>: config vars, with template and task-local
-  overrides
+- <code v-pre>{{ config_root }}</code>：使用该模板的任务的配置根目录
+- <code v-pre>{{ env.VAR }}</code>：环境变量
+- <code v-pre>{{ cwd }}</code>：当前工作目录
+- <code v-pre>{{ vars.NAME }}</code>：配置变量，包括模板和任务局部覆盖值
 
-A task template supplies whole properties; it cannot insert a parameterized
-snippet into the middle of a task's `run` string. For repeated or nested
-snippets inside one script, use
-[Tera components](/templates.html#parameterized-snippets-with-components).
+任务模板提供完整属性，无法将参数化片段插入任务 `run` 字符串的中间。如果要在单个脚本中重复使用或嵌套片段，请使用 [Tera 组件](/templates.html#parameterized-snippets-with-components)。
 
-## Monorepo usage
+## 单体仓库中的用法
 
-Define shared templates in the monorepo root, then extend them in each project.
-In this example, the API project adds coverage to its test command while the
-worker uses the inherited command:
+在单体仓库根目录定义共享模板，然后在各个项目中扩展模板。此例中，API 项目为测试命令添加覆盖率统计，而 worker 项目使用继承的命令：
 
 ```mise-toml
 # Root mise.toml
@@ -275,7 +231,4 @@ extends = "python:test"
 extends = "python:lint"
 ```
 
-To give every project's `build` task the same defaults without adding
-`extends` to each one, use `[monorepo.task_defaults.build]` from the
-[workspace project graph](/tasks/workspace-graph.html#root-task-defaults) instead. A
-template named by `extends` takes precedence over a root default.
+如需为所有项目的 `build` 任务设置相同默认值，又不想逐个添加 `extends`，可改用[工作区项目图](/tasks/workspace-graph.html#root-task-defaults)中的 `[monorepo.task_defaults.build]`。`extends` 指定的模板优先于根目录默认值。

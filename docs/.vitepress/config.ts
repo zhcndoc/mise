@@ -196,7 +196,7 @@ export default withMermaid(
   defineConfig({
     title: "Mise 中文文档",
     description: siteDescription,
-    lang: "en-US",
+    lang: "zh-CN",
     // The contributor guide in docs/README.md is for GitHub, not the site.
     srcExclude: ["README.md"],
     lastUpdated: true,

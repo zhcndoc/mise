@@ -5,93 +5,65 @@ outline: [2, 3]
 
 # 贡献指南
 
-mise welcomes bug fixes, documentation improvements, and registry entries for
-widely used tools. Agree on the direction of anything larger before you write
-code. Report bugs in [Issues](https://github.com/jdx/mise/issues), and bring
-questions and ideas to [Discussions](https://github.com/jdx/mise/discussions).
+mise 欢迎修复缺陷、改进文档，以及为广泛使用的工具添加注册表条目。较大的改动应先确认方向，再开始编写代码。请在 [Issues](https://github.com/jdx/mise/issues) 报告缺陷，并在 [Discussions](https://github.com/jdx/mise/discussions) 分享问题和想法。
 
-## Community participation {#community-participation}
+## 参与社区 {#community-participation}
 
 ::: danger AI replies to Discussions and Issues are restricted
-Breaking this rule is **an instant ban across all of jdx's projects**.
+违反此规则会导致你**立即被 jdx 的所有项目封禁**。
 
-You may only use AI to reply to a [Discussion](https://github.com/jdx/mise/discussions) or
-[Issue](https://github.com/jdx/mise/issues) if you created it, you opened a PR that fixes it, or
-you have already had a contribution, attributed to your GitHub account, merged into the default
-branch of mise. Everyone else is not allowed to use AI to reply. Drive-by AI replies are spam, and
-this is a growing problem.
+只有在以下情况下，才可以使用 AI 回复 [Discussion](https://github.com/jdx/mise/discussions) 或 [Issue](https://github.com/jdx/mise/issues)：该主题由你创建；你提交了修复该问题的 PR；或你此前已有署名归属于自己 GitHub 账号的贡献合并进 mise 默认分支。其他人不得使用 AI 回复。随意发布的 AI 回复属于垃圾信息，而且问题正在加剧。
 
 这包括原始、轻度编辑、经审阅以及已披露的模型输出。添加“AI 辅助”页脚本身并不能让 AI 回复变得
 合规。如果你正在运行代理，请确保它不会向你无权回复的主题发帖，也绝不要让它一次处理大量主题。
 :::
 
-Using AI to help write and file your own Discussion, Issue, or pull request is
-fine. Review it before you post it, and end it with a disclosure line in this
-form:
+可以使用 AI 协助撰写并提交自己的 Discussion、Issue 或 pull request。发布前请先审阅内容，并在末尾添加以下格式的说明：
 
 ```text
 *AI-assisted — Tool: <tool>; model: <provider>/<model>; version: <version-or-unavailable>.*
 ```
 
-If you are allowed to use AI to reply to a thread, review and verify the reply
-before you post it, and disclose it the same way.
+如果你符合使用 AI 回复主题的条件，发布前也必须审阅并核实回复内容，并以相同方式注明。
 
-## Before you open a pull request {#before-you-open-a-pull-request}
+## 提交 pull request 前 {#before-you-open-a-pull-request}
 
-mise has a specific scope and design taste. Unless a change is obvious, propose
-it in a [Discussion](https://github.com/jdx/mise/discussions) or on
-[Discord](https://discord.gg/mABnUDvP57) before you write it. PRs that skip this
-step are often rejected or need to change significantly.
+mise 有明确的项目范围和设计取向。除非改动显而易见，否则请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出方案，再开始编写。跳过这一步的 PR 往往会被拒绝，或需要大幅修改。
 
-If I am on the fence about a contribution, I will probably reject it for that
-reason alone; otherwise mise would suffer from feature bloat. I may also reject
-a PR if its quality does not give me confidence that the contributor can get it
-across the finish line. I do not have time to coach contributors, and I get
-hundreds of PRs a week across my projects, so a rejection may be brief.
+如果我对某项贡献犹豫不决，很可能仅因此就会拒绝它，否则 mise 会陷入功能膨胀。如果 PR 的质量不足以让我相信贡献者能够将其完成，我也可能拒绝。我没有时间指导每位贡献者，而且我维护的项目每周会收到数百个 PR，因此拒绝说明可能很简短。
 
-Check these before you ask for a review:
+请求评审前，请确认以下事项：
 
-1. The direction was agreed in a Discussion or on Discord, unless the change is
-   obvious.
-2. CI passes, including [Clippy](#clippy), which `mise run lint` does not run.
-3. The title follows the [title format](#pull-request-titles-and-descriptions).
-4. The description explains the user-visible change. It feeds the release
-   notes.
-5. Every automated AI review comment is addressed.
-6. Generated files and snapshots are committed with the change that produced
-   them. See [generated files](/architecture.html#generated-files).
-7. User-facing changes include documentation.
+1. 除非改动显而易见，否则已在 Discussion 或 Discord 中就方案达成一致。
+2. CI 全部通过，包括 `mise run lint` 不会运行的 [Clippy](#clippy)。
+3. 标题符合 [PR 标题格式](#pull-request-titles-and-descriptions)。
+4. 描述说明了用户可见的变化；发布说明会使用这段描述。
+5. 已处理所有自动化 AI 评审意见。
+6. 生成文件和快照已与生成它们的改动一并提交。详见[生成文件](/architecture.html#generated-files)。
+7. 面向用户的改动附带了文档。
 
-If CI is failing, the title is wrong, or an AI review comment is still open,
-assume I will wait before I look at the PR.
+如果 CI 失败、标题不符合格式，或仍有未处理的 AI 评审意见，请不要期待我会立即查看 PR。
 
-## Set up a checkout {#set-up-a-checkout}
+## 设置代码检出目录 {#set-up-a-checkout}
 
-### Build dependencies {#build-dependencies}
+### 构建依赖 {#build-dependencies}
 
-- Rust at or above the `rust-version` in `Cargo.toml`, installed with rustup.
-  The project's `mise.toml` does not install Rust.
-- mise at or above the `min_version` in `mise.toml`.
-- Git and a C toolchain.
-- clang and libclang. `mise run build` builds with `--all-features`, which
-  generates `aws-lc-sys` bindings with bindgen.
-- On Linux and macOS, OpenSSL and its headers, plus `pkg-config` on Linux.
-  `--all-features` also turns on the optional `openssl` dependency, which links
-  the system OpenSSL.
-- For E2E tests: Bash, plus zsh, fish, python3, and jq for the tests
-  that use them.
+- Rust 版本不低于 `Cargo.toml` 中的 `rust-version`，并通过 rustup 安装。项目的 `mise.toml` 不会安装 Rust。
+- mise 版本不低于 `mise.toml` 中的 `min_version`。
+- Git 和 C 工具链。
+- clang 和 libclang。`mise run build` 会使用 `--all-features` 构建，并通过 bindgen 生成 `aws-lc-sys` 绑定。
+- Linux 和 macOS 需要 OpenSSL 及其头文件；Linux 还需要 `pkg-config`。`--all-features` 也会启用可选的 `openssl` 依赖，并链接系统 OpenSSL。
+- 运行 E2E 测试需要 Bash；测试用到的 zsh、fish、python3 和 jq 也需安装。
 
-On Debian and Ubuntu:
+在 Debian 和 Ubuntu 上：
 
 ```sh
 sudo apt-get install -y build-essential pkg-config libssl-dev clang libclang-dev
 ```
 
-On macOS, install the Xcode Command Line Tools with `xcode-select --install`,
-and OpenSSL with `brew install openssl@3`. On Windows, `mise run build` builds
-with the default features only.
+在 macOS 上，使用 `xcode-select --install` 安装 Xcode Command Line Tools，并使用 `brew install openssl@3` 安装 OpenSSL。在 Windows 上，`mise run build` 只会启用默认功能。
 
-### Clone and build {#clone-and-build}
+### 克隆并构建 {#clone-and-build}
 
 ```sh
 git clone https://github.com/jdx/mise.git
@@ -103,31 +75,20 @@ mise run build
 target/debug/mise --version
 ```
 
-`mise trust` lets mise load the repository's `mise.toml`, which `mise install`
-needs.
+`mise trust` 会允许 mise 加载仓库的 `mise.toml`，而 `mise install` 需要读取该文件。
 
-### Run your build {#run-your-build}
+### 运行自己的构建版本 {#run-your-build}
 
-`mise.toml` puts `target/debug` and `node_modules/.bin` at the front of `PATH`
-for everything mise sets up in the checkout: tasks, `mise exec`, and an
-activated shell. A `mise` command that a task runs is therefore your
-development build once it exists. The `mise` shell function from `mise activate`
-still calls the binary that activated the shell. Run `target/debug/mise` when
-you need to be sure which binary you are testing. An old build in
-`target/debug` can fail the repository's `min_version` check; rebuild it or
-delete it.
+对于 mise 在检出目录中启动的任务、`mise exec` 和已激活的 Shell，`mise.toml` 都会将 `target/debug` 和 `node_modules/.bin` 放到 `PATH` 最前面。因此，本地构建完成后，任务调用的 `mise` 命令会使用你的开发版本。`mise activate` 提供的 `mise` Shell 函数仍会调用激活 Shell 时所用的二进制文件。若要确定正在测试哪个二进制文件，请直接运行 `target/debug/mise`。`target/debug` 中的旧构建可能无法通过仓库的 `min_version` 检查；请重新构建或删除它。
 
-To run the checkout from any directory, rebuilding when the source changes, I
-use this wrapper at `~/.local/bin/@mise`. Change the manifest path to your
-clone:
+若要从任意目录运行检出版本，并在源码更改时重新构建，我会在 `~/.local/bin/@mise` 使用以下包装脚本。请将清单路径改为你的克隆目录：
 
 ```sh
 #!/bin/sh
 exec cargo run -q --all-features --manifest-path "$HOME/src/mise/Cargo.toml" -- "$@"
 ```
 
-Make it executable and put its directory on `PATH`. Test activation changes in
-a disposable shell, so a broken hook does not affect the one you work in:
+请将脚本设为可执行，并把它所在目录加入 `PATH`。在一次性 Shell 中测试激活改动，避免错误的 hook 影响你正在使用的 Shell：
 
 ```sh
 @mise --help
@@ -135,61 +96,50 @@ eval "$(@mise activate zsh)"
 @mise activate fish | source
 ```
 
-Set `MISE_DEBUG=1` or `MISE_TRACE=1` for debug output. `RUST_LOG` has no
-effect on mise's logging.
+设置 `MISE_DEBUG=1` 或 `MISE_TRACE=1` 可输出调试信息。`RUST_LOG` 不会影响 mise 的日志。
 
-### Cargo build cache {#cargo-build-cache}
+### Cargo 构建缓存 {#cargo-build-cache}
 
-`mise.toml` wraps `cargo` with [mbx](https://mr-boxington.jdx.dev), which
-shares compiled artifacts across checkouts. `mise run` tasks and
-`mise exec -- cargo …` use the wrapper, and plain `cargo` does too once mise is
-[activated in your shell](/shell-setup.html). Set `MBX_DISABLE=1` to build
-without the cache, as most CI jobs do.
+`mise.toml` 使用 [mbx](https://mr-boxington.jdx.dev) 包装 `cargo`，让多个检出目录共用已编译的构建产物。`mise run` 任务和 `mise exec -- cargo …` 会使用该包装器；在 [Shell 中激活 mise](/shell-setup.html) 后，直接运行的 `cargo` 也会使用它。设置 `MBX_DISABLE=1` 可禁用缓存构建，大多数 CI 任务都采用这种方式。
 
-### Project structure {#project-structure}
+### 项目结构 {#project-structure}
 
-| Path                       | Contents                                                              |
+| 路径                       | 内容                                                                  |
 | -------------------------- | --------------------------------------------------------------------- |
-| `src/`                     | The mise library, and the command line under `src/cli/`               |
-| `crates/`                  | Workspace crates such as `vfox`, `mise-util`, and `mise-settings`     |
-| `registry/`                | One TOML file per tool shorthand                                      |
-| `settings.toml`            | Setting definitions, which generate code, schema, and docs            |
-| `schema/`                  | JSON schemas for config files                                         |
-| `e2e/`, `e2e-win/`         | End-to-end tests, in Bash and in Pester                               |
-| `docs/`                    | This site                                                             |
-| `tasks.toml`, `xtasks/`    | Project tasks                                                         |
-| `hk.pkl`                   | Linter configuration                                                  |
-| `packaging/`, `scripts/`   | Release packaging and build scripts                                   |
+| `src/`                     | mise 库，以及 `src/cli/` 下的命令行程序                                |
+| `crates/`                  | `vfox`、`mise-util`、`mise-settings` 等工作区 crate                   |
+| `registry/`                | 每个工具简称对应一个 TOML 文件                                        |
+| `settings.toml`            | 设置定义，用于生成代码、schema 和文档                                 |
+| `schema/`                  | 配置文件的 JSON schema                                                |
+| `e2e/`、`e2e-win/`        | 使用 Bash 和 Pester 编写的端到端测试                                  |
+| `docs/`                    | 本文档站点                                                            |
+| `tasks.toml`、`xtasks/`    | 项目任务                                                              |
+| `hk.pkl`                   | Linter 配置                                                           |
+| `packaging/`、`scripts/`   | 发布打包和构建脚本                                                    |
 
-[Codebase architecture](/architecture.html) maps behaviors to the code under
-`src/` and `crates/`.
+[代码库架构](/architecture.html)介绍了 `src/` 和 `crates/` 中各项行为对应的代码位置。
 
-## Project tasks {#project-tasks}
+## 项目任务 {#project-tasks}
 
-Run `mise tasks ls` to list tasks and `mise tasks info <name>` to see where one
-is defined. Tasks come from `tasks.toml`, file tasks under `xtasks/`, and the
-`[tasks]` entries in `mise.toml`, which hold the perf benchmarks.
+运行 `mise tasks ls` 可列出任务，运行 `mise tasks info <name>` 可查看任务定义位置。任务来自 `tasks.toml`、`xtasks/` 下的文件任务，以及存放性能基准任务的 `mise.toml` 中的 `[tasks]` 条目。
 
-| Task                          | Alias           | What it does                                                         |
+| 任务                          | 别名            | 说明                                                                  |
 | ----------------------------- | --------------- | -------------------------------------------------------------------- |
-| `mise run build`              | `b`             | Debug build, with all features except on Windows                     |
-| `mise run lint`               |                 | hk checks; does not run Clippy                                       |
-| `mise run lint-fix`           | `fix`, `format` | Applies hk's fixes                                                   |
+| `mise run build`              | `b`             | Debug 构建；Windows 上不启用全部功能                                  |
+| `mise run lint`               |                 | 运行 hk 检查；不运行 Clippy                                           |
+| `mise run lint-fix`           | `fix`、`format`  | 应用 hk 自动修复                                                      |
 | `mise run test:unit`          |                 | `cargo test --all-features`                                          |
-| `mise run test:e2e <pattern>` | `e`, `e2e`      | Builds, then runs the [E2E tests](#e2e-tests) you select             |
-| `mise run snapshots`          |                 | Accepts changed insta snapshots and deletes unreferenced ones        |
-| `mise run render`             |                 | Regenerates every [generated file](/architecture.html#generated-files) |
-| `mise run docs`               |                 | Starts the docs dev server                                           |
-| `mise run docs:build`         |                 | Builds the docs site and checks its links                            |
-| `mise run perf`               |                 | Release build plus instruction-count benchmarks                      |
-| `mise run clean`              |                 | `cargo clean`                                                        |
+| `mise run test:e2e <pattern>` | `e`、`e2e`      | 构建后运行所选的 [E2E 测试](#e2e-tests)                              |
+| `mise run snapshots`          |                 | 接受所有已更改的 insta 快照并删除不再引用的快照                       |
+| `mise run render`              |                 | 重新生成所有[生成文件](/architecture.html#generated-files)             |
+| `mise run docs`                |                 | 启动文档开发服务器                                                    |
+| `mise run docs:build`          |                 | 构建文档站点并检查链接                                                |
+| `mise run perf`                |                 | Release 构建并运行指令数基准测试                                      |
+| `mise run clean`               |                 | `cargo clean`                                                        |
 
-`mise run test` (alias `t`) runs the unit tests, then `test:e2e` with no
-arguments, which selects no E2E tests; run `mise run test:e2e --all` for the
-suite. `mise run ci` runs `lint-fix`, `build`, and `test`, which is not what CI
-runs. `mise run release-plz` refuses to run outside GitHub Actions.
+`mise run test`（别名 `t`）会先运行单元测试，再不带参数运行 `test:e2e`；此时不会选中任何 E2E 测试。运行 `mise run test:e2e --all` 可执行整套测试。`mise run ci` 会运行 `lint-fix`、`build` 和 `test`，与 CI 实际执行的流程不同。`mise run release-plz` 在 GitHub Actions 之外会拒绝运行。
 
-## Linting and formatting {#linting-and-formatting}
+## Lint 和格式化 {#linting-and-formatting}
 
 [`hk.pkl`](https://github.com/jdx/mise/blob/main/hk.pkl) configures oxfmt,
 markdownlint, taplo, ShellCheck, shfmt, stylua, lua-language-server,
@@ -201,33 +151,23 @@ mise run lint-fix           # apply the fixes that can be automated
 mise exec -- hk check --pr  # check only the files your branch changed
 ```
 
-`hk install --mise` runs the same fixes as a Git pre-commit hook and stashes
-unstaged changes while it runs. On Windows, `lint-fix` runs only Clippy,
-oxfmt, and `cargo fmt`.
+`hk install --mise` 会安装 Git pre-commit hook，运行相同的自动修复，并在运行期间暂存工作区中未暂存的改动。在 Windows 上，`lint-fix` 只运行 Clippy、oxfmt 和 `cargo fmt`。
 
 ### Clippy {#clippy}
 
-CI runs Clippy with warnings denied, and `mise run lint` does not run it.
-Before you push Rust changes, run:
+CI 会运行 Clippy 并将警告视为错误，而 `mise run lint` 不会运行它。推送 Rust 改动前，请运行：
 
 ```sh
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 ```
 
-CI also runs Clippy with the default features and on Windows. Fix a warning by
-changing the code. Do not add `#[allow(clippy::...)]`, `#[expect(clippy::...)]`,
-a Cargo lint level set to `allow`, or `-A clippy::...`. If the fix needs a
-preparatory refactor, put the refactor in its own PR first. `clippy.toml`
-disallows `std::env::vars`, `std::env::args`, and `std::process::exit`, and
-its messages name what to use instead.
+CI 还会使用默认功能并在 Windows 上运行 Clippy。请通过修改代码修复警告，不要添加 `#[allow(clippy::...)]`、`#[expect(clippy::...)]`、设为 `allow` 的 Cargo lint 级别或 `-A clippy::...`。如果修复需要预先重构，请先单独提交该重构的 PR。`clippy.toml` 禁止使用 `std::env::vars`、`std::env::args` 和 `std::process::exit`，并会在提示中说明应改用什么。
 
-## Testing {#testing}
+## 测试 {#testing}
 
-Use unit tests for parsing and resolution, E2E tests for commands and shell
-behavior, and snapshots for output that must stay stable. Prefer a local
-fixture to a live download.
+解析和解析结果使用单元测试，命令和 Shell 行为使用 E2E 测试，需要保持稳定的输出使用快照测试。优先使用本地 fixture，不要依赖实时下载。
 
-### Unit tests {#unit-tests}
+### 单元测试 {#unit-tests}
 
 ```sh
 mise run test:unit
@@ -236,35 +176,17 @@ cargo test --all-features module_name -- --nocapture
 mise --cd crates/vfox run test   # the vfox crate
 ```
 
-Unit tests run one at a time in a shared process: `.cargo/config.toml` sets
-`RUST_TEST_THREADS=1`. `mise::testing::init` in `src/testing.rs` sets up the
-shared fixture directories under `test/` and the process environment. The
-library's tests call it from `src/test.rs`, and the binary's tests from the
-`test` module in `src/main.rs`. When a test changes settings or environment
-variables, use the existing guards, such as `SettingsGuard` and `EnvVarGuard`,
-so the change cannot leak into a later test.
+单元测试在同一进程中逐个运行：`.cargo/config.toml` 将 `RUST_TEST_THREADS=1`。`src/testing.rs` 中的 `mise::testing::init` 会设置 `test/` 下共用的 fixture 目录和进程环境。库测试从 `src/test.rs` 调用它，二进制测试则从 `src/main.rs` 的 `test` 模块调用。测试更改设置或环境变量时，请使用现有 guard（例如 `SettingsGuard` 和 `EnvVarGuard`），避免改动泄漏到后续测试。
 
-`mise run test:shuffle` runs the unit tests in random order to catch tests
-that depend on order. It needs a nightly toolchain (`cargo +nightly`); you do
-not have to change your default toolchain.
+`mise run test:shuffle` 会随机打乱单元测试顺序，以发现依赖执行顺序的测试。该任务需要 nightly 工具链（`cargo +nightly`），不必更改默认工具链。
 
-### Schema conformance {#schema-conformance}
+### Schema 一致性 {#schema-conformance}
 
-`schema/mise.json` is generated from the declaration types in
-`crates/mise-config`, not from the parser, so a unit test checks it against the
-parser: `cargo test schema_matches_parser` parses every `toml` block in `docs/`
-and every mise config an E2E test writes with a heredoc, validates each against
-the schema, and fails when the two disagree. Fix the schema, then run
-`mise run render:schema`. An E2E config that mise refuses on purpose gets a
-`# schema: invalid` comment on the line above its heredoc, and the test then
-checks that the schema rejects it too; `# schema: skip` leaves a heredoc out.
-A deliberate difference goes in the `GAPS` list in
-`src/config/config_file/mise_toml/schema_conformance.rs`, with its reason.
+`schema/mise.json` 根据 `crates/mise-config` 中的声明类型生成，而不是由解析器生成，因此单元测试会检查它是否与解析器一致：`cargo test schema_matches_parser` 会解析 `docs/` 中的每个 `toml` 代码块，以及 E2E 测试通过 heredoc 写入的每个 mise 配置，并逐一对照 schema 验证；两者不一致时测试会失败。修复后运行 `mise run render:schema`。如果某个 E2E 配置按设计就应被 mise 拒绝，请在 heredoc 上方一行添加 `# schema: invalid` 注释；测试也会检查 schema 是否拒绝该配置。`# schema: skip` 则会让测试跳过该 heredoc。确需保留差异时，请将其原因写入 `src/config/config_file/mise_toml/schema_conformance.rs` 中的 `GAPS` 列表。
 
-### E2E tests {#e2e-tests}
+### E2E 测试 {#e2e-tests}
 
-`mise run test:e2e` builds mise, then runs the tests you select. Each argument
-is a regular expression matched against test file names:
+`mise run test:e2e` 会先构建 mise，再运行你选择的测试。每个参数都是与测试文件名匹配的正则表达式：
 
 ```sh
 mise run test:e2e '^test_version$'   # one test
@@ -274,37 +196,17 @@ mise run test:e2e --all              # every test except *_slow ones
 TEST_ALL=1 mise run test:e2e --all   # including *_slow tests
 ```
 
-The wrapper reduces each argument to its file name and does not anchor the
-pattern. `e2e/cli/test_version` therefore also runs `test_version_order`,
-`test_version_range`, and `test_version_update_hint`, and `e2e/tasks` runs every
-test whose name contains `tasks`, not the tests in that directory. With no
-arguments, it runs nothing. Check the `Running test:` lines to see which tests
-ran.
+包装器会将每个参数缩减为文件名，并且不会固定匹配模式的开头或结尾。因此，`e2e/cli/test_version` 也会运行 `test_version_order`、`test_version_range` 和 `test_version_update_hint`；`e2e/tasks` 会运行名称中含有 `tasks` 的所有测试，而不只是该目录中的测试。不带参数时不会运行任何测试。请查看 `Running test:` 行确认实际运行的测试。
 
-`--all` runs up to four tests at a time; set `E2E_JOBS` to change that, or to
-run selected tests in parallel. `TEST_TRANCHE` and `TEST_TRANCHE_COUNT` split
-the full suite, as CI does.
+`--all` 最多同时运行四项测试；设置 `E2E_JOBS` 可更改并发数，也可让选定测试并行运行。和 CI 一样，可使用 `TEST_TRANCHE` 和 `TEST_TRANCHE_COUNT` 将整套测试拆分为多个批次。
 
-Each test runs in a fresh working directory with its own `HOME`, mise
-directories, and trusted config path, with `MISE_EXPERIMENTAL=1` set and your
-`target/debug` first on `PATH`. The host still has to provide the shells,
-compilers, and services a test uses. `MISE_E2E_DOCKER=1` runs each test inside
-`ghcr.io/jdx/mise:e2e`, the image CI runs the E2E tests in, which has those
-packages; it needs a Linux build of mise. Set `MISE_GITHUB_TOKEN` or
-`GITHUB_TOKEN` for tests that call the GitHub API; the harness passes them
-through. When a test fails, the harness keeps its directory and prints the
-path.
+每项测试都会在新的工作目录中运行，并使用独立的 `HOME`、mise 目录和受信任配置路径；环境中会设置 `MISE_EXPERIMENTAL=1`，且 `target/debug` 位于 `PATH` 最前面。测试所需的 Shell、编译器和服务仍须由主机提供。设置 `MISE_E2E_DOCKER=1` 后，每项测试会在 `ghcr.io/jdx/mise:e2e` 容器镜像中运行；这是 CI 执行 E2E 测试所用的镜像，已包含这些软件包，但要求使用 Linux 构建的 mise。运行会调用 GitHub API 的测试时，请设置 `MISE_GITHUB_TOKEN` 或 `GITHUB_TOKEN`；测试 harness 会传递这些变量。测试失败时，harness 会保留其工作目录并打印路径。
 
-Do not run files under `e2e/` directly or make them executable.
+不要直接运行 `e2e/` 下的文件，也不要将它们设为可执行。
 
-### Writing an E2E test {#writing-an-e2e-test}
+### 编写 E2E 测试 {#writing-an-e2e-test}
 
-Create `e2e/<area>/test_<name>`, such as `e2e/env/test_env_greeting`. The
-harness sources `e2e/assert.sh` and runs the file with Bash, with
-`set -euo pipefail` in effect. A `#!/usr/bin/env zsh` first line runs it with
-zsh, still with `assert.sh` and `-euo pipefail`. A `#!/usr/bin/env fish` test
-runs with `fish --no-config` and gets neither. Do not clean up after the test:
-the harness deletes its directory.
+新建 `e2e/<area>/test_<name>` 文件，例如 `e2e/env/test_env_greeting`。harness 会加载 `e2e/assert.sh`，并在启用 `set -euo pipefail` 的情况下使用 Bash 运行文件。若首行为 `#!/usr/bin/env zsh`，则使用 zsh 运行，同时仍会加载 `assert.sh` 并启用 `-euo pipefail`。首行为 `#!/usr/bin/env fish` 的测试则使用 `fish --no-config` 运行，不会加载 `assert.sh`，也不会启用上述选项。不要在测试中清理文件；harness 会删除测试目录。
 
 ```sh
 #!/usr/bin/env bash
@@ -316,28 +218,26 @@ EOF
 assert "mise exec -- printenv GREETING" "hello"
 ```
 
-Name a test `test_<name>_slow` if it compiles or downloads a large tool. A test
-that takes more than 20 seconds without that suffix gets a warning.
+若测试会编译或下载大型工具，请将其命名为 `test_<name>_slow`。测试耗时超过 20 秒却没有该后缀时，会显示警告。
 
 <span id="test-assertions"></span>
 
-Most helpers take the command as a string:
+大多数辅助函数都接受字符串形式的命令：
 
-| Helper                                                      | Passes when                                                          |
+| 辅助函数                                                    | 成功条件                                                             |
 | ----------------------------------------------------------- | -------------------------------------------------------------------- |
-| `assert "cmd" "text"`                                       | `cmd` succeeds and prints exactly `text` (or succeeds, without `text`) |
-| `assert_contains`, `assert_not_contains`                    | `cmd` succeeds and its output does or does not contain `text`        |
-| `assert_matches "cmd" "regex"`                              | `cmd` succeeds and its output matches the Bash regular expression    |
-| `assert_empty`, `assert_not_empty`                          | `cmd` succeeds with empty or non-empty output                        |
-| `assert_json "cmd" "json"`                                  | `cmd` prints JSON equal to `json`                                    |
-| `assert_fail "cmd" "text"`                                  | `cmd` fails, and its output contains `text` when you pass it         |
-| `assert_fail_contains`, `assert_fail_matches`               | `cmd` fails and its output contains `text` or matches `regex`        |
-| `assert_directory_exists`, `assert_directory_not_exists`    | The directory does or does not exist                                 |
+| `assert "cmd" "text"`                                       | `cmd` 成功且输出与 `text` 完全一致；若省略 `text`，则只检查成功状态       |
+| `assert_contains`、`assert_not_contains`                    | `cmd` 成功，且输出包含或不包含 `text`                                  |
+| `assert_matches "cmd" "regex"`                              | `cmd` 成功，且输出匹配 Bash 正则表达式                                  |
+| `assert_empty`、`assert_not_empty`                          | `cmd` 成功，且输出为空或非空                                           |
+| `assert_json "cmd" "json"`                                  | `cmd` 输出与 `json` 相等的 JSON                                        |
+| `assert_fail "cmd" "text"`                                  | `cmd` 失败；传入 `text` 时，输出还必须包含它                             |
+| `assert_fail_contains`、`assert_fail_matches`               | `cmd` 失败，且输出包含 `text` 或匹配 `regex`                            |
+| `assert_directory_exists`、`assert_directory_not_exists`    | 目录存在或不存在                                                       |
 
-### Windows E2E tests {#windows-e2e-tests}
+### Windows E2E 测试 {#windows-e2e-tests}
 
-The Windows tests in `e2e-win/` use Pester 5. Install it, build mise, and run
-the suite. The runner puts `target\debug` first on `PATH`:
+`e2e-win/` 中的 Windows 测试使用 Pester 5。请先安装 Pester 并构建 mise，再运行测试套件。runner 会将 `target\debug` 放到 `PATH` 最前面：
 
 ```powershell
 Install-Module Pester -Force -SkipPublisherCheck
@@ -346,64 +246,31 @@ pwsh -File e2e-win/run.ps1
 pwsh -File e2e-win/run.ps1 -TestName '*task*'
 ```
 
-`-TestName` filters by the test's full Pester name and accepts wildcards. A
-test for activation or `PATH` must run a command through the `PATH` that mise
-emits and check that a native Windows child process receives a valid
-semicolon-separated `PATH`; comparing output strings is not enough.
-`e2e-win/activate_posix_path.Tests.ps1` is an example.
+`-TestName` 会按 Pester 测试的完整名称筛选，并支持通配符。测试激活或 `PATH` 时，必须通过 mise 输出的 `PATH` 运行命令，并确认原生 Windows 子进程收到有效的分号分隔 `PATH`；只比较输出字符串并不足够。可参考 `e2e-win/activate_posix_path.Tests.ps1`。
 
-### Registry tool tests {#registry-tool-tests}
+### 注册表工具测试 {#registry-tool-tests}
 
-`mise test-tool` installs registry tools and runs the test from each entry. See
-[tool tests](/contributing/registry.html#tool-testing) for how it works and why
-you run it with your build. Plugin authors should also read
-[Publishing plugins](/plugin-publishing.html#testing-before-publication).
+`mise test-tool` 会安装注册表中的工具，并运行各条目定义的测试。其工作方式以及为何要使用你构建的 mise 运行，请参阅[工具测试](/contributing/registry.html#tool-testing)。插件作者还应阅读[发布插件](/plugin-publishing.html#testing-before-publication)。
 
-### Snapshot testing {#snapshot-testing}
+### 快照测试 {#snapshot-testing}
 
-`insta` snapshots record output that must stay stable. When output changes on
-purpose, run `mise run snapshots`, which accepts every changed snapshot and
-deletes unreferenced ones. Review the `.snap` diff, including deletions, before
-you commit it.
+`insta` 快照用于记录必须保持稳定的输出。有意更改输出后，运行 `mise run snapshots`，接受所有已更改的快照并删除不再引用的快照。提交前请检查 `.snap` 差异，包括删除项。
 
-### Performance testing {#performance-testing}
+### 性能测试 {#performance-testing}
 
-`mise run perf` builds a release binary and measures instruction counts with
-tak. It needs valgrind; without it, tak reports wall-clock time only.
-`mise run test:perf` runs wall-clock benchmarks against a generated workspace
-and needs Bash 4 or newer, which macOS does not ship. Compare results only
-between builds made the same way on the same machine.
+`mise run perf` 会构建 Release 二进制文件，并使用 tak 测量指令数。它需要 valgrind；未安装时，tak 只报告实际耗时。`mise run test:perf` 会在生成的工作区中运行耗时基准测试，需要 Bash 4 或更新版本，而 macOS 自带的 Bash 不满足此要求。只比较在同一台机器上以相同方式构建所得的结果。
 
-## Changing a CLI command {#changing-a-cli-command}
+## 修改 CLI 命令 {#changing-a-cli-command}
 
-Commands live in `src/cli/` and are declared with `usage_rs` derives:
-`#[derive(usage_rs::Args)]` plus `#[usage(...)]` attributes. The same
-definition produces `--help`, shell completions, the man page, and the
-[CLI reference](/cli/), so edit the source and regenerate. Never edit
-`docs/cli/`, `mise.usage.kdl`, or `man/` by hand.
+命令位于 `src/cli/`，通过 `usage_rs` derive 声明：使用 `#[derive(usage_rs::Args)]` 和 `#[usage(...)]` 属性。同一份定义会生成 `--help`、Shell 补全、man 页面和 [CLI 参考](/cli/)，因此请修改源文件并重新生成。不要手动编辑 `docs/cli/`、`mise.usage.kdl` 或 `man/`。
 
-- The doc comment on a command's struct is its help. The first line is the
-  short description in `mise --help` and on the CLI index; the rest is the long
-  help that `mise <command> --help` and the reference page show. Add
-  `verbatim_doc_comment` to `#[usage(...)]` to keep your line breaks.
-- Doc comments on fields become the help for arguments and flags.
-- Add examples with `example(...)` inside `#[usage(...)]`, as in
-  `src/cli/where.rs`. They appear in `--help` and in the reference page's
-  examples.
-- `hide = true` hides a command or flag. A hidden command gets no reference
-  page.
-- Classify every new command, hidden or not, in `src/cli/command_effects.rs`:
-  add it to `EFFECTS` as `Read`, `Write`, or `Destructive`, or to
-  `UNCLASSIFIED` with a reason if it runs user-supplied code. The
-  `every_visible_command_is_classified` unit test fails otherwise.
-- Completions for argument values, such as tool, task, and setting names, and
-  the source link on each reference page come from
-  `src/assets/mise-extra.usage.kdl`.
-- The "Related documentation" link at the end of a reference page comes from
-  the `guides` map in `docs/.vitepress/cli-reference.ts`, and a top-level
-  command's group on the [CLI index](/cli/) from `categories` in the same file.
-  Add a new command to both. The render fails when a guide points to a page
-  that does not exist.
+- 命令结构体上的文档注释就是帮助文本。第一行是 `mise --help` 和 CLI 索引中的简短说明，其余内容则是 `mise <command> --help` 和参考页显示的详细帮助。在 `#[usage(...)]` 中添加 `verbatim_doc_comment` 可保留换行。
+- 字段上的文档注释会成为参数和标志的帮助文本。
+- 像 `src/cli/where.rs` 一样，在 `#[usage(...)]` 中使用 `example(...)` 添加示例。示例会显示在 `--help` 和参考页中。
+- `hide = true` 会隐藏命令或标志。隐藏的命令不会生成参考页。
+- 无论命令是否隐藏，都要在 `src/cli/command_effects.rs` 中归类：将其添加到 `EFFECTS`，标记为 `Read`、`Write` 或 `Destructive`；如果命令会运行用户提供的代码，则添加到 `UNCLASSIFIED` 并说明原因。否则 `every_visible_command_is_classified` 单元测试会失败。
+- 参数值（例如工具、任务和设置名称）的补全，以及每个参考页上的源代码链接，来自 `src/assets/mise-extra.usage.kdl`。
+- 参考页末尾的“相关文档”链接来自 `docs/.vitepress/cli-reference.ts` 中的 `guides` 映射；顶层命令在 [CLI 索引](/cli/)中的分组来自同一文件的 `categories`。添加新命令时，两处都要更新。如果 guide 指向不存在的页面，生成过程会失败。
 
 A command definition, trimmed from `src/cli/where.rs`:
 
@@ -427,7 +294,7 @@ pub(crate) struct Where {
 }
 ```
 
-Then regenerate and run the unit tests:
+然后重新生成相关文件并运行单元测试：
 
 ```sh
 mise run render:usage        # mise.usage.kdl, docs/cli/, tasks.md
@@ -437,33 +304,18 @@ mise run render:help         # docs/.vitepress/cli_commands.ts
 mise run test:unit
 ```
 
-`render:usage` deletes `docs/cli/` before it writes it again. If it fails
-partway, run `git restore docs/cli` before you retry.
+`render:usage` 会先删除 `docs/cli/` 再重新生成。如果任务中途失败，请先运行 `git restore docs/cli`，再重试。
 
-### Writing CLI help {#writing-cli-help}
+### 编写 CLI 帮助文本 {#writing-cli-help}
 
-- Start the first line with an imperative verb ("Remove stale cache files"),
-  keep it under 70 characters, and end it without a period. Write "tools", not
-  "tool(s)".
-- In the long help, say what the command does, what it changes, and when to
-  use something else. Wrap lines at 80 columns, and use full
-  `https://mise.jdx.dev/…` URLs, not Markdown links; the reference page adds
-  its related documentation link itself.
-- Write flag and argument help as a capitalized fragment without a period. The
-  web page joins its lines, so make each extra line a full sentence. Name a
-  default by its source, such as "Defaults to the `jobs` setting".
-- Give each example a different use, with capitalized help text and no
-  trailing colon.
+- 第一行以祈使动词开头（例如 “Remove stale cache files”），不超过 70 个字符，且末尾不加句号。写 “tools”，不要写 “tool(s)”。
+- 详细帮助应说明命令的作用、会更改什么，以及何时应改用其他方式。每行不超过 80 列；使用完整的 `https://mise.jdx.dev/…` URL，不要使用 Markdown 链接，参考页会自行添加相关文档链接。
+- 标志和参数的帮助写成首字母大写且不带句号的短语。网页会合并这些行，因此额外的每一行都应是完整句子。注明默认值来源，例如 “Defaults to the `jobs` setting”。
+- 每个示例都应展示不同用途；帮助文本首字母大写，末尾不加冒号。
 
-## Adding a setting {#adding-a-setting}
+## 添加设置 {#adding-a-setting}
 
-Settings are defined in
-[`settings.toml`](https://github.com/jdx/mise/blob/main/settings.toml). Each
-entry becomes three things: a field of the Rust `Settings` type, which
-`crates/mise-settings/build.rs` generates at build time; a property in
-`schema/mise.json`; and an entry on the
-[settings reference](/configuration/settings.html), which renders
-`settings.toml` when the site builds.
+设置定义在 [`settings.toml`](https://github.com/jdx/mise/blob/main/settings.toml) 中。每个条目会生成三项内容：Rust `Settings` 类型中的字段（由 `crates/mise-settings/build.rs` 在构建时生成）、`schema/mise.json` 中的属性，以及[设置参考](/configuration/settings.html)中的条目；站点构建时会渲染 `settings.toml`。
 
 <!-- schema: skip -->
 ```toml
@@ -479,96 +331,61 @@ env = "MISE_HTTP_TIMEOUT"
 type = "Duration"
 ```
 
-A dotted name, such as `[task.output]`, nests the setting, and the Rust field
-follows it: `Settings::get().task.output`. The keys of an entry:
+A dotted 名称（例如 `[task.output]`）会嵌套设置，Rust 字段也采用相同层级：`Settings::get().task.output`。条目包含以下键：
 
-- `type`: `Bool`, `String`, `Integer`, `Duration`, `Path`, `Url`,
-  `ListString`, `ListPath`, `SetString`, `BoolOrString`, or `BoolOrList`.
-- `description`: one plain sentence, shown by
-  `mise settings ls --json-extended`, editor completions, and the schema. For a
-  boolean, say what `true` does.
-- `docs`: Markdown that replaces `description` on the settings page.
-- `env`: the environment variable, usually `MISE_` plus the name in capitals,
-  with `_` in place of `.`.
-- `default`, or `optional = true` for a setting with no default.
-  `default_docs` describes a default that depends on the platform.
-- `rust_type`, `parse_env`, and `enum`: a Rust type other than the one `type`
-  implies, a parser for the environment variable, and the allowed values.
-- `deserialize_with`: a custom deserializer from `crates/mise-settings`, such
-  as `bool_string`.
-- `merge = "append_unique"`: for a `ListString`, combine the values from every
-  config file and drop duplicates, instead of letting the nearest file win.
-- `global_only = true`: project config cannot set it. `env_only = true`: only
-  the environment variable sets it. `rc = true`: `.miserc.toml` can set it.
-- `hide = true`: leaves it off the settings page.
-- `deprecated`, `deprecated_warn_at`, and `deprecated_remove_at`: retire it;
-  see [deprecations](#deprecations-and-breaking-changes).
+- `type`：`Bool`、`String`、`Integer`、`Duration`、`Path`、`Url`、`ListString`、`ListPath`、`SetString`、`BoolOrString` 或 `BoolOrList`。
+- `description`：一句简短说明，会显示在 `mise settings ls --json-extended`、编辑器补全和 schema 中。对于布尔设置，应说明 `true` 时的行为。
+- `docs`：Markdown 文本，在设置页面上替代 `description`。
+- `env`：环境变量名称，通常为设置名转大写并加上 `MISE_` 前缀，同时将 `.` 替换为 `_`。
+- `default`，或者对没有默认值的设置使用 `optional = true`。`default_docs` 用于说明因平台而异的默认值。
+- `rust_type`、`parse_env` 和 `enum`：分别表示不同于 `type` 所隐含类型的 Rust 类型、环境变量解析器和允许值。
+- `deserialize_with`：来自 `crates/mise-settings` 的自定义反序列化器，例如 `bool_string`。
+- `merge = "append_unique"`：用于 `ListString`，合并所有配置文件中的值并去重，而非采用最近配置文件的值。
+- `global_only = true`：项目配置不能设置此项。`env_only = true`：只能通过环境变量设置。`rc = true`：`.miserc.toml` 可以设置此项。
+- `hide = true`：不在设置页面中显示此项。
+- `deprecated`、`deprecated_warn_at` 和 `deprecated_remove_at`：用于弃用设置；详见[弃用与破坏性更改](#deprecations-and-breaking-changes)。
 
-Read the value in Rust with `Settings::get()`, for example
-`Settings::get().jobs`. Loading, trust, and command-line flags are handled in
-`src/config/settings.rs`. Then run `mise run render:schema`, which updates
-`schema/mise.json`, `schema/miserc.json`, and `schema/mise-task.json`, and
-preview the page with `mise run docs`. Keep an entry's keys in alphabetical
-order; `mise run lint-fix` sorts them with taplo.
+在 Rust 中使用 `Settings::get()` 读取设置值，例如 `Settings::get().jobs`。加载、信任和命令行标志由 `src/config/settings.rs` 处理。随后运行 `mise run render:schema`，更新 `schema/mise.json`、`schema/miserc.json` 和 `schema/mise-task.json`，并通过 `mise run docs` 预览页面。条目中的键应按字母顺序排列；`mise run lint-fix` 会调用 taplo 排序。
 
-## Writing documentation {#writing-documentation}
+## 编写文档 {#writing-documentation}
 
-The site is a VitePress project in `docs/`. Read
-[Working on the mise docs](https://github.com/jdx/mise/blob/main/docs/README.md)
-before you change a page: it covers where content belongs, moving pages,
-examples, style, and generated content.
+站点使用 `docs/` 下的 VitePress 项目。修改页面前请阅读[编写 mise 文档](https://github.com/jdx/mise/blob/main/docs/README.md)，了解内容归属、页面移动、示例、文风和生成内容的规则。
 
 ```sh
 mise run docs        # dev server that reloads on save
 mise run docs:build  # production build that checks every internal link and anchor
 ```
 
-Add a new page to `docs/.vitepress/sidebar.ts`. Moving a page needs a
-`pageRedirects` entry in `docs/.vitepress/redirects.mjs`, and moving a section
-to another page needs an `anchorRedirects` entry in
-`docs/.vitepress/anchor-redirects.mjs`. The guide's
-[Move or rename a page](https://github.com/jdx/mise/blob/main/docs/README.md#move-or-rename-a-page)
-section covers headings and labels.
+在 `docs/.vitepress/sidebar.ts` 中添加新页面。移动页面时，需要在 `docs/.vitepress/redirects.mjs` 中添加 `pageRedirects` 条目；将章节移到其他页面时，需要在 `docs/.vitepress/anchor-redirects.mjs` 中添加 `anchorRedirects` 条目。指南中的[移动或重命名页面](https://github.com/jdx/mise/blob/main/docs/README.md#move-or-rename-a-page)一节介绍了标题和标签的处理方式。
 
-Run `mise run render:llms` after you change a page title, a page's lead, or the
-page list, and again after you rebase. It builds mise and renders the CLI pages
-first; when only Markdown pages changed,
-`mise exec node -- node docs/.vitepress/llms.ts` writes just the index.
+修改页面标题、导语或页面列表后，以及 rebase 后，都要运行 `mise run render:llms`。该命令会构建 mise 并先渲染 CLI 页面；若只有 Markdown 页面发生变化，则运行 `mise exec node -- node docs/.vitepress/llms.ts`，只重新生成索引。
 
-## Pull request titles and descriptions {#pull-request-titles-and-descriptions}
+## Pull request 标题与描述 {#pull-request-titles-and-descriptions}
 
-PR titles follow [Conventional Commits](https://www.conventionalcommits.org/).
-The `conventional-commits` workflow checks the title when a PR is opened,
-edited, reopened, or updated. PRs are squash-merged, so CI does not check
-intermediate commit messages, though they should use the same format.
+PR 标题遵循 [Conventional Commits](https://www.conventionalcommits.org/)。`conventional-commits` workflow 会在 PR 创建、编辑、重新打开或更新时检查标题。PR 使用 squash 合并，因此 CI 不会检查中间提交说明，但它们也应采用相同格式。
 
 ```text
 <type>[(scope)][!]: <description>
 ```
 
-| Type       | Use for                                                       |
-| ---------- | ------------------------------------------------------------- |
-| `feat`     | A new user-facing capability                                  |
-| `fix`      | A bug in mise's behavior, not in CI, docs, or infrastructure  |
-| `perf`     | A performance improvement                                     |
-| `refactor` | A code change with no behavior change                         |
-| `docs`     | Documentation only                                            |
-| `test`     | Tests only                                                    |
-| `style`    | Formatting only                                               |
-| `security` | A security fix or hardening                                   |
-| `registry` | Changes under `registry/`; never takes a scope                |
-| `chore`    | Maintenance, dependency updates, and releases                 |
-| `ci`       | CI and automation                                             |
-| `revert`   | Reverting an earlier change                                   |
+| 类型       | 用途                                                            |
+| ---------- | --------------------------------------------------------------- |
+| `feat`     | 新增面向用户的功能                                              |
+| `fix`      | 修复 mise 行为缺陷，不用于 CI、文档或基础设施问题               |
+| `perf`     | 性能改进                                                        |
+| `refactor` | 不改变行为的代码调整                                            |
+| `docs`     | 仅修改文档                                                      |
+| `test`     | 仅修改测试                                                      |
+| `style`    | 仅调整格式                                                      |
+| `security` | 安全修复或加固                                                  |
+| `registry` | 修改 `registry/` 下的内容；不能添加 scope                        |
+| `chore`    | 维护、依赖更新和发布                                            |
+| `ci`       | CI 和自动化                                                     |
+| `revert`   | 撤销先前的更改                                                  |
 
-Scope a change by the command it affects (`install`, `use`, `exec`,
-`activate`) or by subsystem (`config`, `backend`, `env`, `task`, `vfox`,
-`python`, `github`, `schema`, `doctor`, `shim`, `deps`, `ci`). Use `task`, not
-`run`, for the task runner.
+scope 应按受影响的命令（`install`、`use`、`exec`、`activate`）或子系统（`config`、`backend`、`env`、`task`、`vfox`、`python`、`github`、`schema`、`doctor`、`shim`、`deps`、`ci`）填写。任务运行器应使用 `task`，不要用 `run`。
 
-Start the description with a lowercase letter or an acronym such as `CLI` or
-`PGO`, in the imperative mood: "add", not "added". Mark a breaking change with
-`!` after the type or scope.
+描述以小写字母或 `CLI`、`PGO` 这样的缩写开头，并使用祈使语气，例如写 `add`，不要写 `added`。破坏性更改应在类型或 scope 后添加 `!`。
 
 ```text
 fix(install): resolve version mismatch for previously installed tools
@@ -578,52 +395,30 @@ chore(deps): update rust crate demand to v2.4.0
 registry: add twg (http:twg)
 ```
 
-The title becomes the `CHANGELOG.md` entry, which git-cliff groups by type.
-Communique writes the GitHub release notes from the titles and descriptions of
-merged PRs. Write both for a mise user who has not read the diff: lead with the
-problem and what users can do now, include a short config or command example
-for a new feature, and describe the before and after for a bug fix. Update them
-when review changes what the PR does.
+标题会成为 `CHANGELOG.md` 条目，并由 git-cliff 按类型分组。Communique 会根据已合并 PR 的标题和描述生成 GitHub 发布说明。编写时要考虑没看过差异的 mise 用户：先说明问题和用户现在可以做什么；新功能应附上简短配置或命令示例；缺陷修复应说明修复前后的行为。如果评审导致 PR 内容改变，也要同步更新标题和描述。
 
-## Deprecations and breaking changes {#deprecations-and-breaking-changes}
+## 弃用与破坏性更改 {#deprecations-and-breaking-changes}
 
-Breaking changes are rarely accepted, and only when there is no better
-alternative. To remove a feature, backend, or behavior, deprecate it first:
+通常不接受破坏性更改，只有不存在更好的替代方案时才会考虑。移除功能、后端或行为前，应先将其弃用：
 
-1. In the PR that deprecates it, add a warning banner to its docs and a CLI
-   warning with `deprecated_at!` from `src/output.rs`, using the current
-   version as `warn_at`:
+1. 在弃用该功能的 PR 中，为文档添加警告横幅，并使用 `src/output.rs` 中的 `deprecated_at!` 添加 CLI 警告；`warn_at` 使用当前版本：
 
    ```rust
    deprecated_at!("2026.10.0", "2027.10.0", "old-flag", "Use --new-flag instead.");
    ```
 
-   From `warn_at` on, mise prints the warning once per id and adds the version
-   that removes the feature. From `remove_at`, normally 12 months later, a
-   `debug_assert!` fires as a reminder to remove the code. Some deprecations
-   use a shorter window on purpose; do not lengthen an existing one.
+   到达 `warn_at` 版本后，mise 会针对每个 ID 打印一次警告，并附上功能移除版本。到达 `remove_at` 后（通常在 12 个月后），会触发 `debug_assert!`，提醒删除代码。部分弃用会刻意采用更短的期限，不要延长已有期限。
 
-2. Delay the warning by up to 6 months only when the replacement needs a
-   setting or syntax that older supported mise versions reject. Removal is
-   still counted from when the warning starts.
-3. Document the migration path.
+2. 只有替代方案需要使用旧版受支持 mise 不接受的设置或语法时，才将警告最多延后 6 个月。移除期限仍从开始警告时计算。
+3. 说明迁移方式。
 
-Temporary code with no user-facing deprecation, such as a migration or a
-fallback that reads what an older mise wrote, uses
-`remove_by!("2027.1.0", "id")`. The build fails once mise reaches that version,
-until the code is removed.
+对于不涉及面向用户弃用的临时代码（例如迁移代码，或用于读取旧版 mise 写入内容的回退逻辑），使用 `remove_by!("2027.1.0", "id")`。mise 达到指定版本后，如果代码尚未移除，构建就会失败。
 
-## Dependencies {#dependencies}
+## 依赖 {#dependencies}
 
-Use the least specific version requirement that works in `Cargo.toml`: `"1"`
-rather than `"1.2.3"`, and `"0.12"` for a pre-1.0 crate. A routine update
-changes only `Cargo.lock`. Run `cargo update -p <crate> --precise <version>`,
-and drop unrelated changes from the lockfile.
+在 `Cargo.toml` 中使用满足需求的最宽松版本约束：例如使用 `"1"` 而不是 `"1.2.3"`；对于尚未达到 1.0 的 crate，使用 `"0.12"`。常规依赖更新只应修改 `Cargo.lock`。运行 `cargo update -p <crate> --precise <version>`，并从 lockfile 中移除无关改动。
 
-CI checks dependencies with these tools, which the project's `mise.toml` does
-not install. See
-[test-impl.yml](https://github.com/jdx/mise/blob/main/.github/workflows/test-impl.yml)
-for the exact flags.
+CI 会使用以下工具检查依赖，而项目的 `mise.toml` 不会安装它们。具体参数见 [test-impl.yml](https://github.com/jdx/mise/blob/main/.github/workflows/test-impl.yml)。
 
 ```sh
 cargo deny check               # advisories, licenses, and allowed sources
@@ -631,81 +426,42 @@ cargo machete --with-metadata  # unused dependencies
 cargo msrv verify              # the minimum supported Rust version
 ```
 
-`deny.toml` allows duplicate versions of a crate.
+`deny.toml` 允许同一 crate 存在多个版本。
 
-## Adding tools to the registry {#adding-tools}
+## 将工具添加到注册表 {#adding-tools}
 
-New shorthands are for tools that are already widely used, normally with
-thousands of GitHub stars, and most proposals are declined. Read
-[Adding tools to the registry](/contributing/registry.html) before you open a
-PR. It covers the popularity bar, the
-[backend acceptance tiers](/contributing/registry.html#backend-acceptance-tiers),
-the entry format, and [tool tests](/contributing/registry.html#tool-testing).
+新简称仅面向已经广泛使用的工具，通常要求拥有数千个 GitHub stars；大多数提案都会被拒绝。提交 PR 前请阅读[将工具添加到注册表](/contributing/registry.html)，其中介绍了受欢迎程度门槛、[后端接纳等级](/contributing/registry.html#backend-acceptance-tiers)、条目格式和[工具测试](/contributing/registry.html#tool-testing)。
 
-## Adding a backend {#adding-backends}
+## 添加后端 {#adding-backends}
 
-Most contributors want to [add a tool](/contributing/registry.html), not a
-backend. New backends are rarely accepted into core, because each one is
-permanent maintenance; one might be accepted for a major package manager that
-would add a lot to mise. Check first whether an existing backend, such as
-`github`, `aqua`, `npm`, or `pypi`, can install what you need. To support a new
-source without changing mise, write a
-[backend plugin](/backend-plugin-development.html) or a
-[tool plugin](/tool-plugin-development.html), starting from
-[mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template).
-If you think a backend belongs in core, raise it in a
-[Discussion](https://github.com/jdx/mise/discussions) or on
-[Discord](https://discord.gg/mABnUDvP57) before you write code.
+大多数贡献者想要的是[添加工具](/contributing/registry.html)，而非新增后端。核心项目很少接纳新后端，因为每个后端都意味着长期维护；不过，能够显著增强 mise 的主流包管理器后端仍可能被接纳。请先确认现有后端（例如 `github`、`aqua`、`npm` 或 `pypi`）是否已能安装目标工具。若要在不修改 mise 的情况下支持新来源，可基于 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 编写[后端插件](/backend-plugin-development.html)或[工具插件](/tool-plugin-development.html)。如果认为某个后端应加入核心项目，请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出想法。
 
-To implement one:
+实现后端的步骤如下：
 
-1. Create `src/backend/my_backend.rs` and implement the
+1. 新建 `src/backend/my_backend.rs` 并实现
    [`Backend` trait](https://github.com/jdx/mise/blob/main/src/backend/mod.rs),
-   following a backend with the same installation model. The trait's wrapper
-   methods handle caching and policy; implement hooks such as
-   `_list_remote_versions`, which returns `VersionInfo` entries, and
-   `install_version_` instead of duplicating that logic. Treat versions as
-   opaque and leave resolution to the backend.
-2. Declare the module in `src/backend/mod.rs` (`pub(crate) mod my_backend;`).
-3. Add a variant to `BackendType` in `src/backend/backend_type.rs`, and map its
-   prefix in `BackendType::guess`, which falls back to `Unknown` without a
-   compiler error. If the backend starts experimental, add it to
-   `is_experimental`, which falls back to `false`.
-4. Construct the backend in the factory match in `src/backend/mod.rs`. The
-   compiler then lists the other exhaustive matches to update, such as
-   install-time option keys.
-5. Add argument parsing in `src/args/backend_arg.rs` if the identifier needs
-   it.
+   ，并参考安装模型相同的后端。trait 的包装方法会处理缓存和策略；请实现 `_list_remote_versions`（返回 `VersionInfo` 条目）、`install_version_` 等 hook，不要重复实现这些逻辑。版本应视为不透明值，解析工作交给后端。
+2. 在 `src/backend/mod.rs` 中声明模块（`pub(crate) mod my_backend;`）。
+3. 在 `src/backend/backend_type.rs` 的 `BackendType` 中添加变体，并在 `BackendType::guess` 中映射其前缀；未匹配时会回退到 `Unknown`，不会产生编译错误。若后端初期处于实验阶段，还要将它添加到 `is_experimental`；该方法未匹配时会回退到 `false`。
+4. 在 `src/backend/mod.rs` 的工厂 match 中构造后端。之后编译器会指出还需更新的其他穷尽匹配，例如安装时选项键。
+5. 如果该标识符需要特殊解析，请在 `src/args/backend_arg.rs` 中添加参数解析逻辑。
 
-Add E2E tests in `e2e/backend/test_my_backend` that install a tool with the
-backend and run it, plus Windows tests if the backend supports Windows. Add a
-backend page under `docs/dev-tools/backends/` with installation examples, and
-link it from `docs/.vitepress/sidebar.ts` and from the table in
-`docs/dev-tools/backends/index.md`. If registry entries will use the backend,
-add a URL builder for its prefix in `docs/registry.data.ts` so the registry
-page links them.
+在 `e2e/backend/test_my_backend` 中添加 E2E 测试，验证该后端可以安装并运行工具；若后端支持 Windows，还要添加相应的 Windows 测试。在 `docs/dev-tools/backends/` 下添加后端页面和安装示例，并在 `docs/.vitepress/sidebar.ts` 以及 `docs/dev-tools/backends/index.md` 的表格中添加链接。如果注册表条目会使用此后端，还需在 `docs/registry.data.ts` 中为其前缀添加 URL 构造器，让注册表页面能生成对应链接。
 
-Backends to read first:
+建议先阅读以下后端：
 
-- `src/backend/dotnet.rs`: a small package-manager backend
-- `src/backend/packslip.rs`: a release-manifest backend with verification
-- `src/plugins/core/node.rs`: a full language runtime
+- `src/backend/dotnet.rs`：精简的包管理器后端
+- `src/backend/packslip.rs`：带验证功能的发布清单后端
+- `src/plugins/core/node.rs`：完整的语言运行时
 
-See [Backends](/dev-tools/backends/) for how mise picks a backend.
+mise 如何选择后端，请参阅[后端](/dev-tools/backends/)。
 
-## CI and releases {#ci-and-releases}
+## CI 与发布 {#ci-and-releases}
 
-CI builds and tests on Linux, macOS, and Windows, runs the full E2E suite on
-Linux in parallel tranches, and checks Clippy, dependencies, the minimum Rust
-version, and the PR title. A change under `registry/` also runs
-`mise test-tool` for the entries it adds or changes.
+CI 会在 Linux、macOS 和 Windows 上构建并测试，在 Linux 上按批次并行运行完整 E2E 套件，同时检查 Clippy、依赖、最低 Rust 版本和 PR 标题。`registry/` 下的改动还会针对新增或修改的条目运行 `mise test-tool`。
 
-mise versions are CalVer (`YYYY.M.PATCH`) and releases are automated. The
-release-plz workflow opens a release PR on every push to `main` and once a day,
-and publishes the release when that PR merges. Do not run
-`mise run release-plz` locally.
+mise 版本采用 CalVer（`YYYY.M.PATCH`），发布流程由自动化完成。每次推送到 `main` 以及每天一次，release-plz workflow 都会创建发布 PR；该 PR 合并后即发布新版本。不要在本地运行 `mise run release-plz`。
 
-## Packaging and self-update instructions {#packaging-and-self-update-instructions}
+## 打包与自我更新说明 {#packaging-and-self-update-instructions}
 
-Distribution packagers can turn off `mise self-update` and point users to their
-package manager instead. See [Packaging mise](/packaging.html).
+发行版打包者可以关闭 `mise self-update`，并引导用户改用对应的软件包管理器。详见[mise 打包](/packaging.html)。

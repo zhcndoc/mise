@@ -4,77 +4,61 @@ description: "通过 mise 安装 Hex 预编译的 Elixir，并搭配兼容的 Er
 
 # Elixir
 
-mise installs precompiled Elixir releases from Hex. Elixir runs on Erlang/OTP,
-so install [Erlang](/lang/erlang.html) as well.
+mise 从 Hex 安装预编译的 Elixir 发行版。Elixir 运行于 Erlang/OTP 之上，因此也要安装 [Erlang](/lang/erlang.html)。
 
-## Quick start
+## 快速开始 {#quick-start}
 
-Declare Erlang and an Elixir build compiled for the same OTP major:
+声明 Erlang 版本，以及一个针对相同 OTP 主版本编译的 Elixir 构建：
 
 ```sh
 mise use erlang@29 elixir@1.20.4-otp-29
 mise exec -- elixir --version
 ```
 
-`elixir --version` reports both the Elixir and the Erlang/OTP version, which
-helps diagnose a mismatched pair. When both tools are configured, mise installs
-Erlang before Elixir.
+`elixir --version` 会同时显示 Elixir 和 Erlang/OTP 的版本，便于排查版本不匹配的问题。配置了这两个工具时，mise 会先安装 Erlang，再安装 Elixir。
 
-In an existing Mix project, run `mise exec -- mix deps.get` to fetch the
-application's dependencies; selecting Elixir does not install them. Add `-g` to
-`mise use` to set personal defaults.
+在已有的 Mix 项目中，运行 `mise exec -- mix deps.get` 获取应用依赖；选择 Elixir 版本不会安装这些依赖。给 `mise use` 添加 `-g` 可设置个人默认版本。
 
-## Choosing a version
+## 选择版本 {#choosing-a-version}
 
-Hex publishes each Elixir release compiled for several Erlang/OTP majors, as
-`X.Y.Z-otp-NN`. Pick the build whose suffix matches your Erlang major:
+Hex 会为多个 Erlang/OTP 主版本发布 Elixir 构建，版本格式为 `X.Y.Z-otp-NN`。请选择后缀与 Erlang 主版本相同的构建：
 
-| Request                | Selects                                                     |
+| 版本请求               | 选择的版本                                                 |
 | ---------------------- | ----------------------------------------------------------- |
-| `elixir@1.20.4-otp-28` | Elixir 1.20.4 compiled for OTP 28                           |
-| `elixir@1.20.4`        | The Elixir 1.20.4 build without an OTP suffix               |
-| `elixir@1.20`          | The newest 1.20.x, compiled for the newest OTP it supports  |
-| `elixir@latest`        | The newest release, compiled for the newest OTP it supports |
+| `elixir@1.20.4-otp-28` | 针对 OTP 28 编译的 Elixir 1.20.4                            |
+| `elixir@1.20.4`        | 不带 OTP 后缀的 Elixir 1.20.4 构建                          |
+| `elixir@1.20`          | 最新的 1.20.x，针对其支持的最新 OTP 编译                    |
+| `elixir@latest`        | 最新发行版，针对其支持的最新 OTP 编译                        |
 
-A prefix such as `1.20` or `latest` picks the newest OTP variant. That only
-matches your Erlang when Erlang is also on its newest major, so pinning Erlang
-to an older major while Elixir stays on `latest` gives a mismatched pair. List
-the builds with `mise ls-remote elixir 1.20`.
+`1.20` 或 `latest` 这类前缀会选择针对最新 OTP 版本的构建。只有 Erlang 也使用最新主版本时，它才会与之匹配；如果 Erlang 固定在较旧主版本，而 Elixir 仍使用 `latest`，两者就会不匹配。运行 `mise ls-remote elixir 1.20` 可列出可用构建。
 
-## Version files
+## 版本文件 {#version-files}
 
-mise can read `.exenv-version`. Enable it for Elixir:
+mise 可以读取 `.exenv-version`。若要让 Elixir 使用此文件，请启用对应设置：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools elixir
 ```
 
-This changes your global config. Add `--local` to enable it in the project's
-`mise.toml` instead. See
-[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
+此命令会修改全局配置。添加 `--local` 可改为在项目的 `mise.toml` 中启用。另请参阅[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)。
 
-## Hex, Rebar and Mix archives
+## Hex、Rebar 与 Mix 归档 {#hex-rebar-and-mix-archives}
 
-Unless `MIX_HOME` or `MIX_ARCHIVES` is already set in your shell or in `[env]`,
-mise sets them to directories inside the selected Elixir version:
+除非已在 shell 或 `[env]` 中设置 `MIX_HOME` 或 `MIX_ARCHIVES`，否则 mise 会将它们设为所选 Elixir 版本目录中的路径：
 
-| Variable       | Value                     |
+| 变量           | 值                        |
 | -------------- | ------------------------- |
 | `MIX_HOME`     | `<install>/.mix`          |
 | `MIX_ARCHIVES` | `<install>/.mix/archives` |
 
-mise also puts `<install>/.mix/escripts` on `PATH`. As a result,
-`mix archive.install`, `mix escript.install`, Hex and Rebar are per Elixir
-version. After installing a new Elixir version, install Hex and Rebar again:
+mise 还会将 `<install>/.mix/escripts` 加入 `PATH`。因此，`mix archive.install`、`mix escript.install`、Hex 和 Rebar 都是按 Elixir 版本分别管理的。安装新的 Elixir 版本后，需要重新安装 Hex 和 Rebar：
 
 ```sh
 mise exec -- mix local.hex --force
 mise exec -- mix local.rebar --force
 ```
 
-To share them across versions, set both variables and put the shared escripts
-directory on `PATH`. mise does not override a `MIX_HOME` or `MIX_ARCHIVES` that
-your shell or `[env]` already sets:
+若要让不同版本共用它们，请同时设置这两个变量，并将共享的 escripts 目录加入 `PATH`。如果 shell 或 `[env]` 已设置 `MIX_HOME` 或 `MIX_ARCHIVES`，mise 不会覆盖它们：
 
 ```toml [mise.toml]
 [env]
@@ -83,21 +67,12 @@ MIX_ARCHIVES = "{{env.HOME}}/.mix/archives"
 _.path = ["{{env.HOME}}/.mix/escripts"]
 ```
 
-## How mise installs Elixir
+## mise 如何安装 Elixir {#how-mise-installs-elixir}
 
-mise downloads the build's zip archive from `builds.hex.pm` and runs
-`elixir --version` with the configured Erlang on `PATH` to check it.
-[`mise lock`](/cli/lock.html) records the checksum Hex publishes for the build.
+mise 会从 `builds.hex.pm` 下载对应构建的 zip 归档，并在 `PATH` 中使用已配置的 Erlang 运行 `elixir --version` 进行检查。[`mise lock`](/cli/lock.html) 会记录 Hex 为该构建发布的校验和。
 
-An installed plugin named `elixir` takes precedence over the built-in
-installer. If mise behaves differently from this page, check
-[`mise plugins ls`](/cli/plugins/ls.html) and see
-[selecting another implementation](/core-tools.html#selecting-another-implementation).
+如果已安装名为 `elixir` 的插件，它会优先于内置安装器。如果 mise 的行为与本文描述不符，请检查 [`mise plugins ls`](/cli/plugins/ls.html)，并参阅[选择其他实现](/core-tools.html#selecting-another-implementation)。
 
-## Tool options
+## 工具选项 {#tool-options}
 
-Elixir has no Elixir-specific options. Generic options such as `install_env`,
-`postinstall` and `os` work as described in
-[tool options](/dev-tools/#tool-options). `install_env` reaches only the
-`elixir --version` check and `postinstall` commands; it does not set `MIX_HOME`
-or other variables for later use. Set those in `[env]`.
+Elixir 没有专属选项。`install_env`、`postinstall` 和 `os` 等通用选项的用法请参阅[工具选项](/dev-tools/#tool-options)。`install_env` 只会影响 `elixir --version` 检查和 `postinstall` 命令，不会为后续使用设置 `MIX_HOME` 或其他变量；请在 `[env]` 中设置这些变量。

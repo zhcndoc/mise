@@ -2,7 +2,7 @@
 description: "使用 mise 配置的 Go 版本，通过 go install 构建并安装 Go 命令行软件包。"
 ---
 
-# go backend
+# go 后端
 
 The `go` backend builds Go command-line packages with `go install`. Use the
 import path of the executable package, which may end in `/cmd/<name>` or

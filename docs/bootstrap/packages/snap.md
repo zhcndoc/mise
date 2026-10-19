@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Snap 软件包，通过 snapd 安装、切换通道和移除。"
 ---
 
-# Snap packages (snap)
+# Snap 软件包
 
 The `snap` manager installs and removes snaps from the Snap Store with the
 [`snap`](https://snapcraft.io/docs/snap-howto) command. Snaps are installed

@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Windows 软件包，通过 WinGet 安装或升级，并可固定版本。"
 ---
 
-# WinGet packages (winget)
+# WinGet 软件包
 
 The `winget` manager installs and upgrades Windows packages with the Windows
 Package Manager, `winget`.

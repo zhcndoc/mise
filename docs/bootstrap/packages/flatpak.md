@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Flatpak 应用和运行时，并为整台机器或当前用户安装。"
 ---
 
-# Flatpak apps (flatpak)
+# Flatpak 应用
 
 The `flatpak` manager installs Flatpak apps and runtimes into the system-wide
 installation, and `flatpak-user` installs them for the current user. Both use

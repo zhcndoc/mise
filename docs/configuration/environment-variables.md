@@ -3,24 +3,17 @@ description: "查阅不属于设置项的 MISE_* 环境变量：目录、日志�
 socialDescription: "查阅非设置项的 MISE_* 环境变量：目录、日志和工具版本覆盖。"
 ---
 
-# MISE\_\* environment variables
+# MISE\_\* 环境变量
 
-Every [setting](/configuration/settings.html) except the `write_targets` tables
-also has a `MISE_*` environment variable, listed in its entry on the Settings
-page; for example, `MISE_JOBS=4`
-sets [`jobs`](/configuration/settings.html#jobs). This page lists the variables
-that are not settings, plus a few hidden settings that are only useful as
-variables.
+除了 `write_targets` 表以外，每项[设置](/configuration/settings.html)也都对应一个 `MISE_*` 环境变量，列在设置页面对应条目中。例如，`MISE_JOBS=4` 会设置[`jobs`](/configuration/settings.html#jobs)。本页列出不属于设置项的环境变量，以及少数只适合通过环境变量使用的隐藏设置。
 
-Set them in the environment that starts mise, such as your shell startup file
-or a CI job.
+请在启动 mise 的环境中设置这些变量，例如 Shell 启动文件或 CI 作业。
 
-## Directories {#directories}
+## 目录 {#directories}
 
-Each of these moves one of mise's directories. [Directories](/directories.html)
-lists their defaults and what each one holds.
+以下变量可分别更改 mise 的目录位置。[目录说明](/directories.html)列出了各目录的默认路径及其内容。
 
-| Variable                 | Directory                                                                            |
+| 环境变量                 | 目录                                                                                  |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `MISE_CONFIG_DIR`        | [Global config](/directories.html#config-mise)                                       |
 | `MISE_DATA_DIR`          | [Installed tools and plugins](/directories.html#local-share-mise)                    |
@@ -34,38 +27,28 @@ lists their defaults and what each one holds.
 | `MISE_DOWNLOADS_DIR`     | [Downloads](/directories.html#local-share-mise-downloads)                            |
 | `MISE_SYSTEM_DATA_DIR`   | [System installs and shims](/directories.html#system-installs-and-shims)             |
 
-## Config files {#config-files}
+## 配置文件 {#config-files}
 
 ### `MISE_<TOOL>_VERSION` {#mise-tool-version}
 
-Selects a version of one tool and overrides every config file for the commands
-that see it:
+选择某个工具的版本，并覆盖能够读取该变量的命令所使用的所有配置文件：
 
 ```sh
 MISE_NODE_VERSION=22 mise exec -- node --version
 # v22.x.x
 ```
 
-Write the tool name in upper case with `-` changed to `_`, as in
-`MISE_LS_LINT_VERSION` for `ls-lint`. Separate several versions with spaces.
-[`mise shell`](/cli/shell.html) sets this variable for the current shell
-session. See [Version requests and version files](/dev-tools/versions.html) for
-the accepted versions.
+工具名称应使用大写，并将 `-` 替换为 `_`；例如 `ls-lint` 对应 `MISE_LS_LINT_VERSION`。多个版本之间用空格分隔。[`mise shell`](/cli/shell.html) 会为当前 Shell 会话设置此变量。可用版本格式请参阅[版本请求和版本文件](/dev-tools/versions.html)。
 
 ### `MISE_NO_CONFIG` {#mise-no-config}
 
-Set to `1` to load no config files at all, the same as the `--no-config` flag.
+设置为 `1` 可完全不加载配置文件，效果与 `--no-config` 标志相同。
 
 ### Settings for config files
 
-mise reads these settings before any `mise.toml`, because they control which
-config files it loads or, for `global_config_root`, the
-[config root](/configuration.html#config-root) of the global config. Some of
-them work only as environment variables; the last column says where else you
-can set each one. See
-[Settings with restricted locations](/configuration/settings.html#settings-with-restricted-locations).
+mise 会在读取任何 `mise.toml` 前读取这些设置，因为它们会控制要加载的配置文件；`global_config_root` 还会决定全局配置的[配置根目录](/configuration.html#config-root)。其中一些只能通过环境变量设置；最后一列标明其他可用的设置位置。详见[只能在特定位置设置的选项](/configuration/settings.html#settings-with-restricted-locations)。
 
-| Variable                                | Setting                                                                                                        | Also works in                                                  |
+| 环境变量                                | 对应设置                                                                                                       | 其他可用位置                                                  |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `MISE_ENV`                              | [`env`](/configuration/settings.html#env), the [config environments](/configuration/environments.html) to load | [`.miserc.toml`](/configuration.html#miserc) and the `-E` flag |
 | `MISE_AUTO_ENV`                         | [`auto_env`](/configuration/settings.html#auto_env)                                                            | `.miserc.toml`                                                 |
@@ -80,34 +63,28 @@ can set each one. See
 | `MISE_DEFAULT_CONFIG_FILENAME`          | [`default_config_filename`](/configuration/settings.html#default_config_filename)                              | Nowhere else                                                   |
 | `MISE_DEFAULT_TOOL_VERSIONS_FILENAME`   | [`default_tool_versions_filename`](/configuration/settings.html#default_tool_versions_filename)                | Nowhere else                                                   |
 
-You can also set these under `[settings]` in a config file:
+也可以在配置文件的 `[settings]` 下设置以下变量：
 
-| Variable                    | Setting                                                                                                      |
+| 环境变量                    | 对应设置                                                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `MISE_TRUSTED_CONFIG_PATHS` | [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths), in global or system config only |
+| `MISE_TRUSTED_CONFIG_PATHS` | [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)，仅限全局或系统配置               |
 | `MISE_ENV_FILE`             | [`env_file`](/configuration/settings.html#env_file)                                                          |
-| `MISE_NO_ENV`               | [`no_env`](/configuration/settings.html#no_env), the same as `--no-env`                                      |
-| `MISE_NO_HOOKS`             | [`no_hooks`](/configuration/settings.html#no_hooks), the same as `--no-hooks`                                |
+| `MISE_NO_ENV`               | [`no_env`](/configuration/settings.html#no_env)，等同于 `--no-env`                                          |
+| `MISE_NO_HOOKS`             | [`no_hooks`](/configuration/settings.html#no_hooks)，等同于 `--no-hooks`                                    |
 
-## Logging and output {#logging}
+## 日志和输出 {#logging}
 
 ### `MISE_DEBUG` and `MISE_TRACE` {#mise-debug}
 
-Set `MISE_DEBUG=1` for debug logs, or `MISE_TRACE=1` for trace logs, which are
-more detailed. They match the `-v` and `-vv` flags. Use them, not `RUST_LOG`,
-when you report a problem.
+设置 `MISE_DEBUG=1` 可输出调试日志；设置 `MISE_TRACE=1` 可输出更详细的跟踪日志。它们分别等同于 `-v` 和 `-vv` 标志。报告问题时请使用这两个变量，而不要使用 `RUST_LOG`。
 
 ### `MISE_LOG_LEVEL` {#mise-log-level}
 
-Sets the log level: `trace`, `debug`, `info` (the default), `warn`, or `error`.
-[`MISE_QUIET=1`](/configuration/settings.html#quiet) also sets the level to
-`error`, and it hides task headers and progress as well. The hidden
-`--log-level` flag takes the same levels.
+设置日志级别：`trace`、`debug`、`info`（默认值）、`warn` 或 `error`。[`MISE_QUIET=1`](/configuration/settings.html#quiet) 也会将级别设为 `error`，并隐藏任务标题和进度信息。隐藏的 `--log-level` 标志接受相同的级别。
 
 ### `MISE_LOG_FILE` {#mise-log-file}
 
-Also writes logs to this file, appending to it and creating its directory if
-needed:
+还会将日志追加写入此文件；必要时会创建其所在目录：
 
 ```sh
 MISE_LOG_FILE=~/mise.log mise install
@@ -115,14 +92,11 @@ MISE_LOG_FILE=~/mise.log mise install
 
 ### `MISE_LOG_FILE_LEVEL` {#mise-log-file-level}
 
-Sets the level for the log file, so you can keep detailed logs without
-cluttering the terminal. It takes the same values as `MISE_LOG_LEVEL` and
-defaults to the terminal's level.
+设置日志文件的级别，这样可以保留详细日志而不让终端输出过多内容。可用值与 `MISE_LOG_LEVEL` 相同，默认继承终端日志级别。
 
 ### `MISE_LOG_HTTP` {#mise-log-http}
 
-Set to `1` to print every HTTP request mise sends, after
-[URL replacements](/url-replacements.html), with its response status:
+设置为 `1` 可打印 mise 应用 [URL 替换](/url-replacements.html)后发送的每个 HTTP 请求及其响应状态：
 
 ```text
 GET https://mise-versions.jdx.dev/data/jq.toml 200 OK
@@ -130,39 +104,27 @@ GET https://mise-versions.jdx.dev/data/jq.toml 200 OK
 
 ### `MISE_LOG_VERBOSE_DEPS` {#mise-log-verbose-deps}
 
-mise always drops debug and trace logs from noisy libraries such as `h2`,
-`hyper`, `reqwest`, and `rustls`, which log every HTTP/2 frame or socket read.
-Set this to `1` to let them through; it is the only way to see them, even with
-`MISE_TRACE=1` or `-vv`.
+对于 `h2`、`hyper`、`reqwest` 和 `rustls` 等日志过多的库，mise 默认会丢弃其调试和跟踪日志，因为这些库会记录每个 HTTP/2 帧或套接字读取操作。设置为 `1` 可显示这些日志；即使启用了 `MISE_TRACE=1` 或 `-vv`，也必须通过此变量才能看到它们。
 
 ### `MISE_TIMINGS` {#mise-timings}
 
-Set to `1` to print how long each step of a command takes, or `2` for a detailed
-breakdown with cumulative times. See
-[Troubleshooting](/troubleshooting.html#slow-shell-prompts) for profiling a slow
-prompt.
+设置为 `1` 可打印命令每个步骤的耗时；设置为 `2` 可显示更详细的分解信息和累计耗时。如何分析提示符变慢的问题，请参阅[故障排除](/troubleshooting.html#slow-shell-prompts)。
 
 ### `MISE_FRIENDLY_ERROR` {#mise-friendly-error}
 
-mise prints short error messages unless debug logging is on. Set this to `0` to
-print the full error report, with its cause chain and the source location, or
-to `1` to keep short messages even with debug logging.
+除非启用了调试日志，否则 mise 会输出简短的错误信息。设置为 `0` 可打印完整错误报告，包括原因链和源代码位置；设置为 `1` 则即使启用调试日志也保留简短信息。
 
 ### `MISE_TERM_WIDTH` {#mise-term-width}
 
-Sets the terminal width mise uses for tables and lists, such as `mise ls`.
-Without it, mise uses `COLUMNS` and then the width it detects. Set it in CI and
-other non-interactive environments where detection returns a bad value, such as
-CircleCI, which reports a width of `0`. The value is used exactly, so you can
-also force a narrower width:
+设置 mise 在表格和列表（如 `mise ls`）中使用的终端宽度。未设置时，mise 会先读取 `COLUMNS`，再使用检测到的宽度。在 CI 等非交互环境中，如果检测结果不正确（例如 CircleCI 报告宽度为 `0`），请设置此变量。该值会原样使用，因此也可以强制采用更窄的宽度：
 
 ```sh
 MISE_TERM_WIDTH=120 mise ls
 ```
 
-### Settings for output
+### 输出相关设置
 
-| Variable       | Setting                                           |
+| 环境变量       | 对应设置                                          |
 | -------------- | ------------------------------------------------- |
 | `MISE_QUIET`   | [`quiet`](/configuration/settings.html#quiet)     |
 | `MISE_VERBOSE` | [`verbose`](/configuration/settings.html#verbose) |
@@ -170,47 +132,37 @@ MISE_TERM_WIDTH=120 mise ls
 | `MISE_RAW`     | [`raw`](/configuration/settings.html#raw)         |
 | `MISE_YES`     | [`yes`](/configuration/settings.html#yes)         |
 
-## Shells {#shells}
+## Shell {#shells}
 
 ### `MISE_FISH_AUTO_ACTIVATE` {#mise-fish-auto-activate}
 
-Homebrew and other packages install a fish `vendor_conf.d` script that activates
-mise automatically. Set this to `0` to turn that off:
+Homebrew 和其他软件包会安装 fish 的 `vendor_conf.d` 脚本，以自动激活 mise。设置为 `0` 可关闭此功能：
 
 ```fish
 set -Ux MISE_FISH_AUTO_ACTIVATE 0
 ```
 
-See [Shell setup](/shell-setup.html#fish).
+详见 [Shell 设置](/shell-setup.html#fish)。
 
-## Networking {#networking}
+## 网络 {#networking}
 
 ### `MISE_LIST_ALL_VERSIONS` {#mise-list-all-versions}
 
-Set to `1` to read every page of a repository's GitHub, GitLab, or Forgejo
-releases or tags instead of stopping early. It applies to every backend and core
-tool that lists versions from those forges, such as the github and aqua backends
-and Go. Use it when an older release is missing from `mise ls-remote`; listing
-takes longer and uses more API requests.
+设置为 `1` 可读取仓库中 GitHub、GitLab 或 Forgejo 的所有发行版或标签页面，而不提前停止。此设置适用于从这些代码托管平台获取版本列表的所有后端和核心工具，例如 github、aqua 后端和 Go。`mise ls-remote` 缺少较旧发行版时可启用此项；代价是列表加载更慢，API 请求也会更多。
 
-### Tokens
+### 令牌
 
-`MISE_GITHUB_TOKEN`, `MISE_GITLAB_TOKEN`, `MISE_FORGEJO_TOKEN`, and the other
-token variables are described in
-[GitHub, GitLab, and Forgejo tokens](/dev-tools/github-tokens.html).
+`MISE_GITHUB_TOKEN`、`MISE_GITLAB_TOKEN`、`MISE_FORGEJO_TOKEN` 和其他令牌变量的说明请参阅[GitHub、GitLab 和 Forgejo 令牌](/dev-tools/github-tokens.html)。
 
-### Settings for networking
+### 网络相关设置
 
-| Variable                | Setting                                                             |
+| 环境变量                | 对应设置                                                            |
 | ----------------------- | ------------------------------------------------------------------- |
 | `MISE_OFFLINE`          | [`offline`](/configuration/settings.html#offline)                   |
 | `MISE_PREFER_OFFLINE`   | [`prefer_offline`](/configuration/settings.html#prefer_offline)     |
 | `MISE_HTTP_TIMEOUT`     | [`http_timeout`](/configuration/settings.html#http_timeout)         |
 | `MISE_URL_REPLACEMENTS` | [`url_replacements`](/configuration/settings.html#url_replacements) |
 
-## Variables mise sets
+## mise 设置的变量
 
-mise also sets variables for the commands it runs, such as `MISE_ENV` and the
-`MISE_TASK_*` variables in tasks. See
-[Task environment](/tasks/running-tasks.html#task-environment) and
-[Hooks](/hooks.html).
+mise 也会为它运行的命令设置环境变量，例如 `MISE_ENV` 以及任务中的 `MISE_TASK_*` 变量。详见[任务环境](/tasks/running-tasks.html#task-environment)和[钩子](/hooks.html)。

@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Windows 应用，通过 Scoop 安装、固定版本和移除应用。"
 ---
 
-# Scoop apps (scoop)
+# Scoop 应用
 
 The `scoop` manager installs, pins, and removes Windows apps with
 [Scoop](https://scoop.sh) in your user scope.

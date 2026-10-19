@@ -4,11 +4,7 @@ description: "无论是否已安装 Homebrew，都可将 formula 安装到标准
 
 # Homebrew formula（brew）
 
-The `brew` manager installs [Homebrew](https://brew.sh) formulae into the
-standard Homebrew prefix. mise downloads and installs them itself, so Homebrew
-does not need to be installed, and an existing Homebrew installation sees and
-manages what mise installs. For apps and fonts, use
-[`brew-cask`](/bootstrap/packages/brew-cask.html).
+`brew` 管理器会将 [Homebrew](https://brew.sh) formula 安装到标准 Homebrew 前缀目录。mise 自行下载并安装 formula，因此无需预先安装 Homebrew；已有的 Homebrew 安装也能识别和管理 mise 安装的内容。应用程序和字体请使用 [`brew-cask`](/bootstrap/packages/brew-cask.html)。
 
 ```toml
 [bootstrap.packages]
@@ -22,32 +18,23 @@ mise bootstrap packages apply --manager brew --dry-run
 mise bootstrap packages apply --manager brew
 ```
 
-The dry run lists each formula it would install, dependencies first, and any
-sudo command needed to create the prefix. mise installs each formula's runtime
-dependencies with it.
+试运行会列出即将安装的每个 formula（依赖项优先），以及创建前缀目录所需的 sudo 命令。mise 会同时安装每个 formula 的运行时依赖项。
 
-## Supported platforms
+## 支持的平台
 
-| Platform               | Prefix                       |
+| 平台                    | 前缀目录                       |
 | ---------------------- | ---------------------------- |
 | macOS on Apple Silicon | `/opt/homebrew`              |
 | Linux x86_64           | `/home/linuxbrew/.linuxbrew` |
 | Linux arm64            | `/home/linuxbrew/.linuxbrew` |
 
-The `brew` manager is unavailable on Intel Macs, where its entries are skipped.
-[`brew-cask`](/bootstrap/packages/brew-cask.html#supported-platforms) does run
-there. Linux arm64 bottles exist for most, but not all, of homebrew/core; mise
-builds the rest [from source](#source-formulae).
+`brew` 管理器不支持 Intel Mac，这类平台会跳过对应条目。不过 [`brew-cask`](/bootstrap/packages/brew-cask.html#supported-platforms) 可以在 Intel Mac 上运行。homebrew/core 中的大多数 formula 都提供 Linux arm64 瓶装包，但并非全部；其余 formula 会由 mise [从源码构建](#source-formulae)。
 
-## The prefix and PATH {#the-prefix}
+## 前缀目录与 PATH {#the-prefix}
 
-If the prefix does not exist, mise creates it with Homebrew's standard layout,
-using sudo to create the directory and give it to your user. It then installs
-formulae as that user, so run mise as the user who should own the prefix.
+如果前缀目录不存在，mise 会按 Homebrew 的标准目录结构创建它，并使用 sudo 创建目录、将其所有权交给当前用户。之后 mise 会以该用户身份安装 formula，因此请使用应拥有此前缀目录的用户运行 mise。
 
-Linked commands go into `<prefix>/bin`. These packages get no mise shims, and
-mise does not change the current shell's `PATH`, so add the directory in your
-shell startup file:
+链接的命令会放在 `<prefix>/bin` 中。这些包不会生成 mise shim，而且 mise 不会修改当前 shell 的 `PATH`，因此请在 shell 启动文件中添加该目录：
 
 ::: code-group
 
@@ -68,52 +55,32 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
 PKG_CONFIG_PATH = "{{ system_brew_prefix }}/opt/mysql-client/lib/pkgconfig"
 ```
 
-## Formula names
+## Formula 名称
 
-Use the formula name as Homebrew spells it, such as `brew:jq` or
-`brew:openssl@3`. `brew:homebrew/core/jq` names the same formula. Formulae from
-other taps use their fully-qualified name; see
-[Third-party taps](#third-party-taps).
+请使用 Homebrew 中的 formula 名称，例如 `brew:jq` 或 `brew:openssl@3`。`brew:homebrew/core/jq` 指向相同的 formula。其他 tap 中的 formula 请使用完整名称，详见[第三方 tap](#third-party-taps)。
 
-An alias such as `postgres`, or the old name of a renamed formula, installs the
-canonical formula. Status cannot track the alias, so mise warns and prints the
-canonical name to use instead.
+使用 `postgres` 这样的别名或已重命名 formula 的旧名称时，mise 会安装其规范名称。状态无法跟踪别名，因此 mise 会发出警告并显示应改用的规范名称。
 
-## Version pins {#choose-a-formula-version}
+## 固定版本 {#choose-a-formula-version}
 
-Homebrew publishes bottles only for a formula's current version, so mise cannot
-install an older one. To stay on a major version, declare a versioned formula
-such as `"brew:postgresql@17" = "latest"`; the `@17` is part of the formula
-name. If you put a version in the value, such as `"brew:jq" = "1.7"`, status
-reports a `version mismatch` while another version is installed, and `apply`
-and `upgrade` skip the entry with a warning.
+Homebrew 只为 formula 的当前版本发布瓶装包，因此 mise 无法安装旧版本。若要固定到某个主版本，请声明带版本号的 formula，例如 `"brew:postgresql@17" = "latest"`；`@17` 是 formula 名称的一部分。如果在值中指定版本，例如 `"brew:jq" = "1.7"`，而已安装的是其他版本，状态就会报告 `version mismatch`，`apply` 和 `upgrade` 也会发出警告并跳过该条目。
 
-## Upgrade {#upgrades}
+## 升级 {#upgrades}
 
-`mise bootstrap packages upgrade --manager brew` installs the current bottle of
-each configured formula whose installed version differs from Homebrew's API,
-then repoints the links to it, as `brew upgrade` does.
+`mise bootstrap packages upgrade --manager brew` 会为每个已配置且安装版本与 Homebrew API 不一致的 formula 安装当前瓶装包，然后像 `brew upgrade` 一样将链接指向新版本。
 
-## Third-party taps
+## 第三方 tap
 
-Declare a formula from another tap with the fully-qualified name you would pass
-to Homebrew:
+要使用其他 tap 中的 formula，请像传给 Homebrew 一样使用完整名称：
 
 ```toml
 [bootstrap.packages]
 "brew:railwaycat/emacsmacport/emacs-mac" = "latest"
 ```
 
-mise reads the tap's published API metadata when it has some. Otherwise it
-reads the tap's Ruby definitions directly and builds those formulae
-[from source](#source-formulae). Casks from a tap without API metadata are read
-from the tap's Ruby definitions the same way and then installed as usual. A
-definition that uses a Homebrew feature mise does not implement fails with an
-error that names the feature.
+如果 tap 提供已发布的 API 元数据，mise 会读取这些数据；否则会直接读取 tap 中的 Ruby 定义，并[从源码构建](#source-formulae)相应的 formula。对于不提供 API 元数据的 tap，mise 也会以相同方式读取其中的 cask 定义，然后按常规方式安装。如果定义使用了 mise 尚未实现的 Homebrew 功能，安装会失败，并在错误信息中指出该功能。
 
-mise looks for the tap at `https://github.com/<owner>/homebrew-<tap>.git`. For a
-tap in a repository with another name, add its URL under
-`[bootstrap.brew.taps]`. Only GitHub taps are supported.
+mise 会在 `https://github.com/<owner>/homebrew-<tap>.git` 查找 tap。如果 tap 位于名称不同的仓库中，请在 `[bootstrap.brew.taps]` 下添加它的 URL。目前只支持 GitHub 上的 tap。
 
 ```toml
 [bootstrap.brew.taps]
@@ -124,11 +91,7 @@ tap in a repository with another name, add its URL under
 "brew-cask:acme/tools/widget-app" = "latest"
 ```
 
-[`mise bootstrap packages brew tap`](/cli/bootstrap/packages/brew/tap.html) and
-[`untap`](/cli/bootstrap/packages/brew/untap.html) edit
-`[bootstrap.brew.taps]` in your global config by default. Pass `--local` to
-write the project's `mise.toml`, or `--path` for another file. Neither command
-touches a Homebrew installation.
+[`mise bootstrap packages brew tap`](/cli/bootstrap/packages/brew/tap.html) 和 [`untap`](/cli/bootstrap/packages/brew/untap.html) 默认会编辑全局配置中的 `[bootstrap.brew.taps]`。传入 `--local` 可写入项目的 `mise.toml`，传入 `--path` 则可指定其他文件。这两条命令都不会修改 Homebrew 安装。
 
 ```sh
 mise bootstrap packages brew tap railwaycat/emacsmacport
@@ -136,18 +99,13 @@ mise bootstrap packages brew tap acme/tools https://github.com/acme/tools.git --
 mise bootstrap packages brew untap acme/tools
 ```
 
-## Keg-only formulae
+## 仅 keg formula
 
-Keg-only formulae, such as `openssl@3`, are not linked into `<prefix>/bin` or
-`<prefix>/lib`. Point compilers and build flags at `<prefix>/opt/<formula>`
-instead. As with Homebrew, a formula that is keg-only only because macOS
-already provides it, such as `curl`, is linked normally on Linux.
+仅 keg formula（例如 `openssl@3`）不会链接到 `<prefix>/bin` 或 `<prefix>/lib`。请改为将编译器和构建选项指向 `<prefix>/opt/<formula>`。与 Homebrew 一样，如果某个 formula 仅因 macOS 已提供该工具而被标为仅 keg（例如 `curl`），它在 Linux 上仍会正常链接。
 
-### Locate an installed formula
+### 查找已安装的 formula
 
-[`mise bootstrap packages where`](/cli/bootstrap/packages/where.html) prints a
-formula's `<prefix>/opt/<formula>` directory, which works for keg-only formulae
-too. Append `/bin` to use its commands:
+[`mise bootstrap packages where`](/cli/bootstrap/packages/where.html) 会输出 formula 的 `<prefix>/opt/<formula>` 目录，同样适用于仅 keg formula。添加 `/bin` 即可使用其中的命令：
 
 ```sh
 if package_root="$(mise bootstrap packages where brew:unzip)"; then
@@ -155,39 +113,21 @@ if package_root="$(mise bootstrap packages where brew:unzip)"; then
 fi
 ```
 
-The lookup works for formulae installed by mise or by Homebrew, with no
-declaration needed. The `opt` path follows later upgrades. A library-only
-formula has a root but may have no `bin` directory.
+无需额外声明，即可查询由 mise 或 Homebrew 安装的 formula。后续升级时，`opt` 路径仍会指向当前版本。只包含库文件的 formula 有根目录，但可能没有 `bin` 目录。
 
-Use the canonical formula name. `brew:owner/tap/unzip` and
-`brew:homebrew/core/unzip` both look up the installed `unzip`, without checking
-which tap it came from, and aliases are not resolved. `where` does not look up
-casks or packages from other managers.
+请使用规范的 formula 名称。`brew:owner/tap/unzip` 和 `brew:homebrew/core/unzip` 都会查询已安装的 `unzip`，不会检查它来自哪个 tap，也不会解析别名。`where` 不会查询 cask 或其他管理器安装的包。
 
-If the formula is not installed or its `opt` link is broken, `where` prints
-nothing on stdout, explains the problem on stderr, and exits nonzero. Install
-it with `mise bootstrap packages apply brew:unzip`. `where` reads only the
-prefix and ignores mise config files, so it works even when a `mise.toml` is
-untrusted or invalid.
+如果 formula 尚未安装或其 `opt` 链接已损坏，`where` 不会向 stdout 输出内容，而会在 stderr 解释问题并以非零状态退出。请运行 `mise bootstrap packages apply brew:unzip` 安装它。`where` 只读取前缀目录，不读取 mise 配置文件，因此即使 `mise.toml` 不受信任或无效也能使用。
 
-## Use alongside Homebrew {#coexistence-with-a-real-homebrew}
+## 与 Homebrew 共存 {#coexistence-with-a-real-homebrew}
 
-mise installs bottles into the Cellar the way Homebrew does and writes
-Homebrew-compatible receipts, so `brew list`, `brew upgrade`, and
-`brew uninstall` work on formulae mise installed. In the other direction, mise
-reads the prefix directly, so formulae Homebrew installed count as installed.
+mise 会像 Homebrew 一样将瓶装包安装到 Cellar，并写入兼容 Homebrew 的收据，因此 `brew list`、`brew upgrade` 和 `brew uninstall` 都可以管理 mise 安装的 formula。反过来，mise 会直接读取前缀目录，因此 Homebrew 安装的 formula 也会被视为已安装。
 
-mise never overwrites files in the prefix that it did not create. A link
-conflict fails with a list of the conflicting files. If a configured formula's
-`opt` link or linked-keg record is missing, status reports `needs repair`, and
-`apply` restores the link without reinstalling the formula.
+mise 不会覆盖它未创建的前缀目录文件。遇到链接冲突时，操作会失败并列出冲突文件。如果已配置 formula 的 `opt` 链接或 linked-keg 记录缺失，状态会报告 `needs repair`，`apply` 则会恢复链接而不重新安装 formula。
 
-## Import and prune {#importing-and-pruning}
+## 导入与清理 {#importing-and-pruning}
 
-[`mise bootstrap packages import --manager brew`](/cli/bootstrap/packages/import.html)
-records installed formulae in `[bootstrap.packages]`, much like
-[`brew bundle dump`](https://docs.brew.sh/Brew-Bundle-and-Brewfile). By default
-it imports formulae installed on request; `--all` adds their dependencies:
+[`mise bootstrap packages import --manager brew`](/cli/bootstrap/packages/import.html) 会将已安装的 formula 记录到 `[bootstrap.packages]`，类似于 [`brew bundle dump`](https://docs.brew.sh/Brew-Bundle-and-Brewfile)。默认只导入用户主动安装的 formula；传入 `--all` 还会包含其依赖项：
 
 ```toml
 [bootstrap.packages]
@@ -195,66 +135,36 @@ it imports formulae installed on request; `--all` adds their dependencies:
 "brew:postgresql@17" = "latest"
 ```
 
-Formulae from other taps are written with their fully-qualified names, and mise
-adds a `[bootstrap.brew.taps]` entry for each tap. It uses the URL already in
-your config, or else `https://github.com/<owner>/homebrew-<tap>.git`.
+其他 tap 中的 formula 会以完整名称写入，mise 也会为每个 tap 添加 `[bootstrap.brew.taps]` 条目。它会使用配置中已有的 URL；如果没有，则使用 `https://github.com/<owner>/homebrew-<tap>.git`。
 
-[`mise bootstrap packages prune --manager brew`](/cli/bootstrap/packages/prune.html)
-is the explicit cleanup, similar to `brew bundle cleanup`. It removes linked
-formulae that are neither declared nor needed by a declared formula or cask,
-in the current configuration or any trusted config file mise tracks, including
-formulae Homebrew installed. For each, it removes the keg, its `opt` link, and
-its links in the prefix:
+[`mise bootstrap packages prune --manager brew`](/cli/bootstrap/packages/prune.html) 用于显式清理，类似于 `brew bundle cleanup`。它会移除当前配置或 mise 跟踪的任何可信配置文件中未声明、且并非已声明 formula 或 cask 所依赖的已链接 formula，其中也包括由 Homebrew 安装的 formula。对于每个移除项，它都会删除 keg、`opt` 链接以及前缀目录中的链接：
 
 ```sh
 mise bootstrap packages prune --manager brew --dry-run
 mise bootstrap packages prune --manager brew
 ```
 
-Deleting a `brew:` entry does not uninstall the formula until you prune.
+删除 `brew:` 条目不会立即卸载 formula；只有运行 prune 后才会卸载。
 
-## Formulae without a bottle {#source-formulae}
+## 未提供瓶装包的 formula {#source-formulae}
 
-mise builds a formula from source when no bottle exists for your platform. It
-installs a Ruby through mise (or uses the one you configured) to evaluate the
-formula, downloads the formula and its source archive pinned to the checksums
-in Homebrew's API, installs the build dependencies as bottles, and then runs
-the formula's install steps against the prefix. The result gets a
-Homebrew-compatible receipt, as a bottle does.
+如果当前平台没有可用的瓶装包，mise 会从源码构建 formula。它会通过 mise 安装 Ruby（或使用你配置的版本）来解析 formula，根据 Homebrew API 中的校验和下载 formula 定义及源码归档，将构建依赖作为瓶装包安装，然后在前缀目录中执行 formula 的安装步骤。最终会像瓶装包一样生成兼容 Homebrew 的收据。
 
-Source builds need Xcode Command Line Tools on macOS, or gcc and make on Linux.
-mise implements the commonly used parts of Homebrew's formula language, such as
-configure, CMake, and Meson builds, resources, and patches. A formula that uses
-something else, such as `virtualenv_install_with_resources` or a VCS download,
-fails with a `formula uses ...` error instead of building it incorrectly.
+从源码构建需要 macOS 上的 Xcode Command Line Tools，或 Linux 上的 gcc 和 make。mise 实现了 Homebrew formula 语言中常用的功能，例如 configure、CMake 和 Meson 构建、resources 及 patches。若 formula 使用了其他功能（例如 `virtualenv_install_with_resources` 或 VCS 下载），mise 会以 `formula uses ...` 错误中止，而不会错误构建。
 
-## How mise installs a formula {#how-pouring-works}
+## mise 如何安装 formula {#how-pouring-works}
 
-For each formula, dependencies first, mise downloads the bottle from ghcr.io
-and checks its sha256 against Homebrew's API, unpacks it into the Cellar,
-rewrites Homebrew's placeholder paths, re-signs changed binaries on macOS,
-writes a Homebrew-compatible receipt, and links the keg into the prefix.
-Keg-only formulae get only the `opt` link. mise never runs `brew`.
+对每个 formula（先处理依赖项），mise 会从 ghcr.io 下载瓶装包，并将其 sha256 与 Homebrew API 中的值进行校验；随后解压到 Cellar、替换 Homebrew 占位路径、在 macOS 上重新签署已修改的二进制文件、写入兼容 Homebrew 的收据，并将 keg 链接到前缀目录。仅 keg formula 只会创建 `opt` 链接。mise 从不运行 `brew`。
 
-Like `brew install`, mise copies the `etc` and `var` files a bottle ships into
-the prefix. A file you already have there is never overwritten: the bottle's
-copy is written beside it as `<file>.default`. It then runs the formula's
-declarative `post_install_steps` from the Homebrew API, which is how
-`ca-certificates` builds `etc/ca-certificates/cert.pem` and `openssl@4` links
-its `cert.pem` to it. mise implements the generic step types (`symlink`,
-`copy`, `move`, `remove`, `mkdir_p`, `touch`, `write`, `set_permissions` and
-`run`). It skips a step for a tool-specific type, such as
-`compile_gsettings_schemas`, and warns; run `brew postinstall <formula>` if you
-have Homebrew and the formula needs it. A failing step is a warning, not an
-install failure, as in Homebrew.
+与 `brew install` 一样，mise 会将瓶装包附带的 `etc` 和 `var` 文件复制到前缀目录中。已有文件绝不会被覆盖；瓶装包中的副本会以 `<file>.default` 名称写在旁边。之后，mise 会执行 Homebrew API 中声明式的 `post_install_steps`，例如 `ca-certificates` 会生成 `etc/ca-certificates/cert.pem`，`openssl@4` 会将自己的 `cert.pem` 链接到该文件。mise 实现了通用步骤类型（`symlink`、`copy`、`move`、`remove`、`mkdir_p`、`touch`、`write`、`set_permissions` 和 `run`）。遇到工具专用步骤类型（例如 `compile_gsettings_schemas`）时，mise 会跳过并发出警告；如果已安装 Homebrew 且 formula 需要该步骤，请运行 `brew postinstall <formula>`。与 Homebrew 一样，步骤失败只会产生警告，不会导致安装失败。
 
-## Troubleshooting
+## 故障排查
 
-| Symptom                                   | What to do                                                                                                                |
+| 现象                                       | 处理方法                                                                                                                   |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Link conflict                             | Find out which program owns each listed file before you move or delete it. Running `apply` again does not overwrite them. |
-| `formula uses ...` or unsupported feature | mise cannot build this formula. Install it with Homebrew, or remove the entry.                                            |
-| Installed, but the command is not found   | Check that `<prefix>/bin` is on `PATH`, and whether the formula is [keg-only](#keg-only-formulae).                        |
-| `needs repair` in status                  | Run `mise bootstrap packages apply` to restore the formula's links.                                                       |
+| 链接冲突                                   | 移动或删除列出的文件前，请先确认每个文件由哪个程序管理。再次运行 `apply` 不会覆盖这些文件。                                    |
+| `formula uses ...` 或不支持的功能          | mise 无法构建此 formula。请使用 Homebrew 安装，或移除此条目。                                                              |
+| 已安装，但找不到命令                      | 确认 `<prefix>/bin` 已加入 `PATH`，并检查该 formula 是否为[仅 keg](#keg-only-formulae)。                                    |
+| 状态显示 `needs repair`                   | 运行 `mise bootstrap packages apply` 恢复 formula 的链接。                                                               |
 
-mise does not implement `brew services`.
+mise 尚未实现 `brew services`。

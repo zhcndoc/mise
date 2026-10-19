@@ -5,26 +5,18 @@ socialDescription: "在原处跟踪 dotfiles，或从仓库以链接、副本和
 
 # Dotfiles
 
-mise saves the history of the configuration files you edit in place, or
-deploys them from a dotfiles repository as links, copies, and templates. The
-commands are under [`mise dotfiles`](/cli/dotfiles.html), which these pages
-shorten to its alias `mise dot`; `mise bootstrap dotfiles` runs the same
-commands. Dotfiles work on their own, with or without
-[`mise bootstrap`](/bootstrap.html).
+mise 会保存你原地编辑的配置文件历史，也可以将 dotfiles 仓库中的文件以链接、副本或模板形式部署。相关命令位于 [`mise dotfiles`](/cli/dotfiles.html) 下，本组文档中简写为其别名 `mise dot`；`mise bootstrap dotfiles` 会运行相同命令。Dotfiles 功能可以独立使用，也可以与 [`mise bootstrap`](/bootstrap.html) 搭配使用。
 
-## Recommended setup {#recommended-setup}
+## 推荐配置 {#recommended-setup}
 
-If you are not sure where to start, track your files in place, let the watcher
-save every edit, and share them through a private Git repository. Add the
-watcher to `~/.config/mise/config.toml`:
+如果不确定从何开始，可以先原地跟踪文件，让监视器自动保存每次编辑，再通过私有 Git 仓库共享文件。将监视器添加到 `~/.config/mise/config.toml`：
 
 ```toml
 [bootstrap.services.mise-history]
 builtin = "history-watch"
 ```
 
-Then track your files and your mise configuration, start the watcher, and
-connect the repository:
+然后跟踪文件和 mise 配置，启动监视器，并关联仓库：
 
 ```sh
 mise dot track ~/.zshrc ~/.config/nvim ~/.config/mise/config.toml
@@ -32,49 +24,34 @@ mise bootstrap services apply
 mise dot origin set https://github.com/you/dotfiles.git --sync sync
 ```
 
-On another machine, `mise bootstrap --adopt you/dotfiles` restores them.
-[Set up a machine](/bootstrap/setup.html) walks through each step. The rest of
-these pages cover the other approaches and every option; you do not need them
-to get started.
+在另一台机器上运行 `mise bootstrap --adopt you/dotfiles` 即可还原这些文件。[配置新机器](/bootstrap/setup.html)介绍了完整步骤。本组文档的其他页面会讲解更多方案和全部选项；开始使用并不需要先阅读它们。
 
-## Choose an approach {#choose-an-approach}
+## 选择方案 {#choose-an-approach}
 
-Tracking leaves each file where it is, as a regular file you keep editing, and
-saves its versions in a local Git repository that you can roll back and share
-between machines. Deploying keeps the files in a source directory you
-maintain, such as a dotfiles repository, and `mise dot apply` makes the live
-files match it. You can combine the two and track a file that mise deploys.
+跟踪会将文件留在原处，作为可继续编辑的普通文件，并将其版本保存在本地 Git 仓库中，供你回滚或在多台机器间共享。部署则将文件保存在你维护的源目录中（例如 dotfiles 仓库），并通过 `mise dot apply` 使实际文件与源目录保持一致。两种方式可以结合使用，即跟踪由 mise 部署的文件。
 
-| You want to                                                 | Use                                                         |
+| 需求                                                        | 方案                                                        |
 | ----------------------------------------------------------- | ----------------------------------------------------------- |
-| Keep editing a file where it is, and undo or share changes  | [`mode = "track"`](/dotfiles/history.html)                  |
-| Keep files in a repository and link them into place         | [`symlink` or `symlink-each`](/dotfiles/managed.html#modes) |
-| Give an application a regular file that it can also rewrite | [`copy`](/dotfiles/managed.html#modes)                      |
-| Generate a file that differs per machine                    | [`template`](/dotfiles/managed.html#templates)              |
-| Deploy a whole tree, and choose parts of it per machine     | [Groups](/dotfiles/groups.html)                             |
-| Own a few keys in a file that an application also writes    | [`merge = true`](/dotfiles/edits.html#merge)                |
-| Add a line or block to a file you do not otherwise manage   | [`line` or `block`](/dotfiles/edits.html)                   |
-| Remove an old file from every machine                       | [`mode = "absent"`](/dotfiles/managed.html#absent)          |
+| 原地编辑文件，并撤销或共享更改                                | [`mode = "track"`](/dotfiles/history.html)                  |
+| 在仓库中维护文件并链接到目标位置                              | [`symlink` 或 `symlink-each`](/dotfiles/managed.html#modes) |
+| 为应用提供也可由其重写的普通文件                              | [`copy`](/dotfiles/managed.html#modes)                      |
+| 生成因机器而异的文件                                          | [`template`](/dotfiles/managed.html#templates)              |
+| 部署整个目录树，并按机器选择其中内容                          | [组](/dotfiles/groups.html)                                  |
+| 管理应用也会写入的文件中的少数几个键                          | [`merge = true`](/dotfiles/edits.html#merge)                |
+| 向其他方式不管理的文件添加行或代码块                          | [`line` 或 `block`](/dotfiles/edits.html)                  |
+| 从所有机器上移除旧文件                                        | [`mode = "absent"`](/dotfiles/managed.html#absent)          |
 
-## Track a file in place {#tracking-files-in-place}
+## 原地跟踪文件 {#tracking-files-in-place}
 
 ```sh
 mise dot track ~/.zshrc
 ```
 
-mise leaves the file where it is, saves its current contents as a checkpoint,
-and adds `"~/.zshrc" = { mode = "track" }` to your global config
-(`~/.config/mise/config.toml`). Run `mise dot save` after you edit it, or
-install the [watcher](/dotfiles/history.html#automatic-saves) to save every
-edit automatically. [Dotfiles history](/dotfiles/history.html) covers
-comparing and rolling back versions, and
-[Sync across machines](/dotfiles/sync.html) shares them through a private Git
-repository. [Set up a machine](/bootstrap/setup.html) walks through the whole
-flow on two machines.
+mise 会将文件留在原处，将当前内容保存为检查点，并在全局配置（`~/.config/mise/config.toml`）中添加 `"~/.zshrc" = { mode = "track" }`。编辑后运行 `mise dot save`，或安装[监视器](/dotfiles/history.html#automatic-saves)以自动保存每次编辑。[Dotfiles 历史记录](/dotfiles/history.html)介绍如何比较和回滚版本，[跨机器同步](/dotfiles/sync.html)介绍如何通过私有 Git 仓库共享文件。[配置新机器](/bootstrap/setup.html)会以两台机器为例介绍完整流程。
 
-## Deploy from a repository {#deploy-from-a-repository}
+## 从仓库部署 {#deploy-from-a-repository}
 
-Suppose your dotfiles live in a Git repository:
+假设你的 dotfiles 位于一个 Git 仓库中：
 
 ```text
 ~/src/dotfiles/
@@ -83,7 +60,7 @@ Suppose your dotfiles live in a Git repository:
 └── nvim/
 ```
 
-Declare each target and its source in the repository's `mise.toml`:
+在仓库的 `mise.toml` 中声明每个目标及其来源：
 
 ```toml
 # ~/src/dotfiles/mise.toml
@@ -92,7 +69,7 @@ Declare each target and its source in the repository's `mise.toml`:
 "~/.config/nvim" = { source = "nvim" }   # a symlink, the default mode
 ```
 
-Trust the file, preview, apply, and check the result:
+信任该文件，预览并应用配置，然后检查结果：
 
 ```sh
 cd ~/src/dotfiles
@@ -102,92 +79,54 @@ mise dot apply
 mise dot status
 ```
 
-mise copies `git/config` to `~/.gitconfig` and links `~/.config/nvim` to the
-`nvim` directory, and `status` reports both as `applied`. Relative sources
-start from the directory of the config file that declares them. To change a
-file later, edit its source and run `mise dot apply` again.
+mise 会将 `git/config` 复制到 `~/.gitconfig`，并将 `~/.config/nvim` 链接到 `nvim` 目录；`status` 会将两者都报告为 `applied`。相对源路径以声明它们的配置文件所在目录为基准。之后若要修改文件，请编辑其源文件并再次运行 `mise dot apply`。
 
-A repository's `mise.toml` is project config. mise reads its `[dotfiles]`
-only after you trust it, and only when it runs inside that directory, or
-with `mise -C ~/src/dotfiles dot apply` from anywhere else.
+仓库中的 `mise.toml` 属于项目配置。只有在信任该配置后，mise 才会读取其中的 `[dotfiles]`；并且需要在该目录中运行，或在其他位置运行 `mise -C ~/src/dotfiles dot apply`。
 
-To deploy the whole repository into your home directory, one entry can walk
-it:
+若要将整个仓库部署到主目录中，可以用一个条目遍历仓库：
 
 ```toml
 [dotfiles]
 "~" = { source = ".", mode = "symlink-each", exclude = ["mise.toml", "*.md", ".git"] }
 ```
 
-For a GNU Stow layout, with one directory per application, use
-[groups](/dotfiles/groups.html). To start from files you already have,
-[`mise dot add`](/dotfiles/managed.html#capturing-changes) moves each one into
-your dotfiles directory and links it back. [Managed files](/dotfiles/managed.html)
-covers modes, templates, permissions, and conflicts.
+若采用每个应用一个目录的 GNU Stow 布局，请使用[组](/dotfiles/groups.html)。若要从已有文件开始，[`mise dot add`](/dotfiles/managed.html#capturing-changes) 会将文件移入 dotfiles 目录，再链接回原位置。[托管文件](/dotfiles/managed.html)介绍了模式、模板、权限和冲突。
 
-## Where to declare dotfiles {#where-to-declare-dotfiles}
+## 在哪里声明 dotfiles {#where-to-declare-dotfiles}
 
-Put `[dotfiles]` in one of these places:
+请在以下位置之一放置 `[dotfiles]`：
 
-- Your global config, `~/.config/mise/config.toml`, so that it applies from
-  any directory. `mise dot track` writes its entries here, and so does
-  `mise dot add`, unless
-  [`write_targets.dotfiles`](/configuration/settings.html#write_targets.dotfiles)
-  names another global file.
-- A [`conf.d` folder](/configuration.html#conf-d-folders) next to the sources
-  it uses. The folder can be a symlink into your dotfiles repository.
-- The `mise.toml` of your dotfiles repository, as above.
+- 全局配置 `~/.config/mise/config.toml`，这样从任何目录运行都会生效。`mise dot track` 和 `mise dot add` 默认都会将条目写入此处，除非 [`write_targets.dotfiles`](/configuration/settings.html#write_targets.dotfiles) 指定了其他全局文件。
+- 与所用源文件位于同一位置的 [`conf.d` 文件夹](/configuration.html#conf-d-folders)。该文件夹可以是指向 dotfiles 仓库的符号链接。
+- 如上例所示，放在 dotfiles 仓库的 `mise.toml` 中。
 
-Entries merge across these files like the rest of the
-[config hierarchy](/configuration.html#configuration-hierarchy): a more local
-file replaces an entry with the same target. Tracking entries and the
-`[history]` table are read only from global and system config. To give some
-entries to one machine or operating system, put them in `config.local.toml`,
-or in a platform file such as `config.macos.toml` with the `auto_env` setting
-on; see [Platform environments](/configuration/environments.html#platform-environments).
+这些文件中的条目与其他配置一样，按照[配置层级](/configuration.html#configuration-hierarchy)进行合并：更靠近当前目录的文件会替换目标相同的条目。跟踪条目和 `[history]` 表只会从全局配置和系统配置中读取。若要让某些条目只用于一台机器或一种操作系统，请将它们放在 `config.local.toml` 中，或放在启用了 `auto_env` 的平台配置文件中，例如 `config.macos.toml`；详见[平台环境](/configuration/environments.html#platform-environments)。
 
-## With mise bootstrap {#with-mise-bootstrap}
+## 与 mise bootstrap 搭配使用 {#with-mise-bootstrap}
 
-[`mise bootstrap`](/bootstrap.html) applies `[dotfiles]` as one step of a full
-machine setup, after it clones [repositories](/bootstrap/repos.html), so a
-source can come from a repository it just cloned; see the
-[run order](/bootstrap.html#how-it-runs). `mise dot apply` runs the same step
-on its own. Both run your `pre-dotfiles` and `post-dotfiles`
-[hooks](/bootstrap.html#hooks) before and after they write (`--dry-run` prints
-the hooks instead), and the [`[history.reload]` commands](/dotfiles/history.html#reload-an-application-after-restoring-files)
-that match the files they wrote. `mise dot add` and `mise dot edit --apply`
-do not run these hooks.
+[`mise bootstrap`](/bootstrap.html) 会将 `[dotfiles]` 作为整机初始化的一个步骤应用，并在克隆[仓库](/bootstrap/repos.html)后执行，因此源文件可以来自刚刚克隆的仓库；详见[执行顺序](/bootstrap.html#how-it-runs)。单独运行 `mise dot apply` 也会执行此步骤。两种方式都会在写入前后运行 `pre-dotfiles` 和 `post-dotfiles` [钩子](/bootstrap.html#hooks)（使用 `--dry-run` 时只会打印钩子），并运行与写入文件相匹配的 [`[history.reload]` 命令](/dotfiles/history.html#reload-an-application-after-restoring-files)。`mise dot add` 和 `mise dot edit --apply` 不会运行这些钩子。
 
-When an entry deploys mise's own configuration, such as a copy of
-`~/.config/mise/config.toml` from a checkout, `mise dot apply` writes it first
-and reads the configuration again before it plans the other entries. A rule the
-new file adds takes effect in the same run, and `--dry-run` plans against the
-file it would write.
+当条目会部署 mise 自身的配置（例如将检出目录中的 `~/.config/mise/config.toml` 副本部署到目标位置）时，`mise dot apply` 会先写入该文件，再重新读取配置并规划其他条目。新文件添加的规则会在同一次运行中生效，且 `--dry-run` 会根据计划写入的文件进行规划。
 
-## Commands {#commands}
+## 命令 {#commands}
 
-| Task                          | Commands                                                                                                                                         |
+| 任务                          | 命令                                                                                                                                             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Preview and apply             | [`mise dot diff`](/cli/dotfiles/diff.html), [`mise dot apply`](/cli/dotfiles/apply.html)                                                         |
-| Check state                   | [`mise dot status`](/cli/dotfiles/status.html)                                                                                                   |
-| Adopt a file or capture edits | [`mise dot add`](/cli/dotfiles/add.html), [`mise dot edit`](/cli/dotfiles/edit.html)                                                             |
-| Remove deployed files         | [`mise dot unapply`](/cli/dotfiles/unapply.html)                                                                                                 |
-| Track and save                | [`mise dot track`](/cli/dotfiles/track.html), [`mise dot save`](/cli/dotfiles/save.html), [`mise dot untrack`](/cli/dotfiles/untrack.html)       |
-| Browse and restore            | [`mise dot history`](/cli/dotfiles/history.html), [`mise dot rollback`](/cli/dotfiles/rollback.html), [`mise dot undo`](/cli/dotfiles/undo.html) |
-| Share between machines        | [`mise dot origin`](/cli/dotfiles/origin.html), [`mise dot sync`](/cli/dotfiles/sync.html), [`mise dot pull`](/cli/dotfiles/pull.html)           |
+| 预览并应用                    | [`mise dot diff`](/cli/dotfiles/diff.html)、[`mise dot apply`](/cli/dotfiles/apply.html)                                                        |
+| 检查状态                      | [`mise dot status`](/cli/dotfiles/status.html)                                                                                                   |
+| 收录文件或记录编辑            | [`mise dot add`](/cli/dotfiles/add.html)、[`mise dot edit`](/cli/dotfiles/edit.html)                                                             |
+| 移除已部署文件                | [`mise dot unapply`](/cli/dotfiles/unapply.html)                                                                                                |
+| 跟踪并保存                    | [`mise dot track`](/cli/dotfiles/track.html)、[`mise dot save`](/cli/dotfiles/save.html)、[`mise dot untrack`](/cli/dotfiles/untrack.html)      |
+| 浏览并还原                    | [`mise dot history`](/cli/dotfiles/history.html)、[`mise dot rollback`](/cli/dotfiles/rollback.html)、[`mise dot undo`](/cli/dotfiles/undo.html) |
+| 在机器间共享                  | [`mise dot origin`](/cli/dotfiles/origin.html)、[`mise dot sync`](/cli/dotfiles/sync.html)、[`mise dot pull`](/cli/dotfiles/pull.html)          |
 
-See [`mise dotfiles`](/cli/dotfiles.html) for every subcommand and flag.
+所有子命令和标志请参阅 [`mise dotfiles`](/cli/dotfiles.html)。
 
-## Next steps {#next-steps}
+## 后续阅读 {#next-steps}
 
-- [Managed files](/dotfiles/managed.html): entries, modes, templates,
-  permissions, and conflicts.
-- [Groups](/dotfiles/groups.html): deploy directory trees and choose them per
-  machine.
-- [Edit part of a file](/dotfiles/edits.html): blocks, lines, and merged keys.
-- [Dotfiles history](/dotfiles/history.html): save, compare, and roll back
-  tracked files.
-- [Dotfiles reference](/dotfiles/reference.html): every key, pattern rule, and
-  status state.
-- [Dotfiles That Save Themselves](https://jdx.dev/posts/2026-09-07-dotfiles-that-save-themselves/)
-  walks through tracking and syncing a real setup.
+- [托管文件](/dotfiles/managed.html)：条目、模式、模板、权限和冲突。
+- [组](/dotfiles/groups.html)：部署目录树并按机器选择。
+- [编辑文件片段](/dotfiles/edits.html)：代码块、行和合并键。
+- [Dotfiles 历史记录](/dotfiles/history.html)：保存、比较并回滚跟踪的文件。
+- [Dotfiles 参考](/dotfiles/reference.html)：所有键、模式规则和状态说明。
+- [让 Dotfiles 自动保存](https://jdx.dev/posts/2026-09-07-dotfiles-that-save-themselves/)：通过实际配置介绍文件跟踪与同步。

@@ -3,465 +3,264 @@ description: "查阅所有 [dotfiles] 配置项、各模式支持的字段、变
 socialDescription: "查阅所有 [dotfiles] 配置项、匹配规则、状态和状态文件。"
 ---
 
-# Dotfiles reference
+# Dotfiles 配置参考
 
-Look up `[dotfiles]` entry keys, the keys each mode accepts, variant
-selectors, pattern syntax, status states, and the state that mise keeps for
-dotfiles and their history. The keys of `[dotfile_groups]` are in
-[Groups](/dotfiles/groups.html#group-keys), and the `[history]` table and
-history settings are in the
-[history configuration reference](/dotfiles/history.html#configuration-reference).
+本页列出 `[dotfiles]` 条目的键、各模式接受的键、变体选择器、匹配模式语法、状态值，以及 mise 为 dotfiles 和其历史记录保存的状态。`[dotfile_groups]` 的键见[分组](/dotfiles/groups.html#group-keys)；`[history]` 表和历史设置见[历史配置参考](/dotfiles/history.html#configuration-reference)。
 
-## Entry keys {#entry-keys}
+## 条目键 {#entry-keys}
 
-A whole-file entry is keyed by its target path, absolute or starting with
-`~/`. A string value is shorthand for `{ source = "<value>" }`.
+整文件条目以目标路径为键，路径必须是绝对路径或以 `~/` 开头。字符串值是 `{ source = "<value>" }` 的简写。
 
-| Key               | Type           | Meaning                                                                                                                                                                                                                   |
+| 键                | 类型           | 说明                                                                                                                                                                                                                      |
 | ----------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | path           | The file or directory to deploy. Relative paths start at the declaring config file's directory. Defaults to the target's path under [`dotfiles.root`](/configuration/settings.html#dotfiles.root).                        |
-| `mode`            | string         | `symlink`, `symlink-each`, `copy`, `template`, `absent`, `track`, or `track-local`. Defaults to [`dotfiles.default_mode`](/configuration/settings.html#dotfiles.default_mode). See [Modes](/dotfiles/managed.html#modes). |
-| `content`         | string         | The whole file, written inline. See [Inline content](/dotfiles/managed.html#inline-content).                                                                                                                              |
-| `permissions`     | octal string   | Permissions for the target, such as `"0600"`. On its own, manages an existing path's permissions only. See [Permissions](/dotfiles/managed.html#permissions).                                                             |
-| `exclude`         | list of globs  | Paths to skip in a walked source directory or a tracked directory. See [Pattern syntax](#patterns).                                                                                                                       |
-| `manifest`        | `"git"`        | Deploy only files in the source repository's Git index. See [Deploy only files committed to Git](/dotfiles/managed.html#git-tracked-directories).                                                                         |
-| `dot_prefix`      | boolean        | Deploy source names `dot-<name>` as `.<name>`. See [Visible source names](/dotfiles/managed.html#dot-prefix).                                                                                                             |
-| `relative`        | boolean        | `symlink` and `symlink-each`: link by a relative path. Overrides [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks).                                                                 |
-| `remove_empty`    | boolean        | Remove the target when the template renders empty. See [Remove the target when a template renders empty](/dotfiles/managed.html#remove-empty).                                                                            |
-| `variants`        | list of tables | Per-machine selection: a target per machine for deployed entries, separate contents for tracked ones. See [Variant selectors](#variant-selectors).                                                                        |
-| `enabled`         | boolean        | `false` turns off an entry inherited from another config file.                                                                                                                                                            |
-| `include`         | list of globs  | Track only: the files a tracked directory saves. See [Select files in a directory](/dotfiles/history.html#choose-which-files-a-directory-saves).                                                                          |
-| `autosave`        | boolean        | Track only: `false` saves the path only on `mise dot save <path>`. See [Save some files only on request](/dotfiles/history.html#save-on-request).                                                                         |
-| `encrypt`         | boolean        | Track only: encrypt contents before saving them to Git. See [Encrypted files](/dotfiles/encryption.html).                                                                                                                 |
-| `allow_plaintext` | boolean        | Track only: save a credential-named file that you track directly in plaintext. See [Credential filtering](/dotfiles/history.html#credential-filtering-and-omissions).                                                     |
+| `source`          | 路径           | 要部署的文件或目录。相对路径以声明该条目的配置文件所在目录为起点。默认使用目标路径在 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下对应的路径。                                                     |
+| `mode`            | 字符串         | `symlink`、`symlink-each`、`copy`、`template`、`absent`、`track` 或 `track-local`。默认值为 [`dotfiles.default_mode`](/configuration/settings.html#dotfiles.default_mode)。详见[模式](/dotfiles/managed.html#modes)。       |
+| `content`         | 字符串         | 内联写入的整个文件内容。详见[内联内容](/dotfiles/managed.html#inline-content)。                                                                                                                                             |
+| `permissions`     | 八进制字符串   | 目标权限，例如 `"0600"`。单独使用时，只管理现有路径的权限。详见[权限](/dotfiles/managed.html#permissions)。                                                                                                            |
+| `exclude`         | glob 列表      | 遍历源目录或跟踪目录时要跳过的路径。详见[匹配模式语法](#patterns)。                                                                                                                                                        |
+| `manifest`        | `"git"`        | 只部署源仓库 Git 索引中的文件。详见[只部署已提交到 Git 的文件](/dotfiles/managed.html#git-tracked-directories)。                                                                                                          |
+| `dot_prefix`      | 布尔值         | 将源名称 `dot-<name>` 部署为 `.<name>`。详见[可见的源名称](/dotfiles/managed.html#dot-prefix)。                                                                                                                           |
+| `relative`        | 布尔值         | `symlink` 和 `symlink-each`：使用相对路径创建链接。此设置会覆盖 [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks)。                                                               |
+| `remove_empty`    | 布尔值         | 模板渲染结果为空时移除目标。详见[模板渲染为空时移除目标](/dotfiles/managed.html#remove-empty)。                                                                                                                            |
+| `variants`        | 表格列表       | 按机器进行选择：部署条目可为每台机器指定目标路径，跟踪条目可保存不同内容。详见[变体选择器](#variant-selectors)。                                                                                                         |
+| `enabled`         | 布尔值         | 设为 `false` 可关闭从其他配置文件继承的条目。                                                                                                                                                                              |
+| `include`         | glob 列表      | 仅用于跟踪：指定跟踪目录要保存的文件。详见[选择目录中的文件](/dotfiles/history.html#choose-which-files-a-directory-saves)。                                                                                                |
+| `autosave`        | 布尔值         | 仅用于跟踪：设为 `false` 后，只能通过 `mise dot save <path>` 保存该路径。详见[仅按需保存文件](/dotfiles/history.html#save-on-request)。                                                                                    |
+| `encrypt`         | 布尔值         | 仅用于跟踪：保存到 Git 前加密内容。详见[加密文件](/dotfiles/encryption.html)。                                                                                                                                              |
+| `allow_plaintext` | 布尔值         | 仅用于跟踪：直接跟踪凭据名称文件时，允许以明文保存。详见[凭据筛选](/dotfiles/history.html#credential-filtering-and-omissions)。                                                                                             |
 
-A `[dotfiles]` entry takes no `group` key; declare a group's entries under
-[`[dotfile_groups.<name>.entries]`](/dotfiles/groups.html#group-entries).
+`[dotfiles]` 条目不接受 `group` 键；分组条目应声明在 [`[dotfile_groups.<name>.entries]`](/dotfiles/groups.html#group-entries) 下。
 
-## Edit keys {#edit-keys}
+## 编辑键 {#edit-keys}
 
-An edit entry is keyed by the target path followed by `/<id>`, such as
-`"~/.zshrc/aliases"`. Ids can contain letters, digits, `_`, `-`, and `.`. See
-[Edit part of a file](/dotfiles/edits.html).
+编辑条目以目标路径后接 `/<id>` 为键，例如 `"~/.zshrc/aliases"`。ID 可包含字母、数字、`_`、`-` 和 `.`。详见[编辑文件的一部分](/dotfiles/edits.html)。
 
-| Key        | Type                      | Meaning                                                                                                                                                                                                           |
+| 键         | 类型                      | 说明                                                                                                                                                                                                              |
 | ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `block`    | string                    | Inline content to keep between marker comments.                                                                                                                                                                   |
-| `source`   | path                      | A file with the block content (with `template = "tera"`) or the keys to merge (with `merge`).                                                                                                                     |
-| `template` | `"tera"`                  | Render `source` with Tera first.                                                                                                                                                                                  |
-| `comment`  | string                    | The marker comment prefix. Defaults to one inferred from the file extension.                                                                                                                                      |
-| `line`     | string                    | One exact line to ensure exists.                                                                                                                                                                                  |
-| `position` | `"append"` or `"prepend"` | Where a missing `line` goes. Defaults to `"append"`.                                                                                                                                                              |
-| `merge`    | `true` or `"missing"`     | Set the keys in `source` on a `.json`, `.toml`, `.yaml`, or `.yml` target. `"missing"` sets only keys the target has no value for; see [Defaults the application may change](/dotfiles/edits.html#merge-missing). |
+| `block`    | 字符串                    | 要保留在标记注释之间的内联内容。                                                                                                                                                                                  |
+| `source`   | 路径                      | 包含代码块内容的文件（设置 `template = "tera"` 时），或包含待合并键的文件（设置 `merge` 时）。                                                                                                                    |
+| `template` | `"tera"`                  | 先使用 Tera 渲染 `source`。                                                                                                                                                                                       |
+| `comment`  | 字符串                    | 标记注释的前缀。默认根据文件扩展名推断。                                                                                                                                                                          |
+| `line`     | 字符串                    | 要确保存在的一行精确内容。                                                                                                                                                                                        |
+| `position` | `"append"` 或 `"prepend"` | 缺少 `line` 时要将其添加到何处。默认为 `"append"`。                                                                                                                                                               |
+| `merge`    | `true` 或 `"missing"`     | 将 `source` 中的键写入 `.json`、`.toml`、`.yaml` 或 `.yml` 目标。`"missing"` 只设置目标中尚无值的键；详见[应用程序可能更改的默认值](/dotfiles/edits.html#merge-missing)。                                    |
 
-`block` and `source` are mutually exclusive, and neither combines with
-`line`. `position` applies only to `line`. A `merge` entry without `source`
-reads the target's path under
-[`dotfiles.root`](/configuration/settings.html#dotfiles.root), and takes no
-`block`, `line`, `position`, or `comment`. An edit entry takes no
-`permissions`. Edits are never encrypted.
+`block` 和 `source` 不能同时使用，且两者都不能与 `line` 组合。`position` 仅适用于 `line`。未设置 `source` 的 `merge` 条目会从 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下读取与目标路径相同的路径，且不能使用 `block`、`line`、`position` 或 `comment`。编辑条目不接受 `permissions`。编辑内容不会加密。
 
-## Modes and keys {#modes-and-keys}
+## 模式与键 {#modes-and-keys}
 
-The table shows which whole-file keys each kind of entry accepts. An entry
-with `content` is an inline-content entry, and one with only `permissions`
-(no `source`, `content`, or `mode`) is a permissions-only entry. Every entry
-also accepts `enabled`.
+下表列出了各类整文件条目接受的键。包含 `content` 的条目是内联内容条目；只包含 `permissions`（没有 `source`、`content` 或 `mode`）的条目是仅权限条目。所有条目都接受 `enabled`。
 
-| Entry            | Accepts                                                                                                                                        | Accepted, no effect              |
+| 条目类型         | 接受的键                                                                                                                                        | 接受但不起作用的键               |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `symlink`        | `source`, `relative`, `variants` (selectors and `target`)                                                                                      | `exclude`, `autosave`, `encrypt` |
-| `symlink-each`   | `source` (a directory), `exclude`, `manifest`, `dot_prefix`, `relative`, `variants` (selectors and `target`)                                   | `autosave`, `encrypt`            |
-| `copy`           | `source`, `variants` (selectors and `target`); with a directory source, `exclude`, `manifest`, `dot_prefix`; with a file source, `permissions` | `autosave`, `encrypt`            |
-| `template`       | `source` (a file), `permissions`, `remove_empty`, `variants` (selectors and `target`)                                                          | `exclude`, `autosave`, `encrypt` |
-| `content`        | `content`, `permissions`, `variants` (selectors only)                                                                                          | `autosave`                       |
-| Permissions only | `permissions`, `variants` (selectors and `target`)                                                                                             | `autosave`                       |
-| `absent`         | `variants` (selectors and `target`)                                                                                                            | `autosave`                       |
-| `track`          | `exclude`, `include`, `autosave`, `encrypt`, `allow_plaintext`, `variants` (selectors only)                                                    |                                  |
-| `track-local`    | `exclude`, `include`, `autosave`, `allow_plaintext`                                                                                            |                                  |
+| `symlink`        | `source`、`relative`、`variants`（选择器和 `target`）                                                                                         | `exclude`、`autosave`、`encrypt` |
+| `symlink-each`   | `source`（目录）、`exclude`、`manifest`、`dot_prefix`、`relative`、`variants`（选择器和 `target`）                                               | `autosave`、`encrypt`            |
+| `copy`           | `source`、`variants`（选择器和 `target`）；来源为目录时可用 `exclude`、`manifest`、`dot_prefix`；来源为文件时可用 `permissions`                  | `autosave`、`encrypt`            |
+| `template`       | `source`（文件）、`permissions`、`remove_empty`、`variants`（选择器和 `target`）                                                                | `exclude`、`autosave`、`encrypt` |
+| `content`        | `content`、`permissions`、`variants`（仅选择器）                                                                                              | `autosave`                       |
+| 仅权限           | `permissions`、`variants`（选择器和 `target`）                                                                                                 | `autosave`                       |
+| `absent`         | `variants`（选择器和 `target`）                                                                                                                | `autosave`                       |
+| `track`          | `exclude`、`include`、`autosave`、`encrypt`、`allow_plaintext`、`variants`（仅选择器）                                                          |                                  |
+| `track-local`    | `exclude`、`include`、`autosave`、`allow_plaintext`                                                                                           |                                  |
 
-For `encrypt` and `relative`, the table means the `true` value; `encrypt =
-false` and `relative = false` are accepted everywhere except that
-permissions-only and `track-local` entries reject any `encrypt` key, including
-`encrypt = false`. See [Local-only history](/dotfiles/history.html#local-only)
-for `track-local`.
+对于 `encrypt` 和 `relative`，表中的限制指值为 `true` 的情况；`encrypt = false` 和 `relative = false` 在所有条目中都可使用，但仅权限和 `track-local` 条目不接受任何 `encrypt` 键，包括 `encrypt = false`。`track-local` 详见[仅本地历史记录](/dotfiles/history.html#local-only)。
 
-mise warns about and ignores an entry that sets one of the
-[entry keys](#entry-keys) its kind does not accept; for a `track` entry,
-`mise dot paths` also lists it as invalid. A key that is not an entry key at
-all is ignored without a warning, except in configuration arriving from
-another machine, which a pull refuses to apply. `permissions` with a
-directory source, and `manifest` or `dot_prefix` with a file source, stop the
-command with an error. An entry that sets both `permissions` and `manifest` is
-ignored with a warning.
+条目设置了其类型不接受的[条目键](#entry-keys)时，mise 会发出警告并忽略该条目；对于 `track` 条目，`mise dot paths` 也会将其列为无效。完全不属于条目键的键会被忽略且不发出警告，但从其他机器拉取的配置除外，pull 操作会拒绝应用此类配置。目录源不能使用 `permissions`；文件源不能使用 `manifest` 或 `dot_prefix`，否则命令会报错并停止。条目同时设置 `permissions` 和 `manifest` 时会发出警告并忽略该条目。
 
-## How entries combine {#how-entries-combine}
+## 条目的合并方式 {#how-entries-combine}
 
-- Entries merge across the [config hierarchy](/configuration.html#configuration-hierarchy).
-  Whole-file entries merge by target path, and edit entries by target path
-  and id. A more local config file replaces an entry with the same key,
-  including its variants.
-- If a more local declaration is invalid, or none of its variants matches this
-  machine, the inherited entry stays active.
-- A tracking entry and a deployed entry for the same path are separate
-  entries; see [Track files that mise also deploys](/dotfiles/history.html#ownership).
-- mise reads tracking entries, and the `[history]` table, only from system and
-  global config.
-- mise warns about and skips an entry with an unknown mode or edit operation,
-  so a config written for a newer mise still loads.
+- 条目会跨[配置层级](/configuration.html#configuration-hierarchy)合并。整文件条目按目标路径合并，编辑条目按目标路径和 ID 合并。更本地的配置文件会替换具有相同键的条目，包括其变体。
+- 如果更本地的声明无效，或其所有变体都与当前机器不匹配，则继续使用继承而来的条目。
+- 同一路径的跟踪条目和部署条目是两个独立条目；详见[跟踪 mise 同时部署的文件](/dotfiles/history.html#ownership)。
+- mise 只从系统和全局配置中读取跟踪条目及 `[history]` 表。
+- 遇到未知模式或编辑操作时，mise 会发出警告并跳过该条目，因此为较新版本 mise 编写的配置仍可加载。
 
-## Variant selectors {#variant-selectors}
+## 变体选择器 {#variant-selectors}
 
-Each element of `variants` selects machines with these keys:
+`variants` 中的每个元素都使用以下键来选择机器：
 
-| Key       | Matches                                                                                                                                                                                       |
+| 键        | 匹配对象                                                                                                                                                                                      |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `os`      | An operating system (`linux`, `macos`, `windows`), the `unix` family, or either with an architecture after `/`, such as `linux/arm64` or `unix/x64`. A list matches any of its values.        |
-| `profile` | A [config environment](/configuration/environments.html) selected with `-E` or `MISE_ENV`.                                                                                                    |
-| `default` | `true` marks the fallback for machines that match no other variant. It takes no `os` or `profile`, and an entry has at most one.                                                              |
-| `machine` | `true` gives each machine its own version; see [One version per machine](/dotfiles/history.html#machine-variants). It must be the entry's only variant and cannot be combined with `encrypt`. |
+| `os`      | 操作系统（`linux`、`macos`、`windows`）、`unix` 系列，或在其后通过 `/` 指定架构，例如 `linux/arm64` 或 `unix/x64`。列表可匹配其中任一值。                                                |
+| `profile` | 通过 `-E` 或 `MISE_ENV` 选择的[配置环境](/configuration/environments.html)。                                                                                                                    |
+| `default` | 设为 `true` 时，作为未匹配其他变体时使用的回退项。不能同时设置 `os` 或 `profile`，且每个条目最多只能有一个默认变体。                                                                         |
+| `machine` | 设为 `true` 时，为每台机器保存独立版本；详见[每台机器一个版本](/dotfiles/history.html#machine-variants)。它必须是条目唯一的变体，且不能与 `encrypt` 组合。                                      |
 
-A variant with both `os` and `profile` matches only when both do. When several
-variants match, mise scores each one and the highest score wins:
+同时指定 `os` 和 `profile` 的变体必须两者都匹配才算命中。若多个变体都匹配，mise 会为其评分并选择得分最高者：
 
-| Selector                      | Points |
+| 选择器                        | 分值   |
 | ----------------------------- | ------ |
 | `profile`                     | 4      |
-| `os` naming one system        | 2      |
+| `os` 指定单个系统              | 2      |
 | `os = "unix"`                 | 1      |
-| An architecture after the `/` | 2 more |
+| `/` 后指定架构                 | 另加 2 |
 
-On a Mac, `os = "macos"` therefore beats `os = "unix"`, and a profile-only
-variant ties with an OS-and-architecture variant. A tie for the highest score
-makes the entry invalid until you fix it. When nothing matches, mise uses the
-`default` variant; without one, it skips the entry on that machine. A skipped
-tracked path is neither saved nor applied there, and checkpoints keep the
-versions other machines saved.
+因此，在 Mac 上，`os = "macos"` 的得分高于 `os = "unix"`；只指定 profile 的变体与同时指定系统和架构的变体得分相同。最高分并列时，条目会被视为无效，直到你修正配置。没有任何变体匹配时，mise 会使用 `default` 变体；若未指定，则在该机器上跳过此条目。跳过的跟踪路径既不会在该机器上保存，也不会应用；检查点仍会保留其他机器保存的版本。
 
-On a deployed entry, a variant can add `target` to choose the path; see
-[Different targets on different machines](/dotfiles/managed.html#platform-specific-destinations).
-On a tracked entry, each variant is a separate stream of contents at the same
-path; see [Different contents on different machines](/dotfiles/history.html#variants).
+部署条目的变体可添加 `target` 来选择路径；详见[不同机器使用不同目标路径](/dotfiles/managed.html#platform-specific-destinations)。跟踪条目的每个变体则会在同一路径下保存独立的内容流；详见[不同机器保存不同内容](/dotfiles/history.html#variants)。
 
-## Pattern syntax {#patterns}
+## 匹配模式语法 {#patterns}
 
-Patterns in a whole-file entry's `exclude`, a group's `exclude`, and a tracked
-entry's `exclude` and `include` are relative to the entry's directory: the
-source directory for deployed entries and groups, and the tracked directory
-for tracked entries.
+整文件条目的 `exclude`、分组的 `exclude`，以及跟踪条目的 `exclude` 和 `include` 中的模式，都相对于条目目录：部署条目和分组以源目录为基准，跟踪条目则以被跟踪目录为基准。
 
-| Pattern             | Matches                                                                             |
+| 模式                | 匹配对象                                                                            |
 | ------------------- | ----------------------------------------------------------------------------------- |
-| `mise.toml`, `*.md` | A name without `/` matches any single path component, at any depth                  |
-| `nvim/spell`        | A pattern with `/` is anchored to the entry's directory: only that path             |
-| `/cache`            | A leading `/` anchors the pattern too, as in `.gitignore`: only a top-level `cache` |
-| `nvim/**/*.bak`     | `**` matches across directories: `nvim/init.bak` and `nvim/after/init.bak`          |
-| `sessions`          | A pattern that matches a directory covers everything beneath it                     |
+| `mise.toml`、`*.md` | 不含 `/` 的名称会在任意深度匹配单个路径组件                                        |
+| `nvim/spell`        | 含 `/` 的模式以条目目录为基准：只匹配该路径                                        |
+| `/cache`            | 开头的 `/` 也会固定匹配基准，类似 `.gitignore`：只匹配顶层的 `cache` 目录            |
+| `nvim/**/*.bak`     | `**` 可跨目录匹配：`nvim/init.bak` 和 `nvim/after/init.bak`                          |
+| `sessions`          | 匹配目录的模式会涵盖该目录下的所有内容                                              |
 
-`/nvim/spell` and `nvim/spell` are the same pattern. A leading `/` is never an
-absolute path in these lists; the global list below is different.
+`/nvim/spell` 和 `nvim/spell` 是同一模式。在这些列表中，开头的 `/` 从不表示绝对路径；下文的全局列表规则不同。
 
-In an `include` list, `*` never crosses `/`, as in `.gitignore`: `rules/*.md`
-selects the Markdown files directly in `rules`, and `rules/**/*.md` also
-selects those in its subdirectories.
+在 `include` 列表中，`*` 不会跨过 `/`，这与 `.gitignore` 相同：`rules/*.md` 只选择 `rules` 目录中的 Markdown 文件，而 `rules/**/*.md` 还会选择其子目录中的文件。
 
-::: warning Deprecated: `*` crossing `/` in exclusions
-In an `exclude` pattern that contains `/`, `*` still matches across
-directories, so `"nvim/*.bak"` also skips `nvim/after/init.bak`. mise warns
-when a pattern skips a path only for that reason. Write `**` instead: `*` will
-stop at `/` in exclusions, as it already does in `.gitignore`, in include
-lists, and in patterns with a leading `/`.
+::: warning 已弃用：排除模式中的 `*` 可跨越 `/`
+在包含 `/` 的 `exclude` 模式中，`*` 仍可跨目录匹配，因此 `"nvim/*.bak"` 也会跳过 `nvim/after/init.bak`。如果模式只因这一规则而跳过路径，mise 会显示警告。请改用 `**`：排除模式中的 `*` 将不再跨过 `/`，与 `.gitignore`、include 列表以及以 `/` 开头的模式相同。
 :::
 
-An invalid glob in a deployed entry's `exclude` is reported, and the rest of
-the list still applies. An invalid glob in a tracked entry's `exclude` or
-`include` makes the whole entry invalid, so nothing is saved by mistake.
+部署条目的 `exclude` 中若有无效 glob，mise 会报告该模式，但仍会应用列表中的其他模式。跟踪条目的 `exclude` 或 `include` 中若有无效 glob，整个条目都会失效，以免误保存内容。
 
-### Global exclude patterns {#global-exclude-patterns}
+### 全局排除模式 {#global-exclude-patterns}
 
-The `[history] exclude` list, which [`mise dot exclude`](/cli/dotfiles/exclude.html)
-writes, applies beneath every tracked entry:
+由 [`mise dot exclude`](/cli/dotfiles/exclude.html) 写入的 `[history] exclude` 列表，会作用于每个跟踪条目下的路径：
 
-| Pattern                | Matches                                                                 |
+| 模式                   | 匹配对象                                                                |
 | ---------------------- | ----------------------------------------------------------------------- |
-| `cache`                | Any file or directory named `cache` beneath a tracked entry             |
-| `sessions/**`          | Contents of a `sessions` directory at any depth beneath a tracked entry |
-| `~/.codex/sessions/**` | Contents of this specific directory                                     |
-| `keys/*.pem`           | PEM files directly inside any `keys` directory beneath a tracked entry  |
-| `keys/**/*.pem`        | PEM files at any depth inside those `keys` directories                  |
+| `cache`                | 跟踪条目下任意位置名为 `cache` 的文件或目录                             |
+| `sessions/**`          | 跟踪条目下任意深度的 `sessions` 目录内容                                |
+| `~/.codex/sessions/**` | 该特定目录中的内容                                                      |
+| `keys/*.pem`           | 跟踪条目下任意 `keys` 目录中直接包含的 PEM 文件                         |
+| `keys/**/*.pem`        | 这些 `keys` 目录中任意深度的 PEM 文件                                   |
 
-- A relative pattern matches at any depth beneath each tracked entry, never
-  relative to your shell's working directory. A leading `./` is ignored.
-- An absolute pattern can start with `~`, and it keeps matching through
-  symlinked parent directories.
-- `*` stops at a path separator and `**` crosses separators. On Windows, both
-  `/` and `\` are separators.
-- The last rule that matches a path, or one of its parents below the tracked
-  root, decides whether it is excluded. A later `!glob` can select a file
-  inside an excluded directory. mise skips an excluded directory without
-  reading it unless a later rule could select something inside.
-- Environment variables are not expanded; use `~/` or an absolute path.
-  `mise dot exclude` rejects patterns that contain `$` and invalid globs. If
-  such a pattern is already in your config, mise warns and ignores that rule,
-  and the others still apply.
+- 相对模式会在每个跟踪条目下的任意深度匹配，绝不相对于 Shell 当前工作目录。开头的 `./` 会被忽略。
+- 绝对模式可以使用 `~` 开头，并且即使父目录经过符号链接，仍会继续匹配。
+- `*` 不跨越路径分隔符，`**` 可以跨越。在 Windows 上，`/` 和 `\` 都是路径分隔符。
+- 对路径（或其在跟踪根目录下的父目录）进行匹配的最后一条规则决定是否排除该路径。后续的 `!glob` 可以重新选中被排除目录中的文件。除非后续规则可能选中目录中的内容，否则 mise 会跳过整个被排除目录，不读取其中内容。
+- 不会展开环境变量；请使用 `~/` 或绝对路径。`mise dot exclude` 会拒绝包含 `$` 的模式和无效 glob。如果配置中已有此类模式，mise 会发出警告并忽略该规则，其他规则仍会生效。
 
-Checkpoints record which version of these rules they were saved with. When
-rollback cannot interpret an older checkpoint's coverage reliably, it reports
-the affected paths as skipped instead of deleting live files.
+检查点会记录保存时所用的规则版本。如果回滚无法可靠解释旧检查点所覆盖的范围，会将相关路径报告为已跳过，而不会删除现有文件。
 
-## Status states {#status-states}
+## 状态值 {#status-states}
 
-[`mise dot status`](/cli/dotfiles/status.html) prints a row for each entry, edit,
-and orphaned group file that needs attention, and counts the ones that are
-applied or tracked; `--verbose` lists them all, and naming targets lists those
-targets. Sections follow for the history state: Tracking (entries, files, the
-latest checkpoint, unsaved changes), Repository (the origin, branch, mode, and
-sync times), Conflicts, Automatic capture, and Bootstrap. A Next steps list
-names the commands that clear whatever needs attention.
+[`mise dot status`](/cli/dotfiles/status.html) 会为每个需要处理的条目、编辑项和孤立分组文件输出一行，并统计已应用或已跟踪的项目；`--verbose` 会列出全部项目，指定目标路径则只列出这些目标。随后会显示历史记录状态，包括跟踪情况（条目、文件、最新检查点、未保存更改）、仓库信息（远程源、分支、模式和同步时间）、冲突、自动捕获及 Bootstrap。“后续步骤”列表会列出用于处理待办事项的命令。
 
-| State                                              | Meaning                                                                                      | What to do                                                            |
+| 状态                                               | 含义                                                                                         | 处理方式                                                              |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `applied`                                          | The target matches its entry.                                                                | Nothing.                                                              |
-| `applied (target absent; permissions not applied)` | A permissions-only target does not exist.                                                    | Nothing, or create the path.                                          |
-| `missing`                                          | The target or edit does not exist yet.                                                       | `mise dot apply`                                                      |
-| `differs (<reason>)`                               | The target exists but its content, link, or permissions differ, or it cannot be checked.     | `mise dot diff`, then `mise dot apply`, with `--force` for a conflict |
-| `source missing`                                   | The entry's source does not exist.                                                           | Create the source, or fix `source`.                                   |
-| `tracked`                                          | A `mode = "track"` entry. `tracked (2 omitted, 1 nested)` counts files that saves leave out. | `mise dot paths` lists them.                                          |
-| `not on this machine (variants: <names>)`          | A `track` entry whose variants all select other machines, such as an inactive profile.       | Nothing, or select a variant, such as with `-E <profile>`.            |
-| `ambiguous variants (<names> match equally)`       | A `track` entry with two variants that match this machine equally, which skips it.           | Make one variant more specific.                                       |
-| `absent`                                           | An `absent` entry whose target is gone.                                                      | Nothing.                                                              |
-| `would remove (<reason>)`                          | An `absent` entry whose file or symlink is still there.                                      | `mise dot apply`                                                      |
-| `orphaned`                                         | A file a group deployed that no active entry deploys any more.                               | `mise dot apply --prune` or `mise dot unapply --group <name>`         |
-| `orphaned (changed since applied)`                 | An orphaned file you changed after mise wrote it.                                            | Remove it yourself, or pass `--force` to remove a changed copy.       |
+| `applied`                                          | 目标与条目相符。                                                                               | 无需处理。                                                              |
+| `applied (target absent; permissions not applied)` | 仅权限目标不存在。                                                                             | 无需处理，或创建该路径。                                                |
+| `missing`                                          | 目标或编辑项尚不存在。                                                                         | `mise dot apply`                                                      |
+| `differs (<reason>)`                               | 目标存在，但内容、链接或权限不符，或者无法检查。                                                 | 运行 `mise dot diff`，再运行 `mise dot apply`；冲突时添加 `--force`。     |
+| `source missing`                                   | 条目源不存在。                                                                                 | 创建源文件，或修正 `source`。                                           |
+| `tracked`                                          | `mode = "track"` 条目。`tracked (2 omitted, 1 nested)` 会统计保存时跳过的文件。                | `mise dot paths` 会列出相关文件。                                       |
+| `not on this machine (variants: <names>)`          | `track` 条目的所有变体都选择了其他机器，例如当前 profile 未启用。                                | 无需处理，或选择一个变体，例如使用 `-E <profile>`。                      |
+| `ambiguous variants (<names> match equally)`       | `track` 条目有两个变体与当前机器匹配程度相同，因此该条目被跳过。                                  | 提高其中一个变体的具体程度。                                            |
+| `absent`                                           | `absent` 条目的目标已不存在。                                                                  | 无需处理。                                                              |
+| `would remove (<reason>)`                          | `absent` 条目的文件或符号链接仍然存在。                                                         | `mise dot apply`                                                      |
+| `orphaned`                                         | 某个分组曾部署该文件，但现在没有活动条目再部署它。                                                | `mise dot apply --prune` 或 `mise dot unapply --group <name>`         |
+| `orphaned (changed since applied)`                 | mise 写入后又被修改的孤立文件。                                                                  | 手动删除，或添加 `--force` 删除已修改的副本。                           |
 
-`mise dot status --missing` prints the same rows and exits with status 1 when
-any entry or edit is `missing`, `source missing`, `differs`, or
-`would remove`. Orphaned files do not affect the exit status.
+`mise dot status --missing` 会输出相同的行；当任一条目或编辑项的状态为 `missing`、`source missing`、`differs` 或 `would remove` 时，退出状态为 1。孤立文件不会影响退出状态。
 
-### JSON output {#json-output}
+### JSON 输出 {#json-output}
 
-`mise dot status --json` prints an object with `files`, `edits`, and
-`history`, plus `orphaned` when a group left files behind.
+`mise dot status --json` 会输出包含 `files`、`edits` 和 `history` 的对象；如果分组留下了文件，还会包含 `orphaned`。
 
-- Each `files` element has `target`, `source`, `mode`, `origin`, `state`, and
-  the `omitted` and `nested` counts of a tracked entry. `mode` is one of the
-  modes, `content`, or `permissions`. `state` is `applied`, `missing`,
-  `differs`, `source_missing`, or `tracked`.
-- `source` is a display path with `~` for your home directory, and `null` for
-  inline content, permissions-only, and `absent` entries. Use `origin.source`
-  for the absolute path.
-- `origin` describes where the entry came from: the config file, its
-  `config_root`, any config environment in the file name, and the resolved
-  source path. These paths are strings when they are valid UTF-8; on Unix, a
-  path with other bytes is written as `mise:path-bytes:<base64url>`.
-- An entry that sets `permissions` includes them as an octal string.
-- A `differs` entry has a `reason`. An `absent` entry is `applied` once the
-  target is gone and `differs` while it is there, with a reason that ends in
-  `; will be removed`. A permissions-only entry whose target does not exist is
-  `applied` with a `reason`. A `tracked` entry whose variants all select
-  other machines, or tie, has a `reason` that names them.
-- Each `edits` element has `path`, `edit` (such as `block:aliases`), `origin`,
-  and `state`.
-- Each `orphaned` element has `target`, `group`, and `state`, which is
-  `orphaned` or `orphaned_changed`.
+- 每个 `files` 元素都有 `target`、`source`、`mode`、`origin`、`state`，以及跟踪条目的 `omitted` 和 `nested` 计数。`mode` 是某个模式、`content` 或 `permissions`；`state` 是 `applied`、`missing`、`differs`、`source_missing` 或 `tracked`。
+- `source` 是用于显示的路径，主目录会以 `~` 表示；内联内容、仅权限和 `absent` 条目则为 `null`。绝对路径请使用 `origin.source`。
+- `origin` 描述条目的来源，包括配置文件、其 `config_root`、文件名中的配置环境以及解析后的源路径。路径为有效 UTF-8 时会表示为字符串；在 Unix 上，包含其他字节的路径会写作 `mise:path-bytes:<base64url>`。
+- 设置了 `permissions` 的条目会以八进制字符串包含该值。
+- `differs` 条目包含 `reason`。`absent` 条目在目标已删除时为 `applied`，目标仍存在时为 `differs`，且原因以 `; will be removed` 结尾。目标不存在的仅权限条目会以 `reason` 标记为 `applied`。如果 `tracked` 条目的变体都选择了其他机器或出现并列，`reason` 会指出相关变体。
+- 每个 `edits` 元素都有 `path`、`edit`（例如 `block:aliases`）、`origin` 和 `state`。
+- 每个 `orphaned` 元素都有 `target`、`group` 和 `state`，其值为 `orphaned` 或 `orphaned_changed`。
 
-## State files {#state-files}
+## 状态文件 {#state-files}
 
-mise keeps records under [`MISE_STATE_DIR`](/directories.html)
-(`~/.local/state/mise` by default). Keep them: they are how mise recognizes
-what it wrote.
+mise 会在 [`MISE_STATE_DIR`](/directories.html) 下保存记录（默认是 `~/.local/state/mise`）。请保留这些记录，mise 需要依靠它们识别自己写入的内容。
 
-| Path                                           | Holds                                                                                                                                   |
+| 路径                                           | 内容                                                                                                                                     |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `$MISE_STATE_DIR/dotfiles/`                    | The links each `symlink-each` entry created                                                                                             |
-| `$MISE_STATE_DIR/dotfiles/targets/`            | For each target, a digest of what mise last wrote there and the parent directories it created                                           |
-| `$MISE_STATE_DIR/dotfiles/groups/`             | What each [group](/dotfiles/groups.html) deployed, so its files can be found after the group stops deploying them                       |
-| `$MISE_STATE_DIR/history/repo.git`             | The history: a bare Git repository of checkpoints                                                                                       |
-| `$MISE_STATE_DIR/history/`                     | The checkpoint index, which mise can rebuild from Git, operation journals and recovery copies, `health.json`, and `watch-schedule.json` |
-| `~/.config/mise/config.local.toml`             | `[history.origin]`, written by `mise dot origin set`                                                                                    |
-| `~/.config/mise/conf.d/dotfiles-tracking.toml` | Tracking entries for files that another `[dotfiles]` entry already manages                                                              |
+| `$MISE_STATE_DIR/dotfiles/`                    | 每个 `symlink-each` 条目创建的链接                                                                                                        |
+| `$MISE_STATE_DIR/dotfiles/targets/`            | 每个目标上次由 mise 写入内容的摘要，以及 mise 创建的父目录                                                                               |
+| `$MISE_STATE_DIR/dotfiles/groups/`             | 各[分组](/dotfiles/groups.html)部署的文件；分组不再部署后，mise 仍可据此找到这些文件                                                       |
+| `$MISE_STATE_DIR/history/repo.git`             | 历史记录：保存检查点的裸 Git 仓库                                                                                                         |
+| `$MISE_STATE_DIR/history/`                     | 检查点索引（mise 可从 Git 重建）、操作日志和恢复副本、`health.json`、`watch-schedule.json`                                                |
+| `~/.config/mise/config.local.toml`             | 由 `mise dot origin set` 写入的 `[history.origin]`                                                                                       |
+| `~/.config/mise/conf.d/dotfiles-tracking.toml` | 已由其他 `[dotfiles]` 条目管理的文件所对应的跟踪条目                                                                                      |
 
-mise records a digest for every template target, so turning on
-`remove_empty` later still allows a safe removal. An apply that finds a target
-already identical to the rendered output records it too: that file counts as
-written by mise, and any later edit to it makes a removal a conflict. Without
-these records, mise cannot remove links or directories it created earlier,
-cannot tell its own template output from your edits, and cannot find orphaned
-group files.
+mise 会为每个模板目标记录摘要，因此之后启用 `remove_empty` 时仍可安全删除目标。应用操作发现目标与渲染结果完全相同时，也会记录该文件：该文件会被视为由 mise 写入，之后若被修改，删除时就会产生冲突。没有这些记录，mise 就无法删除先前创建的链接或目录、区分自己的模板输出和你的编辑，也无法找到孤立的分组文件。
 
-## Checkpoint contents {#what-a-checkpoint-records}
+## 检查点内容 {#what-a-checkpoint-records}
 
-Each checkpoint is a Git commit in `$MISE_STATE_DIR/history/repo.git`,
-separate from the files you edit. It holds the tracked files as ordinary Git
-tree entries, plus metadata for their paths, tracking settings, variants,
-encryption, and permissions.
+每个检查点都是 `$MISE_STATE_DIR/history/repo.git` 中的一个 Git commit，与编辑的文件分开保存。检查点会将跟踪文件作为普通 Git tree 条目保存，并记录其路径、跟踪设置、变体、加密状态和权限等元数据。
 
-Permission metadata covers non-default modes: files that are not `0644` or
-`0755`, tracked directories that are not `0755`, and directories between a
-tracked path and your home or mise config directory that are not `0755`.
-Tracking `~/.claude/settings.json` inside a `0700` `~/.claude` records that
-mode, so a fresh machine recreates the directory as private rather than
-world-readable. Your home and mise config directories themselves are never
-recorded.
+权限元数据涵盖非默认权限：权限不是 `0644` 或 `0755` 的文件、权限不是 `0755` 的跟踪目录，以及跟踪路径与主目录或 mise 配置目录之间权限不是 `0755` 的目录。若在权限为 `0700` 的 `~/.claude` 中跟踪 `~/.claude/settings.json`，检查点会记录该权限，以便新机器重建出私有目录，而不是所有用户均可读取的目录。主目录和 mise 配置目录本身不会被记录。
 
-A symlink is saved as a link. mise reports oversized files, special files,
-and unreadable paths that it cannot save, and keeps their previous saved
-versions while it saves other files, so check reported omissions before you
-rely on a checkpoint. Exclusions remove paths from future checkpoints. An
-encryption failure stops a save rather than storing plaintext.
+符号链接会以链接形式保存。mise 会报告无法保存的超大文件、特殊文件和不可读路径；保存其他文件时，会保留这些路径先前保存的版本。因此依赖检查点前，请先检查报告中跳过的内容。排除规则会将相应路径从后续检查点中移除。加密失败时，保存操作会停止，而不会改为存储明文。
 
-Checkpoints restore file contents only. They do not restore installed
-packages or the running state of a service; use your system's backup tools
-for that, and run `mise bootstrap` to apply restored configuration.
+检查点只会恢复文件内容，不会恢复已安装的软件包或服务的运行状态；这些内容请使用系统备份工具恢复，然后运行 `mise bootstrap` 应用恢复后的配置。
 
-### Operation checkpoints {#operation-checkpoints}
+### 操作检查点 {#operation-checkpoints}
 
-Commands that change or capture tracked files save checkpoints before and
-after their work, such as `mise bootstrap` and its part subcommands,
-`mise dot apply`, `add`, `unapply`, `edit`, `rollback`, `undo`, `pull`, and
-`capture`. Their metadata includes the operation's label and the link between
-the two checkpoints, which `mise dot undo` and
-`mise dot history diff --operation` use. Raw command arguments, environment
-contents, and temporary recovery copies stay out of committed metadata.
+会更改或捕获跟踪文件的命令会在操作前后保存检查点，例如 `mise bootstrap` 及其 part 子命令，以及 `mise dot apply`、`add`、`unapply`、`edit`、`rollback`、`undo`、`pull` 和 `capture`。元数据会记录操作标签和两个检查点之间的关联，供 `mise dot undo` 与 `mise dot history diff --operation` 使用。原始命令参数、环境内容和临时恢复副本不会写入已提交的元数据。
 
-When an operation changes a tracked file with `autosave = false`, it saves
-that file's actual contents first; unrelated manual edits stay unsaved. If the
-operation writes a file several times, the before checkpoint still holds the
-contents from before the first write. Encrypted files are encrypted in these
-checkpoints too.
+操作更改 `autosave = false` 的跟踪文件时，会先保存该文件的实际内容；无关的手动编辑仍保持未保存状态。如果操作多次写入同一文件，操作前检查点仍会保留首次写入前的内容。这些检查点中的加密文件也会保持加密。
 
-`undo` uses an operation's before checkpoint to restore the tracked paths it
-changed. Untracked files that an operation writes get temporary recovery
-copies only for finishing or recovering interrupted writes, and those copies
-are deleted afterwards, so untracked files have no undo.
+`undo` 会使用操作前检查点还原该操作更改的跟踪路径。操作写入的未跟踪文件只会在完成或恢复中断的写入时使用临时恢复副本；操作之后这些副本会被删除，因此未跟踪文件无法撤销。
 
-## Recovery {#recovery-details}
+## 恢复机制 {#recovery-details}
 
-Before rollback changes any file, mise saves the current contents in a
-`rollback-before` checkpoint. If it cannot save every file it would change, it
-stops before writing. It checks the plan again after that checkpoint, and
-checks each path again immediately before replacing it; a concurrent edit that
-invalidates the plan stops the operation.
+回滚修改任何文件前，mise 会先将当前内容保存在 `rollback-before` 检查点中。如果无法保存所有将要修改的文件，就会在写入前停止。保存检查点后，mise 会再次检查计划，并在替换每个路径前再次检查；如果并发编辑导致计划失效，操作就会停止。
 
-Files are written one at a time, with a journal that records each affected
-path, so an interruption can leave some writes done. Run
-[`mise dot recover`](/cli/dotfiles/recover.html) to retry the unfinished
-writes. A retry never overwrites later edits; when it cannot continue, it
-keeps those edits and the recovery copies and lists the paths to inspect. To
-accept the current files instead:
+文件会逐个写入，日志会记录每个受影响的路径，因此操作中断时可能已有部分写入完成。运行 [`mise dot recover`](/cli/dotfiles/recover.html) 可重试尚未完成的写入。重试绝不会覆盖后续编辑；如果无法继续，会保留这些编辑和恢复副本，并列出需要检查的路径。若要接受当前文件状态：
 
 ```sh
 mise dot recover <operation> --keep-current
 ```
 
-After you confirm, this discards that operation's temporary recovery copies
-and keeps your current files and committed history. Unresolved recovery data
-is kept until you resolve it.
+确认后，mise 会丢弃该操作的临时恢复副本，并保留当前文件和已提交历史。未解决的恢复数据会一直保留，直到你处理完毕。
 
-Ordinary bootstrap writes warn and continue when they cannot save temporary
-recovery contents, for example for an oversized file, and such a write cannot
-be recovered automatically after an interruption. Pull, rollback, and undo
-refuse to write without the recovery data they need. Turning history off lets
-ordinary bootstrap run without the history store, but explicit history
-commands still need their recovery data.
+普通 Bootstrap 写入若无法保存临时恢复内容（例如文件过大），会发出警告并继续；此类写入中断后无法自动恢复。Pull、rollback 和 undo 若缺少所需恢复数据，则会拒绝写入。关闭历史记录后，普通 Bootstrap 仍可在没有历史存储的情况下运行，但显式历史命令仍需要恢复数据。
 
-## History lock {#history-lock}
+## 历史记录锁 {#history-lock}
 
-Operations that record history take a lock on the history store in
-`MISE_STATE_DIR`. A run that records history waits up to 30 seconds for the
-lock, then fails.
+记录历史的操作会锁定 `MISE_STATE_DIR` 中的历史存储。运行过程中需要记录历史时，最多会等待该锁 30 秒，之后才会失败。
 
-A `mise bootstrap` with nothing tracked and no existing history touches the
-history store only when it first rewrites a dotfile or edit, to keep a private
-journal for recovering interrupted writes. If another mise process holds the
-lock at that point, it warns and continues without the journal instead of
-failing. A run that starts with nothing to record but declares tracking before
-it ends waits the same 30 seconds at the end. If the lock is still busy, or an
-earlier write already ran without the journal, it warns that its outcome was
-not recorded and keeps its result.
+如果没有任何跟踪文件且尚无历史记录，`mise bootstrap` 只会在首次重写 dotfile 或编辑项时访问历史存储，以便保留用于恢复中断写入的私有日志。如果此时另一个 mise 进程持有锁，当前操作会发出警告并在没有日志的情况下继续，而不是失败。如果运行开始时没有内容需要记录，但结束前声明了跟踪项，则会在结束时同样等待 30 秒。如果锁仍被占用，或者先前已有写入在没有日志的情况下运行，mise 会警告结果未被记录，但仍保留操作结果。
 
-## Watcher {#watcher-reference}
+## 监视器 {#watcher-reference}
 
-The [watcher](/dotfiles/history.html#automatic-saves) watches tracked
-directories recursively. For a tracked file it watches the parent directory,
-and for a missing path the nearest existing parent. It never watches files
-with `autosave = false`. Only one watcher runs per history store.
+[`监视器`](/dotfiles/history.html#automatic-saves) 会递归监视跟踪目录。对于单个跟踪文件，它会监视父目录；对于缺失路径，则监视最近的现存父目录。它不会监视 `autosave = false` 的文件。每个历史存储只运行一个监视器。
 
-### Adaptive scheduling {#adaptive-scheduling}
+### 自适应调度 {#adaptive-scheduling}
 
-mise schedules each tracked file on its own:
+mise 会为每个跟踪文件单独安排调度：
 
-1. An ordinary edit is saved after
-   [`history.watch.debounce`](/configuration/settings.html#history.watch.debounce)
-   of quiet time.
-2. If a file keeps changing without settling between saves, its save interval
-   doubles, up to [`history.watch.max_interval`](/configuration/settings.html#history.watch.max_interval).
-   The interval doubles when at least two changes arrived since the previous
-   save and the file changed again within its settling period, so ordinary
-   editor saves spaced further apart keep the usual interval.
-3. When the file stops changing, mise saves its final contents after a
-   fraction of that interval, at most five minutes.
-4. After a quiet period of four intervals, and at least five minutes, the file
-   returns to the base interval.
+1. 普通编辑会在静默时间达到 [`history.watch.debounce`](/configuration/settings.html#history.watch.debounce) 后保存。
+2. 如果文件在两次保存之间持续变化、未能稳定下来，其保存间隔会逐步翻倍，最长不超过 [`history.watch.max_interval`](/configuration/settings.html#history.watch.max_interval)。自上次保存后至少发生两次更改，且文件在稳定等待期内再次更改时，间隔才会翻倍；因此，间隔较长的普通编辑器保存仍使用常规间隔。
+3. 文件停止变化后，mise 会在该间隔的一部分时间过后保存最终内容，最多等待五分钟。
+4. 文件静默达到四个间隔且至少经过五分钟后，会恢复为基础间隔。
 
-The longer interval affects only that file. Other files save normally, and
-explicit saves and the checkpoints before bootstrap, rollback, or undo still
-run immediately. A busy file is still saved periodically; mise never excludes
-it or switches it to manual saving. When another file triggers a checkpoint,
-or mise scans the full tracked set, a busy file keeps its last saved contents
-until its own save is due.
+更长的间隔只影响该文件。其他文件仍照常保存；显式保存以及 bootstrap、rollback 或 undo 前的检查点仍会立即执行。频繁更改的文件仍会定期保存，mise 不会将它排除或切换为手动保存。其他文件触发检查点或 mise 扫描整个跟踪集合时，频繁更改的文件会继续保留上次保存的内容，直到轮到它保存。
 
-The watcher stores these schedules, with each busy file's last save and
-pending edits, in `watch-schedule.json`, so they survive a restart. At
-startup, a busy file keeps its saved version until its next save is due, even
-if it changed while the watcher was stopped. Changes to the `history.watch`
-settings in global config take effect while the watcher runs.
+监视器会将这些调度、每个频繁更改文件的上次保存时间和待处理编辑记录在 `watch-schedule.json` 中，以便重启后继续使用。启动时，即使文件在监视器停止期间发生变化，也会保留已保存版本，直到下次保存时间到达。全局配置中的 `history.watch` 设置会在监视器运行期间生效。
 
-When a full scan finds a new tracking entry, it saves the first version even
-with `autosave = false`. Later scans carry that version forward until you save
-the path explicitly.
+完整扫描发现新的跟踪条目时，即使 `autosave = false`，也会保存第一个版本。之后的扫描会继续沿用该版本，直到你显式保存此路径。
 
-### Scans and failures {#reconciliation-and-failures}
+### 扫描与失败 {#reconciliation-and-failures}
 
-The watcher also scans every tracked file to catch changes that filesystem
-notifications missed: at startup, at shutdown, when configuration changes, and
-every [`history.watch.reconcile`](/configuration/settings.html#history.watch.reconcile).
-Set that setting to `0` to turn off the periodic scan. Edits to your global
-config, including `conf.d/`, reload the tracked paths and update the watches,
-and setting `history.enabled = false` stops the watcher.
+监视器还会扫描所有跟踪文件，以捕获文件系统通知遗漏的更改：扫描会在启动、关闭、配置变更时进行，并按 [`history.watch.reconcile`](/configuration/settings.html#history.watch.reconcile) 指定的间隔定期进行。将该设置设为 `0` 可关闭定期扫描。编辑全局配置（包括 `conf.d/` 中的文件）会重新加载跟踪路径并更新监视目标；将 `history.enabled = false` 设为 `false` 会停止监视器。
 
-A failed save stays pending and is retried with delays that grow from one
-second to five minutes. A save that overlaps bootstrap, rollback, or undo
-waits and retries after that operation finishes. At shutdown, the watcher
-waits briefly for a running operation and reports anything it could not save.
+保存失败的内容会保持待处理状态，并按逐渐增长的间隔重试，间隔从一秒增加到五分钟。若保存与 bootstrap、rollback 或 undo 操作重叠，监视器会等待该操作完成后重试。关闭时，监视器会短暂等待正在运行的操作，并报告无法保存的内容。
 
-Every minute, the watcher checks that the mise executable it started from has
-not been replaced. After an upgrade, it saves what is pending and exits with a
-failure status, so the service manager restarts it on the new version. A
-watcher you started by hand with `mise dot watch` stops, and you start it
-again. If the executable is gone with nothing in its place, the watcher keeps
-running and `mise dot status` and `mise doctor` report it as outdated; run
-`mise bootstrap services apply` to restart it. The report clears if the
-executable comes back.
+监视器每分钟都会检查启动时使用的 mise 可执行文件是否已被替换。升级后，它会先保存待处理内容，再以失败状态退出，以便服务管理器使用新版本重新启动它。手动运行 `mise dot watch` 启动的监视器会停止，需要你重新启动。如果该可执行文件已被删除且没有替代文件，监视器会继续运行，而 `mise dot status` 和 `mise doctor` 会报告它已过期；请运行 `mise bootstrap services apply` 重启它。可执行文件恢复后，该报告会消失。
 
-### `mise dot watch` output and exit codes {#watch-output}
+### `mise dot watch` 的输出与退出码 {#watch-output}
 
-[`mise dot watch --json`](/cli/dotfiles/watch.html) prints one JSON object per
-line. The events are `started`, `already-running`, `captured`, `unchanged`,
-`deferred`, `replan`, `throttled`, `settled`, `degraded`, `sync`, `synced`,
-`sync-error`, `applied`, `described`, `describe-error`, `describe-skipped`,
-`outdated`, `restarting`, `unsaved`, `unavailable`, `disabled`, `error`, and
-`stopped`.
+[`mise dot watch --json`](/cli/dotfiles/watch.html) 每行会输出一个 JSON 对象。事件类型包括 `started`、`already-running`、`captured`、`unchanged`、`deferred`、`replan`、`throttled`、`settled`、`degraded`、`sync`、`synced`、`sync-error`、`applied`、`described`、`describe-error`、`describe-skipped`、`outdated`、`restarting`、`unsaved`、`unavailable`、`disabled`、`error` 和 `stopped`。
 
-`mise dot watch` exits 0 when history is disabled or another watcher already
-runs for the store, and 1 when Git is unusable, the store cannot be opened, or
-no watch can be installed. `mise dot watch --once` runs one scan and one
-sync, and exits 1 if its save was deferred or failed, or if its sync with the
-origin failed.
+历史记录已关闭，或该存储已有其他监视器运行时，`mise dot watch` 以 0 退出；Git 不可用、无法打开存储或无法安装任何监视器时则以 1 退出。`mise dot watch --once` 会执行一次扫描和同步；如果保存被延迟或失败，或与远程源同步失败，则以 1 退出。
 
-## Retention {#retention}
+## 保留规则 {#retention}
 
-mise keeps all reachable Git history indefinitely; checkpoints never expire
-and are never compacted. Untracking a path does not erase its old commits, and
-encrypting its latest version does not erase earlier plaintext; see
-[Remove plaintext from history](/dotfiles/encryption.html#remove-plaintext-from-history).
+mise 会无限期保留所有可达的 Git 历史；检查点不会过期，也不会压缩。取消跟踪某个路径不会删除其旧提交；加密最新版本也不会删除早期的明文版本，详见[从历史记录中移除明文](/dotfiles/encryption.html#remove-plaintext-from-history)。

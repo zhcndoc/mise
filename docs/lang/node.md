@@ -4,58 +4,44 @@ description: "通过 mise 安装 Node.js、读取 .nvmrc 或 package.json，并�
 
 # Node.js
 
-mise installs Node.js from the official nodejs.org builds and selects a version
-per project. It can also read `.nvmrc`, `.node-version` and `package.json`, so
-projects set up for other version managers keep working.
+mise 从 nodejs.org 官方构建下载 Node.js，并为每个项目选择对应版本。它也能读取 `.nvmrc`、`.node-version` 和 `package.json`，因此使用其他版本管理器配置的项目也能继续使用。
 
-## Quick start
+## 快速开始
 
-Select Node.js for the current project and check it without depending on shell
-activation:
+为当前项目选择 Node.js，并在不依赖 Shell 激活的情况下检查版本：
 
 ```sh
 mise use node@26
 mise exec -- node --version
 ```
 
-`mise use` writes `node = "26"` to `mise.toml`. Use `mise use -g node@26` for a
-personal default; a project's version overrides it inside that project.
-[`mise upgrade node`](/cli/upgrade.html) updates within the configured request.
+`mise use` 会将 `node = "26"` 写入 `mise.toml`。使用 `mise use -g node@26` 可设置个人默认版本；进入项目后，项目配置的版本会覆盖该默认值。[`mise upgrade node`](/cli/upgrade.html) 会在已配置的版本范围内更新。
 
-`nodejs` is an alias for `node`; see the
-[FAQ](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go).
-For project recipes, see the [Node.js cookbook](/mise-cookbook/nodejs.html).
+`nodejs` 是 `node` 的别名，详见[常见问题](/faq.html#what-is-the-difference-between-nodejs-and-node-or-golang-and-go)。项目配置示例请参阅 [Node.js 指南](/mise-cookbook/nodejs.html)。
 
-## Choosing a version
+## 选择版本
 
-| Request            | Selects                                                           |
+| 版本请求           | 选择结果                                                          |
 | ------------------ | ----------------------------------------------------------------- |
-| `node@26`          | The newest 26.x release                                           |
-| `node@26.10.0`     | That release                                                      |
-| `node@lts`         | The newest release of the current LTS line                        |
-| `node@lts/krypton` | The newest release of a named LTS line (`lts-krypton` also works) |
-| `node@latest`      | The newest release                                                |
+| `node@26`          | 最新的 26.x 版本                                                  |
+| `node@26.10.0`     | 指定版本                                                          |
+| `node@lts`         | 当前 LTS 系列的最新版本                                            |
+| `node@lts/krypton` | 指定 LTS 系列的最新版本（也可使用 `lts-krypton`）                  |
+| `node@latest`      | 最新版本                                                          |
 
-List the available versions with `mise ls-remote node`, or one release line with
-`mise ls-remote node 26`. See [version requests](/dev-tools/versions.html) for
-the full syntax.
+使用 `mise ls-remote node` 列出所有可用版本，或使用 `mise ls-remote node 26` 查看某个主版本系列。完整语法请参阅[版本请求](/dev-tools/versions.html)。
 
-## Version files {#nvmrc-node-version-and-package-json-support}
+## 版本文件 {#nvmrc-node-version-and-package-json-support}
 
-mise does not read `.nvmrc`, `.node-version` or `package.json` until you enable
-them for Node.js:
+启用 Node.js 的相应设置后，mise 才会读取 `.nvmrc`、`.node-version` 或 `package.json`：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools node
 ```
 
-This changes your global config. Add `--local` to enable it in the project's
-`mise.toml` instead, so teammates get the same behavior. See
-[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
+这会修改全局配置。添加 `--local` 可改为在项目的 `mise.toml` 中启用，让团队成员也获得相同的行为。详见[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)。
 
-`.nvmrc` aliases such as `lts/*` and `lts/iron` work as they do in nvm, and a
-leading `v` is ignored. To read `.nvmrc` and `.node-version` but not
-`package.json`:
+`.nvmrc` 中的 `lts/*` 和 `lts/iron` 等别名与 nvm 中的行为相同，开头的 `v` 会被忽略。若要读取 `.nvmrc` 和 `.node-version`，但不读取 `package.json`：
 
 ```sh
 mise settings add idiomatic_version_file_disable_files node:package.json
@@ -63,7 +49,7 @@ mise settings add idiomatic_version_file_disable_files node:package.json
 
 ### `package.json`
 
-mise reads `devEngines.runtime` when its `name` is `node`:
+当 `devEngines.runtime` 的 `name` 为 `node` 时，mise 会读取该字段：
 
 ```json [package.json]
 {
@@ -73,31 +59,21 @@ mise reads `devEngines.runtime` when its `name` is `node`:
 }
 ```
 
-This selects Node.js 26.10.0. `devEngines.runtime` can be an object or an
-array; mise reads the first entry of an array. See the
-[Bun](/lang/bun.html#version-files) and [Deno](/lang/deno.html#version-files)
-pages for other runtimes.
+此配置会选择 Node.js 26.10.0。`devEngines.runtime` 可以是对象或数组；若为数组，mise 会读取第一项。其他运行时请参阅 [Bun](/lang/bun.html#version-files) 和 [Deno](/lang/deno.html#version-files) 页面。
 
-mise does not read `engines.node`, which describes the Node.js versions a
-package is compatible with, not the version to develop with. If a project only
-has an `engines` range, select a version explicitly:
+mise 不会读取 `engines.node`，因为它描述的是软件包兼容的 Node.js 版本，而非开发时使用的版本。如果项目只声明了 `engines` 范围，请显式选择版本：
 
 ```sh
 mise use node@24
 ```
 
-## Package managers
+## 软件包管理器
 
-npm ships with Node.js. mise can also install and select npm, pnpm and Yarn
-as separate tools, without Corepack, and [aube](https://aube.sh/), which
-works with existing npm, pnpm and Yarn lockfiles. See the
-[Node.js cookbook](/mise-cookbook/nodejs.html) for project recipes with pnpm
-and aube.
+npm 随 Node.js 一同提供。mise 也可以不依赖 Corepack，将 npm、pnpm 和 Yarn 作为独立工具安装并选择版本；此外还支持 [aube](https://aube.sh/)，它可以使用现有的 npm、pnpm 和 Yarn 锁文件。pnpm 和 aube 的项目配置示例请参阅 [Node.js 指南](/mise-cookbook/nodejs.html)。
 
-### Pin the npm version {#pinning-npm-version}
+### 固定 npm 版本 {#pinning-npm-version}
 
-To keep a team on the same npm, and avoid `package-lock.json` churn between npm
-versions, pin npm next to Node.js:
+若要让团队使用相同的 npm 版本，并避免不同 npm 版本造成 `package-lock.json` 频繁变化，可在 Node.js 旁固定 npm 版本：
 
 ```toml [mise.toml]
 [tools]
@@ -105,32 +81,26 @@ node = "26"
 npm = "11"
 ```
 
-To write exact versions for both:
+若要将两者都固定为确切版本：
 
 ```sh
 mise use --pin node@lts npm@latest
 ```
 
-This writes the resolved versions to `mise.toml`. Inside the mise environment,
-the separately configured npm takes precedence over the npm bundled with
-Node.js; check it with `mise exec -- npm --version`. This selects the npm
-executable; the project's lockfile still controls its dependencies.
+此命令会将解析后的版本写入 `mise.toml`。在 mise 环境中，单独配置的 npm 优先于 Node.js 自带的 npm；可运行 `mise exec -- npm --version` 检查版本。此配置只决定使用哪个 npm 可执行文件；项目依赖仍由锁文件控制。
 
 <a id="package-manager-versions-in-package-json"></a>
 
 ### package.json 中的软件包管理器版本
 
-mise can read the npm, pnpm or Yarn version from `package.json`. Enable each
-package manager that a repository may declare:
+mise 可以从 `package.json` 读取 npm、pnpm 或 Yarn 版本。请启用仓库可能声明的每种软件包管理器：
 
 ```toml [mise.toml]
 [settings]
 idiomatic_version_file_enable_tools = ["npm", "pnpm", "yarn"]
 ```
 
-mise reads a matching `devEngines.packageManager` declaration first, then the
-top-level `packageManager` field. The declaration's name must match the enabled
-tool:
+mise 会优先读取匹配的 `devEngines.packageManager` 声明，然后读取顶层 `packageManager` 字段。声明中的名称必须与已启用的工具一致：
 
 ~~~json [package.json]
 {
@@ -138,7 +108,7 @@ tool:
 }
 ~~~
 
-This selects pnpm 10.15.0. The equivalent `devEngines` declaration is:
+此配置会选择 pnpm 10.15.0。对应的 `devEngines` 声明如下：
 
 ~~~json [package.json]
 {
@@ -148,13 +118,9 @@ This selects pnpm 10.15.0. The equivalent `devEngines` declaration is:
 }
 ~~~
 
-`devEngines.packageManager` can also be an array; mise reads its first entry.
-For Bun's runtime and package-manager precedence, see
-[Bun version files](/lang/bun.html#version-files).
+`devEngines.packageManager` 也可以是数组；mise 会读取第一项。Bun 运行时和软件包管理器的优先级规则请参阅 [Bun 版本文件](/lang/bun.html#version-files)。
 
-A Corepack-style checksum suffix (`+sha1`, `+sha224`, `+sha256`, `+sha384` or
-`+sha512`) is verified against the exact package-manager artifact before
-installation:
+安装前，mise 会使用 Corepack 风格的校验和后缀（`+sha1`、`+sha224`、`+sha256`、`+sha384` 或 `+sha512`）核对准确的软件包管理器制品：
 
 ```json [package.json]
 {
@@ -162,109 +128,64 @@ installation:
 }
 ```
 
-For npm, pnpm and Yarn 1, that artifact is the npm registry tarball. For Yarn 2
-and later it is Yarn's published CLI file, and the declaration must name an
-exact Yarn version. Without a checksum, mise installs the package manager
-through its usual [registry](/registry.html) backend and that backend's
-verification.
+npm、pnpm 和 Yarn 1 的制品是 npm registry 中的 tarball；Yarn 2 及更高版本使用 Yarn 发布的 CLI 文件，并且声明中必须指定确切版本。未提供校验和时，mise 会通过常规的[注册表](/registry.html)后端安装软件包管理器，并使用该后端的验证机制。
 
-Unlike Corepack, mise does not pick a known-good package-manager version when a
-project declares none. Set the version in `mise.toml`, `package.json` or your
-global config.
+与 Corepack 不同，若项目没有声明软件包管理器版本，mise 不会自动选择一个已知可用的版本。请在 `mise.toml`、`package.json` 或全局配置中设置版本。
 
 ### Corepack
 
-mise installs package managers itself, so Corepack is not needed. If you still
-want Corepack's shims, set [`node.corepack`](/lang/node.html#node.corepack) to `true`; mise
-then runs `corepack enable` after installing any Node.js version that includes
-Corepack.
+mise 会自行安装软件包管理器，因此不需要 Corepack。如果仍想使用 Corepack 的 shims，请将 [`node.corepack`](/lang/node.html#node.corepack) 设为 `true`；这样每次安装包含 Corepack 的 Node.js 版本后，mise 都会运行 `corepack enable`。
 
-## Global npm packages
+## 全局 npm 软件包
 
-`npm install -g` installs into the active Node.js version, unless your
-`.npmrc` sets a different `prefix`. A globally installed command is therefore
-not available after you switch Node.js versions.
+除非 `.npmrc` 设置了其他 `prefix`，否则 `npm install -g` 会将软件包安装到当前启用的 Node.js 版本中。因此，切换 Node.js 版本后，全局安装的命令将无法使用。
 
-On macOS and Linux, mise replaces each version's `bin/npm` with a small wrapper
-that runs [`mise reshim`](/cli/reshim.html) after global installs and
-uninstalls, so new commands get [shims](/dev-tools/shims.html). Turn it off with
-[`node.npm_shim`](/lang/node.html#node.npm_shim).
+在 macOS 和 Linux 上，mise 会将每个版本的 `bin/npm` 替换为一个小型包装器；全局安装或卸载后，该包装器会运行 [`mise reshim`](/cli/reshim.html)，为新命令创建 [shims](/dev-tools/shims.html)。可通过 [`node.npm_shim`](/lang/node.html#node.npm_shim) 关闭此行为。
 
-To keep a CLI across Node.js versions, install it as its own tool with the
-[npm backend](/dev-tools/backends/npm.html), for example
-`mise use -g npm:typescript`.
+若要在不同 Node.js 版本间保留某个 CLI，请使用 [npm 后端](/dev-tools/backends/npm.html)将其作为独立工具安装，例如 `mise use -g npm:typescript`。
 
-## How mise installs Node.js
+## mise 如何安装 Node.js
 
-mise downloads the official binary archive for your platform from
-[`node.mirror_url`](/lang/node.html#node.mirror_url) (`https://nodejs.org/dist/` by default),
-checks it against the release's `SHASUMS256.txt`, and verifies the OpenPGP
-signature on that file when the release publishes one
-([`node.gpg_verify`](/lang/node.html#node.gpg_verify)). It then runs `node -v` and `npm -v`.
-mise sets no Node.js-specific environment variables; the version's `bin`
-directory goes on `PATH`.
+mise 会从 [`node.mirror_url`](/lang/node.html#node.mirror_url)（默认为 `https://nodejs.org/dist/`）下载适用于当前平台的官方二进制归档文件，并使用该版本发布的 `SHASUMS256.txt` 校验；如果该文件附有 OpenPGP 签名，也会进行验证（[`node.gpg_verify`](/lang/node.html#node.gpg_verify)）。随后会运行 `node -v` 和 `npm -v`。mise 不会设置 Node.js 专用环境变量，只会将该版本的 `bin` 目录加入 `PATH`。
 
-When no binary exists for your platform, mise compiles Node.js from source,
-unless [`node.compile`](/lang/node.html#node.compile) is `false`.
+如果当前平台没有对应的二进制文件，mise 会从源码编译 Node.js；除非 [`node.compile`](/lang/node.html#node.compile) 设为 `false`。
 
-On Alpine and NixOS, mise currently compiles from source by default, because
-[`all_compile`](/configuration/settings.html#all_compile) defaults to `true`
-there. This default is deprecated, and mise 2027.8.0 switches to precompiled
-binaries. To use precompiled binaries now, set `node.compile = false` or
-`all_compile = false`; on NixOS, enable [nix-ld](https://github.com/Mic92/nix-ld)
-first. To keep compiling, set `all_compile = true` explicitly.
+在 Alpine 和 NixOS 上，由于 [`all_compile`](/configuration/settings.html#all_compile) 默认值为 `true`，mise 目前默认从源码编译。此默认行为已弃用，mise 2027.8.0 将改用预编译二进制文件。若现在就要使用预编译版本，请将 `node.compile` 或 `all_compile` 设为 `false`；在 NixOS 上还需先启用 [nix-ld](https://github.com/Mic92/nix-ld)。若要继续编译，请显式设置 `all_compile = true`。
 
-An installed plugin named `node` takes precedence over the built-in
-installer. If mise behaves differently from this page, check
-[`mise plugins ls`](/cli/plugins/ls.html) and see
-[selecting another implementation](/core-tools.html#selecting-another-implementation).
+已安装且名为 `node` 的插件优先于内置安装器。如果 mise 的行为与本页所述不同，请检查 [`mise plugins ls`](/cli/plugins/ls.html)，并参阅[选择其他实现](/core-tools.html#selecting-another-implementation)。
 
-### Compiling from source {#building-from-source}
+### 从源码编译 {#building-from-source}
 
-Set `node.compile` to build Node.js instead of downloading a binary. Install
-Node.js's
-[build dependencies](https://github.com/nodejs/node/blob/main/BUILDING.md#building-nodejs-on-supported-platforms)
-first:
+将 `node.compile` 设为启用后，mise 会编译 Node.js，而不是下载二进制文件。请先安装 Node.js 的[构建依赖项](https://github.com/nodejs/node/blob/main/BUILDING.md#building-nodejs-on-supported-platforms)：
 
 ```sh
 mise settings node.compile=true
 mise install node@26
 ```
 
-mise uses `ninja` when it is on `PATH`. The [`node.ninja`](/lang/node.html#node.ninja),
-[`node.concurrency`](/lang/node.html#node.concurrency),
-[`node.configure_opts`](/lang/node.html#node.configure_opts), [`node.cflags`](/lang/node.html#node.cflags)
-and [`node.apply_patches`](/lang/node.html#node.apply_patches) settings tune the build.
+如果 `PATH` 中存在 `ninja`，mise 会使用它。可通过 [`node.ninja`](/lang/node.html#node.ninja)、[`node.concurrency`](/lang/node.html#node.concurrency)、[`node.configure_opts`](/lang/node.html#node.configure_opts)、[`node.cflags`](/lang/node.html#node.cflags) 和 [`node.apply_patches`](/lang/node.html#node.apply_patches) 设置调整构建过程。
 
-### Unofficial builds
+### 非官方构建
 
-The [unofficial builds](https://unofficial-builds.nodejs.org/) project
-publishes Node.js for platforms the official builds do not cover.
+非官方构建项目 [unofficial builds](https://unofficial-builds.nodejs.org/) 为官方构建未覆盖的平台发布 Node.js。
 
-On musl hosts such as Alpine, mise detects musl and, when it downloads a binary
-rather than compiling (see the Alpine note above), fetches Node.js's `musl`
-flavor from the unofficial builds automatically while `node.mirror_url` is the
-default. The [`libc`](/configuration/settings.html#libc) setting set to `musl`
-has the same effect.
+在 Alpine 等使用 musl 的主机上，mise 会检测 musl。如果从默认的 `node.mirror_url` 下载二进制文件而非编译（见上文关于 Alpine 的说明），则会自动从 unofficial builds 获取 Node.js 的 `musl` 版本。将 [`libc`](/configuration/settings.html#libc) 设为 `musl` 也会产生相同效果。
 
-For other platforms, such as linux-loong64 or linux-armv6l, or for the
-`glibc-217` flavor built against an older glibc, point mise at the unofficial
-builds:
+对于 linux-loong64、linux-armv6l 等其他平台，或针对较旧 glibc 构建的 `glibc-217` 版本，可将 mise 指向 unofficial builds：
 
 ```sh
 mise settings node.mirror_url=https://unofficial-builds.nodejs.org/download/release/
 ```
 
-Then choose a flavor with [`node.flavor`](/lang/node.html#node.flavor) if you need one:
+如有需要，再通过 [`node.flavor`](/lang/node.html#node.flavor) 选择构建类型：
 
 ```sh
 mise settings node.flavor=glibc-217
 ```
 
-## Migrating from nvm, nodenv, or Homebrew
+## 从 nvm、nodenv 或 Homebrew 迁移
 
-To reuse Node.js versions you already installed, link them into mise with
-[`mise sync node`](/cli/sync/node.html):
+若要复用已安装的 Node.js 版本，可使用 [`mise sync node`](/cli/sync/node.html) 将其链接到 mise：
 
 ```sh
 mise sync node --nvm     # reads versions under node.nvm_dir (NVM_DIR)
@@ -272,34 +193,22 @@ mise sync node --nodenv  # reads versions under node.nodenv_root (NODENV_ROOT)
 mise sync node --brew    # reads Homebrew's versioned node@NN formulae
 ```
 
-`mise sync` does not overwrite versions mise installed itself. Then enable
-`.nvmrc` and `.node-version` as described in
-[Version files](#nvmrc-node-version-and-package-json-support).
+`mise sync` 不会覆盖由 mise 自行安装的版本。然后按[版本文件](#nvmrc-node-version-and-package-json-support)中的说明启用 `.nvmrc` 和 `.node-version`。
 
-## Tool options
+## 工具选项
 
-Node.js has no Node.js-specific options. `install_env` reaches source builds,
-the `node -v` and `npm -v` checks, default package installs, `corepack enable`
-and `postinstall` commands. For example, to override compiler flags for a
-source build:
+Node.js 没有专用工具选项。`install_env` 会应用于源码构建、`node -v` 和 `npm -v` 检查、默认软件包安装、`corepack enable` 以及 `postinstall` 命令。例如，以下配置会覆盖源码构建所用的编译器标志：
 
 ```toml [mise.toml]
 [tools]
 node = { version = "26", install_env = { CFLAGS = "-O2" } }
 ```
 
-Other generic options are described in [tool options](/dev-tools/#tool-options).
+其他通用选项请参阅[工具选项](/dev-tools/#tool-options)。
 
-## Default packages file <Badge type="danger" text="deprecated" /> {#default-node-packages}
+## 默认软件包文件 <Badge type="danger" text="deprecated" /> {#default-node-packages}
 
-mise installs the packages listed in `~/.default-npm-packages`
-([`node.default_packages_file`](/lang/node.html#node.default_packages_file)), one per line,
-with `npm install --global` into each new Node.js version. mise warns about this
-file from 2026.11.0 and stops reading it in 2027.11.0. Install npm CLIs with
-the [npm backend](/dev-tools/backends/npm.html) instead, for example
-`"npm:typescript" = "latest"`, or use a
-[`postinstall`](/dev-tools/#tool-postinstall-commands) command for packages
-every Node.js version needs.
+mise 会将 `~/.default-npm-packages`（[`node.default_packages_file`](/lang/node.html#node.default_packages_file)）中按行列出的软件包，通过 `npm install --global` 安装到每个新安装的 Node.js 版本中。自 2026.11.0 起，mise 会对此文件发出警告，并将在 2027.11.0 停止读取。请改用 [npm 后端](/dev-tools/backends/npm.html)安装 npm CLI，例如配置 `"npm:typescript" = "latest"`；也可以对每个 Node.js 版本都需要的软件包使用 [`postinstall`](/dev-tools/#tool-postinstall-commands) 命令。
 
 ## 设置
 

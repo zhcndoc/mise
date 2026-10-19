@@ -2,82 +2,53 @@
 description: "将工具安装到共享系统目录，让机器上的所有用户账户都能使用同一份安装。"
 ---
 
-# System installs
+# 系统级安装
 
-Use a system install when several user accounts, or a container image built as
-root, should share one copy of a tool. `mise install --system` installs into
-`/usr/local/share/mise/installs`, and every user's mise uses a matching version
-from there instead of installing its own.
+如果多个用户账户或以 root 构建的容器镜像需要共用同一份工具安装，请使用系统级安装。`mise install --system` 会将工具安装到 `/usr/local/share/mise/installs`；每位用户的 mise 都会使用其中匹配的版本，而不必自行安装。
 
-## Install a tool for every user {#install-a-tool-for-every-user}
+## 为所有用户安装工具 {#install-a-tool-for-every-user}
 
-Run the command as your normal user, not with `sudo`:
+请以普通用户身份运行命令，不要使用 `sudo`：
 
 ```sh
 mise install --system uv
 ```
 
-On Unix, mise downloads, verifies, and unpacks the tool as you, then runs `sudo`
-to move the prepared installation into the system directory. mise prints each
-command it runs with `sudo`. Cache and lockfile updates stay owned by you. When
-you can already write to the destination, or mise runs as root, it installs
-directly without `sudo`. On Windows, mise never elevates; install into a
-directory you can write to.
+在 Unix 上，mise 会以你的身份下载、验证并解压工具，然后运行 `sudo`，将准备好的安装文件移至系统目录。mise 会打印通过 `sudo` 执行的每条命令。缓存和锁文件更新仍归你所有。如果你已拥有目标目录的写入权限，或 mise 以 root 身份运行，则会直接安装而不使用 `sudo`。在 Windows 上，mise 不会提权；请安装到你有权限写入的目录。
 
-Installing does not select the tool. Declare its version in a config file that
-the users read, such as the system config `/etc/mise/config.toml`:
+安装工具不会自动选择其版本。请在用户会读取的配置文件中声明版本，例如系统配置 `/etc/mise/config.toml`：
 
 ```toml [/etc/mise/config.toml]
 [tools]
 uv = "0.12"
 ```
 
-When a user's mise resolves `uv = "0.12"` and a matching version is in the
-system directory, it uses that installation. To replace an installed version,
-run `mise install --system --force uv`; mise prepares the replacement before it
-changes the existing installation. `mise upgrade` keeps a system install in the
-system directory.
+当用户的 mise 将 `uv = "0.12"` 解析为系统目录中已有的版本时，就会使用该安装。若要替换已安装的版本，请运行 `mise install --system --force uv`；mise 会先准备新版本，再替换现有安装。`mise upgrade` 会将系统级安装保留在系统目录中。
 
 ::: warning
-`sudo mise install --system` works, but it runs the whole installation as root
-and can leave root-owned files in your home directory. mise warns when it
-detects this. Run mise as your user and let it call `sudo` itself. Running mise
-directly as root, for example in a container build, is supported.
+`sudo mise install --system` 虽然可用，但会以 root 身份执行整个安装过程，可能在你的主目录中留下归 root 所有的文件。mise 检测到这种情况时会发出警告。请以普通用户身份运行 mise，让它自行调用 `sudo`。直接以 root 身份运行 mise（例如在容器构建中）也受支持。
 :::
 
-## Supported backends {#supported-backends}
+## 支持的后端 {#supported-backends}
 
-When mise has to elevate, it supports tools from the `aqua`, `github`,
-`gitlab`, `forgejo`, `http`, and `s3` backends. The tool must still work after
-it moves from a temporary directory to its final location, and it must not have
-a tool-level [`postinstall`](/dev-tools/#tool-postinstall-commands) command.
-Symlinks inside the installation are kept; symlinks that point outside it are
-rejected.
+需要提权时，mise 支持通过 `aqua`、`github`、`gitlab`、`forgejo`、`http` 和 `s3` 后端安装工具。工具移出临时目录并放到最终位置后仍须正常工作，而且不能设置工具级 [`postinstall`](/dev-tools/#tool-postinstall-commands) 命令。安装目录内部的符号链接会保留；指向目录外部的符号链接会被拒绝。
 
-Other backends, such as `packslip`, `npm`, or the core tools, and tools that
-record their own install path, such as Python virtual environments, need a
-destination you can write to. These limits do not apply when mise installs
-directly because the directory is writable or mise runs as root.
+`packslip`、`npm` 等其他后端、核心工具，以及会记录自身安装路径的工具（例如 Python 虚拟环境）都要求目标目录可由当前用户写入。如果目标目录本身可写，或 mise 以 root 身份运行并直接安装，则不受这些限制。
 
-## Directories {#directories}
+## 目录 {#directories}
 
-| Directory       | Default                          | Setting                                                                   | Environment variable       |
+| 目录            | 默认值                           | 设置                                                                      | 环境变量                   |
 | --------------- | -------------------------------- | ------------------------------------------------------------------------- | -------------------------- |
-| System data     | `/usr/local/share/mise`          |                                                                           | `MISE_SYSTEM_DATA_DIR`     |
-| System installs | `$MISE_SYSTEM_DATA_DIR/installs` | [`system_installs_dir`](/configuration/settings.html#system_installs_dir) | `MISE_SYSTEM_INSTALLS_DIR` |
-| System shims    | `$MISE_SYSTEM_DATA_DIR/shims`    | [`system_shims_dir`](/configuration/settings.html#system_shims_dir)       | `MISE_SYSTEM_SHIMS_DIR`    |
-| System config   | `/etc/mise`                      |                                                                           | `MISE_SYSTEM_CONFIG_DIR`   |
+| 系统数据目录     | `/usr/local/share/mise`          |                                                                           | `MISE_SYSTEM_DATA_DIR`     |
+| 系统安装目录     | `$MISE_SYSTEM_DATA_DIR/installs` | [`system_installs_dir`](/configuration/settings.html#system_installs_dir) | `MISE_SYSTEM_INSTALLS_DIR` |
+| 系统 shims 目录 | `$MISE_SYSTEM_DATA_DIR/shims`    | [`system_shims_dir`](/configuration/settings.html#system_shims_dir)       | `MISE_SYSTEM_SHIMS_DIR`    |
+| 系统配置目录     | `/etc/mise`                      |                                                                           | `MISE_SYSTEM_CONFIG_DIR`   |
 
-Both settings are global-only, expand `~`, and must resolve to absolute paths.
-Lazy tools declared in the system config install into the system installs
-directory and publish their [bootstrap shims](/dev-tools/shims.html#lazy-tools)
-in the system shim directory. See [Directories](/directories.html) for the
-per-user locations.
+这两个设置仅适用于全局配置，会展开 `~`，且最终必须解析为绝对路径。系统配置中声明的延迟安装工具会安装到系统安装目录，并在系统 shims 目录中发布[启动 shims](/dev-tools/shims.html#lazy-tools)。每用户目录位置请参阅[目录](/directories.html)。
 
-### Share storage between system and user installs {#share-storage}
+### 在系统级和用户级安装间共享存储 {#share-storage}
 
-A distribution can keep its system config while storing every tool in the
-user's home directory. Omarchy, for example, can do this with:
+发行版可以保留系统配置，同时将所有工具存储在用户主目录中。例如，Omarchy 可使用以下设置：
 
 ```toml
 [settings]
@@ -86,45 +57,23 @@ shims_dir = "~/.local/share/mise/shims"
 system_shims_dir = "~/.local/share/mise/shims"
 ```
 
-When the two shim directories are the same, mise manages one combined set of
-shims with one lock. When the two install directories are the same, mise treats
-the directory as user storage rather than scanning it twice.
+当两个 shims 目录相同时，mise 会使用同一把锁管理合并后的 shims。当两个安装目录相同时，mise 会将其视为用户存储，而不会重复扫描。
 
-## Shims for system installs {#system-shims}
+## 系统级安装的 shims {#system-shims}
 
-`mise reshim --system` creates shims in the system shim directory for the tools
-in the system installs directory. Run it after `mise install --system` if a
-command's shim is missing. Like installs, shim updates use `sudo` when the
-directory is not writable. [`mise activate --shims`](/dev-tools/shims.html)
-puts the system shim directory on `PATH` behind the user's own.
+`mise reshim --system` 会为系统安装目录中的工具，在系统 shims 目录中创建 shims。如果某个命令缺少 shim，请在 `mise install --system` 后运行该命令。与安装操作相同，目录不可写时更新 shim 会使用 `sudo`。[`mise activate --shims`](/dev-tools/shims.html) 会将系统 shims 目录加到 `PATH` 中，优先级低于用户自己的 shims 目录。
 
-## Permissions and sudo {#permissions-and-sudo}
+## 权限和 sudo {#permissions-and-sudo}
 
-- An interactive install can prompt for your `sudo` password. A noninteractive
-  install, such as one in CI, fails unless `sudo` works without a password.
-- For an elevated install, the destination and every existing parent directory
-  must be owned by root and must not be writable by group or other users. A
-  root-owned directory with the sticky bit, such as `/tmp`, is allowed. mise
-  checks symlinked parents after resolving them.
-- Set [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo)
-  to `false` to stop mise from calling `sudo`. Installs that need root then
-  fail, and installs into writable directories still work.
-- The elevated step runs `mise` as root without loading any config file, and it
-  writes only inside the system installs and shims directories. A custom
-  location must reach it through the environment, so keep
-  `MISE_SYSTEM_DATA_DIR`, or `MISE_SYSTEM_INSTALLS_DIR` and
-  `MISE_SYSTEM_SHIMS_DIR`, in sudo's `env_keep`. For example, in a file under
-  `/etc/sudoers.d/` edited with `visudo`:
+- 交互式安装可以提示输入 `sudo` 密码。CI 等非交互式安装要求 `sudo` 可免密运行，否则会失败。
+- 提权安装时，目标目录及所有已存在的父目录都必须归 root 所有，且组用户和其他用户均不可写入。带 sticky bit 的 root 所有目录（例如 `/tmp`）允许使用。mise 会在解析符号链接后检查父目录。
+- 将 [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) 设为 `false` 可阻止 mise 调用 `sudo`。需要 root 权限的安装会失败，但安装到可写目录仍可正常进行。
+- 提权步骤会以 root 身份运行 `mise`，且不会加载任何配置文件；它只会写入系统安装目录和 shims 目录。自定义目录必须通过环境变量传递，因此请在 sudo 的 `env_keep` 中保留 `MISE_SYSTEM_DATA_DIR`，或 `MISE_SYSTEM_INSTALLS_DIR` 与 `MISE_SYSTEM_SHIMS_DIR`。例如，使用 `visudo` 编辑 `/etc/sudoers.d/` 下的文件：
 
   ```text
   Defaults env_keep += "MISE_SYSTEM_DATA_DIR"
   ```
 
-## Other shared directories {#other-shared-directories}
+## 其他共享目录 {#other-shared-directories}
 
-`mise install --shared <DIR>` installs into any directory you choose. To have
-mise look for installed versions there, list the directory in
-[`shared_install_dirs`](/configuration/settings.html#shared_install_dirs). mise
-reads those directories but never installs into them on its own. The system
-installs directory is always searched when it exists, so it does not need to be
-listed.
+`mise install --shared <DIR>` 可将工具安装到任意指定目录。若要让 mise 在此查找已安装版本，请将目录列入 [`shared_install_dirs`](/configuration/settings.html#shared_install_dirs)。mise 会读取这些目录，但不会自行向其中安装工具。系统安装目录只要存在就一定会被搜索，因此无需列出。

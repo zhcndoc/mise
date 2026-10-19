@@ -5,20 +5,18 @@ socialDescription: "将 mise run 的跟踪信息和任务日志导出到任意 O
 
 # OpenTelemetry <Badge type="warning" text="experimental" />
 
-mise can export a trace of each `mise run` to any backend that accepts OTLP
-over HTTP, such as [Jaeger](https://www.jaegertracing.io/),
-[Grafana Tempo](https://grafana.com/oss/tempo/), or [SigNoz](https://signoz.io/).
-Traces show which tasks are slow or failing and which monorepo project each
-task belongs to. With log export on, each task's output appears next to its
-span.
+mise 可以将每次 `mise run` 的跟踪信息导出到任何支持通过 HTTP 传输 OTLP 的后端，例如
+[Jaeger](https://www.jaegertracing.io/)、
+[Grafana Tempo](https://grafana.com/oss/tempo/) 或 [SigNoz](https://signoz.io/)。
+跟踪信息可以显示哪些任务运行缓慢或失败，以及每个任务属于哪个 monorepo 项目。启用日志导出后，每个任务的输出也会显示在对应的跨度旁边。
 
-::: warning Experimental
+::: warning 实验性功能
 Span 名称、属性和设置可能随版本变化。导出功能还需要启用 `experimental = true`：否则 `mise run` 每次准备导出时都会报错并停止。
 :::
 
-## Quick start
+## 快速开始
 
-Start a local Jaeger that accepts OTLP over HTTP:
+启动一个接受 HTTP OTLP 请求的本地 Jaeger：
 
 ```sh
 docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
@@ -32,51 +30,49 @@ experimental = true
 otel.enabled = true
 ```
 
-Point mise at Jaeger and run some tasks:
+将 mise 指向 Jaeger，然后运行一些任务：
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 mise run build ::: test ::: lint
 ```
 
-Open `http://localhost:16686` and choose the `mise` service. To export task
-output as well, see [Logs](#logs).
+打开 `http://localhost:16686` 并选择 `mise` 服务。要同时导出任务输出，请参阅[日志](#logs)。
 
-## Configuration
+## 配置
 
-Two settings turn export on, one per signal:
+有两个设置可以分别启用两种信号的导出：
 
-| Setting                                                     | Environment variable | Default | Exports                                                  |
+| 设置                                                       | 环境变量             | 默认值  | 导出内容                                                 |
 | ----------------------------------------------------------- | -------------------- | ------- | -------------------------------------------------------- |
-| [`otel.enabled`](/configuration/settings.html#otel.enabled) | `MISE_OTEL_ENABLED`  | `false` | Traces for `mise run`.                                   |
-| [`otel.logs`](/configuration/settings.html#otel.logs)       | `MISE_OTEL_LOGS`     | `false` | Task stdout and stderr as logs. See [Privacy](#privacy). |
+| [`otel.enabled`](/configuration/settings.html#otel.enabled) | `MISE_OTEL_ENABLED`  | `false` | 导出 `mise run` 的跟踪信息。                            |
+| [`otel.logs`](/configuration/settings.html#otel.logs)       | `MISE_OTEL_LOGS`     | `false` | 将任务的 stdout 和 stderr 作为日志导出。参见[隐私](#privacy)。 |
 
-Everything else comes from the standard
-[OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/protocol/exporter/).
-mise exports nothing unless one of the settings is on, so an
-`OTEL_EXPORTER_OTLP_ENDPOINT` set for another tool does not make mise send
-data. Each signal also needs an endpoint: the general
-`OTEL_EXPORTER_OTLP_ENDPOINT` or the signal's own `..._TRACES_ENDPOINT` or
-`..._LOGS_ENDPOINT`. An empty value counts as unset.
+其余配置使用标准的
+[OpenTelemetry 环境变量](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)。
+除非启用了其中一个设置，否则 mise 不会导出任何内容；因此，为其他工具设置
+`OTEL_EXPORTER_OTLP_ENDPOINT` 不会导致 mise 发送数据。每种信号还需要指定端点：可以使用通用的
+`OTEL_EXPORTER_OTLP_ENDPOINT`，也可以使用该信号专属的 `..._TRACES_ENDPOINT` 或
+`..._LOGS_ENDPOINT`。空值视为未设置。
 
-### Standard environment variables
+### 标准环境变量
 
-| Variable                                                                | Purpose                                                                                                                                                |
+| 变量                                                                    | 用途                                                                                                                                                   |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                           | The OTLP endpoint for both signals, for example `http://localhost:4318`.                                                                               |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`                                    | The traces endpoint. Takes priority over the general endpoint.                                                                                         |
-| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`                                      | The logs endpoint. Takes priority over the general endpoint.                                                                                           |
-| `OTEL_EXPORTER_OTLP_HEADERS`                                            | Headers for export requests, as comma-separated `key=value` pairs, for example for authentication.                                                     |
-| `OTEL_EXPORTER_OTLP_TRACES_HEADERS`                                     | Headers for trace export. Take priority over the general headers.                                                                                      |
-| `OTEL_EXPORTER_OTLP_LOGS_HEADERS`                                       | Headers for log export. Take priority over the general headers.                                                                                        |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                           | `http/protobuf` (the default) or `http/json`. gRPC is not supported.                                                                                   |
-| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`                                    | The protocol for trace export. Takes priority over the general protocol.                                                                               |
-| `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`                                      | The protocol for log export. Takes priority over the general protocol.                                                                                 |
-| `OTEL_EXPORTER_OTLP_TIMEOUT` (`..._TRACES_TIMEOUT`, `..._LOGS_TIMEOUT`) | The export request timeout in milliseconds. mise defaults to 3 seconds, so an unreachable collector delays the end of `mise run` by at most that long. |
-| `OTEL_SERVICE_NAME`                                                     | The `service.name` resource attribute. Defaults to `mise`.                                                                                             |
-| `OTEL_RESOURCE_ATTRIBUTES`                                              | More resource attributes, as comma-separated `key=value` pairs. A `service.name` here also replaces the default.                                       |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                           | 两种信号共用的 OTLP 端点，例如 `http://localhost:4318`。                                                                                               |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`                                    | 跟踪信息的端点。优先于通用端点。                                                                                                                       |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`                                      | 日志的端点。优先于通用端点。                                                                                                                           |
+| `OTEL_EXPORTER_OTLP_HEADERS`                                            | 导出请求使用的请求头，以逗号分隔的 `key=value` 对表示，例如用于身份验证。                                                                               |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS`                                     | 跟踪导出使用的请求头。优先于通用请求头。                                                                                                               |
+| `OTEL_EXPORTER_OTLP_LOGS_HEADERS`                                       | 日志导出使用的请求头。优先于通用请求头。                                                                                                               |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                           | `http/protobuf`（默认值）或 `http/json`。不支持 gRPC。                                                                                                 |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`                                    | 跟踪导出使用的协议。优先于通用协议。                                                                                                                   |
+| `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`                                      | 日志导出使用的协议。优先于通用协议。                                                                                                                   |
+| `OTEL_EXPORTER_OTLP_TIMEOUT`（`..._TRACES_TIMEOUT`、`..._LOGS_TIMEOUT`） | 导出请求超时时间，单位为毫秒。mise 默认为 3 秒，因此即使采集器无法连接，`mise run` 的结束时间最多也只会延后 3 秒。                                    |
+| `OTEL_SERVICE_NAME`                                                     | `service.name` 资源属性，默认为 `mise`。                                                                                                               |
+| `OTEL_RESOURCE_ATTRIBUTES`                                              | 其他资源属性，以逗号分隔的 `key=value` 对表示。在此处设置 `service.name` 也会替换默认值。                                                               |
 
-To send traces to an authenticated collector:
+向需要身份验证的采集器发送跟踪信息：
 
 ```sh
 export MISE_EXPERIMENTAL=1
@@ -86,13 +82,9 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mytoken"
 export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=staging,team.name=platform"
 ```
 
-## Trace structure
+## 跟踪结构
 
-Each `mise run` creates one trace. Its root span covers the whole run, setup
-spans cover the work before tasks start, and each task gets a span. Tasks whose
-config root differs from the project you ran in, such as another monorepo
-project or a parent directory's config, are grouped under a span for that
-config root:
+每次 `mise run` 都会创建一条跟踪记录。根跨度覆盖整个运行过程，初始化跨度覆盖任务开始前的工作，每个任务则各有一个跨度。配置根目录与当前运行项目不同的任务（例如其他 monorepo 项目或父目录配置中的任务）会归到代表该配置根目录的跨度下：
 
 ```text
 mise run //packages/frontend:lint …       ← root span
@@ -109,150 +101,84 @@ mise run //packages/frontend:lint …       ← root span
 └── //:deploy                             ← task span (direct child of root)
 ```
 
-The root span is named after the tasks you asked for, by their full resolved
-names. A task span uses the task's full name plus any arguments, such as
-`//:deploy prod`. A run that fetches [remote tasks](/tasks/toml-tasks.html#remote-tasks)
-also has a `fetch tasks` setup span. See [Monorepo tasks](/tasks/monorepo.html)
-for how mise names projects.
+根跨度以你指定任务的完整解析名称命名。任务跨度使用任务的完整名称及其参数，例如 `//:deploy prod`。如果运行过程获取了[远程任务](/tasks/toml-tasks.html#remote-tasks)，还会出现一个 `fetch tasks` 初始化跨度。mise 对项目的命名方式请参阅 [Monorepo 任务](/tasks/monorepo.html)。
 
-The root span has the attribute `mise.span_type = "run"`, setup spans have
-`"setup"`, and group spans have `"monorepo_group"` plus `mise.config_root`, the
-group's config root. Task spans have no `mise.span_type`.
+根跨度的属性为 `mise.span_type = "run"`，初始化跨度为 `"setup"`，分组跨度则包含 `"monorepo_group"` 和 `mise.config_root`（即该组的配置根目录）。任务跨度没有 `mise.span_type` 属性。
 
-### Span timing
+### 跨度计时
 
-The root span starts once mise knows which tasks you asked for and ends after
-the last task finishes. The setup spans show where the time before the first
-task went: fetching remote tasks, resolving the task graph, installing missing
-tools, running deps providers, and starting daemons. A slow first run on a fresh
-CI runner shows up as a long `install tools` span. A failed setup phase marks
-both its span and the root span as errors.
+mise 确定要运行的任务后，根跨度便开始计时；最后一个任务结束后，根跨度随之结束。初始化跨度展示了第一个任务开始前的耗时分布，包括获取远程任务、解析任务依赖图、安装缺失工具、运行依赖提供程序以及启动守护进程。在全新的 CI 运行器上首次运行较慢时，通常会看到较长的 `install tools` 跨度。初始化阶段失败时，该阶段的跨度和根跨度都会标记为错误。
 
-A task span starts when mise picks the task up, so the gap before its first
-output is mise preparing that task's tools and environment. Root-span time that
-no child covers is scheduling overhead and time spent waiting for a free job
-slot (see [`jobs`](/configuration/settings.html#jobs)). A group span stays open until the
-run ends, because mise cannot know whether another task from that project is
-still to come.
+mise 开始处理任务时，任务跨度就会启动。因此，从跨度开始到任务首次输出之间的间隔，表示 mise 正在准备该任务所需的工具和环境。根跨度中未被子跨度覆盖的时间属于调度开销，以及等待空闲任务槽位的时间（参见 [`jobs`](/configuration/settings.html#jobs)）。分组跨度会一直保持开启，直到本次运行结束，因为 mise 无法预先知道该项目是否还有其他任务。
 
-### Task span attributes
+### 任务跨度属性
 
-| Attribute                | Value                                                                                                    |
+| 属性                     | 值                                                                                                       |
 | ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `mise.task.name`         | The task name.                                                                                           |
-| `mise.task.display_name` | The task name plus its arguments, which is also the span name.                                           |
-| `mise.task.args`         | The arguments passed to the task, joined with spaces. Present only when there are arguments.             |
-| `mise.task.source`       | The path of the config file that defines the task.                                                       |
-| `mise.task.config_root`  | The config root of the task's config file.                                                               |
-| `mise.task.skipped`      | `true` when mise skipped the task because its sources were up to date.                                   |
-| `mise.task.cancelled`    | `true` when mise stopped the task because another task failed or the run was interrupted (Ctrl-C).       |
-| `process.command_args`   | The full argv as a string array (`["mise", task_name, ...args]`), per the OpenTelemetry CLI conventions. |
-| `process.exit.code`      | The task's exit code as an integer: `0` for success or a skipped task, otherwise the failed command's.   |
+| `mise.task.name`         | 任务名称。                                                                                               |
+| `mise.task.display_name` | 任务名称及其参数，同时也是跨度名称。                                                                     |
+| `mise.task.args`         | 传给任务的参数，以空格连接。仅当存在参数时才会出现。                                                     |
+| `mise.task.source`       | 定义该任务的配置文件路径。                                                                               |
+| `mise.task.config_root`  | 任务配置文件所属的配置根目录。                                                                           |
+| `mise.task.skipped`      | 如果 mise 因源文件均为最新而跳过任务，则为 `true`。                                                       |
+| `mise.task.cancelled`    | 如果 mise 因其他任务失败或运行被中断（Ctrl-C）而停止该任务，则为 `true`。                                |
+| `process.command_args`   | 按 OpenTelemetry CLI 约定，以字符串数组表示完整 argv（`["mise", task_name, ...args]`）。                 |
+| `process.exit.code`      | 任务的整数退出码：成功或任务被跳过时为 `0`，否则为失败命令的退出码。                                     |
 
-### Failed vs. cancelled tasks
+### 失败任务与取消任务
 
-Unless you pass `--continue-on-error`, a failing task stops the tasks running
-beside it, so several tasks can end at once from one fault. Only the task that
-failed gets an `Error` span status. The tasks mise shut down get an `Unset`
-status and `mise.task.cancelled = true`, so a search for errored spans finds
-the one real cause. Because a signal ended them, cancelled tasks usually have no
-`process.exit.code`. The root span is still an `Error`, since the run failed.
+除非指定 `--continue-on-error`，失败的任务会停止与其并行运行的任务，因此一次故障可能导致多个任务同时结束。只有真正失败的任务会获得 `Error` 跨度状态。被 mise 停止的任务状态为 `Unset`，并带有 `mise.task.cancelled = true`，这样搜索错误跨度时就能找到真正的故障原因。取消任务是由信号终止的，因此通常没有 `process.exit.code`。由于运行失败，根跨度仍会标记为 `Error`。
 
-A task that exits with its own non-zero status after the first failure is still
-an `Error`, and so is one that crashes. Only tasks ended by the SIGTERM mise
-sends, or interrupted by SIGINT, count as cancelled. Windows reports a
-terminated process as an ordinary exit code, so there every task that ends
-after the first failure is recorded as cancelled.
+在首个任务失败后自行以非零状态退出的任务仍会标记为 `Error`，崩溃的任务也一样。只有被 mise 发送的 SIGTERM 终止，或被 SIGINT 中断的任务才算取消。在 Windows 上，进程终止会报告为普通退出码，因此首个任务失败后结束的其他任务都会记录为已取消。
 
-A task whose tools fail to install never starts, but it still gets an `Error`
-span, since its failure stopped the run.
+如果任务所需工具安装失败，该任务不会启动，但由于安装失败导致本次运行停止，它仍会获得一个 `Error` 跨度。
 
-When `--timeout` expires, mise ends the root span as an `Error` and flushes it.
-Tasks still running at that point are not exported.
+`--timeout` 超时后，mise 会将根跨度标记为 `Error` 并立即刷新导出。此时仍在运行的任务不会被导出。
 
-## Trace propagation
+## 跟踪上下文传播
 
-mise passes each task its trace context in the `TRACEPARENT` and `TRACESTATE`
-environment variables, following the
-[OpenTelemetry environment carriers](https://opentelemetry.io/docs/specs/otel/context/env-carriers/)
-specification. A nested `mise run` joins the same trace, and an
-OpenTelemetry-instrumented program that a task runs, in any language, puts its
-spans under the task's span without other setup.
+mise 会按照 [OpenTelemetry 环境载体](https://opentelemetry.io/docs/specs/otel/context/env-carriers/)规范，通过 `TRACEPARENT` 和 `TRACESTATE` 环境变量向每个任务传递跟踪上下文。嵌套运行的 `mise run` 会加入同一条跟踪记录；任务启动的程序只要已使用 OpenTelemetry 插桩（任何语言均可），其跨度就会直接归到该任务跨度下，无需额外设置。
 
-## Logs
+## 日志
 
-Log export is a separate opt-in (`otel.logs = true` or `MISE_OTEL_LOGS=1`)
-because it sends task output, not only timing, to the collector. Read
-[Privacy](#privacy) before you turn it on.
+日志导出需要单独启用（设置 `otel.logs = true` 或 `MISE_OTEL_LOGS=1`），因为它会向采集器发送任务输出，而不只是计时信息。启用前请阅读[隐私](#privacy)一节。
 
-With log export on, mise exports each line a task writes to stdout or stderr as
-an OTLP log record linked to the task's span, so you can read the output from
-the trace. stdout lines have severity `INFO`, and stderr lines have `WARN`,
-because many tools write progress and warnings to stderr; the span status and
-`process.exit.code` show whether the task failed. Each record carries
-`mise.task.name`, `mise.task.args` when the task has arguments, and
-`output.stream` (`stdout` or `stderr`).
+启用日志导出后，mise 会将任务写入 stdout 或 stderr 的每一行作为 OTLP 日志记录导出，并关联到任务跨度，因此可以直接在跟踪记录中查看输出。stdout 行的严重级别为 `INFO`，stderr 行为 `WARN`，因为许多工具会将进度信息和警告写入 stderr；任务是否失败则由跨度状态和 `process.exit.code` 表示。每条记录都带有 `mise.task.name`；任务含参数时还会带有 `mise.task.args`，以及表示输出流的 `output.stream`（`stdout` 或 `stderr`）。
 
-The link to a span needs trace export too. With `otel.logs` but not
-`otel.enabled`, records still carry trace and span IDs, but no spans are
-exported for them to point at.
+关联到跨度还需要启用跟踪导出。如果只启用 `otel.logs` 而未启用 `otel.enabled`，日志记录仍会带有跟踪 ID 和跨度 ID，但不会导出对应的跨度。
 
-### What is exported
+### 导出内容
 
-mise exports output in every mode that reads it line by line: `prefix`,
-`keep-order`, `timed`, `replacing`, `interleave`, and `quiet`. Output in the
-`silent` mode, from [silenced](/tasks/task-configuration.html#silent) tasks, or
-under `--raw` is not exported.
+mise 会在所有逐行读取输出的模式下导出任务输出：`prefix`、`keep-order`、`timed`、`replacing`、`interleave` 和 `quiet`。`silent` 模式、[静默](/tasks/task-configuration.html#silent)任务的输出，以及使用 `--raw` 时的输出都不会导出。
 
 ::: warning
-With log export on, `interleave` and `quiet` tasks get a pipe instead of the
-terminal so mise can read every line. That can change buffering, colors,
-progress bars, prompts, and anything else that checks for a TTY. Run such a task
-with `--raw` to keep the terminal; its output is then not exported.
+启用日志导出后，`interleave` 和 `quiet` 模式的任务会使用管道而非终端，以便 mise 读取每一行。这可能会影响缓冲、颜色、进度条、提示符以及其他会检查 TTY 的行为。使用 `--raw` 运行此类任务可以保留终端行为，但其输出不会导出。
 :::
 
-### Nested `mise run`
+### 嵌套的 `mise run`
 
-When a task runs `mise run`, the inner run's output also flows through the outer
-task. mise exports each line once, attributed to the innermost task that printed
-it:
+任务运行 `mise run` 时，内部运行的输出也会经过外层任务。mise 每行只导出一次，并将其归到实际打印该行的最内层任务：
 
 ```mise-toml
 [tasks.outer]
 run = "echo building; mise run inner; echo done"
 ```
 
-`building` and `done` belong to the `outer` span, and everything `inner` prints
-belongs to the `inner` span. If the inner run does not export logs itself,
-because `otel.logs` is off for it or it uses `--raw`, the outer run exports that
-output instead. Output from a `raw` or `interactive` task inside a nested run
-that does export logs is exported by neither run. Terminal output is the same
-either way.
+`building` 和 `done` 属于 `outer` 跨度，`inner` 打印的所有内容则属于 `inner` 跨度。如果内部运行没有自行导出日志（例如它未启用 `otel.logs` 或使用了 `--raw`），外层运行就会代为导出这些输出。若嵌套运行启用了日志导出，内部 `raw` 或 `interactive` 任务的输出不会由任何一层运行导出。无论采用哪种方式，终端上看到的输出都相同。
 
-## Privacy
+## 隐私
 
-Anything mise exports can be stored, indexed, and read by everyone with access
-to your telemetry backend, under that backend's retention policy. Trace export
-sends each task's name, display name, arguments, config file and config root,
-`process.command_args`, exit code, timing, and status. Log export also sends
-every line the task writes to stdout and stderr.
+mise 导出的所有内容都可能由遥测后端按照其保留策略进行存储和索引，并向所有有权限访问该后端的人开放。跟踪导出会发送每个任务的名称、显示名称、参数、配置文件及配置根目录、`process.command_args`、退出码、计时信息和状态。日志导出还会发送任务写入 stdout 和 stderr 的每一行。
 
-- Pass secrets in environment variables, not arguments. Arguments, for example
-  `mise run deploy -- --token=hunter2`, are exported unless they match a
-  [redaction](/environments/secrets/#redaction); environment variables are not
-  exported.
-- With `otel.logs = true`, any secret a task prints is exported, including one
-  that leaks through `set -x` or debug logging.
-- Redactions apply to exported arguments, span names, error messages, and log
-  lines, but they hide only the values you list. They do not detect secrets.
-- `--raw` output is never exported, and redactions do not apply to it either.
+- 请通过环境变量传递机密，不要放在参数中。除非参数符合[脱敏规则](/environments/secrets/#redaction)，否则会被导出，例如 `mise run deploy -- --token=hunter2`；环境变量不会导出。
+- 启用 `otel.logs = true` 时，任务打印的任何机密都会被导出，包括通过 `set -x` 或调试日志意外泄露的内容。
+- 脱敏规则适用于导出的参数、跨度名称、错误消息和日志行，但只会隐藏你列出的值，不会自动识别机密。
+- `--raw` 模式下的输出永远不会导出，脱敏规则也不适用于这些输出。
 
-To keep task output on the machine, leave `otel.logs` off.
+若要让任务输出仅保留在本机，请不要启用 `otel.logs`。
 
-## Behavior and limits
+## 行为与限制
 
-- Without `otel.enabled` or `otel.logs`, mise creates no trace context and
-  exports nothing.
-- Offline mode ([`offline`](/configuration/settings.html#offline) or
-  `MISE_OFFLINE=1`) turns export off.
-- Export failures never fail a task. Run with `MISE_DEBUG=1` to see them.
+- 如果既未启用 `otel.enabled` 也未启用 `otel.logs`，mise 不会创建跟踪上下文，也不会导出任何内容。
+- 离线模式（[`offline`](/configuration/settings.html#offline) 或 `MISE_OFFLINE=1`）会关闭导出。
+- 导出失败不会导致任务失败。设置 `MISE_DEBUG=1` 运行即可查看相关错误。

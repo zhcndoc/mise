@@ -2,7 +2,7 @@
 description: "没有 Homebrew cask 时，可从厂商下载地址安装 macOS 应用，并通过校验和验证文件。"
 ---
 
-# Direct macOS app downloads (macos-app)
+# 直接下载 macOS 应用（macos-app）
 
 The `macos-app` manager installs an app bundle from a download you declare, for
 a vendor or internal app that has no Homebrew cask. You give the URL, checksum,

@@ -2,7 +2,7 @@
 description: "使用 [tool_alias] 将工具名指向其他后端，或为版本请求设置稳定的别名。"
 ---
 
-# Tool aliases
+# 工具别名
 
 Use `[tool_alias]` to point a tool name at a different backend or to give a
 version request a name. Put shared aliases in the project's `mise.toml`, so

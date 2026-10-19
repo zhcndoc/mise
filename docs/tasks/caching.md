@@ -5,22 +5,18 @@ socialDescription: "跳过输入未变化的任务，或从实验性制品缓存
 
 # 任务缓存
 
-mise can skip a task whose inputs have not changed in two ways. Freshness
-checks compare file modification times and need only `sources` and `outputs`.
-The artifact cache also brings back outputs you deleted and results from earlier
-inputs, for example after you switch back to a branch you already built.
+当任务输入未变化时，mise 可以通过两种方式跳过任务。新鲜度检查比较文件修改时间，只需要配置 `sources` 和 `outputs`。制品缓存还可以恢复已删除的输出，以及较早输入对应的结果，例如切回此前已经构建过的分支时。
 
-| Mechanism        | Compares                                       | When nothing changed                          | Status       |
+| 机制             | 比较内容                                       | 输入未变化时的行为                            | 状态         |
 | ---------------- | ---------------------------------------------- | --------------------------------------------- | ------------ |
-| Freshness checks | Modification times of sources and outputs      | Skips the task and leaves its outputs alone   | Stable       |
-| Artifact cache   | Source contents and the other cache-key inputs | Restores the outputs and replays the task log | Experimental |
+| 新鲜度检查       | 来源文件和输出文件的修改时间                   | 跳过任务并保留其输出                          | 稳定         |
+| 制品缓存         | 来源内容及其他缓存键输入                       | 恢复输出并重放任务日志                        | 实验性       |
 
-To share artifact cache results between CI and developer machines, see
-[Remote task cache](/tasks/remote-cache.html).
+若要在 CI 与开发机器之间共享制品缓存结果，请参阅[远程任务缓存](/tasks/remote-cache.html)。
 
-## Skip up-to-date tasks
+## 跳过最新任务
 
-Give a task `sources` and `outputs`:
+为任务配置 `sources` 和 `outputs`：
 
 ```mise-toml
 [tasks.build]
@@ -29,53 +25,33 @@ sources = ["Cargo.toml", "src/**/*.rs"]
 outputs = ["target/debug/mycli"]
 ```
 
-[`mise run build`](/cli/run.html) runs `cargo build` the first time. On later
-runs it prints `[build] sources up-to-date, skipping` until the task becomes
-[stale](#what-makes-a-task-stale). Use `mise run --force build` to run it
-anyway; `--force` also reruns the task's dependencies.
+首次运行 [`mise run build`](/cli/run.html) 时会执行 `cargo build`。之后只要任务未变为[过期](#what-makes-a-task-stale)，就会输出 `[build] sources up-to-date, skipping`。使用 `mise run --force build` 可强制运行；`--force` 也会重新运行任务依赖项。
 
-[`sources`](/tasks/task-configuration.html#sources) and
-[`outputs`](/tasks/task-configuration.html#outputs) accept globs, `!`
-exclusions, and usage arguments; the task configuration reference describes the
-pattern syntax. [`mise watch`](/cli/watch.html) uses the same `sources` to decide
-which files to watch.
+[`sources`](/tasks/task-configuration.html#sources) 和 [`outputs`](/tasks/task-configuration.html#outputs) 接受 glob、`!` 排除项和 usage 参数；模式语法见任务配置参考。 [`mise watch`](/cli/watch.html) 使用相同的 `sources` 来决定监视哪些文件。
 
-### What makes a task stale
+### 任务何时过期
 
-A task with `sources` is up to date only when all of these hold:
+配置了 `sources` 的任务只有在满足以下所有条件时才算最新：
 
-- Every declared output exists.
-- The newest source file is older than the newest output file.
-- The list of source files, and the size and modification time of each, match
-  what mise recorded after the task last succeeded. Deleting a source, adding
-  one, or restoring an older copy therefore makes the task stale.
-- No source has a modification time of zero (1970-01-01), which some archive
-  tools set.
-- No dependency that has its own `sources` ran or restored outputs in the same
-  `mise run`.
+- 每个已声明的输出都存在。
+- 最新来源文件的时间早于最新输出文件。
+- 来源文件列表，以及每个文件的大小和修改时间，都与 mise 在任务上次成功后记录的值一致。因此，删除来源、添加来源或恢复旧副本都会使任务过期。
+- 来源文件的修改时间都不是零（1970-01-01）；部分归档工具会将修改时间设为零。
+- 同一次 `mise run` 中，没有运行或从缓存恢复任何自身配置了 `sources` 的依赖项。
 
-mise adds the config file that defines the task to its sources. Editing that
-file, even to change a different task, makes the task stale.
+mise 会将定义任务的配置文件加入来源。编辑该文件（即使只是修改另一个任务）也会使此任务过期。
 
-A failed run records nothing, so the task stays stale until it succeeds.
+失败的运行不会记录任何内容，因此任务会一直过期，直到运行成功。
 
-### Outputs
+### 输出
 
-- Explicit paths or globs, such as `outputs = ["dist"]`, are compared by the
-  [freshness rules](#what-makes-a-task-stale).
-- When a task has `sources` but no `outputs`, mise uses
-  `outputs = { auto = true }`. It touches a marker file in its state directory
-  after each successful run, so the task reruns when a source changes after
-  that run.
-- `outputs = []` declares that the task writes no files. Freshness checks then
-  never skip it. With the [artifact cache](#enable-artifact-caching), mise
-  caches its result and log instead.
+- `outputs = ["dist"]` 这样的显式路径或 glob 会按照[新鲜度规则](#what-makes-a-task-stale)进行比较。
+- 任务配置了 `sources` 但未配置 `outputs` 时，mise 会使用 `outputs = { auto = true }`。每次成功运行后，它会在状态目录中更新一个标记文件；此后只要来源发生变化，任务就会重新运行。
+- `outputs = []` 表示任务不会写入文件，因此新鲜度检查永远不会跳过它。启用[制品缓存](#enable-artifact-caching)后，mise 会改为缓存任务结果和日志。
 
-### Dependencies
+### 依赖项
 
-When a dependency that has `sources` runs or restores its outputs from the
-artifact cache, for any reason including `--force`, every task that depends on
-it also runs, even when its own sources are unchanged:
+配置了 `sources` 的依赖项运行或从制品缓存恢复输出时（包括因 `--force` 而运行），所有依赖它的任务也会运行，即使这些任务自己的来源没有变化：
 
 ```mise-toml
 [tasks."core:build"]
@@ -90,39 +66,25 @@ outputs = ["packages/frontend/dist/**/*.js"]
 depends = ["core:build"]
 ```
 
-A change in `packages/core/src/` runs both tasks. With no changes, both are
-skipped. A dependency without `sources` runs every time, so it does not
-invalidate the tasks that depend on it.
+更改 `packages/core/src/` 会运行这两个任务。没有更改时，两个任务都会被跳过。未配置 `sources` 的依赖项每次都会运行，因此不会使依赖它的任务失效。
 
-### Inputs shared by every task
+### 所有任务共用的输入
 
 [`task_config.global_inputs`](/tasks/task-configuration.html#task_config.global_inputs)
-<Badge type="warning" text="experimental" /> adds source patterns to every task
-in a config scope, such as lockfiles that should invalidate everything. A task
-without its own `sources` then gets those inputs and automatic outputs, so mise
-skips it while they are unchanged.
+<Badge type="warning" text="实验性" /> 会将来源模式添加到配置范围内的每个任务，例如添加会使所有任务失效的锁文件。未自行配置 `sources` 的任务也会继承这些输入和自动输出，因此只要它们未变化，mise 就会跳过任务。
 
-### Freshness settings
+### 新鲜度设置
 
-- [`task.source_freshness_hash_contents`](/configuration/settings.html#task.source_freshness_hash_contents)
-  compares BLAKE3 hashes of the source contents with those recorded after the
-  last successful run, and ignores modification times. A task is also stale when
-  its outputs changed since that run. The first run after you enable it always
-  runs the task.
-- [`task.source_freshness_equal_mtime_is_fresh`](/configuration/settings.html#task.source_freshness_equal_mtime_is_fresh)
-  treats a source and output with the same modification time as up to date.
-  Enable it on filesystems with coarse timestamps.
+- [`task.source_freshness_hash_contents`](/configuration/settings.html#task.source_freshness_hash_contents) 会将来源内容的 BLAKE3 哈希与任务上次成功后记录的值比较，并忽略修改时间。如果输出自上次运行后发生变化，任务也会过期。启用该设置后的第一次运行始终会执行任务。
+- [`task.source_freshness_equal_mtime_is_fresh`](/configuration/settings.html#task.source_freshness_equal_mtime_is_fresh) 会将修改时间相同的来源和输出视为最新。时间戳精度较低的文件系统可启用此设置。
 
-## Enable the artifact cache <Badge type="warning" text="experimental" /> {#enable-artifact-caching}
+## 启用制品缓存 <Badge type="warning" text="实验性" /> {#enable-artifact-caching}
 
-::: warning Experimental
-The artifact cache requires `experimental = true`.
+::: warning 实验性功能
+使用制品缓存需要设置 `experimental = true`。
 :::
 
-Set `cache = { enabled = true }` on a task with `sources` and `outputs`. After a
-successful run, mise stores the outputs and the task's log under a key computed
-from the task's inputs. When the same inputs come back, mise restores them
-instead of running the task.
+对同时配置了 `sources` 和 `outputs` 的任务设置 `cache = { enabled = true }`。任务成功运行后，mise 会根据任务输入计算缓存键，并保存输出和任务日志。相同输入再次出现时，mise 会恢复缓存，而不运行任务。
 
 ```mise-toml
 [settings]
@@ -135,19 +97,15 @@ outputs = ["dist"]
 cache = { enabled = true, env = ["NODE_ENV"] }
 ```
 
-| Situation                                      | mise prints                                   | What happens                                              |
-| ---------------------------------------------- | --------------------------------------------- | --------------------------------------------------------- |
-| First run                                      | `[build] cache miss: no matching cache entry` | Runs `npm run build` and stores `dist` and the log        |
-| Next run, nothing changed                      | `[build] sources up-to-date, skipping`        | Skips the task and replays the stored log                 |
-| `dist` deleted                                 | `[build] restored outputs from cache 7ede…`   | Restores `dist` and replays the log without running       |
-| `src` changed and built, then changed back     | `[build] restored outputs from cache 7ede…`   | Finds the entry for the earlier inputs and restores it    |
-| `NODE_ENV=production`, a value not seen before | `[build] cache miss: no matching cache entry` | Runs the task and stores a second entry for the new value |
+| 情况                                           | mise 输出                                      | 行为                                                         |
+| ---------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------ |
+| 首次运行                                       | `[build] cache miss: no matching cache entry` | 运行 `npm run build` 并保存 `dist` 和日志                    |
+| 再次运行，输入未变化                           | `[build] sources up-to-date, skipping`        | 跳过任务并重放已保存的日志                                   |
+| `dist` 已删除                                  | `[build] restored outputs from cache 7ede…`   | 恢复 `dist` 并重放日志，不运行任务                           |
+| `src` 更改并构建后又恢复原状                  | `[build] restored outputs from cache 7ede…`   | 找到先前输入对应的条目并恢复                                 |
+| `NODE_ENV=production`，此前未见过该值          | `[build] cache miss: no matching cache entry` | 运行任务，并为新值保存第二个条目                             |
 
-For checks such as lint or tests that write no files, set `outputs = []` to
-cache only the result and the log. A rerun with unchanged inputs prints
-`sources up-to-date, skipping` and replays the log. Restoring the result for
-earlier inputs, for example after you revert a change, prints
-`restored result from cache <key>`:
+对于 lint 或测试等不写入文件的检查，可设置 `outputs = []`，只缓存结果和日志。输入未变化时再次运行会输出 `sources up-to-date, skipping` 并重放日志。恢复较早输入对应的结果时（例如撤销某项更改后），会输出 `restored result from cache <key>`：
 
 ```mise-toml
 [tasks.lint]
@@ -157,40 +115,27 @@ outputs = []
 cache = { enabled = true }
 ```
 
-### Requirements
+### 要求
 
-- [`experimental`](/configuration/settings.html#experimental) is `true`.
-- The task has at least one entry in `sources`.
-- The task has explicit `outputs` or `outputs = []`. Automatic outputs cannot be
-  stored.
-- Every output pattern, including the part after a `!` exclusion, is a relative
-  path inside the task directory, and no output contains a source.
+- [`experimental`](/configuration/settings.html#experimental) 为 `true`。
+- 任务至少配置一项 `sources`。
+- 任务显式配置了 `outputs` 或 `outputs = []`。自动输出不能被存储。
+- 每个输出模式（包括 `!` 排除项之后的部分）都必须是任务目录内的相对路径，且任何输出都不能包含来源。
 
-A task that sets `cache.enabled = true` without meeting these fails with an
-error such as `task build cache requires at least one source`.
+任务设置 `cache.enabled = true` 却不满足这些要求时会失败，例如报错 `task build cache requires at least one source`。
 
-### When mise does not use the cache
+### mise 不使用缓存的情况
 
-- `mise run --task-cache off` or `MISE_TASK_CACHE=off` turns the artifact cache
-  off for the run. Freshness checks still apply.
-- `mise run --dry-run` does not read, write, or compute cache keys, unless you
-  also ask for an [explanation](#inspect-and-diagnose-cached-results).
-- `mise run --force` skips cache reads and runs the task, then stores the new
-  result.
-- A task that receives [`secrets`](/tasks/task-configuration.html#secrets) is
-  never cached, because its log or outputs could contain them. mise warns, and
-  freshness checks still apply.
-- A `raw` or `interactive` task, or any task run with `--raw`, keeps the
-  terminal and is not cached. mise warns, and the task runs every time.
-- A task runs instead of restoring when one of its dependencies has `sources`
-  but no artifact cache and ran in the same `mise run`.
+- `mise run --task-cache off` 或 `MISE_TASK_CACHE=off` 会在本次运行中关闭制品缓存，但新鲜度检查仍会生效。
+- `mise run --dry-run` 不会读取、写入或计算缓存键，除非同时请求[缓存键说明](#inspect-and-diagnose-cached-results)。
+- `mise run --force` 会跳过缓存读取并运行任务，然后保存新结果。
+- 接收 [`secrets`](/tasks/task-configuration.html#secrets) 的任务永远不会缓存，因为日志或输出可能包含密钥。mise 会发出警告，但新鲜度检查仍适用。
+- `raw` 或 `interactive` 任务，以及任何使用 `--raw` 运行的任务都会占用终端，因此不会缓存。mise 会发出警告，且每次都会运行任务。
+- 同一次 `mise run` 中，如果依赖项配置了 `sources` 但未启用制品缓存，任务会运行而不会恢复缓存。
 
-### Cache every eligible task in a project
+### 为项目中所有符合条件的任务启用缓存
 
-Set `task_config.cache` to give every task in a config scope a default `cache`
-value. Only tasks with at least one source and explicit outputs or
-`outputs = []` receive it; other tasks stay uncached. A task's own `cache` value
-replaces the default entirely.
+设置 `task_config.cache` 可为配置范围内的所有任务提供默认 `cache` 值。只有至少配置一个来源，且显式设置输出或 `outputs = []` 的任务会采用该值；其他任务仍不缓存。任务自身的 `cache` 值会完全替代默认值。
 
 ```mise-toml
 [settings]
@@ -211,12 +156,9 @@ run = "./deploy.sh"
 cache = { enabled = false }
 ```
 
-In a monorepo, [`[monorepo.task_defaults]`](/tasks/workspace-graph.html#root-task-defaults)
-can set `cache` for a task name in every project, and the Node.js workspace
-provider reads `cache` from
-[`turbo.json`](/tasks/workspace-graph.html#provider-task-suggestions).
+在 monorepo 中，[`[monorepo.task_defaults]`](/tasks/workspace-graph.html#root-task-defaults) 可为每个项目中的指定任务名称设置 `cache`；Node.js workspace provider 也会从 [`turbo.json`](/tasks/workspace-graph.html#provider-task-suggestions) 读取 `cache`。
 
-## How a cached run works {#artifact-cache-flow}
+## 缓存运行流程 {#artifact-cache-flow}
 
 ```mermaid
 ---
@@ -241,15 +183,10 @@ flowchart TB
     run -->|Success| save
 ```
 
-mise computes the key first, so `cache.command_inputs` run even when the task is
-then skipped. The skip requires both a
-[freshness check](#what-makes-a-task-stale) and a key equal to the one stored by
-the last run; for `outputs = []`, the key alone decides.
-A lookup checks the local cache and then, when one is configured, the
-[remote cache](/tasks/remote-cache.html). Failed runs are not stored.
+mise 会先计算缓存键，因此即使之后跳过任务，`cache.command_inputs` 中的命令仍会运行。只有[新鲜度检查](#what-makes-a-task-stale)通过，且缓存键与上次运行时保存的键一致，任务才会跳过；对于 `outputs = []`，则只由缓存键决定。
+查找时会先检查本地缓存；如果配置了[远程缓存](/tasks/remote-cache.html)，随后也会检查远程缓存。失败的运行不会被存储。
 
-When the task runs instead of restoring, mise prints the reason after
-`cache miss:`:
+任务实际运行而非从缓存恢复时，mise 会在 `cache miss:` 后显示原因：
 
 - `no matching cache entry`
 - `cache entry was corrupt`
@@ -258,33 +195,23 @@ When the task runs instead of restoring, mise prints the reason after
 - `cache reads are disabled`
 - `dependency completed without a cache key`
 
-## What goes into the cache key
+## 缓存键包含哪些内容
 
-- The paths and contents of the source files, plus the config file that defines
-  the task. Paths are relative to the outermost config root, so checkouts at
-  different locations share entries.
-- The task definition: its name, `run` entries, arguments, shell, output
-  patterns, directory, and whether it runs as a `depends_post` dependency.
-- The values of the task's own `env` entries.
-- The values, or absence, of the variables named in `cache.env` and
-  `task_config.global_env`.
-- The mise variables the task can see, from `[vars]` and the task's `vars`.
-- The output of each `cache.command_inputs` command.
-- The resolved tool versions.
-- The cache keys of cached dependencies.
-- The operating system and architecture.
+- 来源文件的路径和内容，以及定义该任务的配置文件。路径相对于最外层配置根目录，因此位于不同位置的检出目录也能共用缓存条目。
+- 任务定义：任务名称、`run` 项、参数、shell、输出模式、目录，以及它是否作为 `depends_post` 依赖运行。
+- 任务自身 `env` 项的值。
+- `cache.env` 和 `task_config.global_env` 中指定的变量值，或变量未设置这一状态。
+- 任务可见的 mise 变量，包括 `[vars]` 和任务的 `vars`。
+- 每条 `cache.command_inputs` 命令的输出。
+- 解析后的工具版本。
+- 已缓存依赖项的缓存键。
+- 操作系统和体系结构。
 
-Other environment variables, whether inherited from your shell or set in
-`[env]`, are part of the key only when you list them in `cache.env`. A source
-outside the outermost config root, such as `../../shared/file`, is keyed by its
-absolute path, so only checkouts at the same path share that entry.
+从 shell 继承或在 `[env]` 中设置的其他环境变量，只有列入 `cache.env` 后才会成为缓存键的一部分。位于最外层配置根目录之外的来源（例如 `../../shared/file`）会使用绝对路径作为键的一部分，因此只有路径相同的检出目录才能共用该条目。
 
-## External dependencies and lockfiles
+## 外部依赖与锁文件
 
-Declare dependency manifests and lockfiles as sources so dependency updates
-invalidate the cache. List them in a task's `sources`, share them through an
-input group, or apply them to every task in a config scope with
-`task_config.global_inputs`:
+将依赖清单和锁文件声明为来源，这样依赖项更新时缓存就会失效。可以将它们列入任务的 `sources`，通过输入组共享，或者用 `task_config.global_inputs` 将它们应用于配置范围内的所有任务：
 
 ```mise-toml
 [settings]
@@ -303,14 +230,11 @@ outputs = ["dist"]
 cache = { enabled = true }
 ```
 
-The lockfile describes the resolved dependency graph, so do not list installed
-dependency directories such as `node_modules`. Resolved mise tools are already
-part of the key.
+锁文件描述了已解析的依赖关系图，因此不要将 `node_modules` 之类的已安装依赖目录列入来源。已解析的 mise 工具已包含在缓存键中。
 
-### Command inputs
+### 命令输入
 
-Use `cache.command_inputs` for external state that committed files do not
-capture, such as a package registry selection or a compiler wrapper version:
+对于已提交文件无法反映的外部状态（例如软件包注册表选择或编译器包装器版本），可使用 `cache.command_inputs`：
 
 ```mise-toml
 [tasks.build]
@@ -320,33 +244,20 @@ outputs = ["dist"]
 cache = { enabled = true, command_inputs = ["pnpm config get registry"] }
 ```
 
-Each command runs before the cache lookup, with the task's shell (including a
-`--shell` override on the command line), environment, tools, working directory,
-and sandbox. Its command text, stdout, and stderr become part of the key; mise
-hashes the output without printing or keeping it.
+每条命令都会在查找缓存前运行，并使用任务的 shell（包括命令行上的 `--shell` 覆盖项）、环境、工具、工作目录和沙箱。命令文本、标准输出和标准错误都会成为缓存键的一部分；mise 会对输出进行哈希处理，但不会打印或保留输出内容。
 
-A command input must be non-empty and exit successfully. It inherits the task's
-`timeout`, or 30 seconds when the task has none, and may print at most 16 MiB
-across stdout and stderr. Keep command inputs fast, deterministic, and free of
-side effects, because they run every time mise computes the key. They do not run
-during a dry run or for `raw` and `interactive` tasks, unless you request a
-cache-key explanation with `--task-cache-explain` or
-`--task-cache-explain-json`.
+命令输入不能为空，且必须成功退出。它会继承任务的 `timeout`；如果任务未设置超时时间，则默认使用 30 秒。标准输出与标准错误合计最多可输出 16 MiB。由于 mise 每次计算缓存键时都会运行这些命令，因此命令输入应快速、确定且无副作用。试运行期间，以及 `raw` 和 `interactive` 任务中不会运行这些命令；但请求使用 `--task-cache-explain` 或 `--task-cache-explain-json` 说明缓存键时除外。
 
-### Environment variables and cache keys
+### 环境变量与缓存键
 
-`task_config.global_env` adds variable names to the `cache.env` of every
-cache-enabled task in the config scope, including tasks that set their own
-`cache`:
+`task_config.global_env` 会将变量名加入配置范围内每个启用了缓存的任务的 `cache.env`，包括自行设置 `cache` 的任务：
 
 ```mise-toml
 [task_config]
 global_env = ["CI", "NODE_ENV"]
 ```
 
-Pass credentials and other values that must not affect the key with
-[`pass_through_env`](/tasks/task-configuration.html#sandbox) on a
-task, or `task_config.global_pass_through_env` for every task in the scope:
+对于不应影响缓存键的凭据和其他值，可在任务上使用 [`pass_through_env`](/tasks/task-configuration.html#sandbox)，或使用 `task_config.global_pass_through_env` 将其应用于范围内的所有任务：
 
 ```mise-toml
 [task_config]
@@ -356,54 +267,31 @@ global_pass_through_env = ["CI_JOB_TOKEN"]
 pass_through_env = ["NPM_TOKEN"]
 ```
 
-These lists matter when environment sandboxing is active through `allow_env`,
-`deny_env`, `deny_all`, or the matching command-line options. Without a sandbox,
-tasks inherit your whole environment anyway. In a sandbox, a cache-enabled task
-still receives the variables named in `cache.env` and `task_config.global_env`;
-a task without an enabled cache does not.
+通过 `allow_env`、`deny_env`、`deny_all` 或对应的命令行选项启用环境沙箱后，这些列表才会影响任务行为。未启用沙箱时，任务仍会继承整个环境。在沙箱中，启用了缓存的任务仍会收到 `cache.env` 和 `task_config.global_env` 指定的变量；未启用缓存的任务则不会收到这些变量。
 
-A pass-through variable can change what the task does without changing the key,
-so do not use one for a value that affects the outputs. mise does not store
-pass-through values, but a task can still write them into its log or outputs.
+透传变量可能在不改变缓存键的情况下改变任务行为，因此不要将会影响输出的值设为透传变量。mise 不会存储透传变量的值，但任务仍可能将其写入日志或输出文件。
 
-## Cache correctness and deterministic tasks
+## 缓存正确性与确定性任务
 
-Enabling `cache` asserts that the same cache-key inputs always produce the same
-log and outputs. Every value that can change the result must be in the key: a
-source or input group, a resolved mise tool, `cache.env`,
-`cache.command_inputs`, or a cached dependency. That includes configuration and
-lockfiles, locale and feature flags, compiler wrappers, generated inputs, and
-the state of external services the task reads. The operating system and
-architecture are added automatically; nothing else about the machine is.
+启用 `cache` 就意味着相同的缓存键输入始终会产生相同的日志和输出。所有可能改变结果的值都必须纳入缓存键：来源或输入组、已解析的 mise 工具、`cache.env`、`cache.command_inputs`，或已缓存的依赖项。其中包括配置和锁文件、区域设置与功能开关、编译器包装器、生成的输入，以及任务读取的外部服务状态。操作系统和体系结构会自动加入；机器的其他信息不会加入。
 
-A cached task must not depend on undeclared files, the clock, randomness,
-changing network responses, or ambient environment variables. When you cannot
-capture such an input reliably, do not cache the task. A task that uses a
-credential only to download content must key on a lockfile or digest of that
-content, not on the credential.
+启用缓存的任务不得依赖未声明的文件、时钟、随机数、不断变化的网络响应或环境中的其他变量。如果无法可靠地捕获这类输入，就不要缓存该任务。若任务只使用凭据来下载内容，缓存键应包含锁文件或该内容的摘要，而不应包含凭据。
 
-Declared outputs must describe everything a hit needs to reproduce. mise does
-not replay side effects outside them, such as database writes, deployments,
-notifications, or changes elsewhere in the workspace. `outputs = []` is correct
-only when the task changes no files that later work depends on.
+声明的输出必须涵盖缓存命中时需要还原的所有内容。mise 不会重放输出以外的副作用，例如数据库写入、部署、通知或工作区其他位置的变更。只有当任务不会修改后续工作所依赖的任何文件时，`outputs = []` 才是正确的设置。
 
-When you are unsure, run with `--task-cache off` while you investigate, add the
-missing inputs, and run with `--force` once before you trust new entries. On
-Linux, an [audit](#find-undeclared-inputs-on-linux) can show many undeclared
-reads and writes, but it cannot prove that a task is deterministic.
+如果不确定，可先使用 `--task-cache off` 运行任务进行排查，补齐缺失的输入，并在信任新缓存条目前使用一次 `--force`。在 Linux 上，[审计](#find-undeclared-inputs-on-linux)可以显示许多未声明的读写操作，但无法证明任务具有确定性。
 
-## Per-run cache access
+## 按次运行控制缓存访问
 
-`mise run --task-cache <mode>`, or `MISE_TASK_CACHE`, controls the artifact
-cache for one run:
+`mise run --task-cache <mode>` 或 `MISE_TASK_CACHE` 可控制单次运行的制品缓存：
 
-| Mode                   | Reads cached results | Stores new results | Notes                                                         |
+| 模式                   | 读取缓存结果         | 存储新结果         | 说明                                                         |
 | ---------------------- | -------------------- | ------------------ | ------------------------------------------------------------- |
-| `read-write` (default) | Yes                  | Yes                |                                                               |
-| `read-only`            | Yes                  | No                 | For runs that must not publish entries, such as pull requests |
-| `write-only`           | No                   | Yes                | Always runs the task; use it to warm a cache                  |
-| `off`                  | No                   | No                 | Freshness checks still apply                                  |
-| `local-only`           | Yes                  | Yes                | Uses only the local cache and ignores a configured remote     |
+| `read-write`（默认）   | 是                   | 是                 |                                                               |
+| `read-only`            | 是                   | 否                 | 适用于不得发布缓存条目的运行，例如拉取请求                   |
+| `write-only`           | 否                   | 是                 | 始终运行任务；可用于预热缓存                                  |
+| `off`                  | 否                   | 否                 | 新鲜度检查仍然生效                                            |
+| `local-only`           | 是                   | 是                 | 仅使用本地缓存，并忽略已配置的远程缓存                        |
 
 ```sh
 # Do not publish entries from an untrusted pull request
@@ -416,15 +304,13 @@ mise run --task-cache write-only build
 mise run --task-cache off --force build
 ```
 
-`--task-cache` affects only the artifact cache. The unrelated `--no-cache` flag
-refetches remote task files.
+`--task-cache` 只影响制品缓存。另一个用途不同的 `--no-cache` 标志会重新获取远程任务文件。
 
-## Inspect and diagnose cached results
+## 检查和诊断缓存结果
 
-### Explain a cache key
+### 说明缓存键
 
-`mise run --task-cache-explain <task>` lists the inputs that produced the key.
-Add `--dry-run` to see them without running, restoring, or storing anything:
+`mise run --task-cache-explain <task>` 会列出生成缓存键的输入。添加 `--dry-run` 可查看这些输入，而不会运行任务、恢复缓存或存储任何内容：
 
 ```sh
 mise run --dry-run --task-cache-explain build
@@ -450,47 +336,29 @@ mise run --dry-run --task-cache-explain build
 [build]   platform: linux-x86_64
 ```
 
-Values that could be secret appear only as names or counts: environment
-variables show whether they are set, mise variables show their names, and the
-task definition, source contents, command output, dependency keys, and tool
-versions show a count or `included`. Command inputs still run, because their
-output is part of the key.
+可能包含机密的值只会显示名称或数量：环境变量只显示是否已设置，mise 变量只显示名称，任务定义、来源内容、命令输出、依赖项缓存键和工具版本则只显示数量或 `included`。命令输入仍会运行，因为其输出是缓存键的一部分。
 
-`mise run --dry-run --task-cache-explain-json <task>` prints the same
-information as one compact JSON object per task on stdout, with the same
-redaction. Each object includes the opaque `cache_key`, so tools can tell runs
-of the same task apart without seeing its arguments or environment.
+`mise run --dry-run --task-cache-explain-json <task>` 会在标准输出中为每个任务打印一个紧凑 JSON 对象，信息相同且同样会进行脱敏。每个对象都包含不透明的 `cache_key`，因此工具可以区分同一任务的不同运行，而无需看到其参数或环境。
 
-### Measure hits
+### 统计命中情况
 
-`mise run --task-cache-stats <task>` prints a summary after the run:
+`mise run --task-cache-stats <task>` 会在运行结束后打印摘要：
 
 ```text
 Task cache: 1/2 hits (50%), 11 B restored, 5.5ms saved
 ```
 
-It counts artifact cache lookups, the bytes of outputs and logs restored, and
-the run time recorded when each restored entry was created. A task skipped by
-the freshness check does no lookup, so a run where every task was up to date
-prints `Task cache: no lookups`.
+该统计会计算制品缓存查找次数、恢复的输出和日志字节数，以及创建每个恢复条目时记录的运行时间。被新鲜度检查跳过的任务不会查找缓存，因此如果所有任务都已是最新状态，会显示 `Task cache: no lookups`。
 
-### List and clear entries
+### 列出和清除条目
 
-[`mise cache task <task>`](/cli/cache/task.html) lists every local entry for a
-task: its key, whether it is the current entry, its stored and restorable sizes,
-the recorded run time, the last access time, and the output roots. Add `--json`
-for an array that includes each entry's checksum.
+[`mise cache task <task>`](/cli/cache/task.html) 会列出某个任务的所有本地条目，包括其缓存键、是否为当前条目、存储大小和可还原大小、记录的运行时间、上次访问时间以及输出根目录。添加 `--json` 可获得包含每个条目校验和的数组。
 
-[`mise cache clear --task <task>`](/cli/cache/clear.html) deletes that task's
-local entries and its record of the current entry. It leaves the outputs in your
-working directory, other tasks' entries, and copies on a remote server alone. It
-skips entries whose owner it cannot verify; `mise cache clear` without `--task`
-removes everything.
+[`mise cache clear --task <task>`](/cli/cache/clear.html) 会删除该任务的本地条目和当前条目记录，但会保留工作目录中的输出、其他任务的条目以及远程服务器上的副本。对于无法验证所有者的条目会跳过；不带 `--task` 的 `mise cache clear` 会删除所有内容。
 
-### Find undeclared inputs on Linux
+### 在 Linux 上查找未声明的输入
 
-Set `cache.audit = true` to have mise trace the task with `strace` and warn about
-undeclared files:
+设置 `cache.audit = true`，让 mise 使用 `strace` 跟踪任务，并对未声明的文件发出警告：
 
 ```mise-toml
 [tasks.build]
@@ -500,27 +368,19 @@ outputs = ["dist"]
 cache = { enabled = true, audit = true }
 ```
 
-A restored task does not run, so force a run to audit it:
+从缓存恢复的任务不会运行，因此请强制运行以执行审计：
 
 ```sh
 mise run --force build
 ```
 
-mise reports reads beneath the workspace root that no `sources` entry matches,
-and writes beneath the task directory that no `outputs` entry matches. Paths are
-relative to the task directory, using `..` for reads above it, so you can copy a
-reported read into `sources` as printed. Reads of directories and of files
-outside those roots, such as system libraries, are not reported. The audit only
-warns: it does not stop the task or keep a successful result out of the cache.
+mise 会报告工作区根目录下未匹配任何 `sources` 项的读取，以及任务目录下未匹配任何 `outputs` 项的写入。路径相对于任务目录；对于任务目录上层的读取会使用 `..`，因此可以照抄报告中的路径并将其加入 `sources`。目录读取和这些根目录以外的文件读取（例如系统库）不会报告。审计只会发出警告，不会停止任务，也不会阻止成功结果进入缓存。
 
-The audit needs Linux and `strace` on `PATH`. Elsewhere, or without `strace`,
-mise warns and runs the task without auditing.
+审计需要 Linux 环境，并要求 `strace` 位于 `PATH` 中。在其他平台或未安装 `strace` 时，mise 会发出警告并在不审计的情况下运行任务。
 
-The console shows at most 20 paths per task. To get every path, set
+控制台每个任务最多显示 20 条路径。若要获取所有路径，可将
 [`task.cache.audit_report`](/configuration/settings.html#task.cache.audit_report)
-to a file. mise writes one JSON object per line with `task`, `kind`, and `path`
-fields. Each `mise` invocation replaces the file, and every audited task in that
-invocation adds its lines:
+设置为文件路径。mise 会每行写入一个包含 `task`、`kind` 和 `path` 字段的 JSON 对象。每次调用 `mise` 都会替换该文件，而此次调用中每个经过审计的任务都会向文件追加相应行：
 
 ```sh
 MISE_TASK_CACHE_AUDIT_REPORT=audit.jsonl mise run --force build
@@ -530,32 +390,14 @@ MISE_TASK_CACHE_AUDIT_REPORT=audit.jsonl mise run --force build
 
 ## 存储、保留和输出重放
 
-mise stores entries in `$MISE_CACHE_DIR/task-artifacts/v2`. Set
-[`task.cache_dir`](/configuration/settings.html#task.cache_dir) or
-`MISE_TASK_CACHE_DIR` to use another parent directory; mise keeps the entries in
-its `v2` subdirectory. `mise cache clear` and cache pruning include the task
-cache wherever it lives.
+mise 会将条目存储在 `$MISE_CACHE_DIR/task-artifacts/v2`。设置 [`task.cache_dir`](/configuration/settings.html#task.cache_dir) 或 `MISE_TASK_CACHE_DIR` 可指定其他父目录；mise 仍会将条目放在其 `v2` 子目录中。无论任务缓存位于何处，`mise cache clear` 和缓存清理都会将其纳入处理范围。
 
-Each entry holds the declared outputs as an archive and the task's stdout and
-stderr. mise applies [redactions](/environments/secrets/#redaction) to the log
-before storing it, but it does not scan output files or catch a credential it
-does not know about. Do not cache a task that prints or writes secrets.
+每个条目都以归档形式保存声明的输出，以及任务的标准输出和标准错误。存储日志前，mise 会应用[脱敏规则](/environments/secrets/#redaction)，但不会扫描输出文件，也无法识别它不知道的凭据。不要缓存会打印或写入机密信息的任务。
 
-Set [`task.cache_max_size`](/configuration/settings.html#task.cache_max_size) to
-bound the total size of the cache, or
-[`task.cache_max_age`](/configuration/settings.html#task.cache_max_age) to drop
-entries not used within a period. mise enforces both after storing a new entry,
-removing the least recently used entries first, and treats an entry older than
-the age limit as a miss.
+设置 [`task.cache_max_size`](/configuration/settings.html#task.cache_max_size) 可限制缓存总大小；设置 [`task.cache_max_age`](/configuration/settings.html#task.cache_max_age) 可清理在指定期限内未使用的条目。存储新条目后，mise 会执行这两项限制，优先删除最近最少使用的条目；超过时限的条目会被视为未命中。
 
-mise verifies each entry's checksum before restoring it, and concurrent `mise`
-processes can share the cache safely. A corrupt, partial, or unreadable entry
-counts as a miss, so the task runs. Errors while reading or writing the cache
-never turn a successful task into a failure.
+恢复条目前，mise 会验证每个条目的校验和；多个 `mise` 进程也可以安全地共用缓存。损坏、不完整或无法读取的条目都会视为未命中，因此任务会实际运行。读取或写入缓存时发生错误，不会导致原本成功的任务失败。
 
-mise replays a restored log with the output mode of the current run, so
-`prefix`, `interleave`, `keep-order`, `timed`, `replacing`, `quiet`, `silent`,
-and per-stream silencing apply to it as they do to live output.
+mise 会按照当前运行的输出模式重放恢复的日志，因此 `prefix`、`interleave`、`keep-order`、`timed`、`replacing`、`quiet`、`silent` 以及按数据流静默的设置，与处理实时输出时一样适用于这些日志。
 
-When a task depends on cached tasks, their keys are part of its key, so it can
-restore its own entry after its dependencies run, are skipped, or are restored.
+如果任务依赖已缓存的任务，这些依赖项的缓存键也会成为该任务缓存键的一部分。因此，无论依赖项实际运行、被跳过还是从缓存恢复，该任务都可以恢复自己的缓存条目。

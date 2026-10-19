@@ -2,21 +2,15 @@
 description: "编写 Lua 插件，将 VS Code 扩展等软件包管理器接入 bootstrap packages。"
 ---
 
-# Writing package manager plugins {#package-manager-plugins}
+# 编写软件包管理器插件 {#package-manager-plugins}
 
-A package manager plugin adds a manager to
-[`[bootstrap.packages]`](/bootstrap/packages/) for packages that belong to
-another program, such as VS Code extensions, `gh` extensions or Helm plugins.
-mise asks the plugin which requested packages are installed, then hands it
-batches to install, upgrade or remove.
+软件包管理器插件会向[`[bootstrap.packages]`](/bootstrap/packages/)添加一个管理器，用于管理属于其他程序的软件包，例如 VS Code 扩展、`gh` 扩展或 Helm 插件。mise 会询问插件哪些已请求的软件包已经安装，然后分批交由插件安装、升级或移除。
 
-The packages stay in the host program's own state, not in mise's data
-directory. Users set up a plugin as described in the bootstrap guide to
-[package manager plugins](/bootstrap/packages/plugins.html).
+这些软件包仍由宿主程序自行管理，不会存放在 mise 的数据目录中。用户可按照 bootstrap 指南中的[软件包管理器插件说明](/bootstrap/packages/plugins.html)进行配置。
 
-## Quick start {#layout}
+## 快速开始 {#layout}
 
-A package manager plugin has this layout:
+软件包管理器插件的目录结构如下：
 
 ```text
 mise-vscode-extensions/
@@ -29,18 +23,11 @@ mise-vscode-extensions/
     └── package_uninstall.lua   # optional: remove a batch for prune
 ```
 
-`hooks/package_installed.lua` and `hooks/package_install.lua` together mark
-the directory as a package manager plugin; with only one of them, it is a tool
-plugin. A directory that also has `hooks/backend_install.lua` is a backend
-plugin, so keep a package manager plugin in its own repository.
+`hooks/package_installed.lua` 和 `hooks/package_install.lua` 同时存在时，mise 会将该目录识别为软件包管理器插件；如果只存在其中一个，则会被识别为工具插件。若目录中还包含 `hooks/backend_install.lua`，它就会成为后端插件，因此请将软件包管理器插件放在独立仓库中。
 
-Users choose the manager name when they install the plugin and use it as the
-prefix in `[bootstrap.packages]`. With `vscode = "..."` in `[bootstrap.plugins]`,
-packages are `"vscode:ms-python.python"`. `PLUGIN.name` does not have to match,
-and the name cannot be one of the built-in managers, such as `brew` or `apt`.
+用户安装插件时会选择管理器名称，并将该名称用作 `[bootstrap.packages]` 中的软件包前缀。例如，在 `[bootstrap.plugins]` 中设置 `vscode = "..."` 后，软件包可写为 `"vscode:ms-python.python"`。`PLUGIN.name` 无需与管理器名称一致，但管理器名称不能与 `brew`、`apt` 等内置管理器重名。
 
-Link your working copy under the manager name, without a `package:` prefix, and
-check status before you change anything:
+请直接使用管理器名称链接工作副本，不要添加 `package:` 前缀；修改任何内容前先检查状态：
 
 ```sh
 mise plugins link vscode ./mise-vscode-extensions
@@ -48,10 +35,9 @@ mise bootstrap packages status
 mise bootstrap packages apply --dry-run
 ```
 
-## Complete example {#complete-example}
+## 完整示例 {#complete-example}
 
-This plugin manages VS Code extensions with the `code` command on Linux and
-macOS.
+此插件在 Linux 和 macOS 上通过 `code` 命令管理 VS Code 扩展。
 
 ```lua [metadata.lua]
 PLUGIN = {
@@ -133,7 +119,7 @@ function PLUGIN:PackageUninstall(ctx)
 end
 ```
 
-With the plugin linked as `vscode`, this config installs two extensions:
+将插件链接为 `vscode` 后，以下配置会安装两个扩展：
 
 ```toml [mise.toml]
 [bootstrap.packages]
@@ -141,132 +127,85 @@ With the plugin linked as `vscode`, this config installs two extensions:
 "vscode:golang.go" = "0.40.0"
 ```
 
-`mise bootstrap packages apply` calls `PackageInstalled` with both requests,
-then `PackageInstall` with the ones reported missing or at another version, then
-`PackageInstalled` again to record which packages mise installed.
-`mise bootstrap packages upgrade` calls `PackageUpgrade` with the installed
-ones. The commands pass extension names in the `EXTENSION` environment variable
-rather than splicing them into the command line.
+`mise bootstrap packages apply` 会先将两个请求传给 `PackageInstalled`，再将报告为缺失或版本不符的项目传给 `PackageInstall`，最后再次调用 `PackageInstalled`，记录由 mise 安装的软件包。`mise bootstrap packages upgrade` 会将已安装的软件包传给 `PackageUpgrade`。这些命令通过 `EXTENSION` 环境变量传递扩展名称，而不会将名称拼接到命令行中。
 
 ## mise.plugin.toml {#mise-plugin-toml}
 
-The `[package-manager]` table describes the manager:
+`[package-manager]` 表用于描述管理器：
 
-| Key                     | Default        | Value                                                                                                 |
+| 键                       | 默认值         | 说明                                                                                                  |
 | ----------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
-| `requires`              | none           | Host programs the hooks run. mise adds its shims and global tools to `PATH` but does not install them |
-| `supports_version_pins` | `false`        | Whether the manager can install a pinned version such as `"0.40.0"`                                   |
-| `os`                    | every platform | Platforms the manager runs on: `macos`, `linux` or `windows`                                          |
+| `requires`              | 无             | 钩子运行所需的宿主程序。mise 会将自身 shim 和全局工具加入 `PATH`，但不会安装这些程序                     |
+| `supports_version_pins` | `false`        | 管理器是否支持安装固定版本，例如 `"0.40.0"`                                                            |
+| `os`                    | 所有平台       | 管理器支持运行的平台：`macos`、`linux` 或 `windows`                                                    |
 
-When a program in `requires` is missing, mise reports the manager as unavailable
-and tells the user to add it to `[tools]` or install it. The hooks see the
-process `PATH` plus mise's shims and the tools in the global config. When
-`supports_version_pins` is `false`, mise skips pinned requests with a warning.
+缺少 `requires` 中的程序时，mise 会将管理器标记为不可用，并提示用户将程序加入 `[tools]` 或自行安装。钩子可访问进程原有的 `PATH`、mise 的 shim，以及全局配置中的工具。`supports_version_pins` 为 `false` 时，mise 会发出警告并跳过固定版本的请求。
 
 ## Hooks {#hooks}
 
-| Hook               | File                          | Required | mise calls it                                                         |
+| 钩子               | 文件                          | 必需     | mise 何时调用                                                         |
 | ------------------ | ----------------------------- | -------- | --------------------------------------------------------------------- |
-| `PackageInstalled` | `hooks/package_installed.lua` | yes      | to read the state of every request, before and after each action      |
-| `PackageInstall`   | `hooks/package_install.lua`   | yes      | to install missing packages and packages at another version           |
-| `PackageUpgrade`   | `hooks/package_upgrade.lua`   | no       | for `mise bootstrap packages upgrade`; falls back to `PackageInstall` |
-| `PackageUninstall` | `hooks/package_uninstall.lua` | no       | for `mise bootstrap packages prune --manager <name>`                  |
+| `PackageInstalled` | `hooks/package_installed.lua` | 是       | 在每个操作前后读取所有请求的状态                                     |
+| `PackageInstall`   | `hooks/package_install.lua`   | 是       | 安装缺失的软件包和版本不符的软件包                                    |
+| `PackageUpgrade`   | `hooks/package_upgrade.lua`   | 否       | 用于 `mise bootstrap packages upgrade`；缺省时回退到 `PackageInstall` |
+| `PackageUninstall` | `hooks/package_uninstall.lua` | 否       | 用于 `mise bootstrap packages prune --manager <name>`                 |
 
-Each request in `ctx.packages` is a table with `name` and `version`. A hook
-fails the whole batch by raising an error with `error()`. mise does not call an
-action hook when its batch is empty. Hooks can use the `cmd`, `json`, `file` and
-other modules in the [Plugin Lua reference](/plugin-lua-modules.html); see the
-[command module](/plugin-lua-modules.html#command-module) for running the host
-program. `print()` writes a `mise [vscode] ...` line.
+`ctx.packages` 中的每个请求都是包含 `name` 和 `version` 的表。钩子调用 `error()` 报错时，整批操作都会失败。批次为空时，mise 不会调用操作钩子。钩子可以使用 [Plugin Lua 参考](/plugin-lua-modules.html)中的 `cmd`、`json`、`file` 等模块；运行宿主程序的方式请参阅[命令模块](/plugin-lua-modules.html#command-module)。`print()` 会输出一行 `mise [vscode] ...` 消息。
 
 ### PackageInstalled {#packageinstalled}
 
-| `ctx` field | Value                                                                              |
+| `ctx` 字段  | 值                                                                                 |
 | ----------- | ---------------------------------------------------------------------------------- |
-| `packages`  | Every request in this run; `version` is the requested pin, or `nil` for `"latest"` |
+| `packages`  | 本次运行中的所有请求；`version` 是请求固定的版本，`"latest"` 时为 `nil`               |
 
-Return `{ packages = { ... } }` with one entry for every request:
+请返回 `{ packages = { ... } }`，其中每个请求都对应一个条目：
 
-| Field     | Value                                           |
+| 字段      | 值                                              |
 | --------- | ----------------------------------------------- |
-| `name`    | The request's `name`                            |
-| `state`   | `"installed"` or `"missing"`                    |
-| `version` | The installed version, for an installed package |
+| `name`    | 请求中的 `name`                                  |
+| `state`   | `"installed"` 或 `"missing"`                    |
+| `version` | 若软件包已安装，则为其已安装版本                 |
 
-The requests are the merged `[bootstrap.packages]` declarations, or the subset
-named on the command line. mise compares a pinned request's `version` with the
-installed version using exact string equality, and treats a mismatch as a
-package to install. A missing entry or any other `state` is an error.
+请求是合并后的 `[bootstrap.packages]` 声明，或者命令行中指定的子集。mise 会用字符串精确比较固定请求的 `version` 与已安装版本，并将不匹配的软件包视为待安装项目。缺少条目或 `state` 为其他值都会导致错误。
 
-This hook drives status, previews and every action, so keep it fast and follow
-the [rules](#hard-contracts). A wrong answer causes needless installs or hides
-missing packages.
+状态查询、预览和所有操作都会调用此钩子，因此请保持其运行速度，并遵守[规则](#hard-contracts)。返回错误结果会导致不必要的安装，或掩盖缺失的软件包。
 
 ### PackageInstall {#packageinstall}
 
-| `ctx` field | Value                                                                      |
+| `ctx` 字段  | 值                                                                         |
 | ----------- | -------------------------------------------------------------------------- |
-| `packages`  | Requests that `PackageInstalled` reported missing or at another version    |
-| `dry_run`   | `true` for `--dry-run`: print what you would do and change nothing         |
-| `update`    | `true` for `--update`: refresh the manager's metadata first, if it has any |
+| `packages`  | `PackageInstalled` 报告为缺失或版本不符的请求                              |
+| `dry_run`   | `--dry-run` 时为 `true`：打印计划执行的操作，不作任何更改                   |
+| `update`    | `--update` 时为 `true`：如有管理器元数据，先刷新元数据                     |
 
-Return nothing or a table. Install each request, at `version` when it is set.
+可不返回内容或返回一个表。逐个安装请求；如果设置了 `version`，则安装对应版本。
 
 ### PackageUpgrade {#packageupgrade}
 
-`PackageUpgrade` receives the same `ctx` as `PackageInstall`. `ctx.packages`
-holds the requests that `PackageInstalled` reported installed, including ones
-that are already current, so the hook can skip them. Missing packages are left
-out; `mise bootstrap packages upgrade` tells the user to run `apply` for them.
-Upgrade only the packages in `ctx.packages`: `code --update-extensions`, for
-example, updates every extension. Without this hook, mise calls
-`PackageInstall`.
+`PackageUpgrade` 接收与 `PackageInstall` 相同的 `ctx`。`ctx.packages` 中包含 `PackageInstalled` 报告为已安装的请求，也包括已是最新版本的项目，因此钩子可以跳过它们。缺失的软件包不会包含在内；`mise bootstrap packages upgrade` 会提示用户对这些软件包运行 `apply`。升级时只能处理 `ctx.packages` 中的软件包：例如 `code --update-extensions` 会升级所有扩展。未实现此钩子时，mise 会调用 `PackageInstall`。
 
 ### PackageUninstall {#packageuninstall}
 
-| `ctx` field | Value                                                      |
+| `ctx` 字段  | 值                                                         |
 | ----------- | ---------------------------------------------------------- |
-| `packages`  | The packages to remove; `version` is the installed version |
+| `packages`  | 要移除的软件包；`version` 为已安装版本                     |
 
-mise sends `PackageUninstall` only packages it installed itself: one that
-`PackageInstalled` reported missing before `PackageInstall` and installed after.
-Packages that were already present, and packages still declared in the current
-config or in another trusted config mise tracks, are never sent. Dry runs never
-call this hook. After the hook returns or fails, mise calls `PackageInstalled`
-again and keeps track of anything still installed.
+mise 只会将自己安装的软件包传给 `PackageUninstall`：也就是 `PackageInstall` 执行前由 `PackageInstalled` 报告为缺失、执行后又报告为已安装的软件包。原本已存在的软件包，以及仍在当前配置或 mise 跟踪的其他可信配置中声明的软件包，都不会传入。试运行不会调用此钩子。钩子返回或报错后，mise 会再次调用 `PackageInstalled`，并记录仍处于已安装状态的软件包。
 
-mise keeps its record of what it installed in its state directory, by manager
-name, so the record survives removing and reinstalling the plugin, and prune
-works even after the last declaration for the manager is gone. After the user
-confirms a prune, mise reloads the config and drops any package that has become
-declared; it never adds a package the user did not confirm.
+mise 会在状态目录中按管理器名称记录自行安装的软件包，因此即使移除并重新安装插件，该记录仍会保留；即便管理器的最后一项声明已删除，prune 仍可正常工作。用户确认 prune 后，mise 会重新加载配置，并跳过期间新增声明的软件包；它绝不会添加用户未确认的待移除项目。
 
-## Rules {#hard-contracts}
+## 约束规则 {#hard-contracts}
 
-- Never run `sudo` in any hook. mise never elevates for package manager
-  plugins.
-- Treat versions as opaque strings and compare them with `==`; never parse or
-  sort them.
-- Keep `PackageInstalled` free of side effects and prompts.
-- Never treat a package's absence from a batch as a request to remove it. A
-  command can target a subset, and removing the last declaration for a manager
-  sends no batch at all.
-- Make `PackageUninstall` remove only the packages it is given, never every
-  package the manager considers unused.
-- List every host program the hooks run in `requires`.
-- Use the same host profile or scope in every hook, so that `PackageInstalled`
-  reports on the packages the action hooks change.
+- 不要在任何钩子中运行 `sudo`。mise 不会为软件包管理器插件提权。
+- 将版本视为不透明字符串，并使用 `==` 比较；不要解析或排序版本。
+- 确保 `PackageInstalled` 没有副作用，也不会提示用户输入。
+- 不要将批次中缺少某个软件包视为要求移除该软件包。命令可能只针对部分软件包；如果管理器的最后一项声明被移除，甚至不会发送任何批次。
+- `PackageUninstall` 只能移除传入的软件包，不能移除管理器认为未使用的所有软件包。
+- 在 `requires` 中列出钩子运行的所有宿主程序。
+- 所有钩子都应使用相同的宿主配置或作用范围，以确保 `PackageInstalled` 查询的是操作钩子所更改的软件包。
 
-## Testing {#testing}
+## 测试 {#testing}
 
-Test against a throwaway profile of the host program, or a fake command on
-`PATH` that records its arguments, before you change real packages. Cover an
-empty config, missing and installed packages, a pinned version that differs, a
-failing action and a request for a subset on the command line. Check that
-`mise bootstrap packages status` changes nothing, that each action touches only
-`ctx.packages`, and that `--dry-run` changes nothing. Test
-`mise bootstrap packages prune --manager vscode --dry-run` and a real prune
-separately.
+修改真实软件包前，请先使用宿主程序的临时配置，或在 `PATH` 中放置一个会记录参数的模拟命令进行测试。测试内容应覆盖空配置、缺失和已安装的软件包、版本不符的固定版本、操作失败，以及命令行指定部分软件包的情况。确认 `mise bootstrap packages status` 不会更改任何内容、每项操作只处理 `ctx.packages` 中的软件包，且 `--dry-run` 不会产生更改。请分别测试 `mise bootstrap packages prune --manager vscode --dry-run` 和实际 prune。
 
-See [Publishing plugins](/plugin-publishing.html#testing-before-publication) for
-an isolated test setup.
+隔离测试环境的搭建方式请参阅[发布插件](/plugin-publishing.html#testing-before-publication)。

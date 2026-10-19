@@ -3,7 +3,7 @@ description: "在单次 SSH 会话中向远程主机授予私有 GitHub 仓库�
 socialDescription: "在单次 SSH 会话中向远程主机授予 GitHub 只读权限。"
 ---
 
-# GitHub relay (mise ssh)
+# GitHub 中继（mise ssh）
 
 [`mise ssh`](/cli/ssh.html) opens an SSH session like `ssh`. With
 `--github-relay-read-only`, Git and mise on the remote host can read the private

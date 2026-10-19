@@ -2,17 +2,13 @@
 description: "通过 mise 安装 CMake，并为 C++ 项目定义配置、构建和清理任务。"
 ---
 
-# C++ and CMake
+# C++ 与 CMake
 
-Pin CMake for a C++ project and run its configure, build and clean steps as
-tasks. A C or C++ compiler must already be installed, for example through your
-operating system's development tools; installing CMake does not install a
-compiler.
+为 C++ 项目固定 CMake 版本，并将 configure、build 和 clean 步骤设为任务。系统中必须已安装 C 或 C++ 编译器，例如通过操作系统的开发工具安装；安装 CMake 不会同时安装编译器。
 
-## Build a CMake project {#a-c-project-with-cmake}
+## 构建 CMake 项目 {#a-c-project-with-cmake}
 
-The tasks use CMake's build interface, so they work with any generator, such as
-Make or Ninja:
+这些任务使用 CMake 的构建接口，因此可与 Make、Ninja 等任意生成器配合使用：
 
 ```toml [mise.toml]
 [tools]
@@ -34,9 +30,7 @@ alias = "c"
 run = "cmake --build build --target clean"
 ```
 
-For a runnable example, add a `CMakeLists.txt` and a source file next to
-`mise.toml`. `cmake_minimum_required` states the oldest CMake the project
-supports; the `[tools]` entry picks the one you build with:
+要运行此示例，请在 `mise.toml` 旁添加 `CMakeLists.txt` 和一个源文件。`cmake_minimum_required` 指定项目支持的最低 CMake 版本；`[tools]` 中的条目则选择实际用于构建的版本：
 
 ```cmake [CMakeLists.txt]
 cmake_minimum_required(VERSION 3.20)
@@ -52,16 +46,8 @@ int main() {
 }
 ```
 
-Run `mise run build`, then `./build/hello`. The build task configures the
-`build` directory before it compiles. Add `build/` to `.gitignore`.
+运行 `mise run build`，然后执行 `./build/hello`。build 任务会在编译前配置 `build` 目录。请将 `build/` 加入 `.gitignore`。
 
-With a single-configuration generator such as Unix Makefiles, the program is
-`build/hello`. Multi-configuration generators, such as Visual Studio or Ninja
-Multi-Config, put it in a configuration subdirectory; build one configuration
-with `mise run build -- --config Debug` and look in that generator's output
-path.
+使用 Unix Makefiles 这类单配置生成器时，程序位于 `build/hello`。Visual Studio 或 Ninja Multi-Config 这类多配置生成器会将程序放在配置对应的子目录中；可运行 `mise run build -- --config Debug` 构建一个配置，再到该生成器的输出路径中查找。
 
-After the first build, `mise run clean` removes compiled targets with the
-generator's clean target and keeps the build configuration. See
-[CMake's command-line reference](https://cmake.org/cmake/help/latest/manual/cmake.1.html)
-for generator selection and build options.
+首次构建后，`mise run clean` 会调用生成器的 clean target 删除编译产物，同时保留构建配置。有关生成器选择和构建选项，请参阅 [CMake 命令行参考](https://cmake.org/cmake/help/latest/manual/cmake.1.html)。

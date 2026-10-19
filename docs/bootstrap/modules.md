@@ -3,20 +3,13 @@ description: "将可选的机器初始化配置归入配置环境，为每台机
 socialDescription: "将可选的机器初始化配置归入配置环境，并按机器选择模块。"
 ---
 
-# Machine modules
+# 机器模块
 
-A module is a [config environment](/configuration/environments.html) file that
-holds one piece of machine setup, such as SSH or GPG, with its packages,
-dotfiles, and services together. Each machine selects the modules it needs, and
-[`mise bootstrap unapply`](/cli/bootstrap/unapply.html) removes what a module
-set up.
+模块是一个[配置环境](/configuration/environments.html)文件，用于集中管理机器初始化中的某一部分，例如 SSH 或 GPG，以及相关软件包、dotfiles 和服务。每台机器都可以选择所需模块；[`mise bootstrap unapply`](/cli/bootstrap/unapply.html) 则可移除模块创建的资源。
 
-## Define a module
+## 定义模块
 
-Keep shared setup in `~/.config/mise/config.toml` and put each optional piece
-in a `config.<name>.toml` file beside it. This SSH module is for a Linux machine
-with apt and a systemd user session. It installs the client, links an SSH config
-from your dotfiles checkout, and runs an agent:
+将共用设置放在 `~/.config/mise/config.toml` 中，并将每项可选配置放入同目录下的 `config.<name>.toml` 文件。以下 SSH 模块适用于使用 apt 和 systemd 用户会话的 Linux 机器：它会安装 SSH 客户端、从 dotfiles 检出目录链接 SSH 配置，并运行 agent：
 
 ```toml [~/.config/mise/config.ssh.toml]
 [bootstrap.packages]
@@ -30,58 +23,34 @@ scope = "user"
 command = "ssh-agent -D -a %t/ssh-agent.socket"
 ```
 
-Create `~/src/dotfiles/ssh/config` before you apply this module. To use the
-agent from your shell, set `SSH_AUTH_SOCK` to
-`$XDG_RUNTIME_DIR/ssh-agent.socket`.
+应用此模块前，请先创建 `~/src/dotfiles/ssh/config`。若要在 Shell 中使用 agent，请将 `SSH_AUTH_SOCK` 设为 `$XDG_RUNTIME_DIR/ssh-agent.socket`。
 
-In a [bootstrap project](/bootstrap/from-repository.html#a-bootstrap-project),
-use `mise.toml` and `mise.ssh.toml` in the project directory instead.
+在 [Bootstrap 项目](/bootstrap/from-repository.html#a-bootstrap-project)中，请改为在项目目录使用 `mise.toml` 和 `mise.ssh.toml`。
 
-## Select modules {#select-and-preview-modules}
+## 选择模块 {#select-and-preview-modules}
 
-Choose this machine's modules in `miserc.local.toml` in the global config
-directory. For example, after defining `config.ssh.toml` and `config.gpg.toml`:
+在全局配置目录的 `miserc.local.toml` 中选择此机器要启用的模块。例如，定义 `config.ssh.toml` 和 `config.gpg.toml` 后，可这样选择：
 
 ```toml [~/.config/mise/miserc.local.toml]
 env = ["ssh", "gpg"]
 ```
 
-mise reads [`miserc.local.toml`](/configuration.html#miserc) before any other
-config. The file stays on this machine even when the config directory is a
-checkout shared with
-[`--adopt`](/bootstrap/from-repository.html#global-mise-configuration), as long
-as you do not commit it. Its `env` list replaces any list in a shared
-`miserc.toml`, so put the setup every machine needs in the base `config.toml`,
-which always loads. Preview the combined setup, then apply it:
+mise 会在读取其他配置前先读取 [`miserc.local.toml`](/configuration.html#miserc)。只要不提交该文件，即使通过 [`--adopt`](/bootstrap/from-repository.html#global-mise-configuration) 将配置目录设为共享检出目录，此文件也会留在本机。该文件中的 `env` 列表会替换共享 `miserc.toml` 中的列表，因此每台机器都需要的设置应放在始终会加载的基础 `config.toml` 中。先预览合并后的设置，再应用：
 
 ```sh
 mise bootstrap --dry-run
 mise bootstrap
 ```
 
-To pick modules for one run, use `mise -E ssh,gpg bootstrap`. `-E` replaces the
-selection from `miserc.local.toml` for that run instead of adding to it. For
-[remote hosts](/bootstrap/remote.html), set each host's `mise_env` list in the
-inventory, so one repository can describe machines with different combinations
-of modules.
+若只想为单次运行选择模块，请使用 `mise -E ssh,gpg bootstrap`。`-E` 会在本次运行中替换 `miserc.local.toml` 的选择，而不是在其基础上追加。对于[远程主机](/bootstrap/remote.html)，请在清单中为每台主机设置 `mise_env` 列表，这样同一仓库就能描述启用不同模块组合的机器。
 
-## Combine modules {#how-modules-combine}
+## 合并模块 {#how-modules-combine}
 
-Declarations with different keys all contribute to the same run. When two
-modules in the same directory declare the same key, the one listed later in
-`env` wins. With `env = ["ssh", "gpg"]`, a service declared in both files uses
-the definition from `config.gpg.toml`.
+不同键的声明都会参与同一次运行。如果同一目录中的两个模块声明了相同的键，则 `env` 中靠后的模块优先。例如 `env = ["ssh", "gpg"]` 同时在两个文件中声明某项服务时，会使用 `config.gpg.toml` 中的定义。
 
-`mise config` lists the files that loaded. `mise bootstrap plan --json`
-includes `origin.config` and `origin.environment` for each managed file and
-service, so you can trace a resource back to its declaration.
+`mise config` 会列出已加载的文件。`mise bootstrap plan --json` 会为每个托管文件和服务提供 `origin.config` 与 `origin.environment`，方便追溯资源对应的声明。
 
-Setup that should always load belongs in the base config or in a
-[`conf.d` fragment](/configuration.html#conf-d) without an environment
-suffix, such as `conf.d/ssh.toml`. To keep a module together with its source
-files, use a [`conf.d` folder](/configuration.html#conf-d-folders). Relative
-dotfile sources resolve inside the folder, and `mise.<env>.toml` files in it
-load only for that environment:
+应始终加载的设置应放在基础配置中，或放在不带环境后缀的 [`conf.d` 片段](/configuration.html#conf-d)中，例如 `conf.d/ssh.toml`。若要将模块与其源文件放在一起，请使用 [`conf.d` 文件夹](/configuration.html#conf-d-folders)。相对 dotfile 源路径会在文件夹内解析，其中的 `mise.<env>.toml` 文件仅在对应环境启用时加载：
 
 ```text
 ~/.config/mise/conf.d/ssh/
@@ -90,72 +59,42 @@ load only for that environment:
 └── ssh_config
 ```
 
-## Remove a module's resources
+## 移除模块资源
 
-Removing a module from `env` stops loading its declarations, but leaves its
-resources on the machine. `mise bootstrap unapply` removes the module's managed
-files, directories, user services, systemd user units, and dotfile entries and
-edits.
+从 `env` 中移除模块会停止加载其声明，但不会移除机器上已有的资源。`mise bootstrap unapply` 会移除该模块管理的文件、目录、用户服务、systemd 用户单元、dotfile 条目和编辑项。
 
-First, remove the module from `env` in `miserc.local.toml` (or wherever you
-selected it), so the next bootstrap does not apply it again. Keep the module's
-config file on disk, then preview and confirm the removal:
+首先，从 `miserc.local.toml`（或其他选择模块的位置）的 `env` 中移除该模块，以免下次 bootstrap 再次应用。保留模块配置文件，然后预览并确认移除操作：
 
 ```sh
 mise bootstrap unapply ssh --dry-run
 mise bootstrap unapply ssh
 ```
 
-The command selects `ssh` for this run on top of your remaining environments, so
-it can read the module's declarations. Name several modules to remove them in
-one run:
+此命令会在剩余环境之外，为本次运行临时选中 `ssh`，以便读取该模块的声明。可以在一次运行中指定多个模块：
 
 ```sh
 mise bootstrap unapply ssh gpg --dry-run
 mise bootstrap unapply ssh gpg
 ```
 
-Unapply asks for confirmation before it removes anything. `--yes` approves the
-removal without a prompt, as do the global `--yes` flag, `MISE_YES`, and the
-[`yes`](/configuration/settings.html#yes) setting, which mise turns on in CI.
+Unapply 移除任何资源前都会先请求确认。全局 `--yes` 参数、`MISE_YES` 和 [`yes`](/configuration/settings.html#yes) 设置也可跳过提示并批准移除；mise 会在 CI 中启用该设置。
 
-### How removal is planned
+### 移除操作如何规划
 
-mise compares the current configuration with and without the named
-environments. It uses the declarations still on disk, not a record of earlier
-bootstrap runs, so keep those declarations until cleanup is complete. Deleting
-a module's file first leaves mise without the information it needs to remove
-its resources.
+mise 会比较启用和未启用指定环境时的当前配置。它依据磁盘上仍然存在的声明，而不是先前 bootstrap 运行的记录，因此请保留这些声明，直到清理完成。若先删除模块文件，mise 就无法得知需要移除哪些资源。
 
-- A resource that the base config or another selected module still declares
-  present is kept. A `state = "absent"` declaration elsewhere does not protect
-  it.
-- A target that no longer matches its declaration, for example a file edited by
-  hand, is kept and reported with a reason. Review the output before you pass
-  `--force` to remove changed targets.
-- A directory is removed only if it is empty after the planned removals.
-  Unreadable directories, and managed paths of an unexpected type, are kept even
-  with `--force`.
+- 如果基础配置或另一个已选模块仍声明某项资源存在，则会保留该资源。其他位置的 `state = "absent"` 声明不会保护它。
+- 如果目标与其声明不再一致（例如文件被手动编辑），系统会保留该目标并报告原因。使用 `--force` 移除已更改的目标前，请先检查输出。
+- 只有在计划移除资源后目录变为空时，才会删除该目录。即使使用 `--force`，也会保留无法读取的目录和类型与预期不符的托管路径。
 
-Source files and config entries are kept. Unapply does not restore resources
-that a `state = "absent"` declaration removed earlier.
+源文件和配置条目都会保留。若资源先前已被 `state = "absent"` 声明移除，Unapply 不会将其恢复。
 
-### Resources that need separate cleanup
+### 需要单独清理的资源
 
-Unapply reports package, repository, and Compose declarations with guidance
-instead of removing them:
+对于软件包、软件仓库和 Compose 声明，Unapply 会提供清理建议，而不会直接移除：
 
-- For packages, unapply suggests
-  [`mise bootstrap packages prune`](/cli/bootstrap/packages/prune.html), which
-  handles Homebrew formulae, casks that mise installed, and packages from
-  plugins. Preview its plan first, because pruning is not limited to one
-  module's packages. Remove packages from other managers with the manager
-  itself.
-- For a Compose project, set `state = "absent"` and apply the change while the
-  module is still selected, for example with
-  `mise -E ssh bootstrap --only compose`.
-- For a repository, delete the checkout declared in
-  [`[bootstrap.repos]`](/bootstrap/repos.html) when you no longer need it.
+- 对于软件包，unapply 会建议运行 [`mise bootstrap packages prune`](/cli/bootstrap/packages/prune.html)，以处理 Homebrew formula、mise 安装的 cask 和插件提供的软件包。请先预览计划，因为 prune 的范围并不局限于某个模块的软件包。其他管理器安装的软件包应使用对应管理器移除。
+- 对于 Compose 项目，请在模块仍处于选中状态时将 `state` 设为 `"absent"` 并应用更改，例如运行 `mise -E ssh bootstrap --only compose`。
+- 对于软件仓库，不再需要时请删除 [`[bootstrap.repos]`](/bootstrap/repos.html) 中声明的检出目录。
 
-Other bootstrap sections, including system services, are outside unapply's
-scope. Use the removal steps on each section's page.
+其他 Bootstrap 部分（包括系统服务）不属于 unapply 的处理范围。请参阅相应章节中的移除步骤。

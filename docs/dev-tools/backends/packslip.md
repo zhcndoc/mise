@@ -1,51 +1,37 @@
 ---
-description: Install tools from signed packslip releases, with publisher verification, checksum checks, and version-matched completions and skills.
-socialDescription: Install tools from signed packslip releases with verified downloads.
+description: 从经过签名的 packslip 发行版安装工具，验证发布者和校验和，并获取与工具版本匹配的补全和技能。
+socialDescription: 从经过签名验证的 packslip 发行版安装工具。
 ---
 
-# packslip backend
+# packslip 后端
 
-The `packslip:` backend installs tools from release manifests that their
-publishers sign with [packslip](https://packslip.dev). mise verifies the
-publisher and the download, picks the build for your platform, and installs its
-executables. Support is built into mise, so you do not need the `packslip` CLI.
+`packslip:` 后端会安装发布者使用 [packslip](https://packslip.dev) 签名的发行版清单中的工具。mise 会验证发布者和下载内容、选择适用于当前平台的构建，并安装其中的可执行文件。mise 已内置此功能，因此不需要安装 `packslip` CLI。
 
-A publisher signs a **manifest** that lists each downloadable build, an
-**artifact**, with its digest. The manifest and its signature evidence travel
-together as a **bundle**. A release can also declare man pages, shell
-completions, and agent skills for the tool.
+发布者会为一份 **manifest（清单）** 签名，其中列出每个可下载的构建产物（**artifact**）及其摘要。清单及其签名证据会一起组成 **bundle**。发行版还可以声明该工具的 man 手册页、shell 补全和智能体技能。
 
-Use this backend when a tool's publisher signs its releases with packslip; the
-registry already prefers it for those tools. For other tools, use
-[aqua](/dev-tools/backends/aqua.html), [GitHub](/dev-tools/backends/github.html),
-or another [backend](/dev-tools/backends/). For background, read
-[Introducing packslip](https://jdx.dev/posts/2026-09-05-introducing-packslip/).
+当工具发布者使用 packslip 为其发行版签名时，请使用此后端；注册表已为这些工具优先选择 packslip。其他工具可以使用 [aqua](/dev-tools/backends/aqua.html)、[GitHub](/dev-tools/backends/github.html) 或其他[后端](/dev-tools/backends/)。背景介绍参见 [packslip 简介](https://jdx.dev/posts/2026-09-05-introducing-packslip/)。
 
 ## 快速开始 {#usage}
 
-Install [hk](https://hk.jdx.dev), a git hook and lint manager, in your project:
+在项目中安装 [hk](https://hk.jdx.dev)，这是一个 Git 钩子和 lint 管理工具：
 
 ```sh
 mise use packslip:github.com/jdx/hk
 mise exec -- hk --version
 ```
 
-`mise use` installs hk and adds it to the project's `mise.toml`:
+`mise use` 会安装 hk 并将其添加到项目的 `mise.toml` 中：
 
 ```toml
 [tools]
 "packslip:github.com/jdx/hk" = "latest"
 ```
 
-If you edit `mise.toml` by hand instead, run `mise install`. To install hk for
-every directory, use `mise use -g packslip:github.com/jdx/hk`. The registry
-shorthand `mise use hk` selects this backend for hk 1.58.1 and later.
+如果你直接编辑 `mise.toml`，请运行 `mise install`。要在所有目录中安装 hk，请使用 `mise use -g packslip:github.com/jdx/hk`。对于 hk 1.58.1 及更新版本，注册表简写 `mise use hk` 会选择此后端。
 
-## Project identifiers {#project-names-and-discovery}
+## 项目标识符 {#project-names-and-discovery}
 
-Write `packslip:` followed by the project's host and path, without `https://`.
-For GitHub you can leave out the host: `packslip:jdx/hk` is the same project as
-`packslip:github.com/jdx/hk`.
+在 `packslip:` 后写入项目的主机名和路径，不需要 `https://`。GitHub 项目可以省略主机名：`packslip:jdx/hk` 与 `packslip:github.com/jdx/hk` 指向同一项目。
 
 | 标识符                                       | 来源                              |
 | -------------------------------------------- | --------------------------------- |
@@ -54,178 +40,106 @@ For GitHub you can leave out the host: `packslip:jdx/hk` is the same project as
 | `packslip:tool.example.com`                  | 发布者托管的签名发布列表           |
 | `packslip:example.com/tools/mytool`          | 发布者域名上的一个工具             |
 
-The project must publish packslip manifests. This backend does not guess
-installation instructions from release filenames. GitHub projects have built-in
-release discovery and signer identity rules; other hosts need a signed release
-list and an explicit [signer configuration](#pubkey). For bundle filenames,
-discovery URLs, and monorepo identity rules, see
-[project discovery](/dev-tools/packslip-verification.html#project-discovery).
+项目必须发布 packslip 清单。此后端不会根据发行版文件名猜测安装方式。GitHub 项目有内置的发行版发现机制和签名者身份规则；其他主机需要已签名的发行版列表和明确的[签名者配置](#pubkey)。bundle 文件名、发现 URL 和 monorepo 身份规则参见[项目发现](/dev-tools/packslip-verification.html#project-discovery)。
 
 ### 私有 GitHub 仓库 {#private-repositories}
 
-A private repository works with the same
-[GitHub credentials](/dev-tools/github-tokens.html) the `github:` backend uses,
-for example `MISE_GITHUB_TOKEN`, a `github.credential_command`, or a token in
-gh's `hosts.yml`. It needs nothing in your configuration:
+私有仓库可以使用与 `github:` 后端相同的 [GitHub 凭据](/dev-tools/github-tokens.html)，例如 `MISE_GITHUB_TOKEN`、`github.credential_command`，或 gh 的 `hosts.yml` 中的令牌。无需额外配置：
 
 ```toml [mise.toml]
 [tools]
 "packslip:github.com/my-org/internal-cli" = "latest"
 ```
 
-GitHub serves a private repository's release assets only through its API, not
-from the `github.com/.../releases/download/...` URLs a manifest records, so when
-a download fails mise retries through the API with your token. The token is used
-only to transfer files. The signature, project identity, signer continuity, and
-artifact digest checks do not change, and mise never reads a credential from the
-signed manifest.
+GitHub 只通过 API 提供私有仓库的发行版资源，不会提供清单中记录的 `github.com/.../releases/download/...` URL。因此，如果下载失败，mise 会使用你的令牌通过 API 重试。令牌只用于传输文件。签名、项目身份、签名者连续性和构建产物摘要检查都不会改变；mise 也绝不会从已签名清单中读取凭据。
 
 ## 版本
 
-List the available versions, or select one:
+列出可用版本或指定一个版本：
 
 ```sh
 mise ls-remote packslip:github.com/jdx/hk
 mise use packslip:github.com/jdx/hk@2.5.0
 ```
 
-Only releases that carry a packslip manifest are listed. The registry shorthand
-uses aqua for hk versions before 1.58.1, so `mise use hk@1.57.0` still works; you
-can also ask for aqua directly with `mise use aqua:jdx/hk@1.57.0`.
+只有包含 packslip 清单的发行版才会列出。hk 1.58.1 之前的版本会由注册表简写使用 aqua 后端，因此 `mise use hk@1.57.0` 仍然有效；也可以通过 `mise use aqua:jdx/hk@1.57.0` 直接指定 aqua。
 
-The packslip format requires semantic versions, which include date versions such
-as `2026.9.1`. Prereleases are excluded unless you enable the
-[`prerelease`](#prerelease) tool option or the global
-[`prereleases`](/configuration/settings.html#prereleases) setting.
+packslip 格式要求使用语义化版本，其中也包括 `2026.9.1` 这样的日期版本。除非启用 [`prerelease`](#prerelease) 工具选项或全局 [`prereleases`](/configuration/settings.html#prereleases) 设置，否则不会包含预发布版本。
 
-[`minimum_release_age`](/configuration/settings.html#minimum_release_age) also
-applies, so a release published within that window is not offered yet. An exact
-version such as `hk@2.5.0`, or one recorded in `mise.lock`, installs during the
-wait; only requests such as `latest` or `2` are held back. See
-[Minimum release age](/security.html#minimum-release-age).
+[`minimum_release_age`](/configuration/settings.html#minimum_release_age) 同样适用，因此在指定时间窗口内发布的版本暂不会提供。等待期间仍可安装精确指定的版本（例如 `hk@2.5.0`）或已记录在 `mise.lock` 中的版本；只有 `latest` 或 `2` 等请求会被暂缓。参见[最低发行版等待时间](/security.html#minimum-release-age)。
 
 ### 如何选择 `latest` {#latest}
 
-`latest` follows the publisher's signed recommendation if there is one, then
-GitHub's latest release, then the highest eligible version. Every candidate must
-pass verification and your policies. See
-[version resolution](/dev-tools/packslip-verification.html#version-resolution)
-for withdrawals, fallbacks, and offline behavior.
+如果发布者提供了已签名的版本推荐，`latest` 会优先采用该推荐；其次使用 GitHub 的最新发行版；最后选择符合条件的最高版本。每个候选版本都必须通过验证和策略检查。关于撤回、回退和离线行为，参见[版本解析](/dev-tools/packslip-verification.html#version-resolution)。
 
 ### 复现安装
 
-A `latest` request can resolve to a newer release once the publisher recommends
-one. To keep a team on the same release, generate a lockfile and commit it with
-`mise.toml`:
+一旦发布者推荐了新版本，`latest` 请求就可能解析到该版本。要确保团队使用相同发行版，请生成锁定文件并与 `mise.toml` 一起提交：
 
 ```sh
 mise lock
 git add mise.toml mise.lock
 ```
 
-[`mise lock`](/cli/lock.html) verifies the release and records, for each target
-platform, the version, the artifact URL and checksum, the signer, and the forge
-repository ID, without installing anything. Use `mise lock --platform` to choose
-the platforms. Create the file this way: unless the
-[`lockfile`](/configuration/settings.html#lockfile) setting is `true`,
-`mise install` updates a `mise.lock` that already exists but does not create one.
+[`mise lock`](/cli/lock.html) 会验证发行版，并为每个目标平台记录版本、构建产物 URL 和校验和、签名者以及代码托管服务的仓库 ID，但不会安装任何内容。使用 `mise lock --platform` 选择平台。请用此命令创建锁定文件：除非 [`lockfile`](/configuration/settings.html#lockfile) 设置为 `true`，否则 `mise install` 只会更新已有的 `mise.lock`，不会创建该文件。
 
-Teammates and CI then install exactly what the lockfile records:
+之后，团队成员和 CI 会精确安装锁定文件中记录的版本：
 
 ```sh
 mise install --locked
 ```
 
-Installation still needs the artifacts, or usable cached copies, and must pass
-the current verification policy. See [Lockfile (mise.lock)](/dev-tools/mise-lock.html)
-for target platforms and updates.
+安装时仍需要获取构建产物或可用的缓存副本，并且必须通过当前验证策略。目标平台和更新方法参见[锁定文件（mise.lock）](/dev-tools/mise-lock.html)。
 
-## Completions, man pages, and skills {#completions}
+## 补全、man 手册页和技能 {#completions}
 
 <span id="skills"></span><span id="resource-selection-and-command-execution"></span>
 
-A release can declare shell completions, man pages, and agent skills, and they
-follow the tool version active in each project. With
-[mise activated](/shell-setup.html), type `hk` and press Tab to complete its
-commands. For a tool that ships man pages, `man <tool>` opens the active
-version's page. To link a tool's skills where your agent reads them, run
-`mise skills sync --dir .agents/skills`. See
-[Man pages, completions, and skills](/dev-tools/packslip-resources.html) for
-setup without shell activation, automatic skill links, and when mise runs a
-publisher's command.
+发行版可以声明 shell 补全、man 手册页和智能体技能；这些资源会随每个项目中启用的工具版本切换。启用 [mise](/shell-setup.html) 后，输入 `hk` 并按 Tab 键即可补全其命令。工具附带 man 手册页时，运行 `man <tool>` 会打开当前版本对应的页面。要将工具技能链接到智能体读取的位置，请运行 `mise skills sync --dir .agents/skills`。关于无需激活 shell 的配置方式、自动技能链接以及 mise 何时运行发布者命令，参见 [man 手册页、补全和技能](/dev-tools/packslip-resources.html)。
 
 ## 验证 {#what-is-verified}
 
-Before unpacking a release, mise verifies the publisher's signature, the
-requested project and version, and the selected download's digest and size. The
-signer must match the identity the project name implies or the public key you
-configured. mise also checks the signer it accepted before, any `mise.lock`
-commitments, and the release-age and stamp policies that apply. It keeps the
-verified manifest as `.mise-packslip.json` in the install directory.
+解压发行版前，mise 会验证发布者的签名、所请求的项目和版本，以及所选下载文件的摘要和大小。签名者必须符合项目名称隐含的身份，或你配置的公钥。mise 还会检查此前接受的签名者、`mise.lock` 中的约束，以及适用的发行版等待时间和盖章策略。经过验证的清单会以 `.mise-packslip.json` 的名称保存在安装目录中。
 
-Verification establishes who published the release and that the bytes are the
-ones they signed. It does not establish that the software is safe. mise records
-whether a manifest links build provenance, but it does not fetch or verify that
-provenance. See [verification checks](/dev-tools/packslip-verification.html#verification-checks).
+验证可以确认发行版的发布者身份，以及下载的字节与其签名内容相符，但无法确认软件本身安全。mise 会记录清单是否链接到构建来源证明，但不会获取或验证该证明。参见[验证检查](/dev-tools/packslip-verification.html#verification-checks)。
 
 ### 签名者变更 {#pinned-signers}
 
-mise remembers the signer it accepted for each project in its local state, the
-way SSH remembers hosts, and [`mise.lock`](/dev-tools/mise-lock.html) can carry
-the same commitment to other machines. A release from a different signer is
-refused. To see what this machine remembers:
+mise 会在本地状态中记住每个项目已接受的签名者，与 SSH 记住主机的方式类似；[`mise.lock`](/dev-tools/mise-lock.html) 也可以将相同约束传递到其他机器。若发行版由不同签名者签署，mise 会拒绝安装。要查看此机器记住的签名者：
 
 ```sh
 mise packslip pins
 mise packslip pins --json
 ```
 
-When a project announces a new signing key or workflow:
+项目宣布新的签名密钥或工作流时：
 
-1. Confirm the change in the publisher's release notes or announcement.
-2. If you set `pubkey`, `identity`, `identity_prefix`, `workflow`, or
-   `list_identity_prefix` for the tool, update them.
-3. Reset this machine's pin:
+1. 在发布者的发行说明或公告中确认此项变更。
+2. 如果为该工具设置了 `pubkey`、`identity`、`identity_prefix`、`workflow` 或 `list_identity_prefix`，请相应更新。
+3. 重置此机器上的固定记录：
 
    ```sh
    mise packslip forget github.com/jdx/hk
    ```
 
-4. If `mise.lock` records the old signer, delete the tool's entries and run
-   `mise lock` to record the new one.
-5. Review and commit the lockfile change.
+4. 如果 `mise.lock` 记录了旧签名者，请删除该工具的条目并运行 `mise lock` 记录新签名者。
+5. 检查并提交锁定文件更改。
 
-`mise packslip forget` also resets the project's remembered release-list state.
-It does not change stamper-list state. See
-[signer continuity](/dev-tools/packslip-verification.html#signer-continuity)
-for the changes that are refused.
+`mise packslip forget` 也会重置项目记住的发行版列表状态，但不会更改盖章者列表状态。关于会被拒绝的更改，参见[签名者连续性](/dev-tools/packslip-verification.html#signer-continuity)。
 
 ### 重命名的仓库 {#renamed-repositories}
 
-mise pins GitHub and GitLab projects by the forge's repository ID, not only by
-name. A renamed or transferred repository keeps installing, including releases
-signed under the new name, and mise warns once with the new name; update your
-configuration when convenient. The pin and the `mise.lock` commitment follow the
-repository, so you do not need `mise packslip forget`.
+mise 会根据 GitHub 和 GitLab 项目的托管服务仓库 ID 固定项目身份，而不仅仅依赖名称。仓库重命名或转移后仍可继续安装，包括由新名称下的身份签署的发行版；mise 会使用新名称发出一次警告，请在方便时更新配置。固定记录和 `mise.lock` 中的约束会随仓库转移，因此无需运行 `mise packslip forget`。
 
-A different repository that takes the old name is refused, because that is what
-a deleted repository whose name someone else took looks like. The error names
-the record that pins the original: this machine's pin, the `mise.lock` entries,
-or both. Clear what it names (`mise packslip forget`, or delete the lockfile
-entries) only after the project confirms it re-created the repository itself.
+若另一个仓库占用了旧名称，mise 会拒绝安装，因为被删除后由他人抢注的仓库看起来正是如此。错误消息会指出固定原仓库身份的记录：此机器上的固定记录、`mise.lock` 条目或两者。只有在项目确认由原项目重新创建了仓库后，才应清除错误消息中指出的记录（运行 `mise packslip forget` 或删除锁定文件条目）。
 
-The first install on a machine with no pin and no lockfile entry trusts
-whichever repository has the name at that moment, so commit `mise.lock`. See
-[renamed, transferred, and re-created repositories](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)
-for the details and limits.
+在没有固定记录和锁定文件条目的机器上首次安装时，mise 会信任当时拥有该名称的仓库，因此请提交 `mise.lock`。详情及限制参见[已重命名、已转移和重新创建的仓库](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)。
 
 <a id="tool-options"></a>
 
 ## 工具选项
 
-These [tool options](/dev-tools/#tool-options) apply to one entry in `[tools]`.
-The `packslip.exec`, `packslip.stampers`, and `skills.*` settings go under
-`[settings]` instead.
+这些[工具选项](/dev-tools/#tool-options)适用于 `[tools]` 中的单个条目。`packslip.exec`、`packslip.stampers` 和 `skills.*` 设置则应放在 `[settings]` 中。
 
 | 选项                                                                      | 默认值                         | 用途                                                         |
 | ------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------ |
@@ -241,9 +155,7 @@ The `packslip.exec`, `packslip.stampers`, and `skills.*` settings go under
 
 ### `variant`
 
-Select a named alternative build, such as `fips` or `baseline`. Without this
-option, mise considers only artifacts that have no variant. The publisher must
-provide the variant you request.
+选择一个命名的替代构建版本，例如 `fips` 或 `baseline`。如果不设置此选项，mise 只会考虑没有变体的构建产物。发布者必须提供你请求的变体。
 
 ```toml
 [tools]
@@ -252,9 +164,7 @@ provide the variant you request.
 
 ### `pubkey`
 
-For a key-signed project, get the publisher's public key through a channel you
-trust. Set `pubkey` to the minisign-format public-key line or the path of its
-`.pub` file. The release list and bundles must verify against that key.
+对于使用密钥签名的项目，请通过可信渠道获取发布者的公钥。将 `pubkey` 设置为 minisign 格式的公钥行，或其 `.pub` 文件的路径。发行版列表和 bundle 都必须通过该公钥验证。
 
 ```toml
 [tools]
@@ -263,72 +173,44 @@ trust. Set `pubkey` to the minisign-format public-key line or the path of its
 
 ### `identity`、`identity_prefix`、`issuer` {#identity-identity-prefix-issuer}
 
-For keyless signing, set an exact certificate `identity` or an
-`identity_prefix`, plus its OIDC `issuer`. These options override the policy
-derived from the forge name. Keep the trailing slash in a repository prefix. A
-domain project signed by a GitHub workflow could use:
+使用无密钥签名时，请设置证书的完整 `identity` 或 `identity_prefix`，并同时设置其 OIDC `issuer`。这些选项会覆盖根据代码托管服务名称推导出的策略。仓库前缀末尾的斜杠不可省略。由 GitHub 工作流签名的域名项目可以这样设置：
 
 ```toml
 [tools]
 "packslip:tool.example.com" = { version = "latest", identity_prefix = "https://github.com/example/tool/", issuer = "https://token.actions.githubusercontent.com" }
 ```
 
-Replace the example identity with the one the publisher confirms. Recognizing
-the signing issuer does not add release discovery: the domain still needs a
-[signed release list](/dev-tools/packslip-verification.html#project-discovery).
+请将示例身份替换为发布者确认的身份。识别签名颁发者并不会自动启用发行版发现：该域名仍需提供[已签名的发行版列表](/dev-tools/packslip-verification.html#project-discovery)。
 
 ### `workflow`
 
-By default, mise accepts a release of a `github.com` project signed by any
-workflow of its repository. Name the workflow file to accept only that workflow,
-run on a tag:
+默认情况下，mise 会接受由 `github.com` 项目仓库中的任意工作流签署的发行版。要仅接受在标签上运行的特定工作流，请指定工作流文件名：
 
 ```toml
 [tools]
 "packslip:github.com/example/tool" = { version = "latest", workflow = "release.yaml" }
 ```
 
-This expands to the identity prefix
-`https://github.com/example/tool/.github/workflows/release.yaml@refs/tags/` with
-GitHub's OIDC issuer, so a workflow run on a branch cannot sign a release. It
-cannot be combined with `pubkey`, `identity`, `identity_prefix`, or `issuer`;
-use those to pin another ref or forge. When the registry supplies a `workflow`
-default and you set one of those options on the shorthand, yours replaces the
-default. Like those options, it pins the signer by name, so a renamed repository
-needs the new name here.
+此设置会在 GitHub 的 OIDC 颁发者下展开为身份前缀 `https://github.com/example/tool/.github/workflows/release.yaml@refs/tags/`，因此在分支上运行的工作流无法签署发行版。它不能与 `pubkey`、`identity`、`identity_prefix` 或 `issuer` 同时使用；这些选项可用于固定其他 ref 或代码托管服务。注册表为简写提供 `workflow` 默认值时，如果在简写上设置了这些选项之一，你的设置会替换默认值。与这些选项相同，`workflow` 会按名称固定签名者，因此仓库重命名后需要在此处更新名称。
 
-A project whose signing workflow changed across the releases you install can
-name several; a release signed by any one of them is accepted:
+如果你要安装的项目发行版曾由不同工作流签署，可以指定多个工作流；其中任一个签署的发行版都会被接受：
 
 ```toml
 [tools]
 "packslip:github.com/example/tool" = { version = "latest", workflow = ["release-plz.yml", "release.yml"] }
 ```
 
-The list also tells mise's [signer pin](#pinned-signers) that the project moved
-between those workflows, so a machine that accepted a release signed by one of
-them accepts the next one signed by another without `mise packslip forget`.
+此列表也会告知 mise 的[签名者固定记录](#pinned-signers)：项目曾在这些工作流之间切换。因此，已接受其中一个工作流签名发行版的机器，也可以接受另一个工作流签署的下一个版本，而无需运行 `mise packslip forget`。
 
-A name may carry the ref the workflow runs on, for a project that signs from a
-branch rather than a tag: `workflow = "release.yml@refs/heads/main"` accepts
-only that branch. A ref ending in `/`, such as `@refs/tags/`, accepts that
-namespace. A branch is easier to move than a tag, so protect it.
+对于从分支而不是标签执行签名的项目，名称可以包含工作流运行所在的 ref：`workflow = "release.yml@refs/heads/main"` 只接受该分支。以 `/` 结尾的 ref（例如 `@refs/tags/`）会接受整个命名空间。分支比标签更容易被更改，因此请做好保护。
 
-The same prefix also applies to the project's signed release list. If the
-vendor signs that list from another workflow or ref, pin it with
-[`list_identity_prefix`](/dev-tools/backends/packslip.html#list-identity-prefix).
+相同前缀也会应用到项目的已签名发行版列表。如果供应商从另一个工作流或 ref 对列表签名，请使用 [`list_identity_prefix`](/dev-tools/backends/packslip.html#list-identity-prefix) 固定其身份。
 
 ### `list_identity_prefix` {#list-identity-prefix}
 
-When a different workflow signs the vendor's release list, pin its certificate
-identity prefix separately. It replaces `identity` and `identity_prefix` for the
-vendor's list only; release bundles still need their original signer. The OIDC
-`issuer` is shared, including an issuer derived from a forge project. Without
-this option, the list uses the same policy as release bundles.
+如果供应商的发行版列表由另一个工作流签名，请单独固定该工作流的证书身份前缀。此设置只会替换供应商列表所用的 `identity` 和 `identity_prefix`；发行版 bundle 仍然需要原签名者。OIDC `issuer` 是共用的，包括从代码托管服务项目推导出的颁发者。如果不设置此选项，列表会沿用发行版 bundle 的策略。
 
-The value must be a non-empty string and requires an issuer. It cannot be
-combined with `pubkey`, and it does not affect configured stampers, whose lists
-use their own pins.
+该值必须为非空字符串，且必须同时配置颁发者。它不能与 `pubkey` 同时使用，也不会影响已配置的盖章者；盖章者列表使用各自的固定记录。
 
 ### `prerelease`
 
@@ -341,9 +223,7 @@ use their own pins.
 
 ### `trust`
 
-Set `trust = "vendor"` to exempt one tool from the configured
-[stampers](/dev-tools/packslip-verification.html#stamps). The vendor's signature
-is still verified, and mise records the choice in the lockfile options.
+设置 `trust = "vendor"` 可让某个工具免于已配置的[盖章者](/dev-tools/packslip-verification.html#stamps)要求。发布者的签名仍会验证，mise 也会在锁定文件选项中记录此选择。
 
 ```toml
 [tools]
@@ -356,31 +236,19 @@ is still verified, and mise records the choice in the lockfile options.
 
 ### `ignore_requirements` {#ignore-requirements}
 
-Set to `true` to install despite a confirmed
-[host requirement](/dev-tools/packslip-verification.html#host-requirements)
-failure. mise then keeps the selected GNU build instead of falling back to musl.
-This does not supply missing libraries or make an incompatible executable run,
-and the other verification checks still apply.
+设置为 `true` 后，即使已确认[主机要求](/dev-tools/packslip-verification.html#host-requirements)不满足，仍会继续安装。此时 mise 会保留选定的 GNU 构建，而不是回退到 musl。此选项不会补齐缺失的库，也不能让不兼容的可执行文件运行；其他验证检查仍会执行。
 
-## Policies {#advanced-policies}
+## 策略 {#advanced-policies}
 
 <span id="signed-release-lists"></span><span id="release-list-continuity-and-minimum-age"></span><span id="stamps"></span><span id="artifact-selection"></span><span id="host-requirements"></span>
 
-Publishers can recommend or withdraw versions in a signed release list, and you
-can require approval from stampers you trust. The
-[verification and policy reference](/dev-tools/packslip-verification.html)
-covers [signed release lists](/dev-tools/packslip-verification.html#signed-release-lists),
-[release-list continuity](/dev-tools/packslip-verification.html#release-list-continuity-and-minimum-age),
-[stamps](/dev-tools/packslip-verification.html#stamps),
-[artifact selection](/dev-tools/packslip-verification.html#artifact-selection),
-and [host requirements](/dev-tools/packslip-verification.html#host-requirements).
+发布者可以在已签名的发行版列表中推荐或撤回版本；你也可以要求版本通过可信盖章者的批准。[验证与策略参考](/dev-tools/packslip-verification.html)涵盖[已签名的发行版列表](/dev-tools/packslip-verification.html#signed-release-lists)、[发行版列表连续性](/dev-tools/packslip-verification.html#release-list-continuity-and-minimum-age)、[盖章](/dev-tools/packslip-verification.html#stamps)、[构建产物选择](/dev-tools/packslip-verification.html#artifact-selection)和[主机要求](/dev-tools/packslip-verification.html#host-requirements)。
 
 <a id="troubleshooting"></a>
 
 ## 故障排除
 
-Before changing anything, check which backend and version are in use and which
-signer mise remembers, then rerun the failing command with debug output:
+更改任何配置前，请先检查当前使用的后端和版本，以及 mise 记住的签名者；然后启用调试输出，重新运行失败的命令：
 
 ```sh
 mise tool hk
@@ -389,48 +257,33 @@ mise packslip pins
 MISE_DEBUG=1 mise install packslip:github.com/jdx/hk
 ```
 
-Replace `hk` with the affected tool. `mise packslip pins` lists the identities
-mise accepted before; it does not re-verify an installed executable or grant
-trust to a new signer.
+将 `hk` 替换为遇到问题的工具。`mise packslip pins` 会列出 mise 之前接受的身份；它不会重新验证已安装的可执行文件，也不会信任新的签名者。
 
-| Symptom                                       | Next step                                                                                                                                                                                               |
+| 现象                                          | 下一步                                                                                                                                                                                                  |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No versions or bundle found                   | Check the project identifier and `mise ls-remote`. Confirm that the release has a packslip manifest and is older than `minimum_release_age`. Only the publisher can add a missing manifest.             |
-| Nothing pins the signer                       | Configure `pubkey`, or `identity` or `identity_prefix` with `issuer`, using details the publisher confirms.                                                                                             |
-| Signer change or trust downgrade refused      | Compare `mise packslip pins`, the tool's options, and the `mise.lock` entry with the publisher's announcement, then follow [signer changes](#pinned-signers).                                           |
-| A different repository under the same name    | Treat it as a possible takeover. See [renamed repositories](#renamed-repositories), and clear the pin or lockfile entries the error names only after the project confirms it re-created the repository. |
-| Signed list expired, rolled back, or missing  | Ask the list's publisher or stamper for a current list. Removing local state would only discard the continuity check.                                                                                   |
-| Release withdrawn or missing a required stamp | Select a version your stampers approve and the vendor has not withdrawn. See [stamps](/dev-tools/packslip-verification.html#stamps).                                                                    |
-| Bundle or artifact digest or size mismatch    | Report the release and artifact to the publisher, or check your mirror. The download must match the signed manifest; do not accept new bytes to clear the error.                                        |
-| No eligible artifact                          | Check your platform and requested `variant`. The publisher must provide a matching build.                                                                                                               |
-| Ambiguous artifacts                           | The publisher must distinguish the builds in the manifest; no local option can choose between identically described artifacts.                                                                          |
-| Host requirements failed                      | Install the reported dependency or use a compatible host. See [host requirements](/dev-tools/packslip-verification.html#host-requirements) before overriding a failure.                                 |
-| 404 on a private repository's release         | Run `mise token github` to see which token mise selects, and confirm it can read the repository. See [private repositories](#private-repositories).                                                     |
+| 找不到版本或 bundle                            | 检查项目标识符并运行 `mise ls-remote`。确认发行版包含 packslip 清单，且发布时间早于 `minimum_release_age` 限制。缺少清单时只能由发布者补充。                                                    |
+| 没有固定签名者的配置                           | 根据发布者确认的信息配置 `pubkey`，或配置 `identity` / `identity_prefix` 和 `issuer`。                                                                                                                  |
+| 拒绝签名者变更或信任级别降级                   | 将 `mise packslip pins`、工具选项和 `mise.lock` 条目与发布者公告进行比较，然后按照[签名者变更](#pinned-signers)中的步骤处理。                                                                                |
+| 同名但不同的仓库                                | 将其视为可能的仓库劫持。参见[重命名的仓库](#renamed-repositories)；只有在项目确认由原项目重新创建仓库后，才清除错误消息指出的固定记录或锁定文件条目。                                               |
+| 已签名列表过期、回滚或缺失                      | 联系列表发布者或盖章者获取最新列表。删除本地状态只会丢弃连续性检查。                                                                                                                                      |
+| 发行版已撤回或缺少必要的盖章                    | 选择盖章者批准且供应商尚未撤回的版本。参见[盖章](/dev-tools/packslip-verification.html#stamps)。                                                                                                          |
+| bundle 或构建产物摘要、大小不匹配                | 向发布者报告发行版和构建产物，或检查镜像。下载内容必须与已签名清单相符；不要通过接受新字节来消除错误。                                                                                                    |
+| 没有符合条件的构建产物                          | 检查当前平台和请求的 `variant`。发布者必须提供匹配的构建。                                                                                                                                               |
+| 构建产物存在歧义                                | 发布者必须在清单中区分各个构建；本地选项无法从描述完全相同的构建产物中选择一个。                                                                                                                         |
+| 主机要求检查失败                                | 安装报告的依赖或改用兼容主机。覆盖失败前请阅读[主机要求](/dev-tools/packslip-verification.html#host-requirements)。                                                                                        |
+| 私有仓库发行版返回 404                          | 运行 `mise token github` 查看 mise 选择的令牌，并确认其可以读取仓库。参见[私有仓库](#private-repositories)。                                                                                            |
 
-Each error names the stage that failed. Changing an artifact option cannot
-repair an invalid signature, and forgetting a signer pin cannot repair a digest
-mismatch. For completion and skill errors, see
-[resource troubleshooting](/dev-tools/packslip-resources.html#troubleshooting).
+每条错误都会指出失败阶段。更改构建产物选项无法修复无效签名；忘记签名者固定记录也无法修复摘要不匹配。补全和技能问题参见[资源故障排查](/dev-tools/packslip-resources.html#troubleshooting)。
 
 ## 为 mise 发布工具 {#why-publish-one}
 
-A packslip manifest lets mise install your releases without a new registry
-shorthand or a filename-matching recipe. You can keep your release layout and
-add versioned completions, CLI specifications, or agent skills.
+packslip 清单可以让 mise 安装你的发行版，无需新增注册表简写或根据文件名编写匹配规则。你可以保留现有发行版目录结构，并添加按版本提供的补全、CLI 规范或智能体技能。
 
-要支持 mise：
+要支持 mise，请执行以下步骤：
 
-1. Publish installable artifacts with accurate platform metadata and executable
-   paths.
-2. Sign a manifest that contains their digests and publish its bundle with the
-   release.
-3. For domain hosting, publish a signed release list and tell users how to pin
-   your signer.
-4. Optionally declare [completions, man pages, and skills](/dev-tools/packslip-resources.html).
+1. 发布可安装的构建产物，并提供准确的平台元数据和可执行文件路径。
+2. 为包含构建产物摘要的清单签名，并随发行版一同发布其 bundle。
+3. 如果使用域名托管，请发布已签名的发行版列表，并告知用户如何固定你的签名者身份。
+4. 可以选择声明[补全、man 手册页和技能](/dev-tools/packslip-resources.html)。
 
-For GitHub Actions, follow the
-[packslip publishing guide](https://packslip.dev/docs/publishing/) for the
-action version, permissions, inputs, and monorepo setup, and run the action
-after building and uploading the final artifacts. For domain hosting, see
-[signed release lists](https://packslip.dev/docs/release-lists/). The
-[packslip specification](https://packslip.dev/release/v1/) defines the format.
+如需使用 GitHub Actions，请遵循 [packslip 发布指南](https://packslip.dev/docs/publishing/)，了解 action 版本、权限、输入参数和 monorepo 设置，并在构建和上传最终构建产物后运行 action。如需域名托管，请参见[已签名的发行版列表](https://packslip.dev/docs/release-lists/)。格式定义参见 [packslip 规范](https://packslip.dev/release/v1/)。

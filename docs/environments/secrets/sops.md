@@ -2,7 +2,7 @@
 description: "提交经 SOPS 加密的 .env.json、.env.yaml 或 .env.toml 文件，并通过 env._.file 加载其中的值。"
 ---
 
-# SOPS files
+# SOPS 文件
 
 Commit a [SOPS](https://getsops.io)-encrypted `.env.json`, `.env.yaml` or
 `.env.toml` file and load it with [`env._.file`](/environments/#env-file). mise

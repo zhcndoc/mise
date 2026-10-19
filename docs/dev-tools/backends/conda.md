@@ -2,7 +2,7 @@
 description: "无需预先安装 conda，即可从 conda-forge 或其他频道安装 conda 软件包及其依赖。"
 ---
 
-# conda backend
+# conda 后端
 
 The `conda` backend installs command-line packages and their dependencies from
 [conda-forge](https://conda-forge.org/) or another conda channel. mise solves

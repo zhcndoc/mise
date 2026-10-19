@@ -3,25 +3,18 @@ description: "在 mise.toml 中声明 systemd 用户服务和定时器，再通�
 socialDescription: "在 mise.toml 中声明 systemd 用户服务和定时器。"
 ---
 
-# systemd user units
+# systemd 用户单元
 
-Declare systemd user services and timers in `[bootstrap.linux.systemd.units]`.
-[`mise bootstrap`](/bootstrap.html), or
-[`mise bootstrap linux systemd-units apply`](/cli/bootstrap/linux/systemd-units/apply.html),
-writes each to `~/.config/systemd/user/dev.mise.<name>.service` (or `.timer`)
-and enables and starts it with `systemctl --user`.
+在 `[bootstrap.linux.systemd.units]` 中声明 systemd 用户服务和定时器。
+[`mise bootstrap`](/bootstrap.html) 或
+[`mise bootstrap linux systemd-units apply`](/cli/bootstrap/linux/systemd-units/apply.html)
+会将它们分别写入 `~/.config/systemd/user/dev.mise.<name>.service`（或 `.timer`），并通过 `systemctl --user` 启用和启动。
 
-Units run as you, in your systemd user manager. To run one program in the
-background on Linux, macOS, and Windows from a single declaration, use a
-[user service](/bootstrap/services.html#user-services) instead; a name cannot
-be declared in both places, because both write the same unit file. Use this
-section for systemd features such as timers, unit dependencies, hardening, and
-environment files. For units that the system manager runs, such as a database
-installed by a package, use [system services](/bootstrap/services.html#system-services).
+单元会以当前用户身份在 systemd 用户管理器中运行。如果希望通过一份声明在 Linux、macOS 和 Windows 上运行后台程序，请改用[用户服务](/bootstrap/services.html#user-services)；同一名称不能同时在两处声明，因为两者会写入相同的单元文件。本节适用于定时器、单元依赖、加固和环境文件等 systemd 功能。对于由系统管理器运行的单元（例如通过软件包安装的数据库），请使用[系统服务](/bootstrap/services.html#system-services)。
 
-## Example
+## 示例
 
-Install your program first. `my-sync` stands in for it:
+请先安装程序。以下以 `my-sync` 作为程序示例：
 
 ```toml
 [bootstrap.linux.systemd.units.my-sync]
@@ -35,21 +28,13 @@ mise bootstrap linux systemd-units apply --dry-run
 mise bootstrap linux systemd-units apply
 ```
 
-mise writes `~/.config/systemd/user/dev.mise.my-sync.service`, runs
-`systemctl --user daemon-reload`, enables the unit for `default.target`, and
-restarts it. systemd restarts the program when it fails.
+mise 会写入 `~/.config/systemd/user/dev.mise.my-sync.service`，运行 `systemctl --user daemon-reload`，为 `default.target` 启用单元，并重启该单元。程序失败时，systemd 会将其重启。
 
-A unit does not get your shell's mise activation, so tools from `[tools]` are
-not on its `PATH`. Use absolute paths, or `~/` paths in the `exec_*` keys, and
-set the environment the program needs. `exec_start` uses systemd's command
-syntax, not a shell: for pipes or redirection, run `/bin/sh -c '...'` or a
-wrapper script.
+单元不会继承 shell 中的 mise 激活环境，因此 `[tools]` 中的工具不会出现在它的 `PATH` 中。请使用绝对路径，或在 `exec_*` 键中使用 `~/` 路径，并设置程序所需的环境变量。`exec_start` 使用 systemd 命令语法，而不是 shell 语法；如需管道或重定向，请运行 `/bin/sh -c '...'` 或使用包装脚本。
 
-## Run a command once at login
+## 登录时运行一次命令
 
-A `oneshot` service runs a command and finishes. With
-`remain_after_exit = true`, systemd keeps it marked active, so `exec_stop` runs
-when the unit stops, for example when your user manager shuts down:
+`oneshot` 服务会运行命令后退出。设置 `remain_after_exit = true` 后，systemd 会继续将其标记为活动状态，因此单元停止时（例如用户管理器关闭时）会运行 `exec_stop`：
 
 ```toml
 [bootstrap.linux.systemd.units.daemon-lifecycle]
@@ -63,10 +48,9 @@ no_new_privileges = true
 private_tmp = true
 ```
 
-## Tie a service to the desktop session
+## 将服务绑定到桌面会话
 
-A service can start and stop with your graphical session and run a check before
-it starts:
+服务可以随着图形会话启动和停止，并在启动前执行检查：
 
 ~~~toml
 [bootstrap.linux.systemd.units.panel]
@@ -78,17 +62,13 @@ exec_start = "~/.local/bin/panel"
 wanted_by = ["graphical-session.target"]
 ~~~
 
-`wanted_by` only starts the service with the session; `part_of` also stops and
-restarts it with `graphical-session.target`. If an `exec_start_pre` command
-fails, systemd does not run `exec_start`, and `systemctl --user status` shows
-the check as the command that failed.
+`wanted_by` 只会让服务随会话启动；`part_of` 还会让服务随 `graphical-session.target` 停止和重启。如果 `exec_start_pre` 命令失败，systemd 不会运行 `exec_start`，并且 `systemctl --user status` 会显示失败的检查命令。
 
-## Run on a schedule
+## 按计划运行
 
-An entry that sets any timer key becomes a `.timer` unit. Pair it with a
-service entry for the work, and point the timer at that service with `unit`:
+设置任意定时器键后，该条目会生成 `.timer` 单元。请为要执行的工作配置一个服务条目，并使用 `unit` 让定时器指向该服务：
 
-包含 timer 键的条目会被渲染为 .timer，而不是 .service。例如：
+含有 timer 键的条目会被渲染为 `.timer`，而不是 `.service`。例如：
 ```toml
 [bootstrap.linux.systemd.units.backup]
 type = "oneshot"
@@ -102,15 +82,9 @@ persistent = true
 unit = "backup"
 ```
 
-The service sets `start = false` and `wanted_by = []`, so apply leaves it
-stopped and not enabled, and only the timer starts it. `persistent = true` runs
-a job that was missed while the timer was not running, such as while the
-machine was off or you were logged out, as soon as the timer starts again. It
-applies only to `on_calendar`, not to monotonic timers. See the
-[systemd timer reference](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html#Persistent=).
+服务设置了 `start = false` 和 `wanted_by = []`，因此 apply 会让服务保持停止且不启用，只有定时器会启动它。设置 `persistent = true` 后，如果定时器未运行期间错过了任务（例如机器关机或用户已注销），定时器下次启动时会立即补跑。此选项只适用于 `on_calendar`，不适用于单调计时器。参阅 [systemd 定时器参考](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html#Persistent=)。
 
-A monotonic timer runs relative to boot or to the service's last run. This one
-assumes a `healthcheck` service entry declared like `backup` above:
+单调计时器会以系统启动或服务上次运行的时间为基准。以下示例假设已经像上方的 `backup` 一样声明了 `healthcheck` 服务：
 
 ```toml
 [bootstrap.linux.systemd.units.healthcheck-timer]
@@ -121,15 +95,11 @@ randomized_delay_sec = "30s"
 unit = "healthcheck"
 ```
 
-A bare `unit` value names the service that mise writes for that entry, so
-`unit = "backup"` targets `dev.mise.backup.service`. A value with a unit-type
-suffix, such as `unit = "nginx.service"`, is written as is.
+不带后缀的 `unit` 值会指向 mise 为该条目生成的服务，因此 `unit = "backup"` 会指向 `dev.mise.backup.service`。带有单元类型后缀的值（例如 `unit = "nginx.service"`）则会原样写入。
 
-A timer must set at least one of `on_boot_sec`, `on_unit_active_sec`,
-`on_unit_inactive_sec`, or `on_calendar`. Service keys such as `exec_start`,
-`environment`, and `restart` are rejected on a timer entry.
+定时器必须至少设置 `on_boot_sec`、`on_unit_active_sec`、`on_unit_inactive_sec` 或 `on_calendar` 之一。定时器条目不允许使用 `exec_start`、`environment` 和 `restart` 等服务键。
 
-## Set the environment
+## 设置环境
 
 ```toml
 [bootstrap.linux.systemd.units.my-sync]
@@ -143,22 +113,13 @@ standard_output = "journal"
 standard_error = "journal"
 ```
 
-`environment_file` takes a list of absolute paths or paths that use systemd
-specifiers such as `%h`. A leading `-` makes a file optional. systemd does not
-expand `~` or `$HOME` in these paths.
+`environment_file` 接受绝对路径列表，或使用 `%h` 等 systemd 占位符的路径。路径前加 `-` 可将文件设为可选。systemd 不会在这些路径中展开 `~` 或 `$HOME`。
 
-Do not put secret values in `environment`, which writes them into the unit
-file. Put them in an `environment_file` with mode `0600`, for example one
-rendered by a [`[bootstrap.files]`](/bootstrap/files.html) template that uses a
-[secret input](/bootstrap/secrets.html). The service still receives them as
-environment variables; this section has no key for systemd credentials
-(`LoadCredential=`).
+不要将机密值放入 `environment`，因为这些值会被写入单元文件。请将机密放入权限为 `0600` 的 `environment_file`，例如使用[机密输入](/bootstrap/secrets.html)的 [`[bootstrap.files]`](/bootstrap/files.html) 模板生成的文件。服务仍会通过环境变量接收这些值；本节没有用于配置 systemd 凭据（`LoadCredential=`）的键。
 
-## Use templates {#templates}
+## 使用模板 {#templates}
 
-String values are [Tera templates](/templates.html), rendered with the
-declaring config's context. That makes a unit relocatable with the project that
-defines it:
+字符串值都是 [Tera 模板](/templates.html)，并使用声明该单元的配置上下文渲染。这样，单元就可以随定义它的项目一起迁移：
 
 ~~~toml
 [bootstrap.linux.systemd.units.my-service]
@@ -168,173 +129,131 @@ working_directory = "{{ config_root }}"
 environment_file = ["{{ config_root }}/.env"]
 ~~~
 
-Templates are rendered against the declaring config, not the current
-directory, so <code v-pre>{{ config_root }}</code> does not change with where
-you run `mise bootstrap`. It is that config's root: the project directory for a
-project config, including `.mise/config.toml`, and `MISE_GLOBAL_CONFIG_ROOT`
-(default `$HOME`) for the global config. With the config above in
-`~/src/my-project/mise.toml`, the unit gets
-`WorkingDirectory=/home/you/src/my-project` and
-`EnvironmentFile=/home/you/src/my-project/.env`. This matters most for
-`environment_file`, where `%h` is the only other way to write a path in your
-home directory.
+模板会根据声明它的配置渲染，而不是根据当前目录，因此无论从哪里运行 `mise bootstrap`，<code v-pre>{{ config_root }}</code> 的值都不会变化。它代表该配置的根目录：项目配置（包括 `.mise/config.toml`）对应项目目录；全局配置对应 `MISE_GLOBAL_CONFIG_ROOT`（默认值为 `$HOME`）。如果上述配置位于 `~/src/my-project/mise.toml`，则生成的单元会包含 `WorkingDirectory=/home/you/src/my-project` 和 `EnvironmentFile=/home/you/src/my-project/.env`。这对 `environment_file` 尤其重要，因为 `%h` 是在此处指定 home 目录路径的另一种方式。
 
-Values without template syntax are written unchanged, so systemd specifiers
-such as `%h` and `%i` reach the unit file, and `~` expansion still applies
-after rendering. `exec()` is not available; see
-[templates in bootstrap](/bootstrap.html#templates).
+不含模板语法的值会原样写入，因此 `%h` 和 `%i` 等 systemd 占位符会保留在单元文件中，而 `~` 仍会在模板渲染后展开。这里不支持 `exec()`；请参阅[引导配置中的模板](/bootstrap.html#templates)。
 
-## How configs combine
+## 配置的合并方式
 
-Units merge by name across the
-[config hierarchy](/configuration.html#configuration-hierarchy). A more local
-config replaces the whole declaration for that name; mise does not merge keys
-across files. A unit that fails validation or whose template fails to render is
-reported with a warning and skipped, and the other units still apply.
+不同配置会按照单元名称在[配置层级](/configuration.html#configuration-hierarchy)中合并。更靠近项目的配置会整体替换同名声明；mise 不会跨文件合并各个键。验证失败或模板渲染失败的单元会发出警告并跳过，其他单元仍会继续应用。
 
-If an entry changes between a service and a timer, apply stops, disables, and
-deletes the old unit. mise manages only unit files in `~/.config/systemd/user`
-whose names start with `dev.mise.`.
+如果某个条目从服务变为定时器，或从定时器变为服务，apply 会停止、禁用并删除旧单元。mise 只管理 `~/.config/systemd/user` 中名称以 `dev.mise.` 开头的单元文件。
 
-## Remove a unit
+## 移除单元
 
-Set `state = "absent"` to stop, disable, and delete a unit, and keep it removed
-while the entry says so:
+设置 `state = "absent"` 可停止、禁用并删除单元；只要保留此配置，单元就会一直处于移除状态：
 
 ```toml
 [bootstrap.linux.systemd.units.backup]
 state = "absent"
 ```
 
-An absent entry removes both `dev.mise.<name>.timer` and
-`dev.mise.<name>.service`, so you do not have to say which kind it was, and its
-other keys can stay in place. Apply stops and disables the timer before the
-service, deletes the unit files, and runs `systemctl --user daemon-reload`.
+将条目设为 absent 会同时移除 `dev.mise.<name>.timer` 和 `dev.mise.<name>.service`，因此无需说明原先的单元类型，其他键也可以保留。apply 会先停止并禁用定时器，然后停止服务、删除单元文件，并运行 `systemctl --user daemon-reload`。
 
-Deleting a declaration instead leaves the unit installed. To remove a service
-unit once, run
-[`mise bootstrap services remove`](/cli/bootstrap/services/remove.html):
+删除声明不会移除已安装的单元。若只想移除一次服务单元，请运行 [`mise bootstrap services remove`](/cli/bootstrap/services/remove.html)：
 
 ```sh
 mise bootstrap services remove my-sync
 ```
 
-If the entry is still declared, the next `mise bootstrap` installs it again.
-The command removes only `.service` units.
-[`mise bootstrap unapply`](/bootstrap/modules.html#remove-a-module-s-resources)
-removes the services and timers that a machine module declared.
+如果仍保留该条目，下次运行 `mise bootstrap` 时会重新安装单元。该命令只会移除 `.service` 单元。[`mise bootstrap unapply`](/bootstrap/modules.html#remove-a-module-s-resources) 则会移除机器模块声明的服务和定时器。
 
-## Preview and apply
+## 预览和应用
 
-Check each unit with
-[`mise bootstrap linux systemd-units status`](/cli/bootstrap/linux/systemd-units/status.html),
-and preview the commands before you apply them:
+使用 [`mise bootstrap linux systemd-units status`](/cli/bootstrap/linux/systemd-units/status.html) 检查各单元，并在应用前预览命令：
 
 ```sh
-mise bootstrap linux systemd-units status            # state of each unit
-mise bootstrap linux systemd-units status --json     # the same, as JSON
-mise bootstrap linux systemd-units status --missing  # exit 1 if any unit is missing, changed, or not in its desired started/stopped state
-mise bootstrap linux systemd-units apply --dry-run   # print the commands
-mise bootstrap linux systemd-units apply             # apply after a confirmation prompt
-mise bootstrap linux systemd-units apply --yes       # apply without prompting
+mise bootstrap linux systemd-units status            # 查看各单元状态
+mise bootstrap linux systemd-units status --json     # 以 JSON 格式输出相同信息
+mise bootstrap linux systemd-units status --missing  # 任一单元缺失、已变更或未处于期望的启停状态时返回 1
+mise bootstrap linux systemd-units apply --dry-run   # 显示将要运行的命令
+mise bootstrap linux systemd-units apply             # 确认后应用
+mise bootstrap linux systemd-units apply --yes       # 无需提示直接应用
 ```
 
-`systemd` is a shorter alias for `systemd-units`.
+`systemd` 是 `systemd-units` 的简写别名。
 
-Status reports each unit as `active`, `inactive`, `differs` (the unit file or
-its enablement does not match the declaration), or `missing`. An absent entry
-is `present` while any of its unit files exist and `absent` once they are gone. Apply changes
-every unit that is not in its desired state: it writes the unit file, runs
-`systemctl --user daemon-reload`, enables units that have `wanted_by` and
-disables units with `wanted_by = []`, then restarts each unit with
-`start = true` or stops it with `start = false`.
+状态会将各单元报告为 `active`、`inactive`、`differs`（单元文件或启用状态与声明不一致）或 `missing`。只要 absent 条目的任一单元文件仍存在，其状态就是 `present`；文件全部移除后则为 `absent`。Apply 会更改所有状态不符合预期的单元：写入单元文件、运行 `systemctl --user daemon-reload`、启用设置了 `wanted_by` 的单元、禁用设置了 `wanted_by = []` 的单元，然后重启 `start = true` 的单元，或停止 `start = false` 的单元。
 
-## Reference
+## 参考
 
-`[Unit]` keys, for services and timers:
+服务和定时器均可使用的 `[Unit]` 键：
 
-| Key           | systemd key   | Notes                                                          |
+| 键             | systemd 键     | 说明                                                           |
 | ------------- | ------------- | -------------------------------------------------------------- |
 | `description` | `Description` |                                                                |
-| `after`       | `After`       | List of units                                                  |
-| `before`      | `Before`      | List of units                                                  |
-| `wants`       | `Wants`       | List of units                                                  |
-| `requires`    | `Requires`    | List of units; does not order them, so add them to `after` too |
-| `binds_to`    | `BindsTo`     | List of units                                                  |
-| `part_of`     | `PartOf`      | List of units                                                  |
-| `conflicts`   | `Conflicts`   | List of units                                                  |
+| `after`       | `After`       | 单元列表                                                       |
+| `before`      | `Before`      | 单元列表                                                       |
+| `wants`       | `Wants`       | 单元列表                                                       |
+| `requires`    | `Requires`    | 单元列表；不会为其排序，因此也应将它们添加到 `after` 中         |
+| `binds_to`    | `BindsTo`     | 单元列表                                                       |
+| `part_of`     | `PartOf`      | 单元列表                                                       |
+| `conflicts`   | `Conflicts`   | 单元列表                                                       |
 
-`[Service]` keys:
+`[Service]` 键：
 
-| Key                 | systemd key        | Notes                                        |
+| 键                  | systemd 键         | 说明                                         |
 | ------------------- | ------------------ | -------------------------------------------- |
-| `exec_start`        | `ExecStart`        | Required for a service; `~` expanded         |
-| `exec_start_pre`    | `ExecStartPre`     | List; one line per entry, in order           |
-| `exec_start_post`   | `ExecStartPost`    | List; one line per entry, in order           |
+| `exec_start`        | `ExecStart`        | 服务必填；支持展开 `~`                         |
+| `exec_start_pre`    | `ExecStartPre`     | 列表；按顺序逐行写入                           |
+| `exec_start_post`   | `ExecStartPost`    | 列表；按顺序逐行写入                           |
 | `exec_stop`         | `ExecStop`         |                                              |
-| `exec_stop_post`    | `ExecStopPost`     | List; one line per entry, in order           |
-| `type`              | `Type`             | Such as `"oneshot"`                          |
+| `exec_stop_post`    | `ExecStopPost`     | 列表；按顺序逐行写入                           |
+| `type`              | `Type`             | 例如 `"oneshot"`                              |
 | `remain_after_exit` | `RemainAfterExit`  |                                              |
 | `timeout_start_sec` | `TimeoutStartSec`  |                                              |
 | `timeout_stop_sec`  | `TimeoutStopSec`   |                                              |
-| `restart`           | `Restart`          | Such as `"on-failure"`                       |
+| `restart`           | `Restart`          | 例如 `"on-failure"`                            |
 | `restart_sec`       | `RestartSec`       |                                              |
-| `environment`       | `Environment`      | Table of variables                           |
-| `environment_file`  | `EnvironmentFile`  | List of paths; `-` prefix makes one optional |
-| `working_directory` | `WorkingDirectory` | `~` expanded                                 |
-| `nice`              | `Nice`             | -20 to 19                                    |
-| `umask`             | `UMask`            | Octal, `"0000"` to `"0777"`                  |
+| `environment`       | `Environment`      | 变量表                                       |
+| `environment_file`  | `EnvironmentFile`  | 路径列表；前缀 `-` 表示文件可选               |
+| `working_directory` | `WorkingDirectory` | 支持展开 `~`                                  |
+| `nice`              | `Nice`             | 范围为 -20 到 19                             |
+| `umask`             | `UMask`            | 八进制，范围为 `"0000"` 至 `"0777"`          |
 | `no_new_privileges` | `NoNewPrivileges`  |                                              |
 | `private_tmp`       | `PrivateTmp`       |                                              |
-| `standard_output`   | `StandardOutput`   | Such as `"journal"`                          |
+| `standard_output`   | `StandardOutput`   | 例如 `"journal"`                              |
 | `standard_error`    | `StandardError`    |                                              |
 
-In the `exec_*` keys, a leading `~` or `~/` is expanded to your home directory,
-and systemd's command prefixes stay in front of the path, so
-`exec_start_pre = ["-~/bin/check"]` runs an optional check from your home
-directory.
+在 `exec_*` 键中，开头的 `~` 或 `~/` 会展开为 home 目录，并保留路径前的 systemd 命令前缀。因此，`exec_start_pre = ["-~/bin/check"]` 会从 home 目录运行一个可选检查。
 
-`[Timer]` keys; setting any of them makes the entry a timer:
+`[Timer]` 键；设置其中任意一项都会将条目变为定时器：
 
-| Key                    | systemd key          | Notes                                       |
+| 键                     | systemd 键           | 说明                                        |
 | ---------------------- | -------------------- | ------------------------------------------- |
 | `on_boot_sec`          | `OnBootSec`          |                                             |
 | `on_unit_active_sec`   | `OnUnitActiveSec`    |                                             |
 | `on_unit_inactive_sec` | `OnUnitInactiveSec`  |                                             |
-| `on_calendar`          | `OnCalendar`         | Such as `"daily"` or `"Mon *-*-* 09:00"`    |
+| `on_calendar`          | `OnCalendar`         | 例如 `"daily"` 或 `"Mon *-*-* 09:00"`       |
 | `randomized_delay_sec` | `RandomizedDelaySec` |                                             |
 | `accuracy_sec`         | `AccuracySec`        |                                             |
-| `persistent`           | `Persistent`         | Catch up missed `on_calendar` runs          |
-| `unit`                 | `Unit`               | A bare name means `dev.mise.<name>.service` |
+| `persistent`           | `Persistent`         | 补跑错过的 `on_calendar` 任务                |
+| `unit`                 | `Unit`               | 仅有名称时表示 `dev.mise.<name>.service`      |
 
-`[Install]` and mise keys:
+`[Install]` 和 mise 键：
 
-| Key         | Effect                                                                                                                             |
+| 键          | 作用                                                                                                                               |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `wanted_by` | `WantedBy`; defaults to `["default.target"]` for services and `["timers.target"]` for timers. `[]` writes the unit and disables it |
-| `start`     | Defaults to `true`, which restarts the unit after apply; `false` stops it                                                          |
-| `state`     | `"present"` (the default) or `"absent"`, which removes the unit; see [Remove a unit](#remove-a-unit)                               |
+| `wanted_by` | `WantedBy`；服务默认为 `["default.target"]`，定时器默认为 `["timers.target"]`。设为 `[]` 时会写入单元但不启用 |
+| `start`     | 默认为 `true`，apply 后会重启单元；`false` 会停止单元                                                              |
+| `state`     | `"present"`（默认）或 `"absent"`（移除单元）；参见[移除单元](#remove-a-unit)                                    |
 
 Unit names may contain letters, numbers, `.`, `_`, `-`, and `@`.
 
-## On macOS and Windows
+## macOS 和 Windows 上的行为
 
-The section is ignored on other platforms, so one config can serve several
-machines. `status` lists each unit as skipped, `apply` does nothing, and the
-full `mise bootstrap` notes the skipped units in its follow-up summary.
+此配置段会在其他平台上忽略，因此同一份配置可以供多台机器使用。`status` 会将各单元列为已跳过，`apply` 不会执行任何操作，而完整的 `mise bootstrap` 会在后续摘要中说明跳过的单元。
 
-## Troubleshooting
+## 故障排查
 
 | Problem                                                     | What to do                                                                                                               |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Units are skipped with "cannot target SUDO_USER"            | Run mise as the user who owns the units, not with `sudo mise`                                                            |
-| Units are skipped with "systemd user manager not available" | Log in to a session that starts a user manager; containers often have none                                               |
-| Units stop when you log out of a server                     | Enable lingering once with `sudo loginctl enable-linger $USER`; mise does not enable it for you                          |
-| A unit fails to start                                       | Read its output with `journalctl --user -u dev.mise.<name>` and its state with `systemctl --user status dev.mise.<name>` |
+| 单元因 "cannot target SUDO_USER" 被跳过                    | 以拥有这些单元的用户运行 mise，不要使用 `sudo mise`                                                                     |
+| 单元因 "systemd user manager not available" 被跳过         | 登录会启动用户管理器的会话；容器通常没有用户管理器                                                                       |
+| 退出服务器后单元停止                                        | 运行一次 `sudo loginctl enable-linger $USER` 启用 lingering；mise 不会替你启用                                          |
+| 单元启动失败                                                | 使用 `journalctl --user -u dev.mise.<name>` 查看输出，并通过 `systemctl --user status dev.mise.<name>` 查看状态           |
 
-## See also
+## 另请参阅
 
-- [Bootstrap](/bootstrap.html#how-it-runs) for where units fall in the run
-  order.
-- [Services](/bootstrap/services.html) for background programs declared once
-  for every platform, and for system units.
+- [引导配置](/bootstrap.html#how-it-runs)：查看单元在执行顺序中的位置。
+- [服务](/bootstrap/services.html)：了解如何通过一份声明在所有平台配置后台程序和系统单元。

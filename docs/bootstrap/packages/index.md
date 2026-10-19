@@ -3,25 +3,17 @@ description: "在 mise.toml 中声明整机软件包，并通过 apt、Homebrew�
 socialDescription: "在 mise.toml 中声明整机软件包，并通过软件包管理器安装。"
 ---
 
-# Bootstrap packages
+# 初始化软件包 {#bootstrap-packages}
 
-`[bootstrap.packages]` declares machine-wide software, such as native
-libraries, build dependencies, and desktop apps, and installs it with the
-host's package managers.
+`[bootstrap.packages]` 用于声明整台机器共用的软件，例如原生库、构建依赖和桌面应用，并通过主机的软件包管理器安装。
 
-Every project on the machine shares these installations: mise does not switch
-their versions per directory or create shims for them. Use
-[`[tools]`](/dev-tools/) for tools whose version each project chooses. A project
-can use both, for example a compiler from `[tools]` and the OpenSSL headers it
-links against from `[bootstrap.packages]`.
+机器上的所有项目共用这些安装：mise 不会按目录切换其版本，也不会为它们创建 shim。对于需要由各项目分别选择版本的工具，请使用 [`[tools]`](/dev-tools/)。项目可以同时使用两者，例如通过 `[tools]` 安装编译器，并通过 `[bootstrap.packages]` 安装其链接所需的 OpenSSL 头文件。
 
-mise installs these packages only when you ask, with
-`mise bootstrap packages apply` or the full [`mise bootstrap`](/bootstrap.html).
-`mise install` only prints a one-time hint about missing ones.
+只有在你明确要求时，mise 才会安装这些软件包：运行 `mise bootstrap packages apply` 或完整的 [`mise bootstrap`](/bootstrap.html)。`mise install` 只会针对缺少的软件包显示一次提示。
 
 ## 开始使用
 
-On Debian or Ubuntu, add this to `mise.toml`:
+在 Debian 或 Ubuntu 上，将以下内容添加到 `mise.toml`：
 
 ```toml
 [bootstrap.packages]
@@ -29,19 +21,19 @@ On Debian or Ubuntu, add this to `mise.toml`:
 "apt:build-essential" = "latest"
 ```
 
-Check what is already installed:
+查看已安装的软件包：
 
 ```sh
 mise bootstrap packages status
 ```
 
 ```text
-Manager  Package          Installed           State
+管理器   软件包           已安装版本          状态
 apt      libssl-dev       3.0.13-0ubuntu3.16  installed
 apt      build-essential                      missing
 ```
 
-Preview the commands mise would run, then run them:
+先预览 mise 将要执行的命令，再实际运行：
 
 ```sh
 mise bootstrap packages apply --dry-run
@@ -49,45 +41,39 @@ mise bootstrap packages apply --dry-run
 mise bootstrap packages apply
 ```
 
-On other systems, change the prefix, for example `dnf:openssl-devel` on Fedora
-or `brew:openssl@3` on macOS. The [table below](#supported-package-managers)
-lists every manager.
+在其他系统上，请更换前缀，例如 Fedora 上的 `dnf:openssl-devel` 或 macOS 上的 `brew:openssl@3`。下表列出了所有支持的管理器。
 
-A `"latest"` entry is satisfied by whatever version is installed: `apply`
-installs missing packages but does not upgrade installed ones. Run
-[`mise bootstrap packages upgrade`](#upgrade-installed-packages) to update them.
+`"latest"` 条目只要求软件包已安装，无论具体版本是什么。`apply` 会安装缺少的软件包，但不会升级已安装的软件包。运行 [`mise bootstrap packages upgrade`](#upgrade-installed-packages) 可执行升级。
 
 <a id="supported-package-managers"></a>
 
 ## 支持的软件包管理器
 
-The `manager:` prefix in each key is required. Each manager's page covers its
-prerequisites, package names, and the commands mise runs.
+每个键都必须包含 `manager:` 前缀。各管理器页面介绍了使用前提、软件包名称以及 mise 会运行的命令。
 
-| Manager                                                     | Runs on                                           | Version pins                                        | `state = "absent"` | Import, prune                             |
+| 管理器                                                      | 适用系统                                          | 版本固定                                              | `state = "absent"` | 导入、清理                              |
 | ----------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- | ------------------ | ----------------------------------------- |
-| [`apk`](/bootstrap/packages/apk.html)                       | Alpine Linux                                      | Yes                                                 | No                 | No                                        |
-| [`apt`](/bootstrap/packages/apt.html)                       | Debian, Ubuntu, and derivatives                   | Yes                                                 | No                 | No                                        |
-| [`aur`](/bootstrap/packages/aur.html)                       | Arch-based Linux with `yay` or `paru`             | No                                                  | No                 | No                                        |
-| [`brew`](/bootstrap/packages/brew.html)                     | macOS on Apple Silicon, Linux x86_64 and arm64    | No; use a versioned formula such as `postgresql@17` | No                 | Import and prune                          |
-| [`brew-cask`](/bootstrap/packages/brew-cask.html)           | macOS; font casks on Linux                        | No                                                  | No                 | Prune casks mise installed                |
-| [`dnf`](/bootstrap/packages/dnf.html)                       | Fedora, RHEL, and derivatives                     | Yes                                                 | No                 | No                                        |
-| [`flatpak`](/bootstrap/packages/flatpak.html)               | Linux with `flatpak`; system-wide installation    | No                                                  | No                 | No                                        |
-| [`flatpak-user`](/bootstrap/packages/flatpak.html)          | Linux with `flatpak`; per-user installation       | No                                                  | No                 | No                                        |
-| [`macos-app`](/bootstrap/packages/macos-app.html)           | macOS                                             | Required                                            | No                 | No                                        |
-| [`mas`](/bootstrap/packages/mas.html)                       | macOS with `mas` from mise `[tools]` or on `PATH` | No                                                  | No                 | No                                        |
-| [`nix`](/bootstrap/packages/nix.html)                       | Linux and macOS with `nix` on `PATH`              | No; pin the flake source instead                    | No                 | No; can export to NixOS                   |
-| [`pacman`](/bootstrap/packages/pacman.html)                 | Arch-based Linux                                  | No                                                  | Yes                | No                                        |
-| [`scoop`](/bootstrap/packages/scoop.html)                   | Windows with Scoop                                | Yes; `upgrade` skips pinned entries                 | Yes                | No                                        |
-| [`snap`](/bootstrap/packages/snap.html)                     | Linux with `snap`                                 | No; set a `channel` instead                         | Yes                | No                                        |
-| [`winget`](/bootstrap/packages/winget.html)                 | Windows with WinGet                               | Yes                                                 | No                 | No                                        |
-| [`zypper`](/bootstrap/packages/zypper.html)                 | openSUSE and SUSE Linux Enterprise                | Yes                                                 | Yes                | No                                        |
-| [Package manager plugins](/bootstrap/packages/plugins.html) | Set by each plugin                                | Set by each plugin                                  | No                 | Prune, when the plugin supports uninstall |
+| [`apk`](/bootstrap/packages/apk.html)                       | Alpine Linux                                      | 支持                                                | 不支持             | 不支持                                  |
+| [`apt`](/bootstrap/packages/apt.html)                       | Debian、Ubuntu 及其衍生版                         | 支持                                                | 不支持             | 不支持                                  |
+| [`aur`](/bootstrap/packages/aur.html)                       | 使用 `yay` 或 `paru` 的 Arch 系 Linux             | 不支持                                              | 不支持             | 不支持                                  |
+| [`brew`](/bootstrap/packages/brew.html)                     | Apple Silicon 上的 macOS、x86_64 和 arm64 Linux   | 不支持；使用带版本号的 formula，例如 `postgresql@17` | 不支持             | 支持导入和清理                          |
+| [`brew-cask`](/bootstrap/packages/brew-cask.html)           | macOS；Linux 上的字体 cask                        | 不支持                                              | 不支持             | 清理由 mise 安装的 cask                 |
+| [`dnf`](/bootstrap/packages/dnf.html)                       | Fedora、RHEL 及其衍生版                           | 支持                                                | 不支持             | 不支持                                  |
+| [`flatpak`](/bootstrap/packages/flatpak.html)               | 使用 `flatpak` 的 Linux；系统级安装                | 不支持                                              | 不支持             | 不支持                                  |
+| [`flatpak-user`](/bootstrap/packages/flatpak.html)          | 使用 `flatpak` 的 Linux；用户级安装                | 不支持                                              | 不支持             | 不支持                                  |
+| [`macos-app`](/bootstrap/packages/macos-app.html)           | macOS                                             | 必须指定                                            | 不支持             | 不支持                                  |
+| [`mas`](/bootstrap/packages/mas.html)                       | 通过 mise `[tools]` 安装或位于 `PATH` 的 macOS `mas` | 不支持                                            | 不支持             | 不支持                                  |
+| [`nix`](/bootstrap/packages/nix.html)                       | `PATH` 中有 `nix` 的 Linux 和 macOS                | 不支持；改为固定 flake 源                           | 不支持             | 不支持；可导出到 NixOS                  |
+| [`pacman`](/bootstrap/packages/pacman.html)                 | Arch 系 Linux                                     | 不支持                                              | 支持               | 不支持                                  |
+| [`scoop`](/bootstrap/packages/scoop.html)                   | 安装了 Scoop 的 Windows                           | 支持；`upgrade` 会跳过已固定版本的条目              | 支持               | 不支持                                  |
+| [`snap`](/bootstrap/packages/snap.html)                     | 使用 `snap` 的 Linux                              | 不支持；改为指定 `channel`                          | 支持               | 不支持                                  |
+| [`winget`](/bootstrap/packages/winget.html)                 | 使用 WinGet 的 Windows                            | 支持                                                | 不支持             | 不支持                                  |
+| [`zypper`](/bootstrap/packages/zypper.html)                 | openSUSE 和 SUSE Linux Enterprise                | 支持                                                | 支持               | 不支持                                  |
+| [软件包管理器插件](/bootstrap/packages/plugins.html)       | 由各插件决定                                      | 由各插件决定                                        | 不支持             | 插件支持卸载时可清理                    |
 
 ## 声明软件包
 
-Each key is `"manager:package"`. The value is a version string or a table of
-options:
+每个键的格式为 `"manager:package"`。值可以是版本字符串，也可以是选项表：
 
 ```toml
 [bootstrap.packages]
@@ -99,53 +85,37 @@ options:
 "brew-cask:slack" = { env = "work" }
 ```
 
-### Entry options
+### 条目选项 {#entry-options}
 
-| Key                         | Managers                    | Meaning                                                                                                                                                                                                                            |
+| 键                          | 管理器                      | 说明                                                                                                                                                                                                                               |
 | --------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                   | All                         | `"latest"` (the default) or a [version pin](#version-pins) in the manager's own format.                                                                                                                                            |
-| `os`                        | All                         | Install only on these operating systems; see [By operating system](#by-operating-system).                                                                                                                                          |
-| `env`                       | All                         | Install only when one of these [config environments](/configuration/environments.html) is active; see [By config environment](#by-config-environment).                                                                             |
-| `state`                     | pacman, scoop, snap, zypper | `"present"` (the default) or `"absent"`; see [Remove packages](#remove-a-package-declaratively).                                                                                                                                   |
-| `adopt`                     | brew-cask, macos-app        | Take over an identical app that is already installed instead of replacing it; see [brew-cask](/bootstrap/packages/brew-cask.html#adopt-an-existing-app) and [macos-app](/bootstrap/packages/macos-app.html#adopt-an-existing-app). |
-| `appdir`                    | brew-cask                   | Application directory for this cask; see [Application directory](/bootstrap/packages/brew-cask.html#overriding-the-application-directory).                                                                                         |
-| `url`, `sha256`, `artifact` | macos-app                   | The download to install; see [Declare a download](/bootstrap/packages/macos-app.html#declare-a-download).                                                                                                                          |
-| `channel`                   | snap                        | Channel to install from and track, such as `"22/stable"`; see [Channels](/bootstrap/packages/snap.html#channels).                                                                                                                  |
-| `classic`                   | snap                        | Install with classic confinement; see [Classic confinement](/bootstrap/packages/snap.html#classic-confinement).                                                                                                                    |
+| `version`                   | 全部                        | `"latest"`（默认值），或使用管理器自身格式的[固定版本](#version-pins)。                                                                                                                                                           |
+| `os`                        | 全部                        | 仅在指定操作系统上安装；见[按操作系统筛选](#by-operating-system)。                                                                                                                                                                  |
+| `env`                       | 全部                        | 仅在指定的[配置环境](/configuration/environments.html)启用时安装；见[按配置环境筛选](#by-config-environment)。                                                                                                                     |
+| `state`                     | pacman、scoop、snap、zypper | `"present"`（默认值）或 `"absent"`；见[声明式移除软件包](#remove-a-package-declaratively)。                                                                                                                                       |
+| `adopt`                     | brew-cask、macos-app        | 接管已安装的同一应用，而不是替换它；见 [brew-cask](/bootstrap/packages/brew-cask.html#adopt-an-existing-app) 和 [macos-app](/bootstrap/packages/macos-app.html#adopt-an-existing-app)。                                               |
+| `appdir`                    | brew-cask                   | 此 cask 的应用程序目录；见[应用程序目录](/bootstrap/packages/brew-cask.html#overriding-the-application-directory)。                                                                                                                 |
+| `url`、`sha256`、`artifact` | macos-app                   | 要安装的下载内容；见[声明下载项](/bootstrap/packages/macos-app.html#declare-a-download)。                                                                                                                                          |
+| `channel`                   | snap                        | 用于安装和跟踪更新的 channel，例如 `"22/stable"`；见[通道说明](/bootstrap/packages/snap.html#channels)。                                                                                                                          |
+| `classic`                   | snap                        | 使用 classic 隔离模式安装；见[classic 隔离模式](/bootstrap/packages/snap.html#classic-confinement)。                                                                                                                            |
 
-mise warns about and ignores `adopt`, `appdir`, `url`, `sha256`, `artifact`,
-`channel`, and `classic` on managers that do not use them. Any other key makes the config file fail to
-parse.
+对于不使用 `adopt`、`appdir`、`url`、`sha256`、`artifact`、`channel` 和 `classic` 的管理器，mise 会发出警告并忽略这些选项。其他未知键会导致配置文件解析失败。
 
-### Version pins
+### 固定版本 {#version-pins}
 
-A pin uses the manager's own version format, such as `"8.5.0-2ubuntu10"` for
-apt. Status reports a package installed at another version as
-`version mismatch`, and `apply` installs the pinned version. A `"latest"` entry
-accepts any installed version.
+固定版本使用管理器自身的版本格式，例如 apt 的 `"8.5.0-2ubuntu10"`。如果软件包已安装但版本不同，`status` 会报告 `version mismatch`，而 `apply` 会安装指定版本。`"latest"` 条目接受任意已安装版本。
 
-For managers that cannot install a pin (see the
-[table](#supported-package-managers)), status still reports the mismatch, and
-`apply` and `upgrade` skip the entry with a warning. For `brew` and `brew-cask`,
-the `@` in names such as `postgresql@17` is part of the Homebrew name, not a pin.
+对于无法安装固定版本的管理器（见[表格](#supported-package-managers)），`status` 仍会报告版本不匹配，而 `apply` 和 `upgrade` 会跳过该条目并发出警告。对于 `brew` 和 `brew-cask`，`postgresql@17` 等名称中的 `@` 是 Homebrew 名称的一部分，并非版本固定符。
 
-To write a pin from the command line, append `@<version>` to the package in
-[`mise bootstrap packages use`](#add-packages-with-use).
+如需通过命令行写入固定版本，请在 [`mise bootstrap packages use`](#add-packages-with-use) 的软件包名称后追加 `@<version>`。
 
-## Choose where packages apply {#choose-platforms}
+## 选择软件包的适用范围 {#choose-platforms}
 
-By default, mise acts on every entry whose manager is available on the current
-machine. Entries for unavailable managers are skipped, and `status` lists them
-as `skipped` with the reason, so one config can list packages for several
-platforms. A Linux machine with both apt and the built-in Homebrew manager
-installs both sets of declarations.
+默认情况下，mise 会处理当前机器上管理器可用的所有条目。不可用管理器对应的条目会被跳过，`status` 会将其列为 `skipped` 并说明原因，因此同一份配置可以声明多个平台的软件包。若 Linux 机器同时支持 apt 和内置 Homebrew 管理器，两组声明都会安装。
 
-### By operating system
+### 按操作系统筛选 {#by-operating-system}
 
-Use `os` to restrict an entry to an operating system, or to an OS and
-architecture pair. It takes one value or a list, with the same names as
-[OS-specific tools](/dev-tools/#os-specific-tools), such as `linux`, `macos`,
-`windows`, `unix`, `linux/x64`, and `macos/arm64`:
+使用 `os` 将条目限制在某个操作系统或操作系统与架构的组合上。它接受单个值或列表，名称与[按操作系统筛选工具](/dev-tools/#os-specific-tools)所用的名称相同，例如 `linux`、`macos`、`windows`、`unix`、`linux/x64` 和 `macos/arm64`：
 
 ```toml
 [bootstrap.packages]
@@ -153,18 +123,11 @@ architecture pair. It takes one value or a list, with the same names as
 "brew:jq" = { os = ["macos/arm64", "linux"] }
 ```
 
-Windows builds of mise do not include the Homebrew managers. There, `brew:`
-entries are ignored, and `brew-cask:` and `macos-app:` entries warn as unknown
-managers. Add `os = ["macos", "linux"]` to Homebrew entries in a config shared
-with Windows machines.
+Windows 版 mise 不包含 Homebrew 管理器。在 Windows 上，`brew:` 条目会被忽略，`brew-cask:` 和 `macos-app:` 条目则会因管理器未知而产生警告。如果配置由 Windows 机器共享，请在 Homebrew 条目中添加 `os = ["macos", "linux"]`。
 
-### By config environment
+### 按配置环境筛选 {#by-config-environment}
 
-Use `env` to restrict an entry to one or more
-[config environments](/configuration/environments.html). It takes one name or a
-list, and the entry applies only when one of them is active, through `-E`,
-`MISE_ENV`, `env` in `.miserc.toml`, or a platform environment enabled by
-[`auto_env`](/configuration/environments.html#platform-environments):
+使用 `env` 将条目限制在一个或多个[配置环境](/configuration/environments.html)中。它接受单个名称或列表；只有通过 `-E`、`MISE_ENV`、`.miserc.toml` 中的 `env`，或由 [`auto_env`](/configuration/environments.html#platform-environments) 启用的平台环境激活其中之一时，条目才会生效：
 
 ```toml
 [bootstrap.packages]
@@ -176,28 +139,22 @@ list, and the entry applies only when one of them is active, through `-E`,
 mise -E work bootstrap packages apply
 ```
 
-The same applies to declarations in `mise.macos.toml` or `mise.linux.toml`:
-they count only while that environment is active, so enable
-[`auto_env`](/configuration/environments.html#platform-environments) or pass
-`-E`. The file name alone does not activate it.
+`mise.macos.toml` 或 `mise.linux.toml` 中的声明也遵循相同规则：只有对应环境处于活动状态时才会生效，因此请启用 [`auto_env`](/configuration/environments.html#platform-environments) 或传入 `-E`。仅有文件名并不会激活该环境。
 
-### By package manager {#choosing-which-managers-run}
+### 按软件包管理器筛选 {#choosing-which-managers-run}
 
-Pass `--manager` to act on one manager for a single command. To limit which
-managers run on a machine, set
-[`system_packages.managers`](/configuration/settings.html#system_packages.managers):
+传入 `--manager` 可让单条命令只使用一个管理器。要限制某台机器上可运行的管理器，请设置 [`system_packages.managers`](/configuration/settings.html#system_packages.managers)：
 
 ```toml
 [settings]
 system_packages.managers = ["apt"]
 ```
 
-Status lists entries for excluded managers as `skipped`, and naming an excluded
-manager with `--manager` is an error.
+`status` 会将被排除管理器的条目标为 `skipped`；通过 `--manager` 指定已排除的管理器则会报错。
 
-## Remove packages {#remove-a-package-declaratively}
+## 移除软件包 {#remove-a-package-declaratively}
 
-`pacman`, `scoop`, `snap`, and `zypper` accept `state = "absent"`:
+`pacman`、`scoop`、`snap` 和 `zypper` 支持将 `state` 设为 `"absent"`：
 
 ```toml
 [bootstrap.packages]
@@ -205,43 +162,25 @@ manager with `--manager` is an error.
 "scoop:neovim" = { state = "absent" }
 ```
 
-When an absent package is installed, `status` reports it as
-`unexpectedly installed`, and `apply` removes it. Each manager's page describes
-the command it runs. Other managers report the same drift, but `apply` does not
-remove the package: a whole-config apply skips the entry with a warning, and an
-apply scoped with `--manager` or named packages fails after it installs the
-other packages.
+如果声明为 `absent` 的软件包仍已安装，`status` 会将其报告为 `unexpectedly installed`，而 `apply` 会将其移除。各管理器页面说明了 mise 会执行的命令。其他管理器也会报告这种偏差，但 `apply` 不会移除该软件包：应用整个配置时会跳过该条目并发出警告；通过 `--manager` 或指定软件包范围运行时，则会在安装其他软件包后报错。
 
-Deleting an entry from `mise.toml` never uninstalls anything. Use
-[`prune`](#import-and-prune) for explicit cleanup where the manager supports it.
+从 `mise.toml` 删除条目不会卸载任何内容。对于支持清理的管理器，请使用 [`prune`](#import-and-prune) 明确执行清理。
 
-## How declarations combine {#semantics}
+## 声明如何合并 {#semantics}
 
-Package declarations merge across the
-[config hierarchy](/configuration.html#configuration-hierarchy). A project adds
-packages to the global list, and an entry with the same key in a more local file
-replaces the global one, including its version and `state`.
+软件包声明会沿[配置层级](/configuration.html#configuration-hierarchy)合并。项目配置会向全局列表添加软件包；更局部的文件若包含相同键，则会取代全局条目，包括其版本和 `state`。
 
-An entry for an unknown manager produces a warning with a hint to install a
-package plugin, and the entry is ignored. This keeps a config readable by mise
-versions that do not have that manager yet.
+如果条目的管理器未知，mise 会提示安装软件包插件并忽略该条目。这样，尚不支持该管理器的 mise 版本也能读取此配置。
 
-If two active entries name the same package with different spellings and
-disagree on version or state, mise reports an error. WinGet IDs and Scoop app
-names are case-insensitive, and Scoop ignores the bucket prefix, so
-`scoop:Git` and `scoop:extras/git` are the same app. Spell the key the same way
-in every file so the normal override applies. Entries filtered out by `os` or
-`env` are not checked.
+如果两个有效条目以不同拼写指向同一软件包，且版本或状态不一致，mise 会报错。WinGet ID 和 Scoop 应用名称不区分大小写，Scoop 也会忽略 bucket 前缀，因此 `scoop:Git` 和 `scoop:extras/git` 指向同一应用。请在所有文件中统一键的拼写，以便正常应用覆盖规则。被 `os` 或 `env` 筛除的条目不会参与检查。
 
-## Commands
+## 命令 {#commands}
 
-The [`mise bootstrap packages`](/cli/bootstrap/packages.html) reference lists
-every subcommand and flag.
+[`mise bootstrap packages`](/cli/bootstrap/packages.html) 参考页列出了所有子命令和选项。
 
-### Check status
+### 查看状态 {#check-status}
 
-[`mise bootstrap packages status`](/cli/bootstrap/packages/status.html) compares
-the active declarations with what is installed:
+[`mise bootstrap packages status`](/cli/bootstrap/packages/status.html) 会比较当前生效的声明与已安装内容：
 
 ```sh
 mise bootstrap packages status
@@ -249,14 +188,11 @@ mise bootstrap packages status --json
 mise bootstrap packages status --missing # exit 1 if anything is out of sync
 ```
 
-Status does not install anything or use sudo. A package can be
-`installed`, `missing`, `version mismatch`, `needs repair`, `absent`,
-`unexpectedly installed`, or `skipped` when its manager is unavailable.
+`status` 不会安装软件包，也不会调用 sudo。软件包状态可能为 `installed`（已安装）、`missing`（缺失）、`version mismatch`（版本不匹配）、`needs repair`（需要修复）、`absent`（未安装）、`unexpectedly installed`（意外安装），或在管理器不可用时为 `skipped`（已跳过）。
 
-### Apply {#apply-or-record-packages}
+### 应用配置 {#apply-or-record-packages}
 
-[`mise bootstrap packages apply`](/cli/bootstrap/packages/apply.html) installs
-missing and mismatched packages and removes `absent` ones:
+[`mise bootstrap packages apply`](/cli/bootstrap/packages/apply.html) 会安装缺少或版本不匹配的软件包，并移除状态为 `absent` 的软件包：
 
 ```sh
 mise bootstrap packages apply --dry-run
@@ -265,158 +201,101 @@ mise bootstrap packages apply --update --yes
 mise bootstrap packages apply apt:curl
 ```
 
-`--dry-run` prints the commands without running them. `--manager` limits the
-run to one manager and fails if that manager is unavailable. When one manager
-fails to install or remove a package, the others still run, and the apply
-exits non-zero at the end with one line per failed manager. In an interactive
-terminal, mise asks before it installs or removes anything; `--yes` skips that
-prompt but does not supply a sudo password.
+`--dry-run` 只打印命令而不执行。`--manager` 将运行范围限制为单个管理器；如果该管理器不可用，命令会失败。某个管理器安装或移除软件包失败时，其他管理器仍会继续运行；全部执行完后，apply 会以非零状态退出，并为每个失败的管理器打印一行信息。在交互式终端中，mise 会在安装或移除前询问；`--yes` 会跳过确认，但不会提供 sudo 密码。
 
-`--update` refreshes the manager's package metadata first, for example with
-`apt-get update`, `apk add --update-cache`, `dnf install --refresh`,
-`pacman -Sy`, `zypper refresh`, `scoop update`, or `winget source update`.
-`brew`, `brew-cask`, `macos-app`, `flatpak`, `mas`, and `snap` ignore it.
+`--update` 会先刷新管理器的软件包元数据，例如运行 `apt-get update`、`apk add --update-cache`、`dnf install --refresh`、`pacman -Sy`、`zypper refresh`、`scoop update` 或 `winget source update`。
+`brew`、`brew-cask`、`macos-app`、`flatpak`、`mas` 和 `snap` 会忽略此选项。
 
-Packages named on the command line, such as `apt:curl`, are installed without
-being recorded in a config file, and an unavailable manager is an error.
+直接在命令行中指定的软件包（例如 `apt:curl`）会被安装，但不会记录到配置文件中；如果管理器不可用，则会报错。
 
-### Add packages with use
+### 使用 use 添加软件包 {#add-packages-with-use}
 
-[`mise bootstrap packages use`](/cli/bootstrap/packages/use.html) writes
-declarations and installs what is missing:
+[`mise bootstrap packages use`](/cli/bootstrap/packages/use.html) 会写入声明并安装缺少的软件包：
 
 ```sh
 mise bootstrap packages use apt:curl
-mise bootstrap packages use apt:curl@8.5.0-2  # writes "apt:curl" = "8.5.0-2"
-mise bootstrap packages use brew:postgresql@17 # @17 is part of the formula name
+mise bootstrap packages use apt:curl@8.5.0-2  # 写入 "apt:curl" = "8.5.0-2"
+mise bootstrap packages use brew:postgresql@17 # @17 是 formula 名称的一部分
 mise bootstrap packages use -g brew-cask:firefox
 ```
 
-`use` writes to the local `mise.toml` by default. `-g` writes to the global
-config, `-e <env>` to `mise.<env>.toml`, and `-p <path>` to a specific file.
-With `-g`, new entries go to
-[`write_targets.packages`](/configuration/settings.html#write_targets.packages)
-when that setting is set; an entry that already exists is updated where it is
-declared.
+`use` 默认写入本地 `mise.toml`。`-g` 写入全局配置，`-e <env>` 写入 `mise.<env>.toml`，`-p <path>` 写入指定文件。使用 `-g` 时，如果设置了 [`write_targets.packages`](/configuration/settings.html#write_targets.packages)，新条目会写入指定目标；已存在的条目则会在原声明位置更新。
 
-Append `@<version>` to write a pin. `@latest`, or no `@`, writes `"latest"`.
-`brew:` and `brew-cask:` names keep the `@` as part of the name, and `mas:` and
-`nix:` reject a pin. `--dry-run` prints the entries and commands without writing
-anything.
+如需写入固定版本，请追加 `@<version>`。追加 `@latest` 或不使用 `@` 都会写入 `"latest"`。`brew:` 和 `brew-cask:` 名称中的 `@` 保留为名称的一部分；`mas:` 和 `nix:` 不接受固定版本。`--dry-run` 会打印条目和命令，但不会写入任何内容。
 
-Entries for a manager that is unavailable on this machine are written without
-installing, so you can add an `apt:` declaration from a Mac. `--no-install`
-writes declarations without checking or installing anything.
+对于当前机器上不可用的管理器，条目仍会写入，但不会执行安装，因此你可以在 Mac 上添加 `apt:` 声明。`--no-install` 会直接写入声明，不检查也不安装任何内容。
 
-### Upgrade installed packages
+### 升级已安装的软件包 {#upgrade-installed-packages}
 
-[`mise bootstrap packages upgrade`](/cli/bootstrap/packages/upgrade.html)
-updates configured packages that are already installed, refreshing the
-manager's package metadata first where it has any:
+[`mise bootstrap packages upgrade`](/cli/bootstrap/packages/upgrade.html) 会升级已安装且已配置的软件包；如果管理器支持，则会先刷新软件包元数据：
 
 ```sh
 mise bootstrap packages upgrade --dry-run
 mise bootstrap packages upgrade --manager apt
 ```
 
-Missing packages are skipped with a warning; use `apply` to install them. The
-manager decides which version is current. Managers that honor pins upgrade a
-pinned entry to its pin, and each manager's page says what it runs.
+缺少的软件包会被跳过并产生警告；请使用 `apply` 安装它们。由管理器决定哪个版本是最新版本。支持固定版本的管理器会将条目升级到指定版本，各管理器页面说明了具体执行方式。
 
-若要在一次运行中安装缺少的软件包并升级已安装的软件包，请使用
-`mise bootstrap --upgrade`。它会在 packages 阶段升级软件包，并在 tools 阶段升级工具（与 `mise upgrade` 相同，但不带 `--bump`），然后运行 post 钩子。它不会更新 mise 自身、软件仓库或容器镜像。`--dry-run` 只会预览已安装的软件包和工具的升级；对于即将由本次运行安装的内容，必须等安装后才能确定升级行为。
+若要在一次运行中安装缺少的软件包并升级已安装的软件包，请使用 `mise bootstrap --upgrade`。它会在 `packages` 阶段升级软件包，并在 `tools` 阶段升级工具（与 `mise upgrade` 相同，但不带 `--bump`），然后运行 post 阶段钩子。它不会更新 mise 自身、软件仓库或容器镜像。`--dry-run` 只会预览已安装的软件包和工具的升级；对于即将由本次运行安装的内容，必须等安装后才能确定升级行为。
 
-### Import and prune
+### 导入与清理 {#import-and-prune}
 
-[`mise bootstrap packages import`](/cli/bootstrap/packages/import.html) records
-Homebrew formulae that are already installed:
+[`mise bootstrap packages import`](/cli/bootstrap/packages/import.html) 会记录已安装的 Homebrew formula：
 
 ```sh
 mise bootstrap packages import --manager brew --dry-run
 mise bootstrap packages import --manager brew
 ```
 
-It writes `"brew:<formula>" = "latest"` for each formula installed on request;
-`--all` includes dependencies. `--global` follows `write_targets.packages` in
-the same way as `use -g`.
+它会为按要求安装的每个 formula 写入 `"brew:<formula>" = "latest"`；`--all` 还会包括依赖项。`--global` 与 `use -g` 一样遵循 `write_targets.packages` 设置。
 
-[`mise bootstrap packages prune`](/cli/bootstrap/packages/prune.html)
-uninstalls packages that no configuration declares. Always preview it first:
+[`mise bootstrap packages prune`](/cli/bootstrap/packages/prune.html) 会卸载任何配置都未声明的软件包。请务必先预览将要执行的操作：
 
 ```sh
 mise bootstrap packages prune --manager brew --dry-run
 ```
 
-Prune keeps every package declared by the current configuration or by any
-trusted config file mise tracks for other projects, in every config
-environment. It defaults to `--manager brew`. What it removes depends on the
-manager:
+`prune` 会保留当前配置以及 mise 为其他项目跟踪的所有受信任配置文件中声明的软件包，且涵盖每个配置环境。默认使用 `--manager brew`。具体移除内容取决于管理器：
 
-| Manager         | What prune removes                                                                                                                                                                     |
+| 管理器          | prune 会移除的内容                                                                                                                                                                     |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| brew            | Linked formulae that are neither declared nor needed by a declared formula or cask, including ones Homebrew installed; see [brew](/bootstrap/packages/brew.html#importing-and-pruning) |
-| brew-cask       | Only casks mise installed that are unchanged since; see [brew-cask](/bootstrap/packages/brew-cask.html#prune)                                                                          |
-| Package plugins | Only packages mise installed, when the plugin supports uninstall; see [plugins](/bootstrap/packages/plugins.html#prune)                                                                |
+| brew            | 未声明，也不是已声明 formula 或 cask 所需依赖的已链接 formula，包括 Homebrew 安装的 formula；见 [brew](/bootstrap/packages/brew.html#importing-and-pruning)                               |
+| brew-cask       | 仅移除由 mise 安装且此后未更改的 cask；见 [brew-cask](/bootstrap/packages/brew-cask.html#prune)                                                                                           |
+| 软件包插件      | 仅在插件支持卸载时移除由 mise 安装的软件包；见[插件](/bootstrap/packages/plugins.html#prune)                                                                                               |
 
-### Export to NixOS
+### 导出到 NixOS {#export-to-nixos}
 
-`mise bootstrap packages export --format nix` writes `nix:` declarations as a
-NixOS module instead of installing them; see
-[Export to NixOS](/bootstrap/packages/nix.html#export-to-nixos).
+`mise bootstrap packages export --format nix` 会将 `nix:` 声明写入 NixOS 模块，而不会安装这些软件包；见[导出到 NixOS](/bootstrap/packages/nix.html#export-to-nixos)。
 
-### Locate a Homebrew formula {#locate-an-installed-package}
+### 查找已安装的 Homebrew formula {#locate-an-installed-package}
 
-`mise bootstrap packages where brew:<formula>` prints the formula's stable
-`opt` directory for scripts and build flags. It supports only `brew:` formulae;
-see [Locate an installed formula](/bootstrap/packages/brew.html#locate-an-installed-formula).
+`mise bootstrap packages where brew:<formula>` 会输出 formula 稳定的 `opt` 目录，供脚本和构建选项使用。它只支持 `brew:` formula；见[查找已安装的 formula](/bootstrap/packages/brew.html#locate-an-installed-formula)。
 
-## Root privileges and sudo {#sudo}
+## root 权限与 sudo {#sudo}
 
-apk, apt, dnf, pacman, snap, and zypper need root to change packages. When mise is
-not running as root, it runs their commands through `sudo` and logs each
-command first. In an interactive terminal, sudo can prompt for your password.
-Without a terminal, mise checks for passwordless sudo and, when there is none,
-fails and prints the command to run yourself. If `sudo` is not installed, mise
-falls back to `run0` (systemd 256+) and then `doas`; if none is installed, it
-asks you to run the command as root. Set
+apk、apt、dnf、pacman、snap 和 zypper 需要 root 权限才能更改软件包。mise 未以 root 身份运行时，会先记录命令，再通过 `sudo` 执行。在交互式终端中，sudo 可以提示你输入密码。没有终端时，mise 会检查是否配置了免密码 sudo；如果没有，则报错并打印需要你手动运行的命令。如果没有安装 `sudo`，mise 会依次尝试 `run0`（systemd 256+）和 `doas`；如果这些工具也都未安装，则会提示你以 root 身份运行命令。设置
 [`system_packages.elevate_with`](/configuration/settings.html#system_packages.elevate_with)
-to pin one, such as `run0`.
+以固定使用某个提权工具，例如 `run0`。
 
-Set [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo)
-to `false` to forbid elevation. Commands that need root then fail and print the
-command instead.
+将 [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) 设为 `false` 可禁止提权。需要 root 权限的命令会因此失败，并改为打印命令供你手动执行。
 
-Other managers handle privileges differently:
+其他管理器的权限处理方式有所不同：
 
-- AUR helpers build as your user and call sudo themselves to install the
-  result, so `aur` needs the same sudo access and refuses to run as root.
-- `flatpak` system installs are authorized by Flatpak's own polkit prompt, not
-  sudo. `flatpak-user` needs no privileges.
-- Homebrew formulae need sudo when the prefix does not exist yet, to create it
-  and give it to your user
-  ([brew](/bootstrap/packages/brew.html#the-prefix)). Casks may need it for
-  pkg installers and some install steps
-  ([brew-cask](/bootstrap/packages/brew-cask.html#supported-artifacts)).
-- `nix`, `mas`, `scoop`, and `winget` never use sudo. A Windows installer can
-  still raise its own UAC prompt.
-- Package plugins never use sudo and must not elevate themselves.
+- AUR 辅助工具会以当前用户身份构建，并自行调用 sudo 安装结果，因此 `aur` 需要相同的 sudo 权限，且拒绝以 root 身份运行。
+- `flatpak` 系统级安装通过 Flatpak 自带的 polkit 提示进行授权，而不是使用 sudo。`flatpak-user` 无需特殊权限。
+- Homebrew 前缀尚不存在时，安装 formula 需要 sudo 来创建前缀并将其所有权交给当前用户（见 [brew](/bootstrap/packages/brew.html#the-prefix)）。安装 cask 时也可能需要 sudo，例如安装 pkg 安装包或执行某些安装步骤（见 [brew-cask](/bootstrap/packages/brew-cask.html#supported-artifacts)）。
+- `nix`、`mas`、`scoop` 和 `winget` 从不使用 sudo。Windows 安装程序仍可能显示自己的 UAC 提示。
+- 软件包插件从不使用 sudo，也不能自行提权。
 
-## Use in CI {#ci-usage}
+## 在 CI 中使用 {#ci-usage}
 
-Install bootstrap packages before project tools:
+先安装初始化软件包，再安装项目工具：
 
 ```sh
 mise bootstrap packages apply --yes
 mise install
 ```
 
-Containers that run as root need no sudo.
-`mise bootstrap --only packages,tools --yes` runs the same two
-[bootstrap](/bootstrap.html) phases in one command.
+以 root 身份运行的容器不需要 sudo。`mise bootstrap --only packages,tools --yes` 可在一条命令中运行相同的两个 [bootstrap](/bootstrap.html) 阶段。
 
-To check for drift without installing anything, run
-`mise bootstrap packages status --missing`, which exits 1 when a package is not
-in its desired state. A `skipped` entry does not count as missing, so when a
-required manager might be unavailable, also check `status --json`, where the
-manager shows `"available": false`. `mise doctor` also warns about missing
-packages.
+如需在不安装任何内容的情况下检查配置偏差，请运行 `mise bootstrap packages status --missing`。当软件包未处于期望状态时，此命令会以状态码 1 退出。`skipped` 条目不算作缺失，因此如果所需管理器可能不可用，还应检查 `status --json` 输出中的 `"available": false`。`mise doctor` 也会对缺失的软件包发出警告。

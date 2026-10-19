@@ -2,7 +2,7 @@
 description: "声明 bootstrap 模板所需的密钥值，而无需将密钥存入 mise 配置。"
 ---
 
-# Secret inputs
+# 密钥输入
 
 `[bootstrap.secrets]` names the secret values your bootstrap needs, such as
 tokens and passwords, without storing them in mise configuration. mise reads

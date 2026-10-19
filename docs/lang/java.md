@@ -4,10 +4,9 @@ description: "通过 mise 安装 Temurin、Zulu、Corretto 等发行商提供的
 
 # Java
 
-mise installs JDKs from many vendors and sets `JAVA_HOME` to the one your
-project selects.
+mise 会安装多个供应商发布的 JDK，并将 `JAVA_HOME` 设置为项目所选的版本。
 
-## Quick start
+## 快速开始
 
 为当前项目选择 JDK 供应商和版本：
 
@@ -17,116 +16,100 @@ mise exec -- java -version
 mise exec -- javac -version
 ```
 
-Use `mise use -g java@temurin-25` for a personal default. Naming the vendor
-makes the project's distribution choice explicit.
+使用 `mise use -g java@temurin-25` 设置个人默认版本。在项目中指定供应商，可以明确记录所用的
+发行版。
 
-## Choosing a vendor and version {#choosing-a-version}
+## 选择供应商和版本 {#choosing-a-version}
 
-| Request                  | Selects                                                                                   |
+| 版本请求                 | 选择的版本                                                                                |
 | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `java@temurin-25`        | The newest Temurin 25 build                                                               |
-| `java@temurin`           | The newest Temurin build of any major                                                     |
-| `java@zulu-21`           | The newest Zulu 21 build; `corretto-21` and other vendors work the same way               |
-| `java@temurin-jre-25`    | The newest Temurin 25 JRE, without the compiler                                           |
-| `java@oracle-graalvm-25` | The newest Oracle GraalVM for JDK 25                                                      |
-| `java@25`                | The newest 25 build from [`java.shorthand_vendor`](/lang/java.html#java.shorthand_vendor) |
-| `java@lts`               | The current LTS major (25) from `java.shorthand_vendor`                                   |
+| `java@temurin-25`        | 最新的 Temurin 25 构建                                                                    |
+| `java@temurin`           | 任意主版本中的最新 Temurin 构建                                                            |
+| `java@zulu-21`           | 最新的 Zulu 21 构建；`corretto-21` 和其他供应商也采用相同写法                              |
+| `java@temurin-jre-25`    | 最新的 Temurin 25 JRE，不含编译器                                                          |
+| `java@oracle-graalvm-25` | 最新的 Oracle GraalVM JDK 25 构建                                                         |
+| `java@25`                | [`java.shorthand_vendor`](/lang/java.html#java.shorthand_vendor) 对应的最新 25 版本         |
+| `java@lts`               | `java.shorthand_vendor` 对应的当前 LTS 主版本（25）                                       |
 
-A request without a vendor uses `java.shorthand_vendor`, which defaults to
-`temurin`, so `java@21` resolves to the newest Temurin 21 build. Set it to
-`openjdk` for the builds published on jdk.java.net, which stop at the last
-update jdk.java.net published for a release (`java@21` is then 21.0.2). Name a
-vendor in shared config so every machine resolves the same build.
+未指定供应商的请求会使用 `java.shorthand_vendor`，其默认值为 `temurin`，因此 `java@21` 会解析为
+最新的 Temurin 21 构建。将其设为 `openjdk` 可使用 jdk.java.net 发布的构建；这些构建只更新到
+jdk.java.net 为该发行版发布的最后一个版本（此时 `java@21` 对应 21.0.2）。请在共享配置中指定
+供应商，确保所有机器解析到相同的构建。
 
-An OpenJDK build still installed when the default changes keeps working, and
-plain `mise lock` locks it again under the new default, so machines without it
-install the same OpenJDK build from the lockfile. Without the installed build,
-a lockfile entry recorded with `shorthand_vendor = "openjdk"` no longer
-matches: `mise install --locked` fails, and plain `mise lock` or `mise install`
-replaces the entry with the newest matching Temurin build. Set
-`java.shorthand_vendor = "openjdk"` to keep the old pin. `mise lock --bump java`
-always moves to the newest matching Temurin build. Temurin publishes no builds
-for some releases, such as Java 12, so request those with a vendor, for example
-`openjdk-12`.
+默认供应商变更后，已安装的 OpenJDK 构建仍可继续使用；直接运行 `mise lock` 会按新的默认设置再次
+锁定该版本，因此其他尚未安装它的机器也会从锁文件安装相同的 OpenJDK 构建。如果本机没有该构建，
+锁文件中记录的 `shorthand_vendor = "openjdk"` 项将不再匹配：`mise install --locked` 会失败，
+而直接运行 `mise lock` 或 `mise install` 则会将该项替换为最新匹配的 Temurin 构建。若要保留原
+有固定版本，请设置 `java.shorthand_vendor = "openjdk"`。`mise lock --bump java` 始终会更新到
+最新匹配的 Temurin 构建。有些发行版（如 Java 12）没有 Temurin 构建，请指定供应商请求，例如
+`openjdk-12`。
 
-Vendor names also carry variants, such as `temurin-jre`, `zulu-javafx`,
-`zulu-crac` and `liberica-nik-openjdk`. On Alpine and other musl systems, mise
-lists the vendors' musl builds under the usual names. The full list has
-thousands of entries; filter it with a prefix:
+供应商名称还可以包含变体，例如 `temurin-jre`、`zulu-javafx`、`zulu-crac` 和
+`liberica-nik-openjdk`。在 Alpine 等 musl 系统上，mise 会以常用名称列出供应商的 musl 构建。
+完整列表有数千个条目，可按前缀筛选：
 
 ```sh
 mise ls-remote java temurin-25
 ```
 
-## Version files
+## 版本文件
 
-mise can read `.java-version` and `.sdkmanrc`. Enable them for Java:
+mise 可以读取 `.java-version` 和 `.sdkmanrc`。为 Java 启用这些版本文件：
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools java
 ```
 
-This changes your global config. Add `--local` to enable it in the project's
-`mise.toml` instead, so teammates get the same behavior. A Java version in
-`mise.toml` takes precedence over these files. See
-[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files).
+这会修改全局配置。添加 `--local` 可改为在项目的 `mise.toml` 中启用，让团队成员也获得相同的
+行为。`mise.toml` 中的 Java 版本优先于这些文件。参见[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)。
 
-A version without a vendor in `.java-version`, such as `21`, uses
-`java.shorthand_vendor` like any other request.
+`.java-version` 中不带供应商的版本号（例如 `21`）也会像其他请求一样使用
+`java.shorthand_vendor`。
 
-For `.sdkmanrc`, mise maps SDKMAN's vendor identifiers to mise names. For
-example, `21.0.9-tem` becomes `temurin-21.0.9`, and `21.0.9-amzn` becomes
-`corretto-21.0.9`. Because of Azul's version numbering, `11.0.12-zulu` maps to
-the major version only, `zulu-11`.
+对于 `.sdkmanrc`，mise 会将 SDKMAN 的供应商标识映射为 mise 名称。例如，`21.0.9-tem` 会转换为
+`temurin-21.0.9`，`21.0.9-amzn` 会转换为 `corretto-21.0.9`。由于 Azul 的版本号规则，
+`11.0.12-zulu` 只会映射到主版本号 `zulu-11`。
 
-mise cannot translate these SDKMAN identifiers: `bisheng` (Huawei BiSheng,
-formerly `bsg`), `graal` (Oracle GraalVM), `jbr` (JetBrains Runtime) and `nik`
-(Liberica NIK). Write the mise name in `mise.toml` instead, such as
-`java = "oracle-graalvm-21"`, `java = "jetbrains-21"` or
-`java = "liberica-nik-openjdk21"`. BiSheng is not available through mise.
+mise 无法转换以下 SDKMAN 标识：`bisheng`（华为毕昇，旧标识为 `bsg`）、`graal`（Oracle
+GraalVM）、`jbr`（JetBrains Runtime）和 `nik`（Liberica NIK）。请改为在 `mise.toml` 中填写
+mise 名称，例如 `java = "oracle-graalvm-21"`、`java = "jetbrains-21"` 或
+`java = "liberica-nik-openjdk21"`。mise 不提供毕昇。
 
-## Use a JDK installed elsewhere {#using-unsupported-versions}
+## 使用其他位置已安装的 JDK {#using-unsupported-versions}
 
-To use a JDK that SDKMAN, a package manager or an installer put on the machine,
-point mise at its home directory:
+若要使用由 SDKMAN、软件包管理器或安装程序放到本机其他位置的 JDK，请将 mise 指向其主目录：
 
 ```toml [mise.toml]
 [tools]
 java = { path = "/path/to/jdk-home" }
 ```
 
-The directory must contain `bin/java` and, for a full JDK, `bin/javac`. For a
-macOS `.jdk` bundle, this is usually its `Contents/Home` directory. Check it
-with `mise exec -- java -version`.
+该目录必须包含 `bin/java`；完整 JDK 还需包含 `bin/javac`。对于 macOS 的 `.jdk` 软件包，通常
+应指向其 `Contents/Home` 目录。运行 `mise exec -- java -version` 进行检查。
 
-Alternatively, register the installation under a name with
-[`mise link`](/cli/link.html), then select it with `mise use`:
+也可以使用 [`mise link`](/cli/link.html) 为该安装注册一个名称，再通过 `mise use` 选择：
 
 ```sh
 mise link java@local /path/to/jdk-home
 mise use java@local
 ```
 
-mise uses these installations in place. Updates remain the job of whatever
-installed them.
+mise 会直接使用这些现有安装。之后仍由原安装工具负责更新。
 
 ## `JAVA_HOME`
 
-mise sets `JAVA_HOME` to the selected JDK for commands run with
-[`mise exec`](/cli/exec.html), for tasks, and in shells where mise is
-activated. With [shims](/dev-tools/shims.html) alone, only the shimmed `java`
-process sees it. Your shell, your IDE and build tools that read `JAVA_HOME`
-directly do not.
+对于通过 [`mise exec`](/cli/exec.html) 运行的命令、任务，以及已激活 mise 的 shell，mise 会将
+`JAVA_HOME` 设置为所选 JDK。仅使用 [shims](/dev-tools/shims.html) 时，只有经过 shim 的
+`java` 进程能读取它。shell、IDE 和直接读取 `JAVA_HOME` 的构建工具都无法获取该值。
 
-If `JAVA_HOME` still points at an old JDK, run `mise env | grep JAVA_HOME`. If
-mise reports the new path, something else is overriding it: usually a
-`JAVA_HOME` export in your shell startup file, or a shims-only setup. An IDE
-that reads `JAVA_HOME` at startup needs a restart after you switch versions.
+如果 `JAVA_HOME` 仍指向旧版 JDK，请运行 `mise env | grep JAVA_HOME`。若 mise 显示的是新路径，
+说明有其他设置覆盖了它，通常是 shell 启动文件中的 `JAVA_HOME` 导出语句，或仅使用 shims 的
+配置。启动时读取 `JAVA_HOME` 的 IDE 需要在切换版本后重启。
 
-## Registering a JDK with macOS {#macos-java-home-integration}
+## 在 macOS 中注册 JDK {#macos-java-home-integration}
 
-Some macOS apps find Java through `/usr/libexec/java_home`. If the selected JDK
-has a `Contents` bundle, register it:
+某些 macOS 应用通过 `/usr/libexec/java_home` 查找 Java。如果所选 JDK 带有 `Contents` 软件包，
+请按以下方式注册：
 
 ```sh
 mise_java_home="$(mise where java)"
@@ -137,68 +120,55 @@ fi
 /usr/libexec/java_home -V
 ```
 
-Not every distribution includes the bundle. Run the link command only when the
-destination is not already registered. The link points to the selected
-installation and does not follow later upgrades.
+并非所有发行版都包含该软件包。仅当目标位置尚未注册时才运行创建链接的命令。该链接指向当前所选
+安装，后续升级时不会自动更新。
 
-## Gradle toolchains {#gradle-toolchains-detection}
+## Gradle 工具链 {#gradle-toolchains-detection}
 
-Run Gradle through mise so it inherits the selected `JAVA_HOME`, then list the
-JDKs Gradle detects and how it found them:
+通过 mise 运行 Gradle，使其继承所选的 `JAVA_HOME`，然后列出 Gradle 检测到的 JDK 及其发现方式：
 
 ```sh
 mise exec -- ./gradlew -q javaToolchains
 ```
 
-This assumes the project has a Gradle wrapper and a JVM build. To offer the
-selected JDK as an explicit toolchain candidate, add:
+这要求项目包含 Gradle Wrapper 且使用 JVM 构建。若要将所选 JDK 明确提供为工具链候选项，请添加：
 
 ```properties [gradle.properties]
 org.gradle.java.installations.fromEnv=JAVA_HOME
 ```
 
-For several JDKs, Gradle also accepts a comma-separated list of JDK homes in
-`org.gradle.java.installations.paths`. It does not search those directories
-recursively, so list actual JDK homes, not mise's whole `installs/java`
-directory; see
-[Gradle's custom toolchain locations](https://docs.gradle.org/current/userguide/toolchains.html#sec:custom_loc).
+若要指定多个 JDK，Gradle 也接受在 `org.gradle.java.installations.paths` 中填写以逗号分隔的
+JDK 主目录列表。Gradle 不会递归搜索这些目录，因此请填写实际的 JDK 主目录，而不是 mise 的整个
+`installs/java` 目录。参见 [Gradle 自定义工具链位置](https://docs.gradle.org/current/userguide/toolchains.html#sec:custom_loc)。
 
-The build's toolchain requirements still decide which candidate Gradle uses.
-After changing toolchain configuration, stop the running daemon with
-`mise exec -- ./gradlew --stop` before checking again.
+最终使用哪个候选项仍由构建中声明的工具链要求决定。修改工具链配置后，请先运行
+`mise exec -- ./gradlew --stop` 停止正在运行的守护进程，再重新检查。
 
-## How mise installs Java
+## mise 如何安装 Java
 
-mise reads a catalog of vendor builds from `mise-java.jdx.dev`, downloads the
-selected vendor's archive, and checks it against the catalog's checksum when
-there is one. It then runs `java -version`. On macOS, mise keeps the bundle's
-`Contents` directory and prints the commands that
-[register the JDK with macOS](#macos-java-home-integration).
+mise 会从 `mise-java.jdx.dev` 读取供应商构建目录，下载所选供应商的压缩包，并在目录提供校验和
+时进行校验，随后运行 `java -version`。在 macOS 上，mise 会保留软件包的 `Contents` 目录，并
+显示[在 macOS 中注册 JDK](#macos-java-home-integration)所需的命令。
 
-An installed plugin named `java` takes precedence over the built-in
-installer. If mise behaves differently from this page, check
-[`mise plugins ls`](/cli/plugins/ls.html) and see
-[selecting another implementation](/core-tools.html#selecting-another-implementation).
+如果已安装名为 `java` 的插件，它的优先级高于内置安装器。如果 mise 的行为与本文不符，请检查
+[`mise plugins ls`](/cli/plugins/ls.html)，并参见[选择其他实现](/core-tools.html#selecting-another-implementation)。
 
-## Tool options
+## 工具选项
 
 ### `release_type`
 
-Selects general-availability builds (`ga`, the default) or early-access builds
-(`ea`):
+用于选择正式发布版（`ga`，默认值）或早期访问版（`ea`）：
 
 ```toml [mise.toml]
 [tools]
 java = { version = "openjdk-28", release_type = "ea" }
 ```
 
-Generic options such as `install_env` and `postinstall` work as described in
-[tool options](/dev-tools/#tool-options). `install_env` reaches the
-`java -version` check and `postinstall` commands, not the download. To download
-through a proxy, set `https_proxy` in the environment that runs mise (see the
-[FAQ](/faq.html#how-do-i-use-mise-with-http-proxies)).
+`install_env` 和 `postinstall` 等通用选项的用法参见[工具选项](/dev-tools/#tool-options)。
+`install_env` 会传递给 `java -version` 检查和 `postinstall` 命令，但不会用于下载过程。若要
+通过代理下载，请在运行 mise 的环境中设置 `https_proxy`（参见[常见问题](/faq.html#how-do-i-use-mise-with-http-proxies)）。
 
-## Settings
+## 设置
 
 <script setup>
 import Settings from '/components/settings.vue';

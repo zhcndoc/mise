@@ -2,16 +2,13 @@
 description: "将针对子目录的 Terraform 或 OpenTofu 命令定义为 mise 任务：init、check、plan 和 apply。"
 ---
 
-# Terraform and OpenTofu
+# Terraform 与 OpenTofu
 
-Pin Terraform or OpenTofu for a project and run init, validate, plan and apply
-as tasks. The recipe assumes a `terraform/` directory that holds your
-configuration, with provider credentials already set in the environment.
+为项目固定 Terraform 或 OpenTofu 版本，并将 init、validate、plan 和 apply 设为任务。本示例假定配置文件位于 `terraform/` 目录中，且 provider 凭据已设置在环境变量中。
 
-## Run Terraform from a subdirectory {#managing-terraform-opentofu-projects}
+## 从子目录运行 Terraform {#managing-terraform-opentofu-projects}
 
-Each task passes `-chdir=terraform`, and mise runs tasks from the config root,
-so the tasks work from any directory in the project:
+每个任务都会传入 `-chdir=terraform`，而 mise 总是从配置根目录运行任务，因此在项目的任意目录中都可以运行这些任务：
 
 ```toml [mise.toml]
 [tools]
@@ -56,38 +53,25 @@ description = "Check formatting and validate the configuration"
 depends = ["terraform:format-check", "terraform:validate"]
 ```
 
-Run `mise run terraform:check` to validate, then `mise run terraform:plan` to
-see the proposed changes. `terraform:format` is the task that rewrites
-formatting. Every task that depends on `terraform:init` can download providers
-and update `.terraform.lock.hcl`, even when you only run a check.
+运行 `mise run terraform:check` 进行验证，然后运行 `mise run terraform:plan` 查看计划变更。`terraform:format` 任务会直接重写格式。任何依赖 `terraform:init` 的任务都可能下载 provider 并更新 `.terraform.lock.hcl`，即使你只运行检查任务也是如此。
 
-`terraform:apply` and `terraform:destroy` keep Terraform's confirmation prompt;
-[`interactive = true`](/tasks/task-configuration.html#interactive) gives those
-commands the terminal. The recipe saves no plan file, so `apply` computes its
-own plan before it asks for approval.
+`terraform:apply` 和 `terraform:destroy` 会保留 Terraform 的确认提示；[`interactive = true`](/tasks/task-configuration.html#interactive) 会将终端交给这些命令。本示例不会保存计划文件，因此 `apply` 会在请求确认前自行计算计划。
 
-## Use OpenTofu
+## 使用 OpenTofu {#use-opentofu}
 
-Replace the tool with `opentofu = "1"` and the command `terraform` with `tofu`.
-The `terraform/` directory and the task names can stay, or you can rename them
-to match your project.
+将工具配置替换为 `opentofu = "1"`，并将命令 `terraform` 替换为 `tofu`。`terraform/` 目录和任务名称可以保持不变，也可以按项目需要重命名。
 
-## Read the version from `.terraform-version` {#read-the-version-from-terraform-version}
+## 从 `.terraform-version` 读取版本 {#read-the-version-from-terraform-version}
 
-If the project already has a `.terraform-version` (tfenv) or
-`.opentofu-version` (tofuenv) file, enable it as an
-[idiomatic version file](/dev-tools/versions.html#idiomatic-version-files)
-instead of setting the version in `[tools]`:
+如果项目已有 `.terraform-version`（tfenv）或 `.opentofu-version`（tofuenv）文件，可将它启用为[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)，而不必在 `[tools]` 中设置版本：
 
 ```toml [mise.toml]
 [settings]
 idiomatic_version_file_enable_tools = ["terraform"]
 ```
 
-Use `"opentofu"` for `.opentofu-version`.
+对于 `.opentofu-version`，请使用 `"opentofu"`。
 
-## Load credentials from a dotenv file
+## 从 dotenv 文件加载凭据 {#load-credentials-from-a-dotenv-file}
 
-If you keep credentials in a local dotenv file, load it with
-[`_.file`](/environments/#env-file). Keep plaintext credential files out of
-version control; see [secrets](/environments/secrets/) for encrypted storage.
+如果凭据保存在本地 dotenv 文件中，请使用 [`_.file`](/environments/#env-file) 加载。不要将明文凭据文件提交到版本控制；加密存储方式请参阅[密钥管理](/environments/secrets/)。

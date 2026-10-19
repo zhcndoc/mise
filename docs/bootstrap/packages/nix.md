@@ -2,7 +2,7 @@
 description: "在 mise.toml 中声明 Nix 软件包并安装到用户配置中，或将其导出为 NixOS 模块。"
 ---
 
-# Nix packages (nix)
+# Nix 软件包
 
 The `nix` manager installs packages into your user's Nix profile with
 `nix profile install`. It works on Linux and macOS, on NixOS or not. To add the

@@ -1,6 +1,6 @@
 ---
-description: "Run tasks with mise run, select them by name or pattern, pass arguments, and control parallelism and output."
-socialDescription: "Run tasks with mise run, select them by pattern, and control parallelism and output."
+description: "通过 mise run 运行任务，按名称或模式选择任务、传入参数，并控制并行度和输出。"
+socialDescription: "通过 mise run 运行并按模式选择任务，同时控制并行度和输出。"
 ---
 
 # Running tasks

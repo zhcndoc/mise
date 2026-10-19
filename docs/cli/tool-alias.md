@@ -1,5 +1,5 @@
 ---
-description: "Manage tool backend and version aliases"
+description: "管理工具后端和版本别名"
 ---
 
 <!-- 由 usage-cli 根据使用规范生成 -->

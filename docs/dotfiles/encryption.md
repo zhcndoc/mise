@@ -1,6 +1,6 @@
 ---
-description: "Encrypt tracked dotfiles before mise saves them to Git, choose age or SSH recipients, and remove plaintext from shared history."
-socialDescription: "Encrypt tracked dotfiles before saving them to Git, and remove plaintext from history."
+description: "mise 将跟踪的 dotfiles 保存到 Git 前先进行加密，可选择 age 或 SSH 接收者，并从共享历史中移除明文。"
+socialDescription: "将跟踪的 dotfiles 加密后再保存到 Git，并从历史中移除明文。"
 ---
 
 # Encrypted files

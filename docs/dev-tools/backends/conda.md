@@ -1,5 +1,5 @@
 ---
-description: "Install conda packages and their dependencies from conda-forge or another channel, without conda."
+description: "无需预先安装 conda，即可从 conda-forge 或其他频道安装 conda 软件包及其依赖。"
 ---
 
 # conda backend

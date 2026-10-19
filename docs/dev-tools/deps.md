@@ -1,9 +1,9 @@
 ---
-description: Run your project's package installers, such as npm install or uv sync, when their lockfiles change or their outputs go missing.
-socialDescription: Install project packages when lockfiles change or outputs go missing.
+description: 当锁文件发生变化或输出文件缺失时，运行 npm install、uv sync 等项目包安装命令。
+socialDescription: 在锁文件变化或输出文件缺失时安装项目依赖。
 ---
 
-# Project dependencies <Badge type="warning" text="experimental" />
+# 项目依赖 <Badge type="warning" text="experimental" />
 
 `mise deps` installs a project's packages, such as `node_modules` or a Python
 virtual environment, by running the package manager's install command when the
@@ -264,6 +264,7 @@ stale and mise runs it.
 
 - A provider with sources is stale on its first run.
 - An optional output must keep existing once mise has seen it.
+- mise 创建的虚拟环境（例如通过 `python.uv_venv_auto` 创建）会使跟踪它的每个 provider 持续处于过期状态，直到该 provider 运行。
 - A custom provider with outputs but no sources is fresh while its outputs
   exist; editing its command alone does not rerun it.
 - A provider with neither sources nor outputs runs every time.

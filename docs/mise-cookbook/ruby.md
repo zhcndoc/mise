@@ -1,5 +1,5 @@
 ---
-description: "Select Ruby from a Rails app's .ruby-version and run its Bundler and Rails commands as mise tasks."
+description: "从 Rails 应用的 .ruby-version 读取 Ruby 版本，并将 Bundler 和 Rails 命令作为 mise 任务运行。"
 ---
 
 # Ruby on Rails

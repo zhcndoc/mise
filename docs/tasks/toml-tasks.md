@@ -1,5 +1,5 @@
 ---
-description: "Define short commands and task groups in the [tasks] table of mise.toml."
+description: "在 mise.toml 的 [tasks] 表中定义简短命令和任务组。"
 ---
 
 # TOML tasks

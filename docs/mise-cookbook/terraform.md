@@ -1,5 +1,5 @@
 ---
-description: "Run Terraform or OpenTofu commands for a subdirectory as mise tasks: init, check, plan and apply."
+description: "将针对子目录的 Terraform 或 OpenTofu 命令定义为 mise 任务：init、check、plan 和 apply。"
 ---
 
 # Terraform and OpenTofu

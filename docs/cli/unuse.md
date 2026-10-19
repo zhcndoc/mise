@@ -1,5 +1,5 @@
 ---
-description: "Remove tool requests from config files and prune unused installations"
+description: "从配置文件中移除工具请求，并清理不再使用的安装"
 ---
 
 <!-- 由 usage-cli 根据使用规范生成 -->
@@ -34,6 +34,7 @@ remove an installation without editing config, use `mise uninstall`.
 - **`-p --path <PATH>`** — Edit this config file, or the config file in this directory
 
   **别名：** `--file`
+- **`--override`** — 写入优先级高于所有项目配置的全局 override 文件 `config.override.toml`。使用 `--env` 时，则写入 `config.<ENV>.override.toml`。详见 <https://mise.jdx.dev/configuration.html#override-file>
 - **`--no-prune`** — 不要同时清理已安装的版本
 - **`-h --help`** — 打印帮助信息
 

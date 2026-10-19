@@ -1,8 +1,8 @@
 ---
-description: "Choose between shell activation, shims and mise exec, and run the right tool version from editors and scripts."
+description: "在 shell 激活、shims 和 mise exec 之间选择，让编辑器和脚本运行正确的工具版本。"
 ---
 
-# Shims
+# Shims 启动器
 
 A shim is a small executable named after a tool's command, such as `node`.
 When a program runs it, the shim asks mise which version the current directory
@@ -55,8 +55,7 @@ mise keeps two shim directories:
 
 When you install a tool, mise adds a shim to the shim directory for every
 executable the tool provides. On Unix each shim is a symlink to the `mise`
-binary; on Windows it is a small executable by default (see
-[`windows_shim_mode`](/configuration/settings.html#windows_shim_mode)).
+二进制文件；在 Windows 上，默认情况下每个 shim 都是随 `mise.exe` 一同发布的 `mise-shim.exe` 的副本（参见 [`windows_shim_mode`](/configuration/settings.html#windows_shim_mode)）。如果更新替换了 `mise.exe` 却留下旧版 `mise-shim.exe`，`mise doctor` 和 `mise reshim` 会报告此问题，因为重新生成的 shim 仍会使用旧启动器。请使用安装 mise 的包管理器更新，或运行 `mise self-update`，确保两个文件都被替换，然后运行 `mise reshim --force`。
 
 ```sh
 mise use node@24 npm:prettier@3
@@ -484,6 +483,22 @@ mr-boxington = "latest"
 [wrappers.cargo]
 command = "mbx"
 env = { MBX_CARGO_SHIM_MODE = "1" }
+```
+
+`command`、`args` 和 `env` 的值均为[模板](/templates.html)，因此 wrapper 可以使用 `vars`、`env`、`config_root` 和 `join_path` 等函数。`read_file` 等函数中的相对路径会相对于声明该 wrapper 的文件所在目录解析。由于 `command` 可能负责安装项目工具，它只能读取 `vars`、`config_root`、`config_source` 和进程环境变量：
+
+```toml [mise.toml]
+[wrappers.foo]
+command = "foo-real"
+env = { FOO_HOME = "{{ [xdg_data_home, 'foo'] | join_path }}" }
+```
+
+值中直接包含 <span v-pre>`{{`</span> 或 <span v-pre>`{%`</span>（例如 Docker 的 <span v-pre>`{{.Names}}`</span> 格式字符串）时，mise 现在会将其解析为模板。请用 raw 块包裹这类内容：
+
+```toml [mise.toml]
+[wrappers.docker]
+command = "podman"
+args = ["ps", "--format", "{% raw %}{{.Names}}{% endraw %}"]
 ```
 
 When a wrapper runs its command, mise removes the shim and wrapper directories

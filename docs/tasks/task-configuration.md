@@ -1,25 +1,17 @@
 ---
-description: "Look up every task property, task_config option, task environment variable, and setting that controls mise tasks."
-socialDescription: "Look up every task property, task_config option, and setting for mise tasks."
+description: "查阅 mise 任务的所有属性、task_config 选项、任务环境变量和相关设置。"
+socialDescription: "查阅 mise 任务的所有属性、task_config 选项和相关设置。"
 ---
 
-# Task configuration reference
+# 任务配置参考
 
 Find every property a task accepts, the `[task_config]` options that set
 defaults for a config root, the environment variables mise gives each task, and
 the settings that change how tasks run. New to tasks? Start with
 [TOML tasks](/tasks/toml-tasks.html) or [file tasks](/tasks/file-tasks.html).
 
-Set properties in a `[tasks.<name>]` table in `mise.toml`, in a
-[TOML task file](/tasks/task-discovery.html#included-toml-files), or in `#MISE`
-comments at the top of a file task. File-task headers accept the same
-properties except `run`, `run_windows`, `file`, `vars`, `timeout`, and the
-`deny_*` and `allow_*` [sandbox properties](#sandbox). Arguments use `#USAGE`
-lines instead of `usage`. mise ignores those keys in a header with an
-`unknown field(s)` warning. To set them for a file task, use a
-`[tasks.<name>]` block; see
-[configuring file tasks from TOML](/tasks/task-discovery.html#configuring-file-tasks-from-toml).
-To share properties between tasks, use [task templates](/tasks/templates.html).
+你可以在 `mise.toml` 的 `[tasks.<name>]` 表、[TOML 任务文件](/tasks/task-discovery.html#included-toml-files)或文件任务开头的 `#MISE` 注释中设置属性。文件任务头支持相同的属性和值，但不包括 `run`、`run_windows` 和 `file`（脚本本身就是命令），也不包括 `usage`（参数由 `#USAGE` 行定义）。mise 会对这四项发出警告并忽略它们。若属性值的类型不正确，mise 会发出警告并忽略该属性，因此单个脚本配置错误不会阻止其他任务加载。相反，错误的 `confirm` 或 `deny_*` 值会导致报错，以免拼写错误意外移除确认提示或沙箱限制。
+若要在多个任务间共享属性，请使用[任务模板](/tasks/templates.html)。
 
 ::: warning Experimental
 Properties and options marked experimental require this setting. Without it,

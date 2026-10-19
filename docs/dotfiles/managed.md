@@ -1,9 +1,9 @@
 ---
-description: "Link, copy, or render configuration files from sources you maintain, and control their permissions, conflicts, and removal."
-socialDescription: "Link, copy, or render dotfiles from sources you maintain."
+description: "从你维护的来源链接、复制或渲染配置文件，并管理其权限、冲突和移除方式。"
+socialDescription: "从你维护的来源链接、复制或渲染 dotfiles。"
 ---
 
-# Managed files
+# 托管文件
 
 A managed file is a target that mise creates from a source you maintain: a
 link to the source, a copy of it, a rendered template, or content written in
@@ -57,8 +57,9 @@ uses `dotfiles.default_mode`, which is `symlink` unless you change it.
 
 `mode = "track"` and `mode = "track-local"` are not deployment modes: they
 save the history of a file where it is, without a source. See [Dotfiles history](/dotfiles/history.html).
-On Windows, `symlink` can fall back to copying and `symlink-each` always
-copies; see [Windows](#windows).
+On Windows, `symlink` can fall back to copying and `symlink-each` copies
+unless [`dotfiles.windows_symlinks`](/configuration/settings.html#dotfiles.windows_symlinks)
+is on; see [Windows](#windows).
 
 To link a directory as a whole:
 
@@ -623,3 +624,5 @@ otherwise. A directory link is a junction. `symlink-each` always copies each
 file, so edit the source rather than the target and run `mise dot apply`.
 `mise dot status` accepts either form on disk. `relative` and `permissions`
 are ignored on Windows.
+
+将 [`dotfiles.windows_symlinks`](/configuration/settings.html#dotfiles.windows_symlinks) 设为 `true`，两种模式都会创建真正的文件链接。此时 `symlink-each` 会逐个链接文件；若无法创建链接，应用操作会失败而不会回退为复制，因此需要启用开发者模式或使用提升权限的 Shell。之前应用时复制的文件会阻挡链接替换，需要使用 `--force`。之后关闭此设置只会影响新文件：已有链接仍保持链接；若 `symlink-each` 条目包含链接，除非重新启用该设置，否则执行 `mise dot unapply` 需要 `--force`。

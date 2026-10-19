@@ -1,6 +1,6 @@
 ---
 description: Start a daemon defined in another repository, or share one PostgreSQL, CockroachDB, or NATS server across checkouts.
-socialDescription: "Use another repository's daemon, or share one database server."
+socialDescription: "使用其他仓库的守护进程，或共享数据库服务。"
 ---
 
 # Share daemons across projects <Badge type="warning" text="experimental" />

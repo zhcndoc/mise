@@ -1,6 +1,6 @@
 ---
-description: "Restrict the files, network access, and environment variables available to commands that mise exec and mise run start."
-socialDescription: "Restrict files, network, and environment for commands run by mise exec and mise run."
+description: "限制 mise exec 和 mise run 启动的命令可以访问的文件、网络和环境变量。"
+socialDescription: "限制 mise exec 和 mise run 启动的命令可访问的文件、网络和环境变量。"
 ---
 
 # 沙箱

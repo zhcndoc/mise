@@ -1,9 +1,9 @@
 ---
-description: "Manage a Linux host firewall with nftables, firewalld, or UFW from mise.toml, alongside rules that other tools add."
-socialDescription: "Manage a Linux host firewall with nftables, firewalld, or UFW from mise.toml."
+description: "通过 mise.toml 使用 nftables、firewalld 或 UFW 管理 Linux 主机防火墙，并兼顾其他工具添加的规则。"
+socialDescription: "通过 mise.toml 使用 nftables、firewalld 或 UFW 管理 Linux 主机防火墙。"
 ---
 
-# Linux firewall
+# Linux 防火墙
 
 Declare a Linux host firewall in `[bootstrap.linux.firewall]` and mise applies
 it with nftables, firewalld, or UFW. mise keeps its rules apart from rules that
@@ -224,6 +224,8 @@ Firewall management is Linux-only. On macOS and Windows, `mise bootstrap` and
 `ignoring [bootstrap.linux.firewall] on non-Linux host`.
 `mise bootstrap firewall apply` fails there, and
 `mise bootstrap firewall status` reports an unsupported platform.
+
+mise 仍会在所有平台解析此配置段。无效值（例如 `backend = "iptables"`）会导致加载该配置的 Mac 报错，而不只是应用配置的 Linux 机器报错。
 
 To avoid the warning, keep the section in a config that only Linux machines
 load, such as a [machine module](/bootstrap/modules.html) that only Linux

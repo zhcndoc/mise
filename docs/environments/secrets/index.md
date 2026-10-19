@@ -1,5 +1,5 @@
 ---
-description: "Choose how to supply secret values to a project, and mask sensitive values in task output and CI logs."
+description: "选择向项目提供密钥值的方式，并在任务输出与 CI 日志中遮蔽敏感值。"
 ---
 
 # 密钥
@@ -17,18 +17,20 @@ values you mark as sensitive in the output it captures.
 
 ## Use a secret manager {#use-a-secret-manager}
 
-mise secrets is experimental. Enable it and add fnox to the project:
+Add fnox to the project:
 
 ```sh
-mise settings experimental=true
 mise use fnox
 ```
 
-Then name fnox as the project's secrets source and list the keys each task
-needs:
+Then enable mise secrets, which is experimental, name fnox as the project's
+secrets source, and list the keys each task needs:
 
 ```mise-toml [mise.toml]
 min_version = "2026.10.4"
+
+[settings]
+experimental = true
 
 [secrets.fnox]
 

@@ -1,5 +1,5 @@
 ---
-description: "Write a Lua plugin that installs a family of tools under its own prefix, such as acme:deploy."
+description: "编写 Lua 插件，为一类工具提供独立安装路径，例如 acme:deploy。"
 ---
 
 # Backend plugins

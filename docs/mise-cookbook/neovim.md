@@ -1,6 +1,6 @@
 ---
-description: "Highlight scripts embedded in mise.toml and metadata in file tasks, then add language-server features with otter.nvim."
-socialDescription: "Highlight mise task scripts in Neovim and add language-server features with otter.nvim."
+description: "在 Neovim 中高亮 mise.toml 内嵌脚本和文件任务元数据，并通过 otter.nvim 添加语言服务器功能。"
+socialDescription: "在 Neovim 中高亮 mise 任务脚本，并通过 otter.nvim 添加语言服务器功能。"
 ---
 
 # Neovim

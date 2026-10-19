@@ -1,5 +1,5 @@
 ---
-description: "Install Ruby with mise from precompiled binaries or ruby-build, and select it per project."
+description: "通过 mise 使用预编译二进制或 ruby-build 安装 Ruby，并为各项目选择版本。"
 ---
 
 # Ruby

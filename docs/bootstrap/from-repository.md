@@ -1,6 +1,6 @@
 ---
-description: "Bootstrap a machine from a Git repository: a bootstrap project with --from, or global config and setup repositories with --adopt."
-socialDescription: "Bootstrap a machine from a Git repository with --from or --adopt."
+description: "从 Git 仓库初始化机器：使用 --from 指定 bootstrap 项目，或通过 --adopt 管理全局配置和 setup 仓库。"
+socialDescription: "使用 --from 或 --adopt 从 Git 仓库初始化机器。"
 ---
 
 # Bootstrap from a repository

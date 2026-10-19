@@ -1,6 +1,6 @@
 ---
-description: "Share the history of your tracked dotfiles between machines through a private Git repository, and resolve sync conflicts."
-socialDescription: "Share tracked dotfiles between machines through a private Git repository."
+description: "通过私有 Git 仓库在多台机器间共享跟踪的 dotfiles 历史，并解决同步冲突。"
+socialDescription: "通过私有 Git 仓库在多台机器间共享跟踪的 dotfiles。"
 ---
 
 # Sync across machines

@@ -1,5 +1,5 @@
 ---
-description: "Write version requests such as 24, latest or prefix:1.20, and choose which version files mise reads."
+description: "编写 24、latest 或 prefix:1.20 等版本请求，并选择 mise 要读取的版本文件。"
 ---
 
 # Version requests and version files

@@ -1,5 +1,5 @@
 ---
-description: "Write a Lua plugin that adds a package manager, such as VS Code extensions, to bootstrap packages."
+description: "编写 Lua 插件，将 VS Code 扩展等软件包管理器接入 bootstrap packages。"
 ---
 
 # Writing package manager plugins {#package-manager-plugins}

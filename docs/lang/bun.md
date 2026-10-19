@@ -1,5 +1,5 @@
 ---
-description: "Install Bun with mise and select its version from mise.toml, .bun-version, or package.json."
+description: "通过 mise 安装 Bun，并从 mise.toml、.bun-version 或 package.json 选择版本。"
 ---
 
 # Bun

@@ -1,6 +1,6 @@
 ---
-description: "Run tasks across the projects in one repository with //path:task names, per-project tools and environment, and shared root configuration."
-socialDescription: "Run tasks across a repository's projects with //path:task names and per-project tools."
+description: "使用 //path:task 名称跨仓库项目运行任务，并为各项目配置工具和环境、共享根配置。"
+socialDescription: "使用 //path:task 名称跨仓库项目运行任务，并为各项目配置工具。"
 ---
 
 # Monorepo tasks

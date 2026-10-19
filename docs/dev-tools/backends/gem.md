@@ -1,5 +1,5 @@
 ---
-description: "Install Ruby command-line applications from RubyGems, each in its own directory and GEM_HOME."
+description: "从 RubyGems 安装 Ruby 命令行应用，每个应用使用独立目录和 GEM_HOME。"
 ---
 
 # gem backend

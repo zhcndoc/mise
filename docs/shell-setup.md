@@ -1,29 +1,17 @@
 ---
-description: "Add mise activation to bash, zsh, fish, PowerShell, Nushell, Xonsh, or Elvish, and install shell completions."
-socialDescription: "Activate mise in bash, zsh, fish, PowerShell, Nushell, Xonsh, or Elvish."
+description: "在 bash、zsh、fish、PowerShell、Nushell、Xonsh 或 Elvish 中启用 mise，并安装 Shell 补全。"
+socialDescription: "在 bash、zsh、fish、PowerShell、Nushell、Xonsh 或 Elvish 中启用 mise。"
 ---
 
-# Activate mise in your shell
+# 在 Shell 中启用 mise
 
-Shell activation hooks your interactive shell so that the current project's
-tools are on `PATH` and its environment variables are set each time you change
-directories or a prompt appears. Editors and other programs that never read your
-shell's startup files can use shims instead, and scripts and CI can call
-`mise exec` or `mise run` without either; [Shims](/dev-tools/shims.html#overview)
-compares the three.
+Shell 激活会在交互式 Shell 中安装钩子，使当前项目的工具加入 `PATH`，并在切换目录或显示提示符时设置对应的环境变量。不会读取 Shell 启动文件的编辑器和其他程序可以改用 shims；脚本和 CI 则可直接调用 `mise exec` 或 `mise run`，无需启用激活。[Shims](/dev-tools/shims.html#overview)对比了这三种方式。
 
-Add one activation line to the startup file of each shell you use, then open a
-new terminal. The Bash, Zsh, Fish and PowerShell snippets check for the line
-before appending it, so running one twice does not add a second hook. For
-Nushell, Xonsh and Elvish, add the lines to the file yourself.
+将一条激活语句添加到所用 Shell 的启动文件中，然后打开新终端。Bash、Zsh、Fish 和 PowerShell 的示例会先检查该语句，因此重复运行不会添加第二个钩子。Nushell、Xonsh 和 Elvish 需要手动将语句添加到对应文件。
 
-## Before you start {#before-you-start}
+## 开始之前 {#before-you-start}
 
-The activation line runs `mise` by name, so `mise` must be on `PATH` when the
-startup file runs. The [mise.run installer](/installing-mise.html#mise-run)
-puts mise at `~/.local/bin/mise`, which is not on `PATH` on every system. If
-`command -v mise` prints nothing, write `~/.local/bin/mise` in place of `mise`
-in the line you add. Once activated, mise adds its own directory to `PATH`.
+激活语句会直接按名称运行 `mise`，因此执行启动文件时 `mise` 必须位于 `PATH` 中。[mise.run 安装脚本](/installing-mise.html#mise-run)会将 mise 安装到 `~/.local/bin/mise`，但该目录并非在所有系统上都已加入 `PATH`。如果 `command -v mise` 没有输出，请在添加的语句中用 `~/.local/bin/mise` 替代 `mise`。激活后，mise 会将自己的目录加入 `PATH`。
 
 ## Bash {#bash}
 
@@ -32,9 +20,7 @@ activation='eval "$(mise activate bash)"'
 grep -qxF "$activation" ~/.bashrc 2>/dev/null || printf '%s\n' "$activation" >> ~/.bashrc
 ```
 
-Bash login shells, which macOS Terminal opens by default, read `~/.bash_profile`
-and read `~/.bashrc` only when the profile sources it. If your `~/.bash_profile`
-does not, add `[ -f ~/.bashrc ] && . ~/.bashrc` to it.
+macOS Terminal 默认打开 Bash 登录 Shell，它会读取 `~/.bash_profile`；只有该文件加载了 `~/.bashrc` 时，后者才会生效。如果 `~/.bash_profile` 尚未加载它，请添加 `[ -f ~/.bashrc ] && . ~/.bashrc`。
 
 ## Zsh {#zsh}
 
@@ -45,11 +31,11 @@ mkdir -p "$(dirname "$zshrc")"
 grep -qxF "$activation" "$zshrc" 2>/dev/null || printf '%s\n' "$activation" >> "$zshrc"
 ```
 
-The snippet writes to `$ZDOTDIR/.zshrc` when you set `ZDOTDIR`.
+设置了 `ZDOTDIR` 时，此命令会写入 `$ZDOTDIR/.zshrc`。
 
 ## Fish {#fish}
 
-Run this in fish:
+在 fish 中运行：
 
 ```fish
 mkdir -p ~/.config/fish
@@ -57,9 +43,7 @@ set activation 'mise activate fish | source'
 grep -qxF $activation ~/.config/fish/config.fish 2>/dev/null; or echo $activation >> ~/.config/fish/config.fish
 ```
 
-Homebrew, and any package that installs mise's
-`vendor_conf.d/mise-activate.fish`, activates mise in fish automatically, so you
-can skip this step. To turn that off, set `MISE_FISH_AUTO_ACTIVATE` to `0`:
+Homebrew 以及会安装 `vendor_conf.d/mise-activate.fish` 的软件包会自动在 fish 中启用 mise，因此可以跳过此步骤。若要关闭自动激活，请将 `MISE_FISH_AUTO_ACTIVATE` 设为 `0`：
 
 ```fish
 set -Ux MISE_FISH_AUTO_ACTIVATE 0
@@ -67,8 +51,7 @@ set -Ux MISE_FISH_AUTO_ACTIVATE 0
 
 ## PowerShell {#powershell}
 
-`$PROFILE` is the profile of the current PowerShell host. This creates it if it
-does not exist and adds the activation line once:
+`$PROFILE` 是当前 PowerShell 主机所使用的配置文件。以下命令会在文件不存在时创建它，并且只添加一次激活语句：
 
 ```powershell
 if (-not (Test-Path $PROFILE)) {
@@ -80,48 +63,40 @@ if (-not (Select-String -Path $PROFILE -SimpleMatch $activation -Quiet)) {
 }
 ```
 
-Terminals, editors and PowerShell versions can each use a different profile;
-see [PowerShell profiles](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles).
+不同的终端、编辑器和 PowerShell 版本可能使用不同的配置文件，详见 [PowerShell 配置文件](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles)。
 
-mise updates the environment when you change directories only in PowerShell 7
-and newer. Windows PowerShell 5.1 updates it at the next prompt and prints a
-warning at startup; set `$env:MISE_PWSH_CHPWD_WARNING=0` to hide the warning.
+只有 PowerShell 7 及更新版本会在切换目录时更新环境。Windows PowerShell 5.1 会在下一个提示符出现时更新，并在启动时显示警告；将 `$env:MISE_PWSH_CHPWD_WARNING` 设为 `0` 可隐藏该警告。
 
 ## Nushell {#nushell}
 
-Nushell loads activation as a generated module. Add this to `env.nu` (its path
-is in `$nu.env-path`) so the module exists before `config.nu` is parsed:
+Nushell 会将激活内容作为生成的模块加载。将以下内容添加到 `env.nu`（路径位于 `$nu.env-path`），确保解析 `config.nu` 前模块已经生成：
 
 ```nushell
 let mise_path = $nu.default-config-dir | path join mise.nu
 ^mise activate nu | save $mise_path --force
 ```
 
-Add this to `config.nu` (its path is in `$nu.config-path`):
+将以下内容添加到 `config.nu`（路径位于 `$nu.config-path`）：
 
 ```nushell
 use ($nu.default-config-dir | path join mise.nu)
 ```
 
-Restart Nushell after saving both files. If `mise` is not on `PATH`, use its
-absolute path in `env.nu`. `env.nu` regenerates the module at every startup, so
-it follows mise upgrades.
+保存两个文件后重启 Nushell。如果 `mise` 不在 `PATH` 中，请在 `env.nu` 中使用它的绝对路径。每次启动时，`env.nu` 都会重新生成模块，因此 mise 升级后也会自动使用新版本。
 
 ## Xonsh {#xonsh}
 
-Add this to `~/.xonshrc`, or to the Xonsh config file you use:
+将以下内容添加到 `~/.xonshrc` 或所用的 Xonsh 配置文件中：
 
 ```xonsh
 execx($(mise activate xonsh))
 ```
 
-Restart Xonsh after saving. mise sets variables such as `$PATH` in Xonsh's
-environment, which Xonsh passes to the commands it runs. It does not change
-Python's `os.environ`.
+保存后重启 Xonsh。mise 会在 Xonsh 环境中设置 `$PATH` 等变量，Xonsh 会将这些变量传递给它启动的命令，但不会修改 Python 的 `os.environ`。
 
 ## Elvish {#elvish}
 
-Add this to `rc.elv`:
+将以下内容添加到 `rc.elv`：
 
 ```text
 var mise: = (ns [&])
@@ -129,26 +104,19 @@ eval (mise activate elvish | slurp) &ns=$mise: &on-end={|ns| set mise: = $ns }
 mise:activate
 ```
 
-`mise shell` and `mise deactivate` change the running shell, so they need the
-module's `mise` function rather than the `mise` executable. Alias `mise` to it:
+`mise shell` 和 `mise deactivate` 会修改当前 Shell，因此需要使用模块中的 `mise` 函数，而非 `mise` 可执行文件。将 `mise` 设置为该函数的别名：
 
 ```text
 edit:add-var mise~ {|@args| mise:mise $@args }
 ```
 
-## Windows shells {#windows}
+## Windows Shell {#windows}
 
-PowerShell uses the [PowerShell](#powershell) line above.
+PowerShell 使用上文的 [PowerShell](#powershell) 激活语句。
 
-Native Windows mise can also activate Bash, Zsh and Fish inside Git Bash, MSYS2
-and Cygwin: add the line for that shell to its startup file. mise detects the
-runtime when the line runs and writes `PATH` in the form that runtime expects,
-so do not generate the script in PowerShell and source it in another shell. See
-[Troubleshooting](/troubleshooting.html#cygwin) for path conversion in these
-shells.
+原生 Windows 版 mise 也可以在 Git Bash、MSYS2 和 Cygwin 中激活 Bash、Zsh 与 Fish：将对应 Shell 的语句添加到它的启动文件中。mise 会在执行语句时检测运行环境，并按该环境要求的格式写入 `PATH`，因此不要在 PowerShell 中生成脚本，再到其他 Shell 中加载。有关这些 Shell 的路径转换，请参阅[故障排除](/troubleshooting.html#cygwin)。
 
-cmd.exe cannot be activated. Put the shims directory on your user `Path`
-instead, then open a new window:
+cmd.exe 无法启用激活。请改为将 shims 目录加入当前用户的 `Path`，然后打开新窗口：
 
 ```powershell
 $shims = "$env:LOCALAPPDATA\mise\shims"
@@ -158,46 +126,31 @@ if (($userPath -split ';') -notcontains $shims) {
 }
 ```
 
-Shims do not set `[env]` variables in the shell itself; see
-[Shims vs PATH](/dev-tools/shims.html#shims-vs-path).
+Shims 不会在 Shell 本身设置 `[env]` 变量，详见 [Shims 与 PATH](/dev-tools/shims.html#shims-vs-path)。
 
-## Other shells {#other-shells}
+## 其他 Shell {#other-shells}
 
-To request support for another shell, open an
-[idea discussion](https://github.com/jdx/mise/discussions/categories/ideas).
-Each integration is a small module in
-[`src/shell/`](https://github.com/jdx/mise/tree/main/src/shell) if you want to
-contribute one.
+如需支持其他 Shell，请在 GitHub 上发起[功能建议讨论](https://github.com/jdx/mise/discussions/categories/ideas)。每种集成都是 [`src/shell/`](https://github.com/jdx/mise/tree/main/src/shell) 中的一个小模块，欢迎贡献实现。
 
-## Shell feature support {#shell-feature-compatibility}
+## 各 Shell 支持的功能 {#shell-feature-compatibility}
 
-| Feature                              | Bash | Zsh | Fish | Nushell            | Elvish | Xonsh | PowerShell  |
+| 功能                                 | Bash | Zsh | Fish | Nushell            | Elvish | Xonsh | PowerShell  |
 | ------------------------------------ | ---- | --- | ---- | ------------------ | ------ | ----- | ----------- |
-| `mise activate`                      | Yes  | Yes | Yes  | Yes                | Yes    | Yes   | Yes         |
-| `mise shell` and `mise deactivate`   | Yes  | Yes | Yes  | Yes                | Yes    | Yes   | Yes         |
-| Update on directory change           | Yes  | Yes | Yes  | At the next prompt | Yes    | Yes   | 7 and newer |
-| [Shell aliases](/shell-aliases.html) | Yes  | Yes | Yes  | No                 | No     | No    | No          |
-| `mise completion`                    | Yes  | Yes | Yes  | No                 | No     | No    | Yes         |
+| `mise activate`                      | 是   | 是  | 是   | 是                 | 是     | 是    | 是          |
+| `mise shell` 和 `mise deactivate`   | 是   | 是  | 是   | 是                 | 是     | 是    | 是          |
+| 切换目录时更新                       | 是   | 是  | 是   | 下次显示提示符     | 是     | 是    | 7 及更新版本 |
+| [Shell 别名](/shell-aliases.html)    | 是   | 是  | 是   | 否                 | 否     | 否    | 否          |
+| `mise completion`                    | 是   | 是  | 是   | 否                 | 否     | 否    | 是          |
 
-Elvish needs the `mise` alias from [its section](#elvish) for `mise shell` and
-`mise deactivate`. PowerShell 5.1 and Nushell update the environment at the next
-prompt, not on the directory change, so `cd dir; node -v` on one line still uses
-the previous directory's tools. See
-[Directory changes](/dev-tools/shims.html#hook-on-cd) for how each shell does
-it.
+Elvish 需要使用[对应章节](#elvish)中的 `mise` 别名，才能运行 `mise shell` 和 `mise deactivate`。PowerShell 5.1 和 Nushell 会在下次显示提示符时更新环境，而非在切换目录时立即更新，因此在同一行运行 `cd dir; node -v` 仍会使用上一个目录的工具。各 Shell 的处理方式详见[目录切换](/dev-tools/shims.html#hook-on-cd)。
 
-## Completions {#autocompletion}
+## 命令补全 {#autocompletion}
 
-[`mise completion`](/cli/completion.html) generates completion scripts that
-complete mise's commands, flags, tools, versions and task names. The scripts are
-self-contained and do not need the separate `usage` CLI.
+[`mise completion`](/cli/completion.html) 会生成命令补全脚本，支持补全 mise 的命令、标志、工具、版本和任务名称。脚本是独立的，无需另外安装 `usage` CLI。
 
-The Homebrew, Arch Linux (pacman), Ubuntu PPA and COPR (dnf) packages install
-bash, zsh and fish completions for you. The extrepo apt repository, the yum and
-zypper repository, and the mise.run installer do not.
+Homebrew、Arch Linux (pacman)、Ubuntu PPA 和 COPR (dnf) 软件包会自动安装 bash、zsh 和 fish 的补全脚本。extrepo apt 仓库、yum 和 zypper 仓库以及 mise.run 安装脚本不会自动安装。
 
-`--install` writes the script where your shell looks for it. It does not edit
-your startup files; for zsh and PowerShell it prints a line to add once:
+`--install` 会将脚本写入 Shell 查找补全脚本的位置，但不会修改启动文件；对于 zsh 和 PowerShell，它会输出一条需要手动添加的语句：
 
 ::: code-group
 
@@ -225,38 +178,30 @@ mise completion powershell --install
 
 :::
 
-Bash loads the script through the bash-completion package, which must be
-installed and enabled in your shell.
+通过 bash-completion 软件包加载 Bash 补全脚本；该软件包必须已安装并在 Shell 中启用。
 
-To choose the location yourself, print the script with
-`mise completion <shell>` and save it. For zsh, for example:
+若要自行选择安装位置，请使用 `mise completion <shell>` 输出脚本并保存。例如，zsh 可运行：
 
 ```sh
 mkdir -p ~/.zfunc
 mise completion zsh > ~/.zfunc/_mise
 ```
 
-Then add these lines to `~/.zshrc`, before any existing `compinit` call
-(including one a framework makes). Leave out the second line if your
-`~/.zshrc` already runs `compinit`:
+然后将以下语句添加到 `~/.zshrc` 中，放在任何现有的 `compinit` 调用之前（包括框架添加的调用）。如果 `~/.zshrc` 已运行 `compinit`，则无需添加第二行：
 
 ```zsh [~/.zshrc]
 fpath=(~/.zfunc $fpath)
 autoload -Uz compinit && compinit
 ```
 
-These scripts complete mise itself. For commands installed through the packslip
-backend, see [tool completions and skills](/dev-tools/packslip-resources.html).
+这些脚本用于补全 mise 自身的命令。通过 packslip 后端安装的命令，请参阅[工具补全和技能](/dev-tools/packslip-resources.html)。
 
-## Verify the setup {#verify}
+## 验证配置 {#verify}
 
-Open a new terminal and run [`mise doctor`](/cli/doctor.html):
+打开新终端并运行 [`mise doctor`](/cli/doctor.html)：
 
 ```sh
 mise doctor
 ```
 
-It reports `activated: yes` when the hook is loaded. If it reports
-`activated: no`, check that the line is in the startup file this shell reads
-and that `mise` was on `PATH` when it ran. See
-[Troubleshooting](/troubleshooting.html) for other problems.
+加载了钩子时，输出中会显示 `activated: yes`。如果显示 `activated: no`，请确认激活语句已写入当前 Shell 会读取的启动文件，并且执行该文件时 `mise` 位于 `PATH` 中。其他问题请参阅[故障排除](/troubleshooting.html)。

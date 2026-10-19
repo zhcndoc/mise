@@ -1,5 +1,5 @@
 ---
-description: "Install Debian and Ubuntu packages with apt-get from mise.toml, including version pins."
+description: "在 mise.toml 中声明 Debian 和 Ubuntu 软件包，通过 apt-get 安装并可固定版本。"
 ---
 
 # Debian and Ubuntu packages (apt)

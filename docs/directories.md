@@ -1,6 +1,6 @@
 ---
-description: "Find where mise keeps config, installed tools, caches, and state, and which MISE_*_DIR variable moves each one."
-socialDescription: "Find where mise keeps config, installed tools, caches, and state, and how to move them."
+description: "查阅 mise 保存配置、已安装工具、缓存和状态的位置，以及用于迁移它们的 MISE_*_DIR 变量。"
+socialDescription: "查阅 mise 保存配置、已安装工具、缓存和状态的位置，以及迁移方法。"
 ---
 
 # Directories

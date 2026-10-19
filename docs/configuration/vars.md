@@ -1,6 +1,6 @@
 ---
-description: "Define reusable values in mise.toml vars and reference them from Tera templates without exporting them to commands."
-socialDescription: "Define reusable values in mise.toml vars and use them in templates without exporting them."
+description: "在 mise.toml 的 vars 中定义可复用值，并在 Tera 模板中引用，而不将其导出给命令。"
+socialDescription: "在 mise.toml 的 vars 中定义可复用值，并在模板中使用，而不导出给命令。"
 ---
 
 # Config variables

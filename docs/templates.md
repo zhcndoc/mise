@@ -1,9 +1,9 @@
 ---
-description: "Render config values with Tera templates: the variables, functions, filters, and tests available in mise.toml, tasks, and .miserc.toml."
-socialDescription: "Use the variables, functions, filters, and tests of Tera templates in mise config."
+description: "使用 Tera 模板渲染配置值，了解 mise.toml、任务和 .miserc.toml 中可用的变量、函数、过滤器和测试。"
+socialDescription: "在 mise 配置中使用 Tera 模板提供的变量、函数、过滤器和测试。"
 ---
 
-# Tera templates
+# Tera 模板
 
 mise renders [Tera](https://keats.github.io/tera/) templates in config values,
 so a value can come from the project directory, the environment,
@@ -100,6 +100,7 @@ Tera v2 also has slices (`parts[0:2]`, `parts[-1]`), spread
 | `mise_pid`                                                             | Process ID of the running mise                                                                                                                                                                                | Everywhere except `.miserc.toml`                                                 |
 | `mise_env`                                                             | List of the [config environments](/configuration/environments.html) you selected. Undefined when none is selected, so check it with <span v-pre>`{% if mise_env is defined %}`</span>                         | Everywhere except `.miserc.toml`                                                 |
 | `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home` | XDG base directories                                                                                                                                                                                          | Everywhere                                                                       |
+| `system_brew_prefix`                                                   | mise 内置 [Homebrew 支持](/bootstrap/packages/brew.html)使用的前缀：macOS 上为 `/opt/homebrew`，其他平台为 `/home/linuxbrew/.linuxbrew`                                                                           | 所有位置                                                                         |
 | `tools`                                                                | Active tools that are installed (see below)                                                                                                                                                                   | Tasks, and `[env]` directives with `tools = true`                                |
 | `usage`                                                                | Parsed task arguments; see [Task arguments](#task-arguments)                                                                                                                                                  | Task `run` scripts                                                               |
 
@@ -423,6 +424,7 @@ available:
 - `config_root`: the directory that holds the `.miserc.toml` file
 - `cwd`
 - `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home`
+- `system_brew_prefix`
 - Functions that need no project context, such as `arch()`, `os()`,
   `os_family()`, `libc()`, `avx2()`, `num_cpus()`, `choice()`, and `get_env()`
 - All [filters](#filters) and [tests](#tests)

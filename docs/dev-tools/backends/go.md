@@ -1,5 +1,5 @@
 ---
-description: "Build and install Go command-line packages with go install, using the Go version configured in mise."
+description: "使用 mise 配置的 Go 版本，通过 go install 构建并安装 Go 命令行软件包。"
 ---
 
 # go backend

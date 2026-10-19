@@ -1,5 +1,5 @@
 ---
-description: "Generate or update a tool stub"
+description: "生成或更新工具 stub"
 ---
 
 <!-- 由 usage-cli 根据 usage 规范生成 -->

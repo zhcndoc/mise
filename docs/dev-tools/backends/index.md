@@ -1,5 +1,5 @@
 ---
-description: "Choose a tool's backend, write backend identifiers, and control which backend a short name uses."
+description: "选择工具后端、编写后端标识，并控制工具简称使用哪个后端。"
 ---
 
 # 后端

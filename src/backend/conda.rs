@@ -1045,6 +1045,10 @@ impl CondaBackend {
 
 #[async_trait]
 impl Backend for CondaBackend {
+    fn option_spec(&self) -> Option<crate::backend::OptionSpec> {
+        Some(crate::backend::OptionSpec::new(&["tool_conda_options"]))
+    }
+
     fn get_type(&self) -> BackendType {
         BackendType::Conda
     }
@@ -1278,7 +1282,7 @@ mod tests {
             package_record: PackageRecord::new(
                 PackageName::from_str(name).unwrap(),
                 Version::from_str(version).unwrap(),
-                build.to_string(),
+                rattler_conda_types::package::BuildString::new_unchecked(build),
             ),
             identifier: DistArchiveIdentifier::new(archive_id, DistArchiveType::Conda(conda_type)),
             url: Url::parse(url).unwrap(),

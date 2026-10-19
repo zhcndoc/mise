@@ -1,5 +1,217 @@
 # Changelog
 
+## [2026.10.14](https://github.com/jdx/mise/releases/tag/v2026.10.14) - 2026-10-18
+
+### 🚀 Features
+
+- **(backend)** reject tool options a backend does not read by @jdx in [#14629](https://github.com/jdx/mise/pull/14629)
+- **(config)** let env_file take several filenames by @jdx in [#14606](https://github.com/jdx/mise/pull/14606)
+- **(config)** add config.override.toml so global config can override project config by @jdx in [#14610](https://github.com/jdx/mise/pull/14610)
+- **(config)** let paranoid take a list of categories by @jdx in [#14609](https://github.com/jdx/mise/pull/14609)
+- **(config)** say where an unknown mise.toml key is and what it meant by @jdx in [#14639](https://github.com/jdx/mise/pull/14639)
+- **(config)** add mise config explain by @jdx in [#14642](https://github.com/jdx/mise/pull/14642)
+- **(env)** let a find_up env._.file entry search several names together by @jdx in [#14620](https://github.com/jdx/mise/pull/14620)
+- **(task)** read #MISE headers through TaskDecl by @jdx in [#14637](https://github.com/jdx/mise/pull/14637)
+
+### 🐛 Bug Fixes
+
+- **(activate)** stop fish not-found recursion after mise implode by @jdx in [#14594](https://github.com/jdx/mise/pull/14594)
+- **(bootstrap)** find nix installed by a pre-packages hook by @jdx in [#14596](https://github.com/jdx/mise/pull/14596)
+- **(bootstrap)** parse [bootstrap.linux.firewall] on every OS by @jdx in [#14615](https://github.com/jdx/mise/pull/14615)
+- **(cargo)** honor rename_exe for cargo-installed tools by @jdx in [#14626](https://github.com/jdx/mise/pull/14626)
+- **(config)** require content-bound trust for env files in paranoid mode by @jdx in [#14604](https://github.com/jdx/mise/pull/14604)
+- **(config)** say which shapes a hook, run entry or env value takes by @jdx in [#14640](https://github.com/jdx/mise/pull/14640)
+- **(hooks)** don't report git rewrites when HEAD stayed on the same commit by @JamBalaya56562 in [#14585](https://github.com/jdx/mise/pull/14585)
+- **(npm)** report an unusable TLS root store instead of aborting by @jdx in [#14595](https://github.com/jdx/mise/pull/14595)
+- **(npm)** accept the checksum option from packageManager by @jdx in [#14655](https://github.com/jdx/mise/pull/14655)
+- **(pipx)** bind the real python for locked uv installs by @jdx in [#14593](https://github.com/jdx/mise/pull/14593)
+- **(rust)** don't put an external rustup's directory ahead of mise's tools by @jdx in [#14597](https://github.com/jdx/mise/pull/14597)
+- **(schema)** generate [bootstrap] from its parser types by @jdx in [#14616](https://github.com/jdx/mise/pull/14616)
+- **(shim)** render command wrappers with their config file's config_root by @JamBalaya56562 in [#14628](https://github.com/jdx/mise/pull/14628)
+
+### 🚜 Refactor
+
+- **(config)** move doctor, tool_config, watch_files and wrappers into mise-config by @jdx in [#14617](https://github.com/jdx/mise/pull/14617)
+- **(config)** move the oci and daemons declarations into mise-config by @jdx in [#14618](https://github.com/jdx/mise/pull/14618)
+- **(config)** move alias, min_version and monorepo into mise-config by @jdx in [#14627](https://github.com/jdx/mise/pull/14627)
+- **(config)** declare [tools] in mise-config, keyed by string by @jdx in [#14631](https://github.com/jdx/mise/pull/14631)
+- **(config)** parse mise.toml through MiseTomlDecl by @jdx in [#14638](https://github.com/jdx/mise/pull/14638)
+- **(env)** move env directives and the [env] parser into mise-config by @jdx in [#14621](https://github.com/jdx/mise/pull/14621)
+- **(task)** move the task declaration field types into mise-config by @jdx in [#14622](https://github.com/jdx/mise/pull/14622)
+- **(task)** split TaskDecl from Task by @jdx in [#14624](https://github.com/jdx/mise/pull/14624)
+- rename mise-system-config to mise-config by @jdx in [#14608](https://github.com/jdx/mise/pull/14608)
+
+### 📚 Documentation
+
+- **(config)** add an interactive mise.toml reference generated from the schema by @jdx in [#14641](https://github.com/jdx/mise/pull/14641)
+- **(env)** explain env_file and _.file find_up are different features by @jdx in [#14602](https://github.com/jdx/mise/pull/14602)
+
+### ⚡ Performance
+
+- **(dotfiles)** build snapshot trees without a git process per tracked file by @waynehoover in [#14607](https://github.com/jdx/mise/pull/14607)
+
+### 🧪 Testing
+
+- **(npm)** install a popular package in the dependency check by @jdx in [#14633](https://github.com/jdx/mise/pull/14633)
+- **(schema)** check schema/mise.json against the config parser by @jdx in [#14613](https://github.com/jdx/mise/pull/14613)
+
+### 📦️ Dependency Updates
+
+- bump mbx to 1.24.1 by @jdx in [#14635](https://github.com/jdx/mise/pull/14635)
+
+### Chore
+
+- **(schema)** generate the [history] schema from mise-config by @jdx in [#14611](https://github.com/jdx/mise/pull/14611)
+- **(schema)** generate the task schema from TaskDecl and TaskTemplate by @jdx in [#14625](https://github.com/jdx/mise/pull/14625)
+- **(schema)** generate the whole schema from a top-level MiseTomlDecl by @jdx in [#14632](https://github.com/jdx/mise/pull/14632)
+- **(schema)** generate the [dotfiles] schema from typed entries by @jdx in [#14644](https://github.com/jdx/mise/pull/14644)
+
+### Ci
+
+- restore the nextest timeout for the mise-oci blob test by @jdx in [#14619](https://github.com/jdx/mise/pull/14619)
+
+## [2026.10.13](https://github.com/jdx/mise/releases/tag/v2026.10.13) - 2026-10-17
+
+### 🚀 Features
+
+- **(bootstrap)** template repo url and ref, add clone options by @jdx in [#14548](https://github.com/jdx/mise/pull/14548)
+- **(bootstrap)** expose system_brew_prefix to templates by @jdx in [#14572](https://github.com/jdx/mise/pull/14572)
+- **(doctor)** flag a mise-shim.exe template older than mise by @jdx in [#14586](https://github.com/jdx/mise/pull/14586)
+- **(ls-remote)** list every version range of a registry tool by @jdx in [#14544](https://github.com/jdx/mise/pull/14544)
+- **(registry)** let one backend carry different options per version range by @jdx in [#14543](https://github.com/jdx/mise/pull/14543)
+- **(shim)** render command wrapper values as templates by @jdx in [#14565](https://github.com/jdx/mise/pull/14565)
+- **(vfox)** allow a headers table in the PreInstall result by @jdx in [#14531](https://github.com/jdx/mise/pull/14531)
+
+### 🐛 Bug Fixes
+
+- **(bootstrap)** render templates in bootstrap.user.login_shell by @jdx in [#14570](https://github.com/jdx/mise/pull/14570)
+- **(ci)** install zipsign with --locked by @fang2hou in [#14551](https://github.com/jdx/mise/pull/14551)
+- **(github)** install each version with its own request options by @JamBalaya56562 in [#14537](https://github.com/jdx/mise/pull/14537)
+- **(hooks)** run task hooks with mise instead of the initiating tool shim by @jdx in [#14550](https://github.com/jdx/mise/pull/14550)
+- **(install)** keep lockfile resolution when a linked version doesn't match the request by @jdx in [#14539](https://github.com/jdx/mise/pull/14539)
+- **(java)** skip the catalog fetch when installing a locked build by @jdx in [#14534](https://github.com/jdx/mise/pull/14534)
+- **(lock)** keep other platforms' option variants when mise link rewrites mise.lock by @jdx in [#14519](https://github.com/jdx/mise/pull/14519)
+- **(mcp)** include the cause when a resource read fails by @diogochaves in [#14566](https://github.com/jdx/mise/pull/14566)
+- **(ruby)** lock windows platforms when running mise lock on Windows by @jdx in [#14520](https://github.com/jdx/mise/pull/14520)
+- **(ruby)** lock linux and macos platforms when running mise lock on Windows by @jdx in [#14529](https://github.com/jdx/mise/pull/14529)
+- **(rust)** restore the components a toolchain's profile requires by @JamBalaya56562 in [#14525](https://github.com/jdx/mise/pull/14525)
+- **(shim)** keep task lazy tool shims when a task installs another tool by @jdx in [#14533](https://github.com/jdx/mise/pull/14533)
+- **(task)** avoid deadlock when parallel tasks install the same tool by @jdx in [#14536](https://github.com/jdx/mise/pull/14536)
+- **(vfox)** pass each version only its own tool options by @JamBalaya56562 in [#14562](https://github.com/jdx/mise/pull/14562)
+- **(vfox)** report an HTTP client that cannot be built instead of panicking by @JamBalaya56562 in [#14576](https://github.com/jdx/mise/pull/14576)
+- **(watch)** exit quietly when watchexec is interrupted with Ctrl+C by @jdx in [#14541](https://github.com/jdx/mise/pull/14541)
+
+### 🚜 Refactor
+
+- **(backend)** move aqua tests into their own file by @jdx in [#14556](https://github.com/jdx/mise/pull/14556)
+- **(config)** move lockfile tests into their own file by @jdx in [#14554](https://github.com/jdx/mise/pull/14554)
+- **(config)** move config tests into their own file by @jdx in [#14555](https://github.com/jdx/mise/pull/14555)
+- **(config)** move [dotfiles], [dotfile_groups], and [history] types into mise-system-config by @jdx in [#14569](https://github.com/jdx/mise/pull/14569)
+- **(config)** move the [bootstrap] declaration types into mise-system-config by @jdx in [#14573](https://github.com/jdx/mise/pull/14573)
+- **(core)** move progress reports, prompts, and themes into mise-ui by @jdx in [#14558](https://github.com/jdx/mise/pull/14558)
+- **(core)** move system::sudo into mise-ui by @jdx in [#14560](https://github.com/jdx/mise/pull/14560)
+- **(daemons)** move the daemon declarations, ports, presets, and runtime into mise-daemons by @jdx in [#14583](https://github.com/jdx/mise/pull/14583)
+- **(lock)** split run_with_installed into phases by @jdx in [#14559](https://github.com/jdx/mise/pull/14559)
+- **(oci)** move the registry client, layers, and image layout into mise-oci by @jdx in [#14582](https://github.com/jdx/mise/pull/14582)
+- **(system)** split apply_locked_with_scope into phases by @jdx in [#14557](https://github.com/jdx/mise/pull/14557)
+- **(system)** make package managers independent of mise's config and toolset by @jdx in [#14564](https://github.com/jdx/mise/pull/14564)
+- **(system)** move system package managers into mise-system-packages by @jdx in [#14567](https://github.com/jdx/mise/pull/14567)
+- **(system)** reach the config layer through a registered host by @jdx in [#14575](https://github.com/jdx/mise/pull/14575)
+- **(system)** move the bootstrap, dotfiles, and history modules into mise-system by @jdx in [#14581](https://github.com/jdx/mise/pull/14581)
+
+### 📚 Documentation
+
+- **(mcp)** fix the docs build broken by the trust error example by @jdx in [#14574](https://github.com/jdx/mise/pull/14574)
+- say OpenTelemetry export and spinel installs need experimental by @ZainnQureshii in [#14552](https://github.com/jdx/mise/pull/14552)
+
+### ⚡ Performance
+
+- **(config)** parse each settings file once per load by @jdx in [#14553](https://github.com/jdx/mise/pull/14553)
+
+### ◀️ Revert
+
+- Revert "chore(deps): pin zipsign-api to 0.2.1" by @jdx in [baafe33](https://github.com/jdx/mise/commit/baafe3376d7add0b3e15bacb437daf0e48b849b3)
+
+### 📦️ Dependency Updates
+
+- pin zipsign-api to 0.2.1 by @jdx in [6d1bd25](https://github.com/jdx/mise/commit/6d1bd25cca68f18ca7725155011364713ff0aed8)
+- rerun providers when mise recreates the venv by @halms in [#14532](https://github.com/jdx/mise/pull/14532)
+- cargo update and bump zip to 9 for the symlink advisory by @jdx in [#14577](https://github.com/jdx/mise/pull/14577)
+- update zipsign-api and the release zipsign CLI to 0.2.2 by @jdx in [#14580](https://github.com/jdx/mise/pull/14580)
+- update jdx crates by @renovate[bot] in [#14578](https://github.com/jdx/mise/pull/14578)
+
+### 📦 Registry
+
+- prefer signed xcsift releases and enable Linux by @jdx in [#14540](https://github.com/jdx/mise/pull/14540)
+- install protoc-gen-connect-go v2 from its /v2 module path by @jdx in [#14545](https://github.com/jdx/mise/pull/14545)
+- add rea (npm:rea-agents) by @phucisstupid in [#14421](https://github.com/jdx/mise/pull/14421)
+
+### Chore
+
+- **(release)** pin zipsign install to 0.2.1 by @jdx in [d5ef6f9](https://github.com/jdx/mise/commit/d5ef6f91080562dd5d09654e81530f31c68aad6d)
+
+### Ci
+
+- pin perf-runner image by tag and stop automerging it by @jdx in [#14579](https://github.com/jdx/mise/pull/14579)
+
+### Security
+
+- **(config)** ignore [settings] from untrusted project configs by @jdx in [#14538](https://github.com/jdx/mise/pull/14538)
+
+### New Contributors
+
+- @phucisstupid made their first contribution in [#14421](https://github.com/jdx/mise/pull/14421)
+- @diogochaves made their first contribution in [#14566](https://github.com/jdx/mise/pull/14566)
+- @ZainnQureshii made their first contribution in [#14552](https://github.com/jdx/mise/pull/14552)
+- @fang2hou made their first contribution in [#14551](https://github.com/jdx/mise/pull/14551)
+
+## [2026.10.12](https://github.com/jdx/mise/releases/tag/v2026.10.12) - 2026-10-16
+
+### 🚀 Features
+
+- **(config)** add find_up option to env._.file by @jdx in [#14497](https://github.com/jdx/mise/pull/14497)
+- **(dotfiles)** infer .tera sources for group template entries by @jdx in [#14502](https://github.com/jdx/mise/pull/14502)
+- **(hooks)** tell watch_files commands when git moved HEAD by @jdx in [#14511](https://github.com/jdx/mise/pull/14511)
+- **(lock)** warn when a tool is unavailable for a requested platform by @jdx in [#14500](https://github.com/jdx/mise/pull/14500)
+- **(pypi)** select Python runtime per tool by @jdx in [#14479](https://github.com/jdx/mise/pull/14479)
+- **(task)** discover Gradle workspaces by @jdx in [#14512](https://github.com/jdx/mise/pull/14512)
+
+### 🐛 Bug Fixes
+
+- **(backend)** resolve remote versions with each request's own options by @JamBalaya56562 in [#14476](https://github.com/jdx/mise/pull/14476)
+- **(ci)** replace the ctor crate so macOS test binaries link by @jdx in [#14495](https://github.com/jdx/mise/pull/14495)
+- **(env)** stop _.source from loading ~/.bashrc when mise's stdin is a socket by @pikeas in [#14487](https://github.com/jdx/mise/pull/14487)
+- **(github)** retry api.github.com when mise-versions errors by @jdx in [#14501](https://github.com/jdx/mise/pull/14501)
+- **(pypi)** preserve environments when Python changes by @jdx in [#14504](https://github.com/jdx/mise/pull/14504)
+- **(task)** let project overrides take over from a failing workspace provider by @jdx in [#14508](https://github.com/jdx/mise/pull/14508)
+
+### 📚 Documentation
+
+- **(activate)** explain why mise activate keeps shims on PATH by @jdx in [#14493](https://github.com/jdx/mise/pull/14493)
+- **(ci)** clarify platform-specific mise cache paths by @zeitlinger in [#14506](https://github.com/jdx/mise/pull/14506)
+
+### 📦️ Dependency Updates
+
+- update jdx crates to v7.0.1 by @renovate[bot] in [#14454](https://github.com/jdx/mise/pull/14454)
+- update aube to v2.7.1 by @renovate[bot] in [#14507](https://github.com/jdx/mise/pull/14507)
+
+### 📦 Registry
+
+- add martin ([github:maplibre/martin](https://github.com/maplibre/martin)) by @ivan-ivkovic in [#14488](https://github.com/jdx/mise/pull/14488)
+
+### Chore
+
+- regenerate llms.txt in the hk pre-commit hook by @jdx in [#14515](https://github.com/jdx/mise/pull/14515)
+- format with oxfmt instead of prettier by @jdx in [#14516](https://github.com/jdx/mise/pull/14516)
+
+### 📦 Aqua Registry Updates
+
+#### Updated Packages (3)
+
+- [`max-sixty/worktrunk`](https://github.com/max-sixty/worktrunk)
+- [`oxc-project/oxc/oxfmt`](https://github.com/oxc-project/oxc)
+- [`oxc-project/oxc/oxlint`](https://github.com/oxc-project/oxc)
+
 ## [2026.10.11](https://github.com/jdx/mise/releases/tag/v2026.10.11) - 2026-10-15
 
 ### 🚀 Features

@@ -1,5 +1,5 @@
 ---
-description: "Write a Lua plugin that sets environment variables and PATH entries from an [env] directive."
+description: "编写 Lua 插件，根据 [env] 指令设置环境变量和 PATH 条目。"
 ---
 
 # Environment plugins

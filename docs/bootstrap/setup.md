@@ -1,6 +1,6 @@
 ---
-description: "Track your dotfiles, declare tools and packages, and bring a second machine to the same setup through a private Git repository."
-socialDescription: "Track dotfiles, declare tools and packages, and set up a second machine from Git."
+description: "跟踪 dotfiles、声明工具和软件包，并通过私有 Git 仓库让另一台机器使用相同配置。"
+socialDescription: "跟踪 dotfiles、声明工具和软件包，并从 Git 为另一台机器初始化。"
 ---
 
 # Set up a machine

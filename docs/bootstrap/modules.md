@@ -1,6 +1,6 @@
 ---
-description: "Group optional machine setup into config environments, choose the modules each machine loads, and remove a module's resources."
-socialDescription: "Group optional machine setup into config environments and pick them per machine."
+description: "将可选的机器初始化配置归入配置环境，为每台机器选择要加载的模块，并移除模块创建的资源。"
+socialDescription: "将可选的机器初始化配置归入配置环境，并按机器选择模块。"
 ---
 
 # Machine modules

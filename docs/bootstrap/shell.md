@@ -1,9 +1,9 @@
 ---
-description: "Write mise activation into bash, zsh, and fish startup files, and set your login shell, as part of mise bootstrap."
-socialDescription: "Write mise activation into shell startup files and set your login shell."
+description: "通过 mise bootstrap 将 mise 激活命令写入 bash、zsh 和 fish 启动文件，并设置登录 shell。"
+socialDescription: "将 mise 激活命令写入 shell 启动文件，并设置登录 shell。"
 ---
 
-# Shell activation and login shell
+# Shell 激活与登录 shell
 
 `[bootstrap.mise_shell_activate]` writes mise activation into your shell
 startup files, and `[bootstrap.user]` sets your login shell. `mise bootstrap`
@@ -221,6 +221,8 @@ This changes only the account's login shell. It does not affect the shell you
 are in, so `mise bootstrap` ends with a follow-up reminding you to start a new
 login session. It also does not set up [activation](#activate-mise-in-your-shell)
 in the new shell.
+
+`login_shell` 是一个模板，因此可以使用 `[vars]` 和其他[模板变量](/templates.html)，例如 <code v-pre>login_shell = "{{ vars.brew_prefix }}/bin/zsh"</code>。mise 会渲染该值，但不会执行 `exec()`。
 
 A project config can override a global `login_shell`; the most local value
 wins. mise changes the login shell only when you run `mise bootstrap` or

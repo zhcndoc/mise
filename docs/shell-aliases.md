@@ -1,5 +1,5 @@
 ---
-description: "Define shell aliases in mise.toml that mise sets when you enter a project and removes when you leave."
+description: "在 mise.toml 中定义 Shell 别名；进入项目时由 mise 设置，离开时自动移除。"
 ---
 
 # Shell aliases

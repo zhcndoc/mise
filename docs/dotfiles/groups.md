@@ -1,9 +1,9 @@
 ---
-description: "Deploy whole directory trees of dotfiles as named groups, and choose which groups each machine applies."
-socialDescription: "Deploy directory trees of dotfiles as groups, and choose which groups each machine applies."
+description: "将整个 dotfiles 目录树作为命名组部署，并为每台机器选择要应用的组。"
+socialDescription: "将 dotfiles 目录树作为组部署，并为每台机器选择要应用的组。"
 ---
 
-# Groups
+# 文件组
 
 A group is a named directory tree of dotfiles, such as one per application or
 one per machine role. mise deploys every file in the tree without a list of
@@ -129,8 +129,9 @@ missing, it warns about the group instead of listing its files.
 To remove orphaned files, or every file of one group:
 
 ```sh
-mise dot apply --prune          # apply, then remove orphaned files
-mise dot unapply --group work   # remove one group's files
+mise dot apply --prune           # 应用配置并移除孤立文件
+mise bootstrap --prune-dotfiles  # 在初始化流程中执行相同操作
+mise dot unapply --group work    # 移除一个组的文件
 ```
 
 `--prune` and `unapply --group` remove a link only while it still points at

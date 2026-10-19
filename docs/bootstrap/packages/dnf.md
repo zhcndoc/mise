@@ -1,5 +1,5 @@
 ---
-description: "Install Fedora, RHEL, Rocky Linux, and AlmaLinux packages with dnf from mise.toml."
+description: "在 mise.toml 中声明 Fedora、RHEL、Rocky Linux 和 AlmaLinux 软件包，并通过 dnf 安装。"
 ---
 
 # Fedora and RHEL packages (dnf)

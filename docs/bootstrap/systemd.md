@@ -1,6 +1,6 @@
 ---
-description: "Declare systemd user services and timers in mise.toml, then write, enable, and start them with systemctl --user."
-socialDescription: "Declare systemd user services and timers in mise.toml."
+description: "在 mise.toml 中声明 systemd 用户服务和定时器，再通过 systemctl --user 写入、启用并启动它们。"
+socialDescription: "在 mise.toml 中声明 systemd 用户服务和定时器。"
 ---
 
 # systemd user units

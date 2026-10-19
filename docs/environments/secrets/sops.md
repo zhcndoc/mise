@@ -1,5 +1,5 @@
 ---
-description: "Commit SOPS-encrypted .env.json, .env.yaml or .env.toml files and load their values with env._.file."
+description: "提交经 SOPS 加密的 .env.json、.env.yaml 或 .env.toml 文件，并通过 env._.file 加载其中的值。"
 ---
 
 # SOPS files

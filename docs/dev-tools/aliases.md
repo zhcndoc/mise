@@ -1,5 +1,5 @@
 ---
-description: "Use [tool_alias] to point a tool name at a different backend or give a version request a stable name."
+description: "使用 [tool_alias] 将工具名指向其他后端，或为版本请求设置稳定的别名。"
 ---
 
 # Tool aliases

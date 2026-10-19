@@ -1,5 +1,5 @@
 ---
-description: "Install Alpine Linux packages with apk from mise.toml, including version pins."
+description: "在 mise.toml 中声明 Alpine Linux 软件包，通过 apk 安装并可固定版本。"
 ---
 
 # Alpine 软件包（apk）

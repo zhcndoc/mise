@@ -1,6 +1,6 @@
 ---
-description: "Apply short recipes for everyday mise commands, scripts, configuration, shell prompts, and Intel tools on Apple silicon."
-socialDescription: "Apply short mise recipes for everyday commands, scripts, configuration and shell prompts."
+description: "查看 mise 常用命令、脚本、配置、Shell 提示符以及 Apple 芯片上使用 Intel 工具的简明示例。"
+socialDescription: "通过简明示例了解 mise 常用命令、脚本、配置和 Shell 提示符。"
 ---
 
 # Tips and tricks

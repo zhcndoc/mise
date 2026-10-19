@@ -1,5 +1,5 @@
 ---
-description: "Order tasks with depends, wait_for, depends_post and run steps, and debug how mise schedules them."
+description: "使用 depends、wait_for、depends_post 和 run 步骤安排任务，并了解 mise 的调度过程。"
 ---
 
 # Dependencies and execution order

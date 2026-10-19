@@ -1,6 +1,6 @@
 ---
-description: "Configure tools, environment variables, and tasks in mise.toml, and control where mise finds and writes config files."
-socialDescription: "Configure tools, environment variables, and tasks in mise.toml, and where mise finds config files."
+description: "在 mise.toml 中配置工具、环境变量和任务，并控制 mise 查找和写入配置文件的位置。"
+socialDescription: "在 mise.toml 中配置工具、环境变量和任务，并指定 mise 查找配置文件的位置。"
 ---
 
 # mise.toml {#mise-toml-reference}
@@ -48,6 +48,7 @@ mise loads config in this order, and a later file overrides an earlier one:
    directory. The search starts below the nearest
    [`ceiling_paths`](/configuration/settings.html#ceiling_paths) directory when
    one is set; files in the ceiling directory itself are not loaded.
+4. [全局 override 文件](#override-file)（`config.override.toml`），其优先级高于以上所有文件，包括 `mise.local.toml`。
 
 So a file in a deeper directory overrides one in a parent directory. In each
 directory, mise reads the files in [Config file locations](#mise-toml), and
@@ -64,6 +65,8 @@ override an ordinary file in a child directory.
 │   └── config.<env>.toml
 └── home/user/
     ├── .config/mise/                 # global config
+    │   ├── config.override.toml          # beats all project config
+    │   ├── config.<env>.override.toml
     │   ├── conf.d/*.toml
     │   ├── config.toml
     │   ├── config.<env>.toml
@@ -262,7 +265,7 @@ Global config differs from project config in a few ways:
 - `[secrets.*]` and `[daemons_settings]` are ignored there, and
   `[daemon_providers]` is allowed only there.
 - [`global_config_file`](/configuration/settings.html#global_config_file)
-  (`MISE_GLOBAL_CONFIG_FILE`) replaces all of these files with one file.
+  (`MISE_GLOBAL_CONFIG_FILE`) 会将这些文件替换为单个文件，同时关闭[全局 override 文件](#override-file)。
 
 System config applies to every user on the machine and has the lowest
 precedence. It lives in `/etc/mise`
@@ -270,6 +273,62 @@ precedence. It lives in `/etc/mise`
 same file names as the global directory, such as `/etc/mise/config.toml`.
 [`system_config_file`](/configuration/settings.html#system_config_file)
 (`MISE_SYSTEM_CONFIG_FILE`) replaces them with a single file.
+
+## 全局 override 文件 {#override-file}
+
+通常，全局配置的优先级低于项目配置，因此项目的 `mise.toml` 可以覆盖你在全局设置的 `node` 版本或环境变量。如果你希望自己的值在所有项目中都优先生效，请将它写入全局 `config.toml` 同目录下的 `config.override.toml`：
+
+```toml [~/.config/mise/config.override.toml]
+[env]
+AWS_PROFILE = "personal"
+
+[tools]
+node = "24"
+
+[settings]
+jobs = 8
+
+[tasks.lint]
+run = "my-lint --strict"
+```
+
+使用此文件后，即使项目的 `mise.toml` 或 `mise.local.toml` 设置了相同的值，`AWS_PROFILE`、`node` 工具请求、`jobs` 和 `lint` 任务仍以此文件中的值为准。override 文件未提及的值仍来自项目配置和其他全局配置。
+
+override 层级适用于全局配置接受的所有配置段，包括 `[env]`、`[vars]`、`[tools]`、`[tasks]`、`[settings]`、hooks 等。各配置段仍按[各配置段的合并方式](#merge-behavior-by-section)合并；override 文件只是在合并时拥有最高优先级。override 文件属于全局配置，因此会按路径被[信任](/cli/trust.html)，并受其他全局配置的相同限制。
+
+### 生效文件
+
+mise 会从 `~/.config/mise`（[`MISE_CONFIG_DIR`](/directories.html#config-mise)）读取以下文件，表格按优先级从低到高排列：
+
+| 文件                         | 加载条件                              |
+| ---------------------------- | ------------------------------------- |
+| `config.override.toml`       | 始终加载。                            |
+| `config.<env>.override.toml` | `<env>` 位于 `MISE_ENV`（或 `-E`）中时。 |
+
+环境专用文件的优先级高于基础 override 文件。如果有多个环境，例如 `MISE_ENV=dev,test`，后面的环境优先级高于前面的环境，与其他[配置环境](/configuration/environments.html)相同。整个 override 层级的优先级高于所有项目配置，包括项目的 `mise.<env>.toml` 和 `mise.local.toml` 文件。
+
+文件名必须是 `config.override.toml`，而不是 `override.toml`。它与 [`MISE_OVERRIDE_CONFIG_FILENAMES`](/configuration/settings.html#override_config_filenames) 无关；后者只用于重命名 mise 在各目录中查找的文件。
+
+[`MISE_GLOBAL_CONFIG_FILE`](/configuration/settings.html#global_config_file) 表示“这是唯一的全局配置文件”，因此设置后 mise 不会加载任何 override 文件。
+
+### 查看和编辑 override 层级
+
+[`mise config ls`](/cli/config/ls.html) 会在 `Tier` 列中用 `override` 标记 override 文件；`mise config ls --json` 则会添加 `"override": true`，以便查看哪些配置的优先级高于项目配置。[`mise doctor`](/cli/doctor.html) 也会在 `config_files` 列表中标记这些文件。
+
+override 文件永远不会成为默认写入目标。`mise use`、`mise set`、`mise settings set`、`mise trust` 以及[写入目标文件](#target-file-for-write-operations)中列出的其他命令，仍会写入原来的文件。若要写入 override 文件，请传入 `--override`；该选项不能与 `--global` 或 `--path` 同时使用：
+
+```sh
+mise set --override AWS_PROFILE=personal   # config.override.toml
+mise use --override node@24
+mise settings set --override jobs 8
+mise set --override --env work TOKEN=x     # config.work.override.toml
+```
+
+`mise use`、`mise unuse`、`mise set`、`mise unset`、`mise settings set|add|unset` 和 `mise config get|set` 均支持 `--override`。
+
+### 锁文件
+
+override 文件中声明的工具会覆盖项目中同名工具，并单独解析：mise 不会从项目的 `mise.lock` 中查找它，而 [`--locked`](/cli/install.html) 也不会要求项目锁文件固定其版本。它的锁定条目保存在全局配置旁的全局 `mise.lock` 中。锁定模式下，其他工具仍会依据其锁文件进行检查。
 
 ## Which file mise writes to {#target-file-for-write-operations}
 
@@ -296,14 +355,8 @@ directory; in your home directory, it writes the global config instead. Use
 
 Other commands choose differently:
 
-- [`mise config get`](/cli/config/get.html) and
-  [`mise config set`](/cli/config/set.html) use the highest-precedence loaded
-  TOML file, which can be `mise.local.toml`. Use `--file` to choose another
-  project file.
-- [`mise unuse`](/cli/unuse.html) uses the first loaded config that declares a
-  requested tool. A version-qualified argument matches the configured request
-  literally: `node@20` matches `node = "20"`, not `node = "20.0.0"`. Use
-  `--path` to choose the file.
+- [`mise config get`](/cli/config/get.html) 和 [`mise config set`](/cli/config/set.html) 使用当前已加载且优先级最高的 TOML 文件，该文件可能是 `mise.local.toml`。除非传入 `--override`，否则它们会跳过 [override 文件](#override-file)。使用 `--file` 可选择其他项目文件。
+- [`mise unuse`](/cli/unuse.html) 会使用首个声明了目标工具的已加载配置文件，但不包括 [override 文件](#override-file)。带版本号的参数会与配置中的请求进行精确匹配：`node@20` 匹配 `node = "20"`，不匹配 `node = "20.0.0"`。使用 `--path` 可选择文件。
 
 ### Send global writes to separate files {#global-section-write-targets}
 
@@ -474,6 +527,8 @@ _.source = "scripts/env.sh"
 | `[dotfile_groups]`                  | Named directory trees of dotfiles                                       | [Groups](/dotfiles/groups.html)                                    |
 | `[history]`                         | What dotfiles history captures                                          | [History](/dotfiles/history.html)                                  |
 | `[_]`                               | Free-form data that mise ignores                                        | [`[_]`](#free-form-data)                                           |
+
+每个配置项及其类型和说明均列于 [mise.toml 配置参考](/configuration/reference.html)。
 
 Version requests, prefixes such as `prefix:1.25`, and `.tool-versions` are
 described in [Version requests and version files](/dev-tools/versions.html).

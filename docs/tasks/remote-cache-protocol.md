@@ -1,5 +1,5 @@
 ---
-description: "Implement a server or client for version 1 of the protocol behind mise's remote task cache."
+description: "实现 mise 远程任务缓存协议第 1 版的服务端或客户端。"
 ---
 
 # Remote cache protocol <Badge type="warning" text="experimental" />

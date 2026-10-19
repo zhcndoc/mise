@@ -1,5 +1,5 @@
 ---
-description: "Install tools such as Node.js and Python, pick their versions per project, and upgrade or remove them."
+description: "安装 Node.js、Python 等工具，为各项目选择版本，并升级或移除工具。"
 ---
 
 # Dev tools

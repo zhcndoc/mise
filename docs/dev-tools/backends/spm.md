@@ -1,5 +1,5 @@
 ---
-description: "Install Swift package executables from GitHub or GitLab, from an artifact bundle or a source build."
+description: "从 GitHub 或 GitLab 安装 Swift 软件包可执行文件，可使用制品包或从源码构建。"
 ---
 
 # spm backend

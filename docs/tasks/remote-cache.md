@@ -1,5 +1,5 @@
 ---
-description: "Share task cache results between CI and developer machines through a self-hosted cache server."
+description: "通过自托管缓存服务器，在 CI 和开发者机器之间共享任务缓存结果。"
 ---
 
 # Remote task cache <Badge type="warning" text="experimental" />

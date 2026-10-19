@@ -1,6 +1,6 @@
 ---
-description: "Skip tasks whose inputs have not changed, and restore earlier results from mise's experimental artifact cache."
-socialDescription: "Skip unchanged tasks, or restore earlier results from the experimental artifact cache."
+description: "跳过输入未变化的任务，或从 mise 的实验性制品缓存中恢复先前结果。"
+socialDescription: "跳过输入未变化的任务，或从实验性制品缓存中恢复先前结果。"
 ---
 
 # 任务缓存

@@ -1,5 +1,5 @@
 ---
-description: "Install Zig with mise from ziglang.org or its mirrors, including nightly and Mach versions."
+description: "通过 mise 从 ziglang.org 或其镜像安装 Zig，包括 nightly 和 Mach 版本。"
 ---
 
 # Zig

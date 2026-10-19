@@ -1,5 +1,5 @@
 ---
-description: "Install Go with mise, read toolchain lines from go.mod and go.work, and manage GOROOT and GOBIN."
+description: "通过 mise 安装 Go、从 go.mod 和 go.work 读取工具链版本，并管理 GOROOT 和 GOBIN。"
 ---
 
 # Go

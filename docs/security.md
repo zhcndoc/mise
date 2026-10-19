@@ -1,9 +1,9 @@
 ---
-description: "Control which project config can run code, verify downloads, hold back new releases, and restrict the commands mise starts."
-socialDescription: "Control config trust, verify downloads, delay new releases, and restrict commands."
+description: "控制哪些项目配置可以运行代码、验证下载、延后新版本并限制 mise 启动的命令。"
+socialDescription: "管理配置文件信任、下载验证、新版本延迟和命令限制。"
 ---
 
-# Security overview
+# 安全概览
 
 Each mise security control covers one stage, from loading a project's config to
 running the commands it starts. The one you meet first is
@@ -49,7 +49,7 @@ A `mise.toml` loads without trust when it has no template syntax
 - `[tasks]`, as long as no task lists `secrets`
 
 Anything else needs trust, including tool option tables, `[env]`, `[hooks]`,
-`[settings]`, `[tool_alias]` and `include`. Other files follow the same idea:
+`[settings]`、`[tool_alias]` 和 `include`。mise 会忽略未受信任配置文件中的 `[settings]`，因此仓库在你信任它之前无法更改镜像、构建命令或其他设置。其他文件的处理方式相同：
 
 - `.tool-versions` needs trust only when it contains template syntax or inline
   tool options such as `node[postinstall=...] 24`.

@@ -23,6 +23,8 @@ Commands that run project code (`mise run`, task shorthand such as
 `mise daemons start|restart|register`) trust their active config
 automatically.
 
+在 paranoid 模式下，不带路径运行 `mise trust` 还会信任配置读取的环境文件和脚本（`env._.file`、`env._.source` 及 `env_file` 设置）；这些文件和脚本各自拥有独立的信任状态。传入文件路径即可只信任该文件。
+
 Trusting a config file in a repository's main checkout also trusts the same
 path in its git worktrees. Paranoid mode (<https://mise.jdx.dev/paranoid.html>)
 turns off automatic and worktree trust and requires trust, tied to the
@@ -45,7 +47,7 @@ See <https://mise.jdx.dev/security.html#configuration-trust>
 
 ## 示例
 
-Trust the nearest untrusted config in this directory or a parent
+信任当前目录或其父目录中最近的未信任配置；在 paranoid 模式下，也会信任该配置读取的环境文件
 
 ```
 mise trust

@@ -1,8 +1,8 @@
 ---
-description: "Install Homebrew formulae into the standard Homebrew prefix, with or without Homebrew installed."
+description: "无论是否已安装 Homebrew，都可将 formula 安装到标准 Homebrew 前缀目录。"
 ---
 
-# Homebrew formulae (brew)
+# Homebrew formula（brew）
 
 The `brew` manager installs [Homebrew](https://brew.sh) formulae into the
 standard Homebrew prefix. mise downloads and installs them itself, so Homebrew
@@ -60,6 +60,13 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
 ```
 
 :::
+
+模板可以通过 <code v-pre>{{ system_brew_prefix }}</code> 读取前缀，因此同一份配置可用于两个平台：
+
+```toml
+[env]
+PKG_CONFIG_PATH = "{{ system_brew_prefix }}/opt/mysql-client/lib/pkgconfig"
+```
 
 ## Formula names
 

@@ -1,5 +1,5 @@
 ---
-description: "Install Node.js with mise, read .nvmrc or package.json, and pin npm, pnpm, or Yarn per project."
+description: "通过 mise 安装 Node.js、读取 .nvmrc 或 package.json，并为各项目固定 npm、pnpm 或 Yarn 版本。"
 ---
 
 # Node.js

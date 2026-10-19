@@ -1,5 +1,5 @@
 ---
-description: "Install and upgrade Windows packages with WinGet from mise.toml, including version pins."
+description: "在 mise.toml 中声明 Windows 软件包，通过 WinGet 安装或升级，并可固定版本。"
 ---
 
 # WinGet packages (winget)

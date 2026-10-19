@@ -1,6 +1,6 @@
 ---
-description: "Install, configure, update and remove plugins that add tools, environment variables or package managers to mise."
-socialDescription: "Install, update and remove plugins that add tools, environment variables or package managers."
+description: "安装、配置、更新和移除为 mise 添加工具、环境变量或软件包管理器的插件。"
+socialDescription: "安装、更新和移除为 mise 添加工具、环境变量或软件包管理器的插件。"
 ---
 
 # 插件

@@ -1,9 +1,9 @@
 ---
-description: "Add a shorthand for a widely used tool to the mise registry: the popularity bar, accepted backends, the entry format, and the test."
+description: "向 mise 注册表添加常用工具的简写名称：了解受欢迎度门槛、支持的后端、条目格式和测试方法。"
 outline: [2, 3]
 ---
 
-# Adding tools to the registry
+# 向注册表添加工具
 
 A registry entry gives a widely used tool a short name, so `mise use ripgrep`
 works without a backend identifier. Most proposals for new entries are
@@ -129,6 +129,8 @@ through the registry.
 Each tool is one file, `registry/<name>.toml`, and the file name is the
 shorthand. Keys are in alphabetical order because taplo sorts them:
 
+<!-- schema: skip -->
+
 ```toml
 aliases = ["your-tool-cli"]
 backends = [
@@ -190,6 +192,8 @@ other keys narrow or configure it:
 
 Long tables read better as `[[backends]]` sections. This is
 `registry/twg.toml`:
+
+<!-- schema: skip -->
 
 ```toml
 description = "Command line interface to the Atlassian Teamwork Graph and Cloud services"
@@ -265,6 +269,8 @@ mise shows the message as a warning whenever it installs the tool.
 When a backend supports only newer releases, set `min_version` on it. hk
 publishes packslip manifests starting at 1.58.1:
 
+<!-- schema: skip -->
+
 ```toml
 backends = [
   { full = "packslip:github.com/jdx/hk", min_version = "1.58.1" },
@@ -292,6 +298,8 @@ bound.
 When a backend serves only older releases, such as a frozen 1.x line published
 separately from later majors, set `max_version` on it:
 
+<!-- schema: skip -->
+
 ```toml
 backends = [
   { full = "aqua:example/tool-next", min_version = "2.0.0" },
@@ -309,9 +317,28 @@ that spans it keeps the preferred backend. Prereleases of the boundary version
 sort below it, so an exact request for `tool@2.0.0-rc.1` selects `tool-legacy`,
 while the prefix `2` still selects `tool-next`.
 
+`mise ls-remote tool` 会列出每个版本范围，并从对应后端获取版本：1.x 来自 `tool-legacy`，2.x 及更高版本来自 `tool-next`。如果某个后端列出的版本超出自身范围，该版本会被排除，因为安装时会选择另一个后端。仅设置 `min_version` 时也遵循相同规则：hk 的 1.58.1 及更高版本来自 packslip，更早的版本来自 aqua。指定某个范围内的版本前缀（例如 `mise ls-remote tool 1`）时，只会列出该范围对应后端提供的版本。
+
 A locked backend stays in use only for the versions it serves. If the lockfile
 records `tool-legacy` and the config moves to `tool@2`, mise selects `tool-next`
 instead of asking the legacy backend for a release it does not publish.
+
+### 随版本变化的选项 {#version-ranged-options}
+
+当某个发行版改变了后端查找文件的方式（例如资源文件改名或发布流程变化）时，可为每个版本范围分别列出后端，并为每个条目设置自己的选项：
+
+<!-- schema: skip -->
+
+```toml
+backends = [
+  { full = "github:example/tool", min_version = "2.0.0", options = { asset_pattern = "tool-v2-*" } },
+  { full = "github:example/tool", max_version = "2.0.0", options = { asset_pattern = "tool-*" } },
+]
+bins = ["tool"]
+version_order = "semver"
+```
+
+`tool@1.4.0` 会使用 `tool-*` 安装，`tool@2.1.0` 则使用 `tool-v2-*`。未按版本范围分流的请求（例如 `latest`）会使用第一个条目的选项。同一后端的条目不能为同一版本指定不同选项，除非它们通过 `platforms` 区分。旧版 mise 会将第一个条目的选项应用于所有版本，因此只有在需要修复旧版已有错误行为时才添加版本范围。
 
 ## Required attestations {#required-attestations}
 
@@ -319,6 +346,8 @@ When a project publishes
 [GitHub artifact attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
 for its release assets, set `attestations_since` on its `github:` backend to the
 first version whose assets all carry them:
+
+<!-- schema: skip -->
 
 ```toml
 backends = [
@@ -362,6 +391,8 @@ An entry can let users read the tool's version from the
 [idiomatic version files](/dev-tools/versions.html#idiomatic-version-files) the
 tool already uses. A file name uses mise's plain-text parser:
 
+<!-- schema: skip -->
+
 ```toml
 backends = ["aqua:owner/repo"]
 idiomatic_files = [".your-tool-version"]
@@ -370,6 +401,8 @@ idiomatic_files = [".your-tool-version"]
 For a structured or tool-specific file, use a table with the parser fields that
 the [http backend's version listing](/dev-tools/backends/http.html#version-list-url)
 supports:
+
+<!-- schema: skip -->
 
 ```toml
 idiomatic_files = [
@@ -440,6 +473,8 @@ Every new entry needs a `test`. The registry workflow's
 [`validate-new-tools` job](https://github.com/jdx/mise/blob/main/.github/workflows/registry-impl.yml)
 fails a pull request that adds a tool without one.
 
+<!-- schema: skip -->
+
 ```toml
 test = { cmd = "your-tool --version", expected = "your-tool {{version}}" }
 ```
@@ -458,6 +493,8 @@ version; otherwise pick another stable part of the output.
 
 If `cmd` needs other mise-managed tools on `PATH`, list them in `tools`. Only
 `mise test-tool` uses them; they do not change how the tool installs.
+
+<!-- schema: skip -->
 
 ```toml
 test = { cmd = "gradle -V", expected = "Gradle", tools = ["java"] }

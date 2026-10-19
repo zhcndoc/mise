@@ -1,5 +1,5 @@
 ---
-description: "Diagnose problems with shell activation, tool versions, downloads, tasks, and Windows setups."
+description: "排查 Shell 激活、工具版本、下载、任务和 Windows 环境中的问题。"
 outline: [2, 3]
 ---
 

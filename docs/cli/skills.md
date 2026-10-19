@@ -1,5 +1,5 @@
 ---
-description: "List and link the agent skills that active tools ship"
+description: "列出并链接当前工具提供的智能体技能"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

@@ -1,5 +1,5 @@
 ---
-description: "Install Node.js, Python, Go, Java and other languages with installers built into mise, no plugin needed."
+description: "无需插件，使用 mise 内置安装器安装 Node.js、Python、Go、Java 等语言。"
 ---
 
 # Core tools overview

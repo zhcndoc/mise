@@ -1,8 +1,8 @@
 ---
-description: "Set project environment variables in mise.toml, load them from files and scripts, and add directories to PATH."
+description: "在 mise.toml 中设置项目环境变量，从文件和脚本载入，并向 PATH 添加目录。"
 ---
 
-# Environment variables
+# 环境变量
 
 Set project environment variables under `[env]` in `mise.toml`. mise applies
 them to commands run with `mise exec`, to tasks, to shims, and to shells where
@@ -307,7 +307,16 @@ _.file = [
 ]
 ```
 
-文件会从文件系统根目录开始，沿目录层级逐级加载到当前目录，因此较近文件中的变量会覆盖较远文件中的变量。绝对路径不受 `find_up` 影响。[`env_file`](/configuration/settings.html#env_file) 设置（`MISE_ENV_FILE=.env`）可对单个文件名执行相同的向上搜索。
+每个条目会单独搜索，并按列出的顺序应用，因此后面的条目优先级更高，无论其文件位于何处。在下面的例子中，父目录中的 `.env.local` 会覆盖项目中的 `.env`。若要让多个文件名一起搜索，请将它们放进同一个条目的 `path` 列表：
+
+```toml [~/.config/mise/config.toml]
+[env]
+_.file = { path = [".env", ".env.local"], find_up = true }
+```
+
+此时距离当前目录最近的文件优先；如果文件位于同一目录，则后列出的文件优先，因此项目中的 `.env` 会覆盖父目录中的 `.env.local`。只有普通相对路径名会一起搜索。包含模板、`$VAR` 或 `~` 的名称以及绝对路径，会按列表顺序单独搜索。
+
+[`env_file`](/configuration/settings.html#env_file) 设置也会沿目录树向上查找 dotenv 文件，但它是独立功能。它会在所有配置文件的 `[env]` 应用后生效并覆盖其中的值，但不会覆盖已由 `_.file` 加载的文件。它会跳过这些文件，因此这些文件仍遵循 `[env]` 的优先级。`_.file` 则是普通条目，可被项目自身的 `[env]` 覆盖。
 
 ### `env._.path` {#env-path}
 

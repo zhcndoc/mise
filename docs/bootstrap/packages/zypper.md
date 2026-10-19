@@ -1,5 +1,5 @@
 ---
-description: "Install and remove openSUSE and SUSE Linux Enterprise packages with zypper from mise.toml."
+description: "在 mise.toml 中声明 openSUSE 和 SUSE Linux Enterprise 软件包，并通过 zypper 安装或移除。"
 ---
 
 # openSUSE and SUSE packages (zypper)

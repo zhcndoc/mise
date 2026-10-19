@@ -1,22 +1,16 @@
 ---
-description: "Install mise, then give a project its own Node.js version, environment variable, and task."
+description: "安装 mise，然后为项目指定 Node.js 版本、环境变量和任务。"
 ---
 
 # 开始使用
 
-Install mise, then give a project its own Node.js version, an environment
-variable and a task. Steps 1 to 3 work without changing your shell
-configuration; step 4 adds optional shell activation.
+安装 mise 后，即可为项目指定 Node.js 版本、环境变量和任务。第 1 至第 3 步不会更改 Shell 配置；第 4 步可选择启用 Shell 激活。
 
-Joining a project that already has a `mise.toml`? Install mise (step 1), read
-the project's `mise.toml` (see [trust](#trust)), then run `mise install` in the
-project directory and `mise tasks ls` to list its tasks.
-[Use mise in an existing project](/walkthrough.html) covers adding mise to a
-project that does not use it yet.
+如果要加入一个已有 `mise.toml` 的项目，请先安装 mise（第 1 步），阅读项目的 `mise.toml`（参见[信任配置](#trust)），然后在项目目录中运行 `mise install`，并用 `mise tasks ls` 查看任务列表。[在现有项目中使用 mise](/walkthrough.html)介绍如何将 mise 引入尚未使用它的项目。
 
-## 1. Install mise {#installing-mise-cli}
+## 1. 安装 mise {#installing-mise-cli}
 
-On macOS or Linux, run the installer:
+在 macOS 或 Linux 上运行安装脚本：
 
 ```sh
 curl -fsSL https://mise.run | sh
@@ -24,28 +18,24 @@ curl -fsSL https://mise.run | sh
 # 2026.x.x linux-x64 (2026-xx-xx)
 ```
 
-The installer puts the `mise` executable at `~/.local/bin/mise`. If your shell
-cannot find `mise` in the next steps, run it as `~/.local/bin/mise` until you
-[activate mise](#activate-mise) in step 4, which adds it to `PATH`.
+安装脚本会将 `mise` 可执行文件放在 `~/.local/bin/mise`。如果后续步骤中的 Shell 找不到 `mise`，请先使用完整路径 `~/.local/bin/mise`；第 4 步[启用 mise](#activate-mise)后，它会加入 `PATH`。
 
-On Windows, run `winget install jdx.mise`. For Homebrew, apt, dnf and other
-package managers, see [Installing mise](/installing-mise.html).
+在 Windows 上运行 `winget install jdx.mise`。Homebrew、apt、dnf 和其他包管理器的安装方式请参阅[安装 mise](/installing-mise.html)。
 
-## 2. Run a tool {#mise-exec-run}
+## 2. 运行工具 {#mise-exec-run}
 
-[`mise exec`](/cli/exec.html) runs a command with a specific tool version:
+[`mise exec`](/cli/exec.html) 可使用指定的工具版本运行命令：
 
 ```sh
 mise exec node@24 -- node --version
 # v24.x.x
 ```
 
-mise downloads Node.js 24 if it is not installed, then runs the command after
-`--`. This does not change any config file or your current shell's environment.
+如果尚未安装 Node.js 24，mise 会先下载它，然后运行 `--` 后面的命令。此操作不会更改任何配置文件，也不会修改当前 Shell 的环境。
 
 ## 3. 设置项目 {#set-up-a-project}
 
-Create a directory and select Node.js 24 for it:
+创建目录，并为其选择 Node.js 24：
 
 ```sh
 mkdir my-project
@@ -53,8 +43,7 @@ cd my-project
 mise use node@24
 ```
 
-[`mise use`](/cli/use.html) installs Node.js 24 if needed and records the
-request in a new `mise.toml`:
+[`mise use`](/cli/use.html) 会在需要时安装 Node.js 24，并将版本请求写入新建的 `mise.toml`：
 
 ```toml [mise.toml]
 [tools]
@@ -63,13 +52,13 @@ node = "24"
 
 ### 设置环境变量 {#environment-variables}
 
-Run [`mise set`](/cli/set.html) to add an `[env]` section:
+运行 [`mise set`](/cli/set.html) 添加 `[env]` 配置段：
 
 ```sh
 mise set NODE_ENV=development
 ```
 
-`mise.toml` now contains:
+此时 `mise.toml` 内容如下：
 
 ```toml [mise.toml]
 [tools]
@@ -79,7 +68,7 @@ node = "24"
 NODE_ENV = "development"
 ```
 
-Commands run through mise get both the tool and the variable:
+通过 mise 运行的命令可以同时使用该工具和环境变量：
 
 ```sh
 mise exec -- node -p process.env.NODE_ENV
@@ -90,7 +79,7 @@ mise exec -- node -p process.env.NODE_ENV
 
 ### 运行任务 {#run-a-task}
 
-Add a task to the same `mise.toml`:
+在同一个 `mise.toml` 中添加任务：
 
 ```toml [mise.toml]
 [tasks.hello]
@@ -107,12 +96,11 @@ mise run hello
 v24.x.x development
 ```
 
-[`mise run`](/cli/run.html) installs missing tools, sets the project's
-environment, then runs the task.
+[`mise run`](/cli/run.html) 会安装缺少的工具、设置项目环境，然后运行任务。
 
-### Check what mise selected {#confirm-what-is-active}
+### 查看 mise 选择的配置 {#confirm-what-is-active}
 
-From the project directory:
+在项目目录中运行：
 
 ```sh
 mise config ls     # config files in use
@@ -120,33 +108,19 @@ mise ls --current  # selected tool versions
 mise tasks ls      # available tasks
 ```
 
-### Trust project configuration {#trust}
+### 信任项目配置 {#trust}
 
-A `mise.toml` with `[env]`, hooks, templates or settings can run code or change
-your environment, so mise loads it only once it is trusted: files you write with
-`mise use` or `mise set` are trusted, and so is a project where you run
-`mise install`, `mise exec` or `mise run`. For a project from someone else, read
-its config, tasks included, before running those commands or
-[`mise trust`](/cli/trust.html); see
-[Configuration trust](/security.html#configuration-trust) for the rules.
+包含 `[env]`、钩子、模板或设置的 `mise.toml` 可能会运行代码或更改环境，因此 mise 只会加载已信任的配置：通过 `mise use` 或 `mise set` 写入的文件会自动受信任；运行过 `mise install`、`mise exec` 或 `mise run` 的项目也会受信任。对于他人提供的项目，请先阅读其配置（包括任务），再运行这些命令或 [`mise trust`](/cli/trust.html)。信任规则详见[配置的信任机制](/security.html#configuration-trust)。
 
-### Share the project {#share-the-project}
+### 共享项目 {#share-the-project}
 
-Commit `mise.toml`. Teammates and CI run `mise install` in the project to get
-the same tools. `"24"` is a prefix, not an exact version, so two machines can
-resolve it to different Node.js 24 releases; to record exact versions, add a
-[lockfile](/dev-tools/mise-lock.html) with `mise lock`.
+将 `mise.toml` 提交到版本库。团队成员和 CI 在项目中运行 `mise install`，即可安装相同的工具。`"24"` 是版本前缀而非精确版本，因此不同机器可能解析到不同的 Node.js 24 版本；若要记录精确版本，请运行 `mise lock` 并添加[锁文件](/dev-tools/mise-lock.html)。
 
-## 4. Activate mise <Badge text="optional" /> {#activate-mise}
+## 4. 启用 mise <Badge text="可选" /> {#activate-mise}
 
-Activate mise in your interactive shell so that entering a project directory
-puts its tools on `PATH` and sets its environment variables. Activation adds a
-hook that runs at each prompt and directory change and updates the environment
-for the current directory. Scripts and CI do not need activation; keep using
-`mise exec` and `mise run` there.
+在交互式 Shell 中启用 mise 后，进入项目目录时，项目工具会加入 `PATH`，环境变量也会随之设置。激活会添加一个钩子，在每次显示提示符或切换目录时更新当前目录对应的环境。脚本和 CI 无需启用 Shell 激活，继续使用 `mise exec` 和 `mise run` 即可。
 
-Run the command for your shell once. It appends the activation line to your
-shell's startup file:
+针对所用的 Shell 运行一次对应命令，将激活语句追加到 Shell 启动文件中：
 
 ::: code-group
 
@@ -170,14 +144,9 @@ Add-Content $PROFILE '(&mise activate pwsh) | Out-String | Invoke-Expression'
 
 :::
 
-If a package manager installed mise, write `mise` in place of
-`~/.local/bin/mise`. With Homebrew, fish activates mise without this step.
-[Shell setup](/shell-setup.html) covers Nushell, Xonsh, Elvish, Git Bash and
-cmd.exe, and has versions of these lines that do not add a duplicate when run
-twice.
+如果通过包管理器安装了 mise，请将 `~/.local/bin/mise` 替换为 `mise`。使用 Homebrew 时，fish 会自动启用 mise，无需执行此步骤。[Shell 设置](/shell-setup.html)还介绍了 Nushell、Xonsh、Elvish、Git Bash 和 cmd.exe，并提供了重复运行也不会重复添加语句的命令。
 
-Open a new terminal, then compare a directory inside the project with one
-outside it:
+打开新的终端，分别在项目目录内外检查 Node.js 版本：
 
 ```sh
 cd my-project
@@ -188,55 +157,41 @@ node --version
 # another Node.js version, or "command not found"
 ```
 
-To use a version outside any project, set a personal default with
-`mise use --global node@24`. It writes `~/.config/mise/config.toml`, and
-project configuration overrides it.
+若要在项目之外使用某个版本，可通过 `mise use --global node@24` 设置个人默认版本。该命令会写入 `~/.config/mise/config.toml`，项目配置的优先级更高。
 
-Run [`mise doctor`](/cli/doctor.html) to check the setup. Editors and other
-programs that do not read your shell's startup files can use
-[shims](/dev-tools/shims.html) instead, which have
-[some limits](/dev-tools/shims.html#shims-vs-path).
+运行 [`mise doctor`](/cli/doctor.html) 检查配置。不会读取 Shell 启动文件的编辑器和其他程序可以改用 [shims](/dev-tools/shims.html)，但 shims 有[一些限制](/dev-tools/shims.html#shims-vs-path)。
 
 ## 5. 查找更多工具 {#tool-backends}
 
-Use the [registry](/registry.html) to find tool names such as `node`, `python`,
-`jq` and `ripgrep`. Usually the name is all you need. Run these from the
-`my-project` directory; after the step 4 demo, `cd my-project` first:
+在[注册表](/registry.html)中查找 `node`、`python`、`jq` 和 `ripgrep` 等工具。通常只需使用工具名即可。请在 `my-project` 目录中运行以下命令；如果刚完成第 4 步的演示，请先执行 `cd my-project`：
 
 ```sh
 mise use ripgrep
 mise exec -- rg --version
 ```
 
-This adds `ripgrep` to the project's `mise.toml`. Outside a project,
-`mise use` creates a `mise.toml` in the current directory, or writes the global
-config when that directory is your home directory.
+这会将 `ripgrep` 添加到项目的 `mise.toml`。在项目之外运行时，`mise use` 会在当前目录创建 `mise.toml`；如果当前目录是主目录，则会写入全局配置。
 
-A backend tells mise where to get a tool and how to install it. You can name one
-explicitly, including for tools without a registry entry:
+后端告诉 mise 从哪里获取工具以及如何安装。也可以显式指定后端，包括尚未加入注册表的工具：
 
 ```sh
 mise exec github:BurntSushi/ripgrep -- rg --version
 ```
 
-Some backends need another tool or package manager, such as Node.js for `npm:`.
-Check the [backend guide](/dev-tools/backends/) before using a new ecosystem.
+某些后端需要依赖其他工具或包管理器，例如 `npm:` 后端需要 Node.js。使用新的生态系统前，请先阅读[后端指南](/dev-tools/backends/)。
 
-## If something does not work {#if-something-doesn-t-work}
+## 遇到问题时 {#if-something-doesn-t-work}
 
-Run `mise doctor` to check your setup. If a tool works through `mise exec` but
-not as a plain command, check [shell activation](#activate-mise) and open a new
-terminal. See [Troubleshooting](/troubleshooting.html) for other problems.
+运行 `mise doctor` 检查配置。如果工具通过 `mise exec` 可以运行，但直接作为命令运行失败，请检查 [Shell 激活](#activate-mise)并打开新终端。其他问题请参阅[故障排除](/troubleshooting.html)。
 
-### GitHub API rate limits {#github-api-rate-limiting}
+### GitHub API 速率限制 {#github-api-rate-limiting}
 
-If an error reports a GitHub API rate limit, give mise a
-[GitHub token](/dev-tools/github-tokens.html).
+如果错误提示触发了 GitHub API 速率限制，请为 mise 配置 [GitHub 令牌](/dev-tools/github-tokens.html)。
 
-## Next steps {#next-steps}
+## 后续步骤 {#next-steps}
 
-- [Use mise in an existing project](/walkthrough.html)
-- [Tasks](/tasks/): build, test and other project commands
-- [Editors](/ide-integration.html) and [continuous integration](/continuous-integration.html)
-- [Shell completions](/shell-setup.html#autocompletion)
-- [Bootstrap](/bootstrap.html): system packages, dotfiles and services for a whole machine
+- [在现有项目中使用 mise](/walkthrough.html)
+- [任务](/tasks/)：构建、测试和其他项目命令
+- [编辑器](/ide-integration.html)与[持续集成](/continuous-integration.html)
+- [Shell 补全](/shell-setup.html#autocompletion)
+- [初始化](/bootstrap.html)：为整台机器配置系统软件包、点文件和服务

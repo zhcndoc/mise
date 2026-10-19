@@ -196,8 +196,6 @@ Type-check and test the landing-page showreel
 
 ## `render:schema`
 
-- 依赖：docs:setup
-
 - **用法：** `render:schema`
 
 渲染 JSON Schema。

@@ -1,5 +1,5 @@
 ---
-description: "Write the configured macOS preferences"
+description: "写入已配置的 macOS 用户偏好"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

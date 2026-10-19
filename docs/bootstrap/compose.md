@@ -1,6 +1,6 @@
 ---
-description: "Keep Docker Compose projects running, stopped, or removed on a host, after mise bootstrap installs Docker and writes their files."
-socialDescription: "Keep Docker Compose projects running, stopped, or removed on a host."
+description: "在 mise bootstrap 安装 Docker 并写入项目文件后，管理主机上的 Docker Compose 项目，使其保持运行、停止或移除状态。"
+socialDescription: "管理主机上的 Docker Compose 项目，使其保持运行、停止或移除状态。"
 ---
 
 # Docker Compose 项目

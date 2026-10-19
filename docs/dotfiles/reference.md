@@ -1,6 +1,6 @@
 ---
-description: "Look up every [dotfiles] key, which keys each mode accepts, variant and pattern rules, status states, and the files history keeps."
-socialDescription: "Look up every [dotfiles] key, pattern rule, status state, and state file."
+description: "查阅所有 [dotfiles] 配置项、各模式支持的字段、变体和匹配规则、状态以及历史文件。"
+socialDescription: "查阅所有 [dotfiles] 配置项、匹配规则、状态和状态文件。"
 ---
 
 # Dotfiles reference

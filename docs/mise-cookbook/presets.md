@@ -1,5 +1,5 @@
 ---
-description: "Write a global mise task that adds tools and tasks to a new project, such as a Python and uv setup."
+description: "编写全局 mise 任务，为新项目添加工具和任务，例如 Python 与 uv 环境。"
 ---
 
 # Project scaffolding tasks

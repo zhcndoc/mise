@@ -1,6 +1,6 @@
 ---
-description: "Browse every mise release with its number of changes and the issues resolved since September 2026, and learn how version numbers work."
-socialDescription: "Browse every mise release and learn how mise version numbers work."
+description: "浏览 mise 的所有版本、各版本的变更数和自 2026 年 9 月以来修复的问题，并了解版本号规则。"
+socialDescription: "浏览 mise 的所有版本，并了解 mise 版本号的含义。"
 editLink: false
 ---
 

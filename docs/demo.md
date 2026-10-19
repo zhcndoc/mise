@@ -1,6 +1,6 @@
 ---
-description: "Watch mise run one-off commands with mise exec, install global tools, and switch Node.js versions between a global default and a project."
-socialDescription: "Watch mise run one-off commands, install global tools, and switch Node.js versions per project."
+description: "观看 mise 使用 mise exec 运行一次性命令、安装全局工具，并在全局默认版本和项目 Node.js 版本之间切换。"
+socialDescription: "观看 mise 运行一次性命令、安装全局工具并按项目切换 Node.js 版本。"
 ---
 
 # 演示

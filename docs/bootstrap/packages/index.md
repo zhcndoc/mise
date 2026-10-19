@@ -1,6 +1,6 @@
 ---
-description: "Declare machine-wide packages in mise.toml and install them with apt, Homebrew, WinGet, and other package managers."
-socialDescription: "Declare machine-wide packages in mise.toml and install them with your package managers."
+description: "在 mise.toml 中声明整机软件包，并通过 apt、Homebrew、WinGet 等软件包管理器安装。"
+socialDescription: "在 mise.toml 中声明整机软件包，并通过软件包管理器安装。"
 ---
 
 # Bootstrap packages

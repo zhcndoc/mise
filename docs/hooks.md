@@ -1,5 +1,5 @@
 ---
-description: "Run commands when an activated shell changes directory or sees a watched file change, or when mise installs tools."
+description: "在已激活 shell 切换目录、检测到受监视文件变化或 mise 安装工具时运行命令。"
 ---
 
 # 钩子
@@ -241,7 +241,7 @@ patterns = ["**/*.go"]
 run = '[ -n "$MISE_WATCH_FILES_GIT_REWRITTEN" ] || { IFS=:; hk fix $MISE_WATCH_FILES_MODIFIED; }'
 ```
 
-只要有任一已更改文件的时间晚于上次 HEAD 移动时间，该变量就不会设置，因此 rebase 同时发生真实编辑时仍会运行命令。如果上次 HEAD 移动是由提交造成的，该变量也不会设置，因为提交不会重写你编辑的文件。`git stash pop` 和 `git stash apply` 不会移动 HEAD，因此无法检测到。
+只要有任一已更改文件的修改时间晚于上次 HEAD 移动时间，该变量就不会设置，因此 rebase 同时发生真实编辑时仍会运行命令。如果上次 HEAD 移动是由提交造成的，该变量也不会设置，因为提交不会重写你编辑的文件。`git checkout -b`、`git reset` 和 `git branch -m` 等不改变 HEAD 指向的提交的操作会被忽略。`git stash pop` 和 `git stash apply` 不会移动 HEAD；不伴随提交的 `git reset --hard` 也不会改变 HEAD，因此这些操作都无法检测到。
 
 ## Environment variables {#hook-execution}
 

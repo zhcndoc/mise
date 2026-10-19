@@ -1,9 +1,9 @@
 ---
-description: "Declare machine setup in mise configuration and apply it: packages, files, services, repositories, dotfiles, and tools."
-socialDescription: "Declare machine setup in mise config and apply it with one command."
+description: "在 mise 配置中声明并应用整机设置：软件包、文件、服务、代码仓库、dotfiles 和工具。"
+socialDescription: "用 mise 配置声明整机设置，并通过一条命令应用。"
 ---
 
-# Bootstrap
+# 机器初始化
 
 `mise bootstrap` sets up a machine from your mise configuration: host packages,
 system files, services, Git repositories, dotfiles, shell activation, tools, and
@@ -195,6 +195,7 @@ These flags change what the selected parts do:
 | ------------------ | -------------------------------------------------------------------------------------------------------------- |
 | `--update`         | Refresh package metadata before installing packages, and update [declared repositories](/bootstrap/repos.html) |
 | `--force-dotfiles` | Replace existing files that conflict with whole-file `[dotfiles]` entries instead of stopping                  |
+| `--prune-dotfiles` | Remove files that dotfile groups deployed and no active entry deploys now, like `mise dot apply --prune`       |
 | `--skip-dirty`     | Skip `[bootstrap.repos]` checkouts with local changes instead of failing                                       |
 | `--prompt-secrets` | Prompt for [secret inputs](/bootstrap/secrets.html) missing from the environment                               |
 | `--prompt-vars`    | Ask for [`[vars]` with a `prompt`](/configuration/vars.html#prompt) that have no saved answer                  |

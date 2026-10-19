@@ -1,9 +1,9 @@
 ---
-description: "Release a mise plugin from Git or as a signed archive, test the published revision, and show users how to pin it."
-socialDescription: "Release a mise plugin from Git or as a signed archive, and show users how to pin it."
+description: "从 Git 或签名归档发布 mise 插件，测试已发布版本，并说明如何固定版本。"
+socialDescription: "从 Git 或签名归档发布 mise 插件，并说明如何固定版本。"
 ---
 
-# Publishing plugins
+# 发布插件
 
 You publish a mise plugin by putting it where users can fetch it: a Git
 repository pinned by tag, or a signed packslip archive. Users then install it
@@ -173,6 +173,7 @@ mise accepts a plugin release when:
 
 Declare the artifact in the repository's `packslip.toml`:
 
+<!-- schema: skip -->
 ```toml
 [[artifact]]
 path = "dist/my-plugin.tar.gz"

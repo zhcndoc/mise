@@ -1,17 +1,15 @@
 ---
-description: "Compile a Ruby command-line tool from GitHub into a native executable with Spinel."
+description: "使用 Spinel 将 GitHub 上的 Ruby 命令行工具编译为原生可执行文件。"
 ---
 
-# spinel backend <Badge type="warning" text="experimental" />
+# spinel 后端 <Badge type="warning" text="experimental" />
 
 The `spinel` backend compiles a Ruby command-line tool from a GitHub repository
 into a native executable with [Spinel](https://github.com/matz/spinel), Matz's
 Ruby ahead-of-time compiler. The result runs without Ruby or Spinel installed.
 
-::: warning Experimental
-This backend may change, or be removed if Spinel or the backend stops being
-practical to support. It installs tools without `experimental = true`, but
-`mise edit` offers it only when that setting is on.
+::: warning 实验性
+此后端可能会发生变化；如果 Spinel 或此后端不再适合维护，也可能被移除。使用它安装工具需要设置 `experimental = true`，并且只有启用该设置后，`mise edit` 才会提供此后端。
 :::
 
 ## 要求
@@ -32,6 +30,9 @@ gems, copy data files or fetch submodules.
 Most tools need options, such as the entrypoint, so declare them in `mise.toml`:
 
 ```toml
+[settings]
+experimental = true
+
 [tools."spinel:tobi/try"]
 version = "1.10.1"
 entrypoint = "try.rb"

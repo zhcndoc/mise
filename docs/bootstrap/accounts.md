@@ -1,5 +1,5 @@
 ---
-description: "Create, update, and remove local Linux users and groups with mise bootstrap."
+description: "使用 mise bootstrap 创建、更新和移除本地 Linux 用户及用户组。"
 ---
 
 # Linux 用户和组

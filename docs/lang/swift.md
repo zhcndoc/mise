@@ -1,5 +1,5 @@
 ---
-description: "Install the swift.org Swift toolchains for macOS and Linux with mise and select one per project."
+description: "通过 mise 在 macOS 和 Linux 上安装 swift.org Swift 工具链，并为各项目选择版本。"
 ---
 
 # Swift

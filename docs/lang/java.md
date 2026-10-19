@@ -1,5 +1,5 @@
 ---
-description: "Install JDKs from Temurin, Zulu, Corretto and other vendors with mise, and set JAVA_HOME."
+description: "通过 mise 安装 Temurin、Zulu、Corretto 等发行商提供的 JDK，并设置 JAVA_HOME。"
 ---
 
 # Java

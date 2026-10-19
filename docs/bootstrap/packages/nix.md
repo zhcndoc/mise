@@ -1,5 +1,5 @@
 ---
-description: "Install Nix packages into your user profile from mise.toml, or export them as a NixOS module."
+description: "在 mise.toml 中声明 Nix 软件包并安装到用户配置中，或将其导出为 NixOS 模块。"
 ---
 
 # Nix packages (nix)

@@ -1,9 +1,9 @@
 ---
-description: "Manage one block, one line, or a few keys of a file that something else owns, and leave the rest of the file alone."
-socialDescription: "Manage one block, line, or set of keys in a file that something else owns."
+description: "管理由其他程序维护的文件中的代码块、单行或少量键值，保留文件其余部分不变。"
+socialDescription: "在由其他程序维护的文件中管理代码块、行或键值。"
 ---
 
-# Edit part of a file
+# 编辑文件片段
 
 An edit entry manages one piece of a file and leaves the rest alone: a block
 between marker comments, a single line, or a few keys of a JSON, TOML, or YAML
@@ -95,6 +95,8 @@ stays the application's:
 The source holds the keys you want, in the same format as the target, which
 mise infers from the target's `.json`, `.toml`, `.yaml`, or `.yml` extension.
 With `codex/shared.toml` containing:
+
+<!-- schema: skip -->
 
 ```toml
 model = "gpt-5"

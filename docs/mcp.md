@@ -1,9 +1,9 @@
 ---
-description: "Connect an AI assistant to a project's mise tools, tasks, environment, and config through the mise MCP server."
-socialDescription: "Connect an AI assistant to a project's mise tools, tasks, and environment."
+description: "通过 mise MCP 服务器将 AI 助手连接到项目的工具、任务、环境和配置。"
+socialDescription: "将 AI 助手连接到项目的 mise 工具、任务和环境。"
 ---
 
-# AI assistants (MCP)
+# AI 助手（MCP）
 
 [`mise mcp`](/cli/mcp.html) runs a
 [Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro)
@@ -57,8 +57,8 @@ Connect the server only to a project and a client you trust.
   [trust rules](/security.html#configuration-trust), and the server cannot show
   the trust prompt. If the project's config needs trust, for example because
   it has `[env]`, templates or tool options, reads fail with
-  `Failed to load config: error parsing config file: <path>` until you run
-  `mise trust` in the project.
+  一条提示配置文件尚未受信任的 `Failed to load config` 错误；在项目中运行
+  `mise trust` 后即可恢复。
 - `run_task` runs the project's commands with your account's access, and
   `install_tool` installs tools. Unlike `mise run` and `mise install` in a
   terminal, neither trusts the project for you: both refuse a project whose

@@ -1,5 +1,5 @@
 ---
-description: "Install a tool version into a directory outside mise"
+description: "将工具版本安装到 mise 管理目录之外的路径"
 ---
 
 <!-- 由 usage-cli 根据用法规范生成 -->

@@ -1,5 +1,5 @@
 ---
-description: "Install Arch User Repository packages from mise.toml with the yay or paru AUR helper."
+description: "在 mise.toml 中声明 Arch User Repository 软件包，并通过 yay 或 paru 助手安装。"
 ---
 
 # Arch User Repository packages (aur)

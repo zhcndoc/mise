@@ -1,5 +1,5 @@
 ---
-description: "Add packages to the project's dependencies"
+description: "将软件包添加到项目依赖中"
 ---
 
 <!-- 由 usage-cli 根据用法规范生成 -->

@@ -1,5 +1,5 @@
 ---
-description: "Install and remove Arch Linux packages with pacman from mise.toml."
+description: "在 mise.toml 中声明 Arch Linux 软件包，并通过 pacman 安装或移除。"
 ---
 
 # Arch Linux packages (pacman)

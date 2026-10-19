@@ -1,5 +1,5 @@
 ---
-description: "Install a macOS app from a vendor download URL, verified by its checksum, when no cask exists."
+description: "没有 Homebrew cask 时，可从厂商下载地址安装 macOS 应用，并通过校验和验证文件。"
 ---
 
 # Direct macOS app downloads (macos-app)

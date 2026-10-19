@@ -1,5 +1,5 @@
 ---
-description: "Install Erlang/OTP with mise from precompiled builds where available, or from source with kerl."
+description: "通过 mise 安装 Erlang/OTP：优先使用可用的预编译版本，也可通过 kerl 从源码构建。"
 ---
 
 # Erlang

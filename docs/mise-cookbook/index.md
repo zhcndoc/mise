@@ -1,5 +1,5 @@
 ---
-description: "Start from a working mise.toml for Node.js, Python, Rails, C++, Bazel, Terraform or Docker projects."
+description: "从适用于 Node.js、Python、Rails、C++、Bazel、Terraform 或 Docker 项目的 mise.toml 示例开始。"
 ---
 
 # Cookbook overview

@@ -300,6 +300,8 @@ export const sidebar: SidebarItem[] = [
     collapsed: true,
     items: [
       { text: "mise.toml", link: "/configuration" },
+      { text: "mise.toml 参考", link: "/configuration/reference" },
+      { text: "mise.toml 沙盒", link: "/configuration/playground" },
       { text: "配置环境", link: "/configuration/environments" },
       { text: "设置", link: "/configuration/settings" },
       { text: "配置变量", link: "/configuration/vars" },

@@ -1,5 +1,5 @@
 ---
-description: "Lock resolved tool versions and artifact checksums for reproducible installations."
+description: "锁定已解析的工具版本和制品校验和，以便重复安装得到相同结果。"
 ---
 
 # Lockfile (mise.lock)

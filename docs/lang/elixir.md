@@ -1,5 +1,5 @@
 ---
-description: "Install Elixir with mise from Hex's precompiled builds, paired with a compatible Erlang/OTP."
+description: "通过 mise 安装 Hex 预编译的 Elixir，并搭配兼容的 Erlang/OTP。"
 ---
 
 # Elixir

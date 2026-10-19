@@ -1,5 +1,5 @@
 ---
-description: "Pin Node.js and a package manager per project, run package scripts as tasks, and replace Corepack."
+description: "为项目固定 Node.js 和软件包管理器版本，将 package 脚本作为任务运行，并替代 Corepack。"
 ---
 
 # Node.js

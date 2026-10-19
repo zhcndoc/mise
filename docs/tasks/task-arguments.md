@@ -1,6 +1,6 @@
 ---
-description: "Define task arguments and flags with a usage spec to get parsing, validation, --help, and completions."
-socialDescription: "Define task arguments and flags with a usage spec for validation, --help, and completions."
+description: "通过 usage 规范定义任务参数和选项，以支持解析、校验、--help 和补全。"
+socialDescription: "通过 usage 规范定义任务参数和选项，以支持校验、--help 和补全。"
 ---
 
 # Task arguments

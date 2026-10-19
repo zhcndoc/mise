@@ -1,6 +1,6 @@
 ---
-description: "Set up Python projects with mise: a requirements.txt virtualenv, a uv project, and uv scripts with inline dependencies."
-socialDescription: "Set up a requirements.txt virtualenv, a uv project, or uv scripts with mise."
+description: "使用 mise 配置 Python 项目：requirements.txt 虚拟环境、uv 项目，以及带内联依赖的 uv 脚本。"
+socialDescription: "使用 mise 配置 requirements.txt 虚拟环境、uv 项目或 uv 脚本。"
 ---
 
 # Python

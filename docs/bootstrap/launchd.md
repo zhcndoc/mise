@@ -1,6 +1,6 @@
 ---
-description: "Declare macOS LaunchAgents in mise.toml, then write and load them into your login session with launchctl."
-socialDescription: "Declare macOS LaunchAgents in mise.toml and load them with launchctl."
+description: "在 mise.toml 中声明 macOS LaunchAgent，再使用 launchctl 将其写入并加载到登录会话。"
+socialDescription: "在 mise.toml 中声明 macOS LaunchAgent 并使用 launchctl 加载。"
 ---
 
 # macOS LaunchAgents

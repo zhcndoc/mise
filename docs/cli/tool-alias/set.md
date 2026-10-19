@@ -1,5 +1,5 @@
 ---
-description: "Set a backend alias or a version alias in the global config"
+description: "在全局配置中设置后端别名或版本别名"
 ---
 
 <!-- 由 usage-cli 生成 -->

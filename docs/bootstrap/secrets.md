@@ -1,5 +1,5 @@
 ---
-description: "Declare the secret values that bootstrap templates need without storing them in mise configuration."
+description: "声明 bootstrap 模板所需的密钥值，而无需将密钥存入 mise 配置。"
 ---
 
 # Secret inputs

@@ -1,9 +1,9 @@
 ---
-description: Name each tool installation by what it is, so shorthands share one install and variants of one version coexist.
-socialDescription: Name each installation by what it is, so variants of one version coexist.
+description: 按用途为每次工具安装命名，让简写名称共享安装，同时支持同一版本的多个变体共存。
+socialDescription: 按用途为每次安装命名，让同一版本的多个变体共存。
 ---
 
-# Identity install layout <Badge type="warning" text="experimental" />
+# 标识式安装布局 <Badge type="warning" text="experimental" />
 
 By default, mise installs a tool into `installs/<tool>/<version>`, the legacy
 layout. That path cannot say which backend produced the files, which platform
@@ -88,6 +88,8 @@ registry change never moves an install.
 
 Each installation directory holds a `.mise-install.toml` receipt that records
 what the installation answers to. This one is trimmed:
+
+<!-- schema: skip -->
 
 ```toml
 digest = "hlencrstldyjkqnpak2zyr453avqxfjf6so4vopt7au5nsxvzska"

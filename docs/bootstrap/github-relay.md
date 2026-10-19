@@ -1,6 +1,6 @@
 ---
-description: "Lend a remote host read-only access to private GitHub repositories for one SSH session, without copying your token to it."
-socialDescription: "Lend a remote host read-only GitHub access for one SSH session."
+description: "在单次 SSH 会话中向远程主机授予私有 GitHub 仓库的只读权限，无需将令牌复制到远端。"
+socialDescription: "在单次 SSH 会话中向远程主机授予 GitHub 只读权限。"
 ---
 
 # GitHub relay (mise ssh)

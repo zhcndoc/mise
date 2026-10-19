@@ -1,5 +1,5 @@
 ---
-description: "Install Flatpak apps and runtimes system-wide or for the current user from mise.toml."
+description: "在 mise.toml 中声明 Flatpak 应用和运行时，并为整台机器或当前用户安装。"
 ---
 
 # Flatpak apps (flatpak)

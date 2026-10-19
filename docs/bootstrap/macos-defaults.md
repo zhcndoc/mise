@@ -1,6 +1,6 @@
 ---
-description: "Set macOS user preferences, such as Dock, Finder, keyboard, and trackpad settings, from mise.toml as the defaults command would."
-socialDescription: "Set macOS user preferences from mise.toml as the defaults command would."
+description: "在 mise.toml 中设置 macOS 用户偏好，例如 Dock、Finder、键盘和触控板选项，效果与 defaults 命令相同。"
+socialDescription: "在 mise.toml 中设置 macOS 用户偏好，效果与 defaults 命令相同。"
 ---
 
 # macOS defaults

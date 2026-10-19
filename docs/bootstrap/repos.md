@@ -1,6 +1,6 @@
 ---
-description: "Clone Git repositories to declared paths and keep them on a branch, tag, or commit with mise bootstrap."
-socialDescription: "Clone Git repositories to declared paths with mise bootstrap."
+description: "通过 mise bootstrap 将 Git 仓库克隆到指定路径，并固定到分支、标签或提交。"
+socialDescription: "通过 mise bootstrap 将 Git 仓库克隆到指定路径。"
 ---
 
 # Git 仓库
@@ -68,6 +68,31 @@ Reading a var never prompts; an unanswered one uses its `default`. Run
 
 The optional `ref` is a branch, a tag, or a full commit SHA. An invalid entry
 is reported with a warning and skipped.
+
+`url` 和 `ref` 也可以使用变量及进程环境变量（`env.NAME`），因此一份文件可以用于多个分支。与检出路径一样，配置中的 `[env]` 表值不可用：
+
+```toml
+[vars]
+branch = "main"
+
+[bootstrap.repos]
+"~/src/project" = { url = "git@github.com:example/project.git", ref = "{{ vars.branch }}" }
+```
+
+## 克隆选项
+
+以下可选字段用于设置缺失仓库的首次克隆方式。它们不会影响已有检出目录，已有目录会保留最初克隆时的结构。
+
+| 字段           | 作用                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `filter`       | 传入 `--filter=<spec>`；例如使用 `"blob:none"` 可执行无 blob 克隆。                                       |
+| `depth`        | 浅克隆时传入 `--depth <n> --no-single-branch`；不能与完整提交 SHA 或以 `refs/` 开头的 `ref` 一起使用。     |
+| `submodules`   | 为 `true` 时传入 `--recurse-submodules`；若同时设置 `filter`，还会传入 `--also-filter-submodules`。        |
+
+```toml
+[bootstrap.repos]
+"~/src/large" = { url = "git@github.com:example/large.git", filter = "blob:none", depth = 1 }
+```
 
 ## Choose a ref {#choose-apply-or-update}
 

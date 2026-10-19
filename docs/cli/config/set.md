@@ -27,15 +27,18 @@ or `false` as text, and `--type integer` for a number.
 
 ## Arguments
 - **`<KEY>`** — Dotted key path to set, such as `tools.python`
+
+  名称中包含点的键需像 TOML 一样加引号，并将表达式放在 shell 引号中：`'tasks."build.sh"'`。不加引号时，如果不存在名为 `build` 的键，`tasks.build.sh` 仍会匹配 `build.sh` 任务。
 - **`[VALUE]`** — The value to set the key to (optional if provided as KEY=VALUE)
 
 ## Flags
 - **`-f --file <FILE>`** — Config file to edit, or a directory whose config file to edit
 
-  For a directory, mise edits the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest-precedence loaded TOML file.
+  对于目录，mise 会编辑其中已有的 TOML 配置文件，例如 `.mise.toml`；如果没有，则编辑 `mise.toml`。默认编辑当前已加载且优先级最高的 TOML 文件，全局 override 文件除外。
 
   **Aliases:** `--path`
 - **`-g --global`** — Edit the global config file
+- **`--override`** — 编辑全局 override 文件 `config.override.toml`
 - **`--system`** — Edit the system config file
 - **`--append`** — Append the value to a list without duplicating an existing entry
 - **`--remove`** — Remove the value from an existing list

@@ -1,5 +1,5 @@
 ---
-description: "Install tools with vfox plugins: Lua plugins that run on Linux, macOS and Windows."
+description: "通过 vfox 插件安装工具：此类 Lua 插件可在 Linux、macOS 和 Windows 上运行。"
 ---
 
 # vfox backend

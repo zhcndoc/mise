@@ -1,5 +1,5 @@
 ---
-description: "Add a Homebrew tap URL to the global `[bootstrap.brew.taps]`"
+description: "将 Homebrew tap URL 添加到全局 `[bootstrap.brew.taps]`"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

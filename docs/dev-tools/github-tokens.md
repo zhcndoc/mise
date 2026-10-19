@@ -1,6 +1,6 @@
 ---
-description: "Set GitHub, GitLab, and Forgejo tokens for private releases, self-hosted instances, and higher API rate limits."
-socialDescription: "Set GitHub, GitLab, and Forgejo tokens for private releases and API rate limits."
+description: "设置 GitHub、GitLab 和 Forgejo 令牌，以访问私有发行版、自托管实例并提高 API 速率限制。"
+socialDescription: "设置 GitHub、GitLab 和 Forgejo 令牌，以访问私有发行版并提高 API 速率限制。"
 ---
 
 # GitHub, GitLab, and Forgejo tokens

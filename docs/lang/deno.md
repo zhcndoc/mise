@@ -1,5 +1,5 @@
 ---
-description: "Install Deno with mise and select its version from mise.toml, .deno-version, or package.json."
+description: "通过 mise 安装 Deno，并从 mise.toml、.deno-version 或 package.json 选择版本。"
 ---
 
 # Deno

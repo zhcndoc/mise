@@ -1,5 +1,5 @@
 ---
-description: "Install prebuilt tools from GitLab release links on gitlab.com or a self-managed instance."
+description: "从 gitlab.com 或自托管实例的 GitLab 发行版链接安装预编译工具。"
 ---
 
 # gitlab backend

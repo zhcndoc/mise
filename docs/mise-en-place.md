@@ -1,6 +1,6 @@
 ---
-description: "Watch the mise run music video, the mise theme song, and read the lyrics. Download the video in 1080p or 4K, or the MP3."
-socialDescription: "Watch the mise run music video, read the lyrics, and download the video or the MP3."
+description: "观看 mise run 音乐视频和 mise 主题曲视频并阅读歌词。可下载 1080p 或 4K 视频，也可下载 MP3。"
+socialDescription: "观看 mise run 音乐视频、阅读歌词，并下载视频或 MP3。"
 ---
 
 # mise run: the song

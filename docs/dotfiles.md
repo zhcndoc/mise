@@ -1,6 +1,6 @@
 ---
-description: "Track configuration files where they are, or deploy them from a dotfiles repository as links, copies, and templates."
-socialDescription: "Track dotfiles in place, or deploy them from a repository as links, copies, and templates."
+description: "在原位置跟踪配置文件，或将它们作为链接、副本和模板从 dotfiles 仓库部署。"
+socialDescription: "在原处跟踪 dotfiles，或从仓库以链接、副本和模板的形式部署。"
 ---
 
 # Dotfiles

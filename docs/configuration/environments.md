@@ -1,6 +1,6 @@
 ---
-description: "Load extra config files such as mise.production.toml by selecting a config environment with -E or MISE_ENV."
-socialDescription: "Load extra config files such as mise.production.toml with -E or MISE_ENV."
+description: "通过 -E 或 MISE_ENV 选择配置环境，加载 mise.production.toml 等额外配置文件。"
+socialDescription: "通过 -E 或 MISE_ENV 加载 mise.production.toml 等额外配置文件。"
 ---
 
 # Config environments

@@ -1,6 +1,6 @@
 ---
-description: "Find where to ask questions, report bugs and security issues, suggest features, and reach the mise maintainer."
-socialDescription: "Ask questions, report bugs and security issues, and reach the mise maintainer."
+description: "了解如何提问、报告错误和安全问题、提出功能建议，以及联系 mise 维护者。"
+socialDescription: "提问、报告错误和安全问题，并联系 mise 维护者。"
 ---
 
 # 联系

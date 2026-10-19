@@ -1,5 +1,5 @@
 ---
-description: "Install tools with legacy asdf plugins, Git repositories of shell scripts, on Linux and macOS."
+description: "在 Linux 和 macOS 上通过旧版 asdf 插件安装工具；此类插件是由 Shell 脚本组成的 Git 仓库。"
 ---
 
 # asdf backend (legacy)

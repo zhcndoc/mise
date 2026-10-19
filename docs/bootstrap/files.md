@@ -1,6 +1,6 @@
 ---
-description: "Write system files and directories with exact content, owner, group, and mode, using sudo only where a change needs it."
-socialDescription: "Write system files and directories with exact content, owner, group, and mode."
+description: "写入系统文件和目录并指定内容、所有者、用户组及权限；仅在需要更改时使用 sudo。"
+socialDescription: "写入系统文件和目录并指定内容、所有者、用户组及权限。"
 ---
 
 # 系统文件和目录

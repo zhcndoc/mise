@@ -1,5 +1,5 @@
 ---
-description: "Move projects and personal defaults from asdf to mise, with command equivalents and the differences to expect."
+description: "将项目和个人默认设置从 asdf 迁移到 mise，了解对应命令及两者差异。"
 ---
 
 # Migrating from asdf

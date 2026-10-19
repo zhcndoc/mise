@@ -1,5 +1,5 @@
 ---
-description: "Show a task's definition"
+description: "显示任务定义"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

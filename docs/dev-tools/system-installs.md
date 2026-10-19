@@ -1,5 +1,5 @@
 ---
-description: "Install tools into a shared system directory so every user account on a machine can run one copy."
+description: "将工具安装到共享系统目录，让机器上的所有用户账户都能使用同一份安装。"
 ---
 
 # System installs

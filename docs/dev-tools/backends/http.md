@@ -1,8 +1,8 @@
 ---
-description: "Install a binary, script or archive from a URL, with URL templates, version lists and checksums."
+description: "从 URL 安装二进制文件、脚本或归档，支持 URL 模板、版本列表和校验和。"
 ---
 
-# http backend
+# http 后端
 
 The `http` backend installs a binary, script or archive from a download URL. Use
 it when a tool has no release backend, or for artifacts you host yourself. The
@@ -211,6 +211,8 @@ version_json_path = ".[].tag_name"
 A filter keeps one channel of an API that returns several, such as Flutter's
 stable releases:
 
+<!-- schema: skip -->
+
 ```toml
 version_json_path = ".releases[?channel=stable].version"
 ```
@@ -232,10 +234,14 @@ version_expr = 'filter(split(body, "\n"), # != "")'
 
 Other examples:
 
+<!-- schema: skip -->
+
 ```toml
 # keys of a JSON object, as in {"versions": {"1.0.0": {}, "2.0.0": {}}}
 version_expr = 'keys(fromJSON(body).versions)'
 ```
+
+<!-- schema: skip -->
 
 ```toml
 # sort with mise's version-aware comparator

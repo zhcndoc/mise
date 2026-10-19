@@ -1,5 +1,5 @@
 ---
-description: "Install .NET SDKs and runtimes with mise, selected by global.json or isolated per version."
+description: "使用 mise 安装 .NET SDK 和运行时，可通过 global.json 选择版本，也可为每个版本单独隔离。"
 ---
 
 # .NET
@@ -40,9 +40,13 @@ To install .NET global tools such as `dotnet-ef`, use the
 | Request                             | Installs                             |
 | ----------------------------------- | ------------------------------------ |
 | `dotnet@10`                         | The newest .NET 10 SDK               |
+| `dotnet@lts`                        | 当前 LTS 通道中的最新 SDK            |
+| `dotnet@sts`                        | 当前 STS 通道中的最新 SDK            |
 | `dotnet@8.0.425`                    | That SDK release                     |
 | `dotnet[runtime=dotnet]@8.0.14`     | Only the .NET runtime 8.0.14         |
 | `dotnet[runtime=aspnetcore]@8.0.14` | Only the ASP.NET Core runtime 8.0.14 |
+
+`lts` 和 `sts` 依据 Microsoft 发布索引解析到相应类型中最新且处于 `active` 或 `maintenance` 支持阶段的通道，因此会跳过预览版、`go-live` 版本和已停止支持的通道。它们会解析为该通道中的 SDK；如果你在 `[tool_alias.dotnet.versions]` 中定义了同名版本，则优先使用该别名。它们不适用于[仅安装运行时](#runtime-only-installs)，此类安装需要指定精确版本。
 
 mise lists SDK versions from its
 [versions host](/configuration/settings.html#use_versions_host), or from

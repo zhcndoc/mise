@@ -1,5 +1,5 @@
 ---
-description: "Remove files that `mise dot apply` deployed"
+description: "移除 `mise dot apply` 部署的文件"
 ---
 
 <!-- 由 usage-cli 根据用法规范生成 -->

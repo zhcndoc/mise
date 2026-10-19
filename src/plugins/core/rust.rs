@@ -32,6 +32,7 @@ pub(super) struct RustPlugin {
 }
 
 const RUST_DEFAULT_DIST_SERVER: &str = "https://static.rust-lang.org";
+const RUST_MINIMAL_PROFILE_COMPONENTS: &[&str] = &["cargo", "rust-std", "rustc"];
 const RUST_DEFAULT_PROFILE_COMPONENTS: &[&str] = &["clippy", "rust-docs", "rustfmt"];
 
 fn parse_nightly_manifest(manifest: &str) -> Result<String> {
@@ -89,6 +90,22 @@ fn apply_rustup_mirror_env<'a>(
         }
     }
     cmd.envs(rustup_mirror_env(config_env))
+}
+
+/// A mirror can serve the channels without GitHub being reachable (an offline
+/// network), so a failed release listing then only loses the numbered releases.
+/// The flag says the listing is degraded, so it must not be cached as complete.
+fn releases_or_channels_only<T>(
+    releases: Result<Vec<T>>,
+    mirrored: bool,
+) -> Result<(Vec<T>, bool)> {
+    match releases {
+        Err(err) if mirrored => {
+            warn!("failed to list rust releases from GitHub, using channels only: {err:#}");
+            Ok((vec![], true))
+        }
+        other => other.map(|releases| (releases, false)),
+    }
 }
 
 fn nightly_manifest_url_for(dist_server: Option<&str>) -> String {
@@ -504,9 +521,10 @@ impl RustPlugin {
         requested: &[String],
         installed: &BTreeSet<String>,
     ) -> Vec<String> {
+        let host = rustup_installed_host(installed);
         requested
             .iter()
-            .filter(|component| !rustup_component_installed(installed, component))
+            .filter(|component| !rustup_component_installed(installed, component, host))
             .cloned()
             .collect()
     }
@@ -571,13 +589,7 @@ impl Backend for RustPlugin {
         };
 
         let mut required_components = components.unwrap_or_default();
-        if effective_profile == "default" {
-            required_components.extend(
-                RUST_DEFAULT_PROFILE_COMPONENTS
-                    .iter()
-                    .map(|component| (*component).to_string()),
-            );
-        }
+        required_components.extend(profile_components(effective_profile));
         required_components.sort();
         required_components.dedup();
 
@@ -631,8 +643,17 @@ impl Backend for RustPlugin {
     }
 
     async fn _list_remote_versions(&self, config: &Arc<Config>) -> Result<Vec<VersionInfo>> {
-        let mut versions: Vec<VersionInfo> = github::list_releases("rust-lang/rust")
-            .await?
+        Ok(self._list_remote_versions_checked(config).await?.0)
+    }
+
+    async fn _list_remote_versions_checked(
+        &self,
+        config: &Arc<Config>,
+    ) -> Result<(Vec<VersionInfo>, bool)> {
+        let mirrored = rustup_dist_server(&config.env().await?).is_some();
+        let (releases, degraded) =
+            releases_or_channels_only(github::list_releases("rust-lang/rust").await, mirrored)?;
+        let mut versions: Vec<VersionInfo> = releases
             .into_iter()
             .map(|r| {
                 let created_at = Some(r.released_at().to_string());
@@ -669,7 +690,7 @@ impl Backend for RustPlugin {
                 ..Default::default()
             },
         ]);
-        Ok(versions)
+        Ok((versions, degraded))
     }
 
     fn is_rolling_channel(&self, version: &str) -> bool {
@@ -747,15 +768,9 @@ impl Backend for RustPlugin {
         };
         let effective_profile = normalize_rustup_profile(&effective_profile)?;
         let mut components = components.unwrap_or_default();
-        if effective_profile == "default" {
-            components.extend(
-                RUST_DEFAULT_PROFILE_COMPONENTS
-                    .iter()
-                    .map(|component| (*component).to_string()),
-            );
-            components.sort();
-            components.dedup();
-        }
+        components.extend(profile_components(effective_profile));
+        components.sort();
+        components.dedup();
 
         let config_env = ctx.config.env().await?;
         let cmd = CmdLineRunner::new(runtime.bin_dir.join(RUSTUP_BIN))
@@ -807,11 +822,8 @@ impl Backend for RustPlugin {
     }
 
     async fn list_bin_paths(&self, config: &Arc<Config>, tv: &ToolVersion) -> Result<Vec<PathBuf>> {
-        Ok(vec![
-            RustRuntime::resolve_recorded_for_tool_version(config, tv)
-                .await?
-                .bin_dir,
-        ])
+        let runtime = RustRuntime::resolve_recorded_for_tool_version(config, tv).await?;
+        runtime.bin_paths(&dirs::DATA.join("rust-proxies"))
     }
 
     async fn exec_env(
@@ -1309,6 +1321,75 @@ impl RustRuntime {
     fn is_external(&self) -> bool {
         self.provider == RustProvider::External
     }
+
+    /// The directories mise puts on PATH for this runtime. An external rustup's proxies often
+    /// share a directory with unrelated tools (pacman's `/usr/bin`), and prepending that would
+    /// shadow the versions mise manages, so expose only the proxies through a mise-owned dir.
+    fn bin_paths(&self, proxies_root: &Path) -> Result<Vec<PathBuf>> {
+        if !self.is_external() {
+            return Ok(vec![self.bin_dir.clone()]);
+        }
+        // Falling back to the shared dir on failure would reintroduce the PATH shadowing.
+        let dir = link_rustup_proxies(&self.bin_dir, proxies_root)
+            .wrap_err("failed to isolate rustup proxies")?;
+        Ok(vec![dir])
+    }
+}
+
+const RUSTUP_PROXY_NAMES: &[&str] = &[
+    "rustup",
+    "cargo",
+    "rustc",
+    "rustdoc",
+    "rustfmt",
+    "cargo-fmt",
+    "cargo-clippy",
+    "clippy-driver",
+    "cargo-miri",
+    "rust-analyzer",
+    "rust-gdb",
+    "rust-gdbgui",
+    "rust-lldb",
+];
+
+/// Symlinks the rustup proxies found in `external` into a dir under `proxies_root`.
+fn link_rustup_proxies(external: &Path, proxies_root: &Path) -> Result<PathBuf> {
+    let key = crate::hash::hash_sha256_to_str(&external.to_string_lossy());
+    let dir = proxies_root.join(&key[..16]);
+    file::create_dir_all(&dir)?;
+    for name in RUSTUP_PROXY_NAMES {
+        let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+        let target = std::path::absolute(external)?.join(&name);
+        let link = dir.join(&name);
+        if !file::is_executable(&target) {
+            // Drop a link left over from a proxy the provider no longer ships.
+            match std::fs::remove_file(&link) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(err)
+                        .wrap_err_with(|| format!("failed to remove {}", link.display()));
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let up_to_date = if cfg!(windows) {
+            // Windows gets copies, which are current when the same size and not older than the proxy.
+            match (link.metadata(), target.metadata()) {
+                (Ok(l), Ok(t)) => {
+                    l.len() == t.len()
+                        && matches!((l.modified(), t.modified()), (Ok(lm), Ok(tm)) if lm >= tm)
+                }
+                _ => false,
+            }
+        } else {
+            file::resolve_symlink(&link).ok().flatten().as_deref() == Some(target.as_path())
+        };
+        if up_to_date {
+            continue;
+        }
+        file::make_symlink_or_copy(&target, &link)?;
+    }
+    Ok(dir)
 }
 
 fn recorded_external_rustup_bin_dir(
@@ -1435,13 +1516,48 @@ fn normalize_rustup_profile(profile: &str) -> Result<&'static str> {
     }
 }
 
-fn rustup_component_installed(installed: &BTreeSet<String>, component: &str) -> bool {
+/// Components a profile installs that `mise install` restores when they are
+/// missing, by naming them to rustup as `--component`.
+fn profile_components(profile: &str) -> Vec<String> {
+    let components: &[&[&str]] = match profile {
+        "minimal" => &[RUST_MINIMAL_PROFILE_COMPONENTS],
+        "default" => &[
+            RUST_MINIMAL_PROFILE_COMPONENTS,
+            RUST_DEFAULT_PROFILE_COMPONENTS,
+        ],
+        _ => &[],
+    };
+    components
+        .iter()
+        .flat_map(|list| list.iter().map(|component| (*component).to_string()))
+        .collect()
+}
+
+/// The toolchain's host triple, read from its `rustc-<triple>` component;
+/// `rustc` only ever exists for the host.
+fn rustup_installed_host(installed: &BTreeSet<String>) -> Option<&str> {
+    installed.iter().find_map(|item| {
+        item.strip_prefix("rustc-")
+            .filter(|triple| rustup_component_suffix_is_host_triple(triple))
+    })
+}
+
+/// With a known host, only the host's component counts, so a cross target's
+/// `rust-std-<target>` does not stand in for the host's `rust-std`.
+fn rustup_component_installed(
+    installed: &BTreeSet<String>,
+    component: &str,
+    host: Option<&str>,
+) -> bool {
     installed.iter().any(|item| {
         item == component
             || item
                 .strip_prefix(component)
                 .and_then(|suffix| suffix.strip_prefix('-'))
-                .is_some_and(rustup_component_suffix_is_host_triple)
+                .is_some_and(|suffix| match host {
+                    Some(host) => suffix == host,
+                    None => rustup_component_suffix_is_host_triple(suffix),
+                })
     })
 }
 
@@ -1505,6 +1621,20 @@ const RUST_TARGET_ARCHES: &[&str] = &[
 mod tests {
     use super::*;
     use confique::Layer;
+
+    #[test]
+    fn test_releases_or_channels_only() {
+        let fail = || Err(eyre::eyre!("dns error"));
+        assert_eq!(
+            releases_or_channels_only::<u8>(fail(), true).unwrap(),
+            (vec![], true)
+        );
+        assert!(releases_or_channels_only::<u8>(fail(), false).is_err());
+        assert_eq!(
+            releases_or_channels_only(Ok(vec![1u8]), true).unwrap(),
+            (vec![1], false)
+        );
+    }
 
     #[test]
     fn test_nightly_manifest_url_for_mirror() {
@@ -1795,11 +1925,47 @@ rustup - up to date : 1.29.1
             "llvm-tools-x86_64-unknown-linux-gnu".to_string(),
         ]);
 
-        assert!(rustup_component_installed(&installed, "rust-src"));
-        assert!(rustup_component_installed(&installed, "llvm-tools"));
-        assert!(!rustup_component_installed(&installed, "rustfmt"));
-        assert!(!rustup_component_installed(&installed, "rust"));
-        assert!(!rustup_component_installed(&installed, "llvm"));
+        assert!(rustup_component_installed(&installed, "rust-src", None));
+        assert!(rustup_component_installed(&installed, "llvm-tools", None));
+        assert!(!rustup_component_installed(&installed, "rustfmt", None));
+        assert!(!rustup_component_installed(&installed, "rust", None));
+        assert!(!rustup_component_installed(&installed, "llvm", None));
+    }
+
+    #[test]
+    fn rustup_component_matching_uses_the_toolchains_host() {
+        let installed = BTreeSet::from([
+            "cargo-x86_64-unknown-linux-gnu".to_string(),
+            "rustc-x86_64-unknown-linux-gnu".to_string(),
+            "rust-std-wasm32-unknown-unknown".to_string(),
+        ]);
+        let host = rustup_installed_host(&installed);
+
+        assert_eq!(host, Some("x86_64-unknown-linux-gnu"));
+        assert!(rustup_component_installed(&installed, "cargo", host));
+        // a cross target's standard library is not the host's
+        assert!(!rustup_component_installed(&installed, "rust-std", host));
+        assert!(rustup_component_installed(&installed, "rust-std", None));
+    }
+
+    #[test]
+    fn profiles_require_their_components() {
+        assert_eq!(
+            profile_components("minimal"),
+            vec!["cargo", "rust-std", "rustc"]
+        );
+        assert_eq!(
+            profile_components("default"),
+            vec![
+                "cargo",
+                "rust-std",
+                "rustc",
+                "clippy",
+                "rust-docs",
+                "rustfmt"
+            ]
+        );
+        assert!(profile_components("complete").is_empty());
     }
 
     #[test]
@@ -2062,6 +2228,32 @@ targets = ["wasm32-wasip1", " wasm32-wasip1 "]
 
         assert_eq!(runtime.provider, RustProvider::External);
         assert_eq!(runtime.bin_dir, external);
+    }
+
+    #[test]
+    fn rust_runtime_external_bin_paths_expose_only_proxies() {
+        let root = tempfile::tempdir().unwrap();
+        let homes = rust_homes_at(root.path(), false);
+        let external = root.path().join("external/bin");
+        create_proxy_dir(&external, &[RUSTUP_BIN, CARGO_BIN, RUSTC_BIN, "node"]);
+        let runtime =
+            RustRuntime::from_paths_with(homes.clone(), std::slice::from_ref(&external), |_| true);
+        let proxies = root.path().join("proxies");
+
+        let paths = runtime.bin_paths(&proxies).unwrap();
+
+        assert_eq!(paths.len(), 1);
+        assert_ne!(paths[0], external);
+        assert!(paths[0].join(CARGO_BIN).exists());
+        assert!(paths[0].join(RUSTC_BIN).exists());
+        assert!(!paths[0].join("node").exists());
+        assert_eq!(runtime.bin_paths(&proxies).unwrap(), paths);
+
+        let managed = RustRuntime::from_paths_with(homes.clone(), &[], |_| true);
+        assert_eq!(
+            managed.bin_paths(&proxies).unwrap(),
+            vec![homes.cargo_bindir()]
+        );
     }
 
     #[test]

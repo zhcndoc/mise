@@ -1,5 +1,5 @@
 ---
-description: "Install Python command-line applications from PyPI or Git into isolated environments."
+description: "从 PyPI 或 Git 安装 Python 命令行应用，每个应用都使用隔离环境。"
 ---
 
 # pypi backend

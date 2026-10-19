@@ -413,6 +413,9 @@ Manage config files
 \fIAliases: \fRcfg, toml
 .RE
 .TP
+\fBconfig explain\fR
+Describe each key in a mise TOML file
+.TP
 \fBconfig get\fR
 Print a value from one mise TOML file
 .TP
@@ -1486,6 +1489,11 @@ Skip configured repositories with local changes instead of failing
 .TP
 \fB\-\-force\-dotfiles\fR
 Overwrite existing files that conflict with whole\-file dotfile entries
+.TP
+\fB\-\-prune\-dotfiles\fR
+Remove files that dotfile groups deployed but no active entry deploys now
+
+The same pruning as `mise dot apply \-\-prune`, run at the end of the dotfiles phase before its post hook: files of a group that is no longer selected or declared, and files a group stopped deploying because of a new `exclude` or a deleted source. Changed copies stay in place, and mise asks before removing anything unless `\-\-yes` is given or there is no terminal. With `\-\-dry\-run`, nothing is removed.
 .TP
 \fB\-\-only\fR \fI<PART>\fR
 Run only these parts
@@ -3495,6 +3503,63 @@ they use.
 .TP
 \fB\-h, \-\-help\fR
 Print help
+.SH "MISE CONFIG EXPLAIN"
+Describe each key in a mise TOML file
+
+Lists every key the file sets, with its line and what it does, from the same schema
+editors use to check a config. A key mise does not read is marked, with the known key it
+most likely meant, and so is a deprecated one. Reads the highest\-precedence loaded TOML
+file by default; select another with `\-\-file`, `\-\-global`, or `\-\-system`.
+.PP
+\fBUsage:\fR mise config explain [OPTIONS] [<KEY>]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
+Config file to read, or a directory whose config file to read
+
+Defaults to the highest\-precedence loaded TOML file other than the global override files.
+.TP
+\fB\-g, \-\-global\fR
+Read the global config file
+.TP
+\fB\-\-system\fR
+Read the system config file
+.TP
+\fB\-\-override\fR
+Read the global override file, `config.override.toml`
+.TP
+\fB\-J, \-\-json\fR
+Print the keys as JSON
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<KEY>\fR
+Dotted key path to describe, with the keys under it; omit for the whole file
+
+Quote a key with a dot in its name as TOML does, inside shell quotes: `'tasks."build.sh"'`. Unquoted, `tasks.build.sh` still finds the task `build.sh` when there is no key `build` in the way.
+\fBExamples:\fR
+.PP
+Describe the keys of the project config
+.PP
+.RS 4
+mise config explain
+~/src/app/mise.toml
+   1  tools                  dev tools to use
+   2  tools.node             a version of the tool, or a table with its version and options
+   4  settings               mise settings
+   5  settings.experimantal  not a key mise reads; did you mean experimental?
+.RE
+.PP
+Describe only the keys under [tasks]
+.PP
+.RS 4
+mise config explain tasks
+.RE
 .SH "MISE CONFIG GET"
 Print a value from one mise TOML file
 
@@ -3510,13 +3575,16 @@ template\-expanded environment; use `mise env` for the resolved environment.
 \fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
 Config file to read, or a directory whose config file to read
 
-For a directory, mise reads the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest\-precedence loaded TOML file.
+For a directory, mise reads the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest\-precedence loaded TOML file other than the global override files.
 .TP
 \fB\-g, \-\-global\fR
 Read the global config file
 .TP
 \fB\-\-system\fR
 Read the system config file
+.TP
+\fB\-\-override\fR
+Read the global override file, `config.override.toml`
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -3525,6 +3593,8 @@ Print help
 .TP
 \fB<KEY>\fR
 Dotted key path to print, such as `tools.python`; omit to print the whole file
+
+Quote a key with a dot in its name as TOML does, inside shell quotes: `'tasks."build.sh"'`. Unquoted, `tasks.build.sh` still finds the task `build.sh` when there is no key `build` in the way.
 \fBExamples:\fR
 .PP
 Print the python request
@@ -3542,7 +3612,9 @@ mise config get
 .SH "MISE CONFIG LS"
 List config files currently in use, from lowest to highest precedence
 
-Later files override earlier ones.
+Later files override earlier ones. Global override files
+(`config.override.toml`) rank above all project config and are labeled
+`override`.
 .PP
 \fBUsage:\fR mise config ls [OPTIONS]
 .PP
@@ -3606,10 +3678,13 @@ or `false` as text, and `\-\-type integer` for a number.
 \fB\-f, \-\-file, \-\-path\fR \fI<FILE>\fR
 Config file to edit, or a directory whose config file to edit
 
-For a directory, mise edits the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest\-precedence loaded TOML file.
+For a directory, mise edits the TOML config file already there, such as `.mise.toml`, or `mise.toml` when there is none. Defaults to the highest\-precedence loaded TOML file other than the global override files.
 .TP
 \fB\-g, \-\-global\fR
 Edit the global config file
+.TP
+\fB\-\-override\fR
+Edit the global override file, `config.override.toml`
 .TP
 \fB\-\-system\fR
 Edit the system config file
@@ -3633,6 +3708,8 @@ Print help
 .TP
 \fB<KEY>\fR
 Dotted key path to set, such as `tools.python`
+
+Quote a key with a dot in its name as TOML does, inside shell quotes: `'tasks."build.sh"'`. Unquoted, `tasks.build.sh` still finds the task `build.sh` when there is no key `build` in the way.
 .TP
 \fB<VALUE>\fR
 The value to set the key to (optional if provided as KEY=VALUE)
@@ -9058,6 +9135,11 @@ Write to mise.<ENV>.toml in the current directory, or to .mise.<ENV>.toml if tha
 \fB\-g, \-\-global\fR
 Set the environment variable in the global config file
 .TP
+\fB\-\-override\fR
+Set the environment variable in the global override file, `config.override.toml`
+
+The override file outranks all project config. With `\-\-env`, writes `config.<ENV>.override.toml` instead. See https://mise.jdx.dev/configuration.html#override\-file
+.TP
 \fB\-\-age\-encrypt\fR
 [experimental] Encrypt the value with age before storing
 .TP
@@ -9238,6 +9320,11 @@ Write to the nearest project config instead of the global config
 
 The nearest project config is the lowest\-precedence TOML file in the nearest directory that has one, or ./mise.toml.
 .TP
+\fB\-\-override\fR
+Write to the global override file, `config.override.toml`
+
+The override file outranks all project config, so the setting wins over the same setting in a project's `mise.toml`.
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -9373,6 +9460,11 @@ Write to the nearest project config instead of the global config
 
 The nearest project config is the lowest\-precedence TOML file in the nearest directory that has one, or ./mise.toml.
 .TP
+\fB\-\-override\fR
+Write to the global override file, `config.override.toml`
+
+The override file outranks all project config, so the setting wins over the same setting in a project's `mise.toml`.
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -9412,6 +9504,11 @@ another config file.
 Write to the nearest project config instead of the global config
 
 The nearest project config is the lowest\-precedence TOML file in the nearest directory that has one, or ./mise.toml.
+.TP
+\fB\-\-override\fR
+Write to the global override file, `config.override.toml`
+
+The override file outranks all project config, so the setting wins over the same setting in a project's `mise.toml`.
 .TP
 \fB\-h, \-\-help\fR
 Print help
@@ -9941,7 +10038,7 @@ Only show non\-global tasks
 \fB\-x, \-\-extended\fR
 Show all columns
 .TP
-\fB\-\-all\fR
+\fB\-a, \-\-all\fR
 Include tasks from every project in the monorepo, not only the current directory's hierarchy
 .TP
 \fB\-\-complete\fR
@@ -10259,7 +10356,7 @@ Only show non\-global tasks
 \fB\-x, \-\-extended\fR
 Show all columns
 .TP
-\fB\-\-all\fR
+\fB\-a, \-\-all\fR
 Include tasks from every project in the monorepo, not only the current directory's hierarchy
 .TP
 \fB\-\-complete\fR
@@ -10718,6 +10815,11 @@ Commands that run project code (`mise run`, task shorthand such as
 `mise daemons start|restart|register`) trust their active config
 automatically.
 
+In paranoid mode, `mise trust` with no path also trusts the env files and
+scripts that config reads (`env._.file`, `env._.source` and the `env_file`
+setting), which have trust of their own. Give a file's path to trust only
+that file.
+
 Trusting a config file in a repository's main checkout also trusts the same
 path in its git worktrees. Paranoid mode (https://mise.jdx.dev/paranoid.html)
 turns off automatic and worktree trust and requires trust, tied to the
@@ -10754,7 +10856,7 @@ Print help
 The config file whose trust status to change
 \fBExamples:\fR
 .PP
-Trust the nearest untrusted config in this directory or a parent
+Trust the nearest untrusted config in this directory or a parent, and in paranoid mode the env files it reads
 .PP
 .RS 4
 mise trust
@@ -10841,6 +10943,11 @@ Can be a file or a directory. For a directory, mise uses the config file in it, 
 \fB\-g, \-\-global\fR
 Use the global config file
 .TP
+\fB\-\-override\fR
+Use the global override file, `config.override.toml`
+
+See https://mise.jdx.dev/configuration.html#override\-file
+.TP
 \fB\-h, \-\-help\fR
 Print help
 \fBArguments:\fR
@@ -10916,6 +11023,11 @@ Use the global config file (`~/.config/mise/config.toml`) instead of the local o
 .TP
 \fB\-p, \-\-path, \-\-file\fR \fI<PATH>\fR
 Edit this config file, or the config file in this directory
+.TP
+\fB\-\-override\fR
+Write to the global override file, `config.override.toml`
+
+The override file outranks all project config. With `\-\-env`, writes `config.<ENV>.override.toml` instead. See https://mise.jdx.dev/configuration.html#override\-file
 .TP
 \fB\-\-no\-prune\fR
 Do not also prune the installed version
@@ -11132,6 +11244,11 @@ Show what would change without changing anything
 Write to this config file, or to the config file in this directory
 
 For a directory, mise picks the file by the usual write\-target rules.
+.TP
+\fB\-\-override\fR
+Write to the global override file, `config.override.toml`
+
+The override file outranks all project config. With `\-\-env`, writes `config.<ENV>.override.toml` instead. See https://mise.jdx.dev/configuration.html#override\-file
 .TP
 \fB\-\-dry\-run\-code\fR
 Like \-\-dry\-run, but exit with code 1 if there are changes to make

@@ -1,9 +1,9 @@
 ---
-description: "Look up the mise.lock format: format versions, entry fields, platform keys, dependency sidecars, and lock-entry precedence."
-socialDescription: "Look up mise.lock fields, format versions, platform keys, and dependency sidecars."
+description: "查阅 mise.lock 格式：格式版本、条目字段、平台键、依赖旁文件及锁定条目的优先级。"
+socialDescription: "查阅 mise.lock 字段、格式版本、平台键和依赖旁文件。"
 ---
 
-# mise.lock reference
+# mise.lock 参考
 
 `mise.lock` is a TOML file that `mise lock` and other lockfile-aware commands
 write. Generate entries with `mise lock` rather than writing them by hand. To
@@ -159,6 +159,8 @@ locked; Swift 5.10 has no arm64 build for `centos7`, for example.
 
 A platform `url` can pin a build revision of the same version. Precompiled Ruby
 keeps `version = "3.3.11"` and pins revision `3.3.11-1` in the URL:
+
+<!-- schema: skip -->
 
 ```toml
 url = "https://github.com/jdx/ruby/releases/download/3.3.11-1/ruby-3.3.11.x86_64_linux.tar.gz"
@@ -319,10 +321,7 @@ different tools, turn that off with
 lockfile_auto_prune = false
 ```
 
-It applies in both modes, including to `mise lock --global`, and it keeps only
-tools outside the active configuration. Configured tools are still refreshed,
-and their stale versions, option variants and dependency graphs are still
-removed. `mise lock node` already keeps tools outside its filter.
+两种模式下（包括 `mise lock --global`）都会应用此选项，并且只保留当前配置之外的工具。已配置的工具仍会刷新，其过期版本、已刷新的平台对应的选项变体以及依赖图仍会移除。对于本次运行未解析的平台，只要版本仍是当前版本，其选项变体就可能保留。`mise lock node` 本来就会保留筛选范围之外的工具。
 
 ## Which lock entry a command reads {#runtime-resolution}
 

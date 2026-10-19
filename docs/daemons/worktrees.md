@@ -1,9 +1,9 @@
 ---
-description: Run the same daemons in several Git worktrees at once, with separate daemon IDs, ports, and stable HTTPS hostnames.
-socialDescription: Separate daemon IDs, ports, and HTTPS hostnames for each Git worktree.
+description: 在多个 Git worktree 中同时运行相同的守护进程，并为每个 worktree 分配独立 ID、端口和稳定的 HTTPS 主机名。
+socialDescription: 为每个 Git worktree 分配独立的守护进程 ID、端口和 HTTPS 主机名。
 ---
 
-# Ports, URLs, and worktrees <Badge type="warning" text="experimental" />
+# 端口、URL 与 worktree <Badge type="warning" text="experimental" />
 
 Run the same daemons in several Git worktrees of one project at once. Each
 checkout gets its own daemon IDs, ports, and data, and pitchfork's proxy gives
@@ -378,6 +378,8 @@ a label, set `namespace` explicitly, or the URLs mise prints do not route.
 The worktree label is the linked worktree's directory name. To choose it
 yourself, set `worktree_label` in a pitchfork config file inside that worktree,
 which is where pitchfork reads it:
+
+<!-- schema: skip -->
 
 ```toml
 # pitchfork.local.toml, in the worktree

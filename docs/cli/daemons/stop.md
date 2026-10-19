@@ -1,5 +1,5 @@
 ---
-description: "[experimental] Stop project daemons"
+description: "[实验性] 停止项目守护进程"
 ---
 
 <!-- 由 usage-cli 根据使用规范生成 -->

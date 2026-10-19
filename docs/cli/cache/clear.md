@@ -1,5 +1,5 @@
 ---
-description: "Delete cached data"
+description: "删除缓存数据"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

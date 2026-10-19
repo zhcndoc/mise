@@ -1,5 +1,5 @@
 ---
-description: "Install Python with mise, select it per project, and create or activate a virtualenv automatically."
+description: "通过 mise 安装 Python、为各项目选择版本，并自动创建或激活虚拟环境。"
 ---
 
 # Python

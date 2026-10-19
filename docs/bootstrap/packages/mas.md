@@ -1,5 +1,5 @@
 ---
-description: "Install Mac App Store apps from mise.toml with the mas command, using numeric App Store IDs."
+description: "在 mise.toml 中使用数字 App Store ID 声明应用，并通过 mas 命令安装 Mac App Store 应用。"
 ---
 
 # Mac App Store apps (mas)

@@ -1,8 +1,8 @@
 ---
-description: "Write tasks as executable scripts in a task directory and configure them with #MISE comments."
+description: "将任务编写为任务目录中的可执行脚本，并通过 #MISE 注释进行配置。"
 ---
 
-# File tasks
+# 文件任务
 
 A file task is an executable script in a task directory. Its path is the task
 name, and `#MISE` comments at the top hold its configuration. Use one when a
@@ -98,10 +98,7 @@ bracketed. `#MISE`, `# MISE`, `// MISE`, and `# [MISE]` all work, so a
 formatter that adds a space after `#` does not break the header. To disable a
 header line, change the keyword, for example to `# NOMISE`.
 
-Each `#MISE` line holds TOML. Headers accept most task properties, but not
-`timeout`, `vars`, or the sandbox keys (`deny_*` and `allow_*`); mise warns
-about those and ignores them. To set one of them, or to configure a script you
-cannot edit, add a `[tasks.<name>]` block for the script to `mise.toml`; see
+每条 `#MISE` 行都包含 TOML。文件头支持与 `[tasks.<name>]` 表相同的[任务属性](/tasks/task-configuration.html)，但不包括 `run`、`run_windows`、`file` 和 `usage`：前几项由脚本本身提供，参数则通过 `#USAGE` 行定义。若要配置无法编辑的脚本，请在 `mise.toml` 中为其添加 `[tasks.<name>]` 配置块，详见
 [Configuring file tasks from TOML](/tasks/task-discovery.html#configuring-file-tasks-from-toml).
 
 ### 多行值

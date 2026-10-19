@@ -1,5 +1,5 @@
 ---
-description: "Move tools off the deprecated ubi backend to github, gitlab or http before mise 2027.1.0."
+description: "请在 mise 2027.1.0 发布前，将工具从已弃用的 ubi 后端迁移到 github、gitlab 或 http 后端。"
 ---
 
 # Migrating off the ubi backend <Badge type="danger" text="deprecated" />

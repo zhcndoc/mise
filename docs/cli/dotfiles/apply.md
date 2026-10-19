@@ -1,5 +1,5 @@
 ---
-description: "Link, copy, and render `[dotfiles]` entries into place"
+description: "将 `[dotfiles]` 条目部署为链接、副本或模板渲染结果"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

@@ -1,5 +1,5 @@
 ---
-description: "Apply Docker Compose projects from `[bootstrap.compose]`"
+description: "应用 `[bootstrap.compose]` 中声明的 Docker Compose 项目"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

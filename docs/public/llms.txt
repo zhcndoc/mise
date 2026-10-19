@@ -159,6 +159,9 @@
 ## Configuration
 
 - [mise.toml](https://mise.jdx.dev/configuration.html): A project's mise.toml declares the tools, environment variables, and tasks the project needs. mise combines it with your global config and with config files in parent directories.
+- [mise.toml reference](https://mise.jdx.dev/configuration/reference.html): Every key mise reads from a mise.toml: its type, what it does and where it goes, generated from schema/mise.json so it matches this version of mise.
+- [mise.toml reference (Markdown)](https://mise.jdx.dev/configuration/reference.md): Every key mise reads from a mise.toml: its type, what it does and where it goes, generated from schema/mise.json so it matches this version of mise.
+- [mise.toml playground](https://mise.jdx.dev/configuration/playground.html): Hover any key or value to see what it does, its type and the values it takes. Press Ctrl+Space for completions; mistakes are marked as you type. The mise.toml reference has every key.
 - [Config environments](https://mise.jdx.dev/configuration/environments.html): A config environment loads extra config files, such as mise.development.toml or mise.production.toml, on top of mise.toml.
 - [Settings](https://mise.jdx.dev/configuration/settings.html): Settings change how mise itself behaves, such as how many jobs run at once, how downloads are verified and how tasks print output. Set them with mise settings or under [settings] in a config file.
 - [Config variables](https://mise.jdx.dev/configuration/vars.html): Define shared values in [vars] and reference them with {{ vars.NAME }} in a Tera template. Use vars for values that mise needs to render config; use [env] for values that commands need as environment…
@@ -172,7 +175,7 @@
 ## Security
 
 - [Security overview](https://mise.jdx.dev/security.html): Each mise security control covers one stage, from loading a project's config to running the commands it starts.
-- [Paranoid mode](https://mise.jdx.dev/paranoid.html): Paranoid mode requires your approval before mise loads any project config file, and again whenever that file changes.
+- [Paranoid mode](https://mise.jdx.dev/paranoid.html): Paranoid mode makes mise ask before it trusts things it would normally load on its own. It has four categories, and you can turn on all of them or only the ones you need.
 - [Sandboxing](https://mise.jdx.dev/sandboxing.html): mise exec and mise run can limit what the command they start may read, write, reach on the network and see in its environment. Add a --deny-* or --allow-* flag, or set the matching property on a task.
 
 ## Plugins
@@ -297,6 +300,7 @@
 - [mise cache task](https://mise.jdx.dev/cli/cache/task.html): [experimental] Inspect artifact cache entries for a task
 - [mise completion](https://mise.jdx.dev/cli/completion.html): Generate shell completions
 - [mise config](https://mise.jdx.dev/cli/config.html): Manage config files
+- [mise config explain](https://mise.jdx.dev/cli/config/explain.html): Describe each key in a mise TOML file
 - [mise config get](https://mise.jdx.dev/cli/config/get.html): Print a value from one mise TOML file
 - [mise config ls](https://mise.jdx.dev/cli/config/ls.html): List config files currently in use, from lowest to highest precedence
 - [mise config set](https://mise.jdx.dev/cli/config/set.html): Set a value in one mise TOML file

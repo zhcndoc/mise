@@ -1,5 +1,5 @@
 ---
-description: "Show the GitHub token mise uses for a host"
+description: "显示 mise 用于指定主机的 GitHub 令牌"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

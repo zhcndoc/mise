@@ -1,8 +1,8 @@
 ---
-description: "Write a Lua plugin that lists, downloads, verifies and sets up the versions of one tool."
+description: "编写 Lua 插件，列出、下载、验证并设置某个工具的版本。"
 ---
 
-# Tool plugins
+# 工具插件
 
 A tool plugin is a set of Lua hooks that tells mise how to list a tool's
 versions, download and verify one, and set up its environment. Write one when
@@ -250,6 +250,7 @@ Return a table:
 | `sha256` or `sha512` | no       | The file's checksum; return one with every `url`                               |
 | `sha1` or `md5`      | no       | Weaker checksums, also checked                                                 |
 | `attestation`        | no       | A signature or provenance to verify; see [Verify downloads](#verify-downloads) |
+| `headers`            | no       | 下载请求使用的标头，例如 token                                                  |
 
 mise downloads `url`, checks every checksum and attestation you return, and
 extracts the file into the install directory. It extracts `.tar.gz`, `.tgz`,
@@ -258,6 +259,26 @@ archive holds a single top-level directory, that directory's contents become
 the install directory. Any other file is moved into the install directory and
 marked executable. Without a `url`, mise downloads nothing and `PostInstall`
 does the install, as in a build from source.
+
+### 需要身份验证的下载
+
+如果下载文件需要 token，请在 `url` 旁返回一个 `headers` 表：
+
+```lua
+function PLUGIN:PreInstall(ctx)
+    return {
+        version = ctx.version,
+        url = "https://api.github.com/repos/acme/dist/releases/assets/12345",
+        sha256 = sha256,
+        headers = {
+            Accept = "application/octet-stream",
+            Authorization = "Bearer " .. token,
+        },
+    }
+end
+```
+
+mise 只会将这些标头发送到 `url` 的来源地址（协议、主机和端口）。重定向到其他来源地址时，mise 会移除标头，这适用于 GitHub 等服务的签名存储 URL。配置了 [`url_replacements`](/url-replacements) 的镜像不会收到这些标头。`headers` 中的 `Authorization` 优先于 netrc 和自动使用的 GitHub token。标头值不会写入调试输出或 `mise.lock`。mise 会携带这些标头下载文件，因此校验和、重试及 `mise lock` 仍可正常工作。
 
 mise also calls `PreInstall` to record download URLs in `mise.lock` for other
 platforms. `RUNTIME` then describes the target platform, so build the URL from

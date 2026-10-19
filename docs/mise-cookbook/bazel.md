@@ -1,5 +1,5 @@
 ---
-description: "Install the Bazel version a project pins in .bazelversion, or run Bazelisk, with mise."
+description: "通过 mise 安装项目在 .bazelversion 中固定的 Bazel 版本，或运行 Bazelisk。"
 ---
 
 # Bazel

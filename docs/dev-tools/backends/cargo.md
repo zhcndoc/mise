@@ -1,8 +1,8 @@
 ---
-description: "Install Rust command-line tools from crates.io or Git, as prebuilt binaries or built with Cargo."
+description: "从 crates.io 或 Git 安装 Rust 命令行工具，可使用预编译二进制文件或通过 Cargo 构建。"
 ---
 
-# cargo backend
+# cargo 后端
 
 The `cargo` backend installs Rust command-line tools from
 [crates.io](https://crates.io/) or a Git repository. It downloads a prebuilt
@@ -143,6 +143,18 @@ Install one executable from a crate that has several:
 ```toml
 [tools]
 "cargo:sqlx-cli" = { version = "latest", bin = "sqlx" }
+```
+
+### `rename_exe`
+
+重命名已安装的可执行文件，例如避免与 `PATH` 上的其他工具冲突：
+
+```toml
+[tools."cargo:https://github.com/Michael-F-Bryan/wit-lsp"]
+version = "rev:c90addb21d37f2bd62a9474adca1dd8f6320d437"
+crate = "wit-cli"
+bin = "wit"
+rename_exe = "wit-lsp"
 ```
 
 ### `crate`

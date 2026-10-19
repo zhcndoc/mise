@@ -1,6 +1,6 @@
 ---
-description: "Rewrite the URLs mise requests with url_replacements to send downloads and release metadata through a mirror or proxy."
-socialDescription: "Rewrite the URLs mise requests to send downloads and metadata through a mirror or proxy."
+description: "使用 url_replacements 重写 mise 请求的 URL，通过镜像或代理获取下载文件和发行版本元数据。"
+socialDescription: "重写 mise 请求的 URL，通过镜像或代理获取下载文件和元数据。"
 ---
 
 # URL replacements

@@ -1,6 +1,6 @@
 ---
-description: "Share commands, tools, environment variables, and dependencies across tasks by extending a named task template."
-socialDescription: "Share commands, tools, and dependencies across tasks with task templates."
+description: "通过扩展命名任务模板，在多个任务间共享命令、工具、环境变量和依赖。"
+socialDescription: "通过任务模板在多个任务间共享命令、工具和依赖。"
 ---
 
 # Task templates

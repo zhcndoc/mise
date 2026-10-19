@@ -1,5 +1,5 @@
 ---
-description: "Install prebuilt tools from GitHub releases, with the asset options gitlab and forgejo share."
+description: "从 GitHub Releases 安装预编译工具，并了解与 GitLab、Forgejo 后端共享的资源选项。"
 ---
 
 # github backend

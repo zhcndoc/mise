@@ -1,5 +1,5 @@
 ---
-description: "Install Homebrew casks, such as macOS apps and fonts, from mise.toml without installing Homebrew."
+description: "在 mise.toml 中声明 Homebrew cask，例如 macOS 应用和字体；无需安装 Homebrew 即可管理。"
 ---
 
 # Homebrew casks (brew-cask)

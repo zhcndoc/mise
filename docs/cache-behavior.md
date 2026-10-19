@@ -1,6 +1,6 @@
 ---
-description: "Refresh or clear the version lists, environments, and task results mise caches, and see when mise refetches them."
-socialDescription: "Refresh or clear the version lists, environments, and task results that mise caches."
+description: "刷新或清除 mise 缓存的版本列表、环境和任务结果，并了解何时会重新获取数据。"
+socialDescription: "刷新或清除 mise 缓存的版本列表、环境与任务结果。"
 ---
 
 # Caches

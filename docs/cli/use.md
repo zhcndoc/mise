@@ -52,6 +52,9 @@ activated shell at its next prompt, and immediately in `mise exec` commands.
 - **`-p --path <PATH>`** — Write to this config file, or to the config file in this directory
 
   For a directory, mise picks the file by the usual write-target rules.
+- **`--override`** — 写入全局 override 文件 `config.override.toml`
+
+  override 文件的优先级高于所有项目配置。使用 `--env` 时，会改为写入 `config.<ENV>.override.toml`。详见 <https://mise.jdx.dev/configuration.html#override-file>
 - **`--dry-run-code`** — Like --dry-run, but exit with code 1 if there are changes to make
 
   Use it in scripts that check whether tools need to be added or removed.

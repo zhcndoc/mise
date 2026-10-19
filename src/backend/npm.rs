@@ -778,6 +778,10 @@ impl Backend for NPMBackend {
         AUBE_OPERATION_WEIGHTS.to_vec()
     }
 
+    fn option_spec(&self) -> Option<crate::backend::OptionSpec> {
+        Some(crate::backend::OptionSpec::new(&["tool_npm_options"]))
+    }
+
     fn get_type(&self) -> BackendType {
         BackendType::Npm
     }
@@ -2118,7 +2122,14 @@ impl NPMBackend {
     ) -> Result<()> {
         // Validate the fallible options before writing anything, so a malformed
         // value fails without leaving a half-written project dir behind.
-        let aube_config = self.aube_project_config(before_date, options, resolved_from_lockfile)?;
+        let mut aube_config =
+            self.aube_project_config(before_date, options, resolved_from_lockfile)?;
+        // mise reads and writes `aube-lock.yaml` here; a user's own
+        // `defaultLockfile`/`defaultLockfileFormat` must not redirect it.
+        aube_config.insert(
+            "defaultLockfile".to_string(),
+            toml::Value::String("aube-lock.yaml".to_string()),
+        );
 
         let mut manifest = serde_json::json!({
             "name": "mise-npm-install",
@@ -2261,7 +2272,14 @@ impl NPMBackend {
         let trust_policy_excludes = options.trust_policy_excludes()?;
         let allow_low_downloads = options.allow_low_downloads()?;
         let allow_exotic_deps = options.allow_exotic_deps()?;
+        let allow_builds = options.allow_builds()?;
         let mut config = toml::Table::new();
+        if !matches!(allow_builds, AllowBuilds::None) {
+            // The user's `.npmrc` `ignore-scripts=true` would otherwise win over
+            // the in-process `ignore_scripts = false` and silently skip the
+            // scripts `allow_builds` approved. Project config outranks it.
+            config.insert("ignoreScripts".to_string(), toml::Value::Boolean(false));
+        }
         if let Some(before_date) = before_date {
             let minutes = Self::build_aube_minimum_release_age(elapsed_seconds_ceil(
                 before_date,
@@ -2890,6 +2908,7 @@ pub(crate) fn install_time_option_keys() -> Vec<String> {
         "trust_policy_excludes".into(),
         "allow_low_downloads".into(),
         "allow_exotic_deps".into(),
+        "checksum".into(),
     ]
 }
 
@@ -4437,6 +4456,10 @@ pkg@1.2.0 '1.2.0'
                 toml::Value::String("undici@^5".to_string()),
             ])
         );
+        assert_eq!(
+            config["defaultLockfile"],
+            toml::Value::String("aube-lock.yaml".to_string())
+        );
         assert!(!install_path.join(".npmrc").exists());
         // The build-script allowlist goes in package.json's aube namespace.
         let manifest: serde_json::Value =
@@ -4446,6 +4469,8 @@ pkg@1.2.0 '1.2.0'
             manifest["aube"]["allowBuilds"],
             serde_json::json!({ "esbuild": true })
         );
+        // Approved builds must run even if the user's .npmrc ignores scripts.
+        assert_eq!(config["ignoreScripts"], toml::Value::Boolean(false));
         assert_eq!(
             std::fs::read_to_string(install_path.join("aube-workspace.yaml")).unwrap(),
             "packages:\n  - .\n"
@@ -4882,6 +4907,8 @@ pkg@1.2.0 '1.2.0'
         )
         .unwrap();
         assert!(!config.contains_key("allowedUnpopularPackages"));
+        // Without allow_builds, the user's ignore-scripts stays in charge.
+        assert!(!config.contains_key("ignoreScripts"));
         assert!(!install_path.join(".npmrc").exists());
     }
 

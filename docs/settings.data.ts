@@ -42,6 +42,7 @@ const typeLabels: Record<string, string> = {
   SetString: "字符串数组",
   "IndexMap<String, String>": "表格",
   BoolOrString: "布尔值 | 字符串",
+  BoolOrList: "布尔值 | 字符串数组",
 };
 
 const typeHints: Record<string, string> = {

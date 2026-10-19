@@ -1,5 +1,5 @@
 ---
-description: "Install CMake with mise and define configure, build and clean tasks for a C++ project."
+description: "通过 mise 安装 CMake，并为 C++ 项目定义配置、构建和清理任务。"
 ---
 
 # C++ and CMake

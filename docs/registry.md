@@ -1,5 +1,5 @@
 ---
-description: "Look up the short tool names mise knows and the backends each one installs from."
+description: "查阅 mise 支持的工具简称，以及每个工具使用的安装后端。"
 editLink: false
 ---
 

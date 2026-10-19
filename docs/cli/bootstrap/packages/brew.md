@@ -1,5 +1,5 @@
 ---
-description: "Manage Homebrew tap URLs in `[bootstrap.brew.taps]`"
+description: "管理 `[bootstrap.brew.taps]` 中的 Homebrew tap URL"
 ---
 
 <!-- 由 usage-cli 根据 usage spec 生成 -->

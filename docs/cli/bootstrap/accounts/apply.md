@@ -1,5 +1,5 @@
 ---
-description: "Create, update, or remove the configured Linux users and groups"
+description: "创建、更新或移除已配置的 Linux 用户和用户组"
 ---
 
 <!-- 由 usage-cli 根据 usage 规范生成 -->

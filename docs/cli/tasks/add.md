@@ -1,5 +1,5 @@
 ---
-description: "Add a task"
+description: "添加任务"
 ---
 
 <!-- @由 usage-cli 根据用法规范生成 -->

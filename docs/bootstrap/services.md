@@ -1,6 +1,6 @@
 ---
-description: "Run your own programs and mise's built-in services in the background, or start and enable existing Linux system services."
-socialDescription: "Run background services for your user, or manage Linux system services."
+description: "在后台运行自定义程序和 mise 内置服务，或启动并启用现有的 Linux 系统服务。"
+socialDescription: "为当前用户运行后台服务，或管理 Linux 系统服务。"
 ---
 
 # 服务

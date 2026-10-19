@@ -1,5 +1,5 @@
 ---
-description: "Install prebuilt tools from Forgejo release assets on Codeberg or another Forgejo server."
+description: "从 Codeberg 或其他 Forgejo 服务器的发行版资源安装预编译工具。"
 ---
 
 # forgejo backend

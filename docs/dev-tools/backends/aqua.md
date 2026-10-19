@@ -1,5 +1,5 @@
 ---
-description: "Install prebuilt release binaries from aqua registry recipes, with signature and provenance checks."
+description: "根据 aqua 注册表配方安装预编译发行版，并验证签名和来源证明。"
 ---
 
 # aqua backend

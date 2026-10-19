@@ -1,5 +1,5 @@
 ---
-description: "[experimental] Open the pitchfork dashboard"
+description: "[实验性] 打开 pitchfork 控制面板"
 ---
 
 <!-- 由 usage-cli 生成 -->

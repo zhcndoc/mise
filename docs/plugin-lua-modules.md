@@ -1,5 +1,5 @@
 ---
-description: "Look up the globals, metadata fields, hook files and Lua modules that mise provides to plugin hooks."
+description: "查阅 mise 为插件钩子提供的全局对象、元数据字段、钩子文件和 Lua 模块。"
 ---
 
 # Plugin Lua reference

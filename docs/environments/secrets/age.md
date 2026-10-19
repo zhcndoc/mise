@@ -1,5 +1,5 @@
 ---
-description: "Encrypt individual environment variables in mise.toml with age, and decrypt them when mise loads the environment."
+description: "使用 age 加密 mise.toml 中的环境变量，并在 mise 加载环境时解密。"
 ---
 
 # age values <Badge type="warning" text="experimental" />

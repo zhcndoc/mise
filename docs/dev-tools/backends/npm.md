@@ -1,5 +1,5 @@
 ---
-description: "Install npm command-line packages, each in its own directory, with the embedded aube installer."
+description: "通过内置的 aube 安装器安装 npm 命令行软件包，每个软件包使用独立目录。"
 ---
 
 # npm backend

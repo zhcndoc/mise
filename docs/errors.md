@@ -1,5 +1,5 @@
 ---
-description: "Look up a mise error or warning message to find what caused it and how to fix it."
+description: "查找 mise 错误或警告信息，了解原因和解决方法。"
 outline: [2, 3]
 ---
 

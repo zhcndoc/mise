@@ -1,5 +1,5 @@
 ---
-description: "Install Rust toolchains with mise through rustup, with components, targets and rust-toolchain.toml."
+description: "通过 rustup 使用 mise 安装 Rust 工具链，包括组件、目标平台和 rust-toolchain.toml。"
 ---
 
 # Rust
@@ -173,7 +173,7 @@ when rustup is not set up, then runs `rustup toolchain install` with the
 configured profile, components and targets. The toolchains live in
 `RUSTUP_HOME`, not in mise's installs directory; mise keeps a link there to
 track the version. When the toolchain is already installed, `mise install`
-still adds missing configured components and targets.
+仍会补齐缺少的已配置组件和目标平台，以及 `minimal` 或 `default` 配置方案所需的组件，例如 `cargo`、`rustc` 和主机对应的 `rust-std`。
 [`rust.default_host`](/lang/rust.html#rust.default_host) sets the host triple passed to
 `rustup-init`.
 

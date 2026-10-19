@@ -1,6 +1,6 @@
 ---
-description: "Export OpenTelemetry traces and task output logs from mise run to Jaeger, Grafana Tempo, or any OTLP backend."
-socialDescription: "Export traces and task logs from mise run to any OpenTelemetry backend."
+description: "将 mise run 的 OpenTelemetry 跟踪和任务输出日志导出到 Jaeger、Grafana Tempo 或任何 OTLP 后端。"
+socialDescription: "将 mise run 的跟踪信息和任务日志导出到任意 OpenTelemetry 后端。"
 ---
 
 # OpenTelemetry <Badge type="warning" text="experimental" />
@@ -13,9 +13,7 @@ task belongs to. With log export on, each task's output appears next to its
 span.
 
 ::: warning Experimental
-Span names, attributes, and settings may change between releases. Export does
-not need `experimental = true`; the `otel.enabled` and `otel.logs` settings
-turn it on.
+Span 名称、属性和设置可能随版本变化。导出功能还需要启用 `experimental = true`：否则 `mise run` 每次准备导出时都会报错并停止。
 :::
 
 ## Quick start
@@ -26,10 +24,11 @@ Start a local Jaeger that accepts OTLP over HTTP:
 docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
 ```
 
-Turn on trace export:
+启用实验性功能和跟踪导出：
 
 ```toml [mise.toml]
 [settings]
+experimental = true
 otel.enabled = true
 ```
 
@@ -80,6 +79,7 @@ data. Each signal also needs an endpoint: the general
 To send traces to an authenticated collector:
 
 ```sh
+export MISE_EXPERIMENTAL=1
 export MISE_OTEL_ENABLED=1
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.com:4318
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mytoken"

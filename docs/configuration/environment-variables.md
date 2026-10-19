@@ -1,6 +1,6 @@
 ---
-description: "Look up the MISE_* environment variables that are not settings: directories, logging, per-tool version overrides, and terminal output."
-socialDescription: "Look up MISE_* variables that are not settings: directories, logging, and tool overrides."
+description: "查阅不属于设置项的 MISE_* 环境变量：目录、日志、按工具覆盖版本及终端输出。"
+socialDescription: "查阅非设置项的 MISE_* 环境变量：目录、日志和工具版本覆盖。"
 ---
 
 # MISE\_\* environment variables

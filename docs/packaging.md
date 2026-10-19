@@ -1,8 +1,8 @@
 ---
-description: "Package mise for a distribution: choose build features, turn off self-update, ship update instructions, and test the package."
+description: "为发行版打包 mise：选择构建特性、关闭自动更新、附带更新说明并测试软件包。"
 ---
 
-# Packaging mise
+# 打包 mise
 
 A package manager that installs mise should own its updates, so turn off
 `mise self-update` in your package and tell users how to update instead.
@@ -77,10 +77,14 @@ run instead. Install it at any one of:
 mise prints the file's `message`. Without a `message` key, it prints the value
 of the first other key in alphabetical order.
 
+<!-- schema: skip -->
+
 ```toml
 # Debian and Ubuntu (apt)
 message = "To update mise from the APT repository, run:\n\n  sudo apt update && sudo apt install --only-upgrade mise\n"
 ```
+
+<!-- schema: skip -->
 
 ```toml
 # Fedora and CentOS Stream (dnf)

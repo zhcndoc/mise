@@ -1,6 +1,6 @@
 ---
-description: "Apply your bootstrap configuration to other machines over SSH, from an inventory or from ad-hoc hosts."
-socialDescription: "Apply your bootstrap configuration to other machines over SSH."
+description: "通过 SSH 根据主机清单或临时指定的主机，在其他机器上应用 bootstrap 配置。"
+socialDescription: "通过 SSH 在其他机器上应用 bootstrap 配置。"
 ---
 
 # Remote hosts

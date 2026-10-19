@@ -1,5 +1,5 @@
 ---
-description: "Install, pin, and remove Windows apps with Scoop from mise.toml."
+description: "在 mise.toml 中声明 Windows 应用，通过 Scoop 安装、固定版本和移除应用。"
 ---
 
 # Scoop apps (scoop)

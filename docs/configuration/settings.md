@@ -1,5 +1,5 @@
 ---
-description: "Change how mise installs tools, loads config and runs tasks, and see which value wins when a setting is set in several places."
+description: "调整 mise 安装工具、加载配置和运行任务的方式，并了解同一设置在多个位置定义时哪个值优先。"
 outline: [2, 3]
 ---
 

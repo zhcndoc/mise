@@ -1,8 +1,8 @@
 ---
-description: "Use, maintain and test shell-script asdf plugins with mise, and port them to Lua tool plugins."
+description: "使用、维护和测试基于 shell 脚本的旧版 asdf 插件，并将它们移植为 Lua 工具插件。"
 ---
 
-# asdf plugins (legacy)
+# asdf 插件（旧版）
 
 asdf plugins are Git repositories of shell scripts (`bin/list-all`,
 `bin/install` and others) that follow the
@@ -272,6 +272,8 @@ the Git refs before and after the update.
 
 An optional `mise.plugin.toml` at the plugin's root changes how mise caches or
 replaces some scripts:
+
+<!-- schema: skip -->
 
 ```toml
 [exec-env]

@@ -1,6 +1,6 @@
 ---
-description: "Get short answers about mise commands, version requests, shell activation, config trust, and related tools."
-socialDescription: "Short answers about mise commands, version requests, activation, and config trust."
+description: "快速了解 mise 命令、版本请求、Shell 激活、配置文件信任及相关工具。"
+socialDescription: "快速了解 mise 命令、版本请求、Shell 激活和配置文件信任。"
 outline: [2, 3]
 ---
 

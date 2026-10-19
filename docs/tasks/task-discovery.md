@@ -1,6 +1,6 @@
 ---
-description: "Control where mise looks for tasks, how included and remote task files load, and which definition wins when names collide."
-socialDescription: "Control where mise finds tasks and which definition wins when names collide."
+description: "控制 mise 查找任务的位置、加载 include 和远程任务文件的方式，以及任务重名时采用哪个定义。"
+socialDescription: "控制 mise 查找任务的位置，以及任务重名时采用哪个定义。"
 ---
 
 # Task discovery and precedence

@@ -1,5 +1,5 @@
 ---
-description: "Move .envrc settings into mise.toml and remove direnv from a project that mise now manages."
+description: "将 .envrc 设置迁移到 mise.toml，并从已交由 mise 管理的项目中移除 direnv。"
 ---
 
 # Migrating from direnv

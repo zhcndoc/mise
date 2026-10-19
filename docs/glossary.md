@@ -1,6 +1,6 @@
 ---
-description: "Look up the terms used across the mise docs, from backends and version requests to trust, shims, and bootstrap."
-socialDescription: "Terms used in the mise docs, from backends and version requests to trust and shims."
+description: "查阅 mise 文档中的术语，涵盖后端、版本请求、信任、shim 和 bootstrap 等概念。"
+socialDescription: "mise 文档术语表，涵盖后端、版本请求、信任和 shim 等概念。"
 outline: [2, 3]
 ---
 

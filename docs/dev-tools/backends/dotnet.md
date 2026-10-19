@@ -1,8 +1,8 @@
 ---
-description: "Install .NET command-line tools from NuGet with dotnet tool install, each into its own directory."
+description: "通过 dotnet tool install 从 NuGet 安装 .NET 命令行工具，每个工具使用独立目录。"
 ---
 
-# dotnet backend
+# dotnet 后端
 
 The `dotnet` backend installs .NET command-line tool packages from
 [NuGet](https://www.nuget.org/) with `dotnet tool install`. The unprefixed
@@ -51,6 +51,16 @@ mise lists versions from the NuGet service index in
 credentials. For a private feed, add it to `NuGet.Config` and point
 `dotnet.registry_url` at its service index; changing the setting alone does not
 add an install source.
+
+这两个步骤分别进行身份验证。mise 列出版本时会通过 HTTP Basic 身份验证，将 [netrc](/configuration/settings.html#netrc) 凭据发送到匹配的主机，因此受密码保护的 Nexus 或 Artifactory 软件源需要在 `~/.netrc` 中添加对应条目：
+
+```text
+machine nexus.example.com
+  login myuser
+  password mytoken
+```
+
+`dotnet tool install` 不会读取 netrc。请在 `NuGet.Config` 中向 NuGet 提供软件源凭据，可以添加 `packageSourceCredentials` 条目，也可以使用 `dotnet nuget add source`。
 
 ## Tool options
 

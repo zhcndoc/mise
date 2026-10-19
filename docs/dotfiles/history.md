@@ -1,6 +1,6 @@
 ---
-description: "Save versions of your tracked dotfiles in local Git history, compare them, roll back a change, and choose what gets saved."
-socialDescription: "Save, compare, and roll back versions of your tracked dotfiles in local Git history."
+description: "将跟踪的 dotfiles 版本保存到本地 Git 历史中，比较并回滚变更，还可选择要保存的内容。"
+socialDescription: "在本地 Git 历史中保存、比较和回滚跟踪的 dotfiles 版本。"
 ---
 
 # Dotfiles history

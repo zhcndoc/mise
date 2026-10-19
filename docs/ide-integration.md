@@ -1,5 +1,5 @@
 ---
-description: "Connect your editor, language servers, debugger, and dev containers to the tools mise manages."
+description: "将编辑器、语言服务器、调试器和开发容器接入 mise 管理的工具。"
 ---
 
 # Editors and IDEs

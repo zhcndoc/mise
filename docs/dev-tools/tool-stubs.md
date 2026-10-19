@@ -1,5 +1,5 @@
 ---
-description: "Commit an executable file that names one tool and version, so ./bin/tool installs and runs it through mise."
+description: "提交一个声明工具和版本的可执行文件，以便通过 ./bin/tool 使用 mise 安装并运行该工具。"
 ---
 
 # Tool stubs

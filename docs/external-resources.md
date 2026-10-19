@@ -1,5 +1,5 @@
 ---
-description: "Find community articles, podcasts, and videos about mise, and other tools from its author that work alongside it."
+description: "查找社区发布的 mise 相关文章、播客和视频，以及作者开发的其他配套工具。"
 ---
 
 # External resources

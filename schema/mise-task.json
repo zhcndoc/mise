@@ -2310,6 +2310,18 @@
         "version_expr": {
           "type": "string",
           "description": "expr-lang expression post-processing versions (variables: body, versions)"
+        },
+        "version_date_url": {
+          "type": "string",
+          "description": "url holding release dates; defaults to the version_list_url body"
+        },
+        "version_date_next_expr": {
+          "type": "string",
+          "description": "expr-lang expression returning the url of the next page of version_date_url, or nil after the last (variables: body, url)"
+        },
+        "version_date_expr": {
+          "type": "string",
+          "description": "expr-lang expression mapping each version to its release date, as a list of [version, date] pairs or a map of version to date (variables: body, bodies, versions)"
         }
       }
     },
@@ -3188,7 +3200,7 @@
     },
     "env_file_find_up": {
       "type": "boolean",
-      "description": "look for a relative env._.file path in the current directory and each parent directory",
+      "description": "search the config file's directory and each parent directory for a relative env._.file path. An absolute path searches its own directory and each parent for its file name",
       "default": false
     },
     "tool_bool_text": {

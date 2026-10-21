@@ -115,10 +115,7 @@ mise plugins install vfox:my-plugin 'packslip:your-org/my-plugin#1.0.0'
 
 packslip 来源始终安装 vfox 插件，因此在命令行和 `[plugins]` 中都可以省略 `vfox:` 前缀。例如，
 `my-plugin = "packslip:your-org/my-plugin#1.0.0"` 与 `"vfox:my-plugin" = ...` 均有效。命令行中
-不接受 `asdf:` 等其他类型前缀。已安装插件会保留安装时指定的类型。省略 `#1.0.0` 可使用最新的
-符合条件的发行版。mise 会验证压缩包的签名、摘要和签名者；`mise plugins update` 会保留显式指定的
-版本固定值。目前仅支持发布了 `packslip.sigstore.json` 的 GitHub 仓库；参阅
-[vfox 后端](/dev-tools/backends/vfox.html#install-from-a-signed-packslip)。
+后端插件也可通过相同方式安装，但在命令行和 `[plugins]` 中都要使用 `vfox-backend:` 前缀。命令行中不接受 `asdf:` 等其他类型前缀。已安装插件会保留安装时指定的类型。省略 `#1.0.0` 可使用最新的符合条件的发行版。mise 会验证压缩包的签名、摘要和签名者；`mise plugins update` 会保留显式指定的版本固定值。目前仅支持发布了 `packslip.sigstore.json` 的 GitHub 仓库；参阅[后端插件文档](/backend-plugin-development.html)和 [vfox 后端](/dev-tools/backends/vfox.html#install-from-a-signed-packslip)。
 
 ### 通过工具标识安装 {#vfox-identifiers}
 

@@ -128,6 +128,8 @@ mise plugins install vfox:my-plugin 'packslip:your-org/my-plugin#1.2.3'
 - 清单中的制品是 `tar.gz` 归档，声明了 `extensions.mise.plugin = "vfox"`，未指定操作系统、架构或 libc，也未声明可执行文件和主机依赖；
 - 归档根目录包含 `metadata.lua`，且只包含普通文件和目录：不得有符号链接或硬链接、`.git` 目录、绝对路径、`..` 路径段，也不得包含带 `\` 或 `:` 的名称。
 
+后端插件的发布方式相同。其归档也要声明 `extensions.mise.plugin = "vfox"`，因为这里指定的是归档格式，而不是插件类型；mise 会通过 `hooks/backend_install.lua` 识别后端插件。用户使用 `vfox-backend:` 前缀安装，例如 `mise plugins install vfox-backend:my-backend 'packslip:your-org/my-backend#1.2.3'`。
+
 在仓库的 `packslip.toml` 中声明该制品：
 
 <!-- schema: skip -->

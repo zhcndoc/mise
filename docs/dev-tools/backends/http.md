@@ -239,6 +239,34 @@ version_expr = 'fromJSON(body) | map({ trimPrefix(#.tag_name, "v") }) | sortVers
 [`version_order = "semver"`](#version-order)；如果表达式中途需要已排序的值，则使用
 `sortVersions()`。
 
+### `version_date_expr` 和 `version_date_url` {#version-date-expr}
+
+没有发布日期的版本列表无法应用[`minimum_release_age`](/configuration/settings.html#minimum_release_age)：没有发布日期的版本不会受到冷却期限制。上游提供日期时，可用 `version_date_expr` 读取。它是一个 [expr-lang](https://expr-lang.org/) 表达式，接收 `body`（`version_list_url` 的响应）、`bodies`（见下文）和 `versions`（由 `version_expr` 生成的列表），并返回 `[version, date]` 配对列表或版本到日期的映射表。日期可以是 RFC 3339 时间戳、HTTP 日期（例如 `Last-Modified` 的值）或 `YYYY-MM-DD` 日期；其他格式会被 mise 跳过并发出警告。
+
+```toml
+[tools."http:my-tool"]
+version = "latest"
+url = "https://example.com/releases/my-tool-v{{ version }}.tar.gz"
+version_list_url = "https://example.com/releases.json"
+version_expr = 'map(fromJSON(body).releases, { #.version })'
+version_date_expr = 'map(fromJSON(body).releases, { [#.version, #.published_at] })'
+```
+
+表达式未列出的版本仍视为无日期版本；表达式返回但不在版本列表中的版本会被忽略。表达式格式错误会导致版本列表获取失败。
+
+日期与版本列表分开提供时，请设置 `version_date_url`。此时 `body` 是日期接口的响应，而不是版本列表的响应。上游列表采用分页时，还需设置 `version_date_next_expr`。该表达式会将每页内容作为 `body`、页面地址作为 `url`，并返回下一页地址；最后一页后返回 `nil`。`bodies` 按顺序保存所有页面。由于每次请求都会发送 `headers`，下一页必须位于同一主机；mise 最多读取 100 页。
+
+<!-- schema: skip -->
+
+```toml
+# GCS object listing: 1000 objects a page, with a token for the next one
+version_date_url = "https://storage.googleapis.com/storage/v1/b/my-bucket/o?prefix=releases/"
+version_date_next_expr = 'fromJSON(body).nextPageToken != nil ? split(url, "&pageToken=")[0] + "&pageToken=" + fromJSON(body).nextPageToken : nil'
+version_date_expr = 'map(flatten(map(bodies, { fromJSON(#).items })), { [split(#.name, "/")[1], #.timeCreated] })'
+```
+
+`version_date_url` 和 `version_date_next_expr` 都必须与 `version_date_expr` 一起使用，三者发出的请求都会携带与 `version_list_url` 相同的 `headers`。
+
 ### `version_order` {#version-order}
 
 许多 JSON 索引按从新到旧的顺序列出版本，因此列表末项，也就是 `latest`，反而是最旧版本。

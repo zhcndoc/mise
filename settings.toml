@@ -2131,11 +2131,12 @@ duration such as `7d`, `6mo` or `1y`, or a cutoff date such as `2024-06-01` or
 minimum_release_age = "7d"
 ```
 
-The `24h` default applies to aqua, cargo, core, forgejo, gem, github, gitlab,
-go, npm, packslip, pypi, spm and ubi tools. Tools from asdf, vfox (including
-vfox plugin backends), conda, dotnet, http, s3 and spinel get no default
-cutoff. A value you set applies to every backend, except for tools in
-[`minimum_release_age_excludes`](#minimum_release_age_excludes).
+The `24h` default applies to every backend, except for tools in
+[`minimum_release_age_excludes`](#minimum_release_age_excludes). A backend can
+only hold back versions it knows a release date for. When mise installs a
+version that has none, it warns that the cutoff could not be checked; see
+[Which backends have a default](/security.html#which-backends-have-a-default).
+A value you set applies to every backend.
 
 The cutoff applies when mise resolves a version request such as `node@22` or
 `latest`, for backends that report release dates. Exact versions such as
@@ -2832,6 +2833,28 @@ env = "MISE_PRUNE_EXCLUDE"
 parse_env = "set_by_comma"
 rust_type = "BTreeSet<String>"
 type = "SetString"
+
+[pypi.keyring_provider]
+description = "Read a `pypi:` index password from a `keyring` command when the index URL names a user but no password."
+docs = """
+Set to `subprocess` to have mise run `keyring get <index-url> <username>` when
+[`pypi.registry_url`](#pypi.registry_url) (or a tool's `registry_url`) contains a
+username but no password, such as an Azure Artifacts feed written as
+`https://VssSessionToken@pkgs.dev.azure.com/.../simple/{}/`. The printed password
+is sent as HTTP Basic credentials when mise lists versions and locks. This is
+the same value and lookup uv's `keyring-provider = "subprocess"` uses, so
+`mise lock` reaches the index the way `mise install` does through uv. mise also
+sets `UV_KEYRING_PROVIDER=subprocess` for the `uv lock` it runs, which ignores
+`uv.toml`. The
+`keyring` executable must be on `PATH`; if it is missing or has no entry, the
+request goes out without credentials. The password is never written to the
+lockfile or the version cache. See
+[Private indexes](/dev-tools/backends/pypi.html#private-indexes).
+"""
+enum = ["disabled", "subprocess"]
+env = "MISE_PYPI_KEYRING_PROVIDER"
+optional = true
+type = "String"
 
 [pypi.registry_url]
 default_docs = "https://pypi.org/pypi/{}/json"
@@ -4555,6 +4578,22 @@ repositories, GitHub Enterprise, custom GitHub API URLs, and installs with this
 setting off need normal [GitHub authentication](/dev-tools/github-tokens.html)
 to stay within GitHub's rate limits.
 
+Every backend's list may come from the host, including `npm:`, `pipx:`,
+`cargo:`, `gem:` and `go:` tools, when the tool is a registry tool on its
+registry backend. The host is skipped for a tool whose source you have
+redirected, because its list describes the public one: an npm registry from
+`.npmrc` or `NPM_CONFIG_REGISTRY` (or any registry under `npm.shell_out`),
+[`pypi.registry_url`](#pypi.registry_url),
+[`cargo.registry_name`](#cargo.registry_name), a `GOPROXY`, `GOPRIVATE` or
+`GONOPROXY` other than the default, a gem source or a primary `gem sources`
+entry other than rubygems.org, [`dotnet.registry_url`](#dotnet.registry_url), an
+`AWS_ENDPOINT_URL` for S3, or a local tool option that changes the listing.
+`conda:` tools always list from their channel, since which versions exist
+depends on the platform.
+The host's list can trail a brand-new release, which the default
+[`minimum_release_age`](#minimum_release_age) hides anyway. Set this to `false`
+to list straight from the source.
+
 When [`url_replacements`](#url_replacements) reroutes `api.github.com`, or a
 repository's release or attestation API paths, mise does not use this host for
 that GitHub metadata; the replacement is the only source, because this host
@@ -4689,8 +4728,9 @@ docs = """
 `mise dot edit` uses it too when it adds an entry. `mise dot track` does not:
 it writes new track entries to the global `config.toml`, or to
 `conf.d/dotfiles-tracking.toml` when another entry already manages the target.
-Existing entries stay in the file that declares them. The path must be absolute
-or start with `~/`, and name a file that mise loads from the global config
+Existing entries stay in the file that declares them. The path may be absolute,
+start with `~/`, or be relative to the `config_root` of the config file that sets it, and may use
+templates such as `{{ config_source | dirname }}`. It must name a file that mise loads from the global config
 directory, such as `~/.config/mise/conf.d/30-dotfiles.toml`. See
 [Send global writes to separate files](/configuration.html#global-section-write-targets).
 """
@@ -4703,8 +4743,9 @@ description = "Global config file where `--global` package commands create new `
 docs = """
 Used by `mise bootstrap packages use --global` and
 `mise bootstrap packages import --global`. Existing entries stay in the file
-that declares them. The path must be absolute or start with `~/`, and name a
-file that mise loads from the global config directory, such as
+that declares them. The path may be absolute, start with `~/`, or be relative to
+the `config_root` of the config file that sets it, and may use templates such as
+`{{ config_source | dirname }}`. It must name a file that mise loads from the global config directory, such as
 `~/.config/mise/conf.d/20-packages.toml`. See
 [Send global writes to separate files](/configuration.html#global-section-write-targets).
 """
@@ -4715,8 +4756,9 @@ type = "Path"
 [write_targets.tools]
 description = "Global config file where `mise use --global` creates new `[tools]` entries."
 docs = """
-Existing entries stay in the file that declares them. The path must be absolute
-or start with `~/`, and name a file that mise loads from the global config
+Existing entries stay in the file that declares them. The path may be absolute,
+start with `~/`, or be relative to the `config_root` of the config file that sets it, and may use
+templates such as `{{ config_source | dirname }}`. It must name a file that mise loads from the global config
 directory, such as `~/.config/mise/conf.d/10-tools.toml`. See
 [Send global writes to separate files](/configuration.html#global-section-write-targets).
 """

@@ -301,8 +301,14 @@ dotfiles = "~/.config/mise/conf.d/30-dotfiles.toml"
 
 通过 `mise use --global`、`mise bootstrap packages use --global`、
 `mise bootstrap packages import --global` 和 `mise dotfiles add`（默认写入全局配置）新增的声明，会写入这些目标文件。
-目标必须是 mise 会从全局配置目录加载的文件的绝对路径（或以 `~/` 开头的路径），例如 `config.toml`、
-`mise.toml` 或 `conf.d` 配置片段。`~/.config/mise/tools.toml` 这类路径不会被加载，因此 mise 会拒绝该路径。
+目标必须指向 mise 会从全局配置目录加载的文件，可以是绝对路径、以 `~/` 开头的路径，也可以相对于设置该目标的配置文件的 [`config_root`](/configuration.html#config-root) 解析，与其他路径设置相同。`config.toml`、`mise.toml` 和 `conf.d` 配置片段都符合要求；`~/.config/mise/tools.toml` 这类不会被加载的路径会被拒绝。
+
+对于全局配置文件，`config_root` 是你的主目录。若要避免依赖配置目录的位置，可使用[模板](/templates.html)。<code v-pre>{{ config_source | dirname }}</code> 表示设置目标的文件所在目录：
+
+```toml [~/.config/mise/conf.d/settings.toml]
+[settings.write_targets]
+tools = "{{ config_source | dirname }}/tools.toml" # ~/.config/mise/conf.d/tools.toml
+```
 
 只有新条目会写入目标文件。已有工具、软件包或点文件仍留在声明它的文件中；如果一条命令要更新多个全局文件中的条目，
 mise 会停止并要求指定 `--path`。`--path` 始终优先，`mise use --env staging` 等项目级写入不受影响。

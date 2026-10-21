@@ -217,7 +217,7 @@ _.source = { path = "scripts/env.sh", redact = true }
 | `tools`   | 是       | 是         | 是       | 在工具加载后解析（[详情](#lazy-eval)）                                  |
 | `redact`  | 是       | 是         | 否       | 将所有载入的值标记为[敏感信息](/environments/secrets/#redaction)       |
 | `expand`  | 是       | 否         | 否       | 允许文件引用此前载入的值                                                |
-| `find_up` | 是       | 否         | 否       | 从当前目录及其父目录中搜索相对路径                                      |
+| `find_up` | 是       | 否         | 否       | 从配置文件所在目录及其父目录中搜索该文件                                |
 
 ### `env._.file` {#env-file}
 
@@ -265,19 +265,23 @@ _.file = { path = ".env.json", expand = true }
 mise 会在载入文件时解密通过 SOPS 加密的 JSON、YAML 和 TOML 文件；参见
 [SOPS 文件](/environments/secrets/sops.html)。
 
-`_.file` 会相对于配置根目录（通常是项目目录）解析相对路径。若要改为从当前目录及其所有父目录加载文件，请设置 `find_up = true`。此选项也适用于全局配置，因此一个条目即可覆盖所有项目：
+`_.file` 会相对于配置根目录（通常是项目目录）解析相对路径。若要改为从配置文件所在目录及其所有父目录中搜索文件，请设置 `find_up = true`。这适用于 monorepo 根目录中的 `.env` 需要应用于每个包的场景：
+
+```toml [mise.toml]
+[env]
+_.file = { path = ".env", find_up = true }
+```
+
+绝对路径会从其所在目录开始，沿父目录逐层搜索指定文件名。全局配置可结合 `cwd` 使用此功能，从而用一个条目覆盖所有项目：
 
 ```toml [~/.config/mise/config.toml]
 [env]
-_.file = [
-  { path = ".env", find_up = true },
-  { path = ".env.local", find_up = true },
-]
+_.file = { path = "{{cwd}}/.env", find_up = true }
 ```
 
 每个条目会单独搜索，并按列出的顺序应用，因此后面的条目优先级更高，无论其文件位于何处。在下面的例子中，父目录中的 `.env.local` 会覆盖项目中的 `.env`。若要让多个文件名一起搜索，请将它们放进同一个条目的 `path` 列表：
 
-```toml [~/.config/mise/config.toml]
+```toml [mise.toml]
 [env]
 _.file = { path = [".env", ".env.local"], find_up = true }
 ```

@@ -124,7 +124,7 @@ AWS_ACCESS_KEY_ID = "placeholder"
 
 只有项目配置中的 `[oci.env]` 会满足此要求；其他命令仍会强制检查 `required`。
 
-### 将文件复制到镜像中
+### 将文件复制到镜像中 {#copy-files-into-the-image}
 
 每个 `[[oci.copy]]` 条目或 `--copy HOST:IMAGE` 标志都会在工具层之后添加一层：
 
@@ -164,7 +164,7 @@ Debian 或 Ubuntu 基础镜像可以使用 `apt:` 软件包条目；Alpine 或 W
 - `symlink` 和 `symlink-each` 条目会复制为文件内容，因为指向构建宿主机检出目录的链接在容器中会失效。
 - 以 `~/` 开头的目标路径会写入 `/root/` 下。
 - `absent` 条目或渲染结果为空的 `remove_empty` 模板会添加 OCI whiteout，从而隐藏基础镜像中该路径已有的文件。
-- 调用 `secret()` 的模板会导致构建失败。模板渲染时不提供 `env` 上下文；调用 `get_env()`、`exec()` 或 `read_file()` 也会导致构建失败，因为这些值可能从镜像层中恢复。
+- 调用 `secret()` 的模板会导致构建失败。模板渲染时不提供 `env` 上下文；调用 `get_env()`、`exec()`、`read_file()`、`read_json()`、`read_yaml()` 或 `read_toml()` 也会导致构建失败，因为这些值可能从镜像层中恢复。
 - 跟踪文件和仅修改权限的条目不会纳入镜像。
 
 如果纳入的配置设置了 `[bootstrap.macos.*]` 默认项，`mise oci build` 会失败；请将这些设置放在构建不会读取的配置中，例如不传入 `--include-global` 时的全局配置。其他 `[bootstrap]` 段（例如 `[bootstrap.files]`）和 `bootstrap` 任务不会应用到镜像。容器启动时要执行的工作请放入镜像的 `entrypoint` 或 `cmd`。

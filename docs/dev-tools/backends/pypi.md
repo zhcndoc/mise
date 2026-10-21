@@ -148,6 +148,16 @@ wheel 平台，因此旁文件可能较大。锁定安装会复用 uv 的制品�
 必须在所选发行版的 wheel 链接中提供 `data-requires-python` 元数据。请将注册表凭据放在安装器的
 环境或凭据提供程序中：包含凭据或查询字符串的 URL 无法写入锁文件。
 
+如果索引通过 keyring 进行身份验证，请在 URL 中设置用户名且不填密码，并将
+[`pypi.keyring_provider`](/dev-tools/backends/pypi.html#pypi.keyring_provider)
+设为 `subprocess`。这样 mise 自身在列出版本和锁定依赖时，也会像 uv 一样通过 `keyring get` 读取密码：
+
+```toml
+[settings.pypi]
+keyring_provider = "subprocess"
+registry_url = "https://VssSessionToken@pkgs.dev.azure.com/org/project/_packaging/feed/pypi/simple/{}/"
+```
+
 ## 最低发行时长
 
 mise 解析依赖关系图时， [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 会筛选该工具的依赖项；

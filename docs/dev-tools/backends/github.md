@@ -61,7 +61,7 @@ mise install github:user/repo
 
 随后，mise 会验证下载内容：检查 GitHub 为资源文件报告的摘要，或同一发行版中发布的校验和文件；如果公开 GitHub 上的发行版附带 [GitHub 产物证明](#github-attestations)，mise 也会进行检查。参阅[验证](#verification)。
 
-## 工具选项
+## 工具选项 {#tool-options}
 
 可在 `[tools]` 中该工具的条目设置这些选项，也可直接写成 `github:owner/repo[key=value]`。`gitlab` 和 `forgejo` 后端接受这些选项，但不接受仅适用于 GitHub 的验证选项；两者的差异分别列于 [gitlab](/dev-tools/backends/gitlab.html#differences-from-the-github-backend) 和 [forgejo](/dev-tools/backends/forgejo.html#differences-from-the-github-backend)。所有后端都接受的选项（例如 `postinstall` 和 `os`）见[工具选项](/dev-tools/#tool-options)。
 
@@ -86,7 +86,7 @@ mise install github:user/repo
 | [`slsa_signer_identity`, `slsa_signer_issuer`](#slsa-signer-identity-and-slsa-signer-issuer) | 验证 SLSA 来源信息（仅 GitHub）                                    |
 | [`api_url`](#api-url)                                                                        | 使用 GitHub Enterprise Server 或其他 Forge 主机                   |
 
-### 选择资源文件
+### 选择资源文件 {#selecting-assets}
 
 #### `asset_pattern` {#asset-pattern}
 
@@ -148,7 +148,7 @@ linux-x64 = {
 
 附加资源文件必须是归档。mise 解压它们时不会应用主资源文件的 `strip_components`、`bin` 和 `rename_exe`；后续归档中的文件会覆盖较早归档中的同一路径。`mise lock` 会记录每个附加归档的 URL 和校验和；如果锁文件缺少其中任一项，`mise install --locked` 就会失败。
 
-### 选择版本
+### 选择版本 {#choosing-versions}
 
 #### `version_prefix` {#version-prefix}
 
@@ -185,7 +185,7 @@ linux-x64 = {
 
 如果 GitHub 或 Forgejo 标记了 Latest，`latest` 仍会解析到该发行版。参阅[版本排序](/dev-tools/versions.html#version-ordering)。
 
-### 按平台设置选项
+### 按平台设置选项 {#per-platform-options}
 
 要仅在特定平台使用某个选项，请将其设在 `platforms.<os>-<arch>` 下。平台级的值会覆盖顶层值。键名使用 mise 的命名方式：操作系统为 `linux`、`macos` 或 `windows`，架构为 `x64` 或 `arm64`；mise 也接受 `darwin`、`amd64`、`x86_64` 和 `aarch64`。
 
@@ -222,7 +222,7 @@ platforms.macos-arm64.url = "https://downloads.example.com/tool/{{ version }}/to
 
 URL 中必须自行包含 `v` 等标签前缀。此后端会忽略顶层的 `url`，因此应在每个平台下分别设置。mise 只解压下载内容，不会构建，因此 URL 必须指向预编译归档或二进制文件。你可以使用 [`additional_asset_patterns`](#additional-asset-patterns) 在其上叠加发行版资源文件。如果所有受支持的平台都设置了 `url`，即使发行版没有资源文件，mise 也会列出这些版本；参阅[版本列表的生成方式](#version-listing)。
 
-### 解压和命名可执行文件
+### 解压和命名可执行文件 {#extracting-and-naming-executables}
 
 #### `format`
 

@@ -331,33 +331,6 @@ pub(crate) fn release_tag_from_download_url(url: &str, repo_web_url: &str) -> Op
     urlencoding::decode(tag).ok().map(|tag| tag.into_owned())
 }
 
-/// Whether the versions host may serve this backend type's remote version list.
-///
-/// Only a subset of backends benefit from the versions host cache — those
-/// whose upstream listing is rate-limited (github API) or not otherwise
-/// available. Package-registry backends (npm, pipx, cargo, gem, go, conda,
-/// dotnet, spm) and http/s3 with an explicit version_list_url already have
-/// canonical, always-fresh sources, so the cache would only add latency and
-/// staleness risk. Note: this asymmetrically overrides
-/// `settings.use_versions_host = true` — the setting can still disable the
-/// host globally, but cannot re-enable it for backends that are not on this
-/// allowlist.
-fn versions_host_applies(backend_type: &BackendType, listing_opts: &ToolVersionOptions) -> bool {
-    match backend_type {
-        BackendType::Github
-        | BackendType::Gitlab
-        | BackendType::Forgejo
-        | BackendType::Ubi
-        | BackendType::Aqua
-        | BackendType::Core
-        | BackendType::Asdf
-        | BackendType::Vfox
-        | BackendType::VfoxBackend(_) => true,
-        BackendType::Http | BackendType::S3 => !listing_opts.contains_key("version_list_url"),
-        _ => false,
-    }
-}
-
 pub(crate) fn toolset_semver_version(ts: &Toolset, tool: &str) -> Option<String> {
     let tvl = ts
         .versions
@@ -2009,6 +1982,80 @@ mod tests {
         assert_eq!(tool("aqua:example/not-in-the-registry"), None);
     }
 
+    /// No backend type is excluded from the versions host: a registry tool on
+    /// the package-registry backends, which an allowlist once skipped, reads
+    /// its published list like any other.
+    #[test]
+    fn test_every_backend_type_may_use_the_versions_host() {
+        for tool in [
+            "cowsay",       // npm
+            "ansible-core", // pipx
+            "tokei",        // cargo
+            "bashly",       // gem
+            "ginkgo",       // go
+            "clang-format", // conda
+            "danger-swift", // spm
+        ] {
+            let backend = get(&BackendArg::from(tool)).unwrap();
+            assert_eq!(
+                backend.versions_host_tool(),
+                Ok(tool.to_string()),
+                "{tool} on {}",
+                backend.get_type()
+            );
+            assert_eq!(backend.versions_host_skip_reason(), None);
+        }
+    }
+
+    /// A registry or channel that settings or the environment redirect lists
+    /// other versions than the published list, so it makes a cache context,
+    /// which keeps the versions host out of the way.
+    #[tokio::test]
+    async fn test_redirected_sources_make_a_cache_context() {
+        use confique::Layer;
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+
+        // Conda's versions depend on the platform, which one shared list
+        // cannot describe, so it always lists from its channel.
+        let platform = rattler_conda_types::Subdir::current().unwrap();
+        let conda = get(&BackendArg::from("clang-format")).unwrap();
+        assert_eq!(
+            conda.remote_version_cache_context(&config).await.unwrap(),
+            Some(format!("conda-forge@{platform}"))
+        );
+        let mut partial = crate::config::settings::SettingsPartial::empty();
+        partial.conda.channel = Some("bioconda".to_string());
+        Settings::reset(Some(partial));
+        assert_eq!(
+            conda.remote_version_cache_context(&config).await.unwrap(),
+            Some(format!("bioconda@{platform}"))
+        );
+
+        let pipx = get(&BackendArg::from("ansible-core")).unwrap();
+        let mut partial = crate::config::settings::SettingsPartial::empty();
+        partial.pypi.registry_url = Some("https://pypi.example.com/pypi/{}/json".to_string());
+        Settings::reset(Some(partial));
+        assert!(
+            pipx.remote_version_cache_context(&config)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        Settings::reset(None);
+        assert_eq!(
+            pipx.remote_version_cache_context(&config).await.unwrap(),
+            None
+        );
+
+        // The public npm registry is the default; no `.npmrc` here redirects it.
+        let npm = get(&BackendArg::from("cowsay")).unwrap();
+        assert_eq!(
+            npm.remote_version_cache_context(&config).await.unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn test_explicit_packslip_arg_reads_the_catalog_of_the_registry_tool_preferring_it() {
         let tool = |arg: &str, shape: bool| versions_host_tool(&BackendArg::from(arg), shape);
@@ -3149,12 +3196,12 @@ pub trait Backend: Debug + Send + Sync {
     /// Results are cached. Backends can override `_list_remote_versions_with_info`
     /// to provide timestamp information.
     ///
-    /// For backends that query canonical, always-fresh sources (npm, pipx, cargo,
-    /// gem, go, and http/s3 with `version_list_url`), the versions host cache is
-    /// skipped and the upstream is queried directly. For all other backends this
-    /// method first tries the versions host (mise-versions.jdx.dev) which provides
-    /// version info with created_at timestamps, and falls back to the backend's
-    /// `_list_remote_versions_with_info` implementation on failure.
+    /// This method first tries the versions host (mise-versions.jdx.dev), which
+    /// provides version info with created_at timestamps, and falls back to the
+    /// backend's `_list_remote_versions_with_info` implementation on failure.
+    /// The host is skipped when local options or a redirected source (see
+    /// `remote_version_cache_context`) make the listing differ from the
+    /// published one.
     ///
     /// In offline mode, this reads the existing remote-versions cache without
     /// fetching or writing. If no cache exists, it returns an empty list.
@@ -3273,7 +3320,7 @@ pub trait Backend: Debug + Send + Sync {
             );
             None
         } else {
-            match self.versions_host_tool(listing_opts) {
+            match self.versions_host_tool() {
                 Ok(tool) => Some(tool),
                 Err(reason) => {
                     trace!("Skipping versions host for {} because {reason}", ba.short);
@@ -3460,7 +3507,7 @@ pub trait Backend: Debug + Send + Sync {
             return None;
         }
         let opts = resolved_opts.effective();
-        let tool = self.versions_host_tool(opts).ok()?;
+        let tool = self.versions_host_tool().ok()?;
         if self
             .remote_version_cache_context_for(config, opts, false)
             .await
@@ -3602,6 +3649,22 @@ pub trait Backend: Debug + Send + Sync {
         &self,
         _config: &Arc<Config>,
         _version: &str,
+    ) -> eyre::Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// The version to resolve in place of the moving channel `version` under an explicit
+    /// release-age cutoff `before`, or `None` to resolve it as written. A channel has no
+    /// release date of its own, so the cutoff cannot be applied to it as it is: a backend
+    /// maps it to the concrete release the channel pointed at then, or errors when the
+    /// channel's current build is too new and nothing older can stand in for it.
+    /// `prefer_offline` asks a mapping that needs the network to leave the channel as written.
+    async fn channel_for_cutoff(
+        &self,
+        _config: &Arc<Config>,
+        _version: &str,
+        _before: Timestamp,
+        _prefer_offline: bool,
     ) -> eyre::Result<Option<String>> {
         Ok(None)
     }
@@ -3897,8 +3960,14 @@ pub trait Backend: Debug + Send + Sync {
         // version — takes the last entry of this list, so the cutoff has to be
         // exact by the time it is returned.
         if let Some(before) = before_date {
-            self.drop_matches_hidden_by_cutoff(config, &mut versions, before, selection_opts)
-                .await?;
+            self.drop_matches_hidden_by_cutoff(
+                config,
+                &mut versions,
+                before,
+                selection_opts,
+                query,
+            )
+            .await?;
         }
         Ok(versions)
     }
@@ -4025,8 +4094,14 @@ pub trait Backend: Debug + Send + Sync {
             // `list_versions_matching_with_selection_options` already did this
             // for the list above; this branch built its own.
             if let Some(before) = before_date {
-                self.drop_matches_hidden_by_cutoff(config, &mut matches, before, selection_opts)
-                    .await?;
+                self.drop_matches_hidden_by_cutoff(
+                    config,
+                    &mut matches,
+                    before,
+                    selection_opts,
+                    query,
+                )
+                .await?;
             }
         }
         Ok(find_match_in_list(&matches, query))
@@ -4051,11 +4126,11 @@ pub trait Backend: Debug + Send + Sync {
         matches: &mut Vec<String>,
         before: Timestamp,
         selection_opts: &ToolVersionOptions,
+        query: &str,
     ) -> eyre::Result<()> {
         if matches.is_empty() {
             return Ok(());
         }
-        let backend = self.ba().full();
         // Cached from the listing this candidate set was built from.
         let dated: HashSet<String> = self
             .list_remote_versions_with_info_with_selection_options(config, selection_opts, false)
@@ -4069,31 +4144,18 @@ pub trait Backend: Debug + Send + Sync {
                 // Already checked against the cutoff by `filter_by_date`.
                 break;
             }
-            // Reuse an answer this run already paid for; the error message
-            // below asks for the same versions again.
-            let created_at = match on_demand_release_date(&backend, candidate) {
-                Some(created_at) => Some(created_at),
-                None => match self.fetch_version_created_at(config, candidate).await {
-                    Ok(created_at) => {
-                        remember_on_demand_release_date(&backend, candidate, created_at.as_deref());
-                        created_at
-                    }
-                    Err(err) => {
-                        // Allow a version whose date could not be read, the same as
-                        // one from a backend that has no dates at all. These lookups
-                        // reach the network one candidate at a time, so failing the
-                        // resolution here would turn a slow proxy or VCS host into
-                        // an install error for a request that resolved fine before
-                        // the cutoff could be checked at all. Say so, though: it
-                        // means this version went in unchecked.
-                        warn!(
-                            "{}@{candidate}: could not read its release date to check the {before} cutoff, allowing it: {err:#}",
-                            self.id()
-                        );
-                        None
-                    }
-                },
-            };
+            let created_at = self
+                // A version the request named in full is the user's own choice,
+                // not one the cutoff picked, so it needs no warning. `latest` and
+                // rolling channels are moving pointers, even when a backend lists
+                // one as a literal version, so they are not pins.
+                .release_date_for_cutoff(
+                    config,
+                    candidate,
+                    before,
+                    candidate != query || query == "latest" || self.is_rolling_channel(query),
+                )
+                .await;
             let info = VersionInfo {
                 version: candidate.clone(),
                 created_at,
@@ -4110,6 +4172,59 @@ pub trait Backend: Debug + Send + Sync {
             matches.pop();
         }
         Ok(())
+    }
+
+    /// The release date of `candidate`, read on demand when the listing left it
+    /// out, for checking it against `before`. `None` means no date could be
+    /// found; the version is then allowed, and recorded for the install-time
+    /// warning.
+    async fn release_date_for_cutoff(
+        &self,
+        config: &Arc<Config>,
+        candidate: &str,
+        before: Timestamp,
+        record_unchecked: bool,
+    ) -> Option<String> {
+        let backend = self.ba().full();
+        let tool = self.ba().short.clone();
+        // Reuse an answer this run already paid for; the error message
+        // below asks for the same versions again.
+        let created_at = match on_demand_release_date(&backend, candidate) {
+            Some(created_at) => Some(created_at),
+            None => match self.fetch_version_created_at(config, candidate).await {
+                Ok(created_at) => {
+                    remember_on_demand_release_date(&backend, candidate, created_at.as_deref());
+                    if created_at.is_none() && record_unchecked {
+                        note_undated_release(&tool, candidate, before, None);
+                    }
+                    created_at
+                }
+                Err(err) => {
+                    // Allow a version whose date could not be read, the same as
+                    // one from a backend that has no dates at all. These lookups
+                    // reach the network one candidate at a time, so failing the
+                    // resolution here would turn a slow proxy or VCS host into
+                    // an install error for a request that resolved fine before
+                    // the cutoff could be checked at all. Record it for the
+                    // install-time warning, like an undated version: resolution
+                    // also runs for `mise env` and `mise ls`.
+                    debug!(
+                        "{}@{candidate}: could not read its release date to check the {before} cutoff, allowing it: {err:#}",
+                        self.id()
+                    );
+                    if record_unchecked {
+                        note_undated_release(&tool, candidate, before, Some(format!("{err:#}")));
+                    }
+                    None
+                }
+            },
+        };
+        if created_at.is_some() {
+            // A lookup that failed earlier may have left a record; this one
+            // checked the cutoff, so the install must not say it could not.
+            clear_undated_release(&tool, candidate);
+        }
+        created_at
     }
 
     /// Get the latest version, optionally filtered by release date.
@@ -4253,7 +4368,25 @@ pub trait Backend: Debug + Send + Sync {
                             .await?;
                         fallback_refresh = false;
                         let info = versions.iter().find(|v| v.version == version);
-                        latest_stable_candidate_allowed_by_before_date(&version, info, before)
+                        if info.is_some_and(|v| v.created_at.is_none()) {
+                            // The listing left it undated: ask for its date the way
+                            // the list path does, so a backend that dates only part
+                            // of a listing still holds back a too-new stable pick.
+                            let dated = VersionInfo {
+                                version: version.clone(),
+                                created_at: self
+                                    .release_date_for_cutoff(config, &version, before, true)
+                                    .await,
+                                ..Default::default()
+                            };
+                            latest_stable_candidate_allowed_by_before_date(
+                                &version,
+                                Some(&dated),
+                                before,
+                            )
+                        } else {
+                            latest_stable_candidate_allowed_by_before_date(&version, info, before)
+                        }
                     };
                     if allowed {
                         return Ok(Some(version));
@@ -5818,22 +5951,15 @@ pub trait Backend: Debug + Send + Sync {
     /// Why the versions host cannot serve this backend's remote version list,
     /// or `None` when it can. Ignores `use_versions_host` and cache contexts,
     /// which callers check themselves.
-    fn versions_host_skip_reason(&self, listing_opts: &ToolVersionOptions) -> Option<String> {
-        self.versions_host_tool(listing_opts).err()
+    fn versions_host_skip_reason(&self) -> Option<String> {
+        self.versions_host_tool().err()
     }
 
     /// The tool whose list on the versions host is this backend's remote
     /// version list, or why the versions host cannot serve it. Ignores
     /// `use_versions_host` and cache contexts, which callers check themselves.
-    fn versions_host_tool(
-        &self,
-        listing_opts: &ToolVersionOptions,
-    ) -> std::result::Result<String, String> {
+    fn versions_host_tool(&self) -> std::result::Result<String, String> {
         let ba = self.ba();
-        let backend_type = self.get_type();
-        if !versions_host_applies(&backend_type, listing_opts) {
-            return Err(format!("{backend_type} backend has a direct source"));
-        }
         let tool;
         if let Some(plugin) = self.plugin()
             && let Ok(Some(remote_url)) = plugin.get_remote_url()
@@ -5911,7 +6037,7 @@ pub trait Backend: Debug + Send + Sync {
         // the other listings are always direct, so their one entry is correct.
         if context.is_none()
             && !Settings::get().use_versions_host
-            && self.versions_host_skip_reason(listing_opts).is_none()
+            && self.versions_host_skip_reason().is_none()
         {
             return Ok(Some("direct".to_string()));
         }
@@ -6315,9 +6441,7 @@ async fn versions_index_tool<B: Backend + ?Sized>(
         return Err(unavailable);
     }
     let listing_opts = resolved_opts.effective();
-    let tool = backend
-        .versions_host_tool(listing_opts)
-        .map_err(|_| unavailable)?;
+    let tool = backend.versions_host_tool().map_err(|_| unavailable)?;
     if !matches!(
         backend
             .remote_version_cache_context_for(config, listing_opts, false)
@@ -6444,16 +6568,11 @@ fn latest_stable_candidate_allowed_by_before_date(
         return false;
     };
     let Some(created_at) = info.created_at.as_deref() else {
-        if before > crate::duration::process_now() {
-            debug!(
-                "Latest stable version {version} has no release date metadata, but the cutoff is in the future"
-            );
-            return true;
-        }
-        debug!(
-            "Latest stable version {version} has no release date metadata; falling back to full version list"
-        );
-        return false;
+        // The same rule as `VersionInfo::filter_by_date`: a version the backend
+        // cannot date is allowed, so a plugin's own stable choice is kept
+        // rather than replaced by whatever the full list ends with.
+        debug!("Latest stable version {version} has no release date metadata, allowing it");
+        return true;
     };
     match parse_into_timestamp(created_at) {
         Ok(created) => created < before,
@@ -6475,6 +6594,14 @@ mod latest_version_tests {
     use confique::Layer;
     use pretty_assertions::assert_eq;
     use std::fs;
+
+    /// These tests exercise the latest-stable fast path, which a release-age
+    /// cutoff bypasses; every backend now gets the 24h default, so switch it off.
+    fn without_default_release_age() {
+        let mut partial = SettingsPartial::empty();
+        partial.minimum_release_age = Some("0s".to_string());
+        Settings::reset(Some(partial));
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug)]
@@ -6680,6 +6807,27 @@ mod latest_version_tests {
     }
 
     #[tokio::test]
+    async fn test_cutoff_dates_an_undated_stable_pick_on_demand() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        // The stable fast path names 3.0.0, which the listing left undated; a
+        // lookup shows it is too new, so resolution falls back to 2.0.0.
+        let backend = partially_dated_backend("test-stable-lazy-date")
+            .with_stable_result(Some("3.0.0"))
+            .with_lazy_dates(&[("3.0.0", "2025-12-01"), ("2.0.0", "2025-01-01")]);
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+
+        assert_eq!(
+            backend
+                .latest_version(&config, Some("latest".to_string()), Some(before))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2.0.0")
+        );
+    }
+
+    #[tokio::test]
     async fn test_cutoff_resolves_dates_for_a_prefix_request() {
         let _settings = crate::test::SettingsGuard::lock();
         let config = Config::get().await.unwrap();
@@ -6801,6 +6949,145 @@ mod latest_version_tests {
             Some("3.0.0")
         );
         assert_eq!(backend.lazy_date_calls(), 1);
+        // The failure is recorded for the install-time warning, not logged at
+        // resolution, and it keeps the reason apart from "no date".
+        let (recorded, err) = unchecked_release(&backend.ba().short, "3.0.0").unwrap();
+        assert_eq!(recorded, before);
+        assert!(err.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_an_exactly_named_undated_version_is_not_recorded() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        let backend = partially_dated_backend("test-exact-pin-unrecorded");
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+
+        // 3.0.0 is undated, but the request names it in full: the user chose
+        // it, so there is nothing to warn about at install.
+        assert_eq!(
+            backend
+                .latest_version(&config, Some("3.0.0".to_string()), Some(before))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("3.0.0")
+        );
+        assert_eq!(unchecked_release(&backend.ba().short, "3.0.0"), None);
+    }
+
+    #[tokio::test]
+    async fn test_a_version_literally_named_latest_is_still_recorded() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        // The listing ends on a version actually called `latest`; the request
+        // `latest` is a moving pointer, not a pin on it.
+        let backend = LatestBackend::new("test-literal-latest")
+            .with_stable_result(None)
+            .with_remote_versions(vec![
+                VersionInfo {
+                    version: "1.0.0".to_string(),
+                    created_at: Some("2024-01-01".to_string()),
+                    ..Default::default()
+                },
+                VersionInfo {
+                    version: "latest".to_string(),
+                    ..Default::default()
+                },
+            ]);
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+
+        let picked = backend
+            .latest_version(&config, Some("latest".to_string()), Some(before))
+            .await
+            .unwrap();
+        assert_eq!(picked.as_deref(), Some("latest"));
+        assert_eq!(
+            unchecked_release_cutoff(&backend.ba().short, "latest"),
+            Some(before)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_successful_date_lookup_clears_an_earlier_failure_record() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        let backend = partially_dated_backend("test-lookup-retry")
+            .with_lazy_dates(&[("3.0.0", "2025-01-01")]);
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+        // An earlier resolution failed to read 3.0.0's date.
+        note_undated_release(
+            &backend.ba().short,
+            "3.0.0",
+            before,
+            Some("timed out".to_string()),
+        );
+
+        assert_eq!(
+            backend
+                .latest_version(&config, Some("latest".to_string()), Some(before))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("3.0.0")
+        );
+        // This lookup read a date, so the install has nothing to warn about.
+        assert_eq!(unchecked_release(&backend.ba().short, "3.0.0"), None);
+    }
+
+    #[tokio::test]
+    async fn test_undated_version_picked_under_a_cutoff_is_recorded_for_install() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        let backend = partially_dated_backend("test-undated-recorded");
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+
+        // Resolving only records the gap; the warning belongs to install.
+        assert_eq!(
+            backend
+                .latest_version(&config, Some("latest".to_string()), Some(before))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("3.0.0")
+        );
+        let id = backend.ba().short.clone();
+        assert_eq!(unchecked_release_cutoff(&id, "3.0.0"), Some(before));
+        assert_eq!(unchecked_release_cutoff(&id, "2.0.0"), None);
+    }
+
+    #[tokio::test]
+    async fn test_cutoff_keeps_a_plugins_undated_stable_choice() {
+        let _settings = crate::test::SettingsGuard::lock();
+        let config = Config::get().await.unwrap();
+        // Neither version has a date, and the plugin deliberately calls the
+        // older one stable (the way an asdf `bin/latest-stable` can).
+        let backend = LatestBackend::new("test-undated-stable")
+            .with_stable_result(Some("1.0.0"))
+            .with_remote_versions(vec![
+                VersionInfo {
+                    version: "1.0.0".to_string(),
+                    ..Default::default()
+                },
+                VersionInfo {
+                    version: "2.0.0".to_string(),
+                    ..Default::default()
+                },
+            ]);
+        let before = parse_into_timestamp("2025-06-01").unwrap();
+
+        assert_eq!(
+            backend
+                .latest_version(&config, Some("latest".to_string()), Some(before))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            unchecked_release_cutoff(&backend.ba().short, "1.0.0"),
+            Some(before)
+        );
     }
 
     #[tokio::test]
@@ -6847,6 +7134,7 @@ mod latest_version_tests {
         let _settings = crate::test::SettingsGuard::lock();
         let config = Config::get().await.unwrap();
         let backend = LatestBackend::new("test-latest-stable");
+        without_default_release_age();
 
         assert_eq!(
             backend
@@ -6874,6 +7162,7 @@ mod latest_version_tests {
     #[tokio::test]
     async fn test_semver_order_preserves_latest_fast_path() {
         let _settings = crate::test::SettingsGuard::lock();
+        without_default_release_age();
         let config = Config::get().await.unwrap();
         let backend = LatestBackend::new("test-semver-order[version_order=semver]")
             .with_remote_versions(vec![
@@ -6956,7 +7245,7 @@ mod latest_version_tests {
     #[tokio::test]
     async fn test_prerelease_selection_skips_latest_stable_fast_path() {
         let _settings = crate::test::SettingsGuard::lock();
-        Settings::reset(None);
+        without_default_release_age();
         let config = Config::get().await.unwrap();
         let mut backend =
             LatestBackend::new("test-prerelease-latest").with_stable_result(Some("1.0.0"));
@@ -7183,14 +7472,16 @@ mod latest_version_tests {
     }
 
     #[test]
-    fn test_latest_stable_candidate_rejects_unverified_cutoff_metadata() {
+    fn test_latest_stable_candidate_allows_undated_but_rejects_unverifiable_metadata() {
         let _settings = crate::test::SettingsGuard::lock();
         let before = crate::duration::parse_into_timestamp("2024-06-01").unwrap();
 
         assert!(!latest_stable_candidate_allowed_by_before_date(
             "1.0.0", None, before
         ));
-        assert!(!latest_stable_candidate_allowed_by_before_date(
+        // The listing itself has no date for it: allowed, like every other
+        // undated version, so a plugin's own stable choice survives the cutoff.
+        assert!(latest_stable_candidate_allowed_by_before_date(
             "1.0.0",
             Some(&VersionInfo {
                 version: "1.0.0".to_string(),
@@ -7917,6 +8208,7 @@ mod latest_version_tests {
 
         let mut partial = SettingsPartial::empty();
         partial.offline = Some(true);
+        partial.minimum_release_age = Some("0s".to_string());
         Settings::reset(Some(partial));
         let latest = backend.latest_version(&config, None, None).await.unwrap();
         Settings::reset(None);
@@ -8450,9 +8742,80 @@ fn remember_on_demand_release_date(backend: &str, version: &str, created_at: Opt
 /// The oldest rather than the whole map: another resolution may still be
 /// relying on a date it stored to say which versions its cutoff hid. Losing one
 /// costs a repeated lookup, nothing more.
-fn evict_oldest_release_dates(dates: &mut OnDemandReleaseDates, limit: usize) {
+fn evict_oldest_release_dates<V>(dates: &mut IndexMap<(String, String), V>, limit: usize) {
     while dates.len() >= limit {
         dates.shift_remove_index(0);
+    }
+}
+
+/// Versions a release-age cutoff let through because no date could be found,
+/// keyed by the tool's short name and version, with the cutoff that went
+/// unchecked.
+///
+/// The short name rather than the full backend: a registry entry that routes by
+/// version (`nub` on GitHub from 0.9.5, on npm below it) lists a version through
+/// one backend and installs it through another, but both carry the short name.
+///
+/// Resolution only records them. Resolution also runs for `mise env`, `mise ls`
+/// and `mise outdated`, which a shell prompt can trigger on every command, so
+/// the warning waits until the version is about to be installed
+/// ([`warn_if_release_date_unchecked`]).
+/// The value is the cutoff and, when the date lookup failed rather than came
+/// back empty, why.
+type UndatedReleases = IndexMap<(String, String), (Timestamp, Option<String>)>;
+static UNDATED_RELEASES: LazyLock<Mutex<UndatedReleases>> = LazyLock::new(Default::default);
+
+fn note_undated_release(
+    tool: &str,
+    version: &str,
+    before: Timestamp,
+    lookup_error: Option<String>,
+) {
+    if let Ok(mut undated) = UNDATED_RELEASES.lock() {
+        evict_oldest_release_dates(&mut undated, ON_DEMAND_RELEASE_DATE_LIMIT);
+        undated.insert(
+            (tool.to_string(), version.to_string()),
+            (before, lookup_error),
+        );
+    }
+}
+
+fn clear_undated_release(tool: &str, version: &str) {
+    if let Ok(mut undated) = UNDATED_RELEASES.lock() {
+        undated.shift_remove(&(tool.to_string(), version.to_string()));
+    }
+}
+
+/// What went unchecked for `version`, if resolution picked it without a
+/// release date: the cutoff, and the lookup error if one was raised.
+fn unchecked_release(tool: &str, version: &str) -> Option<(Timestamp, Option<String>)> {
+    UNDATED_RELEASES
+        .lock()
+        .ok()?
+        .get(&(tool.to_string(), version.to_string()))
+        .cloned()
+}
+
+/// The cutoff that went unchecked for `version`, if resolution picked it
+/// without a release date.
+#[cfg(test)]
+fn unchecked_release_cutoff(tool: &str, version: &str) -> Option<Timestamp> {
+    unchecked_release(tool, version).map(|(before, _)| before)
+}
+
+/// Warn that `version` is about to be installed although the release-age cutoff
+/// could not check it, because its backend returned no release date for it.
+/// Silent for a version resolution did not pick under a cutoff.
+pub(crate) fn warn_if_release_date_unchecked(ba: &BackendArg, version: &str) {
+    let backend = ba.full();
+    match unchecked_release(&ba.short, version) {
+        Some((before, Some(err))) => warn_once!(
+            "{backend}@{version}: could not read its release date to check the {before} cutoff, allowing it: {err} (exclude it with minimum_release_age_excludes to silence this)"
+        ),
+        Some((before, None)) => warn_once!(
+            "{backend}@{version} has no release date, so the {before} cutoff cannot be checked and it is allowed (exclude it with minimum_release_age_excludes to silence this)"
+        ),
+        None => {}
     }
 }
 

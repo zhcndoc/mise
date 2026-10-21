@@ -11,13 +11,13 @@ mise 的每项安全控制都针对一个阶段，涵盖从加载项目配置到
 
 | 风险                                                                     | 控制措施                                        | 默认状态                                                     |
 | ------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
-| 进入仓库或在其中运行 mise 时，仓库配置执行了代码                       | [配置文件信任](#configuration-trust)             | 开启                                                         |
-| 自动化流程必须读取他人编写的配置                                        | [安全模式](#safe-mode)                           | 关闭；设置 `MISE_SAFE=1` 启用                                |
-| 受信任的配置在审核后发生了变化                                          | [偏执模式](/paranoid.html)                       | 关闭                                                         |
-| 下载内容遭到篡改或替换                                                  | [下载验证](#download-verification)               | 后端和上游项目支持时开启                                     |
-| 新发布的版本存在恶意内容                                                | [最低发布时长](#minimum-release-age)             | 大多数[后端](#which-backends-have-a-default) 默认延迟 24 小时 |
-| 任务或命令读取、写入或访问了超出所需范围的内容                          | [沙箱](/sandboxing.html)                         | 关闭；仅支持 Linux 和 macOS                                  |
-| 密钥进入了 Shell、日志或不需要它的进程                                  | [密钥](#secrets)                                 | 选择启用                                                     |
+| 进入仓库或在其中运行 mise 时，仓库配置执行了代码                       | [配置文件信任](#configuration-trust)              | 开启                                                         |
+| 自动化流程必须读取他人编写的配置                                        | [安全模式](#safe-mode)                            | 关闭；设置 `MISE_SAFE=1` 启用                                |
+| 受信任的配置在审核后发生了变化                                          | [偏执模式](/paranoid.html)                        | 关闭                                                         |
+| 下载内容遭到篡改或替换                                                  | [下载验证](#download-verification)                | 后端和上游项目支持时开启                                     |
+| 新发布的版本存在恶意内容                                                | [最低发布时长](#minimum-release-age)              | 所有[后端](#which-backends-have-a-default) 默认延迟 24 小时  |
+| 任务或命令读取、写入或访问了超出所需范围的内容                          | [沙箱](/sandboxing.html)                          | 关闭；仅支持 Linux 和 macOS                                  |
+| 密钥进入了 Shell、日志或不需要它的进程                                  | [密钥](#secrets)                                  | 选择启用                                                     |
 
 每项控制措施都有各自的作用范围。信任配置不会验证上游发布内容；为任务启用沙箱，也不会在 mise 解析配置时为 mise 本身启用沙箱。
 
@@ -40,7 +40,7 @@ mise 的每项安全控制都针对一个阶段，涵盖从加载项目配置到
 - `.tool-versions` 只有包含模板语法或内联工具选项（例如 `node[postinstall=...] 24`）时才需要信任。
 - `.nvmrc` 等惯用版本文件始终不需要信任。
 - 任务文件（包括来自 [`task_config.includes`](/tasks/task-discovery.html) 的 TOML 文件）只有包含模板语法或列出 `secrets` 时才需要信任。
-- [`.miserc.toml`](/configuration.html#miserc) 始终不需要信任。它只保存用于选择要加载哪些配置文件的早期设置，其中的模板也不能调用 `exec()` 或 `read_file()`。
+- [`.miserc.toml`](/configuration.html#miserc) 始终不需要信任。它只保存用于选择要加载哪些配置文件的早期设置，其中的模板也不能调用 `exec()`、`read_file()`、`read_json()`、`read_yaml()` 或 `read_toml()`。
 
 [偏执模式](/paranoid.html)会取消这些例外，`.miserc.toml` 除外：全局和系统配置之外的所有其他配置文件都需要信任。
 
@@ -125,7 +125,7 @@ MISE_SAFE=1 mise lock --bump --dry-run --json
 
 以下操作会以 `<operation> is disabled in safe mode (MISE_SAFE=1)` 错误退出：
 
-- 任意配置模板中的 `exec()` 和 `read_file()`。
+- 任意配置模板中的 `exec()`、`read_file()`、`read_json()`、`read_yaml()` 和 `read_toml()`。
 - 运行任务。
 - `postinstall` 和 `install_env` 工具选项。
 - asdf 插件脚本，因此 `asdf:` 后端的工具无法列出或安装版本。
@@ -204,7 +204,7 @@ minimum_release_age = "7d" # raise the default 24h delay to 7 days
 
 ### 哪些后端默认启用
 
-未配置时长时，mise 会对 `aqua:`、`cargo:`、内置工具、`forgejo:`、`gem:`、`github:`、`gitlab:`、`go:`、`npm:`、`packslip:`、`pypi:`、`spm:` 和 `ubi:` 工具应用默认的 24 小时延迟。其他后端（例如 `http:`、`s3:`、`conda:`、`dotnet:`、`asdf:` 和 `vfox:`）只有在你配置时长后才会延迟。
+未显式配置时，mise 会对所有后端应用 24 小时默认延迟。可使用 [`minimum_release_age_excludes`](/configuration/settings.html#minimum_release_age_excludes) 排除某个工具或后端。
 
 后端只能筛选其已知发布日期的版本：
 
@@ -213,7 +213,7 @@ minimum_release_age = "7d" # raise the default 24h delay to 7 days
 | 筛选工具自身的版本                                | 会报告发布日期的后端，例如 `aqua:`、`cargo:`、`github:`、`gitlab:`、`go:`、`npm:`、`pypi:` 和大多数内置工具                     |
 | 筛选安装时解析的依赖                              | `npm:` 和 `pypi:`（`pipx:` 是别名）                                                                                              |
 
-没有发布日期的版本不会被筛选。其他后端可以延迟工具自身的版本，但无法延迟安装器或编译器获取的依赖。有关如何将时长限制传递给软件包管理器，请参阅 [npm](/dev-tools/backends/npm.html) 和 [PyPI](/dev-tools/backends/pypi.html) 后端页面。
+没有发布日期的版本不会被筛选。安装这类版本时，mise 会警告它无法检查截止时间，因此该版本并未被延迟；可改用会报告发布日期的后端，或排除该工具以关闭警告。其他后端可以延迟工具自身的版本，但无法延迟安装器或编译器获取的依赖。有关如何将时长限制传递给软件包管理器，请参阅 [npm](/dev-tools/backends/npm.html) 和 [PyPI](/dev-tools/backends/pypi.html) 后端页面。
 
 ### 时长限制的适用范围
 

@@ -191,6 +191,19 @@ mise exec -- deploy --version
 
 返回 `{ versions = { ... } }`，其中是按照工具发行策略从旧到新排列的版本字符串。mise 会保留此顺序。版本不一定遵循 SemVer，也可以是日期、预发行版或通道名称。工具插件的 `Available` 钩子则相反，需要按从新到旧排列。
 
+条目也可以是表格，例如 `{ version = "2.1.0", created_at = "2026-01-31T12:00:00Z" }`；同一个列表中可以混合字符串和表格。`created_at` 是 RFC 3339 格式的发布日期。mise 会将其用于[`minimum_release_age`](/configuration/settings.html#minimum_release_age) 和 `--before`。没有日期或无法解析的版本会视为无日期版本，截止时间不会隐藏这类版本。只要注册表提供发布日期，就请返回该字段。
+
+如果注册表包含会变动的名称（例如 GHCup 的 `recommended` GHC），请通过 `aliases` 返回名称到对应版本的映射表：
+
+```lua
+return {
+  versions = { "9.8.4", "9.10.3", "9.14.1" },
+  aliases = { recommended = "9.10.3" },
+}
+```
+
+之后，mise 会将 `tool@recommended` 解析为 `9.10.3`，安装到 `9.10.3/` 并在锁文件中记录 `9.10.3`，因此名称指向的版本变动时，工具也会随之更新。配置中的别名优先级更高。以数字开头的版本请求，以及 `latest`、`system` 或包含 `:` 的请求，都不会作为别名查询。在支持 `aliases` 的版本发布之前，mise 会忽略此字段，因此插件可以立即返回它。
+
 ### BackendInstall
 
 | `ctx` 字段      | 含义                                                    | 示例                                                           |

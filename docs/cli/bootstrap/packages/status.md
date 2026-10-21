@@ -6,7 +6,7 @@ description: "显示 `[bootstrap.packages]` 中软件包的状态"
 # `mise bootstrap packages status`
 
 - **用法：** `mise bootstrap packages status [-J --json] [--missing]`
-- **别名：** `ls`
+- **别名：** `ls`、`list`
 - **作用：** 只读
 - **源代码：** [`src/cli/system/status.rs`](https://github.com/jdx/mise/blob/main/src/cli/system/status.rs)
 

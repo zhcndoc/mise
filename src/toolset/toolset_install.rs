@@ -891,6 +891,12 @@ impl Toolset {
             tv.install_path_is_explicit = true;
         }
         let before_date = transitive_dependency_before_date(tr, &tv);
+        // Silent unless resolution picked this version under a cutoff without a
+        // date, so it needs no cutoff check of its own: an upgrade installs what
+        // it picked as an exact pin, which has no `before_date` here.
+        if !opts.dry_run {
+            crate::backend::warn_if_release_date_unchecked(tv.ba(), &tv.version);
+        }
 
         let ctx = InstallContext {
             config: config.clone(),
@@ -1105,9 +1111,11 @@ impl Toolset {
             if !plugin.is_installed() {
                 // An unprefixed packslip entry already resolved to vfox, so
                 // only an explicit non-vfox prefix can reach this.
-                if url.starts_with("packslip:") && plugin_type != PluginType::Vfox {
+                if url.starts_with("packslip:")
+                    && !matches!(plugin_type, PluginType::Vfox | PluginType::VfoxBackend)
+                {
                     eyre::bail!(
-                        "plugin {plugin_key}: packslip plugin sources require the vfox plugin type"
+                        "plugin {plugin_key}: packslip plugin sources require the vfox or vfox-backend plugin type"
                     );
                 }
                 plugin

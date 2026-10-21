@@ -126,7 +126,7 @@ python = { version = "3.13", auto_update = false }
 ```
 
 ::: tip 24 小时的延迟可能意味着最长 48 小时
-更新会遵循 [`minimum_release_age`](/security.html#minimum-release-age)。[大多数后端](/security.html#which-backends-have-a-default)的默认值为 `24h`。发行版发布 24 小时后才符合更新条件，而 mise 要到下次检查时才会发现它。因此，如果至少每个检查间隔启动一次工具，更新会在发行版发布后的 24 至 48 小时内完成；如果没有启动，则还会更晚。
+更新会遵循 [`minimum_release_age`](/security.html#minimum-release-age)，所有[后端](/security.html#which-backends-have-a-default)默认值均为 `24h`。若后端会报告发布日期，某个版本需在发布 24 小时后才符合更新条件，而 mise 要到下次检查时才会发现它。因此，如果至少每个检查间隔启动一次工具，更新会在发行版发布后的 24 至 48 小时内完成；如果没有启动，则还会更晚。无法确定发布日期的版本不会被延迟，mise 在安装时会发出警告。
 :::
 
 要延长等待时间，可在工具条目中设置 `minimum_release_age`：

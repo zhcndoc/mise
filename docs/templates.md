@@ -111,6 +111,9 @@ _.path = "{{ config_source | canonicalize | dirname }}/bin"
 | --------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `exec(command, [cache_key], [cache_duration])`            | 字符串  | 使用默认内联 shell 运行 `command`，并返回去掉末尾换行符的输出。参见 [`exec()`](#exec)。                                                                                                                                                                   |
 | `read_file(path)`                                         | 字符串  | 返回文件内容。相对路径以模板所在目录为基准，而不是 `cwd`；参见 [`exec()`](#exec)。                                                                                                                                                                      |
+| `read_json(path)`                                         | 任意    | 读取并解析 JSON 文件。参见 [`read_json()`](#read-structured)。                                                                                                                                                                                          |
+| `read_yaml(path)`                                         | 任意    | 读取并解析 YAML 文件。参见 [`read_json()`](#read-structured)。                                                                                                                                                                                          |
+| `read_toml(path)`                                         | 任意    | 读取并解析 TOML 文件。参见 [`read_json()`](#read-structured)。                                                                                                                                                                                          |
 | `get_env(name, [default])`                                | 字符串  | 返回 mise 启动时环境中的变量；若变量未设置，则返回 `default`。空值会原样返回。此函数看不到 `[env]` 的值；建议使用 <span v-pre>`{{ env.NAME \| default(value="...") }}`</span>。 |
 | `arch([x64=...], [arm64=...])`                            | 字符串  | 返回 CPU 架构：`x64`、`arm64` 或其他 Rust 架构名称。可传入以架构命名的关键字来重命名，例如 <span v-pre>`{{ arch(x64="amd64", arm64="aarch64") }}`</span>。                                                                                          |
 | `os([linux=...], [macos=...], [windows=...])`             | 字符串  | 返回操作系统：`linux`、`macos` 或 `windows`。可用关键字重命名，例如 <span v-pre>`{{ os(macos="darwin") }}`</span>。                                                                                                                                     |
@@ -149,6 +152,29 @@ AWS_ACCOUNT_ID = "{{ exec(command='aws sts get-caller-identity --query Account -
 每次渲染模板时都会运行 `exec()`，包括使用 `--dry-run` 时。因此只能用它运行没有副作用的命令。
 `mise bootstrap --dry-run` 会禁用 `[bootstrap.hooks]` 命令中的 `exec()`；如果钩子命令调用了 `exec()`，预览会因 `exec() is disabled during dry run` 而中止。配置加载时仍会渲染 `[vars]` 和 `[env]`，因此其中的 `exec()` 即使在 `--dry-run` 下也会运行。
 :::
+
+### read_json()、read_yaml() 和 read_toml() {#read-structured}
+
+这些函数会读取并解析文件，让模板可以使用文件中已有的值，而不必在 `mise.toml` 中重复定义。相对路径与 `read_file()` 相同，以配置文件所在目录为基准。
+
+可通过 `["key"]` 和 `[0]` 访问解析结果：
+
+```toml
+[tools]
+node = "{{ read_json(path='package.json')['volta']['node'] }}"
+pnpm = "{{ read_json(path='package.json')['packageManager'] | split(pat='@') | last }}"
+pulumi = "{{ read_yaml(path='Pulumi.yaml')['requiredPulumiVersion'] }}"
+mytool = "{{ read_toml(path='pyproject.toml')['tool']['mytool']['version'] }}"
+```
+
+Tera 不支持在函数调用后直接使用 `.key`。如需从同一文件读取多个值，请先用 `set` 绑定结果，此时可以使用 `.key`：<span v-pre>`{% set pkg = read_json(path='package.json') %}{{ pkg.volta.node }}`</span>。
+
+- 文件无法读取或解析时会报错，并指出函数名和文件名。
+- 指定的键不存在时会报错；可添加 <span v-pre>`| default(value="...")`</span> 设置回退值。
+- TOML 日期和时间会作为字符串处理。
+- YAML 的布尔值规则与 mise 的其他 YAML 读取方式相同：只有 `true` 和 `false` 会识别为布尔值，因此 `yes` 和 `on` 仍是字符串。未加引号的数字（例如 `3.270`）会解析为数字并显示为 `3.27`，因此应在文件中将版本号加上引号。
+
+与 `read_file()` 一样，这些函数需要[受信任](/security.html#configuration-trust)的配置，在[安全模式](/security.html#safe-mode)下会被禁用，且不能用于 `.miserc.toml`。
 
 ## 过滤器 {#filters}
 
@@ -347,7 +373,7 @@ mise 会先渲染 [`.miserc.toml`](/configuration.html#miserc)，再读取 `mise
 - 无需项目上下文的函数，例如 `arch()`、`os()`、`os_family()`、`libc()`、`avx2()`、`num_cpus()`、`choice()` 和 `get_env()`
 - 所有[过滤器](#filters)和[测试条件](#tests)
 
-以下内容不可用：`mise_env`（由 `.miserc.toml` 自身设置）、`exec()`、`read_file()`、`mise_bin`、`mise_pid`、`vars` 和 `tools`。
+以下内容不可用：`mise_env`（由 `.miserc.toml` 自身设置）、`exec()`、`read_file()`、`read_json()`、`read_yaml()`、`read_toml()`、`mise_bin`、`mise_pid`、`vars` 和 `tools`。
 
 <div v-pre>
 

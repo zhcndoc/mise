@@ -95,7 +95,11 @@ profiles = ["monitoring"]
 services = ["proxy", "grafana"]
 ```
 
-`services` 会将 `up` 和 `stop` 限定为指定服务；未设置时，mise 会管理文件和配置档案启用的所有服务。请将密钥值放在由 [`[bootstrap.files]`](/bootstrap/files.html) 模板以 `0600` 权限写入的环境文件中，而不要放在 `mise.toml` 里。
+`services` 会将 `up` 和 `stop` 限定为指定服务；未设置时，mise 会管理文件和配置档案启用的所有服务。
+
+如果服务使用 `network_mode: service:vpn`、`ipc: service:` 或 `pid: service:`，请显式设置 `files`。Compose 会在将这些值解析为容器 ID 后计算哈希，因此 mise 会在比较哈希前将它们固定到正在运行的容器；只有显式设置 `files` 时才能这样处理。若未设置 `files`，使用这些配置的项目每次运行都会报告需要更新。引用服务的 `volumes_from` 无法固定，同样会在每次运行时报告更新。
+
+请将密钥值放在由 [`[bootstrap.files]`](/bootstrap/files.html) 模板以 `0600` 权限写入的环境文件中，而不要放在 `mise.toml` 里。
 
 ## 使用 Podman 或其他引擎 {#engines-and-privileges}
 

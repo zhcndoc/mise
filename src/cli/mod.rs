@@ -79,6 +79,7 @@ mod local;
 pub(crate) mod lock;
 mod ls;
 mod ls_remote;
+mod lsp;
 mod mcp;
 mod oci;
 mod outdated;
@@ -362,6 +363,7 @@ pub(crate) enum Commands {
     Lock(lock::Lock),
     Ls(ls::Ls),
     LsRemote(ls_remote::LsRemote),
+    Lsp(lsp::Lsp),
     Mcp(mcp::Mcp),
     Oci(oci::Oci),
     Packslip(packslip::Packslip),
@@ -428,9 +430,10 @@ impl Commands {
     /// Commands that run as a service, with no terminal reading their output.
     ///
     /// Windows gives a Scheduled Task's console program a console of its own,
-    /// and the watcher would run behind that window until it was hidden. This
-    /// is asked for right after parsing, ahead of the auto-update that could
-    /// otherwise leave the window on screen for a download's worth of time.
+    /// and a watcher would keep its window open for as long as it runs. This
+    /// is checked after invocation validation and before automatic updates,
+    /// so validation errors remain visible without keeping a window open
+    /// throughout an update download.
     fn runs_unattended(&self) -> bool {
         match self {
             Self::Dotfiles(cmd) => cmd.is_watch(),
@@ -454,6 +457,7 @@ impl Commands {
                 | Self::HookEnv(_)
                 | Self::HookNotFound(_)
                 | Self::Implode(_)
+                | Self::Lsp(_)
                 | Self::PublishSystemInstall(_)
                 | Self::SelfUpdate(_)
                 | Self::ToolUpdate(_)
@@ -467,7 +471,9 @@ impl Commands {
 
     /// Shell integration runs on startup and every prompt, so it must not do
     /// an all-project tracked-config scan or mutate installed tools. Deferred
-    /// cleanup will run on the next ordinary command instead.
+    /// cleanup will run on the next ordinary command instead. The cleanup also
+    /// loads the current directory's config, which `trust` and `untrust` are
+    /// deciding about and so must not load.
     fn allows_tool_purgatory_auto_prune(&self) -> bool {
         !matches!(
             self,
@@ -475,18 +481,30 @@ impl Commands {
                 | Self::Deactivate(_)
                 | Self::HookEnv(_)
                 | Self::HookNotFound(_)
+                | Self::Lsp(_)
                 | Self::PublishSystemInstall(_)
                 | Self::Ssh(_)
                 | Self::ToolUpdate(_)
+                | Self::Trust(_)
+                | Self::Untrust(_)
         )
     }
 
+    /// Whether running this command is the user's decision to run the project's code. Asking a
+    /// command for its own help is not: the parser leaves `--help` to the task for `run` and
+    /// `watch`, so those see it here.
     fn implicitly_trusts_active_config(&self) -> bool {
+        // A shim that is not mise itself (the Windows `exe` and `file` modes, the scripts
+        // `reshim` writes for an asdf plugin's shims) runs `mise x -- <tool>` in place of
+        // `handle_shim` and names itself in `__MISE_SHIM_PATH`. The user typed the tool's name,
+        // not `mise exec`, so that dispatch trusts no more than `handle_shim` does.
+        if matches!(self, Self::Exec(_)) && crate::env::MISE_SHIM_PATH.read().unwrap().is_some() {
+            return false;
+        }
         matches!(self, Self::Daemons(cmd) if cmd.starts())
-            || matches!(
-                self,
-                Self::Exec(_) | Self::Install(_) | Self::Run(_) | Self::Watch(_)
-            )
+            || matches!(self, Self::Run(cmd) if !cmd.only_prints_help())
+            || matches!(self, Self::Watch(cmd) if !cmd.only_prints_help())
+            || matches!(self, Self::Exec(_) | Self::Install(_))
     }
 
     /// Builds the subcommand's future on the heap instead of awaiting it
@@ -534,6 +552,7 @@ impl Commands {
             Self::Lock(cmd) => Box::pin(cmd.run()),
             Self::Ls(cmd) => Box::pin(cmd.run()),
             Self::LsRemote(cmd) => Box::pin(cmd.run()),
+            Self::Lsp(cmd) => Box::pin(cmd.run()),
             Self::Mcp(cmd) => Box::pin(cmd.run()),
             Self::Oci(cmd) => Box::pin(cmd.run()),
             Self::Packslip(cmd) => Box::pin(cmd.run()),
@@ -567,7 +586,7 @@ impl Commands {
             Self::Trust(cmd) => Box::pin(cmd.run()),
             Self::Uninstall(cmd) => Box::pin(cmd.run()),
             Self::Unset(cmd) => Box::pin(cmd.run()),
-            Self::Untrust(cmd) => Box::pin(async move { cmd.run() }),
+            Self::Untrust(cmd) => Box::pin(cmd.run()),
             Self::Unuse(cmd) => Box::pin(cmd.run()),
             Self::Upgrade(cmd) => Box::pin(cmd.run()),
             Self::Usage(cmd) => Box::pin(async move { cmd.run() }),
@@ -927,15 +946,20 @@ pub(crate) fn register_frontend() {
         lockfiles_after_install: |config, installed| {
             Box::pin(async move { lock::Lock::generate_after_install(config, &installed).await })
         },
-        subcommand_names: || {
-            Cli::command()
-                .subcommands
-                .iter()
-                .flat_map(|s| std::iter::once(s.name).chain(s.aliases.iter().copied()))
-                .map(str::to_string)
-                .collect()
-        },
+        subcommand_names,
     });
+}
+
+/// Every visible command name and alias, for "did you mean" suggestions.
+fn subcommand_names() -> Vec<String> {
+    self::usage::spec()
+        .cmd
+        .subcommands
+        .iter()
+        .filter(|(_, s)| !s.hide)
+        .flat_map(|(name, s)| std::iter::once(name).chain(s.aliases.iter()))
+        .cloned()
+        .collect()
 }
 
 impl Cli {
@@ -1104,7 +1128,10 @@ impl Cli {
             cli.command
                 .as_ref()
                 .is_some_and(Commands::implicitly_trusts_active_config)
-                || cli.task.is_some(),
+                || cli
+                    .task
+                    .as_deref()
+                    .is_some_and(|task| !matches!(task, "help" | "-h" | "--help")),
         );
         // Validate --cd path BEFORE Settings processes it and changes the directory
         validate_cd_path(&cli.cd)?;
@@ -1154,7 +1181,7 @@ impl Cli {
         // land in a console somebody can still read, and before the
         // auto-update that could otherwise leave the window up for a download.
         if cli.command.as_ref().is_some_and(Commands::runs_unattended) {
-            crate::windows_console::hide_if_unattended();
+            crate::windows_console::hide_if_unattended()?;
         }
         let auto_update_command_eligible = !print_version
             && cli
@@ -1291,6 +1318,7 @@ impl Cli {
                         task_cache_explain_json: false,
                         task_cache_stats: false,
                         timeout: None,
+                        lock_timeout: None,
                         skip_deps: false,
                         skip_tools: false,
                         no_deps: false,
@@ -1449,6 +1477,15 @@ fn display_args(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestion_candidates_leave_out_hidden_commands() {
+        let names = subcommand_names();
+        assert!(names.iter().any(|n| n == "list"), "{names:?}");
+        for hidden in ["__publish-system-install", "hook-env"] {
+            assert!(!names.iter().any(|n| n == hidden), "{hidden} in {names:?}");
+        }
+    }
     use mise_util::args::GLOBAL_FLAGS_WITH_VALUES;
 
     #[test]
@@ -1788,8 +1825,8 @@ mod tests {
         assert!(unattended(&["mise", "bootstrap", "dotfiles", "watch"]));
 
         // the launcher a Windows user service's task starts is handed a
-        // console the same way, and its window has to go before settings,
-        // config, or an auto-update can hold it on screen
+        // console the same way. Validate settings and the invocation first so
+        // errors stay readable, then prepare it before automatic updates.
         assert!(unattended(&[
             "mise",
             "bootstrap",
@@ -1975,6 +2012,30 @@ mod tests {
     }
 
     #[test]
+    fn trust_commands_do_not_allow_tool_purgatory_auto_prune() {
+        for args in [
+            vec!["mise", "trust"],
+            vec!["mise", "trust", "--show"],
+            vec!["mise", "trust", "--ignore"],
+            vec!["mise", "untrust"],
+        ] {
+            let cli = parse_cli(&args).unwrap();
+            assert!(
+                !cli.command
+                    .as_ref()
+                    .is_some_and(Commands::allows_tool_purgatory_auto_prune),
+                "expected {args:?} to skip deferred pruning"
+            );
+        }
+        let cli = parse_cli(&["mise", "ls"]).unwrap();
+        assert!(
+            cli.command
+                .as_ref()
+                .is_some_and(Commands::allows_tool_purgatory_auto_prune)
+        );
+    }
+
+    #[test]
     fn test_commands_that_implicitly_trust_active_config() {
         let trusting = [
             vec!["mise", "run", "task"],
@@ -1996,6 +2057,11 @@ mod tests {
             vec!["mise", "hook-env", "-s", "bash"],
             vec!["mise", "env"],
             vec!["mise", "ls"],
+            vec!["mise", "run", "--help"],
+            vec!["mise", "run", "-h"],
+            vec!["mise", "run", "--force", "--help"],
+            vec!["mise", "watch", "--", "--help"],
+            vec!["mise", "watch", "--", "-h"],
         ];
         for args in non_trusting {
             let cli = parse_cli(&args).unwrap();

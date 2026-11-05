@@ -17,7 +17,10 @@ use walkdir::WalkDir;
 
 use super::prefix;
 use crate::options::ManagerPackageOptions;
-use crate::{InstallOpts, PackageRequest, PackageState, PackageStatus, SystemPackageManager};
+use crate::{
+    InstallOpts, PackageManagement, PackageRequest, PackageState, PackageStatus,
+    SystemPackageManager,
+};
 use eyre::Result;
 use mise_ui::multi_progress_report::MultiProgressReport;
 use mise_ui::progress_report::{ProgressIcon, SingleReport};
@@ -73,15 +76,19 @@ pub struct BrewCaskManager {
 
 struct InstallAncestry<'a> {
     tokens: &'a BTreeSet<String>,
+    /// Tokens the user asked for, so a cask requested alongside its parent is
+    /// still recorded as requested when it is installed as the parent's dependency.
+    requested: &'a BTreeSet<String>,
     inherited_appdir: Option<&'a Path>,
 }
 
-impl InstallAncestry<'_> {
-    fn root() -> Self {
+impl<'a> InstallAncestry<'a> {
+    fn root(requested: &'a BTreeSet<String>) -> Self {
         static ROOT: std::sync::LazyLock<BTreeSet<String>> =
             std::sync::LazyLock::new(BTreeSet::new);
         Self {
             tokens: &ROOT,
+            requested,
             inherited_appdir: None,
         }
     }
@@ -95,6 +102,14 @@ enum InstallMode {
 
 /// Preserves matching recorded versions in both modes and self-updating casks
 /// during installation; explicit upgrades may assess their live bundle versions.
+/// The tokens of the requested casks (the last segment of a tapped name).
+fn requested_tokens(pkgs: &[PackageRequest]) -> BTreeSet<String> {
+    pkgs.iter()
+        .filter_map(|pkg| pkg.name.rsplit('/').next())
+        .map(str::to_string)
+        .collect()
+}
+
 fn should_skip_installed(cask: &Cask, version: &str, mode: InstallMode) -> bool {
     version == cask.version || (mode == InstallMode::Install && cask.auto_updates)
 }
@@ -168,7 +183,12 @@ fn installed_skip_reason(
     let Ok(live) = read_app_version(&live_path) else {
         return Ok(Some("skipped: installed app version is unreadable"));
     };
-    if !app_version_outdated(&cask.version, live.short.as_deref(), live.build.as_deref()) {
+    if !app_version_outdated(
+        &cask.version,
+        live.short.as_deref(),
+        live.build.as_deref(),
+        Some(&receipt.version),
+    ) {
         return Ok(Some(
             "skipped: installed app is current, newer, or incomparable",
         ));
@@ -197,7 +217,7 @@ fn pkg_upgrade_skip_reason(cask_version: &str, versions: &[String]) -> Option<&'
     let cask_short = cask_version.split(',').next().unwrap_or(cask_version);
     let mut outdated = false;
     for version in versions {
-        if app_version_outdated(cask_version, Some(version), None) {
+        if app_version_outdated(cask_version, Some(version), None, None) {
             outdated = true;
         } else if matches!(
             compare_app_versions(version, cask_short),
@@ -442,6 +462,10 @@ struct CaskTransactionJournal<'a> {
 pub struct CaskPruneCandidate {
     pub token: String,
     pub version: String,
+    /// Why a plain prune would have skipped this cask, when `--force` overrode
+    /// it. A forced removal deletes only the recorded targets mise can still
+    /// attribute to the cask, so anything the cask's own scripts set up stays.
+    pub forced: Option<String>,
     version_dir: PathBuf,
     receipt: CaskReceipt,
 }
@@ -450,6 +474,10 @@ pub struct CaskPruneCandidate {
 pub struct CaskPruneSkip {
     pub token: String,
     pub reason: String,
+    /// Whether `--force` would remove the cask anyway. Only skips that mean
+    /// "cannot prove it is unchanged" qualify; a cask mise cannot attribute
+    /// to itself is never forced.
+    pub forceable: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -504,6 +532,7 @@ impl BrewCaskManager {
         {
             bail!("brew casks are installed at their current version ('{p}')");
         }
+        let requested = requested_tokens(pkgs);
         if opts.dry_run {
             // Gated like the real install: previewing a macos-app apply must
             // not create a Homebrew prefix that applying it never would.
@@ -511,7 +540,7 @@ impl BrewCaskManager {
                 prefix::bootstrap(true)?;
             }
             for pkg in pkgs {
-                self.install_one(pkg, opts, None, manager_options, mode)
+                self.install_one(pkg, opts, None, &requested, manager_options, mode)
                     .await?;
             }
             return Ok(());
@@ -523,7 +552,7 @@ impl BrewCaskManager {
             let pr: Box<dyn SingleReport> =
                 mpr.add(&format!("{}:{}", self.manager.label(), pkg.name));
             match self
-                .install_one(pkg, opts, Some(&*pr), manager_options, mode)
+                .install_one(pkg, opts, Some(&*pr), &requested, manager_options, mode)
                 .await
             {
                 Ok(version) => {
@@ -562,6 +591,7 @@ impl BrewCaskManager {
         req: &PackageRequest,
         opts: &InstallOpts,
         pr: Option<&dyn SingleReport>,
+        requested: &BTreeSet<String>,
         manager_options: &ManagerPackageOptions,
         mode: InstallMode,
     ) -> Result<String> {
@@ -569,7 +599,7 @@ impl BrewCaskManager {
             req,
             opts,
             pr,
-            InstallAncestry::root(),
+            InstallAncestry::root(requested),
             manager_options,
             mode,
         )
@@ -671,6 +701,7 @@ impl BrewCaskManager {
                 None,
                 InstallAncestry {
                     tokens: &ancestors,
+                    requested: ancestry.requested,
                     inherited_appdir: cask.appdir.as_deref(),
                 },
                 manager_options,
@@ -918,6 +949,15 @@ impl BrewCaskManager {
             install_generic_artifact(&stage, &tmp_caskroom, artifact, &mut flight_targets)?;
             record_cask_action(cask.manager, &mut journal, &format!("artifact[{index}]"))?;
         }
+        // Postflight hooks receive the caskroom as staged_path and may modify
+        // the binary payload there before its artifacts are linked.
+        if artifacts
+            .binaries
+            .iter()
+            .any(|binary| payload_backed_binary(&stage, binary))
+        {
+            durabilize_stage_payload(&stage, &tmp_caskroom, &artifacts.apps)?;
+        }
         execute_flight_steps_recording(
             &cask,
             &artifacts.postflight_steps,
@@ -930,13 +970,6 @@ impl BrewCaskManager {
         execute_lifecycle_hook(&cask, &tmp_caskroom, &appdir, "postflight", pr).await?;
         if has_lifecycle_hook(&cask, "postflight") {
             record_cask_action(cask.manager, &mut journal, "postflight_hook")?;
-        }
-        if artifacts
-            .binaries
-            .iter()
-            .any(|binary| payload_backed_binary(&stage, binary))
-        {
-            durabilize_stage_payload(&stage, &tmp_caskroom, &artifacts.apps)?;
         }
         for (index, binary) in artifacts.binaries.iter().enumerate() {
             stage_binary(&stage, &tmp_caskroom, &cask, &artifacts.apps, binary)?;
@@ -1019,6 +1052,20 @@ impl BrewCaskManager {
         remove_stale_versions(&caskroom_token, &cask.version)?;
         remove_cask_journals(cask.manager, &cask.token)?;
         file::remove_all(stage)?;
+        if manager_options.brew_cask_homebrew_metadata()
+            && homebrew_handoff_applies(&cask, req)
+            && let Err(err) = write_homebrew_metadata(
+                &caskroom_token,
+                &cask.token,
+                &cask.version,
+                ancestry.tokens.is_empty() || ancestry.requested.contains(&cask.token),
+            )
+        {
+            warn!(
+                "brew-cask:{}: installed, but failed to write Homebrew metadata: {err:#}",
+                cask.token
+            );
+        }
         Ok(cask.version)
     }
 }
@@ -1186,16 +1233,108 @@ impl SystemPackageManager for BrewCaskManager {
         pkgs: &[PackageRequest],
         manager_options: &ManagerPackageOptions,
     ) -> Result<Vec<PackageStatus>> {
-        let mut statuses = Vec::with_capacity(pkgs.len());
-        for req in pkgs {
+        use futures_util::{StreamExt, TryStreamExt};
+
+        // Concurrently, in order. Official casks resolve from the bulk index
+        // without a request, but a third-party tap cask is a chain of GitHub
+        // requests and a Ruby evaluation, about 1.3s each; one after another,
+        // three of them were half of a `bootstrap packages upgrade` that had
+        // nothing to do. `buffered` keeps `pkgs` order and still stops at the
+        // first error in that order, as the loop it replaces did.
+        let jobs = mise_util::jobs::normalize(mise_settings::Settings::get().jobs);
+        futures_util::stream::iter(pkgs.iter().map(|req| async move {
             let cask = self.resolve_cask(req, manager_options, false).await?;
-            statuses.push(PackageStatus {
+            Ok(PackageStatus {
                 request: req.clone(),
                 state: package_state(req, &cask)?,
                 display_name: None,
-            });
+            })
+        }))
+        .buffered(jobs)
+        .try_collect()
+        .await
+    }
+
+    async fn management(
+        &self,
+        status: &PackageStatus,
+        manager_options: &ManagerPackageOptions,
+    ) -> Option<PackageManagement> {
+        if matches!(status.state, PackageState::Missing) || status.state.is_unavailable() {
+            return None;
         }
-        Ok(statuses)
+        let Ok(cask) = self
+            .resolve_cask(&status.request, manager_options, false)
+            .await
+        else {
+            return Some(PackageManagement::Unknown);
+        };
+        Some(cask_management(&cask))
+    }
+
+    async fn reconcile_installed(
+        &self,
+        statuses: &[PackageStatus],
+        manager_options: &ManagerPackageOptions,
+    ) -> Result<()> {
+        if !self.manager.uses_homebrew_caskroom() || !manager_options.brew_cask_homebrew_metadata()
+        {
+            return Ok(());
+        }
+        for status in statuses {
+            if !status.state.is_installed()
+                || status.request.desired != crate::PackageDesiredState::Present
+            {
+                continue;
+            }
+            let cask = match self
+                .resolve_cask(&status.request, manager_options, false)
+                .await
+            {
+                Ok(cask) => cask,
+                Err(err) => {
+                    warn!(
+                        "brew-cask:{}: skipping Homebrew metadata handoff: {err:#}",
+                        status.request.name
+                    );
+                    continue;
+                }
+            };
+            if !homebrew_handoff_applies(&cask, &status.request) {
+                continue;
+            }
+            let _caskroom_lock = lock_caskroom(cask.manager)?;
+            // Re-read under the lock: Homebrew may have taken the cask meanwhile.
+            // Ownership first: a Homebrew-owned cask may keep a stale or malformed mise
+            // receipt that must not be read.
+            if !matches!(homebrew_metadata_present(&cask.token), Ok(false)) {
+                continue;
+            }
+            // The current appdir setting says nothing about where an existing install
+            // went; its receipt does. Homebrew would reinstall into /Applications.
+            if previous_receipt(&cask)?.is_some_and(|receipt| {
+                receipt
+                    .apps
+                    .iter()
+                    .any(|app| !app.starts_with(DEFAULT_APP_DIR))
+            }) {
+                continue;
+            }
+            if let Some(version) = mise_installed_cask_version(&cask)?
+                && let Err(err) = write_homebrew_metadata(
+                    &caskroom_token_dir(cask.manager, &cask.token),
+                    &cask.token,
+                    &version,
+                    true,
+                )
+            {
+                warn!(
+                    "brew-cask:{}: failed to write Homebrew metadata: {err:#}",
+                    cask.token
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Installs casks with default manager options, preserving installed self-updaters.
@@ -1234,6 +1373,21 @@ impl SystemPackageManager for BrewCaskManager {
     ) -> Result<()> {
         self.install_with_manager_options(pkgs, opts, manager_options, InstallMode::Upgrade)
             .await
+    }
+}
+
+/// Whether install and upgrade would leave an installed cask to Homebrew.
+///
+/// Only the Homebrew-backed manager shares the Caskroom, so only it can find a
+/// token that Homebrew itself owns.
+fn cask_management(cask: &Cask) -> PackageManagement {
+    if !cask.manager.uses_homebrew_caskroom() {
+        return PackageManagement::Mise;
+    }
+    match homebrew_metadata_present(&cask.token) {
+        Ok(true) => PackageManagement::Homebrew,
+        Ok(false) => PackageManagement::Mise,
+        Err(_) => PackageManagement::Unknown,
     }
 }
 
@@ -1615,27 +1769,31 @@ fn install_app_in(
     // Suffix hashes stay derived from the logical path so temporary and backup
     // names are stable across runs.
     let name_hash = mise_util::hash::hash_to_str(&logical_target.display().to_string());
-    let tmp_name = replace_bundle_extension(&name, &format!("mise-tmp-{name_hash}"));
     let old_name = replace_bundle_extension(&name, &format!("mise-old-{name_hash}"));
-    remove_all_at(&parent.fd, &tmp_name)?;
-    ditto_into(&caskroom_app, &parent.fd, &tmp_name)?;
+    // The copy keeps its final bundle name inside a hidden directory, so app
+    // launchers that index the appdir never see a bundle under a staging name.
+    let stage_name = std::ffi::OsString::from(format!(".mise-tmp-{name_hash}"));
+    remove_all_at(&parent.fd, &stage_name)?;
+    let stage = create_stage_dir_at(&parent.fd, &stage_name)?;
+    ditto_into(&caskroom_app, &stage, &name)?;
     if defer_if_running && app_is_running(&logical_target) {
-        remove_all_at(&parent.fd, &tmp_name)?;
+        remove_all_at(&parent.fd, &stage_name)?;
         file::remove_all(&caskroom_app)?;
         return Ok(AppInstall::Running);
     }
     // The earlier checks concluded this entry may put a bundle here. Only an
     // entry that owns the target may replace what is at it; otherwise the swap
     // must refuse anything that appeared while the copies ran.
-    if let Err(err) = activate_app_at(
+    let activated = activate_app_at(
         &parent,
         &name,
-        &tmp_name,
+        &stage,
         &old_name,
         &caskroom_app,
         &logical_target,
         !require_unowned,
-    ) {
+    );
+    if let Err(err) = activated {
         if err.downcast_ref::<AppTargetCollision>().is_none() {
             // A real activation failure. The swap may already have happened and
             // only the caskroom symlink failed, so leave both staged copies in
@@ -1643,7 +1801,7 @@ fn install_app_in(
             return Err(err);
         }
         // Nothing was activated, so the staged copies are safe to discard.
-        let _ = remove_all_at(&parent.fd, &tmp_name);
+        let _ = remove_all_at(&parent.fd, &stage_name);
         let _ = file::remove_all(&caskroom_app);
         return Err(err.wrap_err(format!(
             "{}: '{}' was created by something else while this app was being staged; it was left untouched",
@@ -1651,6 +1809,8 @@ fn install_app_in(
             logical_target.display()
         )));
     }
+    // The bundle has left the staging directory; drop the empty shell.
+    let _ = remove_all_at(&parent.fd, &stage_name);
     // Remove macOS quarantine attribute so Gatekeeper doesn't block the app.
     let relative = Path::new(".").join(&name);
     let _ = run_in_trusted_dir(
@@ -1860,6 +2020,27 @@ fn validate_adoptable_apps(cask: &Cask, stage: &Path, apps: &[AppArtifact]) -> R
     Ok(())
 }
 
+/// Create the hidden staging directory `name` inside `dir` and return it opened
+/// without following symlinks, so later steps address the bound inode rather
+/// than re-resolving the name.
+#[cfg(unix)]
+fn create_stage_dir_at<Fd: std::os::fd::AsFd>(
+    dir: Fd,
+    name: &std::ffi::OsStr,
+) -> Result<std::os::fd::OwnedFd> {
+    nix::sys::stat::mkdirat(&dir, name, nix::sys::stat::Mode::S_IRWXU).wrap_err_with(|| {
+        format!(
+            "brew-cask: cannot create staging directory {}",
+            Path::new(name).display()
+        )
+    })?;
+    let stage = open_dir_nofollow_at(&dir, name)?;
+    if nix::sys::stat::fstat(&stage)?.st_uid != nix::unistd::geteuid().as_raw() {
+        bail!("brew-cask: staging directory is not owned by the current user");
+    }
+    Ok(stage)
+}
+
 /// Replace an app bundle's extension for a bare file name
 /// (`Firefox.app` + `mise-tmp-ab12` -> `Firefox.mise-tmp-ab12`).
 fn replace_bundle_extension(name: &std::ffi::OsStr, extension: &str) -> std::ffi::OsString {
@@ -1873,7 +2054,7 @@ fn replace_bundle_extension(name: &std::ffi::OsStr, extension: &str) -> std::ffi
 fn activate_app_at(
     parent: &TrustedOperationParent,
     name: &std::ffi::OsStr,
-    tmp_name: &std::ffi::OsStr,
+    stage: impl std::os::fd::AsFd,
     old_name: &std::ffi::OsStr,
     caskroom_app: &Path,
     logical_target: &Path,
@@ -1891,7 +2072,7 @@ fn activate_app_at(
             logical_target.display()
         );
     }
-    swap_app_at(parent, name, tmp_name, old_name, allow_replace)?;
+    swap_app_at(parent, name, stage, old_name, allow_replace)?;
     replace_caskroom_app_with_symlink(caskroom_app, logical_target)
 }
 
@@ -1941,7 +2122,7 @@ impl std::error::Error for AppTargetCollision {}
 fn swap_app_at(
     parent: &TrustedOperationParent,
     name: &std::ffi::OsStr,
-    tmp_name: &std::ffi::OsStr,
+    stage: impl std::os::fd::AsFd,
     old_name: &std::ffi::OsStr,
     allow_replace: bool,
 ) -> Result<()> {
@@ -1966,7 +2147,7 @@ fn swap_app_at(
             Err(nix::errno::Errno::EEXIST) => return Err(AppTargetCollision.into()),
             Err(err) => return Err(err.into()),
         }
-        if let Err(err) = nix::fcntl::renameat(&parent.fd, tmp_name, &parent.fd, name) {
+        if let Err(err) = nix::fcntl::renameat(&stage, name, &parent.fd, name) {
             // Drop the placeholder, or a later apply reads the empty bundle
             // left behind as a foreign app and refuses.
             let _ = nix::unistd::unlinkat(&parent.fd, name, nix::unistd::UnlinkatFlags::RemoveDir);
@@ -1985,7 +2166,7 @@ fn swap_app_at(
     if exists_at(&parent.fd, name)? {
         nix::fcntl::renameat(&parent.fd, name, &parent.fd, old_name)?;
     }
-    if let Err(e) = nix::fcntl::renameat(&parent.fd, tmp_name, &parent.fd, name) {
+    if let Err(e) = nix::fcntl::renameat(&stage, name, &parent.fd, name) {
         // Restore the old app if the swap failed.
         if exists_at(&parent.fd, old_name)? {
             let _ = nix::fcntl::renameat(&parent.fd, old_name, &parent.fd, name);
@@ -2770,7 +2951,7 @@ fn trusted_parent_is_writable(parent: &TrustedOperationParent) -> Result<bool> {
 }
 
 #[cfg(unix)]
-fn current_process_groups() -> Result<Vec<nix::libc::gid_t>> {
+pub(crate) fn current_process_groups() -> Result<Vec<nix::libc::gid_t>> {
     // SAFETY: A null buffer with size zero is the documented way to query the
     // number of supplementary groups and does not dereference the pointer.
     let count = unsafe { nix::libc::getgroups(0, std::ptr::null_mut()) };
@@ -4100,36 +4281,97 @@ fn durabilize_stage_payload(stage: &Path, caskroom: &Path, apps: &[AppArtifact])
         .filter_map(|app| find_app(stage, &app.source))
         .map(|source| file::desymlink_path(&source))
         .collect();
-    for entry in std::fs::read_dir(stage)? {
-        let source = entry?.path();
-        if !path_starts_with_resolved_root(&source, stage) {
-            continue;
+    // Directories are copied entry by entry so every link below them is
+    // rebased from its own installed location. Their permissions are applied
+    // last, so a read-only source directory can still be filled.
+    let mut directory_permissions = vec![];
+    let mut directories = vec![stage.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let source = entry.path();
+            if !path_starts_with_resolved_root(&source, stage) {
+                continue;
+            }
+            let resolved = file::desymlink_path(&source);
+            if app_sources.contains(&resolved) {
+                continue;
+            }
+            let Some(relative) = staged_relative_path(stage, &source) else {
+                continue;
+            };
+            let target = caskroom.join(&relative);
+            if let Ok(metadata) = target.symlink_metadata() {
+                // Generic artifacts can create a shared parent directory. Fill
+                // its missing entries without replacing installed files or links.
+                // `source` resolves inside the stage, so following a directory
+                // link here cannot leave it.
+                if metadata.is_dir() && source.is_dir() {
+                    directories.push(source);
+                }
+                continue;
+            }
+            if !path_starts_with_resolved_root(&target, caskroom) {
+                bail!(
+                    "brew-cask: refusing to stage cask payload through a path outside the caskroom: {}",
+                    target.display()
+                );
+            }
+            if let Some(parent) = target.parent() {
+                file::create_dir_all(parent)?;
+            }
+            let is_link = entry.file_type()?.is_symlink();
+            if is_link
+                && !app_sources.iter().any(|app| resolved.starts_with(app))
+                && let Some(resolved_relative) = staged_relative_path(stage, &resolved)
+            {
+                // Keep a link between payload entries a link, so a binary sees
+                // postflight edits to the file it points at. A relative link
+                // is kept when it reaches the same payload path from the
+                // caskroom; one that does not, such as a link reached through
+                // a followed directory link, or an absolute one, points at
+                // its resolved entry in the caskroom instead, relative to its
+                // own directory so the caskroom rename at activation leaves it
+                // valid. A link into a skipped app bundle is copied, since
+                // nothing would be left for it to point at.
+                let link = std::fs::read_link(&source)?;
+                let reached_from = |directory: &Path, root: &Path| {
+                    lexically_normalized_path(&file::desymlink_path(directory).join(&link))
+                        .strip_prefix(file::desymlink_path(root))
+                        .ok()
+                        .map(Path::to_path_buf)
+                };
+                let keeps_its_meaning = link.is_relative()
+                    && source
+                        .parent()
+                        .zip(target.parent())
+                        .is_some_and(|(from, to)| {
+                            let staged = reached_from(from, stage);
+                            staged.is_some() && staged == reached_from(to, caskroom)
+                        });
+                let link = if keeps_its_meaning {
+                    link
+                } else {
+                    let installed = caskroom.join(resolved_relative);
+                    target
+                        .parent()
+                        .and_then(|parent| relative_path_between(parent, &installed))
+                        .unwrap_or(installed)
+                };
+                file::make_symlink(&link, &target)?;
+            } else if source.is_dir() && !is_link {
+                file::create_dir_all(&target)?;
+                directory_permissions.push((target, entry.metadata()?.permissions()));
+                directories.push(source);
+            } else if source.is_dir() {
+                file::copy_dir_all_preserve_symlinks(&source, &target)?;
+            } else {
+                file::copy(&source, &target)?;
+            }
         }
-        let resolved = file::desymlink_path(&source);
-        if app_sources.contains(&resolved) {
-            continue;
-        }
-        let Some(relative) = staged_relative_path(stage, &source) else {
-            continue;
-        };
-        let target = caskroom.join(&relative);
-        if !path_starts_with_resolved_root(&target, caskroom) {
-            bail!(
-                "brew-cask: refusing to stage cask payload through a path outside the caskroom: {}",
-                target.display()
-            );
-        }
-        if target.symlink_metadata().is_ok() {
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            file::create_dir_all(parent)?;
-        }
-        if source.is_dir() {
-            file::copy_dir_all_preserve_symlinks(&source, &target)?;
-        } else {
-            file::copy(&source, &target)?;
-        }
+    }
+    for (directory, permissions) in directory_permissions.into_iter().rev() {
+        std::fs::set_permissions(directory, permissions)?;
     }
     Ok(())
 }

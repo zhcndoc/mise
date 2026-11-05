@@ -191,6 +191,7 @@ impl<'a> PipxOptions<'a> {
         self.with()?;
         self.exposed_package_names()?;
         self.dependency_prereleases()?;
+        self.registry_index_priority()?;
         if self.selected_python()?.is_some() {
             for args in [self.uvx_args(), self.pipx_args()].into_iter().flatten() {
                 if uv_args_select_python(&shell_words::split(args)?) {
@@ -228,6 +229,17 @@ impl<'a> PipxOptions<'a> {
 
     fn registry_url(&self) -> Option<&'a str> {
         self.values.str("registry_url")
+    }
+
+    /// Whether `registry_url` is searched ahead of the default index instead of
+    /// replacing it when locking (`registry_index = "priority"`).
+    fn registry_index_priority(&self) -> Result<bool> {
+        match self.values.raw().opts.get("registry_index") {
+            None => Ok(false),
+            Some(toml::Value::String(value)) if value == "default" => Ok(false),
+            Some(toml::Value::String(value)) if value == "priority" => Ok(true),
+            Some(_) => bail!("registry_index must be default or priority"),
+        }
     }
 
     fn uvx_args(&self) -> Option<&'a str> {
@@ -413,13 +425,18 @@ impl Backend for PIPXBackend {
                     Self::fetch_simple_index(&registry_url, &package, url).await?
                 }
             }
-            PipxRequest::Git(source) => match PipxRequest::github_repo(&source.repo) {
-                Some(repo) => {
-                    let data = github::list_releases(&repo).await?;
-                    Self::versions_from_github_releases(data)
-                }
-                None => Self::versions_from_git_tags(&source.remote()).await?,
-            },
+            PipxRequest::Git(source) => {
+                Self::git_source_versions(
+                    &source,
+                    async |repo| {
+                        Ok(Self::versions_from_github_releases(
+                            github::list_releases(repo).await?,
+                        ))
+                    },
+                    Self::versions_from_git_tags,
+                )
+                .await?
+            }
         };
         Ok(versions.into_iter().map(stamp_pep440_prerelease).collect())
     }
@@ -629,9 +646,25 @@ impl Backend for PIPXBackend {
             && tv
                 .uv_python
                 .as_ref()
-                .is_none_or(|(python, _)| python.as_os_str().is_empty())
+                .is_none_or(|(python, _)| python.as_os_str().is_empty() || !python.exists())
         {
-            self.bind_uv_python(ctx, &mut tv).await?;
+            let selected = PipxOptions::new(&request_options)
+                .selected_python()?
+                .is_some();
+            if let Err(error) = self.bind_uv_python(ctx, &mut tv).await {
+                // Resolving the graph lets uv download an interpreter, but replaying it
+                // needs one mise can hand to `uv sync`. Without one, an install that
+                // is not `--locked` can still proceed from the version alone.
+                if selected || ctx.locked {
+                    return Err(error);
+                }
+                warn!(
+                    "{} dependency graph skipped; installing with version-only resolution: {error}",
+                    self.ba.short
+                );
+                tv.uv_lock = None;
+                tv.uv_python = None;
+            }
         }
         reset_selected_python_install_path(&mut tv)?;
         Ok(tv)
@@ -648,7 +681,14 @@ impl Backend for PIPXBackend {
             .is_some();
         if tv.uv_lock.is_some() {
             if tv.uv_python.is_none() {
-                return Ok(false);
+                // No interpreter to replay the graph with: an install made from the
+                // version alone is as good as it gets, so do not retry it every time.
+                let locked = config
+                    .invocation_locked_for(tv.request.source(), Settings::get().locked)
+                    || tv.request.tool_config_locked(config, true);
+                return Ok(!selected_python
+                    && !locked
+                    && self.is_version_installed(config, tv, check_symlink));
             }
         } else if self.uv_lock_allowed(tv) {
             let revision = self.uv_lockfile_version(config, tv)?;
@@ -963,12 +1003,7 @@ impl PIPXBackend {
     async fn git_head(remote: &str) -> Result<String> {
         timeout::run_with_timeout_async(
             async || {
-                let output = crate::cmd::cmd_read_async_inherited_env(
-                    "git",
-                    &["ls-remote", remote, "HEAD"],
-                    std::iter::empty::<(&str, &std::ffi::OsStr)>(),
-                )
-                .await?;
+                let output = crate::git::ls_remote(&[], remote, &["HEAD"]).await?;
                 Self::git_head_from_ls_remote(&output)
                     .ok_or_else(|| eyre!("no HEAD found for {remote}"))
             },
@@ -985,16 +1020,39 @@ impl PIPXBackend {
         })
     }
 
+    /// Lists the versions of a Git source: GitHub releases for a github.com
+    /// remote, Git tags otherwise. A private repository is invisible to the
+    /// versions host and the API without a token, but an SSH remote already
+    /// shows the user can reach it with their key, so only that case falls
+    /// back to Git tags when GitHub cannot list it. With a token GitHub can
+    /// see the repository but may hold no releases for its tags, so an empty
+    /// release list falls back the same way.
+    async fn git_source_versions(
+        source: &GitSource,
+        github_releases: impl AsyncFnOnce(&str) -> Result<Vec<VersionInfo>>,
+        git_tags: impl AsyncFnOnce(&str) -> Result<Vec<VersionInfo>>,
+    ) -> Result<Vec<VersionInfo>> {
+        let Some(repo) = PipxRequest::github_repo(&source.repo) else {
+            return git_tags(&source.remote()).await;
+        };
+        match github_releases(&repo).await {
+            Err(err) if PipxRequest::is_ssh_remote(&source.repo) => {
+                debug!("{repo} not listed by GitHub ({err}), trying git ls-remote");
+                git_tags(&source.remote()).await
+            }
+            Ok(releases) if releases.is_empty() && PipxRequest::is_ssh_remote(&source.repo) => {
+                debug!("{repo} has no GitHub releases, trying git ls-remote");
+                git_tags(&source.remote()).await
+            }
+            result => result,
+        }
+    }
+
     /// Lists tags from a Git remote while preserving Git's source ordering.
     async fn versions_from_git_tags(remote: &str) -> Result<Vec<VersionInfo>> {
         timeout::run_with_timeout_async(
             async || {
-                let output = crate::cmd::cmd_read_async_inherited_env(
-                    "git",
-                    &["ls-remote", "--tags", "--refs", remote],
-                    std::iter::empty::<(&str, &std::ffi::OsStr)>(),
-                )
-                .await?;
+                let output = crate::git::ls_remote(&["--tags", "--refs"], remote, &[]).await?;
                 Ok(Self::versions_from_git_ls_remote(&output))
             },
             Settings::get().fetch_remote_versions_timeout(),
@@ -1034,7 +1092,9 @@ impl PIPXBackend {
         );
         let (url, auth) = keyring::index_request(registry, &url).await?;
         headers.extend(auth);
-        let resp = HTTP_FETCH.get_async_with_headers(url, &headers).await?;
+        let resp =
+            crate::http::buffer_body(HTTP_FETCH.get_async_with_headers(url, &headers).await?)
+                .await?;
         let content_type = resp
             .headers()
             .get(CONTENT_TYPE)
@@ -1127,11 +1187,31 @@ impl PIPXBackend {
             return Some(fields[1].to_string());
         }
 
+        // The name ends at the first `-` whose prefix normalizes to the package.
+        // Normalizing the prefix anew at every `-` is quadratic in the filename,
+        // which the index controls, so normalize the stem in one pass (mirroring
+        // `normalize_package_name`) and stop as soon as it diverges from the
+        // package: normalization only appends, so no longer prefix can match.
         let stem = filename.strip_suffix(".tar.gz")?;
-        stem.match_indices('-').find_map(|(index, _)| {
-            (Self::normalize_package_name(&stem[..index]) == normalized_package)
-                .then(|| stem[index + 1..].to_string())
-        })
+        let mut rest = normalized_package.as_str();
+        let mut separator = false;
+        for (index, c) in stem.char_indices() {
+            if c == '-' && rest.is_empty() {
+                return Some(stem[index + 1..].to_string());
+            }
+            if matches!(c, '-' | '_' | '.') {
+                if !separator {
+                    rest = rest.strip_prefix('-')?;
+                    separator = true;
+                }
+            } else {
+                for c in c.to_lowercase() {
+                    rest = rest.strip_prefix(c)?;
+                }
+                separator = false;
+            }
+        }
+        None
     }
 
     fn normalize_package_name(package: &str) -> String {
@@ -1248,6 +1328,9 @@ impl PIPXBackend {
                 .cache_path()
                 .join(format!("latest_version_info_{registry_hash}.msgpack.z")),
         )
+        // The directory is named by the kebab-cased short name, which two
+        // packages can share.
+        .with_cache_key(self.ba.full())
         .with_fresh_duration(Settings::get().fetch_remote_versions_cache())
         .build()
     }
@@ -1588,6 +1671,10 @@ impl PipxRequest {
         }
         let repo = url.path().trim_matches('/').trim_end_matches(".git");
         (!repo.is_empty()).then(|| repo.to_string())
+    }
+
+    fn is_ssh_remote(url: &str) -> bool {
+        url::Url::parse(url).is_ok_and(|url| url.scheme() == "ssh")
     }
 
     fn extras_from_opts(&self, opts: &PipxOptions<'_>) -> String {
@@ -2258,6 +2345,41 @@ mod tests {
     }
 
     #[test]
+    fn splits_sdist_filenames_at_the_end_of_the_package_name() {
+        for (package, filename, version) in [
+            ("demo", "demo-1.0.tar.gz", Some("1.0")),
+            ("demo-pkg", "demo-pkg-1.0.tar.gz", Some("1.0")),
+            ("demo-pkg", "Demo._-PKG-1.0.tar.gz", Some("1.0")),
+            ("demo", "demo-pkg-1.0.tar.gz", Some("pkg-1.0")),
+            ("demo", "demo--1.0.tar.gz", Some("-1.0")),
+            ("demo", "demo_1.0.tar.gz", None),
+            ("demo", "demos-1.0.tar.gz", None),
+            ("demo-pkg", "demo-1.0.tar.gz", None),
+            ("demo", "demo.tar.gz", None),
+        ] {
+            assert_eq!(
+                PIPXBackend::version_from_distribution_filename(package, filename).as_deref(),
+                version,
+                "{package} {filename}"
+            );
+        }
+    }
+
+    #[test]
+    fn sdist_filename_parsing_is_linear_in_the_filename() {
+        // Quadratic work on names this long does not finish in a test run.
+        for (package, stem) in [
+            ("demo", "x-".repeat(2_000_000)),
+            ("demo-pkg", format!("demo{}", "-".repeat(4_000_000))),
+        ] {
+            assert_eq!(
+                PIPXBackend::version_from_distribution_filename(package, &format!("{stem}.tar.gz")),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn parses_versions_from_git_ls_remote() {
         let output = "\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v0.8.0\n\
@@ -2772,6 +2894,74 @@ cccccccccccccccccccccccccccccccccccccccc\trefs/heads/main\n";
             PipxRequest::github_repo("ssh://git@github.com/psf/black"),
             Some("psf/black".to_string())
         );
+        assert!(PipxRequest::is_ssh_remote("ssh://git@github.com/psf/black"));
+        assert!(!PipxRequest::is_ssh_remote("https://github.com/psf/black"));
+    }
+
+    fn git_source(repo: &str) -> GitSource {
+        GitSource::new(repo, None)
+    }
+
+    fn tag_versions() -> Vec<VersionInfo> {
+        PIPXBackend::versions_from_git_ls_remote("abc\trefs/tags/v1.0.0\n")
+    }
+
+    #[tokio::test]
+    async fn ssh_github_source_falls_back_to_git_tags_when_github_cannot_list_it() {
+        let source = git_source("ssh://git@github.com/owner/private");
+        let versions = PIPXBackend::git_source_versions(
+            &source,
+            async |_| Err(eyre::eyre!("404")),
+            async |remote| {
+                assert_eq!(remote, "ssh://git@github.com/owner/private");
+                Ok(tag_versions())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(versions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ssh_github_source_falls_back_to_git_tags_when_github_has_no_releases() {
+        let source = git_source("ssh://git@github.com/owner/private");
+        let versions = PIPXBackend::git_source_versions(
+            &source,
+            async |_| Ok(vec![]),
+            async |remote| {
+                assert_eq!(remote, "ssh://git@github.com/owner/private");
+                Ok(tag_versions())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(versions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ssh_github_source_keeps_github_releases_without_calling_git() {
+        let source = git_source("ssh://git@github.com/owner/private");
+        let versions = PIPXBackend::git_source_versions(
+            &source,
+            async |_| Ok(tag_versions()),
+            async |_| panic!("git must not be called"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(versions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn https_github_source_keeps_the_github_error_without_calling_git() {
+        let source = git_source("https://github.com/owner/private");
+        let err = PIPXBackend::git_source_versions(
+            &source,
+            async |_| Err(eyre::eyre!("404")),
+            async |_| panic!("git must not be called"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "404");
     }
 
     #[tokio::test]
@@ -2890,6 +3080,32 @@ cccccccccccccccccccccccccccccccccccccccc\trefs/heads/main\n";
         opts.opts.insert(
             "with".to_string(),
             toml::Value::Array(vec![toml::Value::Integer(1)]),
+        );
+        assert!(PipxOptions::new(&opts).validate_semantic().is_err());
+    }
+
+    #[test]
+    fn registry_index_selects_priority_only_when_asked() {
+        let mut opts = ToolVersionOptions::default();
+        assert!(!PipxOptions::new(&opts).registry_index_priority().unwrap());
+        for (value, priority) in [("default", false), ("priority", true)] {
+            opts.opts.insert(
+                "registry_index".to_string(),
+                toml::Value::String(value.to_string()),
+            );
+            assert_eq!(
+                PipxOptions::new(&opts).registry_index_priority().unwrap(),
+                priority
+            );
+        }
+        opts.opts.insert(
+            "registry_index".to_string(),
+            toml::Value::String("sideways".to_string()),
+        );
+        assert!(PipxOptions::new(&opts).validate_semantic().is_err());
+        opts.opts.insert(
+            "registry_index".to_string(),
+            toml::Value::Array(vec![toml::Value::String("priority".to_string())]),
         );
         assert!(PipxOptions::new(&opts).validate_semantic().is_err());
     }

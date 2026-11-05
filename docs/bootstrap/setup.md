@@ -126,13 +126,16 @@ mise dot undo
 
 ### 连接私有仓库 {#share-your-setup-optional}
 
-要共享配置，请连接一个私有 Git 仓库，称为 origin。首先跟踪 mise 配置，这样下一台机器也会获取工具、软件包、shell 激活设置和监视器：
+To share your setup, connect a private Git repository, called an origin. First,
+跟踪 mise 配置目录，以便下一台机器也能获得你的工具、软件包、Shell 激活配置和文件监视器：
 
 ```sh
-mise dot track ~/.config/mise/config.toml
+mise dot track ~/.config/mise
 ```
 
-在仓库托管平台上完成身份验证。GitHub 用户可运行：
+跟踪整个目录也会共享你之后添加的文件，例如 `config.work.toml`、`conf.d/` 片段和 `miserc.toml`。以 `.local.toml` 结尾的文件不会共享，因此每台机器都可以保留自己的 `miserc.local.toml` 来选择[配置环境](/configuration/environments.html)，并在 `config.local.toml` 中保存仅适用于该机器的设置。
+
+Authenticate with your repository host. For GitHub:
 
 ```sh
 mise use -g gh

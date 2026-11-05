@@ -57,12 +57,13 @@ run = "npm run dev"
 
 | 声明                                         | 运行内容                                                                                       |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `[daemons]` 下的 `postgres = "18"`           | 与条目同名并使用该版本的[服务预设](/daemons/presets.html)                                           |
-| `preset = "postgres"` 和 `version = "18"`  | 预设的命名实例，可选覆盖设置                                                                        |
-| `run = "exec npm run dev"`                 | Shell 命令                                                                                       |
-| `task = "dev:core"`                        | [mise 任务](#daemons-that-run-a-task)，可选传入 `args`                                             |
-| `project = "../services"`                  | [其他项目](/daemons/sharing.html#use-a-daemon-from-another-project)中声明的 daemon                 |
-| `provider = "local-postgres"`              | [共享服务器](/daemons/sharing.html#shared-server-providers)上的数据库                              |
+| `postgres = "18"` under `[daemons]`        | The [service preset](/daemons/presets.html) named like the entry, at that version               |
+| `preset = "postgres"` and `version = "18"` | A named instance of a preset, with optional overrides                                           |
+| `run = "exec npm run dev"`                 | A shell command                                                                                 |
+| `task = "dev:core"`                        | A [mise task](#daemons-that-run-a-task), with optional `args`                                   |
+| `image = "postgres:18"`                    | 通过 Docker 或 Podman 运行的[容器](/daemons/containers.html) |
+| `project = "../services"`                  | A daemon declared in [another project](/daemons/sharing.html#use-a-daemon-from-another-project) |
+| `provider = "local-postgres"`              | A database on a [shared server](/daemons/sharing.html#shared-server-providers)                  |
 
 例如，声明一个开发服务器和第二个 PostgreSQL 实例：
 
@@ -109,29 +110,40 @@ run = "exec echo {{ vars.greeting | quote }} {{ env.AUDIENCE | quote }}"
 
 ## Daemon 配置键 {#daemon-keys}
 
-| 配置键                 | 形式                 | 含义                                                                                                                                                                                  |
-| ---------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`                  | custom, preset       | 长时间运行进程的 shell 命令。用于预设时，会替换预设命令。                                                                                                                            |
-| `task`, `args`         | task                 | 作为进程运行的 mise 任务及传入参数。详见[将任务作为 daemon 运行](#daemons-that-run-a-task)。                                                                                           |
-| `preset`, `version`    | preset               | [服务预设](/daemons/presets.html)及其工具所需版本。                                                                                                                                   |
-| `tool`                 | preset               | 使用不同于预设默认值的工具安装服务器。                                                                                                                                               |
-| `options`              | preset               | [预设选项](/daemons/presets.html#preset-options)，例如 `options.database`。                                                                                                           |
-| `port`                 | custom, task, preset | 固定端口、`"auto"` 或 `{ auto = true, base = 3000 }`。单独设置 `"auto"` 只适用于预设；自定义 daemon 或任务型 daemon 需要 `base`。详见[端口](/daemons/worktrees.html#ports)。         |
-| `ports`                | preset               | 覆盖预设的[命名端口](/daemons/worktrees.html#named-ports)。                                                                                                                           |
-| `init`                 | custom, task, preset | 在进程启动前运行的[初始化命令](#setup-before-the-process-starts)。                                                                                                                     |
-| `mise`                 | custom, task         | 设置为 `false` 时，进程及其初始化命令不会使用项目工具环境。                                                                                                                          |
-| `data_dir`             | preset               | 预设数据的存放位置。详见[将数据保存在检出目录中](/daemons/data.html#keep-data-in-the-checkout)。                                                                                      |
-| `proxy`                | custom, task, preset | Daemon 的主机名标签；设为 `false` 时不分配主机名。详见[单个 daemon 的代理设置](/daemons/worktrees.html#per-daemon-proxy-settings)。                                                 |
-| `proxy_tls`            | custom, task, preset | `"terminate"` 或 `"passthrough"`：由代理还是 daemon 处理 TLS。                                                                                                                     |
-| `proxy_idle_timeout`   | custom, task, preset | 由代理启动的 daemon 可空闲运行多久才会停止。详见[停止空闲 daemon](/daemons/worktrees.html#stop-idle-daemons)。                                                                         |
-| `project`, `name`      | reference            | 其他项目的目录及其中 daemon 的名称。详见[使用其他项目的 daemon](/daemons/sharing.html#use-a-daemon-from-another-project)。                                                           |
-| `provider`, `resource` | provider             | 共享服务器以及要使用的数据库或账户。详见[共享服务器 provider](/daemons/sharing.html#shared-server-providers)。                                                                         |
+| Key                    | Forms                           | Meaning                                                                                                                                                                                                            |
+| ---------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run`                  | custom, preset                  | Shell command for the long-running process. On a preset, it replaces the preset's command.                                                                                                                         |
+| `task`, `args`         | task                            | A mise task to run as the process, and the arguments passed to it. See [Run a task as a daemon](#daemons-that-run-a-task).                                                                                         |
+| `image`                | container                       | 要通过 Docker 或 Podman 运行的容器镜像。详见[容器守护进程](/daemons/containers.html)，其中还介绍了 `command`、`container_port`、`ports`、`volumes`、`data_mount`、`runtime` 和 `runtime_args`。 |
+| `preset`, `version`    | preset                          | A [service preset](/daemons/presets.html) and the version request for its tool.                                                                                                                                    |
+| `tool`                 | preset                          | Installs the server from a different tool than the preset's default.                                                                                                                                               |
+| `options`              | preset                          | [Preset options](/daemons/presets.html#preset-options), such as `options.database`.                                                                                                                                |
+| `port`                 | custom, task, container, preset | 固定端口、`"auto"` 或 `{ auto = true, base = 3000 }`。单独使用 `"auto"` 仅适用于预设；自定义或任务守护进程需要设置 `base`。详见[端口](/daemons/worktrees.html#ports)。 |
+| `ports`                | preset, container               | 覆盖预设的[命名端口](/daemons/worktrees.html#named-ports)，或设置容器的[映射端口](/daemons/containers.html#several-ports)。 |
+| `init`                 | custom, task, container, preset | 进程启动前运行的[设置命令](#setup-before-the-process-starts)。 |
+| `mise`                 | custom, task, container         | 设为 `false` 时，进程及其初始化命令不会使用项目工具环境。 |
+| `data_dir`             | preset, container               | 预设数据的存放位置，详见[在检出目录中保留数据](/daemons/data.html#keep-data-in-the-checkout)。对于容器，此项是 `data_mount` 在主机上的路径。 |
+| `proxy`                | custom, task, container, preset | 守护进程的主机名标签；设为 `false` 时不使用主机名。详见[按守护进程配置代理](/daemons/worktrees.html#per-daemon-proxy-settings)。 |
+| `proxy_tls`            | custom, task, container, preset | `"terminate"` 或 `"passthrough"`：由代理还是守护进程处理 TLS。 |
+| `proxy_idle_timeout`   | custom, task, container, preset | 代理启动的守护进程空闲多久后停止。详见[停止空闲守护进程](/daemons/worktrees.html#stop-idle-daemons)。 |
+| `project`, `name`      | reference                       | Another project's directory, and the daemon's name there. See [Use a daemon from another project](/daemons/sharing.html#use-a-daemon-from-another-project).                                                        |
+| `provider`, `resource` | provider                        | A shared server, and the database or account to use on it. See [Shared server providers](/daemons/sharing.html#shared-server-providers).                                                                           |
 
-其他键（例如 `ready_port`、`ready_cmd`、`depends`、`auto` 或 `boot_start`）会传递给 pitchfork。mise 会调整其中两类内容：将 `depends` 中指向 [`project` 引用](/daemons/sharing.html#use-a-daemon-from-another-project)的条目改写为被引用 daemon 的完整 ID；并通过 `mise x` 运行 `ready_cmd` 和 `health_cmd`，使其可以使用项目工具和 `[env]`，除非 daemon 设置了 `mise = false`。这两个命令也可以写成参数数组，pitchfork 2.30.0 及更高版本会在不启动 shell 的情况下运行数组。详见 pitchfork 的[配置参考](https://pitchfork.jdx.dev/reference/configuration)。`project` 引用只接受 `project` 和 `name`；`provider` 引用只接受 `provider` 和 `resource`。
+Any other key, such as `ready_port`, `ready_cmd`, `depends`, `auto`, or
+`boot_start`, is passed to pitchfork. mise adjusts two of them: it rewrites a
+`depends` entry that names a [`project` reference](/daemons/sharing.html#use-a-daemon-from-another-project)
+to the referenced daemon's full ID, and it runs `ready_cmd` and `health_cmd`
+through `mise x`, so they see the project's tools and `[env]`, unless the
+daemon sets `mise = false`. Either can also be an argument array, which
+pitchfork 2.30.0 and later runs without a shell. See
+pitchfork's
+[configuration reference](https://pitchfork.jdx.dev/reference/configuration).
+A `project` reference accepts only `project` and `name`, and a `provider`
+reference accepts only `provider` and `resource`.
 
-## 在任务运行前启动 daemon {#tasks-that-require-daemons}
+## Start daemons before a task {#tasks-that-require-daemons}
 
-在任务中添加 `daemons`，即可在任务主体运行前启动所需服务：
+Add `daemons` to a task to start its services before any task body runs:
 
 ```toml
 [daemons]

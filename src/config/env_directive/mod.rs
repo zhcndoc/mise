@@ -6,7 +6,7 @@ use crate::env_diff::EnvMap;
 use crate::file::display_path;
 use crate::path_env::PathEnv;
 use crate::tera::{
-    TeraEngine, contains_template_syntax, get_tera, render_str, tera_exec, tera1_exec,
+    TeraEngine, contains_template_syntax, get_tera, render_config_str, tera_exec, tera1_exec,
 };
 use crate::toolset::Toolset;
 use eyre::{Context, eyre};
@@ -29,7 +29,9 @@ pub mod prompt;
 mod source;
 pub(crate) mod venv;
 
-pub use mise_config::env::{AgeFormat, EnvDirective, EnvDirectiveOptions, RequiredValue};
+pub use mise_config::env::{
+    AgeFormat, EnvDirective, EnvDirectiveOptions, PathPosition, RequiredValue,
+};
 
 /// Show env directive paths the way the rest of mise does.
 pub(crate) fn register_hooks() {
@@ -43,6 +45,8 @@ pub struct EnvResults {
     pub env_remove: BTreeSet<String>,
     pub env_files: Vec<PathBuf>,
     pub env_paths: Vec<PathBuf>,
+    /// `_.path` entries declared with `position = "append"`: they go after tool paths
+    pub env_paths_append: Vec<PathBuf>,
     pub env_scripts: Vec<PathBuf>,
     pub redactions: Vec<String>,
     pub redaction_exclusions: BTreeSet<String>,
@@ -58,7 +62,8 @@ pub struct EnvResults {
     /// Files to watch for cache invalidation (from modules and _.source directives)
     pub watch_files: Vec<PathBuf>,
     /// True if any directive declared cacheable=false, is a dynamic module, or produced a
-    /// redacted or decrypted (age, sops) value, none of which may be written to the env cache
+    /// decrypted (age, sops) value, or a redacted one unless `env_cache_redacted` is on,
+    /// none of which may be written to the env cache
     pub has_uncacheable: bool,
 }
 
@@ -212,6 +217,7 @@ impl EnvResults {
             }
         };
         let mut paths: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut append_paths: Vec<(PathBuf, PathBuf)> = Vec::new();
         let safe_mode = Settings::safe_mode();
         // In safe mode, environment directives from project (non-global) config are
         // ignored — they would otherwise be applied to the host environment and to
@@ -289,8 +295,8 @@ impl EnvResults {
             //     &source
             // );
             let config_root = crate::config::config_file::config_root::config_root(&source);
-            ctx.insert("cwd", &*dirs::CWD);
-            ctx.insert("config_root", &config_root);
+            ctx.insert("cwd", &dirs::CWD.as_ref().map(|p| p.to_string_lossy()));
+            ctx.insert("config_root", &config_root.to_string_lossy());
             ctx.insert(
                 "config_source",
                 &crate::config::config_file::config_root::config_source(&source),
@@ -534,7 +540,7 @@ impl EnvResults {
                         env.insert(k.clone(), (decrypted_v, Some(source.clone())));
                     }
                 }
-                EnvDirective::Path(input_str, _opts) => {
+                EnvDirective::Path(input_str, opts) => {
                     let mut directive_ctx = EnvDirectiveContext {
                         config,
                         tera_ctx: &mut ctx,
@@ -547,7 +553,10 @@ impl EnvResults {
                         toolset,
                     };
                     let path = Self::path(&mut directive_ctx, input_str).await?;
-                    paths.push((path.clone(), source.clone()));
+                    match opts.position {
+                        PathPosition::Prepend => paths.push((path.clone(), source.clone())),
+                        PathPosition::Append => append_paths.push((path.clone(), source.clone())),
+                    }
                     // Don't modify PATH in env - just add to env_paths
                     // This allows consumers to control PATH ordering
                 }
@@ -661,18 +670,44 @@ impl EnvResults {
                         .collect();
                     // Incorporate _.path entries accumulated so far into PATH
                     // so that cmd.exec in the plugin can find tools on PATH.
-                    if !paths.is_empty() {
+                    if !paths.is_empty() || !append_paths.is_empty() {
                         let existing_path =
                             env_map.get(&*env::PATH_KEY).cloned().unwrap_or_default();
                         let mut path_env = PathEnv::from_path_str(&existing_path);
-                        for (p, path_source) in &paths {
+                        let resolve = |(p, path_source): &(PathBuf, PathBuf)| {
                             let config_root =
                                 crate::config::config_file::config_root::config_root(path_source);
-                            for s in env::split_paths(p) {
-                                path_env.add(normalize_path(&config_root, s));
+                            env::split_paths(p)
+                                .map(|s| normalize_path(&config_root, s))
+                                .collect_vec()
+                        };
+                        for entry in paths.iter().flat_map(resolve) {
+                            path_env.add(entry);
+                        }
+                        // A `tools = true` module already has the tool paths in PATH, and
+                        // appended entries belong behind them, not ahead.
+                        let tool_paths = match toolset {
+                            Some(ts) => ts.list_paths(config).await,
+                            None => vec![],
+                        };
+                        let tools_in_path =
+                            env::split_paths(&existing_path).any(|e| tool_paths.contains(&e));
+                        let mut appended = vec![];
+                        for entry in append_paths.iter().flat_map(resolve) {
+                            if tools_in_path {
+                                appended.push(entry);
+                            } else {
+                                path_env.add(entry);
                             }
                         }
-                        env_map.insert(env::PATH_KEY.to_string(), path_env.to_string());
+                        let mut entries = env::split_paths(&path_env.to_string()).collect_vec();
+                        if let Some(i) = entries.iter().rposition(|e| tool_paths.contains(e)) {
+                            entries.splice(i + 1..i + 1, appended);
+                        }
+                        env_map.insert(
+                            env::PATH_KEY.to_string(),
+                            env::join_paths(entries)?.to_string_lossy().to_string(),
+                        );
                     }
                     if log::log_enabled!(log::Level::Trace) {
                         if let Some(path) = env_map.get(&*env::PATH_KEY) {
@@ -716,22 +751,8 @@ impl EnvResults {
         }
         // trace!("resolve: paths: {:#?}", &paths);
         // trace!("resolve: ctx.env: {:#?}", &ctx.get("env"));
-        for (source, paths) in &paths.iter().chunk_by(|(_, source)| source) {
-            // Use the computed config_root (project root for nested configs) for path resolution
-            // to be consistent with other env directives like _.source and _.file
-            let config_root = crate::config::config_file::config_root::config_root(source);
-            let paths = paths.map(|(p, _)| p).collect_vec();
-            let mut paths = paths
-                .iter()
-                .rev()
-                .flat_map(|path| env::split_paths(path))
-                .map(|s| normalize_path(&config_root, s))
-                .collect::<Vec<_>>();
-            // r.env_paths is already reversed and paths should prepend r.env_paths
-            paths.reverse();
-            paths.extend(r.env_paths);
-            r.env_paths = paths;
-        }
+        Self::prepend_paths(&mut r.env_paths, &paths, normalize_path);
+        Self::prepend_paths(&mut r.env_paths_append, &append_paths, normalize_path);
 
         let context_vars_for_validation = Self::context_vars(&ctx);
         let oci_env_keys = if resolve_opts.vars {
@@ -754,7 +775,16 @@ impl EnvResults {
 
         // A redacted value is a secret by the user's or the directive's own account
         // (age values are redacted by default), and the env cache would write it to disk.
-        if !r.redactions.is_empty() {
+        // `env_cache_redacted` opts in; decrypted values were marked above regardless.
+        // A redacted var can change without the config file changing, and a `default` or
+        // `required` depends on the caller's environment, which the cache key does not see.
+        let caller_dependent = r
+            .redactions
+            .iter()
+            .any(|k| r.caller_env_keys.contains(k) || r.rendered_defaults.contains(k));
+        if !r.redactions.is_empty()
+            && (!Settings::get().env_cache_redacted || resolve_opts.vars || caller_dependent)
+        {
             r.has_uncacheable = true;
         }
 
@@ -901,7 +931,7 @@ impl EnvResults {
                 }
                 tera
             });
-            output = render_str(tera, input, ctx)
+            output = render_config_str(tera, input, ctx, path)
                 .wrap_err_with(|| eyre!("failed to parse template: '{input}'"))?;
         }
 
@@ -919,12 +949,38 @@ impl EnvResults {
         Ok(output)
     }
 
+    /// Puts each config file's `paths` ahead of `target`, so the config file that sorts last
+    /// ends up first. A file's own entries keep the order they were written in.
+    fn prepend_paths(
+        target: &mut Vec<PathBuf>,
+        paths: &[(PathBuf, PathBuf)],
+        normalize_path: fn(&Path, PathBuf) -> PathBuf,
+    ) {
+        for (source, paths) in &paths.iter().chunk_by(|(_, source)| source) {
+            // Use the computed config_root (project root for nested configs) for path resolution
+            // to be consistent with other env directives like _.source and _.file
+            let config_root = crate::config::config_file::config_root::config_root(source);
+            let paths = paths.map(|(p, _)| p).collect_vec();
+            let mut paths = paths
+                .iter()
+                .rev()
+                .flat_map(|path| env::split_paths(path))
+                .map(|s| normalize_path(&config_root, s))
+                .collect::<Vec<_>>();
+            // target is already reversed and paths should prepend target
+            paths.reverse();
+            paths.extend(std::mem::take(target));
+            *target = paths;
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.env.is_empty()
             && self.vars.is_empty()
             && self.env_remove.is_empty()
             && self.env_files.is_empty()
             && self.env_paths.is_empty()
+            && self.env_paths_append.is_empty()
             && self.env_scripts.is_empty()
             && self.tool_add_paths.is_empty()
     }
@@ -1125,6 +1181,9 @@ impl Debug for EnvResults {
         }
         if !self.env_paths.is_empty() {
             ds.field("env_paths", &self.env_paths);
+        }
+        if !self.env_paths_append.is_empty() {
+            ds.field("env_paths_append", &self.env_paths_append);
         }
         if !self.env_scripts.is_empty() {
             ds.field("env_scripts", &self.env_scripts);

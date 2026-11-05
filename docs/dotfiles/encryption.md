@@ -211,9 +211,13 @@ mise bootstrap services remove mise-history
 此命令会通过 Linux、macOS 或 Windows 上的用户服务管理器停止服务，并防止修复期间监视器重新启动。
 如果服务使用了其他名称，请改用实际名称。
 
-如果明文从未推送到远程仓库，可以删除受影响的检查点，并在启用加密后重新保存当前文件。这会删除
-最后一个安全提交之后的所有检查点，包括其他文件的更改。可通过 `mise dot history` 查找该提交，
-也可使用下面的 `git log` 命令检查仓库。
+若明文从未推送，可对该文件运行 [`mise dot history purge`](/dotfiles/history.html#purge)。此操作只会移除该文件的历史版本，保留其他所有检查点。本节其余内容介绍了手动替代方案，也可用于清理 origin 上已有的历史记录。
+
+你也可以删除受影响的检查点，并
+save the current file again with encryption on. This drops all checkpoints
+after the last safe commit, including changes to other files. Find that commit
+with `mise dot history`, or inspect the repository with the `git log` command
+below.
 
 请将下面的 `safe` 和凭据路径替换为相应提交及受跟踪文件，并确保保存前已为该路径配置加密。历史记录
 使用裸 Git 仓库，因此请用 `git update-ref` 移动分支：

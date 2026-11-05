@@ -54,10 +54,10 @@ pub struct DotfileTableDecl {
     pub source: Option<String>,
     /// literal inline file content; alternative to source
     pub content: Option<String>,
-    /// how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. "absent" removes a file or symlink at the target and takes no source. "track" saves the file's history where it is, and "track-local" saves it in this machine's local-only history, which is never shared
+    /// how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. "absent" removes a file or symlink at the target and takes no source. "track" saves the file's history where it is, and "track-local" saves it in this machine's local-only history, which is never shared. "fnox" writes the file fnox stores for the target (`fnox set --file`) with mode 0600 and takes no source
     // A string, so a mode from a newer mise warns and is skipped.
     #[schemars(extend("anyOf" = [
-        {"enum": ["symlink", "symlink-each", "copy", "template", "absent", "track", "track-local"]},
+        {"enum": ["symlink", "symlink-each", "copy", "template", "absent", "track", "track-local", "fnox"]},
         {"type": "string"}
     ]))]
     pub mode: Option<String>,
@@ -71,12 +71,15 @@ pub struct DotfileTableDecl {
     /// template mode only: remove the target when the template renders empty or whitespace-only; a target that changed since mise last wrote it needs --force
     #[serde(default)]
     pub remove_empty: bool,
+    /// copy and template modes, or inline content: write the target only when nothing exists there yet, leaving an existing file's content and permissions alone; a target that was deleted is created again on the next apply. Not for directory sources
+    #[serde(default)]
+    pub create_if_missing: bool,
     /// symlink-each and directory copy only: deploy each source path component named "dot-<name>" as ".<name>", like GNU Stow's --dotfiles; exclude still matches source names
     #[serde(default)]
     pub dot_prefix: bool,
     /// symlink and symlink-each only: link by a path relative to the link's directory instead of an absolute one; overrides the dotfiles.relative_symlinks setting (ignored on Windows)
     pub relative: Option<bool>,
-    /// octal permissions for the target, such as "0600"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target (Unix only)
+    /// octal permissions for the target, such as "0600"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target; on a merge entry it sets the mode only when apply creates the target, never on one that exists (Unix only)
     #[schemars(regex(pattern = r"^(0o)?[0-7]{1,4}$"))]
     pub permissions: Option<String>,
     /// track only: false saves the path only on `mise dotfiles save <path>`
@@ -98,12 +101,17 @@ pub struct DotfileTableDecl {
     pub position: Option<String>,
     /// comment prefix for edit marker lines; inferred from the file extension when omitted
     pub comment: Option<String>,
-    /// edit entry: true sets the keys of source (default: the target's path under dotfiles.root) on a JSON, TOML, or YAML target and leaves the target's other keys to the application that also writes it; "missing" sets only the keys the target has no value for; the format comes from the target's extension
+    /// edit entry: true sets the keys of source (default: the target's path under dotfiles.root) on a JSON, JSONC, TOML, YAML, or INI target and leaves the target's other keys to the application that also writes it; "missing" sets only the keys the target has no value for; the format comes from the target's extension unless "format" names it
     #[serde(default)]
     #[schemars(schema_with = "schema::merge")]
     pub merge: Option<MergeSetting>,
+    /// merge only: the format of the target and source when the target's extension doesn't name it, such as "jsonc" for VS Code's settings.json or "ini" for an extensionless INI file
+    #[schemars(extend("anyOf" = [{"enum": ["json", "jsonc", "toml", "yaml", "ini"]}, {"type": "string"}]))]
+    pub format: Option<String>,
     /// OS/profile variants: history streams for track mode, or optional destinations for deployment modes
     pub variants: Option<Vec<DotfileVariantDecl>>,
+    /// dotfile groups (by name) and whole-file entries (by target path) mise writes before it renders or reads this entry, so a template, a fnox file or a copy can use files they create. A dependency that fails stops this entry and everything after it; a cycle or a name that is neither is an error. Not for edits or track modes
+    pub depends: Option<Vec<String>>,
 }
 
 /// The value of an entry's `merge` key: `true`, or `"missing"` to set only absent keys.
@@ -143,6 +151,8 @@ pub struct DotfileGroupDecl {
     /// target directory, absolute or starting with ~/
     #[schemars(extend("default" = "~"))]
     pub target: Option<String>,
+    /// dotfile groups (by name) and whole-file entries (by target path) mise writes before it deploys this group and its entries
+    pub depends: Option<Vec<String>>,
     /// how the tree is deployed
     #[schemars(extend("enum" = ["symlink-each", "copy", "symlink"], "default" = "symlink-each"))]
     pub mode: Option<String>,
@@ -156,18 +166,95 @@ pub struct DotfileGroupDecl {
     pub manifest: Option<String>,
     /// link by a path relative to the link's directory; overrides the dotfiles.relative_symlinks setting (ignored on Windows)
     pub relative: Option<bool>,
-    /// whole-file entries for parts of the tree, keyed by target path inside the group's target and written like [dotfiles] entries; each is cut out of the walk. A missing source is found under the root at the entry's path inside the target, and a relative source starts at the root
+    /// entries for parts of the tree, written like [dotfiles] entries and applied only while the group is selected. A whole-file entry is keyed by its target path inside the group's target and cut out of the walk; a block, line, or merge edit is keyed by the path of the file it edits, inside the group's target, then "/" and an id. A missing source is found under the root at the entry's path inside the target, and a relative source starts at the root
     pub entries: Option<IndexMap<String, DotfileGroupEntryDecl>>,
 }
 
 // One `[dotfile_groups.<name>.entries]` value.
-/// a whole-file entry for a path inside the group's target: its source path, or a table as in [dotfiles]
+/// an entry for a path inside the group's target: a whole-file entry's source path, or a table as in [dotfiles] for a whole-file entry or a block, line, or merge edit
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 #[schemars(transform = crate::schema::one_of)]
 pub enum DotfileGroupEntryDecl {
     /// source path, relative to the group root
     Source(String),
-    /// whole-file entry, as in [dotfiles]
-    Table(#[schemars(schema_with = "schema::any_table")] toml::Table),
+    /// whole-file entry or file edit, as in [dotfiles]
+    Table(Box<DotfileGroupEntryTableDecl>),
+}
+
+/// whole-file entry or file edit entry of a dotfile group
+// The keys of `DotfileTableDecl`. An edit takes the same keys in a group as in [dotfiles]; its
+// relative source starts at the group root.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = schema::entry_rules)]
+pub struct DotfileGroupEntryTableDecl {
+    /// encrypt tracked file contents before storing them in Git; the live file remains plaintext
+    #[serde(default)]
+    pub encrypt: bool,
+    /// allow this directly tracked credential-named file to be saved in plaintext history and any connected origin
+    #[serde(default)]
+    pub allow_plaintext: bool,
+    /// source file or directory
+    pub source: Option<String>,
+    /// literal inline file content; alternative to source
+    pub content: Option<String>,
+    /// how to apply a whole-file source to the target; omitted uses the group's mode. "absent" removes a file or symlink at the target and takes no source. "track" saves the file's history where it is, and "track-local" saves it in this machine's local-only history, which is never shared
+    // A string, so a mode from a newer mise warns and is skipped.
+    #[schemars(extend("anyOf" = [
+        {"enum": ["symlink", "symlink-each", "copy", "template", "absent", "track", "track-local"]},
+        {"type": "string"}
+    ]))]
+    pub mode: Option<String>,
+    /// glob patterns to skip when the mode walks a directory (symlink-each, copy with a directory source, or a tracked directory, where they are relative to the tracked path); a pattern without "/" matches any path component, one with "/" is anchored to the root
+    pub exclude: Option<Vec<String>>,
+    /// history only (mode = "track"): the only paths of the tracked directory that are captured, relative to it and matched like "exclude"; without it the whole tree is captured with the builtin credential filtering, and an explicit "exclude" still wins. A selected file is captured even when it looks like a credential store, in plaintext unless the entry sets encrypt
+    pub include: Option<Vec<String>>,
+    /// source manifest used to select managed files from a directory
+    #[schemars(extend("enum" = ["git"]))]
+    pub manifest: Option<String>,
+    /// template mode only: remove the target when the template renders empty or whitespace-only; a target that changed since mise last wrote it needs --force
+    #[serde(default)]
+    pub remove_empty: bool,
+    /// copy and template modes, or inline content: write the target only when nothing exists there yet, leaving an existing file's content and permissions alone; a target that was deleted is created again on the next apply. Not for directory sources
+    #[serde(default)]
+    pub create_if_missing: bool,
+    /// symlink-each and directory copy only: deploy each source path component named "dot-<name>" as ".<name>", like GNU Stow's --dotfiles; exclude still matches source names
+    #[serde(default)]
+    pub dot_prefix: bool,
+    /// symlink and symlink-each only: link by a path relative to the link's directory instead of an absolute one; overrides the dotfiles.relative_symlinks setting (ignored on Windows)
+    pub relative: Option<bool>,
+    /// octal permissions for the target, such as "0600"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target; on a merge entry it sets the mode only when apply creates the target, never on one that exists (Unix only)
+    #[schemars(regex(pattern = r"^(0o)?[0-7]{1,4}$"))]
+    pub permissions: Option<String>,
+    /// track only: false saves the path only on `mise dotfiles save <path>`
+    pub autosave: Option<bool>,
+    /// false turns off an entry inherited from another config file
+    pub enabled: Option<bool>,
+    /// OS/profile variants: history streams for track mode, or optional destinations for deployment modes
+    pub variants: Option<Vec<DotfileVariantDecl>>,
+    /// dotfile groups (by name) and whole-file entries (by target path) mise writes before it renders or reads this entry, in addition to the group's own. Not for edits or track modes
+    pub depends: Option<Vec<String>>,
+    /// edit entry: block content, maintained between marker comments
+    pub block: Option<String>,
+    /// template engine to render block content with; currently only "tera"
+    #[schemars(extend("anyOf" = [{"enum": ["tera"]}, {"type": "string"}]))]
+    pub template: Option<String>,
+    /// edit entry: exact line to ensure exists
+    pub line: Option<String>,
+    /// where to insert a missing line
+    #[schemars(extend("default" = "append", "anyOf" = [
+        {"enum": ["append", "prepend"]},
+        {"type": "string"}
+    ]))]
+    pub position: Option<String>,
+    /// comment prefix for edit marker lines; inferred from the file extension when omitted
+    pub comment: Option<String>,
+    /// edit entry: true sets the keys of source (default: the file's path under the group root) on a JSON, JSONC, TOML, or YAML target and leaves the target's other keys to the application that also writes it; "missing" sets only the keys the target has no value for; the format comes from the target's extension unless "format" names it
+    #[serde(default)]
+    #[schemars(schema_with = "schema::merge")]
+    pub merge: Option<MergeSetting>,
+    /// merge only: the format of the target and source when the target's extension doesn't name it, such as "jsonc" for VS Code's settings.json
+    #[schemars(extend("anyOf" = [{"enum": ["json", "jsonc", "toml", "yaml"]}, {"type": "string"}]))]
+    pub format: Option<String>,
 }

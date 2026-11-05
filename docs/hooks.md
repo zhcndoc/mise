@@ -89,8 +89,11 @@ enter = { task = "setup" }
 mise 会在子进程中通过 `mise run` 运行任务，因此依赖项、任务环境和文件任务都照常生效。任务钩子适用于
 所有事件。
 
-作为 `preinstall` 钩子运行时，任务不会先安装其缺失工具，因为它所准备的安装过程尚未开始。任务所需的
-命令必须已由系统或先前的安装提供。
+与手动输入的 `mise run` 不同，该调用不会隐式[信任](/security.html#implicit-trust)所加载的配置：如果配置不受信任，或 hook 任务将运行或依赖不受信任的任务，hook 会发出警告并失败。全局配置中的任务 hook 只有在项目配置和任务目录都受信任后，才会在当前项目中运行，这样不受信任的项目就无法用同名任务替换它。在此之前，该 hook 会在全局配置根目录中运行。
+
+As a `preinstall` hook, a task runs without installing its missing tools first,
+because the install it prepares has not happened yet. The commands it needs must
+already be available from the system or an earlier installation.
 
 声明了 `secrets` 的任务不会从钩子中运行；参阅
 [fnox](/environments/secrets/fnox.html#launchers-that-refuse-grants)。
@@ -110,12 +113,17 @@ cd = "echo 'I changed directories'"
 - `leave` 在离开项目时运行。
 - `cd` 在每次切换目录后仍位于项目内时运行，包括进入项目的那次切换。
 
-项目是定义该钩子的配置文件所在项目根目录：即包含 `mise.toml` 的目录，或 `.config/mise/`、`.mise/`
-的父目录。一次目录切换触发多个此类钩子时，依次运行 `leave`、`cd`、`enter`。首次加载项目配置时，
-即使目录没有变化，`enter` 也会运行；例如在当前目录创建或信任 `mise.toml` 后。
+项目启动的 `enter` 和 `leave` hook 会以项目根目录为工作目录，即使 Shell 是从项目子目录进入项目，或从项目切换到另一个目录也是如此，因此 `enter = "./bin/setup"` 始终会运行项目中的 `bin/setup`。`cd` hook 则在 Shell 切换到的目录中运行。所有 hook 中的 `MISE_ORIGINAL_CWD` 都保存 Shell 原来的目录。
 
-全局配置（`~/.config/mise/config.toml`）中的钩子没有所属项目，因此全局 `enter`、`leave` 和 `cd` 钩子
-会在每次目录切换时运行。
+The project is the root of the config file that defines the hook: the
+directory that holds `mise.toml`, or the parent of `.config/mise/` or `.mise/`.
+When one directory change triggers several of these hooks, `leave` runs first,
+then `cd`, then `enter`. `enter` also runs when a project config is loaded for
+the first time without a directory change, for example after you create or
+trust `mise.toml` in the current directory.
+
+Hooks in the global config (`~/.config/mise/config.toml`) have no project, so
+全局 `enter`、`leave` 和 `cd` hook 会在每次目录变化时运行，工作目录为 Shell 切换到的目录。
 
 ## 在当前 Shell 中运行 {#shell-hooks}
 
@@ -127,13 +135,14 @@ cd = "echo 'I changed directories'"
 | `{ run = "...", shell = "bash -c" }` | 通过 `bash -c` 启动的新进程               |
 | `{ script = "...", shell = "bash" }` | 当前 Shell，且仅当该 Shell 为 bash 时运行 |
 
-使用 `script` 时，`shell` 指定 Shell 名称，例如 `bash`、`zsh` 或 `fish`。mise 会将脚本加入已激活 Shell
-在提示符处求值的代码中；如果当前使用的是其他 Shell，则会跳过此钩子：
+With `script`, `shell` names a shell, such as `bash`, `zsh` or `fish`. mise adds
+the script to the code the activated shell evaluates at the prompt, and skips
+如果当前 Shell 与设置的不同，则跳过该 hook。脚本会在 Shell 当前目录中运行，该目录可能是项目的子目录；请通过 `MISE_PROJECT_ROOT` 引用项目文件：
 
 ```toml [mise.toml]
 [hooks.enter]
 shell = "bash"
-script = "source completions.sh"
+script = 'source "$MISE_PROJECT_ROOT/completions.sh"'
 ```
 
 `script` 接受字符串或行数组。`scripts` 只接受数组形式：
@@ -142,7 +151,7 @@ script = "source completions.sh"
 [hooks.enter]
 shell = "bash"
 script = [
-  "source completions.sh",
+  'source "$MISE_PROJECT_ROOT/completions.sh"',
   "export PROJECT_READY=1",
 ]
 
@@ -190,11 +199,14 @@ patterns = ["src/**/*.rs"]
 run = "cargo fmt"
 ```
 
-- 模式是相对于项目根目录的 glob。`*` 不匹配 `/`；跨目录匹配请使用 `**`。
-- `run` 使用默认的内联 Shell。添加 `shell = "bash -c"` 可选择其他 Shell；`shell` 仅适用于 `run`。
-- 设置 `task = "sync-deps"` 可改为运行 mise 任务。请只设置 `run` 或 `task` 其中之一；两者都设置时，
-  mise 会发出警告并运行任务。
-- mise 只会从项目配置中读取 `[[watch_files]]`。全局配置中的条目会被忽略。
+- Patterns are globs relative to the project root. `*` does not match `/`; use
+  `**` to cross directories.
+- `run` uses your default inline shell. Add `shell = "bash -c"` to choose
+  another one; `shell` applies only to `run`. 即使 Shell 当前位于项目子目录，命令也会以项目根目录为工作目录运行。
+- `task = "sync-deps"` runs a mise task instead. Set either `run` or `task`;
+  when both are set, mise warns and runs the task.
+- mise reads `[[watch_files]]` from project config only. Entries in the global
+  config are ignored.
 
 ```toml [mise.toml]
 [[watch_files]]

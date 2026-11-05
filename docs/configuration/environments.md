@@ -53,7 +53,25 @@ env = ["development"]
 
 个人选择可写入不提交的 `.miserc.local.toml`；仅供单台机器使用的设置可写入 `~/.config/mise/miserc.local.toml`。所有文件位置及其合并方式请参阅[`.miserc.toml`](/configuration.html#miserc)。
 
-## 文件名和优先级 {#file-names-and-precedence}
+### 为环境组命名 {#env-sets}
+
+如果需要让多台机器同时选择多个环境，可以在共享的 `miserc.toml` 中使用 [`env_sets`](/configuration/settings.html#env_sets) 为环境组命名，然后选择对应名称：
+
+```toml [miserc.toml]
+[env_sets]
+server = ["server", "ssh", "pac"]
+workstation = ["workstation", "ssh", "pac", "raycast"]
+```
+
+```toml [~/.config/mise/miserc.local.toml]
+env = ["workstation"]
+```
+
+此机器会依次加载 `workstation`、`ssh`、`pac` 和 `raycast`，`{{ mise_env }}` 保存该列表。`-E workstation` 和 `MISE_ENV=workstation` 也会以相同方式展开。不是环境组的名称会被视为环境，因此 `env = ["workstation", "ci"]` 也有效。环境组只展开一层，不能包含其他组；重复列出的环境保留首次出现的位置。
+
+项目 `.miserc.toml` 不能定义与系统或全局 `miserc.toml` 中相同名称的环境组，也不能定义与其选择的环境同名的组。
+
+## File names and precedence {#file-names-and-precedence}
 
 在项目目录中，此表中位置较高的文件会覆盖位置较低的文件：
 
@@ -116,9 +134,10 @@ mise/conf.d/tools.development.toml        # MISE_ENV=development
 mise/conf.d/tools.development.local.toml  # MISE_ENV=development, usually gitignored
 ```
 
-由于此设置会控制配置文件的发现过程，必须写入 `miserc.toml` 或环境变量；设置在 `mise.toml` 中就太迟了。迁移期间如需保留旧行为并消除弃用警告，请显式设置 `env_conf_d = false`。
-
-<a id="platform-environments"></a>
+Because this setting controls config discovery, set it in `miserc.toml` or the
+environment; in `mise.toml` it is too late. To keep the old behavior without the
+deprecation warning during the migration, set `env_conf_d = false` explicitly.
+项目的 `.miserc.toml` 只对项目目录作出此设置：`~/.config/mise/conf.d` 和 `/etc/mise/conf.d` 中的片段仍遵循 `MISE_ENV_CONF_D` 以及全局和系统 `miserc.toml` 文件。
 
 ## 平台环境
 

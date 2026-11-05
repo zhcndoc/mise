@@ -36,6 +36,7 @@ use crate::files::FileState;
 use crate::history::journal::{self, Capture};
 use crate::host::{Config, ConfigMap};
 use crate::resources::ResourceOrigin;
+use crate::secrets::{self, SecretValues};
 use mise_ui::prompt;
 use mise_util::file;
 use mise_util::path::PathExt;
@@ -77,13 +78,22 @@ pub(crate) struct EditTomlTable {
     #[serde(default)]
     pub comment: Option<String>,
     /// `merge = true` sets the keys in `source` on a structured target file
-    /// (JSON, TOML, or YAML) and leaves every other key to the application
+    /// (JSON, JSONC, TOML, YAML, or INI) and leaves every other key to the application
     /// that also writes it
     ///
     /// `merge = "missing"` sets only the keys of `source` the target has no
     /// value for, so a value the application changed stays
     #[serde(default)]
     pub merge: Option<MergeSetting>,
+    /// format of a merge target whose extension doesn't name it, such as
+    /// VS Code's `settings.json` (`"jsonc"`); string-typed so formats from
+    /// newer mise versions warn and skip instead of failing to parse
+    #[serde(default)]
+    pub format: Option<String>,
+    /// merge only: octal permissions for the target when apply creates it;
+    /// an existing target keeps the mode it has
+    #[serde(default)]
+    pub permissions: Option<String>,
 }
 
 pub use mise_config::dotfiles::MergeSetting;
@@ -115,6 +125,8 @@ pub enum EditOp {
         format: Format,
         /// only set keys the target has no value for
         missing_only: bool,
+        /// the mode of the target when apply creates it (Unix only)
+        permissions: Option<u32>,
     },
 }
 
@@ -178,6 +190,9 @@ pub struct EditRequest {
     /// config file that declared this edit
     pub config_path: PathBuf,
     pub origin: ResourceOrigin,
+    /// the `[dotfile_groups]` table that declared this edit; it applies only
+    /// while that group is selected
+    pub group: Option<String>,
 }
 
 impl EditRequest {
@@ -214,13 +229,26 @@ pub fn matches_target(req: &EditRequest, filters: &[String]) -> bool {
         })
 }
 
-/// Aggregate edit `[dotfiles]` entries across all loaded config files. Entries
+/// Aggregate edit `[dotfiles]` entries, and the edits of the selected
+/// `[dotfile_groups]`, across all loaded config files. Entries
 /// union global -> local, keyed by `(path, id)`; a more local config overrides
 /// an edit with the same id. Malformed entries warn and are skipped.
 pub fn edits_from_config(config: &Config) -> Result<Vec<EditRequest>> {
     let mut composed: IndexMap<String, EditRequest> = IndexMap::new();
+    let selection = crate::dotfile_groups::selection(&config.config_files());
     for config_files in config.bootstrap_config_maps() {
-        for request in edits_from_config_files(&config_files) {
+        // an edit a group declares applies only while its group is selected,
+        // so a deselected group's edit takes no part in the conflict checks
+        for request in edits_from_config_files(&config_files)
+            .into_iter()
+            .chain(crate::dotfile_groups::group_edits(&config_files))
+            .filter(|request| {
+                crate::dotfile_groups::group_selected(
+                    request.group.as_deref(),
+                    selection.as_deref(),
+                )
+            })
+        {
             let key = format!("{}\u{0}{}", request.path.display(), request.id);
             if let Some(existing) = composed.get(&key) {
                 if edit_requests_match(config, existing, &request) {
@@ -289,7 +317,7 @@ pub(crate) fn edits_from_config_files(config_files: &ConfigMap) -> Vec<EditReque
 }
 
 /// keys that only mean something on a whole-file entry
-const WHOLE_FILE_KEYS: [&str; 15] = [
+const WHOLE_FILE_KEYS: [&str; 17] = [
     "mode",
     "content",
     "permissions",
@@ -302,10 +330,51 @@ const WHOLE_FILE_KEYS: [&str; 15] = [
     "variants",
     "enabled",
     "remove_empty",
+    "create_if_missing",
     "relative",
     "dot_prefix",
     "group",
+    "depends",
 ];
+
+/// the whole-file keys a merge rejects: all but `permissions`, which sets the
+/// mode of a target the merge creates
+fn merge_rejected_keys() -> impl Iterator<Item = &'static str> {
+    WHOLE_FILE_KEYS
+        .into_iter()
+        .filter(|key| *key != "permissions")
+}
+
+/// Read one block, line, or merge entry of `[dotfile_groups.<group>.entries]`.
+/// It is keyed like a `[dotfiles]` edit, and a relative `source` starts at
+/// `base`, the group root. Unlike `[dotfiles]`, a key that only a whole-file
+/// entry takes is an error, so the group is refused and not half applied.
+pub(crate) fn group_edit(
+    group: &str,
+    path_and_id: &str,
+    value: toml::Value,
+    base: &Path,
+    config_path: &Path,
+) -> Result<EditRequest> {
+    if let Some(table) = value.as_table() {
+        let is_merge = table.contains_key("merge");
+        // a merge may set the mode of a target it creates
+        for key in WHOLE_FILE_KEYS {
+            if table.contains_key(key) && !(is_merge && key == "permissions") {
+                bail!("{key} applies to whole-file entries, not block, line, or merge edits");
+            }
+        }
+    }
+    let entry: EditTomlEntry = value
+        .try_into()
+        .map_err(|err| eyre::eyre!("invalid edit entry: {err}"))?;
+    let Some((path_raw, id)) = split_edit_key(path_and_id) else {
+        bail!("edit entries must end with an id path segment");
+    };
+    let mut request = resolve_entry(&path_raw, id, entry, base, config_path)?;
+    request.group = Some(group.to_string());
+    Ok(request)
+}
 
 /// Check an incoming `merge` declaration the way the edit parser will read it,
 /// so `mise dot pull` refuses one that would later be dropped. Templates are
@@ -316,7 +385,7 @@ pub(crate) fn validate_incoming_merge(
     config_path: &Path,
 ) -> Result<()> {
     if let Some(table) = value.as_table() {
-        for key in WHOLE_FILE_KEYS {
+        for key in merge_rejected_keys() {
             if table.contains_key(key) {
                 bail!(
                     "dotfile {path_and_id}: {key} applies to whole-file entries, not merge edits"
@@ -342,7 +411,7 @@ fn edit_entry_from_toml(path_and_id: &str, value: toml::Value) -> Option<EditTom
         toml::Value::Table(table) if table.contains_key("merge") => {
             // a merge edits one structured file, so every key that shapes a
             // whole-file entry is a mistake worth naming, not silently dropped
-            for key in WHOLE_FILE_KEYS {
+            for key in merge_rejected_keys() {
                 if table.contains_key(key) {
                     warn!(
                         "[dotfiles].\"{path_and_id}\": {key} applies to whole-file entries, not merge edits, ignoring entry"
@@ -358,6 +427,7 @@ fn edit_entry_from_toml(path_and_id: &str, value: toml::Value) -> Option<EditTom
                 || only_enabled
                 || table.contains_key("mode")
                 || table.contains_key("remove_empty")
+                || table.contains_key("create_if_missing")
                 || (table.contains_key("source")
                     || table.contains_key("content")
                     || table.contains_key("permissions")
@@ -392,7 +462,7 @@ fn edit_entry_from_toml(path_and_id: &str, value: toml::Value) -> Option<EditTom
     }
 }
 
-fn split_edit_key(path_and_id: &str) -> Option<(String, String)> {
+pub(crate) fn split_edit_key(path_and_id: &str) -> Option<(String, String)> {
     let (path, id) = path_and_id.rsplit_once('/')?;
     if path.is_empty() || path == "~" || path == "/" || id.is_empty() {
         return None;
@@ -433,6 +503,8 @@ fn resolve_entry(
             position: None,
             comment: None,
             merge: None,
+            format: None,
+            permissions: None,
         },
         EditTomlEntry::Table(table) => table,
     };
@@ -446,7 +518,11 @@ fn resolve_entry(
             base: base.to_path_buf(),
             config_path: config_path.to_path_buf(),
             origin,
+            group: None,
         });
+    }
+    if entry.format.is_some() {
+        bail!("\"{path_raw}\".{id}: format is only valid with merge, ignoring entry")
     }
     let is_block = entry.block.is_some() || entry.source.is_some();
     let op = match (&is_block, &entry.line) {
@@ -533,6 +609,7 @@ fn resolve_entry(
         base: base.to_path_buf(),
         config_path: config_path.to_path_buf(),
         origin,
+        group: None,
     })
 }
 
@@ -569,10 +646,17 @@ fn merge_op(
             .to_string_lossy()
             .into_owned(),
     };
-    let Some(format) = Format::from_path(path) else {
-        bail!(
-            "\"{path_raw}\".{id}: merge needs a .json, .toml, .yaml, or .yml target, ignoring entry"
-        );
+    let format = match entry.format.as_deref() {
+        Some(name) => Format::from_name(name).ok_or_else(|| {
+            eyre::eyre!(
+                "\"{path_raw}\".{id}: unknown format '{name}' (expected \"json\", \"jsonc\", \"toml\", \"yaml\", or \"ini\"), ignoring entry"
+            )
+        })?,
+        None => Format::from_path(path).ok_or_else(|| {
+            eyre::eyre!(
+                "\"{path_raw}\".{id}: merge needs a .json, .jsonc, .toml, .yaml, .yml, or .ini target or a format, ignoring entry"
+            )
+        })?,
     };
     let source = file::replace_path(&source);
     let source = if source.is_relative() {
@@ -590,11 +674,29 @@ fn merge_op(
             )
         }
     };
+    let permissions = match entry.permissions.as_deref() {
+        None => None,
+        Some(value) => {
+            let mode = crate::files::parse_permissions(value)
+                .map_err(|err| eyre::eyre!("\"{path_raw}\".{id}: {err}, ignoring entry"))?;
+            #[cfg(unix)]
+            {
+                Some(mode)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = mode;
+                crate::files::warn_permissions_ignored();
+                None
+            }
+        }
+    };
     Ok(EditOp::Merge {
         source: BlockSource::File(source),
         template,
         format,
         missing_only,
+        permissions,
     })
 }
 
@@ -668,6 +770,65 @@ fn find_block(
     }
 }
 
+/// Render the template source of a `merge = "missing"` entry. `secret()` renders
+/// a placeholder, because which secrets are needed is only known once apply
+/// compares the keys with the target.
+fn render_source(config: &Config, req: &EditRequest, raw: &str) -> Result<String> {
+    secrets::resolve(config, false)?
+        .render_dotfile_deferred(config, raw, &req.base, &req.origin.config)
+        .map_err(|err| {
+            eyre::eyre!(
+                "[dotfiles].\"{}/{}\": failed to render template: {err}",
+                req.path_raw,
+                req.id
+            )
+        })
+}
+
+/// `desired`, the rendered source of a `merge = "missing"` template, with the
+/// secrets of the keys `text` lacks put in place of their placeholders, or
+/// `None` when no secret is needed. A key the target already holds is never
+/// resolved, so it asks for nothing. The template is not rendered again, so a
+/// command in it runs once.
+fn source_with_secrets(
+    config: &Config,
+    req: &EditRequest,
+    desired: &str,
+    text: &str,
+    values: &SecretValues,
+) -> Result<Option<String>> {
+    let EditOp::Merge {
+        template: true,
+        format,
+        missing_only: true,
+        ..
+    } = &req.op
+    else {
+        return Ok(None);
+    };
+    let Some(missing) = structured_merge::missing(*format, text, desired)? else {
+        return Ok(None);
+    };
+    let names = secrets::deferred_names(&missing);
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let mut filled = desired.to_string();
+    for (name, value) in values.resolve_names(config, &names)? {
+        filled = filled.replace(&secrets::deferred_text(&name), &value);
+    }
+    // the parse error would quote the filled text, secret values included
+    structured_merge::contains(*format, "", &filled).map_err(|_| {
+        eyre::eyre!(
+            "[dotfiles].\"{}/{}\": the source is not valid once its secrets are filled in; \
+             a value may need quoting or escaping",
+            req.path_raw,
+            req.id
+        )
+    })?;
+    Ok(Some(filled))
+}
+
 /// the content a block should contain, resolved and rendered at most once
 /// per check/apply cycle (templates may use exec())
 fn desired_content(config: &Config, req: &EditRequest) -> Result<Option<String>> {
@@ -687,12 +848,17 @@ fn desired_content(config: &Config, req: &EditRequest) -> Result<Option<String>>
         BlockSource::Inline(s) => s.clone(),
         BlockSource::File(p) => file::read_to_string(p)?,
     };
-    let content = if *template {
+    let content = if *template && req.op.fills_missing_only() {
+        // `secret()` stays a placeholder: which keys the target lacks, and so
+        // which secrets are needed, is only known once apply compares them
+        render_source(config, req, &raw)?
+    } else if *template {
         let mut tera = mise_util::tera::get_tera(Some(&req.base));
-        mise_util::tera::render_str(
+        crate::host::render_config_str(
             &mut tera,
             &raw,
             config.bootstrap_tera_ctx(&req.origin.config),
+            &req.origin.config,
         )
         .map_err(|err| {
             eyre::eyre!(
@@ -710,10 +876,15 @@ fn desired_content(config: &Config, req: &EditRequest) -> Result<Option<String>>
         // reported before any entry is written, even when the target is
         // missing
         if let EditOp::Merge { format, .. } = &req.op {
-            structured_merge::contains(*format, "", &content).wrap_err_with(|| {
-                format!(
-                    "[dotfiles].\"{}/{}\": invalid merge source",
-                    req.path_raw, req.id
+            structured_merge::contains(*format, "", &content).map_err(|err| {
+                let from = match source {
+                    BlockSource::File(path) => format!(" {}", path.display()),
+                    BlockSource::Inline(_) => String::new(),
+                };
+                eyre::eyre!(
+                    "[dotfiles].\"{}/{}\": invalid merge source{from}: {err}",
+                    req.path_raw,
+                    req.id
                 )
             })?;
         }
@@ -1155,6 +1326,7 @@ pub fn apply(
     config: &Config,
     requests: &[EditRequest],
     opts: &ApplyOpts,
+    secrets: &SecretValues,
     written: &mut Vec<PathBuf>,
 ) -> Result<bool> {
     let mut todo: Vec<(&EditRequest, Option<String>)> = vec![];
@@ -1271,6 +1443,7 @@ pub fn apply(
     let unapplied = unapplied_siblings(config, requests, &siblings, &merged);
     problems.extend(merge_conflicts(&merged, &unapplied));
     problems.extend(format_conflicts(requests, &siblings));
+    problems.extend(permission_conflicts(requests, &siblings));
     if !problems.is_empty() {
         bail!(
             "edits: cannot apply these entries, fix them manually:\n{}",
@@ -1309,10 +1482,68 @@ pub fn apply(
             return Ok(false);
         }
     }
-    for (req, desired) in &todo {
-        let pending = journal::begin_changes_with(opts.part, &req.path_raw, edit_paths(&req.path))?;
-        apply_one(req, desired.as_deref(), written)?;
-        journal::commit_changes(pending);
+    let candidates = todo
+        .iter()
+        .map(|(req, _)| *req)
+        .chain(siblings.iter())
+        .collect::<Vec<_>>();
+    // files this run created owner-only that still wait for their mode: a
+    // file gets it with the last merge that writes it, since a read-only mode
+    // would stop the next merge, and inside that merge's journal entry, so
+    // recovery sees the state it recorded
+    let mut waiting: Vec<(PathBuf, u32)> = vec![];
+    let applied = (|| -> Result<()> {
+        for (i, (req, desired)) in todo.iter().enumerate() {
+            // a fill-only template asks for the secrets of the keys it adds, and
+            // only those, once the file as earlier entries left it is known.
+            // This comes before the journal, so a secret that cannot be read
+            // leaves nothing to recover
+            let with_secrets = match desired.as_deref() {
+                Some(desired) => {
+                    let text = if req.path.exists() {
+                        file::read_to_string(&req.path)?
+                    } else {
+                        String::new()
+                    };
+                    source_with_secrets(config, req, desired, &text, secrets)?
+                }
+                None => None,
+            };
+            let desired = with_secrets.as_deref().or(desired.as_deref());
+            let pending =
+                journal::begin_changes_with(opts.part, &req.path_raw, edit_paths(&req.path))?;
+            let mode = creation_mode(&candidates, &req.path);
+            if apply_one(req, desired, mode, written)?
+                && let Some(mode) = mode
+            {
+                waiting.push((req.path.clone(), mode));
+            }
+            let last = !todo[i + 1..]
+                .iter()
+                .any(|(later, _)| same_target(&later.path, &req.path));
+            if last
+                && let Some(at) = waiting
+                    .iter()
+                    .position(|(path, _)| same_target(path, &req.path))
+            {
+                let (path, mode) = waiting.remove(at);
+                set_created_mode(&path, mode)?;
+            }
+            journal::commit_changes(pending);
+        }
+        Ok(())
+    })();
+    // after a failure, a file left behind is not stuck owner-only; every file
+    // is tried, and the apply error is the one reported
+    let mut mode_error = None;
+    for (path, mode) in &waiting {
+        if let Err(err) = set_created_mode(path, *mode) {
+            mode_error.get_or_insert(err);
+        }
+    }
+    applied?;
+    if let Some(err) = mode_error {
+        return Err(err);
     }
     let applied = todo
         .iter()
@@ -1738,7 +1969,12 @@ fn edit_paths(path: &Path) -> Vec<(PathBuf, Capture)> {
 /// changed — the journal preimage is only restored by a later recovery run.
 /// A new file is recorded once it exists, even if the write that created it
 /// then failed.
-fn apply_one(req: &EditRequest, desired: Option<&str>, written: &mut Vec<PathBuf>) -> Result<()> {
+fn apply_one(
+    req: &EditRequest,
+    desired: Option<&str>,
+    create_mode: Option<u32>,
+    written: &mut Vec<PathBuf>,
+) -> Result<bool> {
     use std::io::Write;
     debug!("edits: {} ({})", req.path.display_user(), req.describe_op());
     if let Some(parent) = req.path.parent() {
@@ -1758,6 +1994,9 @@ fn apply_one(req: &EditRequest, desired: Option<&str>, written: &mut Vec<PathBuf
             .wrap_err_with(|| format!("failed to replace symlink: {}", req.path.display_user()))?;
         std::fs::copy(&req.path, tmp.path())
             .wrap_err_with(|| format!("failed to replace symlink: {}", req.path.display_user()))?;
+        // the copy is the raw source, which a template may leave unparseable;
+        // fail before the link is gone rather than after
+        apply_to_string(req, desired, &file::read_to_string(tmp.path())?)?;
         // a read-only source (a Nix store file, `chmod -w`) must not leave a
         // copy the merge cannot write
         #[cfg(unix)]
@@ -1793,13 +2032,21 @@ fn apply_one(req: &EditRequest, desired: Option<&str>, written: &mut Vec<PathBuf
         String::new()
     };
     let out = apply_to_string(req, desired, &text)?;
+    // a placeholder must never reach the file as if it were the secret
+    if req.op.is_template() && secrets::has_deferred(&out) && !secrets::has_deferred(&text) {
+        bail!(
+            "[dotfiles].\"{}/{}\": a secret placeholder was left in the merged file, not writing it",
+            req.path_raw,
+            req.id
+        );
+    }
     // a fill-only entry reconsidered after another merge may have nothing left to add
     if existed && req.op.fills_missing_only() && out == text {
         // a replaced link still changed the path, which reload commands key on
         if replaced_link {
             written.push(req.path.clone());
         }
-        return Ok(());
+        return Ok(false);
     }
     let failed = || format!("failed write: {}", req.path.display_user());
     if existed {
@@ -1811,9 +2058,98 @@ fn apply_one(req: &EditRequest, desired: Option<&str>, written: &mut Vec<PathBuf
         written.push(req.path.clone());
         target.write_all(out.as_bytes()).wrap_err_with(failed)?;
     } else {
-        crate::files::create_recorded(&req.path, written, || file::write(&req.path, &out))?;
+        crate::files::create_recorded(&req.path, written, || {
+            // a file that will get a mode starts owner-only, so its content is
+            // never readable by others while it is written; `apply` sets the
+            // final mode once every merge for the file is done
+            #[cfg(unix)]
+            if create_mode.is_some() {
+                return write_new_private(&req.path, &out);
+            }
+            file::write(&req.path, &out)
+        })?;
+    }
+    Ok(!existed && create_mode.is_some())
+}
+
+/// Give a file this run created its declared `mode` (Unix only).
+fn set_created_mode(path: &Path, mode: u32) -> Result<()> {
+    #[cfg(unix)]
+    crate::files::set_mode(path, mode)?;
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+    Ok(())
+}
+
+/// Create `path`, which must not exist, readable and writable by its owner
+/// only, and write `text` to it.
+#[cfg(unix)]
+fn write_new_private(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let failed = || format!("failed write: {}", path.display_user());
+    let mut target = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .wrap_err_with(failed)?;
+    if let Err(err) = target.write_all(text.as_bytes()) {
+        // a half-written file would look like an existing target on the next
+        // apply and never get its mode
+        drop(target);
+        let _ = std::fs::remove_file(path);
+        return Err(err).wrap_err_with(failed);
     }
     Ok(())
+}
+
+/// The mode a merge-created `path` gets: the `permissions` of the merge
+/// entries declared for it, which `apply` has already checked agree.
+fn creation_mode(candidates: &[&EditRequest], path: &Path) -> Option<u32> {
+    candidates.iter().find_map(|req| match &req.op {
+        EditOp::Merge { permissions, .. } if same_target(&req.path, path) => *permissions,
+        _ => None,
+    })
+}
+
+/// Merge entries for one file that declare different `permissions`: which
+/// one a created file gets would depend on which entries a run applies and in
+/// what order. Siblings are checked too, so selecting one entry cannot skip it.
+fn permission_conflicts(requests: &[EditRequest], siblings: &[EditRequest]) -> Vec<String> {
+    let declared = requests
+        .iter()
+        .map(|req| (req, true))
+        .chain(siblings.iter().map(|req| (req, false)))
+        .filter_map(|(req, selected)| match &req.op {
+            EditOp::Merge {
+                permissions: Some(mode),
+                ..
+            } => Some((req, *mode, selected)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut problems: Vec<String> = vec![];
+    for (i, (first, a, first_selected)) in declared.iter().enumerate() {
+        for (second, b, second_selected) in &declared[i + 1..] {
+            // an entry this run does not select only matters next to one it does
+            if (*first_selected || *second_selected)
+                && a != b
+                && same_target(&first.path, &second.path)
+            {
+                let problem = format!(
+                    "  \"{}\": {} and {} declare different permissions ({a:04o} and {b:04o})",
+                    first.path_raw,
+                    first.describe_op(),
+                    second.describe_op()
+                );
+                if !problems.contains(&problem) {
+                    problems.push(problem);
+                }
+            }
+        }
+    }
+    problems
 }
 
 fn apply_to_string(req: &EditRequest, desired: Option<&str>, text: &str) -> Result<String> {
@@ -1914,11 +2250,12 @@ mod tests {
                 environment: vec![],
                 source: None,
             },
+            group: None,
         };
 
         // a writable file is recorded and edited
         let mut written = vec![];
-        apply_one(&req, None, &mut written)?;
+        apply_one(&req, None, None, &mut written)?;
         assert_eq!(written, vec![path.clone()]);
         assert!(file::read_to_string(&path)?.contains("mise activate"));
 
@@ -1931,9 +2268,50 @@ mod tests {
             return Ok(());
         }
         let mut written = vec![];
-        assert!(apply_one(&req, None, &mut written).is_err());
+        assert!(apply_one(&req, None, None, &mut written).is_err());
         assert!(written.is_empty());
         assert_eq!(file::read_to_string(&path)?, "before\n");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_merge_that_cannot_read_its_linked_source_keeps_the_link() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("shared.ini");
+        // a template whose raw text is not INI, though it renders to INI
+        file::write(&source, "[{{ section }}\nk = 1\n")?;
+        let path = dir.path().join("app.ini");
+        std::os::unix::fs::symlink(&source, &path)?;
+        let req = EditRequest {
+            path_raw: path.to_string_lossy().to_string(),
+            path: path.clone(),
+            id: "shared".into(),
+            op: EditOp::Merge {
+                source: BlockSource::File(source.clone()),
+                template: true,
+                format: Format::Ini,
+                missing_only: false,
+                permissions: None,
+            },
+            base: dir.path().to_path_buf(),
+            config_path: dir.path().join("mise.toml"),
+            origin: ResourceOrigin {
+                config: dir.path().join("mise.toml"),
+                config_root: dir.path().to_path_buf(),
+                environment: vec![],
+                source: Some(source.clone()),
+            },
+            group: None,
+        };
+        let mut written = vec![];
+        let err = apply_one(&req, Some("[app]\nk = 1\n"), None, &mut written).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("failed to parse the INI target"),
+            "{err:?}"
+        );
+        assert!(path.is_symlink());
+        assert!(written.is_empty());
         Ok(())
     }
 
@@ -1955,6 +2333,7 @@ mod tests {
             ("~/a/settings.json", Format::Json),
             ("~/a/config.yml", Format::Yaml),
             ("~/a/config.yaml", Format::Yaml),
+            ("~/a/tox.ini", Format::Ini),
         ] {
             let req = resolve(path, "source = \"shared.txt\"\nmerge = true").unwrap();
             assert_eq!(
@@ -1964,11 +2343,36 @@ mod tests {
                     template: false,
                     format,
                     missing_only: false,
+                    permissions: None,
                 }
             );
             assert_eq!(req.describe_op(), "merge:shared");
             assert_eq!(req.origin.source, Some(PathBuf::from("/cfg/shared.txt")));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn merge_entries_take_permissions_for_a_created_target() {
+        let req = resolve(
+            "~/a/config.toml",
+            "source = \"s.toml\"\nmerge = \"missing\"\npermissions = \"0600\"",
+        )
+        .unwrap();
+        assert!(matches!(
+            req.op,
+            EditOp::Merge {
+                permissions: Some(0o600),
+                missing_only: true,
+                ..
+            }
+        ));
+        let err = resolve(
+            "~/a/config.toml",
+            "source = \"s.toml\"\nmerge = true\npermissions = \"rw\"",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("octal string"), "{err}");
     }
 
     #[test]
@@ -2017,7 +2421,7 @@ mod tests {
             (
                 "~/a/notes.txt",
                 "source = \"s\"\nmerge = true",
-                ".json, .toml",
+                ".json, .jsonc",
             ),
             (
                 "~/a/config.toml",
@@ -2043,6 +2447,16 @@ mod tests {
                 "~/a/config.toml",
                 "source = \"s\"\nmerge = true\ntemplate = \"jinja\"",
                 "unknown template engine",
+            ),
+            (
+                "~/a/settings.json",
+                "source = \"s\"\nmerge = true\nformat = \"xml\"",
+                "unknown format 'xml'",
+            ),
+            (
+                "~/a/settings.json",
+                "block = \"x\"\nformat = \"jsonc\"",
+                "format is only valid with merge",
             ),
         ] {
             let err = resolve(path, entry).unwrap_err().to_string();
@@ -2072,7 +2486,7 @@ mod tests {
             (
                 "~/a/notes.txt/shared",
                 "source = \"s\"\nmerge = true",
-                ".json, .toml",
+                ".json, .jsonc",
             ),
             (
                 "~/a/settings.json/shared",

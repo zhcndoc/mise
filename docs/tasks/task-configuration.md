@@ -25,19 +25,21 @@ experimental = true
 
 | 类别                                                      | 属性                                                                                                                                                                                                                           |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [命令](#command)                                          | [`run`](#run), [`run_windows`](/tasks/task-configuration.html#run-windows), [`file`](#file), [`shell`](#shell), [`dir`](#dir), [`usage`](#usage), [`raw_args`](/tasks/task-configuration.html#raw-args), [`extends`](#extends) |
-| [说明与可见性](#description-and-visibility)               | [`description`](#description), [`alias`](#alias), [`hide`](#hide), [`confirm`](#confirm)                                                                                                                                       |
-| [执行顺序](#ordering)                                     | [`depends`](#depends), [`depends_post`](/tasks/task-configuration.html#depends-post), [`wait_for`](/tasks/task-configuration.html#wait-for), [`daemons`](/tasks/task-configuration.html#daemons)                               |
-| [环境与工具](#environment-and-tools)                     | [`env`](#env), [`vars`](#task-vars), [`secrets`](/tasks/task-configuration.html#secrets), [`tools`](#tools)                                                                                                                    |
-| [跳过工作](#skipping-work)                               | [`skip_if`](/tasks/task-configuration.html#skip-if), [`sources`](#sources), [`outputs`](#outputs), [`watch`](#watch), [`cache`](/tasks/task-configuration.html#cache)                                                          |
-| [执行](#execution)                                       | [`timeout`](#timeout), [`raw`](#raw), [`interactive`](#interactive)                                                                                                                                                            |
-| [输出](#output-properties)                                | [`output`](#output), [`quiet`](#quiet), [`silent`](#silent)                                                                                                                                                                    |
-| [沙箱](#sandbox)                                          | `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`, `allow_read`, `allow_write`, `allow_net`, `allow_env`, `pass_through_env`                                                                                       |
-| [已弃用](#deprecated)                                    | [`rust_cache`](/tasks/task-configuration.html#rust-cache)                                                                                                                                                                      |
+| [Command](#command)                                       | [`run`](#run), [`run_windows`](/tasks/task-configuration.html#run-windows), [`file`](#file), [`shell`](#shell), [`dir`](#dir), [`usage`](#usage), [`raw_args`](/tasks/task-configuration.html#raw-args), [`extends`](#extends) |
+| [Description and visibility](#description-and-visibility) | [`description`](#description), [`alias`](#alias), [`hide`](#hide), [`confirm`](#confirm)                                                                                                                                       |
+| [Ordering](#ordering)                                     | [`depends`](#depends), [`depends_post`](/tasks/task-configuration.html#depends-post), [`wait_for`](/tasks/task-configuration.html#wait-for), [`daemons`](/tasks/task-configuration.html#daemons)                               |
+| [Environment and tools](#environment-and-tools)           | [`env`](#env), [`vars`](#task-vars), [`secrets`](/tasks/task-configuration.html#secrets), [`tools`](#tools)                                                                                                                    |
+| [Skipping work](#skipping-work)                           | [`skip_if`](/tasks/task-configuration.html#skip-if), [`sources`](#sources), [`outputs`](#outputs), [`watch`](#watch), [`cache`](/tasks/task-configuration.html#cache)                                                          |
+| [Execution](#execution)                                   | [`timeout`](#timeout), [`lock`](#lock), [`raw`](#raw), [`interactive`](#interactive)                                                                                                                                           |
+| [Output](#output-properties)                              | [`output`](#output), [`quiet`](#quiet), [`silent`](#silent)                                                                                                                                                                    |
+| [Sandbox](#sandbox)                                       | `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`, `allow_read`, `allow_write`, `allow_net`, `allow_env`, `pass_through_env`                                                                                       |
+| [Deprecated](#deprecated)                                 | [`rust_cache`](/tasks/task-configuration.html#rust-cache)                                                                                                                                                                      |
 
-本页其余部分介绍 [`[task_config]` 选项](#task-config-options)、[mise 设置的环境变量](#environment-variables-mise-sets)和[相关设置](#settings)。
+The rest of the page covers [`[task_config]` options](#task-config-options),
+[environment variables mise sets](#environment-variables-mise-sets), and
+[settings](#settings).
 
-## 命令
+## Command
 
 ### `run`
 
@@ -76,6 +78,14 @@ run = [
 - **类型**：与 [`run`](#run) 相同
 
 在 Windows 上，mise 会运行此项，而不是 `run`。它接受与 `run` 相同的格式；未设置时，Windows 会运行 `run`。
+
+将其设为空列表可让 Windows 跳过此任务：
+
+```mise-toml
+[tasks.enable-linger]
+run = "loginctl enable-linger"
+run_windows = []
+```
 
 ```mise-toml
 [tasks.build]
@@ -676,6 +686,48 @@ timeout = "10m"
 在 Windows 上，单任务超时会发送 Ctrl+C，并在 5 秒后结束整个进程树；这也能停止忽略 Ctrl+C 的程序，例如停在
 `Terminate batch job (Y/N)?` 提示处的批处理文件。整次运行的超时会立即结束 Windows 上的进程树，但不会停止 [`raw`](#raw) 任务的进程。
 
+### `lock`
+
+- **Type**: `boolean | string | string[]`
+- **Default**: unset
+
+任务运行命令期间持有的资源锁。如果某次运行需要的锁正被另一次运行持有，它会等待锁释放，让共享资源的任务依次执行，避免冲突。多个代理或终端在不同工作树中同时运行相同任务时，这项功能尤其有用。
+
+```mise-toml
+[tasks.test]
+run = "pytest"
+lock = "test-db"
+
+[tasks."e2e:ios"]
+run = "./scripts/e2e-ios.sh"
+lock = ["ios-simulator", "test-db"]
+
+[tasks.migrate]
+run = "./scripts/migrate.sh"
+lock = true
+```
+
+- 某个名称会在本机所有项目中被使用该名称的任务间共享。请使用具体名称，例如 `shop-test-db`，而不是 `db`。
+- 设置为 `true` 后，同一仓库的所有工作树中，同一任务同时只能运行一个实例。其他仓库中同名的任务不受影响。
+- 设置为 `false` 或空列表时不获取锁，例如可用于关闭模板设置的锁。
+
+任务会在依赖项完成、且 mise 确定必须运行后才获取锁：被 `skip_if` 跳过、`sources` 已是最新，或从[缓存](/tasks/task-configuration.html#cache)恢复的任务都不会等待。任务会一直持有锁，直到最后一条命令结束（包括其 `run` 条目启动的任务）；无论以何种方式结束，锁都会释放。多个锁名称会按排序后的顺序获取。任务等待时会让出 `--jobs` 名额，使本次运行中的其他任务继续执行；mise 也会显示锁的持有者：
+
+```text
+[test] waiting for lock test-db, held by test in ~/src/shop-pr-42 (pid 4121, for 2m10s)
+[test] got lock test-db after 3m02s
+```
+
+任务会一次性获取锁、`--jobs` 名额和终端使用权，并持有到任务结束。其 `{ task = ... }` 和 `{ tasks = [...] }` 条目启动的任务会在同一名额下运行，不会另行获取锁。因此，持有锁的运行不会等待同一次运行中另一个任务持有的资源，而那个任务又在等待该锁。未设置 [`interactive`](#interactive) 的锁定任务会与其他任务共享终端，因此它启动的任务无法提示输入[密钥](/tasks/task-configuration.html#secrets)，而由它启动的交互任务会失败；请改为在锁定任务上设置 `interactive = true`。
+
+同一次 `mise run` 中使用同一锁的两个任务也会依次运行。任务的 [`timeout`](#timeout) 会在获取锁之后开始计时。若要限制等待时间，请设置 [`task.lock_timeout`](/configuration/settings.html#task.lock_timeout)，或传入 `mise run --lock-timeout 5m`；超时后任务会失败，并指出锁的持有者。
+
+任务命令可通过 `MISE_TASK_LOCKS` 查看当前持有的锁。通过嵌套 `mise run` 或 `{ task = ... }` 条目启动的子任务已继承这些锁，不会等待父任务。子任务只能再获取排序位置晚于继承锁的锁；否则会失败，并提示你将该锁添加到父任务，从而避免两个运行各持有对方正在等待的锁。
+
+锁以文件形式保存在 `$MISE_STATE_DIR/task-locks` 下，并使用操作系统文件锁。因此，持有锁的 mise 进程一旦退出（即使被强制结束），锁就会释放。任务在后台遗留的命令不会继续持有锁。
+
+如果每个工作树都可以拥有各自的资源副本，优先采用这种方式而不是加锁：[守护进程](/daemons/worktrees.html)会为每个工作树分配独立端口和数据。
+
 ### `raw`
 
 - **类型**：`bool`
@@ -701,16 +753,21 @@ raw 命令运行期间，mise 不会启动其他命令，因此无需担心其�
 
 ### `output`
 
-- **类型**：`"prefix" | "interleave" | "keep-order" | "replacing" | "timed" | "quiet" | "silent"`
-- **默认值**：[`task.output`](/configuration/settings.html#task.output) 设置值
+- **Type**: `"prefix" | "interleave" | "keep-order" | "replacing" | "summary" | "timed" | "quiet" | "silent"`
+- **Default**: the [`task.output`](/configuration/settings.html#task.output)
+  setting
 
-此任务的输出样式，即 `task.output` 的单任务形式。样式可与 [`quiet`](#quiet) 和 [`silent`](#silent) 属性自由组合，这两个属性控制显示内容的多少：
-例如，`output = "prefix"` 与 `quiet = true` 会保留任务名称前缀并隐藏 mise 自身的消息。`quiet` 和 `silent` 值将输出样式与相应的详细程度绑定在一起，
-目前仅为兼容旧配置而保留。
+The output style for this task, the per-task form of `task.output`. Styles
+combine freely with the [`quiet`](#quiet) and [`silent`](#silent) properties,
+which control how much is shown: `output = "prefix"` with `quiet = true` keeps
+the task-name prefixes and hides mise's own messages. The `quiet` and `silent`
+values bundle a style with that verbosity and remain for compatibility.
 
-::: warning 已弃用
-`quiet` 输出值已弃用。mise 从 `2026.9.3` 开始发出警告，并将在 `2027.9.3` 移除支持。请改用 `output = "interleave"` 和 `quiet = true`。
-若要设置全局默认值，请在 `[settings]` 下设置 `task.output = "interleave"` 和 `task.quiet = true`。
+::: warning Deprecated
+The `quiet` output value is deprecated. Warnings begin in mise `2026.9.3`, and
+support will be removed in `2027.9.3`. Use `output = "interleave"` with
+`quiet = true` instead. For a global default, set `task.output = "interleave"`
+and `task.quiet = true` under `[settings]`.
 :::
 
 ### `quiet`

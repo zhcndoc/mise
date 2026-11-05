@@ -132,16 +132,10 @@ impl OutdatedInfo {
                 .await
                 .map(Option::from)
         };
-        let latest = match latest_result {
-            Ok(Some(latest)) => latest,
-            Ok(None) => {
-                warn!("Error getting latest version for {t}: no latest version found");
-                return Ok(None);
-            }
-            Err(e) => {
-                warn!("Error getting latest version for {t}: {e:#}");
-                return Ok(None);
-            }
+        // The caller warns, and counts the tool as unchecked rather than up to
+        // date.
+        let Some(latest) = latest_result? else {
+            eyre::bail!("no latest version found");
         };
         let mut oi = Self::new(config, tv, latest)?;
         if opts.inactive && oi.source == ToolSource::Unknown {
@@ -418,15 +412,7 @@ pub fn compute_config_bumps_for_paths(
             }
 
             let current_version = requests[0].version();
-            let (prefix, _) = split_version_prefix(&current_version);
-            let old = current_version
-                .strip_prefix(&prefix)
-                .unwrap_or(&current_version);
-
-            if let Some(bumped) = check_semver_bump(old, cli_version)
-                && bumped != old
-            {
-                let new_version = format!("{prefix}{bumped}");
+            if let Some(new_version) = cli_config_bump(&current_version, cli_version) {
                 let new_request = match requests[0].clone() {
                     ToolRequest::Version {
                         version: _,
@@ -448,7 +434,7 @@ pub fn compute_config_bumps_for_paths(
                         source,
                         lockfile_scope,
                     } => ToolRequest::Prefix {
-                        prefix: format!("{prefix}{bumped}"),
+                        prefix: new_version.clone(),
                         backend,
                         options,
                         source,
@@ -471,6 +457,37 @@ pub fn compute_config_bumps_for_paths(
     bumps
 }
 
+/// Splits a config request into its vendor prefix and bare version, and bumps
+/// the bare version to the one given on the command line.
+///
+/// The CLI version can carry the vendor prefix too (`java@temurin-27`). It is
+/// bumped bare, or the prefix is taken for the version and written twice
+/// (`temurin-temurin`). A CLI prefix replaces the config's, so `temurin-26`
+/// moves to `temurin-27` and a bare `26` follows `java@temurin-27` to the vendor.
+/// A request with no version in it (`latest`, `nightly`) names a channel and
+/// keeps its name, and a `prefix:` wrapper is not part of the version.
+///
+/// Returns the request that replaces `current`, or `None` when nothing changes.
+fn cli_config_bump(current: &str, cli_version: &str) -> Option<String> {
+    let current = current.strip_prefix("prefix:").unwrap_or(current);
+    let (prefix, old) = split_version_prefix(current);
+    // Nothing to bump: `latest` and a bare vendor (`temurin`) are moving targets,
+    // and bumping one would swap the word for the CLI version.
+    if !request_names_a_version(&old) {
+        return None;
+    }
+    let (cli_prefix, cli_bare) = split_version_prefix(cli_version);
+    let new_prefix = if cli_prefix.is_empty() || matches!(cli_prefix.as_str(), "v" | "V") {
+        prefix.clone()
+    } else {
+        cli_prefix
+    };
+    // A vendor switch at the same version (`temurin-26` to `zulu-26`) is a bump too.
+    let bumped = check_semver_bump(&old, &cli_bare)
+        .or_else(|| (new_prefix != prefix).then(|| old.clone()))?;
+    Some(format!("{new_prefix}{bumped}")).filter(|new| new != current)
+}
+
 /// Apply config bumps by writing the new versions to their config files.
 pub fn apply_config_bumps(config: &Config, bumps: &[ConfigBump]) -> Result<()> {
     for bump in bumps {
@@ -489,6 +506,12 @@ pub fn apply_config_bumps(config: &Config, bumps: &[ConfigBump]) -> Result<()> {
     Ok(())
 }
 
+/// Parses a purely dot-separated numeric version such as `2026.08.19`, which
+/// neither SemVer nor `versions` accept because of the leading zeros.
+fn numeric_components(v: &str) -> Option<Vec<u64>> {
+    v.split('.').map(|c| c.parse().ok()).collect()
+}
+
 /// Checks whether the current version is older than a backend-selected candidate.
 /// Uses SemVer precedence when possible, then the general version comparison;
 /// versions that cannot be ordered are considered outdated when they differ.
@@ -498,6 +521,8 @@ pub fn is_outdated_version(current: &str, latest: &str) -> bool {
     }
     if let (Some(c), Some(l)) = (Version::new(current), Version::new(latest)) {
         c.lt(&l)
+    } else if let (Some(c), Some(l)) = (numeric_components(current), numeric_components(latest)) {
+        c < l
     } else {
         current != latest
     }
@@ -510,17 +535,42 @@ mod tests {
     use test_log::test;
 
     use super::{
-        OutdatedInfo, bumped_request_version, check_semver_bump, is_outdated_version,
-        prefixed_latest_query, request_names_a_version,
+        OutdatedInfo, bumped_request_version, check_semver_bump, cli_config_bump,
+        is_outdated_version, prefixed_latest_query, request_names_a_version,
     };
     use crate::args::{BackendArg, BackendResolution};
     use crate::config::Config;
     use crate::toolset::{ToolRequest, ToolSource, ToolVersion, ToolVersionOptions, install_state};
 
+    #[test]
+    fn test_cli_config_bump_keeps_vendor_prefix_once() {
+        let bump = cli_config_bump;
+        assert_eq!(bump("temurin-26", "temurin-27"), Some("temurin-27".into()));
+        assert_eq!(
+            bump("temurin-26", "temurin-27.0.1+0"),
+            Some("temurin-27".into())
+        );
+        assert_eq!(bump("temurin-26", "27"), Some("temurin-27".into()));
+        assert_eq!(bump("26", "27"), Some("27".into()));
+        assert_eq!(bump("temurin-26", "temurin-26.0.1"), None);
+        assert_eq!(bump("1", "v2.0.0"), Some("2".into()));
+        assert_eq!(bump("temurin-26", "zulu-26"), Some("zulu-26".into()));
+        assert_eq!(bump("26", "zulu-26"), Some("zulu-26".into()));
+        // Channels keep their name and a `prefix:` wrapper is not doubled.
+        assert_eq!(bump("latest", "temurin-27"), None);
+        assert_eq!(bump("temurin", "27"), None);
+        assert_eq!(bump("temurin", "temurin-27"), None);
+        assert_eq!(bump("prefix:26", "zulu-26"), Some("zulu-26".into()));
+        assert_eq!(bump("prefix:26", "27"), Some("27".into()));
+        assert_eq!(bump("prefix:26", "26.0.1"), None);
+    }
+
     /// Guards against offering a downgrade when installed versions and backend
     /// candidates use different prefixes, while retaining non-SemVer comparisons.
     #[test]
     fn test_is_outdated_version() {
+        assert_eq!(is_outdated_version("2026.08.19", "2026.10.21"), true);
+        assert_eq!(is_outdated_version("2026.10.21", "2026.08.19"), false);
         assert_eq!(is_outdated_version("3.7b", "3.7c"), true);
         assert_eq!(is_outdated_version("3.7c", "3.7b"), false);
         assert_eq!(is_outdated_version("1.10.0", "1.12.0"), true);

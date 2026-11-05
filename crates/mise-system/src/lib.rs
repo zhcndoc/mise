@@ -22,7 +22,7 @@ pub use mise_config::bootstrap::{
     BootstrapLinuxSystemdTomlConfig, BootstrapLinuxTomlConfig, BootstrapMacosDefaultsEntry,
     BootstrapMacosLaunchdTomlConfig, BootstrapMacosTomlConfig, BootstrapTomlConfig,
     BootstrapUserTomlConfig, SystemAptTomlConfig, SystemBrewTomlConfig, SystemDnfTomlConfig,
-    hook_commands,
+    hook_commands, merge_hook_commands,
 };
 pub use mise_config::packages::{
     PackageDesiredStateTomlConfig, PackageOptionsTomlConfig, PackageTomlConfig,
@@ -166,11 +166,10 @@ impl BootstrapMerge for BootstrapTomlConfig {
         for (phase, shared) in lower.hooks {
             match self.hooks.entry(phase) {
                 indexmap::map::Entry::Occupied(mut own) => {
-                    if let (Some(mut commands), Some(own_commands)) =
+                    if let (Some(shared), Some(own_commands)) =
                         (hook_commands(shared), hook_commands(own.get().clone()))
                     {
-                        commands.extend(own_commands);
-                        own.insert(toml::Value::Array(commands));
+                        own.insert(merge_hook_commands(shared, own_commands));
                     }
                 }
                 indexmap::map::Entry::Vacant(slot) => {
@@ -249,6 +248,10 @@ impl BootstrapMerge for BootstrapTomlConfig {
         fill(&mut self.linux.systemd.units, lower.linux.systemd.units);
         or(&mut self.user.login_shell, lower.user.login_shell);
         or(&mut self.brew.adopt, lower.brew.adopt);
+        or(
+            &mut self.brew.homebrew_metadata,
+            lower.brew.homebrew_metadata,
+        );
         fill(&mut self.brew.taps, lower.brew.taps);
     }
 }
@@ -554,6 +557,7 @@ fn merge_manager_packages(
         let requests = by_mgr.entry(manager_name.clone()).or_default();
         for request in mp.requests {
             let adopt = mp.options.brew_cask_adopt(&request.name);
+            let homebrew_metadata = mp.options.brew_cask_homebrew_metadata();
             let appdir = mp
                 .options
                 .brew_cask_appdir(&request.name)
@@ -572,21 +576,24 @@ fn merge_manager_packages(
                 Some(_) => {}
                 None => {
                     match manager_name.as_str() {
-                        "brew-cask" if adopt || appdir.is_some() => {
+                        "brew-cask" if adopt || homebrew_metadata || appdir.is_some() => {
                             let options = manager_options
                                 .entry(manager_name.clone())
                                 .or_insert_with(|| ManagerPackageOptions::BrewCask {
                                     adopt: BTreeSet::new(),
                                     appdirs: BTreeMap::new(),
+                                    homebrew_metadata: false,
                                 });
                             if let ManagerPackageOptions::BrewCask {
                                 adopt: cask_adopt,
                                 appdirs,
+                                homebrew_metadata: cask_homebrew_metadata,
                             } = options
                             {
                                 if adopt {
                                     cask_adopt.insert(request.name.clone());
                                 }
+                                *cask_homebrew_metadata |= homebrew_metadata;
                                 if let Some(appdir) = appdir {
                                     appdirs.entry(request.name.clone()).or_insert(appdir);
                                 }
@@ -669,7 +676,11 @@ fn package_requests_from_config_files(
     #[cfg(unix)]
     let brew_adopt = brew_adopt_from_config_files(config_files);
     #[cfg(unix)]
+    let brew_homebrew_metadata = brew_homebrew_metadata_from_config_files(config_files);
+    #[cfg(unix)]
     let mut cask_adopt = BTreeSet::new();
+    #[cfg(unix)]
+    let mut cask_homebrew_metadata = false;
     #[cfg(unix)]
     let mut cask_appdirs = BTreeMap::new();
     #[cfg(unix)]
@@ -714,6 +725,10 @@ fn package_requests_from_config_files(
                 #[cfg(unix)]
                 if mgr == "brew-cask" && adopt_requested.unwrap_or(brew_adopt) {
                     cask_adopt.insert(name.clone());
+                }
+                #[cfg(unix)]
+                if mgr == "brew-cask" && brew_homebrew_metadata {
+                    cask_homebrew_metadata = true;
                 }
                 #[cfg(unix)]
                 if mgr == "brew-cask"
@@ -798,12 +813,13 @@ fn package_requests_from_config_files(
     #[cfg(unix)]
     let mut options = {
         let mut options = IndexMap::new();
-        if !cask_adopt.is_empty() || !cask_appdirs.is_empty() {
+        if !cask_adopt.is_empty() || !cask_appdirs.is_empty() || cask_homebrew_metadata {
             options.insert(
                 "brew-cask".to_string(),
                 ManagerPackageOptions::BrewCask {
                     adopt: cask_adopt,
                     appdirs: cask_appdirs,
+                    homebrew_metadata: cask_homebrew_metadata,
                 },
             );
         }
@@ -1041,10 +1057,15 @@ fn render_repo_str(config: &Config, config_path: &Path, path_raw: &str) -> Resul
     let mut ctx = config.bootstrap_tera_ctx(config_path).clone();
     if ctx.get("config_root").is_none() {
         let config_root = crate::host::config_root(config_path);
-        ctx.insert("config_root", &config_root);
+        ctx.insert("config_root", &config_root.to_string_lossy());
     }
     let mut tera = mise_util::tera::get_tera_without_exec(config_path.parent());
-    Ok(mise_util::tera::render_str(&mut tera, path_raw, &ctx)?)
+    Ok(crate::host::render_config_str(
+        &mut tera,
+        path_raw,
+        &ctx,
+        config_path,
+    )?)
 }
 
 /// Aggregate `[bootstrap.repos]` across all loaded config files.
@@ -1664,9 +1685,9 @@ pub fn login_shell_from_config(config: &Config) -> Option<login_shell::LoginShel
                 warn!("[bootstrap.user].login_shell: must not be empty, ignoring entry");
                 continue;
             }
-            if !Path::new(&login_shell).is_absolute() {
+            if !Path::new(&login_shell).is_absolute() && login_shell.contains(['/', '\\']) {
                 warn!(
-                    "[bootstrap.user].login_shell: shell must be an absolute path, ignoring entry"
+                    "[bootstrap.user].login_shell: shell must be an absolute path or a bare shell name, ignoring entry"
                 );
                 continue;
             }
@@ -1937,7 +1958,8 @@ fn shell_activation_setting_display(setting: Option<ShellActivationMode>) -> &'s
 /// Aggregate `[bootstrap.hooks]` across all loaded config files.
 ///
 /// Hooks are additive and ordered global -> local. A hook value can be a string
-/// command, an array of string commands, or a table with a `run` string/array.
+/// command, an array of string commands, or a table with a `run` and/or `run_windows`
+/// string/array.
 pub fn hooks_from_config(config: &Config) -> Vec<hooks::BootstrapHook> {
     hooks_from_config_files(&config.config_files())
 }
@@ -1987,10 +2009,14 @@ fn packages_from_specs_with_config_files(
     let brew_taps = brew_taps_from_config_files(config_files);
     #[cfg(unix)]
     let brew_adopt = brew_adopt_from_config_files(config_files);
+    #[cfg(unix)]
+    let brew_homebrew_metadata = brew_homebrew_metadata_from_config_files(config_files);
     let package_configs = package_configs_from_config_files(config_files);
     let mut snap_options = BTreeMap::new();
     #[cfg(unix)]
     let mut cask_adopt = BTreeSet::new();
+    #[cfg(unix)]
+    let mut cask_homebrew_metadata = false;
     #[cfg(unix)]
     let mut cask_appdirs = BTreeMap::new();
     #[cfg(unix)]
@@ -2084,6 +2110,9 @@ fn packages_from_specs_with_config_files(
             {
                 cask_adopt.insert(name.clone());
             }
+            if brew_homebrew_metadata {
+                cask_homebrew_metadata = true;
+            }
             if let Some(appdir) = configured.and_then(PackageTomlConfig::appdir) {
                 match crate::packages::brew::package_app_dir(appdir) {
                     Ok(appdir) => {
@@ -2119,12 +2148,13 @@ fn packages_from_specs_with_config_files(
     #[cfg(unix)]
     let mut options = {
         let mut options = IndexMap::new();
-        if !cask_adopt.is_empty() || !cask_appdirs.is_empty() {
+        if !cask_adopt.is_empty() || !cask_appdirs.is_empty() || cask_homebrew_metadata {
             options.insert(
                 "brew-cask".to_string(),
                 ManagerPackageOptions::BrewCask {
                     adopt: cask_adopt,
                     appdirs: cask_appdirs,
+                    homebrew_metadata: cask_homebrew_metadata,
                 },
             );
         }
@@ -2431,6 +2461,20 @@ fn brew_adopt_from_config_files(config_files: &ConfigMap) -> bool {
         }
     }
     adopt
+}
+
+#[cfg(unix)]
+fn brew_homebrew_metadata_from_config_files(config_files: &ConfigMap) -> bool {
+    let mut enabled = false;
+    for cf in config_files.values().rev() {
+        if let Some(value) = cf
+            .bootstrap_config()
+            .and_then(|system| system.brew.homebrew_metadata)
+        {
+            enabled = value;
+        }
+    }
+    enabled
 }
 
 #[derive(Clone, Copy)]
@@ -2755,6 +2799,29 @@ mod tests {
         assert_eq!(casks.requests.len(), 2);
         assert!(casks.options.brew_cask_adopt("textmate"));
         assert!(!casks.options.brew_cask_adopt("replace-me"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_brew_cask_homebrew_metadata_option_reaches_package_request() -> Result<()> {
+        let (_dir, config_files) = config_map_from_toml(&[(
+            "mise.toml",
+            r#"
+                [bootstrap.brew]
+                homebrew_metadata = true
+
+                [bootstrap.packages]
+                "brew-cask:1password-cli" = "latest"
+            "#,
+        )])?;
+
+        let packages = packages_from_config_files(&config_files)?;
+        let casks = packages
+            .into_iter()
+            .find(|packages| packages.manager.name() == "brew-cask")
+            .unwrap();
+        assert!(casks.options.brew_cask_homebrew_metadata());
         Ok(())
     }
 

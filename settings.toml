@@ -612,6 +612,11 @@ docs = """
 sources here. Relative `[dotfile_groups]` roots and the relative keys of
 destination-variant entries also resolve against it. See
 [Whole-file entries](/dotfiles/managed.html#whole-file-entries).
+
+In a config file, the value may be a template such as
+`{{ mise_config_dir }}/home`, which keeps the sources beside a dotfiles
+repository adopted as the global config. A relative result resolves against
+the config root.
 """
 env = "MISE_DOTFILES_ROOT"
 type = "Path"
@@ -700,8 +705,11 @@ hash, and uses one again in two cases:
   carries the `ETag` or `Last-Modified` value the server sent, and a
   `304 Not Modified` answer means the kept file is used instead of a new
   download. Servers that send no validator are not cached.
-- **A tool pinned its checksum**, in its options or in `mise.lock`. The kept
-  file is used with no request at all, even if the URL changed.
+- **A tool pinned its checksum**, in its options or in `mise.lock`, and the kept
+  file was downloaded from the same URL. It is used with no request at all. A
+  file another URL served is not, even when it has that checksum, and neither
+  is anything for a checksum `mise lock` took from mise-versions without
+  downloading (see [`mise.lock`](/dev-tools/mise-lock.html#checksums)).
 
 The `http`, `github`, `aqua` and `packslip` backends and the core tools'
 precompiled archives pin and install from the stored file, linked into place
@@ -779,11 +787,34 @@ Caches environment variables and `PATH` so nested commands such as
 [`env_cache_ttl`](#env_cache_ttl) or when config files, tool versions, settings,
 or files that env plugins watch change. Edits to dotenv files or `_.source`
 scripts may not invalidate an entry; set `MISE_ENV_CACHE=0` for a command that
-must recompute. Configurations with secrets (an `age` value, a sops-encrypted
-file or `redact = true`) are never cached. See
+must recompute. Configurations with secrets (an `age` value or a sops-encrypted
+file) are never cached, and neither are those with `redact = true` unless
+[`env_cache_redacted`](#env_cache_redacted) is on. See
 [Environment cache](/cache-behavior.html#environment-caching).
 """
 env = "MISE_ENV_CACHE"
+type = "Bool"
+
+[env_cache_redacted]
+default = false
+description = "[experimental] Let the environment cache hold values marked `redact = true`."
+docs = """
+By default a config with a `redact = true` directive is never written to the
+[environment cache](#env_cache), so mise recomputes it on every command. That is
+slow when such a directive sources a slow script. With this on, mise caches the
+environment and keeps masking the redacted keys on a cache hit.
+
+The cache file holds the secret values on disk, encrypted with a key that
+`mise activate` puts in its shell's environment. Every process started from
+that shell inherits the key and can decrypt the file. After
+[`env_cache_ttl`](#env_cache_ttl) mise stops using an entry, but the file stays
+until mise loads it again or you run `mise cache clear`.
+
+`age` and sops values, plugin results with `cacheable = false`, redacted
+`[vars]`, and redacted `default` and `required` directives are still never
+cached. See [Environment cache](/cache-behavior.html#environment-caching).
+"""
+env = "MISE_ENV_CACHE_REDACTED"
 type = "Bool"
 
 [env_cache_ttl]
@@ -845,6 +876,38 @@ optional = true
 parse_env = "list_by_os_path_separator"
 rust_type = "Vec<PathBuf>"
 type = "ListPath"
+
+[env_sets]
+description = "Named sets of config environments, which `env` and `-E` can name."
+docs = """
+Defines names that stand for several [config environments](/configuration/environments.html).
+Put them in a shared `miserc.toml` and select them by name:
+
+```toml
+# miserc.toml, in git
+[env_sets]
+server = ["server", "ssh", "pac"]
+workstation = ["workstation", "ssh", "pac", "raycast"]
+```
+
+```toml
+# ~/.config/mise/miserc.local.toml, on this machine
+env = ["workstation"]
+```
+
+`env`, `MISE_ENV` and `-E` expand a set name to its environments, in the order
+the set lists them, before mise reads any config. `{{ mise_env }}` and the
+`MISE_ENV` that mise exports hold the expanded list. A name that is not a set is an
+environment, so a machine can still list environments one by one. A set expands one
+level: a set cannot contain another set, and a set may list an environment of its
+own name (`server` above). An environment that appears twice keeps its first position.
+
+A project `.miserc.toml` cannot define a set named like one the system or global
+`miserc.toml` defines, or like an environment it selects; among the other files, the closest one wins for each name.
+"""
+optional = true
+rc = true
+type = "IndexMap<String, Vec<String>>"
 
 [env_shell_expand]
 default = true
@@ -918,6 +981,55 @@ it, check whether it still happens with `experimental = false`, then
 """
 env = "MISE_EXPERIMENTAL"
 type = "Bool"
+
+[extra_ca_certs]
+description = "PEM bundle of CA certificates mise trusts in addition to its usual roots."
+docs = """
+Use it when mise's HTTPS traffic passes through a proxy whose CA is not in the
+system trust store, such as a traffic-inspecting proxy that generates a new CA
+for each run. The certificates are added to the roots mise already trusts, on
+every platform, so the file only needs the extra CAs. Unlike `SSL_CERT_FILE`,
+it never replaces the system store.
+
+```sh
+MISE_EXTRA_CA_CERTS=/path/to/proxy-ca.pem mise install
+```
+
+It applies to the connections mise makes with its own HTTP client: downloads,
+version lookups, GitHub API calls, attestation verification, vfox plugins and
+the GitHub relay. The package manager embedded in the `npm:` backend reads
+`NODE_EXTRA_CA_CERTS` instead, and programs mise runs, such as `git`, `uv` or a
+tool's installer, read their own certificate settings.
+
+The path must be absolute or start with `~/`: a relative path would resolve
+against the current directory, so mise ignores it. If the file cannot be read or
+holds a certificate mise cannot use, mise warns and keeps its usual roots: the
+system store, `SSL_CERT_FILE` where that replaces it, or the bundled Mozilla
+roots when neither loads. This setting is only read from the environment and the
+global config, so a project's `mise.toml` cannot add a trusted CA. See
+[TLS certificates](/faq.html#tls-certificates).
+"""
+env = "MISE_EXTRA_CA_CERTS"
+global_only = true
+optional = true
+type = "Path"
+
+[extract_max_ratio]
+default = 100
+description = "How many times its own size a downloaded archive or compressed file may unpack to."
+docs = """
+A small download can be built to unpack to far more data than the disk holds:
+1 GiB of zeroes is under 1 KiB of bzip2. When mise unpacks a tool's archive or
+compressed file, it stops, and the install fails, once the output is larger
+than 256 MiB and more than this many times the size of the download. Tool
+archives rarely unpack to more than 10 times their size.
+
+Raise it for a tool that legitimately unpacks to more, such as an archive of
+mostly empty disk images. `0` means no limit.
+"""
+env = "MISE_EXTRACT_MAX_RATIO"
+global_only = true
+type = "Integer"
 
 [fetch_remote_versions_cache]
 default_docs = "1h"
@@ -1042,6 +1154,33 @@ See [Credential command](/dev-tools/github-tokens.html#credential-command) and
 env = "MISE_GITHUB_CREDENTIAL_COMMAND"
 global_only = true
 type = "String"
+
+[github.enterprise_hosts]
+default = []
+description = "Extra GitHub Enterprise hosts that receive your GitHub token on their `/api/v3` URLs."
+docs = """
+mise sends the GitHub token to `api.github.com` and `api.*.ghe.com`, and to
+an `/api/v3` URL only on the origin of the tool's
+[`api_url`](/dev-tools/backends/github.html#api-url). A GitHub Enterprise
+Server URL that reaches mise any other way, such as an `http:` tool, an aqua
+package or a remote task file under `https://github.mycompany.com/api/v3/`,
+gets no token. List the hosts that should get one:
+
+```toml [~/.config/mise/config.toml]
+[settings.github]
+enterprise_hosts = ["github.mycompany.com"]
+```
+
+The token is sent over `https` only, to any port of a listed host, and only on
+paths under `/api/v3`. mise ignores this setting in project config, since a
+repository could otherwise list a host of its choosing. See
+[GitHub Enterprise](/dev-tools/github-tokens.html#github-enterprise).
+"""
+env = "MISE_GITHUB_ENTERPRISE_HOSTS"
+global_only = true
+parse_env = "list_by_comma"
+rust_type = "Vec<String>"
+type = "ListString"
 
 [github.gh_cli_tokens]
 default = true
@@ -1704,6 +1843,10 @@ and sends a strong `ETag` or `Last-Modified` value, mise keeps a partial
 download and resumes it on the next attempt, even in a later run; otherwise the
 download starts over. Changing the URL or request headers discards the partial
 file.
+
+The same limit bounds reading the body of a response that mise parses instead
+of saving, such as a checksum file or a version list, so a server that sends it
+a byte at a time cannot hold a command forever.
 """
 env = "MISE_HTTP_DOWNLOAD_TIMEOUT"
 type = "Duration"
@@ -1790,22 +1933,6 @@ parse_env = "set_by_comma"
 rust_type = "BTreeSet<String>"
 type = "SetString"
 
-[idiomatic_version_file_ignore_minimum_versions]
-default = false
-description = "Ignore idiomatic version file fields that only declare a minimum compatible version."
-docs = """
-Affects `go.mod`'s `go X.Y` line (a `toolchain goX.Y.Z` line, or an exact
-`go X.Y.Z` line with no `toolchain` line, is still read) and
-`CMakeLists.txt`'s `cmake_minimum_required`. mise still reads those minimums
-with a deprecation warning; this setting opts into the final behavior now and
-silences the warning. In mise 2026.11.0 that behavior becomes unconditional and
-this setting is removed. See
-[Which fields mise reads](/dev-tools/versions.html#which-fields-mise-reads).
-"""
-env = "MISE_IDIOMATIC_VERSION_FILE_IGNORE_MINIMUM_VERSIONS"
-hide = true
-type = "Bool"
-
 [ignored_config_paths]
 default = []
 description = "Config files and directories mise does not load."
@@ -1818,7 +1945,8 @@ resolve from the directory that holds it, and relative paths in
 Commands that act on every tracked config (`mise prune`, `mise ls --prunable`
 and the stale-version check in `mise upgrade`) honor only the environment
 variable and the global and system `miserc.toml` files, so a project's
-`.miserc.toml` cannot hide other projects' configs from them.
+`.miserc.toml` cannot hide other projects' configs from them. The same applies
+to global and system config: a project's `.miserc.toml` cannot ignore it.
 
 `mise settings` and `mise settings add` refuse this setting, because mise
 reads it before config files load; put it in a `.miserc.toml` file or the
@@ -1868,6 +1996,27 @@ enum = ["legacy", "identity"]
 env = "MISE_INSTALL_LAYOUT"
 optional = true
 type = "String"
+
+[ipv4_only]
+default = false
+description = "Connect to remote hosts over IPv4 only."
+docs = """
+Use it when a host answers wrongly over IPv6 while IPv4 works, for example
+`dl.google.com` returning `404 Not Found` for a Go download, or the Sigstore
+trust root failing to load during attestation verification. Without it mise
+follows the system resolver, which usually prefers IPv6 on a dual-stack machine.
+
+It applies to the connections mise makes with its own HTTP client: downloads,
+version lookups, GitHub API calls, attestation verification, vfox plugins and
+the GitHub relay. Programs mise runs, such as `git`, `npm` or a tool's
+installer, follow the system, and so does the package manager embedded in the
+`npm:` backend. For those, prefer IPv4 system-wide, for example with
+`precedence ::ffff:0:0/96 100` in `/etc/gai.conf`.
+
+A host with no IPv4 address cannot be reached while this is on.
+"""
+env = "MISE_IPV4_ONLY"
+type = "Bool"
 
 [java.shorthand_vendor]
 default = "temurin"
@@ -1961,7 +2110,8 @@ Resolves tools only from lockfile entries, instead of looking versions and URLs
 up through the GitHub API or a registry. A tool with no matching entry is an
 error, both for installs and for lookups such as `mise which`, even when the
 tool is already installed. Backends that lock download URLs must have one for
-the current platform, and recorded dependency graphs must be present and match
+the current platform, with a checksum (see
+[`locked_require_checksum`](#locked_require_checksum)), and recorded dependency graphs must be present and match
 their digest; backends that do not lock URLs, such as `cargo`, `go`, `gem` and
 `asdf`, need only the version. Installs in this mode do not update lockfiles.
 Same as passing `--locked`.
@@ -1976,6 +2126,27 @@ applies to. See
 [Strict lockfile mode](/dev-tools/mise-lock.html#strict-lockfile-mode).
 """
 env = "MISE_LOCKED"
+type = "Bool"
+
+[locked_require_checksum]
+description = "Make locked mode fail when the lockfile has no checksum for a download."
+docs = """
+[`locked`](#locked) mode requires a checksum in the lockfile for every artifact
+it downloads for the current platform, including additional GitHub release
+assets, and fails before downloading when one is missing. Otherwise a lockfile
+entry with a URL but no checksum would install whatever the URL serves. Run
+`mise lock` to fill in missing checksums: it downloads and hashes any artifact
+whose checksum the release does not publish. Backends that do not lock download
+URLs, such as `cargo` and `go`, are not affected.
+
+Unset, this is on, except with
+[`lockfile_mode = "merge"`](#lockfile_mode), which can lock a URL without a
+checksum. Set it to `false` to install such entries anyway, or to `true` to
+require checksums in merge mode too. The setting will be removed after merge
+mode is.
+"""
+env = "MISE_LOCKED_REQUIRE_CHECKSUM"
+optional = true
 type = "Bool"
 
 [locked_scopes]
@@ -2070,19 +2241,23 @@ env = "MISE_LOCKFILE_AUTO_PRUNE"
 type = "Bool"
 
 [lockfile_mode]
-default_docs = "merge"
-description = "How lockfiles are written: entry by entry, or rebuilt from the current requests."
+default = "generate"
+description = "How lockfiles are written: rebuilt from the current requests, or entry by entry."
 docs = """
 Neither mode creates lockfiles; set [`lockfile = true`](#lockfile) or run
-`mise lock`. `generate` is a trial, and the default may change. See
+`mise lock`. See
 [Complete lockfile generation](/dev-tools/mise-lock-reference.html#complete-lockfile-generation).
+
+::: warning
+`merge` is deprecated. mise will start warning about it in 2027.4.0 and remove it in
+2027.10.0. Remove `lockfile_mode` to use the default `generate` mode.
+:::
 """
 enum = [
-  { value = "merge", description = "update entries as tools are installed" },
+  { value = "merge", description = "[deprecated] update entries as tools are installed" },
   { value = "generate", description = "rebuild the whole lockfile from the current requests, reusing unchanged entries, and lock other platforms during installs" },
 ]
 env = "MISE_LOCKFILE_MODE"
-optional = true
 type = "String"
 
 [lockfile_platforms]
@@ -2316,9 +2491,12 @@ default_docs = "true"
 description = "Check the OpenPGP signature of the `SHASUMS256.txt` file that `node.verify` checks downloads against."
 docs = """
 mise checks the signature itself, so `gpg` does not need to be installed. It
-runs only when [`node.verify`](#node.verify) is on, and skips releases that
-never published a signature (the `.sig` download returns 404).
-Set to `false` to skip the check. The global
+runs only when [`node.verify`](#node.verify) is on, for installs and for the
+checksums [`mise lock`](/cli/lock.html) records. A missing `.sig` fails the
+check, except on unofficial-builds, which signs nothing. Set to `false` to skip
+the check, for example for a mirror that does not copy the signatures or for
+one of the few early releases (such as 4.0.0 and 5.12.0) that never published
+one. The global
 [`gpg_verify`](/configuration/settings.html#gpg_verify) setting sets the
 default.
 """
@@ -2484,6 +2662,36 @@ enum = [
 env = "MISE_NPM_PACKAGE_MANAGER"
 rust_type = "NpmPackageManager"
 type = "String"
+
+[npm.provenance]
+default = true
+description = "Verify the Sigstore provenance npm publishes for an `npm:` tool's own package."
+docs = """
+On by default. `mise install` fetches the attestations the public npm registry holds
+for the tool's package and requires the SLSA provenance among them to verify
+against the integrity hash the install locks. A package that publishes no
+provenance, or a private registry that serves none, installs as it does with
+this off. Provenance must come from GitHub Actions or from CI on gitlab.com;
+provenance built anywhere else, such as on a self-hosted GitLab, is not accepted
+yet, so such a package fails to install while this is on.
+
+The first install with this on records the repository the provenance names in
+`mise.lock` (lockfile revision 4). Later installs of that version must show the
+same repository, and a package that has stopped publishing provenance is
+refused.
+
+Only the embedded aube package manager verifies provenance. An install through
+another [`npm.package_manager`](#npm.package_manager), and one of a local archive
+pinned only by a checksum, installs unchecked. The `provenance` category of
+[`paranoid`](/configuration/settings.html#paranoid) turns verification on even
+when this is off, and makes those installs an error instead. If npm's
+attestation lookup fails, [`provenance_api_failures_fatal`](/configuration/settings.html#provenance_api_failures_fatal)
+decides whether the install fails or goes on unchecked, unless `mise.lock` pins a
+repository. Set this to `false` to skip verification, for example behind a
+network that blocks Sigstore's trust roots.
+"""
+env = "MISE_NPM_PROVENANCE"
+type = "Bool"
 
 [npm.shell_out]
 default = false
@@ -2721,10 +2929,11 @@ rust_type = "Paranoid"
 type = "BoolOrList"
 
 [pin]
-description = "Make `mise use` write the resolved version, such as `24.14.0` for `node@24`, instead of the requested one."
+description = "Make `mise use` and `mise upgrade --bump` write the resolved version, such as `24.14.0` for `node@24`, instead of the requested one."
 docs = """
 Same as passing `--pin` every time; `--fuzzy` writes the requested version for
-one command. To record exact versions without changing `mise.toml`, use a
+one command. `mise upgrade --bump` also writes resolved versions, replacing
+requests such as `latest` or `20` in `mise.toml`. To record exact versions without changing `mise.toml`, use a
 [lockfile](/dev-tools/mise-lock.html).
 """
 env = "MISE_PIN"
@@ -2801,7 +3010,8 @@ default = true
 description = "Fail an install when a provenance API, such as GitHub's attestation API, cannot be reached or queried."
 docs = """
 Applies to GitHub artifact attestation lookups for aqua and github backend
-tools, and to SLSA provenance lookups for github backend tools. Set to `false`
+tools, to SLSA provenance lookups for github backend tools, and to the attestation
+lookups of [`npm.provenance`](#npm.provenance). Set to `false`
 to warn and install without that check, for example on a build network that
 cannot reach the GitHub API. Checksum failures, provenance that fails
 verification, and provenance that the lockfile already requires for the tool
@@ -3108,6 +3318,7 @@ mise applies them through ruby-build, or ruby-install when
 patched.
 """
 env = "MISE_RUBY_APPLY_PATCHES"
+global_only = true
 optional = true
 type = "String"
 
@@ -3281,12 +3492,17 @@ Use it for bots and CI jobs that process config you did not write, such as a bot
 that runs `mise lock --bump` on pull request branches. Project config then loads
 without a trust prompt.
 
-Safe mode refuses template `exec()` and `read_file()`, tasks, the `postinstall`
-and `install_env` tool options, asdf plugin scripts, plugin installs, mise
-secrets and `mise daemons`, with an error. It skips hooks, as `--no-hooks`
-does, and ignores project `[env]`, `[shell_alias]`, `[settings]`, remote
-includes, `[bootstrap]` and `[dotfiles]`, so a repository cannot turn off
-verification, redirect a backend or write files into your home directory.
+Safe mode refuses template `exec()`, `read_file()` and `get_env()`, tasks, the
+`postinstall`, `install_env` and spm `install_command` tool options, asdf
+plugin scripts, S3 requests, plugin installs, mise secrets and `mise daemons`,
+with an error. It skips hooks, as `--no-hooks` does, and ignores project
+`[env]`, `[shell_alias]`, `[settings]`, `[deps]`, lazy tools, `path:` versions,
+remote includes, `[bootstrap]` and `[dotfiles]`, so a repository cannot turn off
+verification, redirect a backend, run its dependency providers or write files
+into your home directory. Project templates see an empty `env`, the hosts a
+project `api_url` or download URL names get none of your forge tokens or netrc
+credentials, and a project `[tool_alias]` cannot redirect a tool global config
+declares.
 Global and system config still apply. Version resolution and `mise.lock`
 updates keep working for backends that query HTTP APIs, such as core tools,
 `aqua:`, `github:`, `pypi:` and `npm:`.
@@ -3529,7 +3745,10 @@ mise runs the equivalent of `mise skills sync` after every install, after
 `mise use` changes a version, and after `mise upgrade`, so the links under
 [`skills.dir`](#skills.dir) point at the versions active in the project. Only
 projects with a mise config get links, and nothing is written outside a project
-root. mise touches only links it made, and removes stale ones only when [`skills.prune`](#skills.prune)
+root, except that global tools link into `skills.dir` under your home directory.
+A project's directory gets the tools its own config files declare and the tools
+`MISE_<TOOL>_VERSION` selects, but not the ones only the global config declares.
+When the project and home share one `skills.dir`, every active tool links there. mise touches only links it made, and removes stale ones only when [`skills.prune`](#skills.prune)
 is on. See
 [Keep project links up to date](/dev-tools/packslip-resources.html#keep-project-links-up-to-date).
 """
@@ -3537,14 +3756,18 @@ env = "MISE_SKILLS_AUTO_SYNC"
 type = "Bool"
 
 [skills.dir]
-default = ".claude/skills"
 description = "Where `mise skills sync` links skills: a path under the project root, or under the home directory with `--global`."
 docs = """
-Set it to the directory the agents you use read, such as `.agents/skills`. An
-absolute path is used as written, and `--dir` overrides it for one run. See
+Set it to the directory the agents you use read, such as `.claude/skills`. An
+absolute path is used as written, and `--dir` overrides it for one run.
+
+Left unset, mise uses `.agents/skills` if it exists, then `.claude/skills` if it
+exists. When neither exists it creates `.agents/skills` and a `.claude/skills`
+symlink to it, so agents that read either path find the skills. See
 [Choose a skill directory](/dev-tools/packslip-resources.html#choose-a-skill-directory).
 """
 env = "MISE_SKILLS_DIR"
+optional = true
 type = "String"
 
 [skills.fetch]
@@ -3783,10 +4006,16 @@ with `doas -n` or `run0 --no-ask-password` so it fails instead of prompting;
 any other command is used only in an interactive terminal. A `doas` rule that
 restricts commands must also allow `env`, which mise uses to pass variables
 such as `DEBIAN_FRONTEND` to apt. [`system_packages.sudo`](#system_packages.sudo) still turns
-elevation off entirely. See
+elevation off entirely.
+
+Set it to an empty string to never elevate: mise runs package manager commands
+as your user, with no `sudo`, `run0` or `doas` in front. Use this where there is
+no root to get, such as Termux or a rootless container, and the package manager
+works without it. Unset still picks an elevator from `PATH`. See
 [Root privileges and sudo](/bootstrap/packages/#sudo).
 """
 env = "MISE_SYSTEM_PACKAGES_ELEVATE_WITH"
+global_only = true
 optional = true
 type = "String"
 
@@ -4108,6 +4337,18 @@ pass. Define arguments in the task's
 env = "MISE_TASK_DISABLE_SPEC_FROM_RUN_SCRIPTS"
 type = "Bool"
 
+[task.lock_timeout]
+description = "How long a task waits for a lock another run holds before it fails."
+docs = """
+Applies to tasks that set [`lock`](/tasks/task-configuration.html#lock). Unset,
+a task waits until the lock is free. `mise run --lock-timeout` overrides this
+setting. The task's own [`timeout`](/tasks/task-configuration.html#timeout)
+starts only once it holds the lock.
+"""
+env = "MISE_TASK_LOCK_TIMEOUT"
+optional = true
+type = "Duration"
+
 [task.monorepo_depth]
 default = 5
 description = "Maximum directory depth for automatic monorepo discovery, which is deprecated."
@@ -4177,6 +4418,7 @@ enum = [
   { value = "interleave", description = "print output as it arrives, without labels" },
   { value = "keep-order", description = "label lines, stream one task live and buffer the others, then print them in definition order as they finish" },
   { value = "replacing", description = "replace the previous stdout line with each new one, like `mise install` progress; stderr is printed as is" },
+  { value = "summary", description = "hold each task's output until it ends, then print one line if it passed and everything it printed if it failed" },
   { value = "timed", description = "print only stdout lines that stay on screen for more than a second" },
   { value = "quiet", description = "deprecated; use `interleave` with `task.quiet`" },
   { value = "silent", description = "print nothing from tasks or mise except errors" },
@@ -4451,6 +4693,12 @@ They override trust prompts you declined and `mise trust --ignore`, but
 [`ignored_config_paths`](#ignored_config_paths) still stops configs from
 loading. Paranoid mode still trusts these paths, without tying trust to file
 contents. See [Trust by path](/security.html#trust-by-path).
+
+mise first compares each entry as written with the config's canonical path,
+which needs no filesystem lookup. Only if none match does it resolve the
+entries, once per process. Entries on autofs or network mounts (such as
+`/home/...` on macOS, an autofs mount that holds no user homes) cost a lookup
+each, so use `~/...` or a path that exists locally instead.
 """
 env = "MISE_TRUSTED_CONFIG_PATHS"
 global_only = true
@@ -4489,7 +4737,13 @@ that path for good, such as a virtualenv built from a mise-managed interpreter;
 the old version then stays without a scheduled removal.
 
 Versions still used by another tracked config, a tool stub or a running process
-are kept, and may be removed up to a day after that use ends.
+are kept, and may be removed up to a day after that use ends. A process runs
+from a version when its executable, or an absolute path in its command line, is
+inside that version's directory. When the path goes through a link such as
+`installs/<tool>/latest` that an upgrade has moved since the process started,
+the process's executable tells which version it runs; when only a script path
+goes through the link, every version of that tool counts as running until the
+process exits.
 `mise upgrade --prune` removes the replaced version at once, and `--no-prune`
 keeps it without scheduling removal. See
 [`upgrade.prune_after`](#upgrade.prune_after).

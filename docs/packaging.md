@@ -29,7 +29,7 @@ disabled for this install, update mise the same way you installed it".
 | `self_update`       | The `mise self-update` implementation                                                  |
 
 The `rustls` and `rustls-native-roots` features use rustls in place of
-`native-tls`.
+`native-tls`。官方发布二进制文件使用 `--no-default-features` 构建，并在功能列表中启用 `rustls-native-roots`（完整列表见 `scripts/build-tarball.sh`，其中还包括 `self_update`、`vfox/vendored-lua` 和各目标平台的额外功能），因此 TLS 使用 rustls。两种 TLS 方案都会根据操作系统的信任库验证证书；详见[mise 如何处理 TLS 证书？](/faq.html#tls-certificates)。
 
 The build needs Rust at or above the `rust-version` in `Cargo.toml`, a C
 compiler, and, with `native-tls` on Linux, `pkg-config` and the OpenSSL
@@ -64,6 +64,11 @@ prefix:
 - `lib/.disable-self-update` (Homebrew uses this one)
 - `lib/mise/.disable-self-update` (the AUR `mise-bin` package uses this one)
 - `lib64/mise/.disable-self-update`
+
+## WinGet
+
+mise 会根据可执行文件路径识别 WinGet 安装：按用户安装时位于 `...\Microsoft\WinGet\Packages\` 或 `...\Microsoft\WinGet\Links\`；按计算机范围安装时位于 `C:\Program Files\WinGet\Packages\` 或 `...\Links\`，
+并关闭自更新，因为替换由 WinGet 管理的二进制文件会导致 WinGet 无法更新或移除该软件包。mise 会提示改为运行 `winget upgrade jdx.mise`。设置 `MISE_SELF_UPDATE_AVAILABLE=true` 可重新启用自更新。
 
 ## Ship update instructions {#ship-update-instructions}
 

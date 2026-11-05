@@ -99,6 +99,10 @@ pub(crate) struct DotfilesAdd {
     pub(super) path: Option<PathBuf>,
 
     /// Source path to use for a single target
+    ///
+    /// A relative path starts from the current directory. The entry records it
+    /// relative to the config file's directory when it lies inside it, and as
+    /// an absolute path otherwise.
     #[usage(long, short, value_name = "PATH")]
     pub(super) source: Option<PathBuf>,
 
@@ -139,6 +143,10 @@ impl DotfilesAdd {
             ),
             Some("absent") => bail!(
                 "`--mode absent` removes a file rather than capturing it; declare `mode = \"absent\"` in [dotfiles]"
+            ),
+            // capturing would copy the secret into the dotfiles root as plaintext
+            Some("fnox") => bail!(
+                "`--mode fnox` takes no source; store the file with `fnox set --file <path>` and declare `mode = \"fnox\"` in [dotfiles]"
             ),
             Some(mode) => {
                 FileMode::parse(mode).ok_or_else(|| eyre::eyre!("unknown dotfile mode: {mode}"))
@@ -272,6 +280,30 @@ impl DotfilesAdd {
                     req.origin.config.display_user()
                 );
             }
+            if let Some(req) = existing
+                && req.mode == FileMode::Fnox
+            {
+                bail!(
+                    "{target_raw}: stored in fnox by {}; change it with `mise dot edit {target_raw}`",
+                    req.origin.config.display_user()
+                );
+            }
+            // capturing a directory copies every file under it, secrets too,
+            // and a symlink can reach a fnox target under another name
+            let canonical =
+                |path: &std::path::Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let target_canonical = canonical(&target);
+            if let Some(req) = managed.iter().find(|req| {
+                req.mode == FileMode::Fnox
+                    && (req.target.starts_with(&target)
+                        || canonical(&req.target).starts_with(&target_canonical))
+            }) {
+                bail!(
+                    "{target_raw}: reaches {}, which {} stores in fnox; capturing it would copy the secret into the dotfiles root, so add the other files one at a time",
+                    req.target.display_user(),
+                    req.origin.config.display_user()
+                );
+            }
             // capturing copies the target tree into the source verbatim,
             // which would store `.bashrc` where the entry reads `dot-bashrc`
             if let Some(req) = existing
@@ -279,6 +311,18 @@ impl DotfilesAdd {
             {
                 bail!(
                     "{target_raw}: declared with dot_prefix in {}; edit its source {} directly",
+                    req.origin.config.display_user(),
+                    req.source.display_user()
+                );
+            }
+            // capturing copies the rendered target over the source, which
+            // drops the template code and stores any `exec()` output in it
+            if let Some(req) = existing
+                && req.mode == FileMode::Template
+                && !self.force
+            {
+                bail!(
+                    "{target_raw}: declared as a template in {}; edit its source {} directly, or pass --force to overwrite it with the rendered file",
                     req.origin.config.display_user(),
                     req.source.display_user()
                 );
@@ -324,6 +368,7 @@ impl DotfilesAdd {
                         rel,
                         req.dot_prefix,
                     )),
+                    source_spelling: None,
                     target,
                     mode: req.mode,
                     implied_source: true,
@@ -339,10 +384,13 @@ impl DotfilesAdd {
                 }
                 continue;
             }
+            let mut source_spelling = None;
             let source = if let Some(req) = existing {
                 req.source.clone()
             } else if let Some(source) = &self.source {
-                file::replace_path(source)
+                let resolved = system::files::resolve_source_arg(source)?;
+                source_spelling = config_relative_source(source, &resolved, &config_path);
+                resolved
             } else {
                 system::files::implied_source(&target)?
             };
@@ -362,6 +410,7 @@ impl DotfilesAdd {
                 target_raw: normalized_target_raw(&target),
                 target,
                 source,
+                source_spelling,
                 mode: write_mode,
                 implied_source: self.source.is_none(),
                 explicit_mode: self.mode.is_some(),
@@ -682,6 +731,9 @@ struct PlannedAdd {
     target_raw: String,
     target: PathBuf,
     source: PathBuf,
+    /// how the entry spells a relative `--source`: relative to the config
+    /// file's directory, which the loader resolves it against
+    source_spelling: Option<String>,
     mode: FileMode,
     implied_source: bool,
     explicit_mode: bool,
@@ -741,9 +793,11 @@ impl PlannedAdd {
             variants: vec![],
             enabled: true,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: system::files::relative_symlinks(self.mode, None),
             group: None,
+            depends: vec![],
             origin: crate::system::resources::ResourceOrigin {
                 config: config_path.to_path_buf(),
                 config_root: crate::config::config_file::config_root::config_root(config_path),
@@ -773,12 +827,11 @@ fn write_entry(doc: &mut DocumentMut, item: &PlannedAdd) {
 fn inline_entry(item: &PlannedAdd) -> Value {
     let mut table = InlineTable::new();
     if !item.implied_source {
-        table.insert(
-            "source",
-            Value::String(toml_edit::Formatted::new(
-                item.source.display_user().to_string(),
-            )),
-        );
+        let source = item
+            .source_spelling
+            .clone()
+            .unwrap_or_else(|| item.source.display_user().to_string());
+        table.insert("source", Value::String(toml_edit::Formatted::new(source)));
     } else if let Some(req) = &item.already_managed
         && !system::files::source_is_implied(req)
     {
@@ -796,6 +849,29 @@ fn inline_entry(item: &PlannedAdd) -> Value {
         );
     }
     Value::InlineTable(table)
+}
+
+/// Spell a relative `--source` relative to the config file's directory when
+/// it lies inside it, so the entry stays portable with the config. Other
+/// sources are written absolute.
+fn config_relative_source(
+    arg: &std::path::Path,
+    resolved: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Option<String> {
+    if !file::replace_path(arg).is_relative() {
+        return None;
+    }
+    let rel = resolved.strip_prefix(config_path.parent()?).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    let rel = rel.to_string_lossy();
+    if cfg!(windows) {
+        Some(rel.replace('\\', "/"))
+    } else {
+        Some(rel.into_owned())
+    }
 }
 
 fn normalized_target_raw(target: &std::path::Path) -> String {
@@ -816,7 +892,11 @@ fn describe_apply(item: &PlannedAdd) -> String {
         FileMode::Copy if item.source.is_dir() => format!("cp -r {source} {target}"),
         FileMode::Copy => format!("cp {source} {target}"),
         FileMode::Template => format!("render {source} -> {target}"),
-        FileMode::Content | FileMode::Track | FileMode::Absent | FileMode::Permissions => {
+        FileMode::Content
+        | FileMode::Track
+        | FileMode::Absent
+        | FileMode::Permissions
+        | FileMode::Fnox => {
             unreachable!("dotfiles add always captures a source file")
         }
     }

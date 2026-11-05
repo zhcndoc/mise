@@ -386,18 +386,32 @@ mise 会报告工作区根目录下未匹配任何 `sources` 项的读取，以�
 MISE_TASK_CACHE_AUDIT_REPORT=audit.jsonl mise run --force build
 ```
 
-<a id="storage-retention-and-output-replay"></a>
+## Storage, retention, and output replay
 
-## 存储、保留和输出重放
+mise stores entries in `$MISE_CACHE_DIR/task-artifacts/v2`. Set
+[`task.cache_dir`](/configuration/settings.html#task.cache_dir) or
+`MISE_TASK_CACHE_DIR` to use another parent directory; mise keeps the entries in
+its `v2` subdirectory. `mise cache clear` and cache pruning include the task
+cache wherever it lives.
 
-mise 会将条目存储在 `$MISE_CACHE_DIR/task-artifacts/v2`。设置 [`task.cache_dir`](/configuration/settings.html#task.cache_dir) 或 `MISE_TASK_CACHE_DIR` 可指定其他父目录；mise 仍会将条目放在其 `v2` 子目录中。无论任务缓存位于何处，`mise cache clear` 和缓存清理都会将其纳入处理范围。
+Each entry holds the declared outputs as an archive and the task's stdout and
+stderr. mise applies [redactions](/environments/secrets/#redaction) to the log
+before storing it, but it does not scan output files or catch a credential it
+does not know about. Do not cache a task that prints or writes secrets.
 
-每个条目都以归档形式保存声明的输出，以及任务的标准输出和标准错误。存储日志前，mise 会应用[脱敏规则](/environments/secrets/#redaction)，但不会扫描输出文件，也无法识别它不知道的凭据。不要缓存会打印或写入机密信息的任务。
+Set [`task.cache_max_size`](/configuration/settings.html#task.cache_max_size) to
+bound the total size of the cache, or
+[`task.cache_max_age`](/configuration/settings.html#task.cache_max_age) to drop
+entries not used within a period. mise enforces both after storing a new entry,
+removing the least recently used entries first, and treats an entry older than
+the age limit as a miss.
 
-设置 [`task.cache_max_size`](/configuration/settings.html#task.cache_max_size) 可限制缓存总大小；设置 [`task.cache_max_age`](/configuration/settings.html#task.cache_max_age) 可清理在指定期限内未使用的条目。存储新条目后，mise 会执行这两项限制，优先删除最近最少使用的条目；超过时限的条目会被视为未命中。
+mise verifies each entry's checksum before restoring it, and concurrent `mise`
+processes can share the cache safely. 损坏、不完整、不可读的缓存条目，或包含任务 `outputs` 未选择路径的条目，都会被视为未命中并重新运行任务。读取或写入缓存时出错，不会导致成功的任务变成失败。
 
-恢复条目前，mise 会验证每个条目的校验和；多个 `mise` 进程也可以安全地共用缓存。损坏、不完整或无法读取的条目都会视为未命中，因此任务会实际运行。读取或写入缓存时发生错误，不会导致原本成功的任务失败。
+mise replays a restored log with the output mode of the current run, so
+`prefix`, `interleave`, `keep-order`, `timed`, `replacing`, `quiet`, `silent`,
+and per-stream silencing apply to it as they do to live output.
 
-mise 会按照当前运行的输出模式重放恢复的日志，因此 `prefix`、`interleave`、`keep-order`、`timed`、`replacing`、`quiet`、`silent` 以及按数据流静默的设置，与处理实时输出时一样适用于这些日志。
-
-如果任务依赖已缓存的任务，这些依赖项的缓存键也会成为该任务缓存键的一部分。因此，无论依赖项实际运行、被跳过还是从缓存恢复，该任务都可以恢复自己的缓存条目。
+When a task depends on cached tasks, their keys are part of its key, so it can
+restore its own entry after its dependencies run, are skipped, or are restored.

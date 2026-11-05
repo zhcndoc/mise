@@ -13,6 +13,7 @@ use crate::toolset::{ToolVersion, Toolset};
 use crate::{backend, dirs, env, fake_asdf, file};
 use color_eyre::eyre::{Result, bail, eyre};
 use eyre::WrapErr;
+use heck::ToKebabCase;
 use indexmap::IndexMap;
 #[cfg(windows)]
 use indoc::formatdoc;
@@ -32,8 +33,57 @@ const GENERATED_WINDOWS_CMD_SHIM_HEADER: &str = "@echo off\r\nrem mise generated
 #[cfg(any(windows, test))]
 const GENERATED_WINDOWS_BASH_SHIM_HEADER: &str = "#!/bin/bash\n# mise generated shim\n";
 const SHIM_SCRIPT_INSPECTION_LIMIT: u64 = 16 * 1024;
+const WRAPPER_STAGING_PREFIX: &str = ".mise-wrappers-stage-";
 
 pub const TASK_TOOL_ARGS_ENV: &str = "__MISE_TASK_TOOL_ARGS";
+
+/// A JSON array of the command wrappers whose commands are running, inherited by their
+/// descendants. A wrapper shim named in it runs the real command instead of the wrapper again,
+/// so `mbx` finds the real `cargo` while a wrapped command's other wrappers still apply.
+pub const ACTIVE_WRAPPERS_ENV: &str = "__MISE_ACTIVE_WRAPPERS";
+
+/// Whether two command names find the same shim. Windows file names are case-insensitive, so a
+/// shim can be invoked as `Cargo` for `[wrappers.cargo]`.
+pub fn same_command_name(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        command_names_eq(a, b)
+    }
+}
+
+fn parse_active_wrappers(value: &str) -> Vec<String> {
+    serde_json::from_str(value).unwrap_or_default()
+}
+
+/// Whether the command wrapper for `name` is already running in this process tree.
+pub fn is_active_command_wrapper(name: &str) -> bool {
+    env::var(ACTIVE_WRAPPERS_ENV).is_ok_and(|value| {
+        parse_active_wrappers(&value)
+            .iter()
+            .any(|active| same_command_name(active, name))
+    })
+}
+
+/// `wrapper_env` plus `name` in the active wrappers, for the command the wrapper runs. The value
+/// is sorted and holds no PID, so it is the same for every run of a wrapped command.
+pub fn with_active_command_wrapper(
+    name: &str,
+    mut wrapper_env: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut active = env::var(ACTIVE_WRAPPERS_ENV)
+        .map(|value| parse_active_wrappers(&value))
+        .unwrap_or_default();
+    if !active.iter().any(|active| same_command_name(active, name)) {
+        active.push(name.to_string());
+    }
+    active.sort();
+    wrapper_env.insert(
+        ACTIVE_WRAPPERS_ENV.to_string(),
+        serde_json::to_string(&active).unwrap_or_default(),
+    );
+    wrapper_env
+}
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct TaskToolArg {
@@ -269,21 +319,40 @@ pub async fn ensure_lazy_shims(missing: &[ToolVersion]) -> Result<()> {
     }
 }
 
+/// The lock every writer of `shims_dir` takes. The wrapper directory is shared
+/// by every mise process using this data directory, whatever its cache
+/// directory, so its lock sits beside it rather than in the cache, and outside
+/// it because a reshim removes the directory once no wrapper is wanted.
+fn shim_dir_lock(shims_dir: &Path) -> LockFile {
+    let wrappers_dir = &*dirs::COMMAND_WRAPPERS;
+    match wrappers_dir.parent() {
+        Some(parent) if shims_dir == wrappers_dir => LockFile::at(&parent.join("bin.lock")),
+        _ => LockFile::new(shims_dir),
+    }
+}
+
 fn write_bootstrap_shims(
     mise_bin: &Path,
     shims_dir: &Path,
     shims: &BTreeSet<String>,
     _prune_stale_windows_variants: bool,
 ) -> Result<Option<eyre::Report>> {
+    // Taking the lock writes a file, so a farm that is already complete must
+    // not take it: `mise x` and wrapper shims run on read-only filesystems
+    // (#15296).
+    if bootstrap_shims_current(shims_dir, shims, _prune_stale_windows_variants) {
+        return Ok(None);
+    }
+    // Lock failures come from outside the target farm and must remain visible
+    // to the user. The lock is taken first because a reshim may remove an
+    // emptied wrapper directory while it holds it.
+    let _lock = shim_dir_lock(shims_dir).lock()?;
     if let Err(err) = file::create_dir_all(shims_dir) {
         if is_permission_denied(&err) {
             return Ok(Some(err));
         }
         return Err(err);
     }
-    // Lock failures come from the cache rather than the target farm and must
-    // remain visible to the user.
-    let _lock = LockFile::new(shims_dir).lock()?;
 
     #[cfg(windows)]
     if _prune_stale_windows_variants {
@@ -307,8 +376,33 @@ fn write_bootstrap_shims(
     Ok(None)
 }
 
+/// Whether `write_bootstrap_shims` would change nothing in `shims_dir`.
+fn bootstrap_shims_current(
+    shims_dir: &Path,
+    shims: &BTreeSet<String>,
+    prune_stale_windows_variants: bool,
+) -> bool {
+    shims.iter().all(|shim| shims_dir.join(shim).exists())
+        && !(prune_stale_windows_variants && has_stale_windows_shim_variants(shims_dir, shims))
+}
+
 #[cfg(windows)]
-fn remove_stale_windows_shim_variants(shims_dir: &Path, desired: &BTreeSet<String>) -> Result<()> {
+fn has_stale_windows_shim_variants(shims_dir: &Path, desired: &BTreeSet<String>) -> bool {
+    // The prune also deletes a variant's `.old` copy, and `symlink_metadata`
+    // sees a dangling symlink that `exists` does not.
+    stale_windows_shim_variants(desired).any(|variant| {
+        let path = shims_dir.join(variant);
+        path.symlink_metadata().is_ok() || old_shim_path(&path).symlink_metadata().is_ok()
+    })
+}
+
+#[cfg(not(windows))]
+fn has_stale_windows_shim_variants(_shims_dir: &Path, _desired: &BTreeSet<String>) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn stale_windows_shim_variants(desired: &BTreeSet<String>) -> impl Iterator<Item = String> + '_ {
     let stems = desired
         .iter()
         .map(|shim| {
@@ -318,12 +412,16 @@ fn remove_stale_windows_shim_variants(shims_dir: &Path, desired: &BTreeSet<Strin
                 .to_string()
         })
         .collect::<BTreeSet<_>>();
-    for stem in stems {
-        for variant in [stem.clone(), format!("{stem}.cmd"), format!("{stem}.exe")] {
-            if !desired.contains(&variant) {
-                remove_shim_with_rename_fallback(&shims_dir.join(variant))?;
-            }
-        }
+    stems
+        .into_iter()
+        .flat_map(|stem| [stem.clone(), format!("{stem}.cmd"), format!("{stem}.exe")])
+        .filter(|variant| !desired.contains(variant))
+}
+
+#[cfg(windows)]
+fn remove_stale_windows_shim_variants(shims_dir: &Path, desired: &BTreeSet<String>) -> Result<()> {
+    for variant in stale_windows_shim_variants(desired) {
+        remove_shim_with_rename_fallback(&shims_dir.join(variant))?;
     }
     Ok(())
 }
@@ -545,7 +643,10 @@ async fn add_plugin_shims(shims_dir: &Path, scope: ShimScope) -> Result<()> {
         let shims_dir = shims_dir.to_path_buf();
         let excluded = excluded.clone();
         jset.spawn(async move {
-            if let Ok(files) = dirs::PLUGINS.join(plugin.id()).join("shims").read_dir() {
+            let Some(plugin_shims) = plugin_shims_dir(&dirs::PLUGINS, plugin.id()) else {
+                return Ok(());
+            };
+            if let Ok(files) = plugin_shims.read_dir() {
                 for bin in files {
                     let bin = bin?;
                     let bin_name = bin.file_name().into_string().unwrap();
@@ -566,6 +667,17 @@ async fn add_plugin_shims(shims_dir: &Path, scope: ShimScope) -> Result<()> {
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     Ok(())
+}
+
+/// The `shims/` directory an asdf plugin ships for the tool `id`.
+///
+/// `id` is the tool name as a config file spells it, which may be path-shaped (`/abs/dir`,
+/// `../x`); joined raw, an absolute one would replace the plugins directory. It gets the same
+/// encoding as the plugin's own directory (see `AsdfBackend::from_arg`), and a name that encodes
+/// to nothing has no plugin directory at all.
+fn plugin_shims_dir(plugins_dir: &Path, id: &str) -> Option<PathBuf> {
+    let name = id.to_kebab_case();
+    file::is_plain_file_name(&name).then(|| plugins_dir.join(name).join("shims"))
 }
 
 fn publish_staged_shim_farm(
@@ -944,20 +1056,19 @@ async fn tracked_command_wrappers(
     let is_mbx = |tool: &crate::toolset::ToolRequest| {
         tool.ba().short == mbx.short || tool.ba().full() == mbx.full()
     };
-    let all: Vec<&crate::toolset::ToolRequest> = current_requests
+    // `add_rust_wrapper` only needs to know that some supported provider exists, so find one
+    // once; passing every provider request to every set is quadratic in tracked configs.
+    let mbx_request = current_requests
         .into_iter()
         .chain(
             request_sets
                 .iter()
                 .flat_map(|set| set.tools.values().flatten()),
         )
-        .collect();
+        .find(|tool| is_mbx(tool) && tool.is_os_supported());
     for set in &request_sets {
         let own: Vec<&crate::toolset::ToolRequest> = set.tools.values().flatten().collect();
-        let requests = own
-            .iter()
-            .copied()
-            .chain(all.iter().copied().filter(|tool| is_mbx(tool)));
+        let requests = own.iter().copied().chain(mbx_request);
         if let Err(err) = crate::config::command_wrapper::add_rust_wrapper(&mut out, requests) {
             debug!("skipping tracked rust wrapper: {err:#}");
         }
@@ -1000,44 +1111,130 @@ async fn sync_command_wrapper_shims(
         }
         wrappers.insert(name, wrapper);
     }
-    if wrappers.is_empty() {
-        if cfg!(windows) {
-            remove_shims_individually(&dirs::COMMAND_WRAPPERS)?;
-        } else {
-            file::remove_all(&*dirs::COMMAND_WRAPPERS)?;
-        }
+    // Every mise process on the machine execs wrappers from this one
+    // directory, so it is never removed or emptied while a wrapper is still
+    // wanted: writers take its lock, a forced rebuild replaces each wanted
+    // shim with a rename, and only unwanted shims are deleted.
+    let wrappers_dir = &*dirs::COMMAND_WRAPPERS;
+    if wrappers.is_empty() && !wrappers_dir.is_dir() {
         return Ok(());
     }
-    if force {
-        if cfg!(windows) {
-            remove_shims_individually(&dirs::COMMAND_WRAPPERS)?;
-        } else {
-            file::remove_all(&*dirs::COMMAND_WRAPPERS)?;
-        }
-    }
-    file::create_dir_all(&*dirs::COMMAND_WRAPPERS)?;
+    let _lock = shim_dir_lock(wrappers_dir).lock()?;
+    file::create_dir_all(wrappers_dir)?;
+    remove_stale_wrapper_staging(wrappers_dir);
 
     let mut desired = HashSet::new();
     for name in wrappers.keys() {
         desired.extend(platform_shim_names(mise_bin, name));
     }
-    let actual = list_shims_in(&dirs::COMMAND_WRAPPERS)?;
-    for shim in desired.difference(&actual) {
-        let path = dirs::COMMAND_WRAPPERS.join(shim);
-        if cfg!(windows) && path.exists() {
-            remove_shim_with_rename_fallback(&path)?;
+    let actual = list_shims_in(wrappers_dir)?;
+    let to_publish: BTreeSet<&String> = if force {
+        desired.iter().collect()
+    } else {
+        desired.difference(&actual).collect()
+    };
+    if !to_publish.is_empty() {
+        let staging = tempfile::Builder::new()
+            .prefix(WRAPPER_STAGING_PREFIX)
+            .tempdir_in(wrappers_dir)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to create wrapper staging directory in {}",
+                    display_path(wrappers_dir)
+                )
+            })?;
+        for shim in to_publish {
+            let source = staging.path().join(shim);
+            add_shim(mise_bin, &source, shim)?;
+            let destination = wrappers_dir.join(shim);
+            // Rename replaces a same-named wrapper atomically, so a concurrent
+            // exec finds either the old wrapper or the new one. Windows refuses
+            // to replace a wrapper that is running; only then is it moved
+            // aside first.
+            let publish = || fs::rename(&source, &destination);
+            let mut published = publish();
+            if published.is_err() && cfg!(windows) && destination.exists() {
+                remove_shim_with_rename_fallback(&destination)?;
+                published = publish();
+            }
+            published.wrap_err_with(|| {
+                format!(
+                    "failed to publish wrapper {} to {}",
+                    display_path(&source),
+                    display_path(&destination)
+                )
+            })?;
         }
-        add_shim(mise_bin, &path, shim)?;
+        if let Err(err) = staging.close() {
+            warn!("failed to remove wrapper staging directory: {err}");
+        }
     }
     for shim in actual.difference(&desired) {
-        let path = dirs::COMMAND_WRAPPERS.join(shim);
+        let path = wrappers_dir.join(shim);
         if cfg!(windows) {
             remove_shim_with_rename_fallback(&path)?;
         } else {
             file::remove_all(&path)?;
         }
     }
+    // With no wrapper wanted, drop the directory so activation stops putting it
+    // on PATH. Writers create it under the same lock, so none is mid-write. On
+    // Unix it goes whole, with any hidden wrapper the listing skips; on Windows
+    // a running wrapper's `.old` copy cannot be deleted and keeps it.
+    if !desired.is_empty() {
+        return Ok(());
+    }
+    if !cfg!(windows) {
+        return file::remove_all(wrappers_dir);
+    }
+    // The shim listing skips `.old` copies, so drop them here; one whose
+    // wrapper is still running stays locked and is left.
+    if let Ok(entries) = wrappers_dir.read_dir() {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "old") {
+                let _ = fs::remove_file(entry.path()); // best-effort
+            }
+        }
+    }
+    if let Err(err) = fs::remove_dir(wrappers_dir)
+        && !matches!(
+            err.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+        )
+    {
+        return Err(err).wrap_err_with(|| {
+            format!(
+                "failed to remove wrapper directory: {}",
+                display_path(wrappers_dir)
+            )
+        });
+    }
     Ok(())
+}
+
+/// Only a reshim holding the wrapper directory's lock stages wrappers, so a
+/// staging directory found under that lock was left by a reshim that died
+/// mid-publish. Left alone it would also keep the directory from ever being
+/// removed once no wrapper is wanted.
+fn remove_stale_wrapper_staging(wrappers_dir: &Path) {
+    let Ok(entries) = fs::read_dir(wrappers_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // A wrapper may itself be named with the prefix; only a directory is
+        // staging.
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(WRAPPER_STAGING_PREFIX)
+            || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        if let Err(err) = file::remove_all(entry.path()) {
+            warn!("failed to remove stale wrapper staging directory: {err:#}");
+        }
+    }
 }
 
 pub fn command_names_eq(a: &str, b: &str) -> bool {
@@ -1131,46 +1328,15 @@ fn snap_mise_bin(mise_bin: &Path, snap: &Path) -> Option<PathBuf> {
     Some(snap_mount.join("current").join(relative))
 }
 
-/// Remove all shim files from a directory individually, skipping dotfiles like
-/// `.mode`. Uses [`remove_shim_with_rename_fallback`] for each entry so locked
-/// `.exe` files on Windows are renamed out of the way instead of causing a
-/// hard error.
-fn remove_shims_individually(shims_dir: &Path) -> Result<()> {
-    let entries = match shims_dir.read_dir() {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(e).wrap_err_with(|| {
-                format!(
-                    "failed to read shims directory: {}",
-                    display_path(shims_dir)
-                )
-            });
-        }
-    };
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        // skip dotfiles (e.g. .mode) — these are metadata, not shims
-        if is_hidden_shim_name(&name) {
-            continue;
-        }
-        let path = entry.path();
-        remove_shim_with_rename_fallback(&path)?;
-    }
-    Ok(())
-}
-
 /// Remove a single shim file. On Windows, if deletion fails (e.g. because the
 /// `.exe` is locked by another process), rename it to `<name>.old` so the path
 /// is freed for a new shim. The `.old` file will be cleaned up on the next
 /// reshim or when the lock is released.
 fn remove_shim_with_rename_fallback(path: &Path) -> Result<()> {
     // First, try to clean up any leftover .old files from a previous run.
+    // Unguarded, so a dangling `.old` link goes too.
     let old_path = old_shim_path(path);
-    if old_path.exists() {
-        let _ = fs::remove_file(&old_path); // best-effort
-    }
+    let _ = fs::remove_file(&old_path); // best-effort
 
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1830,6 +1996,25 @@ fn shim_name_key(name: &str) -> String {
     }
 }
 
+/// Whether `shims.exclude` leaves a bootstrap shim for at least one of a lazy tool's
+/// `bins`. Matched on the names the shims are written under, as `ensure_lazy_shims`
+/// does: on Windows those can differ from the command names.
+pub(crate) fn lazy_bins_keep_a_shim(bins: &[String]) -> bool {
+    let excluded = &Settings::get().shims.exclude;
+    if excluded.is_empty() {
+        return !bins.is_empty();
+    }
+    // Locating the mise binary walks PATH; only Windows reads it, for its shim mode.
+    let mise_bin = if cfg!(windows) {
+        mise_bin_for_shims()
+    } else {
+        PathBuf::new()
+    };
+    bins.iter()
+        .flat_map(|bin| platform_shim_names(&mise_bin, bin))
+        .any(|name| !shim_name_excluded(excluded, &name))
+}
+
 /// Whether `shims.exclude` covers this shim name.
 pub(crate) fn shim_name_excluded(excluded: &BTreeSet<String>, name: &str) -> bool {
     let key = shim_name_key(name);
@@ -1879,16 +2064,25 @@ async fn list_tool_bins(
         .collect())
 }
 
+/// The `sh` script that runs a plugin's own shim through `mise x`. The target is quoted: it is a
+/// path, and a directory name may hold shell syntax. Like the Windows shims, it names itself in
+/// `__MISE_SHIM_PATH`, so `mise x` knows the user did not type `mise x` and does not trust the
+/// active config on their behalf.
+fn plugin_shim_contents(data_dir: &Path, fake_asdf_dir: &Path, target: &Path) -> String {
+    format!(
+        "{GENERATED_SHELL_SHIM_HEADER}export ASDF_DATA_DIR={data_dir}\nexport PATH=\"{fake_asdf_dir}:$PATH\"\nexport {shim_env}=\"$0\"\nmise x -- {target} \"$@\"\n",
+        shim_env = env::MISE_SHIM_PATH_ENV,
+        data_dir = data_dir.display(),
+        fake_asdf_dir = fake_asdf_dir.display(),
+        target = shell_escape::unix::escape(target.to_string_lossy()),
+    )
+}
+
 async fn make_shim(target: &Path, shim: &Path) -> Result<()> {
     file::remove_file_async_if_exists(shim).await?;
     file::write_async(
         shim,
-        format!(
-            "{GENERATED_SHELL_SHIM_HEADER}export ASDF_DATA_DIR={data_dir}\nexport PATH=\"{fake_asdf_dir}:$PATH\"\nmise x -- {target} \"$@\"\n",
-        data_dir = dirs::DATA.display(),
-        fake_asdf_dir = fake_asdf::setup()?.display(),
-        target = target.display()
-        ),
+        plugin_shim_contents(&dirs::DATA, &fake_asdf::setup()?, target),
     )
     .await?;
     file::make_executable_async(shim).await?;
@@ -1907,6 +2101,11 @@ pub async fn err_no_version_set(
     tvs: Vec<ToolVersion>,
 ) -> Result<PathBuf> {
     if tvs.is_empty() {
+        // A shim left over from an older version: the configured tool may now ship the
+        // executable under another name, which is more useful to say than "invalid shim".
+        if let Some(msg) = unavailable_configured_tool_message(config, &ts, bin_name).await {
+            return Err(eyre!(msg));
+        }
         bail!(
             "{bin_name} is not a valid shim. This likely means you uninstalled a tool and the shim does not point to anything. Run `mise use <TOOL>` to reinstall the tool."
         );
@@ -1919,7 +2118,15 @@ pub async fn err_no_version_set(
         .filter(|t| missing_plugins.contains(t.ba()))
         .collect_vec();
     if missing_tools.is_empty() {
-        if let Some(msg) = unavailable_configured_tool_message(config, &ts, bin_name) {
+        let lacks = active_version_lacks_bin_message(&ts, bin_name, &missing_plugins, &tvs);
+        // Naming the installed version that does provide the executable beats a generic hint.
+        if let Some(msg) = lacks.as_ref().filter(|m| m.contains("is provided by:")) {
+            return Err(eyre!(msg.clone()));
+        }
+        if let Some(msg) = unavailable_configured_tool_message(config, &ts, bin_name).await {
+            return Err(eyre!(msg));
+        }
+        if let Some(msg) = lacks {
             return Err(eyre!(msg));
         }
         let mut msg = format!("No version is set for shim: {bin_name}\n");
@@ -1942,7 +2149,86 @@ pub async fn err_no_version_set(
     }
 }
 
-pub fn unavailable_configured_tool_message(
+/// A config selects a version of the tool that is installed but does not provide `bin_name`, while
+/// other installed versions do (e.g. a Ruby gem executable after a Ruby upgrade). Naming the active
+/// version keeps the user from reading this as a missing config and from `mise use -g`-ing an
+/// older version just to run one executable.
+fn active_version_lacks_bin_message(
+    ts: &Toolset,
+    bin_name: &str,
+    providers: &HashSet<&BackendArg>,
+    tvs: &[ToolVersion],
+) -> Option<String> {
+    let active = ts
+        .list_current_versions()
+        .into_iter()
+        .map(|(_, tv)| tv)
+        .filter(|tv| providers.contains(tv.ba()))
+        .collect_vec();
+    if active.is_empty() {
+        return None;
+    }
+
+    let mut msg = String::new();
+    for tv in &active {
+        msg.push_str(&format!(
+            "{bin_name} is not provided by the active {}@{} (set by {})\n",
+            tv.ba(),
+            tv.version,
+            tv.request.source()
+        ));
+    }
+    // Installs are told apart by directory: the same name and version can be installed more than
+    // once with different options, and only one of them may provide the executable.
+    let others = tvs
+        .iter()
+        .filter(|tv| {
+            !active
+                .iter()
+                .any(|a| a.ba() == tv.ba() && a.install_path() == tv.install_path())
+        })
+        .map(|tv| {
+            let label = format!("{}@{}", tv.ba(), tv.version);
+            let ambiguous = active
+                .iter()
+                .any(|a| a.ba() == tv.ba() && a.version == tv.version);
+            if ambiguous {
+                format!("{label} ({})", display_path(tv.install_path()))
+            } else {
+                label
+            }
+        })
+        .collect_vec();
+    if !others.is_empty() {
+        msg.push_str(&format!(
+            "{bin_name} is provided by: {}\n",
+            others.join(", ")
+        ));
+    }
+    msg.push_str("Install it for the active version, or switch to a version that provides it.");
+    Some(msg)
+}
+
+/// Executables a version's bin dirs hold on disk. `None` when a listing failed, which says nothing
+/// about what the version ships.
+async fn offered_bins(
+    config: &Arc<Config>,
+    backend: &Arc<dyn Backend>,
+    tv: &ToolVersion,
+) -> Option<BTreeSet<String>> {
+    let mut bins = BTreeSet::new();
+    for dir in backend.list_bin_paths(config, tv).await.ok()? {
+        // Backends list candidate dirs; one that does not exist holds nothing, unlike one that
+        // cannot be read.
+        if dir.parent().is_none() || !dir.exists() {
+            continue;
+        }
+        bins.extend(list_executables_in_dir(&dir).ok()?);
+    }
+    Some(bins)
+}
+
+pub async fn unavailable_configured_tool_message(
     config: &Arc<Config>,
     ts: &Toolset,
     bin_name: &str,
@@ -1953,10 +2239,59 @@ pub fn unavailable_configured_tool_message(
         .filter(|(backend, tv)| {
             tv.ba().matches_bin_name(bin_name) && backend.is_version_installed(config, tv, true)
         })
-        .map(|(_, tv)| tv)
         .collect_vec();
     if versions.is_empty() {
         return None;
+    }
+
+    // Other executables beside a missing one point at a rename (an upstream rename, a registry
+    // alias), where reinstalling yields the same install. The files on disk cannot tell that from
+    // a damaged install, so the message names both rather than promising either.
+    let mut reinstall = vec![];
+    let mut lacking = vec![];
+    for (backend, tv) in versions {
+        match offered_bins(config, &backend, &tv).await {
+            Some(bins) if !bins.is_empty() && !offers_bin(&bins, bin_name) => {
+                lacking.push((tv, bins));
+            }
+            _ => reinstall.push(tv),
+        }
+    }
+
+    if reinstall.is_empty() {
+        let mut msg = String::new();
+        for (tv, bins) in &lacking {
+            msg.push_str(&format!(
+                "{}@{} does not provide {bin_name} (it provides: {})\n",
+                tv.ba(),
+                tv.version,
+                bins.iter().join(", ")
+            ));
+        }
+        let others = ts
+            .list_rtvs_with_bin(config, bin_name)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tv| format!("{}@{}", tv.ba(), tv.version))
+            .collect_vec();
+        if !others.is_empty() {
+            msg.push_str(&format!(
+                "{bin_name} is provided by: {}\n",
+                others.join(", ")
+            ));
+            msg.push_str("Switch to a version that provides it, or if the install is damaged, restore it with:\n");
+        } else {
+            msg.push_str("If the install is damaged, restore it with:\n");
+        }
+        for (tv, _) in &lacking {
+            msg.push_str(&format!(
+                "mise install --force {}@{}\n",
+                tv.ba(),
+                tv.version
+            ));
+        }
+        return Some(msg.trim().to_string());
     }
 
     let mut msg = format!("No executable found for configured tool: {bin_name}\n");
@@ -1964,7 +2299,7 @@ pub fn unavailable_configured_tool_message(
         "The installed version does not provide this executable with its current backend metadata.\n",
     );
     msg.push_str("Reinstall it with:\n");
-    for tv in versions {
+    for tv in reinstall {
         msg.push_str(&format!(
             "mise install --force {}@{}\n",
             tv.ba(),
@@ -1972,6 +2307,15 @@ pub fn unavailable_configured_tool_message(
         ));
     }
     Some(msg.trim().to_string())
+}
+
+/// Whether an executable the install offers answers to `bin_name` the way the real lookup does:
+/// an explicit extension must match exactly, a bare name also matches its Windows extensions.
+fn offers_bin(bins: &BTreeSet<String>, bin_name: &str) -> bool {
+    file::executable_names(bin_name).iter().any(|name| {
+        bins.iter()
+            .any(|b| shim_filename_key(b.clone()) == shim_filename_key(name.clone()))
+    })
 }
 
 /// `mise install <tool>` deliberately writes to no config file, so the tool's
@@ -2094,6 +2438,51 @@ mod tests {
     use super::*;
     use crate::args::BackendArg;
     use crate::toolset::{ToolRequest, ToolSource, ToolVersionList};
+
+    #[test]
+    fn active_wrappers_ignore_a_value_that_is_not_a_name_list() {
+        assert_eq!(parse_active_wrappers(r#"["a","b"]"#), ["a", "b"]);
+        for value in ["", "cargo", "{}", "[1]"] {
+            assert!(parse_active_wrappers(value).is_empty(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn plugin_shims_stay_inside_the_plugins_dir() {
+        let plugins = Path::new("/data/plugins");
+        assert_eq!(
+            plugin_shims_dir(plugins, "node"),
+            Some(PathBuf::from("/data/plugins/node/shims"))
+        );
+        // A path-shaped tool key from a config file must not pick the directory.
+        for id in ["/proc/self/cwd/;id>x;#", "/abs/dir", "../x", "..", ""] {
+            let dir = plugin_shims_dir(plugins, id);
+            assert!(
+                dir.as_ref()
+                    .is_none_or(|d| d.parent().and_then(Path::parent) == Some(plugins)),
+                "{id:?} resolved to {dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_shim_quotes_its_target() {
+        let contents = plugin_shim_contents(
+            Path::new("/data"),
+            Path::new("/data/.fake-asdf"),
+            Path::new("/data/plugins/a;id>x;#/shims/ls"),
+        );
+        assert!(
+            contents.contains("mise x -- '/data/plugins/a;id>x;#/shims/ls' \"$@\"\n"),
+            "{contents}"
+        );
+        // names itself, so `mise x` does not take the dispatch for a typed command
+        assert!(
+            contents.contains("export __MISE_SHIM_PATH=\"$0\"\n"),
+            "{contents}"
+        );
+        assert!(is_generated_shell_shim(contents.as_bytes()));
+    }
 
     #[cfg(windows)]
     #[test]
@@ -2299,9 +2688,108 @@ mod tests {
             ts.versions.insert(ba, tvl);
         }
 
-        let msg = unavailable_configured_tool_message(&config, &ts, "codex").unwrap();
+        let msg = unavailable_configured_tool_message(&config, &ts, "codex")
+            .await
+            .unwrap();
         assert!(msg.contains("mise install --force codex@1.0.0"));
         assert!(!msg.contains("node@1.0.0"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_tool_message_skips_reinstall_when_version_ships_other_bins() {
+        let config = Config::get().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut ts = Toolset::new(ToolSource::Argument);
+
+        let ba = Arc::new(BackendArg::from("codex"));
+        let request = ToolRequest::new(ba.clone(), "1.0.0", ToolSource::Argument).unwrap();
+        let mut tv = ToolVersion::new(request.clone(), "1.0.0".into());
+        let install_path = temp.path().join("codex");
+        let bin_dir = install_path.join("bin");
+        file::create_dir_all(&bin_dir).unwrap();
+        let renamed = bin_dir.join(if cfg!(windows) { "dekit.exe" } else { "dekit" });
+        fs::write(&renamed, "").unwrap();
+        file::make_executable(&renamed).unwrap();
+        tv.install_path = Some(install_path);
+
+        let mut tvl = ToolVersionList::new(ba.clone(), ToolSource::Argument);
+        tvl.requests.push(request);
+        tvl.versions.push(tv);
+        ts.versions.insert(ba, tvl);
+
+        let msg = unavailable_configured_tool_message(&config, &ts, "codex")
+            .await
+            .unwrap();
+        assert!(!msg.contains("No executable found"), "{msg}");
+        assert!(msg.contains("does not provide codex"), "{msg}");
+        assert!(msg.contains("dekit"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn unavailable_tool_message_keeps_reinstall_when_version_ships_the_bin() {
+        let config = Config::get().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut ts = Toolset::new(ToolSource::Argument);
+
+        let ba = Arc::new(BackendArg::from("codex"));
+        let request = ToolRequest::new(ba.clone(), "1.0.0", ToolSource::Argument).unwrap();
+        let mut tv = ToolVersion::new(request.clone(), "1.0.0".into());
+        let install_path = temp.path().join("codex");
+        let bin_dir = install_path.join("bin");
+        file::create_dir_all(&bin_dir).unwrap();
+        for name in ["codex", "dekit"] {
+            let bin = bin_dir.join(if cfg!(windows) {
+                format!("{name}.exe")
+            } else {
+                name.to_string()
+            });
+            fs::write(&bin, "").unwrap();
+            file::make_executable(&bin).unwrap();
+        }
+        tv.install_path = Some(install_path);
+
+        let mut tvl = ToolVersionList::new(ba.clone(), ToolSource::Argument);
+        tvl.requests.push(request);
+        tvl.versions.push(tv);
+        ts.versions.insert(ba, tvl);
+
+        // The bin is on disk, so the failure is not a rename and a reinstall is the advice.
+        let msg = unavailable_configured_tool_message(&config, &ts, "codex")
+            .await
+            .unwrap();
+        assert!(msg.contains("mise install --force codex@1.0.0"), "{msg}");
+        assert!(!msg.contains("does not provide codex"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn stale_shim_for_renamed_bin_names_what_the_version_provides() {
+        let config = Config::get().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut ts = Toolset::new(ToolSource::Argument);
+
+        let ba = Arc::new(BackendArg::from("codex"));
+        let request = ToolRequest::new(ba.clone(), "1.0.0", ToolSource::Argument).unwrap();
+        let mut tv = ToolVersion::new(request.clone(), "1.0.0".into());
+        let install_path = temp.path().join("codex");
+        let bin_dir = install_path.join("bin");
+        file::create_dir_all(&bin_dir).unwrap();
+        let renamed = bin_dir.join(if cfg!(windows) { "dekit.exe" } else { "dekit" });
+        fs::write(&renamed, "").unwrap();
+        file::make_executable(&renamed).unwrap();
+        tv.install_path = Some(install_path);
+
+        let mut tvl = ToolVersionList::new(ba.clone(), ToolSource::Argument);
+        tvl.requests.push(request);
+        tvl.versions.push(tv);
+        ts.versions.insert(ba, tvl);
+
+        // No installed version provides the bin, so the shim has no providers at all.
+        let err = err_no_version_set(&config, ts, "codex", vec![])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not provide codex"), "{err}");
+        assert!(!err.contains("No executable found"), "{err}");
     }
 
     #[tokio::test]

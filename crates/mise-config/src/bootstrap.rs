@@ -117,27 +117,59 @@ fn plugin_urls(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     })
 }
 
-/// The commands of a `[bootstrap.hooks]` value, in the shapes the hook parser accepts.
-pub fn hook_commands(value: toml::Value) -> Option<Vec<toml::Value>> {
+fn command_list(value: toml::Value) -> Option<Vec<toml::Value>> {
     match value {
         toml::Value::String(_) => Some(vec![value]),
         toml::Value::Array(values) => Some(values),
-        toml::Value::Table(mut table) => match table.remove("run")? {
-            run @ toml::Value::String(_) => Some(vec![run]),
-            toml::Value::Array(values) => Some(values),
-            _ => None,
-        },
         _ => None,
     }
 }
 
+/// The commands of a `[bootstrap.hooks]` value, in the shapes the hook parser accepts: the
+/// commands for every platform, and those of a table's `run_windows`, which replace them on Windows.
+pub fn hook_commands(value: toml::Value) -> Option<(Vec<toml::Value>, Option<Vec<toml::Value>>)> {
+    // a malformed value stays in the list, so the hook parser reports it, and only where it applies
+    let list = |value: toml::Value| command_list(value.clone()).unwrap_or_else(|| vec![value]);
+    match value {
+        toml::Value::Table(mut table) => {
+            let windows = table.remove("run_windows").map(list);
+            let run = match table.remove("run") {
+                Some(run) => list(run),
+                None if windows.is_some() => vec![],
+                None => return None,
+            };
+            Some((run, windows))
+        }
+        value => Some((command_list(value)?, None)),
+    }
+}
+
+/// Hook commands `shared` runs before `own`, keeping each side's Windows commands apart.
+pub fn merge_hook_commands(
+    (mut run, mut windows): (Vec<toml::Value>, Option<Vec<toml::Value>>),
+    (own_run, own_windows): (Vec<toml::Value>, Option<Vec<toml::Value>>),
+) -> toml::Value {
+    if windows.is_none() && own_windows.is_none() {
+        run.extend(own_run);
+        return toml::Value::Array(run);
+    }
+    // a side without `run_windows` runs its `run` commands there too
+    let mut merged_windows = windows.take().unwrap_or_else(|| run.clone());
+    merged_windows.extend(own_windows.unwrap_or_else(|| own_run.clone()));
+    run.extend(own_run);
+    let mut table = toml::map::Map::new();
+    table.insert("run".into(), toml::Value::Array(run));
+    table.insert("run_windows".into(), toml::Value::Array(merged_windows));
+    toml::Value::Table(table)
+}
+
 #[derive(Debug, Default, Clone, Deserialize, JsonSchema)]
 pub struct BootstrapUserTomlConfig {
-    /// current user's desired login shell, applied with `chsh -s`; a template that must render to an absolute path
-    // The value is rendered and trimmed before the absolute-path check, so the schema also takes
-    // surrounding whitespace and a leading template.
+    /// current user's desired login shell, applied with `chsh -s`; an absolute path or a bare shell name resolved after packages are installed; may be a template
+    // The value is rendered and trimmed before the check, so the schema also takes
+    // surrounding whitespace and a leading template; a relative path with a separator is rejected.
     #[serde(default)]
-    #[schemars(regex(pattern = r"^\s*(?:/|\{[{%])"))]
+    #[schemars(regex(pattern = r"^\s*(?:/|\{[{%]|[^/\\{\s][^/\\]*$)"))]
     pub login_shell: Option<String>,
 }
 
@@ -240,6 +272,10 @@ pub struct SystemBrewTomlConfig {
     // reported as having an unknown field.
     #[serde(default)]
     pub adopt: Option<bool>,
+    /// write Homebrew's cask metadata after mise installs a brew-cask package, so `brew upgrade` and `brew outdated` manage it afterwards
+    // Parsed on every platform for the same reason as `adopt`.
+    #[serde(default)]
+    pub homebrew_metadata: Option<bool>,
     /// Homebrew tap names mapped to custom git URLs
     // Like `[plugins]`, this lets shared config name tap remotes while package entries stay
     // focused on formulae and casks.
@@ -264,4 +300,77 @@ pub struct SystemDnfTomlConfig {
     #[serde(default)]
     #[schemars(schema_with = "refs::bootstrap_dnf_repos")]
     pub repos: IndexMap<String, toml::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn merged(shared: &str, own: &str) -> toml::Value {
+        let parse = |raw: &str| {
+            let table: toml::Table = raw.parse().unwrap();
+            hook_commands(table["hook"].clone()).unwrap()
+        };
+        merge_hook_commands(parse(shared), parse(own))
+    }
+
+    #[test]
+    fn merged_hooks_keep_each_sides_windows_commands() {
+        let value = merged(
+            r#"hook = { run = "echo unix", run_windows = "echo win" }"#,
+            r#"hook = "echo own""#,
+        );
+        assert_eq!(
+            value["run"].as_array().unwrap(),
+            &["echo unix".into(), "echo own".into()]
+        );
+        assert_eq!(
+            value["run_windows"].as_array().unwrap(),
+            &["echo win".into(), "echo own".into()]
+        );
+
+        let value = merged(
+            r#"hook = { run_windows = ["echo win"] }"#,
+            r#"hook = { run = "echo own" }"#,
+        );
+        assert_eq!(value["run"].as_array().unwrap(), &["echo own".into()]);
+        assert_eq!(
+            value["run_windows"].as_array().unwrap(),
+            &["echo win".into(), "echo own".into()]
+        );
+    }
+
+    #[test]
+    fn merged_hooks_without_windows_commands_stay_a_plain_array() {
+        let value = merged(r#"hook = "echo a""#, r#"hook = { run = ["echo b"] }"#);
+        assert_eq!(
+            value.as_array().unwrap(),
+            &["echo a".into(), "echo b".into()]
+        );
+    }
+
+    #[test]
+    fn merged_hooks_keep_malformed_windows_commands_for_the_parser() {
+        let value = merged(
+            r#"hook = { run = "echo unix", run_windows = 1 }"#,
+            r#"hook = "echo own""#,
+        );
+        assert_eq!(
+            value["run_windows"].as_array().unwrap(),
+            &[toml::Value::Integer(1), "echo own".into()]
+        );
+    }
+
+    #[test]
+    fn merged_hooks_keep_windows_commands_beside_a_malformed_run() {
+        let value = merged(
+            r#"hook = { run = 1, run_windows = "echo win" }"#,
+            r#"hook = "echo own""#,
+        );
+        assert_eq!(
+            value["run_windows"].as_array().unwrap(),
+            &["echo win".into(), "echo own".into()]
+        );
+        assert_eq!(value["run"].as_array().unwrap()[0], toml::Value::Integer(1));
+    }
 }

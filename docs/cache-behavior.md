@@ -52,13 +52,34 @@ env_cache = true
 env_cache_ttl = "4h"
 ```
 
-此缓存位于[状态目录](/directories.html#local-state-mise)下的 `env-cache/`，而不是缓存目录中。`mise activate` 和 `mise exec` 会创建一个 session key，嵌套命令会继承该密钥；只有密钥相同才会复用缓存环境，因此其他会话会单独计算环境。缓存会在磁盘上加密，但继承该 session key 的任何进程都可以读取它。
+The cache lives in `env-cache/` in the
+[state directory](/directories.html#local-state-mise), not in the cache
+directory. `mise activate` and `mise exec` create a session key that nested
+commands inherit, and a cached environment is reused only with the same key, so
+an unrelated session computes its own. The cache is encrypted on disk, but any
+process that inherits the session key can read it.
 
-缓存键包含配置路径及修改时间、已解析的工具版本、相关设置、基础 `PATH` 和 mise 版本。条目会在 [`env_cache_ttl`](/configuration/settings.html#env_cache_ttl) 指定的时长后过期；env 插件声明为受监视的文件发生变化时，也会使缓存失效。修改 dotenv 文件或 `_.source` 脚本后，嵌套命令仍可能使用缓存环境；如果改动没有生效，请清除或禁用缓存。外部服务发生变化（例如密钥轮换）不属于文件变更，因此请设置合适的 TTL。
+The cache key covers config paths and modification times, resolved tool
+versions, relevant settings, the base `PATH`, and the mise version. Entries
+expire after [`env_cache_ttl`](/configuration/settings.html#env_cache_ttl), and
+files that env plugins declare as watched invalidate them. Edits to dotenv files
+or `_.source` scripts can still leave a nested command with a cached
+environment; clear or disable the cache when such an edit does not show up.
+Changes in an external service, such as a rotated secret, are not file changes,
+so choose a suitable TTL.
 
-mise 不会缓存密钥。包含 `age` 加密值、sops 加密的 `_.file`、带有 `redact = true` 的指令，或返回 `redact = true` 的 env 插件，其环境都不会写入环境缓存；mise 每次都会重新计算。
+mise does not cache secrets. A config with an `age`-encrypted value, a
+sops-encrypted `_.file`, a directive with `redact = true`, or an env plugin that
+returns `redact = true` is never written to the environment cache; mise
+recomputes that environment every time.
 
-环境指令无法逐项退出缓存，因此时间戳模板等值会一直保持不变，直到缓存过期。对需要新值的命令，可设置 `MISE_ENV_CACHE=0`：
+如果此过程太慢（例如 `redact = true` 指令运行了较慢的脚本），请设置 [`env_cache_redacted`](/configuration/settings.html#env_cache_redacted)（`MISE_ENV_CACHE_REDACTED=1`）。mise 随后会缓存 `redact = true` 的值，并在命中缓存时继续对其脱敏。缓存文件会在磁盘上保存这些值，并使用 `mise activate` 写入 Shell 环境的密钥进行加密。从该 Shell 启动的每个进程都会继承密钥，并能够解密该文件。超过 [`env_cache_ttl`](/configuration/settings.html#env_cache_ttl) 后，mise 会停止使用某个条目，但缓存文件会保留，直到 mise 再次加载它或你运行 `mise cache clear`。
+
+`age` 和 sops 值、设置了 `cacheable = false` 的插件结果、已脱敏的 `[vars]`，以及已脱敏的 `default` 和 `required` 指令仍不会缓存。
+
+Environment directives cannot opt out of caching one at a time, so a value such
+as a timestamp template stays the same until the cache expires. Set
+`MISE_ENV_CACHE=0` for a command that needs fresh values:
 
 ```sh
 MISE_ENV_CACHE=0 mise exec -- npm test

@@ -227,7 +227,11 @@ end
 | `attestation`        | 否       | 用于校验的签名或来源证明；参见[校验下载内容](#verify-downloads)                 |
 | `headers`            | 否       | 下载请求使用的标头，例如 token                                                  |
 
-mise 会下载 `url` 指向的文件，检查返回的所有校验和和来源证明，并将文件解压到安装目录。mise 支持解压 `.tar.gz`、`.tgz`、`.tar.xz`、`.txz`、`.tar.bz2`、`.tbz2`、`.tbz` 和 `.zip` 归档；如果归档中只有一个顶层目录，则该目录的内容会成为安装目录。其他文件会被移入安装目录并设为可执行文件。如果没有 `url`，mise 不会下载内容，而由 `PostInstall` 完成安装，例如从源代码构建。
+mise downloads `url`, checks every checksum and attestation you return, and
+extracts the file into the install directory. It extracts `.tar.gz`, `.tgz`,
+`.tar.xz`, `.txz`, `.tar.bz2`, `.tbz2`, `.tbz` and `.zip` archives, and when an
+如果归档中只有一个顶层目录，该目录的内容会成为安装目录。若归档包含指向安装目录之外的符号链接，则会被拒绝。其他文件会被移动到安装目录并标记为可执行。若未设置 `url`，mise 不会下载任何内容，而 `PostInstall`
+does the install, as in a build from source.
 
 ### 需要身份验证的下载
 
@@ -273,10 +277,14 @@ return {
 
 | 字段                                                                                                                                           | 校验内容                                                                                                                                             |
 | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `github_owner`、`github_repo`、可选的 `github_signer_workflow`                                                                               | GitHub 制品来源证明。用户必须在环境中设置 `MISE_GITHUB_TOKEN` 或 `GITHUB_TOKEN`，否则安装会失败。                                                     |
-| `cosign_sig_or_bundle_path`、`cosign_public_key_path`                                                                                        | 使用密钥生成的 cosign 签名。                                                                                                                          |
-| `cosign_sig_or_bundle_path`、`cosign_certificate_identity` 或 `cosign_certificate_identity_regexp`、可选的 `cosign_certificate_oidc_issuer`  | 无密钥的 cosign 签名。必须指定身份，因为任何 GitHub Actions 工作流都可以获取有效的 Fulcio 证书。                                                    |
-| `slsa_provenance_path`、`slsa_signer_identity`、`slsa_signer_issuer`、可选的 `slsa_min_level`                                                 | SLSA 来源证明。`slsa_signer_identity` 是精确的证书主题 URI，包含工作流引用。未同时提供两个 signer 字段时，mise 会跳过 SLSA 校验。                       |
+| `github_owner`, `github_repo`, optional `github_signer_workflow`                                                                              | A GitHub artifact attestation. Users need `MISE_GITHUB_TOKEN` or `GITHUB_TOKEN` in the environment; without one the install fails.                    |
+| `cosign_sig_or_bundle_path`, `cosign_public_key_path`                                                                                         | A cosign signature made with a key.                                                                                                                   |
+| `cosign_sig_or_bundle_path`, `cosign_certificate_identity` or `cosign_certificate_identity_regexp`, optional `cosign_certificate_oidc_issuer` | A keyless cosign signature. The identity is required, because any GitHub Actions workflow can get a valid Fulcio certificate.                         |
+| `slsa_provenance_path`, `slsa_signer_identity`, `slsa_signer_issuer`, optional `slsa_min_level`, `slsa_source_repository`, `slsa_source_tag`  | SLSA provenance. `slsa_signer_identity` is the exact certificate subject URI, including the workflow ref. mise skips SLSA without both signer fields. |
+
+生成 SLSA 来源证明的工作流运行，必须属于存放 `slsa_signer_identity` 工作流的仓库。如果发布者使用其他仓库中的可复用工作流（例如 `slsa-framework/slsa-github-generator`）进行签名，请将 `slsa_source_repository` 设为发布者的 `owner/repo`：该工作流在所有调用它的仓库中都具有相同身份。
+
+将 `slsa_source_tag` 设为构建此版本发布所用的 Git 标签，例如 `v1.2.3`。这样 mise 会拒绝由其他 ref 构建的来源证明，避免旧版本的来源证明被错误用于当前版本。未设置时，mise 不会检查 ref。
 
 ### 环境变量 {#envkeys-hook}
 
@@ -305,7 +313,36 @@ end
 
 只返回工具所需的变量。`LD_LIBRARY_PATH` 等变量会影响此环境中启动的所有程序。对于不属于某个工具版本的变量，请编写[环境插件](/env-plugin-development.html)。
 
-### 安装后处理 {#postinstall-hook}
+#### 缓存 {#envkeys-caching}
+
+mise 会为每个已安装版本和选项组合缓存 `EnvKeys` 的结果，因为每次 Shell 提示符出现时都需要构建环境。以下情况会重新运行此 hook：
+
+- 安装目录、插件或 mise 数据目录发生变化；
+- hook 通过 `os.getenv` 读取的变量值发生变化；
+- hook 通过 [`mise.cache.watch_files`](/plugin-lua-modules.html#cache-module) 指定的文件发生更改、新建或删除。
+
+mise 不会检测 hook 读取的文件或运行的命令，因此请明确列出结果所依赖的文件。若 hook 每次都必须运行，请调用 [`mise.cache.disable`](/plugin-lua-modules.html#cache-module)。以下 hook 会在当前目录存在 `Pipfile` 时启用虚拟环境，并在 `Pipfile.lock` 更改后重新运行：
+
+```lua [hooks/env_keys.lua]
+function PLUGIN:EnvKeys(ctx)
+    local file = require("file")
+    local keys = { { key = "PATH", value = file.join_path(ctx.path, "bin") } }
+    local cwd = os.getenv("PWD")
+    local lock = file.join_path(cwd, "Pipfile.lock")
+    local ok, cache = pcall(require, "mise.cache")
+    if ok then
+        cache.watch_files({ lock })
+    end
+    if file.exists(lock) then
+        table.insert(keys, { key = "VIRTUAL_ENV", value = file.join_path(cwd, ".venv") })
+    end
+    return keys
+end
+```
+
+`mise.cache` 是 mise 扩展的模块，因此如果插件也要在 vfox CLI 或较旧版本的 mise 中运行，请使用 `pcall` 加载它。
+
+### PostInstall {#postinstall-hook}
 
 | `ctx` 字段       | 值                                                                        |
 | ---------------- | ------------------------------------------------------------------------- |
@@ -448,23 +485,37 @@ PLUGIN = {
 
 | 检查方式    | 满足条件                                       | 适用场景                                    |
 | ----------- | ---------------------------------------------- | ------------------------------------------ |
-| `bin`       | 可执行文件位于 `PATH` 中                       | 编译器、构建工具、`*-config` 脚本           |
-| `pkgconfig` | `pkg-config --exists <name>` 执行成功          | 提供 `.pc` 文件的 C 库                      |
-| `sharedlib` | 动态链接器可以找到 soname（Linux）             | 预编译二进制所需的运行时库                  |
-| `command`   | shell 命令以 `0` 退出                          | 其他检查方式无法表达的依赖                  |
+| `bin`       | the executable is on `PATH`                    | compilers, build tools, `*-config` scripts |
+| `pkgconfig` | `pkg-config --exists <name>` succeeds          | C libraries that ship a `.pc` file         |
+| `sharedlib` | the dynamic linker can find the soname (Linux) | runtime libraries for prebuilt binaries    |
+| `command`   | the shell command exits `0`                    | anything the other checks cannot express   |
 
-- `version`：适用于 `bin` 和 `pkgconfig` 的版本约束，例如 `>=3.0`、`>3`、
-  `<=1.2` 或 `=3.0`；单独写 `3.0` 表示 `>=3.0`。mise 会从 `<bin> --version` 或 `pkg-config --modversion` 读取版本；如果无法读取，则视为依赖已满足。
-- `optional`：简短说明依赖的用途，例如 `"wxWidgets GUI"`。缺少可选依赖时只打印一行信息，不会询问用户或导致安装失败。
-- `packages`：为每种受支持的包管理器指定提供该依赖的软件包。键可以是 mise 已知的任何包管理器，例如
-  `brew`、`brew-cask`、`apt`、`dnf`、`zypper`、`pacman`、`aur`、`apk`、`nix`、
-  `flatpak`、`flatpak-user`、`mas`、`scoop`、`snap`、`winget`，也可以是已安装的包管理器插件名称。mise 会使用第一个可用且配置了对应项的包管理器。对于名称列表，`apt` 会安装它能提供的第一个名称，其他管理器则使用列表中的第一项。
+- `version`: a constraint for `bin` and `pkgconfig`, such as `>=3.0`, `>3`,
+  `<=1.2` or `=3.0`; a bare `3.0` means `>=3.0`. mise reads the version from
+  `<bin> --version` or `pkg-config --modversion`, and treats the dependency as
+  satisfied when it cannot read one.
+- `optional`: a short reason, such as `"wxWidgets GUI"`. A missing optional
+  dependency prints one line and never prompts or fails the install.
+- `packages`: the package that provides the dependency, for each package
+  manager that has one. Keys are any package manager mise knows, such as
+  `brew`, `brew-cask`, `apt`, `dnf`, `zypper`, `pacman`, `aur`, `apk`, `nix`,
+  `choco`, `flatpak`, `flatpak-user`, `mas`, `scoop`, `snap`, `winget`, or an installed package
+  manager plugin's name. mise uses the first available manager that has an
+  entry. For a list of names, `apt` installs the first one it offers, and the
+  other managers use the first entry.
 
-检查通过即可；mise 不关心依赖是如何安装的，并且只会在依赖缺失时使用 `packages` 安装它。较旧版本的 mise 会忽略 `systemDependencies`。
+A passing check is enough: mise does not care how the dependency was installed,
+and uses `packages` only to install what is missing. Older mise versions ignore
+`systemDependencies`.
 
-## 工具选项 {#tool-options}
+## Tool options {#tool-options}
 
-在 `PreInstall`、`PostInstall`、`EnvKeys` 和 `MiseInstallSatisfied` 中，`ctx.options` 会包含 `mise.toml` 中的工具选项。`Available` 和 `PreUninstall` 不会收到这些选项。`os`、`depends`、`install_env`、`lazy`、`lazy_bins` 和 `auto_update` 由 mise 自行处理；其他选项都会传给钩子，其中 `postinstall` 和 `minimum_release_age` 也会由 mise 额外处理。
+`ctx.options` holds the tool's options from `mise.toml` in `PreInstall`,
+`PostInstall`, `EnvKeys` and `MiseInstallSatisfied`. `Available` and
+`PreUninstall` do not receive them. mise keeps `os`, `depends`, `install_env`,
+`lazy`, `lazy_bins` and `auto_update` to itself; every other option reaches the
+hooks, including `postinstall` and `minimum_release_age`, which mise also acts
+on.
 
 ```toml [mise.toml]
 [tools]
@@ -512,27 +563,49 @@ MISE_DEBUG=1 mise install example@1.10.0
 mise cache clear example
 ```
 
-发布前，请在所有支持的操作系统上测试版本列表、安装过程、可执行文件和环境变量；还要测试不支持的平台、缺少校验和的情况、包含空格的路径，以及你支持的版本文件。隔离测试环境的设置方法参见[发布插件](/plugin-publishing.html#testing-before-publication)。
+Before you publish, test version listing, an install, the executable and the
+environment on every OS you support, plus an unsupported platform, a missing
+checksum, a path with spaces and, if you support them, version files. See
+[Publishing plugins](/plugin-publishing.html#testing-before-publication) for an
+isolated test setup.
 
-## 常见错误 {#common-mistakes}
+## Common mistakes {#common-mistakes}
 
-- 使用 `line:match(filename)` 匹配文件名。`.` 和 `-` 是模式字符；应像 `find_checksum` 一样使用 `==` 比较字符串。
-- 校验和请求失败后仍以 `sha256 = nil` 继续执行。应改为抛出错误。
-- 使用 `if ctx.options.flag then` 读取布尔选项。顶层布尔值会以字符串传入，因此 `"false"` 也是真值；应使用 `== "true"` 比较。
-- 从版本号中移除超出文档说明范围的前缀。移除 `-beta.1` 或将 `lts/*` 转成数字都会改变版本请求；应将版本视为不透明字符串，不要用 SemVer 解析器排序。
-- 在 `PostInstall` 中更改用户级配置，例如运行 `npm config set`。应改为从 `EnvKeys` 返回环境变量。
-- 认为 Lua 表可以在不同命令间缓存数据。每条 mise 命令都会启动新的 Lua 运行时；版本列表和环境由 mise 自行缓存。参见[缓存行为](/cache-behavior.html)。
-- 为解释请求失败而记录 token 或包含机密的响应正文。
+- Matching a file name with `line:match(filename)`. `.` and `-` are pattern
+  characters; compare strings with `==`, as `find_checksum` does.
+- Continuing with `sha256 = nil` after a checksum request fails. Raise an error
+  instead.
+- Reading a boolean option with `if ctx.options.flag then`. Top-level booleans
+  arrive as strings, so `"false"` is true; compare with `== "true"`.
+- Stripping more than a documented prefix from versions. Removing `-beta.1` or
+  turning `lts/*` into digits changes the request; treat versions as opaque
+  strings and do not sort them with a SemVer parser.
+- Changing user-wide configuration from `PostInstall`, such as
+  `npm config set`. Return environment variables from `EnvKeys` instead.
+- Expecting a Lua table to cache data between commands. Each mise command
+  starts a new Lua runtime; mise caches version lists and environments itself.
+  See [cache behavior](/cache-behavior.html).
+- Logging tokens or a response body that contains secrets to explain a failed
+  request.
 
-## 与 vfox 的差异 {#differences-from-vfox}
+## Differences from vfox {#differences-from-vfox}
 
-- mise 不会调用 `PreUse`。应从 `EnvKeys` 返回环境变量，并在 `Available` 中解析版本请求。
-- mise 只安装 `PreInstall` 返回的主要下载内容，会忽略 `addition` 项。请在 `PostInstall` 中安装额外组件，或将其声明为工具依赖。
-- mise 会忽略 `PreInstall` 结果中的 `headers`。下载时会应用自己的 [`url_replacements`](/url-replacements.html) 和 [`netrc`](/configuration/settings.html#netrc) 设置。
-- mise 不读取 `minRuntimeVersion`。
-- mise 会忽略 `Available` 和 `PreInstall` 结果中的 `note`。
-- `ctx.args` 始终为空。
-- `ParseLegacyFile` 中的 `ctx:getInstalledVersions()` 会调用 `Available`，而不是列出已安装版本。
-- `Available` 中的 `rolling` 和 `checksum`、`PreInstall` 中的 `attestation`、`ctx.options`、`MiseInstallSatisfied`、`PLUGIN.depends` 和 `systemDependencies` 都是 mise 扩展，vfox CLI 会忽略它们。
+- mise never calls `PreUse`. Return environment variables from `EnvKeys`, and
+  resolve version requests in `Available`.
+- mise installs only the main download from `PreInstall` and ignores
+  `addition` entries. Install extra components in `PostInstall`, or declare
+  them as tool dependencies.
+- mise ignores `headers` in `PreInstall`'s result. It applies its own
+  [`url_replacements`](/url-replacements.html) and
+  [`netrc`](/configuration/settings.html#netrc) settings to the download.
+- mise does not read `minRuntimeVersion`.
+- mise ignores `note` in the results of `Available` and `PreInstall`.
+- `ctx.args` is always empty.
+- `ctx:getInstalledVersions()` in `ParseLegacyFile` calls `Available` instead
+  of listing installed versions.
+- `rolling` and `checksum` in `Available`, `attestation` in `PreInstall`,
+  `ctx.options`, `MiseInstallSatisfied`, `PLUGIN.depends` and
+  `systemDependencies` are mise additions that the vfox CLI ignores.
+- [`mise.cache`](/plugin-lua-modules.html#cache-module) 模块是 mise 扩展的功能，vfox CLI 不提供。
 
-发布插件的方法参见[发布插件](/plugin-publishing.html)。
+To publish the plugin, see [Publishing plugins](/plugin-publishing.html).

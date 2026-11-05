@@ -85,7 +85,7 @@ import { data as showreel } from "./.vitepress/showreel.data";
         </div>
         <div class="bootstrap-connector"><span aria-hidden="true">↓</span> <code>mise bootstrap</code></div>
         <div class="bootstrap-resources">
-          <div><strong>软件包</strong><span>brew · apt · scoop · winget</span></div>
+          <div><strong>软件包</strong><span>brew · apt · scoop · winget · choco</span></div>
           <div><strong>代码仓库</strong><span>项目检出目录</span></div>
           <div><strong>Dotfiles</strong><span>跟踪 · 链接 · 模板</span></div>
           <div><strong>服务</strong><span>后台进程</span></div>
@@ -99,8 +99,8 @@ import { data as showreel } from "./.vitepress/showreel.data";
           <code>mise bootstrap --dry-run</code> 可预览变更。这些配置属于机器，而非某个项目，通常放在全局配置或自己的配置仓库中。
         </p>
         <ul class="landing-checklist">
-          <li><a href="/bootstrap/packages/">管理软件包</a>，支持 apt、dnf、pacman、AUR、zypper、apk、nix、flatpak、snap、Homebrew formula 和 cask、macOS 应用直链下载、mas、scoop、winget 及包管理器插件</li>
-          <li>就地跟踪 dotfiles，保留可回滚并在机器间同步的历史记录；也可将文件部署为符号链接、副本或模板，或按行和代码块编辑</li>
+          <li><a href="/bootstrap/packages/">管理软件包</a>：支持 apt、dnf、pacman、AUR、zypper、apk、nix、flatpak、snap、Homebrew formula 和 cask、macOS 应用直连下载、mas、scoop、winget、Chocolatey 及包管理器插件</li>
+          <li>dotfiles 可在原位跟踪，并保留可回滚、可在机器间同步的历史记录；也可以将文件部署为符号链接、副本或模板，或按行和代码块编辑</li>
           <li>通过 SSH 管理远程主机：<code>mise bootstrap remote</code></li>
         </ul>
         <p class="landing-note">从存放 <code>mise.toml</code> 的仓库初始化新机器：</p>
@@ -166,7 +166,7 @@ import { data as showreel } from "./.vitepress/showreel.data";
         <div class="recipe-text">
           <span class="recipe-num">第 1 步</span>
           <h3>安装 mise</h3>
-          <p>在 macOS 或 Linux 上运行安装脚本。mise 会安装到 <code>~/.local/bin</code>；如果该目录不在 <code>PATH</code> 中，请在后两步中使用 <code>~/.local/bin/mise</code>。在 Windows 上运行 <code>winget install jdx.mise</code>。其他安装方式请参阅<a href="/installing-mise.html">安装 mise</a>。</p>
+          <p>在 macOS 或 Linux 上运行安装程序。它会将 mise 安装到 <code>~/.local/bin</code>；如果该目录不在 <code>PATH</code> 中，请在接下来的两步中使用 <code>~/.local/bin/mise</code>。在 Windows 上，请在 PowerShell 中运行 <code>irm https://mise.run/powershell | iex</code>。其他安装方式请参阅<a href="/installing-mise.html">安装 mise</a>。</p>
         </div>
         <div class="recipe-code terminal-lines">
           <div><span class="prompt">$</span> curl -fsSL https://mise.run | sh</div>

@@ -120,65 +120,96 @@ mise 会根据任务类型转发额外参数：
 
 | 标志                          | 作用                                                                                                                                                                                                                |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-j`、`--jobs <N>`             | 同时运行最多 N 个任务。默认值来自 [`jobs`](/configuration/settings.html#jobs) 设置（`MISE_JOBS`）。                                                                                                                  |
-| `-f`、`--force`               | 即使[输出已是最新状态](#skip-tasks-that-are-up-to-date)，仍运行任务。                                                                                                                                                |
-| `-n`、`--dry-run`             | 按执行顺序打印每个任务的命令，但不实际运行。                                                                                                                                                                         |
-| `-c`、`--continue-on-error`   | 任务失败后仍继续运行。参阅[任务失败时](#when-a-task-fails)。                                                                                                                                                          |
-| `--skip-deps`                 | 仅运行指定任务，不运行其依赖项。                                                                                                                                                                                    |
-| `--timeout <DURATION>`        | 在指定时长后（例如 `30s` 或 `5m`）停止整个运行过程。覆盖 [`task.timeout`](/configuration/settings.html#task.timeout) 设置。                                                                                        |
-| `-C`、`--cd <DIR>`            | 将指定目录视为 mise 启动时所在的目录。                                                                                                                                                                               |
-| `-t`、`--tool <TOOL@VERSION>` | 为本次运行添加工具，例如 `--tool node@24`。                                                                                                                                                                          |
-| `--skip-tools`                | 任务开始前不安装缺失的工具。                                                                                                                                                                                        |
-| `-r`、`--raw`                 | 将 stdin、stdout 和 stderr 直接连接到各任务，并一次运行一个任务。不进行敏感信息隐藏；接收[机密信息](/tasks/task-configuration.html#secrets)的任务除外，这些任务会忽略 `--raw`。 |
+| `-j`, `--jobs <N>`            | Run up to N tasks at once. Defaults to the [`jobs`](/configuration/settings.html#jobs) setting (`MISE_JOBS`).                                                                                                       |
+| `-f`, `--force`               | Run tasks even when their [outputs are up to date](#skip-tasks-that-are-up-to-date).                                                                                                                                |
+| `-n`, `--dry-run`             | Print each task's command in execution order without running anything.                                                                                                                                              |
+| `-c`, `--continue-on-error`   | Keep running after a task fails. See [When a task fails](#when-a-task-fails).                                                                                                                                       |
+| `--skip-deps`                 | Run only the named tasks, without their dependencies.                                                                                                                                                               |
+| `--timeout <DURATION>`        | Stop the whole run after a duration such as `30s` or `5m`. Overrides the [`task.timeout`](/configuration/settings.html#task.timeout) setting.                                                                       |
+| `-C`, `--cd <DIR>`            | Run as if mise started in another directory.                                                                                                                                                                        |
+| `-t`, `--tool <TOOL@VERSION>` | Add a tool to the run, such as `--tool node@24`.                                                                                                                                                                    |
+| `--skip-tools`                | Do not install missing tools before the tasks start.                                                                                                                                                                |
+| `-r`, `--raw`                 | Connect stdin, stdout, and stderr directly to each task and run one task at a time. Redaction does not apply, except to tasks that receive [secrets](/tasks/task-configuration.html#secrets), which ignore `--raw`. |
 
-传入 `--timeout` 时，任务自身的 [`timeout`](/tasks/task-configuration.html#timeout) 仍会限制其命令。
+A task's own [`timeout`](/tasks/task-configuration.html#timeout) still limits
+its commands when you pass `--timeout`.
 
-### 任务失败时
+### When a task fails
 
-默认情况下，任务失败会终止本次运行。mise 会停止仍在运行的任务（在 Unix 上发送 SIGTERM），并且不再
-启动新任务；已经开始的任务所对应的 [`depends_post`](/tasks/architecture.html#depends-post) 任务除外。
-进程会以失败任务的状态码退出。
+By default, a failing task stops the run. mise stops the tasks that are still
+running (with SIGTERM on Unix) and starts no new tasks, except the
+[`depends_post`](/tasks/architecture.html#depends-post) tasks of tasks that
+already started. The run exits with the failed task's status.
 
-使用 `--continue-on-error` 后，正在运行的任务会完成，其余任务也会继续启动，包括依赖失败任务的任务。
-最后，mise 会列出失败任务并以非零状态码退出。
+With `--continue-on-error`, running tasks finish and the remaining tasks still
+start, including tasks that depend on the failed one. At the end, mise lists the
+failed tasks and exits with a non-zero status.
 
-## 输出
+## Output
 
-任务并行运行时，mise 会在每行输出前标注任务名称（`prefix`）。当一次只能运行一个任务时（只有一个任务、
-依赖链，或使用 `--jobs 1`），mise 会直接输出内容（`interleave`）。可通过 `--output`、`MISE_TASK_OUTPUT`、
-[`task.output`](/configuration/settings.html#task.output) 设置或任务的 [`output`](/tasks/task-configuration.html#output) 属性选择样式：
+When tasks run in parallel, mise labels each output line with the task name
+(`prefix`). When only one task can run at a time (a single task, a chain of
+dependencies, or `--jobs 1`), it prints output directly (`interleave`). Choose a
+style with `--output`, `MISE_TASK_OUTPUT`, the
+[`task.output`](/configuration/settings.html#task.output) setting, or a task's
+[`output`](/tasks/task-configuration.html#output) property:
 
-| 样式         | 输出行为                                                                                                                  |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `prefix`     | 每行前面都标注任务名称。                                                                                                  |
-| `interleave` | 按到达顺序直接输出，不添加标注。                                                                                          |
-| `keep-order` | 为每行添加标注；一个任务实时输出，其他任务的输出则缓冲后按顺序打印。                                                      |
-| `replacing`  | 每一行新的 stdout 会替换上一行；stderr 原样输出。                                                                         |
-| `timed`      | 标注 stdout 行，并至少将其作为任务的最新输出显示一秒；更早被替换的行会丢弃。stderr 原样输出。                            |
-| `silent`     | 除错误外，不显示任务或 mise 的任何输出。                                                                                  |
+| Style        | Output                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `prefix`     | Each line, labelled with the task name.                                                                                                   |
+| `interleave` | Output as it arrives, without labels.                                                                                                     |
+| `keep-order` | Labelled lines; one task streams live while the others are buffered and printed in order.                                                 |
+| `replacing`  | Each new stdout line replaces the previous one; stderr is printed as is.                                                                  |
+| `summary`    | 任务运行时不输出内容；结束后若成功则显示 `[test] passed in 2.1s`，若失败则显示其全部带标签的输出。                   |
+| `timed`      | Labelled stdout lines that stay the task's latest line for at least a second; lines replaced sooner are dropped. Stderr is printed as is. |
+| `silent`     | Nothing from tasks or mise except errors.                                                                                                 |
 
-详细程度与样式是两个独立设置。`--quiet` 会隐藏 mise 自身的消息，例如 `[build] $ cargo build`；
-`--silent` 还会隐藏任务输出。例如，`mise run --output prefix --quiet test` 会保留任务名称标注，
-但隐藏 mise 的消息。若要让所有任务都保持安静，而不影响其他 mise 命令，请在 `[settings]` 下设置
-[`task.quiet`](/configuration/settings.html#task.quiet)。任务也可以设置自己的 `quiet` 或 `silent` 属性。
-`quiet` 输出样式已弃用，请改用 `--output interleave --quiet`。
+Verbosity is separate from style. `--quiet` hides mise's own messages, such as
+`[build] $ cargo build`, and `--silent` also hides the tasks' output. For
+example, `mise run --output prefix --quiet test` keeps the labels and hides
+mise's messages. To make every task quiet without changing other mise commands,
+set [`task.quiet`](/configuration/settings.html#task.quiet) under `[settings]`.
+A task can also set its own `quiet` or `silent` property. The `quiet` output
+style is deprecated; use `--output interleave --quiet` instead.
 
-## 交互式输入
+### 仅显示失败内容 {#summary-output}
 
-除非任务设为 `interactive` 或 `raw`，否则只有在输出样式为 `interleave` 时才会连接 stdin。单个任务、
-顺序执行的依赖链、`--jobs 1` 默认使用此样式，也可通过 `--output interleave` 显式指定。其他输出样式
-不会连接 stdin；任务并行运行时默认使用的 `prefix` 也是如此。如果输出必须隐藏敏感信息，也不会连接
-stdin：例如任务接收了[机密信息](/tasks/task-configuration.html#secrets)，或配置使用 `redact = true` 或
-`redactions` 将值标记为[需隐藏内容](/environments/secrets/#redaction)。
+`summary` 会暂存每个任务的输出，直到任务结束。测试套件通过时，每个任务只输出一行，而不是显示每项测试的输出；失败时则会显示失败任务的全部输出。此模式适合 CI 日志和会读取命令所有输出行的编程代理；可在代理环境中设置 `MISE_TASK_OUTPUT=summary`。
 
-需要终端的任务（例如会提示用户输入的任务）应设置 `interactive = true`。运行期间，该任务会独占终端。
-设置 `raw = true` 则会让每条命令分别独占终端。这两种方式都会绕过输出敏感信息隐藏和制品缓存。
-参阅 [`interactive`](/tasks/task-configuration.html#interactive) 和
-[`raw`](/tasks/task-configuration.html#raw)。
+```console
+$ mise run --output summary test
+[test:lint] $ cargo clippy -- -D warnings
+[test:lint] error: unused variable: `x`
+[test:lint]  --> src/main.rs:12:9
+[test:unit] passed in 4.2s
+[test:lint] ERROR task failed
+```
 
-## 跳过已是最新状态的任务
+mise 因其他任务失败而停止的任务会显示 `[name] cancelled`，试运行则会显示将要执行的命令。mise 会保留每个任务最后 64 KiB 的输出；运行被中断或达到 `--timeout` 时，会打印仍在运行任务的已保留输出。`raw` 和 `interactive` 任务仍会直接使用终端。
 
-为任务指定 `sources` 和 `outputs` 后，只要输出仍为最新状态，mise 就会跳过该任务：
+持续运行的任务（例如开发服务器或文件监视器）在 `summary` 模式下不会输出内容，直到任务退出或运行被中断。若要实时查看输出，请为其设置 `output = "interleave"`。
+
+## Interactive input
+
+Unless a task is `interactive` or `raw`, stdin is connected only with
+`interleave` output: the default for a single task, a sequential chain, or
+`--jobs 1`, or when you pass `--output interleave`. With other output styles,
+including `prefix`, the default when tasks run in parallel, stdin is not
+connected. It is also not connected when output must be redacted: when the task
+receives [secrets](/tasks/task-configuration.html#secrets), or when the config
+marks a value for [redaction](/environments/secrets/#redaction) with
+`redact = true` or `redactions`.
+
+Set `interactive = true` on a task that needs the terminal, such as one that
+prompts. It has exclusive terminal access while it runs. `raw = true` takes
+exclusive access for each command instead. Both bypass output redaction and the
+artifact cache. See [`interactive`](/tasks/task-configuration.html#interactive)
+and [`raw`](/tasks/task-configuration.html#raw).
+
+## Skip tasks that are up to date
+
+Give a task `sources` and `outputs`, and mise skips it while its outputs are up
+to date:
 
 ```mise-toml [mise.toml]
 [tasks.build]
@@ -207,9 +238,18 @@ mise 会监视任务及其依赖项的 `sources`。未指定 `sources` 的任务
 mise watch --restart dev
 ```
 
-和 `mise run` 一样，可用 `:::` 分隔多个任务。不指定任务名称时，`mise watch` 会运行 `default` 任务。
-`mise watch` 使用 [watchexec](https://github.com/watchexec/watchexec)；请通过 `mise use watchexec` 安装它，
-或自行将其加入 `PATH`。
+需要阻塞等待文件更改的脚本或编程代理可以使用 `--once`，无需自行循环休眠和轮询。mise 启动时不会运行任务，而是等待任务的某个 source 发生变化，再运行一次任务并以任务的退出状态结束：
+
+```sh
+mise watch test --once && echo "tests pass after the change"
+```
+
+`--once` 会隐含 `--postpone`。如果 watchexec 在任何文件更改前停止，mise 会以 1 退出。若要继续监视，但在第一次运行失败时停止，请在不带 `--once` 的情况下传入 `--exit-on-error`。
+
+Separate several tasks with `:::`, as with `mise run`. Without a task name,
+`mise watch` runs the `default` task. `mise watch` uses
+[watchexec](https://github.com/watchexec/watchexec); install it with
+`mise use watchexec` or put it on `PATH` yourself.
 
 `mise watch` 会将 `--debounce`、`--clear` 和 `--shell` 等 watchexec 标志继续传给 watchexec。
 watchexec 的 `--env` 和 `--quiet` 在此命令中写作 `--watchexec-env` 和 `--watchexec-quiet`，因为
@@ -225,20 +265,22 @@ mise watch -E dev --watchexec-env LOG_LEVEL=debug build
 
 | 变量                          | 值                                                                                                                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MISE_ORIGINAL_CWD`         | 运行 mise 时所在的目录。                                                                                                                                                                                |
-| `MISE_CONFIG_ROOT`          | 定义任务的配置文件所对应的[配置根目录](/configuration.html#config-root)，例如 `~/proj/mise.toml` 和 `~/proj/.config/mise.toml` 的配置根目录都是 `~/proj`。                                         |
-| `MISE_PROJECT_ROOT`         | 定义任务的项目根目录，与从哪个目录运行无关。单体仓库中为子项目目录。对于全局或远程任务，则为运行该任务的项目。                                                                                        |
-| `MISE_MONOREPO_ROOT`        | 配置中设置了 `monorepo_root = true` 的目录。仅在[单体仓库](/tasks/monorepo.html)中设置。                                                                                                               |
-| `MISE_TASK_NAME`            | `mise tasks ls` 显示的任务名称。文件任务名称通常不带脚本扩展名；若已有另一个任务使用较短名称，则除外。参阅[文件任务名称](/tasks/file-tasks.html#task-grouping)。                                  |
-| `MISE_TASK_FILE`            | 任务脚本：文件任务本身，或 TOML 任务的 `file` 指定的文件。对于使用内联 `run` 的 TOML 任务，则为定义该任务的配置文件。                                                                                |
-| `MISE_TASK_DIR`             | 包含 `MISE_TASK_FILE` 的目录。                                                                                                                                                                          |
-| `MISE_TASK_COLOR`           | 任务名称标签的 ANSI 颜色序列。关闭颜色、任务处于安静模式，或输出样式不显示标签（`interleave`、`silent`）时为空。                                                                                      |
-| `MISE_ENV`                  | 当前启用的[配置环境](/configuration/environments.html)，多个环境以逗号分隔；未设置时为空。                                                                                                             |
-| `TRACEPARENT`、`TRACESTATE` | 启用 [OpenTelemetry](/tasks/opentelemetry.html#trace-propagation) 导出时，任务的追踪上下文。                                                                                                           |
-| `usage_*`                   | 任务[参数和标志](/tasks/task-arguments.html)对应的值。                                                                                                                                                  |
+| `MISE_ORIGINAL_CWD`         | The directory where you ran mise.                                                                                                                                                                      |
+| `MISE_CONFIG_ROOT`          | The [config root](/configuration.html#config-root) of the file that defines the task, such as `~/proj` for both `~/proj/mise.toml` and `~/proj/.config/mise.toml`.                                     |
+| `MISE_PROJECT_ROOT`         | The root of the project that defines the task, whichever directory you run it from. In a monorepo, the subproject's directory. For a global or remote task, the project you run it in.                 |
+| `MISE_MONOREPO_ROOT`        | The directory whose config sets `monorepo_root = true`. Set only in a [monorepo](/tasks/monorepo.html).                                                                                                |
+| `MISE_TASK_NAME`            | The task's name as `mise tasks ls` shows it. A file task's name has no script extension unless another task already has the shorter name; see [file task names](/tasks/file-tasks.html#task-grouping). |
+| `MISE_TASK_FILE`            | The task's script: the file task itself, or the file named by a TOML task's `file`. For a TOML task with an inline `run`, the config file that defines it.                                             |
+| `MISE_TASK_DIR`             | The directory that contains `MISE_TASK_FILE`.                                                                                                                                                          |
+| `MISE_TASK_COLOR`           | The ANSI sequence for the task's label color. Empty when colors are off, the task is quiet, or the output style shows no label (`interleave`, `silent`).                                               |
+| `MISE_TASK_LOCKS`           | 任务持有的[锁](/tasks/task-configuration.html#lock)，以逗号分隔；也包括从父任务继承的锁。仅在任务持有或继承锁时设置。                       |
+| `MISE_ENV`                  | The active [config environments](/configuration/environments.html), comma-separated, when any are set.                                                                                                 |
+| `TRACEPARENT`, `TRACESTATE` | The task's trace context, when [OpenTelemetry](/tasks/opentelemetry.html#trace-propagation) export is on.                                                                                              |
+| `usage_*`                   | The values of the task's [arguments and flags](/tasks/task-arguments.html).                                                                                                                            |
 
-对于 `~/proj/.config/mise.toml` 中的 TOML 任务，`MISE_TASK_DIR` 为 `~/proj/.config`，而
-`MISE_CONFIG_ROOT` 为 `~/proj`。使用 `MISE_TASK_COLOR` 打印时，请在文本后重置颜色：
+For a TOML task in `~/proj/.config/mise.toml`, `MISE_TASK_DIR` is
+`~/proj/.config`, while `MISE_CONFIG_ROOT` is `~/proj`. When you print with
+`MISE_TASK_COLOR`, reset the color after your text:
 
 ```sh
 printf '%smessage\033[0m\n' "$MISE_TASK_COLOR"

@@ -1,6 +1,7 @@
 use eyre::{Result, bail};
 
 use crate::cli::run;
+use crate::config::Config;
 
 mod add;
 mod deps;
@@ -8,7 +9,10 @@ mod edit;
 mod graph;
 mod info;
 mod ls;
+mod rm;
+mod set;
 mod validate;
+mod write;
 
 /// Manage tasks
 ///
@@ -51,6 +55,8 @@ enum Commands {
     /// or https://mise.jdx.dev/cli/run.html for the full reference.
     #[usage(hide = true)]
     Run(Box<run::Run>),
+    Rm(rm::TasksRm),
+    Set(Box<set::TasksSet>),
     Validate(validate::TasksValidate),
 }
 
@@ -64,6 +70,8 @@ impl Commands {
             Self::Info(cmd) => cmd.run().await,
             Self::Ls(cmd) => cmd.run().await,
             Self::Run(cmd) => (*cmd).run().await,
+            Self::Rm(cmd) => cmd.run().await,
+            Self::Set(cmd) => (*cmd).run().await,
             Self::Validate(cmd) => cmd.run().await,
         }
     }
@@ -81,6 +89,9 @@ impl Tasks {
                 cmd
             }
             None => match task {
+                // `mise tasks list` reads like `mise tasks ls`, but a task named
+                // `list` still wins so it stays reachable.
+                Some(task) if task == "list" && !task_exists(&task).await? => Commands::Ls(ls),
                 Some(task) => {
                     if ls.has_non_json_options() {
                         bail!("task list options cannot be used with task info");
@@ -96,4 +107,9 @@ impl Tasks {
 
         cmd.run().await
     }
+}
+
+async fn task_exists(name: &str) -> Result<bool> {
+    let config = Config::get().await?;
+    Ok(info::find_task(&config, name).await?.is_some())
 }

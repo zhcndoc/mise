@@ -108,7 +108,10 @@ impl DotfilesStatus {
                 _ => (0, 0),
             };
             let absent = matches!(state, FileState::Applied)
-                .then(|| system::files::permissions_target_absent(req))
+                .then(|| {
+                    system::files::permissions_target_absent(req)
+                        .or_else(|| system::files::symlink_target_copied(req))
+                })
                 .flatten();
             // a tracked entry whose variants all name other machines, or
             // tie, is neither saved nor pulled here
@@ -193,6 +196,7 @@ impl DotfilesStatus {
                     req.mode.name().to_string(),
                     match req.mode {
                         system::files::FileMode::Content => "inline".to_string(),
+                        system::files::FileMode::Fnox => "fnox".to_string(),
                         system::files::FileMode::Absent => "-".to_string(),
                         system::files::FileMode::Permissions => "-".to_string(),
                         _ => req.source.display_user(),

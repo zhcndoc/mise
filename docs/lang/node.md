@@ -130,7 +130,11 @@ mise 会优先读取匹配的 `devEngines.packageManager` 声明，然后读取�
 
 npm、pnpm 和 Yarn 1 的制品是 npm registry 中的 tarball；Yarn 2 及更高版本使用 Yarn 发布的 CLI 文件，并且声明中必须指定确切版本。未提供校验和时，mise 会通过常规的[注册表](/registry.html)后端安装软件包管理器，并使用该后端的验证机制。
 
-与 Corepack 不同，若项目没有声明软件包管理器版本，mise 不会自动选择一个已知可用的版本。请在 `mise.toml`、`package.json` 或全局配置中设置版本。
+后缀必须为 `<algorithm>.<hex digest>`，算法须为上文列出的其中一种；其他后缀的声明会被 mise 忽略。如果 `devEngines.packageManager` 与 `packageManager` 指定相同版本，但自身没有后缀，则仍会应用 `packageManager` 中的校验和。
+
+Unlike Corepack, mise does not pick a known-good package-manager version when a
+project declares none. Set the version in `mise.toml`, `package.json` or your
+global config.
 
 ### Corepack
 
@@ -146,9 +150,11 @@ mise 会自行安装软件包管理器，因此不需要 Corepack。如果仍想
 
 ## mise 如何安装 Node.js
 
-mise 会从 [`node.mirror_url`](/lang/node.html#node.mirror_url)（默认为 `https://nodejs.org/dist/`）下载适用于当前平台的官方二进制归档文件，并使用该版本发布的 `SHASUMS256.txt` 校验；如果该文件附有 OpenPGP 签名，也会进行验证（[`node.gpg_verify`](/lang/node.html#node.gpg_verify)）。随后会运行 `node -v` 和 `npm -v`。mise 不会设置 Node.js 专用环境变量，只会将该版本的 `bin` 目录加入 `PATH`。
+mise 会从 [`node.mirror_url`](/lang/node.html#node.mirror_url)（默认为 `https://nodejs.org/dist/`）下载适用于当前平台的官方二进制归档，将其与发布中的 `SHASUMS256.txt` 核对，并验证该文件的 OpenPGP 签名（[`node.gpg_verify`](/lang/node.html#node.gpg_verify)）。如果缺少签名，安装会失败；unofficial-builds 发布的 musl 构建除外，因为它不提供签名。随后 mise 会运行 `node -v` 和 `npm -v`。mise 不会设置 Node.js 专用环境变量；版本目录中的 `bin` 会加入 `PATH`。
 
-如果当前平台没有对应的二进制文件，mise 会从源码编译 Node.js；除非 [`node.compile`](/lang/node.html#node.compile) 设为 `false`。
+`mise lock` 也会从同一个 `SHASUMS256.txt` 获取校验和，并在记录前验证相同的签名。
+
+如果当前平台没有可用二进制文件，除非 [`node.compile`](/lang/node.html#node.compile) 为 `false`，mise 会从源码编译 Node.js。如果 [`mise.lock`](/dev-tools/mise-lock.html) 为二进制文件固定了校验和，而下载请求返回 404，安装就会失败；请运行 `mise lock node` 固定其他制品。
 
 在 Alpine 和 NixOS 上，由于 [`all_compile`](/configuration/settings.html#all_compile) 默认值为 `true`，mise 目前默认从源码编译。此默认行为已弃用，mise 2027.8.0 将改用预编译二进制文件。若现在就要使用预编译版本，请将 `node.compile` 或 `all_compile` 设为 `false`；在 NixOS 上还需先启用 [nix-ld](https://github.com/Mic92/nix-ld)。若要继续编译，请显式设置 `all_compile = true`。
 

@@ -65,6 +65,9 @@ pub enum FileMode {
     /// set the permissions of an existing target without managing its
     /// content: an entry with `permissions` and no source, content, or mode
     Permissions,
+    /// write the file fnox stores for the target path (`fnox get --file`),
+    /// so its content never sits in the dotfiles repository
+    Fnox,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +104,7 @@ impl FileMode {
             "template" => Some(Self::Template),
             "track" => Some(Self::Track),
             "absent" => Some(Self::Absent),
+            "fnox" => Some(Self::Fnox),
             _ => None,
         }
     }
@@ -115,19 +119,23 @@ impl FileMode {
             Self::Track => "track",
             Self::Permissions => "permissions",
             Self::Absent => "absent",
+            Self::Fnox => "fnox",
         }
     }
 
     /// Whether requests in this mode read a source path. Inline content,
     /// permissions-only entries, and absent targets have none.
     pub fn has_source(self) -> bool {
-        !matches!(self, Self::Content | Self::Permissions | Self::Absent)
+        !matches!(
+            self,
+            Self::Content | Self::Permissions | Self::Absent | Self::Fnox
+        )
     }
 }
 
 /// Parse a `permissions` value: an octal string such as `"0600"`, with the
 /// same syntax `[bootstrap.files]` accepts for `mode`.
-fn parse_permissions(value: &str) -> Result<u32> {
+pub(crate) fn parse_permissions(value: &str) -> Result<u32> {
     crate::managed_files::parse_mode(Some(value), 0).map_err(|_| {
         eyre::eyre!(
             "permissions must be an octal string between \"0000\" and \"7777\", got {value:?}"
@@ -161,7 +169,7 @@ fn permissions_conflict(
 
 /// Windows has no Unix permission bits; entries there ignore `permissions`.
 #[cfg(not(unix))]
-fn warn_permissions_ignored() {
+pub(crate) fn warn_permissions_ignored() {
     static WARNED: std::sync::Once = std::sync::Once::new();
     WARNED.call_once(|| warn!("[dotfiles]: permissions is ignored on this platform"));
 }
@@ -339,11 +347,12 @@ fn validate_file_variants(
     if has_target_override && content.is_some() {
         bail!("destination variants with inline content are not supported");
     }
-    // an absent entry removes its destination and reads no source
+    // absent and fnox entries read no source: one removes its destination,
+    // the other writes what fnox stores for it
     let implied_source = if has_target_override
         && source.is_none()
         && !permissions_only
-        && mode != Some("absent")
+        && !matches!(mode, Some("absent" | "fnox"))
     {
         if !variants.iter().all(|v| v.target.is_some()) {
             bail!(
@@ -359,6 +368,19 @@ fn validate_file_variants(
     }
     for variant in variants {
         let destination = variant.target.as_deref().unwrap_or(target);
+        // a template is checked once it is rendered, when a variant is selected;
+        // its syntax can be checked now without evaluating it
+        if variant.target.is_some() && mise_util::tera::contains_template_syntax(destination) {
+            mise_util::tera::get_tera_without_exec(None)
+                .validate_template_syntax("variant target", destination)
+                .map_err(|err| {
+                    eyre::eyre!(
+                        "variant target {destination:?}: {}",
+                        mise_util::tera::error_chain(&err)
+                    )
+                })?;
+            continue;
+        }
         if !variant_target_is_absolute(destination) {
             bail!("variant target must be absolute or start with ~/");
         }
@@ -392,6 +414,44 @@ fn logical_source_path(key: &str) -> Result<PathBuf> {
     Ok(relative)
 }
 
+/// The text of a destination outside its `{{ }}` and `{# #}` blocks, which
+/// must appear in the rendered path. A `{% %}` block can drop text, so a
+/// template with one has nothing certain to check before it is rendered.
+fn template_literal(target: &str) -> String {
+    if target.contains("{%") {
+        return String::new();
+    }
+    static BLOCKS: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"(?s)\{\{.*?\}\}|\{#.*?#\}").unwrap());
+    BLOCKS.replace_all(target, "").into_owned()
+}
+
+/// Render a selected variant `target` with the template context every config
+/// file gets (`env`, `xdg_config_home`, `config_root`, ...), without `exec()`
+/// so a preview cannot run commands, then check the result is a destination.
+fn render_variant_target(target: &str, origin: &ResourceOrigin) -> Result<String> {
+    let rendered = if mise_util::tera::contains_template_syntax(target) {
+        let mut ctx = mise_util::tera::BASE_CONTEXT.clone();
+        ctx.insert("config_root", &origin.config_root.to_string_lossy());
+        let config_source =
+            std::path::absolute(&origin.config).unwrap_or_else(|_| origin.config.clone());
+        ctx.insert("config_source", &config_source.to_string_lossy());
+        let mut tera = mise_util::tera::get_tera_without_exec(origin.config.parent());
+        crate::host::render_config_str(&mut tera, target, &ctx, &origin.config).map_err(|err| {
+            eyre::eyre!(
+                "variant target {target:?}: {}",
+                mise_util::tera::error_chain(&err)
+            )
+        })?
+    } else {
+        target.to_string()
+    };
+    if !variant_target_is_absolute(&rendered) {
+        bail!("variant target must be absolute or start with ~/ (rendered {rendered:?})");
+    }
+    Ok(rendered)
+}
+
 /// Inactive variants can contain another platform's absolute path syntax.
 /// The selected destination is still checked with native path rules before use.
 fn variant_target_is_absolute(target: &str) -> bool {
@@ -415,7 +475,7 @@ pub(crate) enum FileTomlEntry {
     /// optional so `{}` can mean implied source/default mode. Mode stays a
     /// string here so configs using modes from newer mise versions still
     /// parse (they warn and are skipped, like unknown package managers)
-    Table(FileTomlTable),
+    Table(Box<FileTomlTable>),
 }
 
 /// The table form of a [`FileTomlEntry`]. Its keys, with [`crate::edits::EditTomlTable`]'s, are
@@ -456,6 +516,10 @@ pub(crate) struct FileTomlTable {
     /// template only: remove the target when the template renders empty
     #[serde(default)]
     pub(crate) remove_empty: Option<bool>,
+    /// copy, template, and inline content only: write the target only when
+    /// nothing exists there yet
+    #[serde(default)]
+    pub(crate) create_if_missing: Option<bool>,
     /// directory-walking modes only: deploy a source name like
     /// `dot-bashrc` as `.bashrc`
     #[serde(default)]
@@ -468,6 +532,10 @@ pub(crate) struct FileTomlTable {
     /// `[bootstrap] dotfile_groups`
     #[serde(default)]
     pub(crate) group: Option<String>,
+    /// whole-file entries and dotfile groups this entry waits for: mise
+    /// writes them before it renders or reads this entry
+    #[serde(default)]
+    pub(crate) depends: Option<Vec<String>>,
 }
 
 impl FileRequest {
@@ -559,6 +627,10 @@ pub struct FileRequest {
     /// template only: an empty (whitespace-only) render removes the target
     /// instead of writing an empty file
     pub remove_empty: bool,
+    /// copy, template, and inline content only: an existing target is left
+    /// exactly as it is, content and permissions included, and the entry
+    /// writes it only while nothing is there
+    pub create_if_missing: bool,
     /// directory-walking modes only: each source path component named
     /// `dot-<name>` is deployed as `.<name>`, like GNU Stow's `--dotfiles`
     pub dot_prefix: bool,
@@ -568,6 +640,10 @@ pub struct FileRequest {
     /// the dotfile group the entry belongs to: declared with `group` on an
     /// ordinary entry, or generated from a `[dotfile_groups]` tree
     pub group: Option<String>,
+    /// dotfile groups (by name) and whole-file entries (by target path) this
+    /// entry waits for: a dependency is written before this entry is
+    /// rendered or read, so the entry can use files the dependency creates
+    pub depends: Vec<String>,
 }
 
 const SYMLINK_EACH_STATE_VERSION: u8 = 1;
@@ -666,12 +742,30 @@ pub fn composed_files_from_config(config: &Config) -> Result<Vec<FileRequest>> {
     // a deselected group is kept, disabled, out of the conflict checks: only
     // the groups a machine applies have to agree with each other
     let mut deselected = vec![];
-    for config_files in config.bootstrap_config_maps() {
-        for mut request in
-            files_from_config_files_with_tracking_roots(&config_files, Some(&trusted_roots))
+    let maps = config.bootstrap_config_maps();
+    let mut layers = maps
+        .iter()
+        .map(|config_files| {
+            files_from_config_files_with_tracking_roots(config_files, Some(&trusted_roots))
                 .into_iter()
-                .chain(crate::dotfile_groups::group_requests(&config_files))
-        {
+                .chain(crate::dotfile_groups::group_requests(config_files))
+                .collect_vec()
+        })
+        .collect_vec();
+    if let Some(selection) = &selection {
+        let declared = maps
+            .iter()
+            .flat_map(crate::dotfile_groups::declared_names)
+            .collect::<HashSet<_>>();
+        let implicit = crate::dotfile_groups::implicit_group_requests(
+            &config.config_files(),
+            selection,
+            &declared,
+        );
+        layers.push(implicit);
+    }
+    for layer in layers {
+        for mut request in layer {
             if !crate::dotfile_groups::is_selected(&request, selection.as_deref()) {
                 request.enabled = false;
                 deselected.push(request);
@@ -940,11 +1034,13 @@ fn file_requests_match(config: &Config, first: &FileRequest, second: &FileReques
     first.target == second.target
         // two groups deploying one tree are two declarations, not a repeat
         && first.group == second.group
+        && first.depends == second.depends
         && first.source == second.source
         && first.content == second.content
         && first.mode == second.mode
         && first.manifest == second.manifest
         && first.remove_empty == second.remove_empty
+        && first.create_if_missing == second.create_if_missing
         && first.dot_prefix == second.dot_prefix
         && first.relative == second.relative
         && first.permissions == second.permissions
@@ -1002,7 +1098,7 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                         .iter()
                         .any(|key| table.contains_key(*key))
                 }) {
-                    for key in ["permissions", "relative", "dot_prefix", "group"] {
+                    for key in ["permissions", "relative", "dot_prefix", "group", "depends"] {
                         if table.contains_key(key) {
                             bail!(
                                 "dotfile {target}: {key} applies to whole-file entries, not block or line edits"
@@ -1033,9 +1129,11 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                             | "variants"
                             | "enabled"
                             | "remove_empty"
+                            | "create_if_missing"
                             | "dot_prefix"
                             | "relative"
                             | "group"
+                            | "depends"
                     ) {
                         bail!(
                             "unknown dotfile key {key:?} for {target} in {}",
@@ -1047,24 +1145,29 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
             if let FileTomlEntry::Source(_) = &entry {
                 validate_file_variants(&target, None, None, None, false, &[])?;
             }
-            if let FileTomlEntry::Table(FileTomlTable {
-                source,
-                content,
-                mode,
-                manifest,
-                exclude,
-                encrypt,
-                allow_plaintext,
-                include,
-                permissions,
-                variants,
-                remove_empty,
-                dot_prefix,
-                relative,
-                group,
-                ..
-            }) = entry
-            {
+            if let FileTomlEntry::Table(table) = entry {
+                let FileTomlTable {
+                    source,
+                    content,
+                    mode,
+                    manifest,
+                    exclude,
+                    encrypt,
+                    allow_plaintext,
+                    include,
+                    permissions,
+                    variants,
+                    remove_empty,
+                    create_if_missing,
+                    dot_prefix,
+                    relative,
+                    group,
+                    depends,
+                    ..
+                } = *table;
+                if depends.is_some() && matches!(mode.as_deref(), Some("track" | TRACK_LOCAL)) {
+                    bail!("dotfile {target}: mode = \"track\" takes no depends");
+                }
                 if group.is_some() {
                     bail!("dotfile {target}: {GROUP_KEY_IN_DOTFILES}");
                 }
@@ -1117,8 +1220,9 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                     );
                 }
                 // composition checks whichever destination a variant selects,
-                // so every one of them must be a single path
-                if mode == FileMode::Absent
+                // so every one of them must be a single path; a template's
+                // literal text is checked now and its rendering when selected
+                if matches!(mode, FileMode::Absent | FileMode::Fnox)
                     && std::iter::once(target.as_str())
                         .chain(
                             variants
@@ -1126,9 +1230,23 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                                 .flatten()
                                 .filter_map(|variant| variant.target.as_deref()),
                         )
-                        .any(|path| is_glob_pattern(&resolve_target_arg(path)))
+                        .any(|path| is_glob_pattern(&resolve_target_arg(&template_literal(path))))
                 {
-                    bail!("dotfile {target}: an absent target cannot use wildcards");
+                    bail!(
+                        "dotfile {target}: an {} target cannot use wildcards",
+                        mode.name()
+                    );
+                }
+                if mode == FileMode::Fnox
+                    && (source.is_some()
+                        || content.is_some()
+                        || manifest.is_some()
+                        || exclude.is_some()
+                        || encrypt == Some(true))
+                {
+                    bail!(
+                        "dotfile {target} with mode = \"fnox\" cannot declare source, content, manifest, exclude, or encrypt; fnox stores the file"
+                    );
                 }
                 if source.is_some() && content.is_some() {
                     bail!("dotfile {target} cannot declare both source and content");
@@ -1160,6 +1278,15 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                 {
                     bail!("dotfile {target}: remove_empty requires mode = \"template\"");
                 }
+                if create_if_missing == Some(true)
+                    && (permissions_only
+                        || content.is_none()
+                            && !matches!(mode, FileMode::Copy | FileMode::Template))
+                {
+                    bail!(
+                        "dotfile {target}: create_if_missing requires mode copy or template, or inline content"
+                    );
+                }
                 if dot_prefix == Some(true)
                     && (content.is_some()
                         || permissions_only
@@ -1176,7 +1303,7 @@ pub(crate) fn validate_incoming_files(config_files: &ConfigMap) -> Result<()> {
                         "dotfile {target}: relative requires mode = \"symlink\" or \"symlink-each\""
                     );
                 }
-                if !matches!(mode, FileMode::Track | FileMode::Absent)
+                if !matches!(mode, FileMode::Track | FileMode::Absent | FileMode::Fnox)
                     && !permissions_only
                     && source.is_none()
                     && content.is_none()
@@ -1286,8 +1413,8 @@ fn files_from_config_files_with_tracking_roots(
                 let mut requests = IndexMap::new();
                 if let Some(entry) = parse_dotfiles_entry(&key, value, path) {
                     let overrides_target = matches!(&entry,
-                        FileTomlEntry::Table(FileTomlTable { variants: Some(vs), .. })
-                            if vs.iter().any(|v| v.target.is_some()));
+                        FileTomlEntry::Table(table)
+                            if table.variants.as_ref().is_some_and(|vs| vs.iter().any(|v| v.target.is_some())));
                     merge_file_entry(key.clone(), entry, base, &origin, &mut requests);
                     // An invalid or inactive declaration cannot suppress an
                     // inherited request. Cache resolution so sources are walked once.
@@ -1399,6 +1526,15 @@ fn parse_file_entry(target: &str, value: toml::Value, config: &Path) -> Option<F
         );
         return None;
     }
+    // `format` only names the format of a merge; a whole-file entry would drop it
+    // and replace the file the user meant to merge into
+    if value
+        .as_table()
+        .is_some_and(|t| t.contains_key("format") && !t.contains_key("merge"))
+    {
+        record_invalid(target, config, "format is only valid with merge", local);
+        return None;
+    }
     let encryption_declared = value
         .as_table()
         .is_some_and(|table| table.contains_key("encrypt"));
@@ -1439,12 +1575,14 @@ fn file_entry_from_toml(target_raw: &str, value: toml::Value) -> Option<FileToml
                 || table.contains_key("variants")
                 || table.contains_key("enabled")
                 || table.contains_key("remove_empty")
+                || table.contains_key("create_if_missing")
                 || ((table.contains_key("source")
                     || table.contains_key("content")
                     || table.contains_key("permissions")
                     || table.contains_key("relative")
                     || table.contains_key("dot_prefix")
-                    || table.contains_key("group"))
+                    || table.contains_key("group")
+                    || table.contains_key("depends"))
                     && !table.contains_key("block")
                     && !table.contains_key("line")
                     && !table.contains_key("template")
@@ -1515,9 +1653,11 @@ fn merge_file_entry(
         variants,
         enabled,
         remove_empty,
+        create_if_missing,
         dot_prefix,
         relative,
         group,
+        depends,
     ) = match entry {
         FileTomlEntry::Source(source) => (
             Some(source),
@@ -1536,42 +1676,51 @@ fn merge_file_entry(
             None,
             None,
             None,
+            None,
+            None,
         ),
-        FileTomlEntry::Table(FileTomlTable {
-            source,
-            content,
-            mode,
-            exclude,
-            include,
-            manifest,
-            permissions,
-            autosave,
-            encrypt,
-            allow_plaintext,
-            variants,
-            enabled,
-            remove_empty,
-            dot_prefix,
-            relative,
-            group,
-        }) => (
-            source,
-            content,
-            mode,
-            exclude,
-            include,
-            manifest,
-            permissions,
-            autosave,
-            encrypt,
-            allow_plaintext,
-            variants,
-            enabled,
-            remove_empty,
-            dot_prefix,
-            relative,
-            group,
-        ),
+        FileTomlEntry::Table(table) => {
+            let FileTomlTable {
+                source,
+                content,
+                mode,
+                exclude,
+                include,
+                manifest,
+                permissions,
+                autosave,
+                encrypt,
+                allow_plaintext,
+                variants,
+                enabled,
+                remove_empty,
+                create_if_missing,
+                dot_prefix,
+                relative,
+                group,
+                depends,
+            } = *table;
+            (
+                source,
+                content,
+                mode,
+                exclude,
+                include,
+                manifest,
+                permissions,
+                autosave,
+                encrypt,
+                allow_plaintext,
+                variants,
+                enabled,
+                remove_empty,
+                create_if_missing,
+                dot_prefix,
+                relative,
+                group,
+                depends,
+            )
+        }
     };
     // `mode = "track-local"` is `track` saved in this machine's own history.
     // It is a mode rather than a flag so that a mise that predates it skips
@@ -1604,6 +1753,8 @@ fn merge_file_entry(
         }
     };
     let remove_empty = remove_empty.unwrap_or(false);
+    let create_if_missing = create_if_missing.unwrap_or(false);
+    let depends = depends.unwrap_or_default();
     let dot_prefix = dot_prefix.unwrap_or(false);
     if let Some(group) = &group
         && let Err(err) = crate::dotfile_groups::validate_group_name(group)
@@ -1680,14 +1831,16 @@ fn merge_file_entry(
             || content.is_some()
             || manifest.is_some()
             || remove_empty
+            || create_if_missing
             || relative == Some(true)
             || dot_prefix
             || group.is_some()
+            || !depends.is_empty()
         {
             record_invalid(
                 &target_raw,
                 &origin.config,
-                "mode = \"track\" leaves the file where it is and takes no source, content, manifest, remove_empty, relative, dot_prefix, or group",
+                "mode = \"track\" leaves the file where it is and takes no source, content, manifest, remove_empty, create_if_missing, relative, dot_prefix, group, or depends",
                 local,
             );
             return;
@@ -1762,9 +1915,11 @@ fn merge_file_entry(
             variants: selectors,
             enabled,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: false,
             group: None,
+            depends: vec![],
         };
         // a later file of the same directory (`config.local.toml` after
         // `config.toml`) repeating a track declaration overrides only what
@@ -1780,11 +1935,22 @@ fn merge_file_entry(
     use crate::history::select::{self, Selection};
     let target_raw = match select::select(&selectors, &select::active_environments()) {
         Selection::Single => target_raw,
-        Selection::Variant(selected) => variants
-            .iter()
-            .find(|v| v.selector == selected)
-            .and_then(|v| v.target.clone())
-            .unwrap_or(target_raw),
+        Selection::Variant(selected) => {
+            match variants
+                .iter()
+                .find(|v| v.selector == selected)
+                .and_then(|v| v.target.as_deref())
+                .map(|target| render_variant_target(target, origin))
+                .transpose()
+            {
+                Ok(Some(rendered)) => rendered,
+                Ok(None) => target_raw,
+                Err(err) => {
+                    record_invalid(&target_raw, &origin.config, err.to_string(), local);
+                    return;
+                }
+            }
+        }
         Selection::NoMatch => return,
         Selection::Ambiguous(_) => {
             record_invalid(
@@ -1808,6 +1974,14 @@ fn merge_file_entry(
         );
         return;
     }
+    if mode.as_deref() == Some("fnox")
+        && (source.is_some() || exclude.is_some() || manifest.is_some() || encrypt == Some(true))
+    {
+        warn!(
+            "[dotfiles].\"{target_raw}\": mode = \"fnox\" takes no source, exclude, manifest, or encrypt; fnox stores the file, ignoring entry"
+        );
+        return;
+    }
     if mode.as_deref() == Some("absent") {
         if source.is_some()
             || exclude.is_some()
@@ -1820,9 +1994,9 @@ fn merge_file_entry(
             );
             return;
         }
-        if remove_empty || relative == Some(true) {
+        if remove_empty || create_if_missing || relative == Some(true) {
             warn!(
-                "[dotfiles].\"{target_raw}\": mode = \"absent\" takes no remove_empty or relative, ignoring entry"
+                "[dotfiles].\"{target_raw}\": mode = \"absent\" takes no remove_empty, create_if_missing, or relative, ignoring entry"
             );
             return;
         }
@@ -1864,9 +2038,11 @@ fn merge_file_entry(
                 variants: vec![],
                 enabled,
                 remove_empty: false,
+                create_if_missing: false,
                 dot_prefix: false,
                 relative: false,
                 group: group.clone(),
+                depends: depends.clone(),
             },
         );
         return;
@@ -1951,6 +2127,15 @@ fn merge_file_entry(
         );
         return;
     }
+    if create_if_missing
+        && (permissions_only
+            || content.is_none() && !matches!(mode, FileMode::Copy | FileMode::Template))
+    {
+        warn!(
+            "[dotfiles].\"{target_raw}\": create_if_missing requires mode copy or template, or inline content, ignoring entry"
+        );
+        return;
+    }
     if dot_prefix
         && (content.is_some()
             || permissions_only
@@ -2003,9 +2188,46 @@ fn merge_file_entry(
                 variants: vec![],
                 enabled,
                 remove_empty: false,
+                create_if_missing: false,
                 dot_prefix: false,
                 relative: false,
                 group: group.clone(),
+                depends: depends.clone(),
+            },
+        );
+        return;
+    }
+    if mode == FileMode::Fnox {
+        // fnox keys the file by its exact path
+        if is_glob_pattern(&target) {
+            warn!(
+                "[dotfiles].\"{target_raw}\": a fnox target cannot use wildcards, ignoring entry"
+            );
+            return;
+        }
+        merged.insert(
+            (target.clone(), false),
+            FileRequest {
+                target_raw,
+                target,
+                source: PathBuf::new(),
+                content: None,
+                mode: FileMode::Fnox,
+                exclude: vec![],
+                include: None,
+                manifest: None,
+                permissions,
+                base: base.to_path_buf(),
+                origin: origin.clone(),
+                policy: policy_for(FileMode::Fnox),
+                variants: vec![],
+                enabled,
+                remove_empty: false,
+                create_if_missing: false,
+                dot_prefix: false,
+                relative: false,
+                group: group.clone(),
+                depends: depends.clone(),
             },
         );
         return;
@@ -2029,9 +2251,11 @@ fn merge_file_entry(
                 variants: vec![],
                 enabled,
                 remove_empty: false,
+                create_if_missing,
                 dot_prefix: false,
                 relative: false,
                 group: group.clone(),
+                depends: depends.clone(),
             },
         );
         return;
@@ -2075,9 +2299,11 @@ fn merge_file_entry(
         variants: vec![],
         enabled,
         remove_empty,
+        create_if_missing,
         dot_prefix,
         relative: relative_symlinks(mode, relative),
         group,
+        depends,
     }) {
         merged.insert((req.target.clone(), false), req);
     }
@@ -2141,7 +2367,47 @@ pub fn resolve_target_arg(target: &str) -> PathBuf {
     lexical_normalize(&file::replace_path(target))
 }
 
-fn lexical_normalize(path: &Path) -> PathBuf {
+/// Resolve a source path given on the command line: `~/` expands and a
+/// relative path starts from the current directory, as in a shell.
+pub fn resolve_source_arg(source: &Path) -> Result<PathBuf> {
+    let source = file::replace_path(source);
+    let source = if source.is_absolute() {
+        source
+    } else {
+        let Some(cwd) = dirs::CWD.as_ref() else {
+            bail!(
+                "cannot resolve {}: the current directory is unavailable",
+                source.display()
+            );
+        };
+        cwd.join(source)
+    };
+    // `..` follows the real parent of a symlinked directory, so resolve that
+    // link before dropping the component
+    let mut resolved = PathBuf::new();
+    for component in source.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !resolved.is_dir() {
+                    bail!(
+                        "cannot resolve {}: {} is not a directory",
+                        source.display(),
+                        resolved.display()
+                    );
+                }
+                if resolved.is_symlink() {
+                    resolved = dunce::canonicalize(&resolved)?;
+                }
+                resolved.pop();
+            }
+            component => resolved.push(component.as_os_str()),
+        }
+    }
+    Ok(resolved)
+}
+
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -2199,9 +2465,11 @@ fn expand_request(req: FileRequest) -> Vec<FileRequest> {
         policy,
         enabled,
         remove_empty,
+        create_if_missing,
         dot_prefix,
         relative,
         group,
+        depends,
         ..
     } = req;
     if !is_glob_pattern(&source) {
@@ -2221,9 +2489,11 @@ fn expand_request(req: FileRequest) -> Vec<FileRequest> {
             variants: vec![],
             enabled,
             remove_empty,
+            create_if_missing,
             dot_prefix,
             relative,
             group,
+            depends,
         }];
     }
 
@@ -2278,8 +2548,10 @@ fn expand_request(req: FileRequest) -> Vec<FileRequest> {
             variants: vec![],
             enabled,
             remove_empty,
+            create_if_missing,
             dot_prefix,
             relative,
+            depends,
             group,
         }];
     }
@@ -2320,9 +2592,11 @@ fn expand_request(req: FileRequest) -> Vec<FileRequest> {
                 variants: vec![],
                 enabled,
                 remove_empty,
+                create_if_missing,
                 dot_prefix,
                 relative,
                 group: group.clone(),
+                depends: depends.clone(),
             })
         })
         .collect()
@@ -2463,29 +2737,61 @@ pub fn check(config: &Config, req: &FileRequest, secrets: &SecretValues) -> Resu
     if req.mode == FileMode::Track {
         return Ok(FileState::Tracked);
     }
-    if req.mode.has_source() && !req.source.exists() {
+    if req.mode.has_source() && !req.source.exists() && !keeps_existing(req) {
         return Ok(FileState::SourceMissing);
     }
     // render at most once per call — templates may use exec()
     let rendered = match req.mode {
-        FileMode::Template => Some(render_template(config, req, secrets)?),
+        FileMode::Template | FileMode::Fnox if !keeps_existing(req) => {
+            Some(computed_content(config, req, secrets)?)
+        }
         _ => None,
     };
     check_rendered(req, rendered.as_deref())
+}
+
+/// Whether `create_if_missing` leaves the target exactly as it is: anything
+/// but a directory is already there, a link and a dangling one included. A
+/// directory is still a conflict, and a directory source cannot be seeded.
+fn keeps_existing(req: &FileRequest) -> bool {
+    req.create_if_missing
+        && !(req.mode == FileMode::Copy && req.source.is_dir())
+        && std::fs::symlink_metadata(&req.target).is_ok_and(|meta| !meta.is_dir())
+}
+
+/// Whether an apply may record `req`'s target as deployed by its dotfile
+/// group. A `create_if_missing` entry claims its target only in the apply
+/// that wrote it: a file it left alone may hold what the user typed, or
+/// never have been mise's, and a prune must not remove it without `--force`.
+/// `seeded` holds the entries whose target `apply_one` actually wrote.
+fn records_group_ownership(seeded: &[&FileRequest], req: &FileRequest) -> bool {
+    !req.create_if_missing || seeded.iter().any(|written| std::ptr::eq(*written, req))
 }
 
 /// [`check`] with template output already rendered, so callers that go on to
 /// write the file render only once (templates may use `exec()`, which must
 /// not run more often than necessary)
 fn check_rendered(req: &FileRequest, rendered: Option<&str>) -> Result<FileState> {
+    if keeps_existing(req) {
+        return Ok(FileState::Applied);
+    }
     match req.mode {
         FileMode::Track => Ok(FileState::Tracked),
         FileMode::Absent => check_absent(&req.target),
-        FileMode::Symlink => check_symlink(&req.source, &req.target, req.relative),
+        FileMode::Symlink => match check_symlink(&req.source, &req.target, req.relative)? {
+            // the reason is the copy comparison's; say why there is a copy to compare
+            FileState::Differs(reason) if symlink_fell_back_to_copy(req) => {
+                Ok(FileState::Differs(format!("{reason}; {NOT_A_SYMLINK}")))
+            }
+            state => Ok(state),
+        },
         FileMode::SymlinkEach => check_symlink_each(req),
         FileMode::Copy if req.source.is_dir() => {
             if req.permissions.is_some() {
                 bail!("permissions requires a file source, not a directory");
+            }
+            if req.create_if_missing {
+                bail!("create_if_missing requires a file source, not a directory");
             }
             check_copy_dir(req)
         }
@@ -2518,6 +2824,13 @@ fn check_rendered(req: &FileRequest, rendered: Option<&str>) -> Result<FileState
                 rendered.expect("rendered template content").as_bytes(),
             ),
         ),
+        FileMode::Fnox => check_permissions(
+            req,
+            check_content(
+                &req.target,
+                rendered.expect("content fnox stores").as_bytes(),
+            ),
+        ),
         FileMode::Permissions => check_permissions_only(req),
     }
 }
@@ -2533,6 +2846,9 @@ fn desired_permissions(req: &FileRequest) -> Result<Option<u32>> {
     }
     if req.mode == FileMode::Template {
         return Ok(Some(permission_bits(&req.source.metadata()?)));
+    }
+    if req.mode == FileMode::Fnox {
+        return Ok(Some(FNOX_PERMISSIONS));
     }
     Ok(None)
 }
@@ -2613,6 +2929,28 @@ pub fn permissions_target_absent(req: &FileRequest) -> Option<&'static str> {
         && std::fs::symlink_metadata(&req.target)
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound))
     .then_some("target absent; permissions not applied")
+}
+
+/// What status says of a `symlink` entry whose target is a regular file. Only what is on disk:
+/// the file may be the copy `link_path` falls back to, or one that was there before.
+const NOT_A_SYMLINK: &str = "a regular file, not a symlink";
+
+/// Whether a `symlink` entry's file target is a regular file where `link_path` would have
+/// copied one when Windows refused a symlink (no Developer Mode or elevation,
+/// `dotfiles.windows_symlinks` off).
+fn symlink_fell_back_to_copy(req: &FileRequest) -> bool {
+    cfg!(windows)
+        && !windows_symlinks()
+        && req.mode == FileMode::Symlink
+        && req.source.is_file()
+        && req.target.is_file()
+        && !req.target.is_symlink()
+}
+
+/// Why an applied `symlink` entry does not follow its source: on Windows its target is a
+/// regular file. Status shows this next to `applied`.
+pub fn symlink_target_copied(req: &FileRequest) -> Option<&'static str> {
+    symlink_fell_back_to_copy(req).then_some(NOT_A_SYMLINK)
 }
 
 const PERMISSIONS_THROUGH_LINK: &str =
@@ -2716,6 +3054,91 @@ fn points_at_same_file(target: &Path, source: &Path) -> bool {
     }
 }
 
+/// Directory links at or beneath a symlink-each entry's target that resolve
+/// into the entry's own source tree, outermost first. GNU Stow leaves these
+/// when it folds a directory: `~/.config/kitty -> <package>/.config/kitty`.
+/// Each is paired with whether it reaches the source directory at its own
+/// place in the tree, which apply replaces with a real directory of links
+/// (as Stow unfolds). Writing a link through one would replace the source
+/// file it reaches with a link to itself.
+fn folded_source_links(req: &FileRequest) -> Result<Vec<(PathBuf, bool)>> {
+    let Ok(source_root) = dunce::canonicalize(&req.source) else {
+        return Ok(vec![]);
+    };
+    let mut seen = HashSet::new();
+    let mut found: Vec<(PathBuf, bool)> = vec![];
+    for (source, target) in walk_source_files(req)? {
+        // the source path has as many components as the target path beneath
+        // the entry (dot_prefix renames, never adds or drops one)
+        for (target_dir, source_dir) in target.ancestors().zip(source.ancestors()).skip(1) {
+            if !target_dir.starts_with(&req.target) || !seen.insert(target_dir.to_path_buf()) {
+                break;
+            }
+            if file::is_symlink_or_junction(target_dir)
+                && let Ok(resolved) = dunce::canonicalize(target_dir)
+                && resolved.starts_with(&source_root)
+            {
+                let at_its_place = dunce::canonicalize(source_dir).is_ok_and(|dir| dir == resolved);
+                found.push((target_dir.to_path_buf(), at_its_place));
+            }
+            if target_dir == req.target {
+                break;
+            }
+        }
+    }
+    // a link beneath another one is reached through it, and goes with it
+    found.sort();
+    let mut outermost: Vec<(PathBuf, bool)> = vec![];
+    for (link, at_its_place) in found {
+        if !outermost.iter().any(|(outer, _)| link.starts_with(outer)) {
+            outermost.push((link, at_its_place));
+        }
+    }
+    Ok(outermost)
+}
+
+/// Replaces each folded link to `req`'s source with an empty directory, each
+/// journaled as a step of its own before the entry's: the step ends with the
+/// directory still empty, so recovery can always put the link back, and the
+/// links the entry then writes into it are journaled with the entry.
+fn unfold_source_links(req: &FileRequest, written: &mut Vec<PathBuf>) -> Result<()> {
+    let folded = folded_source_links(req)?;
+    misplaced_source_link(req, &folded)?;
+    // a link Windows refuses must fail the entry while the folded link
+    // still shows the application its configuration
+    if !folded.is_empty()
+        && windows_symlinks()
+        && let Some((source, _)) = walk_source_files(req)?
+            .into_iter()
+            .find(|(source, _)| source.is_file())
+    {
+        ensure_windows_link_possible(&source, &req.target)?;
+    }
+    for (link, _) in folded {
+        let item = link.display_user().to_string();
+        let pending =
+            journal::begin_changes_with(DOTFILES_PART, &item, vec![(link.clone(), Capture::Full)])?;
+        file::remove_symlink_or_junction(&link)?;
+        file::create_dir_all(&link)?;
+        written.push(link);
+        journal::commit_changes(pending);
+    }
+    Ok(())
+}
+
+/// A folded link that reaches the source somewhere other than its own place
+/// would make apply rewrite source files, so it is never `--force`-able.
+fn misplaced_source_link(req: &FileRequest, links: &[(PathBuf, bool)]) -> Result<()> {
+    if let Some((link, _)) = links.iter().find(|(_, at_its_place)| !at_its_place) {
+        bail!(
+            "{} is a link into {}, but not to the directory that belongs there; remove it so mise can link the files beneath it",
+            link.display_user(),
+            req.source.display_user()
+        );
+    }
+    Ok(())
+}
+
 fn check_symlink_each(req: &FileRequest) -> Result<FileState> {
     if !req.source.is_dir() {
         // callers add the entry's context (status row / apply error list)
@@ -2723,6 +3146,25 @@ fn check_symlink_each(req: &FileRequest) -> Result<FileState> {
             "mode symlink-each requires the source to be a directory: {}",
             req.source.display_user()
         );
+    }
+    let folded = folded_source_links(req)?;
+    misplaced_source_link(req, &folded)?;
+    if let Some((link, _)) = folded.first() {
+        return Ok(FileState::Differs(format!(
+            "{} is a link to its source directory; apply replaces it with a directory of links",
+            link.display_user()
+        )));
+    }
+    // links already behind a user's directory link look applied, but apply must not leave them
+    // there: it needs --force to replace the link with a directory of links
+    if let Some(dir) = needed_dirs(req)?
+        .into_iter()
+        .find(|dir| blocking_dir_link(req, dir))
+    {
+        return Ok(FileState::Differs(format!(
+            "{} is a link to a directory; apply replaces it with a directory of links",
+            dir.display_user()
+        )));
     }
     let stale = stale_links(req)?;
     let stale_reason = || format!("{} stale link(s)", stale.len());
@@ -2856,6 +3298,77 @@ pub fn render_template_for_oci(config: &Config, req: &FileRequest) -> Result<Str
     Ok(rendered)
 }
 
+/// The permission bits a `mode = "fnox"` target gets unless the entry sets
+/// `permissions`: the file holds a secret.
+#[cfg(unix)]
+const FNOX_PERMISSIONS: u32 = 0o600;
+
+/// Message text only: versions are never compared.
+const FNOX_FILES_MIN_VERSION: &str = "1.44.0";
+
+/// What apply writes for an entry whose content mise computes: a template's
+/// render, or the file fnox stores for the target.
+fn computed_content(config: &Config, req: &FileRequest, secrets: &SecretValues) -> Result<String> {
+    match req.mode {
+        FileMode::Fnox => read_fnox_file(req),
+        _ => render_template(config, req, secrets),
+    }
+}
+
+/// The file fnox stores for `req`'s target, from `fnox get --file`. fnox
+/// keys the file by the same path, so the entry needs no source. Its prompts
+/// and errors go straight to the terminal.
+fn read_fnox_file(req: &FileRequest) -> Result<String> {
+    let context = || format!("[dotfiles].\"{}\"", req.target_raw);
+    let Some(fnox) = file::which_spawnable("fnox") else {
+        bail!(
+            "{}: mode = \"fnox\" needs fnox {FNOX_FILES_MIN_VERSION} or newer on PATH; install it with `mise use -g fnox`",
+            context()
+        );
+    };
+    let output = Command::new(&fnox)
+        .args(["get", "--file"])
+        .arg(&req.target)
+        .stdin(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .wrap_err_with(|| format!("{}: failed to run {}", context(), fnox.display_user()))?;
+    if !output.status.success() {
+        bail!(
+            "{}: `fnox get --file {}` exited with {}; its error output is above. mode = \"fnox\" needs fnox {FNOX_FILES_MIN_VERSION} or newer, and the file stored with `fnox set --file {}`",
+            context(),
+            req.target_raw,
+            output.status,
+            req.target_raw
+        );
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|_| eyre::eyre!("{}: fnox returned content that is not UTF-8", context()))
+}
+
+/// Write `content` to a new file at `path` that only its owner can read from
+/// the moment it exists, so a secret is never briefly readable by others.
+fn write_private(path: &Path, content: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(FNOX_PERMISSIONS)
+            .open(path)
+            .wrap_err_with(|| format!("failed to create {}", path.display_user()))?;
+        file.write_all(content.as_bytes())
+            .wrap_err_with(|| format!("failed to write {}", path.display_user()))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        file::write(path, content)
+    }
+}
+
 /// Render every configured dotfile template before a full bootstrap can
 /// mutate anything. Secret values are cached, but templates are rendered again
 /// when applied so hooks can update dynamic inputs such as files or commands.
@@ -2867,7 +3380,10 @@ pub fn preflight_templates(
     validate_composed_file_footprints(requests)?;
     let broken = requests
         .iter()
-        .filter(|req| req.mode == FileMode::Template)
+        // an entry that depends on others may read files they have not written yet
+        .filter(|req| {
+            req.mode == FileMode::Template && !keeps_existing(req) && req.depends.is_empty()
+        })
         .filter_map(|req| render_template(config, req, secrets).err())
         .map(|err| format!("  {err}"))
         .collect::<Vec<_>>();
@@ -2895,13 +3411,76 @@ fn needed_dirs(req: &FileRequest) -> Result<Vec<PathBuf>> {
     Ok(out.into_iter().collect())
 }
 
+/// Whether `dir`, a directory a `symlink-each` entry needs, is a link the entry must not write
+/// through. The target itself may link to the directory that holds the links, but not to
+/// nothing, which no link can be written under.
+fn blocking_dir_link(req: &FileRequest, dir: &Path) -> bool {
+    file::is_symlink_or_junction(dir) && (dir != req.target || !dir.exists())
+}
+
 fn symlink_each_state_path(req: &FileRequest) -> PathBuf {
     let source = lexical_normalize(&req.source);
     let target = lexical_normalize(&req.target);
-    dirs::STATE.join("dotfiles").join(format!(
+    let dir = dirs::STATE.join("dotfiles");
+    let path = dir.join(format!(
         "{}.toml",
         hash_to_str(&(source.as_path(), target.as_path()))
-    ))
+    ));
+    if cfg!(windows) && !path.exists() {
+        // the name hashes this spelling of the paths; a record written under another casing of
+        // them is this entry's on Windows, and is used rather than a second one beside it
+        if let Some(other) = state_files(&dir).find(|other| {
+            read_symlink_each_state(other).is_ok_and(|state| {
+                same_path_any_case(&state.source, &source)
+                    && same_path_any_case(&state.target, &target)
+            })
+        }) {
+            return other;
+        }
+    }
+    path
+}
+
+/// The state records directly in `dir`.
+fn state_files(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    dir.read_dir()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
+}
+
+/// Whether `a` and `b` name the same path, letter case aside on Windows where the directory
+/// ignores it (one marked case-sensitive tells `foo` from `Foo`).
+fn same_path_any_case(a: &Path, b: &Path) -> bool {
+    file::same_location_ignoring_case(&lexical_normalize(a), &lexical_normalize(b))
+}
+
+/// `path` under `from` moved under `to`, the same directory spelled with other letter case.
+fn respell(path: &Path, from: &Path, to: &Path) -> PathBuf {
+    path.strip_prefix(from)
+        .map_or_else(|_| path.to_path_buf(), |rest| to.join(rest))
+}
+
+/// A record found under another casing of `req`'s paths (see `symlink_each_state_path`),
+/// spelled as `req` spells them now, so the links it holds compare equal to the desired ones.
+fn respell_symlink_each_state(mut state: SymlinkEachState, req: &FileRequest) -> SymlinkEachState {
+    let source = lexical_normalize(&req.source);
+    let target = lexical_normalize(&req.target);
+    if state.source == source && state.target == target
+        || !same_path_any_case(&state.source, &source)
+        || !same_path_any_case(&state.target, &target)
+    {
+        return state;
+    }
+    for link in &mut state.links {
+        link.source = respell(&link.source, &state.source, &source);
+        link.target = respell(&link.target, &state.target, &target);
+    }
+    state.source = source;
+    state.target = target;
+    state
 }
 
 fn desired_symlink_each_state(req: &FileRequest) -> Result<SymlinkEachState> {
@@ -2940,7 +3519,7 @@ fn load_symlink_each_state(req: &FileRequest) -> LoadedSymlinkEachState {
         return LoadedSymlinkEachState::Missing;
     }
     let state = match read_symlink_each_state(&path) {
-        Ok(state) => state,
+        Ok(state) => respell_symlink_each_state(state, req),
         Err(err) => {
             warn!(
                 "files: failed to read dotfiles state {}: {err}",
@@ -3071,6 +3650,7 @@ fn reconcile_symlink_each_states(
                 .get(&link.target)
                 .is_none_or(|source| **source != link.source)
                 && link_points_to(&link.source, &link.target)
+                && !beneath_dir_link(&link.target, &state.target)
             {
                 stale_links.insert(link.target.clone(), link.clone());
             }
@@ -3085,24 +3665,129 @@ fn reconcile_symlink_each_states(
     }
 }
 
+/// An entry whose apply failed partway returned normally, so what it left on disk is known
+/// and nothing about it needs recovering: the directories it created on the way to the target
+/// are removed again while empty, links a `symlink-each` entry made are recorded as its own, and
+/// the journal records each touched path as it now is. Left unfinished, the journal would make
+/// the next apply stop for `mise dot recover`.
+fn settle_failed_apply(
+    req: &FileRequest,
+    created: &[PathBuf],
+    stale: &HashMap<PathBuf, PathBuf>,
+    pending: Vec<journal::PendingChange>,
+) {
+    remove_empty_created_dirs(created);
+    // a single-file target the failed write left keeps the directories it is in; they are
+    // still mise's to remove with it, and a later apply finds them already there
+    if records_created_dirs(req) && std::fs::symlink_metadata(&req.target).is_ok() {
+        let kept = created
+            .iter()
+            .filter(|dir| **dir != req.target && dir.is_dir())
+            .cloned()
+            .collect::<Vec<_>>();
+        record_created_dirs(req, &kept);
+    }
+    // links the entry cannot record as its own stay unfinished, for recovery to look at
+    if req.mode == FileMode::SymlinkEach && !save_partial_symlink_each_state(req) {
+        return;
+    }
+    // What the journal captured as there before may have been the user's file, which a
+    // `--force` write removed before failing: left unfinished, recovery keeps its preimage and
+    // asks. One that is unchanged settles that way too. Finished as the failure left them are
+    // only paths captured as missing, links captured exactly as the stale link of its own the
+    // entry found there, and mise's own records. The capture decides, not an earlier look at the path:
+    // something may have replaced a stale link since.
+    let records = [symlink_each_state_path(req), target_state_path(req)];
+    let finished = pending
+        .into_iter()
+        .filter(|change| {
+            change.prior_missing()
+                || change
+                    .prior_link()
+                    .is_some_and(|dest| stale.get(change.path()).is_some_and(|d| d == dest))
+                || records.iter().any(|r| r == change.path())
+        })
+        .collect();
+    journal::commit_changes(finished);
+}
+
+/// Remove the directories in `created` that are still empty, deepest first, so a parent
+/// emptied by removing its children goes too. `remove_dir` leaves one that holds anything.
+/// Only a real directory: removing a link to one would not be undoing what an apply did.
+fn remove_empty_created_dirs(created: &[PathBuf]) {
+    let mut dirs = created.iter().unique().collect::<Vec<_>>();
+    dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+    for dir in dirs {
+        if file::is_symlink_or_junction(dir) || !dir.is_dir() {
+            continue;
+        }
+        let _ = std::fs::remove_dir(dir);
+    }
+}
+
+/// Record the links a failed `symlink-each` apply left: what the entry already owned, and each
+/// desired link that is now in place. A link the apply never made is not claimed.
+fn save_partial_symlink_each_state(req: &FileRequest) -> bool {
+    if cfg!(windows) && !windows_symlinks() {
+        return true;
+    }
+    let state = (|| -> Result<SymlinkEachState> {
+        let mut state = desired_symlink_each_state(req)?;
+        state
+            .links
+            .retain(|link| link_points_to(&link.source, &link.target));
+        if let LoadedSymlinkEachState::Present(prior) = load_symlink_each_state(req) {
+            for link in prior.links {
+                if !state.links.contains(&link) {
+                    state.links.push(link);
+                }
+            }
+        }
+        Ok(state)
+    })();
+    match state {
+        Ok(state) if state.links.is_empty() => true,
+        Ok(state) => write_symlink_each_state(req, &state),
+        Err(err) => {
+            warn!(
+                "files: failed to record the links made for {}: {err}",
+                req.target.display_user()
+            );
+            false
+        }
+    }
+}
+
 fn save_symlink_each_state(req: &FileRequest) {
     if cfg!(windows) && !windows_symlinks() {
         return;
     }
+    match desired_symlink_each_state(req) {
+        Ok(state) => {
+            write_symlink_each_state(req, &state);
+        }
+        Err(err) => warn!(
+            "files: failed to write dotfiles state {}: {err}",
+            symlink_each_state_path(req).display_user()
+        ),
+    }
+}
+
+/// Whether the record was written; a failure warns.
+fn write_symlink_each_state(req: &FileRequest, state: &SymlinkEachState) -> bool {
     let path = symlink_each_state_path(req);
     let result = (|| -> Result<()> {
         file::create_dir_all(path.parent().expect("dotfiles state parent"))?;
-        file::write(
-            &path,
-            toml::to_string_pretty(&desired_symlink_each_state(req)?)?,
-        )
+        // atomic: a failed write must not leave the record it replaces unreadable
+        file::write_atomic(&path, toml::to_string_pretty(state)?)
     })();
-    if let Err(err) = result {
+    if let Err(err) = &result {
         warn!(
             "files: failed to write dotfiles state {}: {err}",
             path.display_user()
         );
     }
+    result.is_ok()
 }
 
 fn remove_symlink_each_state(req: &FileRequest) -> Result<()> {
@@ -3113,12 +3798,57 @@ fn remove_symlink_each_state(req: &FileRequest) -> Result<()> {
     Ok(())
 }
 
+/// Drop the `symlink-each` records of `group` whose links are all gone. A group's removal goes by
+/// its own record rather than the planner that clears an entry's state, so the per-target
+/// records would stay behind. A record that still names a link in place is kept: that link was
+/// left on purpose, and the record is what lets a later apply or unapply find it.
+pub(crate) fn forget_group_symlink_each_states(group: &str) {
+    for path in state_files(&dirs::STATE.join("dotfiles")) {
+        let Ok(state) = read_symlink_each_state(&path) else {
+            continue;
+        };
+        if state.group.as_deref() != Some(group) || !state.links.iter().all(link_confirmed_gone) {
+            continue;
+        }
+        if let Err(err) = file::remove_file(&path) {
+            warn!(
+                "files: failed to remove dotfiles state {}: {err}",
+                path.display_user()
+            );
+        }
+    }
+}
+
+/// Whether `link`'s target is confirmed not to be that link: absent, not a link, or a link
+/// elsewhere. A path that cannot be inspected is not confirmed, so its record stays.
+fn link_confirmed_gone(link: &ManagedLink) -> bool {
+    match std::fs::symlink_metadata(&link.target) {
+        Err(err) => err.kind() == std::io::ErrorKind::NotFound,
+        Ok(_) if !file::is_symlink_or_junction(&link.target) => true,
+        Ok(_) => {
+            std::fs::read_link(&link.target).is_ok() && !link_points_to(&link.source, &link.target)
+        }
+    }
+}
+
 fn target_state_path(req: &FileRequest) -> PathBuf {
     let target = lexical_normalize(&req.target);
-    dirs::STATE
-        .join("dotfiles")
-        .join("targets")
-        .join(format!("{}.toml", hash_to_str(&target.as_path())))
+    let dir = dirs::STATE.join("dotfiles").join("targets");
+    let path = dir.join(format!("{}.toml", hash_to_str(&target.as_path())));
+    if cfg!(windows) && !path.exists() {
+        // as for `symlink_each_state_path`: the record of another casing of the target is its
+        if let Some(other) = state_files(&dir).find(|other| {
+            read_target_state(other).is_ok_and(|state| same_path_any_case(&state.target, &target))
+        }) {
+            return other;
+        }
+    }
+    path
+}
+
+fn read_target_state(path: &Path) -> Result<TargetState> {
+    file::read_to_string(path)
+        .and_then(|contents| toml::from_str::<TargetState>(&contents).map_err(Into::into))
 }
 
 /// The record for `req`'s target. A missing, unreadable, or foreign record
@@ -3128,10 +3858,24 @@ fn load_target_state(req: &FileRequest) -> Option<TargetState> {
     if !path.exists() {
         return None;
     }
-    let state = match file::read_to_string(&path)
-        .and_then(|contents| toml::from_str::<TargetState>(&contents).map_err(Into::into))
-    {
-        Ok(state) => state,
+    let state = match read_target_state(&path) {
+        Ok(mut state) => {
+            let target = lexical_normalize(&req.target);
+            if state.target != target && same_path_any_case(&state.target, &target) {
+                // found under another casing of the target: the directories it records are
+                // the target's ancestors, spelled as the target now is
+                for dir in &mut state.created_dirs {
+                    if let Some(ancestor) = target
+                        .ancestors()
+                        .find(|ancestor| same_path_any_case(ancestor, dir))
+                    {
+                        *dir = ancestor.to_path_buf();
+                    }
+                }
+                state.target = target;
+            }
+            state
+        }
         Err(err) => {
             warn!(
                 "files: failed to read dotfiles state {}: {err}",
@@ -3211,7 +3955,7 @@ fn remove_target_state(req: &FileRequest) -> Result<()> {
 /// [`removal_created_dirs`]).
 fn records_created_dirs(req: &FileRequest) -> bool {
     match req.mode {
-        FileMode::Symlink | FileMode::Template | FileMode::Content => true,
+        FileMode::Symlink | FileMode::Template | FileMode::Content | FileMode::Fnox => true,
         FileMode::Copy => !req.source.is_dir(),
         FileMode::SymlinkEach | FileMode::Track | FileMode::Permissions | FileMode::Absent => false,
     }
@@ -3481,6 +4225,33 @@ fn content_digest(content: &str) -> String {
     hash_sha256_to_str(content)
 }
 
+/// Warn before an apply replaces a template target that differs from what mise
+/// last wrote there, so the edit can be moved into the source first. Without a
+/// record nothing is known about the file, so it stays quiet.
+fn warn_if_template_target_edited(req: &FileRequest) {
+    let Some(recorded) = load_target_state(req).and_then(|state| state.content_digest) else {
+        return;
+    };
+    if req.target.is_symlink() || !req.target.is_file() {
+        return;
+    }
+    let Ok(bytes) = file::read(&req.target) else {
+        return;
+    };
+    // what mise wrote was a string, so bytes that are not UTF-8 are an edit
+    let edited = match String::from_utf8(bytes) {
+        Ok(current) => content_digest(&current) != recorded,
+        Err(_) => true,
+    };
+    if edited {
+        warn!(
+            "files: {} was edited since mise last wrote it; applying overwrites the edit. Move it into {} to keep it",
+            req.target.display_user(),
+            req.source.display_user()
+        );
+    }
+}
+
 /// Whether the record already holds `rendered` as the target's content.
 fn target_state_matches(req: &FileRequest, rendered: &str) -> bool {
     load_target_state(req)
@@ -3541,14 +4312,16 @@ pub(crate) fn link_points_to(source: &Path, target: &Path) -> bool {
         dest == source
             || points_at_same_file(target, source)
             || if dest.is_absolute() {
-                lexical_normalize(&dest) == lexical_normalize(source)
+                // a record found under another casing of the source is read in the current
+                // one (see `respell_symlink_each_state`), while the link keeps the old one
+                same_path_any_case(&dest, source)
             } else {
                 // the kernel resolves a relative link from the directory the
                 // link physically sits in, so its text is read from there too:
                 // read from the configured spelling, a link in a symlinked
                 // directory could seem to reach a source it does not
                 resolve_relative_link(target, &dest)
-                    .is_some_and(|resolved| resolved == physical_path(source))
+                    .is_some_and(|resolved| same_path_any_case(&resolved, &physical_path(source)))
             }
     })
 }
@@ -3666,8 +4439,18 @@ fn link_points_at(link: &Path, dest: &Path, expected: &Path) -> bool {
 /// with generated excludes, which would make an entry's own pre-existing link
 /// (a stow migration) look stale, and every group targeting `~` would pay a
 /// full walk of it.
+///
+/// Windows walks only with `dotfiles.windows_symlinks` on: without it
+/// `symlink-each` copies every file and records no state, so a link in the
+/// target is not one mise made. With it on, a lost state file must still find
+/// the links whose sources are gone, or apply records an empty state and
+/// unapply no longer knows about them.
 fn legacy_stale_links(req: &FileRequest) -> Result<Vec<PathBuf>> {
-    if cfg!(windows) || req.group.is_some() || !req.target.is_dir() || req.target.is_symlink() {
+    if (cfg!(windows) && !windows_symlinks())
+        || req.group.is_some()
+        || !req.target.is_dir()
+        || req.target.is_symlink()
+    {
         return Ok(vec![]);
     }
     let mut out = vec![];
@@ -3699,7 +4482,9 @@ fn legacy_stale_links(req: &FileRequest) -> Result<Vec<PathBuf>> {
         };
         let expected = req.source.join(&source_rel);
         if link_points_at(entry.path(), &dest, &expected)
-            && (!expected.exists() || is_excluded(&source_rel, &req.exclude))
+            // a dangling link in the source is still a source entry the walk deploys
+            && (std::fs::symlink_metadata(&expected).is_err()
+                || is_excluded(&source_rel, &req.exclude))
         {
             out.push(entry.path().to_path_buf());
         }
@@ -3710,16 +4495,31 @@ fn legacy_stale_links(req: &FileRequest) -> Result<Vec<PathBuf>> {
 /// Links recorded for this target that are no longer desired. Persistent
 /// ownership state keeps this proportional to the managed source tree instead
 /// of recursively walking a shared target such as the user's home directory.
+///
+/// A link beneath a directory link of the user's is not one: removing it would reach into
+/// wherever that link points.
 fn stale_links(req: &FileRequest) -> Result<Vec<PathBuf>> {
-    match load_symlink_each_state(req) {
-        LoadedSymlinkEachState::Present(state) => Ok(tracked_stale_links(
-            &state,
-            &desired_symlink_each_state(req)?,
-        )),
-        LoadedSymlinkEachState::Missing | LoadedSymlinkEachState::Invalid => {
-            legacy_stale_links(req)
+    let stale = match load_symlink_each_state(req) {
+        LoadedSymlinkEachState::Present(state) => {
+            tracked_stale_links(&state, &desired_symlink_each_state(req)?)
         }
-    }
+        LoadedSymlinkEachState::Missing | LoadedSymlinkEachState::Invalid => {
+            legacy_stale_links(req)?
+        }
+    };
+    Ok(stale
+        .into_iter()
+        .filter(|path| !beneath_dir_link(path, &req.target))
+        .collect())
+}
+
+/// Whether a directory link lies between `root` and `path`, so that removing `path` would reach
+/// into wherever the link points. A link at `root` itself, or above it, is not counted.
+fn beneath_dir_link(path: &Path, root: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .take_while(|dir| *dir != root && dir.starts_with(root))
+        .any(file::is_symlink_or_junction)
 }
 
 fn symlink_each_state_needs_update(req: &FileRequest) -> Result<bool> {
@@ -4174,12 +4974,292 @@ pub fn apply(
     secrets: &SecretValues,
     written: &mut Vec<PathBuf>,
 ) -> Result<bool> {
-    execute_apply(
-        config,
-        plan_apply(config, requests, opts, secrets)?,
-        opts,
-        written,
-    )
+    apply_layers(config, requests, opts, secrets, written, |_| true)
+}
+
+/// [`apply`], showing each planned layer to `before`, which returns whether
+/// to execute it: `false` skips a layer that has nothing to do, and refuses
+/// one that does, which stops the apply. A config without `depends` is one
+/// layer.
+pub fn apply_layers(
+    config: &Config,
+    requests: &[FileRequest],
+    opts: &ApplyOpts,
+    secrets: &SecretValues,
+    written: &mut Vec<PathBuf>,
+    mut before: impl FnMut(&ApplyPlan<'_>) -> bool,
+) -> Result<bool> {
+    let layers = dependency_layers(config, requests)?;
+    if layers.len() <= 1 {
+        let plan = plan_apply(config, requests, opts, secrets)?;
+        return if before(&plan) {
+            execute_apply(config, plan, opts, written)
+        } else {
+            // a plan with nothing to do is skipped; any other is refused
+            Ok(plan.is_noop())
+        };
+    }
+    // each round is planned alone, so the claims of entries in different
+    // rounds are checked against each other here
+    validate_composed_file_footprints(requests)?;
+    let mut worked = false;
+    // what earlier rounds create, for a dry run that has not written it
+    let mut pending: Vec<(PathBuf, bool)> = vec![];
+    // a layer is planned only after the ones it depends on are written, so a
+    // template or fnox entry reads the files its dependencies created
+    for (i, layer) in layers.iter().enumerate() {
+        let layer_requests = layer
+            .iter()
+            .map(|&index| requests[index].clone())
+            .collect::<Vec<_>>();
+        let applied = files_from_config(config)
+            .and_then(|active| {
+                plan_apply_after(config, &layer_requests, &active, opts, secrets, &pending)
+            })
+            .and_then(|plan| {
+                if before(&plan) {
+                    // "all files are applied" is the end of the command: only the
+                    // last round says it, and only when no round had work
+                    let announce = i + 1 == layers.len() && !worked;
+                    worked |= !plan.is_noop();
+                    execute_layer(config, plan, opts, written, announce)
+                } else {
+                    // a round with nothing to do is skipped; refusing any
+                    // other stops the rounds after it
+                    Ok(plan.is_noop())
+                }
+            });
+        match applied {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(err) => {
+                let skipped = layers[i + 1..]
+                    .iter()
+                    .flatten()
+                    .map(|&index| requests[index].target_raw.as_str())
+                    .collect::<Vec<_>>();
+                if !skipped.is_empty() {
+                    warn!(
+                        "files: not applied because an entry they depend on failed: {}",
+                        skipped.join(", ")
+                    );
+                }
+                return Err(err);
+            }
+        }
+        let created = layer_requests
+            .iter()
+            .filter(|req| {
+                !matches!(
+                    req.mode,
+                    FileMode::Absent | FileMode::Permissions | FileMode::Track
+                ) && !req.remove_empty
+            })
+            .map(|req| {
+                // a directory an earlier round creates is not on disk yet in
+                // a dry run, so copying or linking it still deploys a tree
+                let walks = walks_directory(req)
+                    || matches!(req.mode, FileMode::Copy | FileMode::Symlink)
+                        && pending_directory(&req.source, &pending);
+                (req.target.clone(), walks)
+            })
+            .collect::<Vec<_>>();
+        pending.extend(created);
+    }
+    Ok(true)
+}
+
+/// Group `requests` into layers of indices: every request comes after the
+/// ones it `depends` on, and requests in a layer keep their order. A config
+/// without `depends` is one layer. A dependency names a dotfile group or the
+/// target of an entry; one that is not part of `requests` because the apply
+/// was narrowed to some targets is taken as already satisfied, but a name
+/// that no entry of the config answers to is an error, like a cycle.
+fn dependency_layers(config: &Config, requests: &[FileRequest]) -> Result<Vec<Vec<usize>>> {
+    if requests.iter().all(|req| req.depends.is_empty()) {
+        return Ok(vec![(0..requests.len()).collect()]);
+    }
+    // a group the machine does not select is still a name that exists
+    layering(requests, &composed_files_from_config(config)?)
+}
+
+/// `selected` among `all`, plus everything they depend on, in `all`'s order:
+/// a pass that applies only some entries still writes what they wait for.
+pub fn with_dependencies(
+    all: &[FileRequest],
+    selected: impl Fn(&FileRequest) -> bool,
+) -> Vec<FileRequest> {
+    let mut keep = all.iter().map(selected).collect::<Vec<_>>();
+    let mut pending = (0..all.len()).filter(|&i| keep[i]).collect::<Vec<_>>();
+    while let Some(index) = pending.pop() {
+        for dep in &all[index].depends {
+            for found in dependency_matches(dep, all) {
+                if !keep[found] {
+                    keep[found] = true;
+                    pending.push(found);
+                }
+            }
+        }
+    }
+    all.iter()
+        .zip(keep)
+        .filter(|(_, keep)| *keep)
+        .map(|(req, _)| req.clone())
+        .collect()
+}
+
+/// [`dependency_layers`] given every entry of the config (`known`), which
+/// tells a name that is not part of a narrowed apply from a misspelt one.
+fn layering(requests: &[FileRequest], known: &[FileRequest]) -> Result<Vec<Vec<usize>>> {
+    let mut edges: Vec<Vec<usize>> = vec![];
+    for req in requests {
+        let mut edge = vec![];
+        for dep in &req.depends {
+            let in_apply = dependency_matches(dep, requests);
+            if in_apply.is_empty() && dependency_matches(dep, known).is_empty() {
+                bail!(
+                    "files: [dotfiles].\"{}\": depends names {dep:?}, which is neither a dotfile group nor the target of an entry",
+                    req.target_raw
+                );
+            }
+            // an entry of a group that names its own group waits for the rest
+            edge.extend(in_apply.into_iter().filter(|&found| {
+                !(req.group.as_deref() == Some(dep.as_str()) && found == edges.len())
+            }));
+        }
+        edges.push(edge);
+    }
+    // a permissions-only entry never creates its target, so while the target
+    // is missing it waits for the entries that create it or what lies beneath
+    // it, unless one of those waits for it, however indirectly. Its dependents
+    // then wait for it in turn.
+    for (index, req) in requests.iter().enumerate() {
+        // a directory that is already there may need its mode fixed before
+        // anything can be written inside it, so it keeps its place, unless
+        // the mode it gets takes the owner's write access away
+        let makes_writable = req.permissions.is_none_or(|mode| mode & 0o200 != 0);
+        if req.mode != FileMode::Permissions
+            || makes_writable && std::fs::symlink_metadata(&req.target).is_ok()
+        {
+            continue;
+        }
+        for (creator, other) in requests.iter().enumerate() {
+            if creator != index
+                && !matches!(other.mode, FileMode::Permissions | FileMode::Absent)
+                && (other.target.starts_with(&req.target)
+                    || walks_directory(other) && req.target.starts_with(&other.target))
+                && !waits_for(creator, index, &edges)
+            {
+                edges[index].push(creator);
+            }
+        }
+    }
+    let mut layer_of: Vec<Option<usize>> = vec![None; requests.len()];
+    let mut path = vec![];
+    for index in 0..requests.len() {
+        layer_for(index, requests, &edges, &mut layer_of, &mut path)?;
+    }
+    let mut layers: Vec<Vec<usize>> = vec![];
+    for (index, layer) in layer_of.into_iter().enumerate() {
+        let layer = layer.expect("every request has a layer");
+        if layers.len() <= layer {
+            layers.resize(layer + 1, vec![]);
+        }
+        layers[layer].push(index);
+    }
+    Ok(layers)
+}
+
+/// Whether `req` deploys a tree of files under its target.
+fn walks_directory(req: &FileRequest) -> bool {
+    req.mode == FileMode::SymlinkEach
+        || matches!(req.mode, FileMode::Copy | FileMode::Symlink) && req.source.is_dir()
+}
+
+/// Whether request `from` waits for `to`, directly or through other entries.
+fn waits_for(from: usize, to: usize, edges: &[Vec<usize>]) -> bool {
+    let mut seen = vec![false; edges.len()];
+    let mut pending = vec![from];
+    while let Some(index) = pending.pop() {
+        for &dep in &edges[index] {
+            if dep == to {
+                return true;
+            }
+            if !seen[dep] {
+                seen[dep] = true;
+                pending.push(dep);
+            }
+        }
+    }
+    false
+}
+
+/// Whether `source` is a directory an earlier round creates, or a path in one.
+fn pending_directory(source: &Path, pending: &[(PathBuf, bool)]) -> bool {
+    let source = lexical_normalize(source);
+    pending
+        .iter()
+        .any(|(target, walks)| *walks && source.starts_with(target))
+}
+
+/// Whether `source` is a path an earlier round creates: the target itself, or
+/// a file beneath one that deploys a directory.
+fn pending_source(source: &Path, pending: &[(PathBuf, bool)]) -> bool {
+    let source = lexical_normalize(source);
+    pending
+        .iter()
+        .any(|(target, walks)| source == *target || *walks && source.starts_with(target))
+}
+
+/// The indices of the requests a `depends` item names: the members of a
+/// dotfile group, else the entry whose target it is.
+fn dependency_matches(dep: &str, requests: &[FileRequest]) -> Vec<usize> {
+    let members = requests
+        .iter()
+        .enumerate()
+        .filter(|(_, req)| req.group.as_deref() == Some(dep))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if !members.is_empty() {
+        return members;
+    }
+    let target = resolve_target_arg(dep);
+    requests
+        .iter()
+        .enumerate()
+        .filter(|(_, req)| req.target == target)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// One more than the deepest layer among the dependencies of `index`,
+/// failing on a cycle. `path` holds the requests being resolved.
+fn layer_for(
+    index: usize,
+    requests: &[FileRequest],
+    edges: &[Vec<usize>],
+    layer_of: &mut [Option<usize>],
+    path: &mut Vec<usize>,
+) -> Result<usize> {
+    if let Some(layer) = layer_of[index] {
+        return Ok(layer);
+    }
+    if let Some(start) = path.iter().position(|&seen| seen == index) {
+        let cycle = path[start..]
+            .iter()
+            .chain([&index])
+            .map(|&seen| requests[seen].target_raw.as_str())
+            .collect::<Vec<_>>();
+        bail!("files: depends form a cycle: {}", cycle.join(" -> "));
+    }
+    path.push(index);
+    let mut layer = 0;
+    for &dep in &edges[index] {
+        layer = layer.max(layer_for(dep, requests, edges, layer_of, path)? + 1);
+    }
+    path.pop();
+    layer_of[index] = Some(layer);
+    Ok(layer)
 }
 
 impl ApplyPlan<'_> {
@@ -4296,6 +5376,18 @@ pub fn execute_apply(
     opts: &ApplyOpts,
     written: &mut Vec<PathBuf>,
 ) -> Result<bool> {
+    execute_layer(config, plan, opts, written, true)
+}
+
+/// [`execute_apply`]; `announce_noop` is whether a plan with nothing to do
+/// says so, which a dependency round that is not the last one does not.
+fn execute_layer(
+    config: &Config,
+    plan: ApplyPlan<'_>,
+    opts: &ApplyOpts,
+    written: &mut Vec<PathBuf>,
+    announce_noop: bool,
+) -> Result<bool> {
     let has_reconciliation = !plan.reconciliation.stale_links.is_empty();
     if plan.todo.is_empty() && !has_reconciliation {
         if !opts.dry_run {
@@ -4310,9 +5402,15 @@ pub fn execute_apply(
                 journal::commit_changes(pending);
             }
             record_template_states(&plan.record_templates)?;
-            crate::dotfile_groups::record_applied(plan.requests);
+            crate::dotfile_groups::record_applied(
+                plan.requests
+                    .iter()
+                    .filter(|req| records_group_ownership(&[], req)),
+            );
         }
-        info!("files: all files are applied");
+        if announce_noop {
+            info!("files: all files are applied");
+        }
         return Ok(true);
     }
     if opts.dry_run {
@@ -4325,11 +5423,18 @@ pub fn execute_apply(
             let conditional = req.mode == FileMode::Template && rendered.is_none();
             let suffix = if conditional { " (if changed)" } else { "" };
             miseprintln!("{}{suffix}", describe(req)?);
-            if opts.verbose && !conditional {
+            // a source an earlier round writes is not there to compare yet
+            let deferred = req.mode.has_source() && !req.source.exists() && !keeps_existing(req);
+            if opts.verbose && !conditional && !deferred {
                 print_diff(config, req, rendered.as_deref())?;
             }
         }
         return Ok(true);
+    }
+    for (req, rendered) in &plan.todo {
+        if req.mode == FileMode::Template && rendered.is_some() {
+            warn_if_template_target_edited(req);
+        }
     }
     if !opts.yes && console::user_attended_stderr() {
         let list = plan
@@ -4380,22 +5485,60 @@ pub fn execute_apply(
                 );
             }
             let pending = journal::begin_changes_with(DOTFILES_PART, &item, paths)?;
-            file::remove_file(&link.target)?;
+            // a junction or directory symlink is refused by `remove_file` on Windows
+            file::remove_symlink_or_junction(&link.target)?;
             written.push(link.target.clone());
             journal::commit_changes(pending);
         }
     }
     let mut removals = vec![];
     let mut done = vec![];
+    let mut seeded: Vec<&FileRequest> = vec![];
     // the request being applied, and where its writes start in `written`
     let mut current = None;
     let applied = (|| -> Result<()> {
         for (req, rendered) in &plan.todo {
             current = Some((*req, written.len()));
             recheck_removal(req, rendered.as_deref(), opts.force)?;
+            if req.mode == FileMode::SymlinkEach {
+                unfold_source_links(req, written)?;
+            }
+            // the links the entry recorded as its own, which a failed apply may finish pruning
+            // (see `settle_failed_apply`)
+            // each with where it points now, which the captured link must match exactly
+            let stale = if req.mode == FileMode::SymlinkEach {
+                stale_links(req)?
+                    .into_iter()
+                    .filter_map(|link| std::fs::read_link(&link).ok().map(|dest| (link, dest)))
+                    .collect()
+            } else {
+                HashMap::new()
+            };
             let pending =
                 journal::begin_changes_with(DOTFILES_PART, &req.target_raw, touched_paths(req)?)?;
-            apply_one(req, rendered.as_deref(), written)?;
+            let start = written.len();
+            // what is missing now is what a failed apply may have to take away again
+            let mut created = missing_ancestors(&req.target);
+            if req.mode == FileMode::SymlinkEach
+                || req.mode == FileMode::Copy && req.source.is_dir()
+            {
+                if std::fs::symlink_metadata(&req.target).is_err() {
+                    created.push(req.target.clone());
+                }
+                // and the directories the walk creates beneath it
+                for (_, target) in walk_source_files(req).unwrap_or_default() {
+                    created.extend(missing_ancestors(&target));
+                }
+            }
+            if let Err(err) = apply_one(req, rendered.as_deref(), written) {
+                settle_failed_apply(req, &created, &stale, pending);
+                return Err(err);
+            }
+            // a target that appeared since planning is left alone and not
+            // written, so it is not this group's to prune
+            if req.create_if_missing && written[start..].contains(&req.target) {
+                seeded.push(*req);
+            }
             if apply_removes_target(req, rendered.as_deref()) {
                 removals.push(*req);
             }
@@ -4421,8 +5564,9 @@ pub fn execute_apply(
         // recorded: a target still waiting to be written may hold the
         // user's edits, which must not be recorded as mise's
         crate::dotfile_groups::record_applied(plan.requests.iter().filter(|req| {
-            done.iter().any(|d| std::ptr::eq(*d, *req))
-                || !plan.todo.iter().any(|(todo, _)| std::ptr::eq(*todo, *req))
+            (done.iter().any(|d| std::ptr::eq(*d, *req))
+                || !plan.todo.iter().any(|(todo, _)| std::ptr::eq(*todo, *req)))
+                && records_group_ownership(&seeded, req)
         }));
         // the entry that failed may have written some of its files, such
         // as part of a copied tree; those, and only those, are recorded
@@ -4447,7 +5591,11 @@ pub fn execute_apply(
         }
     }
     cleanup_reconciled_directories(&plan.reconciliation)?;
-    crate::dotfile_groups::record_applied(plan.requests);
+    crate::dotfile_groups::record_applied(
+        plan.requests
+            .iter()
+            .filter(|req| records_group_ownership(&seeded, req)),
+    );
     let applied = plan
         .todo
         .iter()
@@ -4486,6 +5634,21 @@ pub fn plan_apply_with_active<'a>(
     opts: &ApplyOpts,
     secrets: &SecretValues,
 ) -> Result<ApplyPlan<'a>> {
+    plan_apply_after(config, requests, active_requests, opts, secrets, &[])
+}
+
+/// [`plan_apply_with_active`] for a round of dependent entries. `pending` are
+/// the targets earlier rounds will create, which a dry run has not written, and
+/// whether each is a directory with files beneath it: a source there is not
+/// missing, only not yet written.
+fn plan_apply_after<'a>(
+    config: &Config,
+    requests: &'a [FileRequest],
+    active_requests: &[FileRequest],
+    opts: &ApplyOpts,
+    secrets: &SecretValues,
+    pending: &[(PathBuf, bool)],
+) -> Result<ApplyPlan<'a>> {
     validate_composed_file_footprints(requests)?;
     // pre-rendered template output rides along so it's written as compared,
     // and exec() in templates runs once per apply
@@ -4504,7 +5667,21 @@ pub fn plan_apply_with_active<'a>(
         }
         // report every problem in one pass instead of fix-and-retry — a
         // render or check failure on one entry must not hide the rest
-        if req.mode.has_source() && !req.source.exists() {
+        if opts.dry_run
+            && req.mode.has_source()
+            && !req.source.exists()
+            && pending_source(&req.source, pending)
+        {
+            // nothing to compare with or walk until the earlier round has run;
+            // what does not depend on the source is still checked: how a copy
+            // or a walk meets its target depends on what the source will be
+            if !matches!(req.mode, FileMode::SymlinkEach | FileMode::Copy) {
+                conflicts.extend(find_conflicts(req)?);
+            }
+            todo.push((req, None));
+            continue;
+        }
+        if req.mode.has_source() && !req.source.exists() && !keeps_existing(req) {
             missing_sources.push(format!(
                 "  [dotfiles].\"{}\": {}",
                 req.target_raw,
@@ -4529,22 +5706,28 @@ pub fn plan_apply_with_active<'a>(
             }
             continue;
         }
-        // rendering can run exec() — a dry run must not execute anything,
-        // so list template entries without computing their current state
-        if opts.dry_run && req.mode == FileMode::Template {
+        // rendering can run exec() and reading from fnox can prompt — a dry
+        // run must not execute anything, so list these entries without
+        // computing their current state
+        if opts.dry_run
+            && matches!(req.mode, FileMode::Template | FileMode::Fnox)
+            && !keeps_existing(req)
+        {
             conflicts.extend(find_conflicts(req)?);
             todo.push((req, None));
             continue;
         }
         let rendered = match req.mode {
-            FileMode::Template => match render_template(config, req, secrets) {
-                Ok(rendered) => Some(rendered),
-                // already carries the entry's context
-                Err(err) => {
-                    broken.push(format!("  {err}"));
-                    continue;
+            FileMode::Template | FileMode::Fnox if !keeps_existing(req) => {
+                match computed_content(config, req, secrets) {
+                    Ok(rendered) => Some(rendered),
+                    // already carries the entry's context
+                    Err(err) => {
+                        broken.push(format!("  {err}"));
+                        continue;
+                    }
                 }
-            },
+            }
             _ => None,
         };
         match check_rendered(req, rendered.as_deref()) {
@@ -4760,7 +5943,7 @@ pub fn resolve_unapply(
         .iter()
         .map(|plan| {
             if plan.conditional {
-                match render_template(config, plan.req, secrets) {
+                match computed_content(config, plan.req, secrets) {
                     Ok(rendered) => Some(rendered),
                     Err(err) => {
                         problems.push(format!("  [dotfiles].\"{}\": {err}", plan.req.target_raw));
@@ -5058,6 +6241,12 @@ fn plan_unapply_one<'a>(
                 plan_inline_file(req, &mut paths)?;
             }
         }
+        // Reading from fnox can prompt. Like a template's render, the content
+        // is compared only after the complete unapply plan has been confirmed.
+        FileMode::Fnox => {
+            paths.insert(req.target.clone(), ());
+            conditional = !opts.force;
+        }
         FileMode::Symlink => {
             plan_single_file(req, opts, &mut paths)?;
         }
@@ -5230,13 +6419,10 @@ fn unapply_one(plan: &UnapplyPlan<'_>) -> Result<()> {
     let mut parents = vec![];
     for path in &plan.paths {
         debug!("files: removing {}", path.display_user());
-        if path.is_symlink() || path.is_file() {
-            file::remove_file(path)?;
-        } else if path.is_dir() {
-            // Only reached for a forced type conflict. The user explicitly
-            // asked to remove the declared whole target.
-            file::remove_all(path)?;
-        }
+        // links first: a Windows directory symlink or junction is refused by `remove_file`.
+        // A real directory is only reached for a forced type conflict, where the user
+        // explicitly asked to remove the declared whole target.
+        remove_existing(path)?;
         if let Some(parent) = path.parent() {
             parents.push(parent.to_path_buf());
         }
@@ -5263,6 +6449,10 @@ fn find_conflicts(req: &FileRequest) -> Result<Vec<PathBuf>> {
     // `copy` mode, which is declared as overwriting; for a `symlink` entry it meant the copy
     // silently destroyed a file the user wrote, with no `--force` and no message — while unix
     // refused the same apply.
+    //
+    // That includes the copies `symlink-each` makes on Windows without
+    // `dotfiles.windows_symlinks`: once the source changes, a stale copy cannot be told from one
+    // somebody edited, so refreshing it needs `--force` as well. The Windows docs say so.
     let file_link_conflicts =
         |target: &Path| -> Result<bool> { Ok(target.exists() && !target.is_symlink()) };
     let mut out = vec![];
@@ -5273,14 +6463,26 @@ fn find_conflicts(req: &FileRequest) -> Result<Vec<PathBuf>> {
             }
         }
         FileMode::SymlinkEach => {
+            // a file seen through a folded link is the source itself, and
+            // apply unfolds the link before it links anything there
+            let folded = folded_source_links(req)?;
             // a regular file where the target directory (or a nested one)
-            // should go blocks the whole entry
+            // should go blocks the whole entry, and so does a directory link
+            // the user made beneath the target: links written through it
+            // would land in wherever it points, outside the entry. The target
+            // itself may be a link to the directory that holds the links, as
+            // may anything above it.
             for dir in needed_dirs(req)? {
-                if dir.exists() && !dir.is_dir() {
+                if dir.exists() && !dir.is_dir()
+                    || blocking_dir_link(req, &dir) && !folded.iter().any(|(link, _)| *link == dir)
+                {
                     out.push(dir);
                 }
             }
             for (_source, target) in walk_source_files(req)? {
+                if folded.iter().any(|(link, _)| target.starts_with(link)) {
+                    continue;
+                }
                 if file_link_conflicts(&target)? {
                     out.push(target);
                 }
@@ -5293,7 +6495,7 @@ fn find_conflicts(req: &FileRequest) -> Result<Vec<PathBuf>> {
                 out.push(req.target.clone());
             }
         }
-        FileMode::Content => {
+        FileMode::Content | FileMode::Fnox => {
             if req.target.is_dir() {
                 out.push(req.target.clone());
             }
@@ -5314,6 +6516,10 @@ fn describe(req: &FileRequest) -> Result<String> {
         FileMode::Track => format!("track {tgt} in place"),
         FileMode::Absent => format!("rm {tgt}"),
         FileMode::Symlink => format!("{ln} {src} {tgt}"),
+        // a directory an earlier round has yet to write has nothing to walk
+        FileMode::SymlinkEach if !req.source.exists() => {
+            format!("{ln} {src}/* into {tgt}/ (once {src} is written)")
+        }
         FileMode::SymlinkEach => {
             let stale = stale_links(req)?.len();
             let removals = match stale {
@@ -5335,6 +6541,7 @@ fn describe(req: &FileRequest) -> Result<String> {
         FileMode::Copy => format!("cp {src} {tgt}"),
         FileMode::Template => format!("render {src} -> {tgt}"),
         FileMode::Content => format!("write inline content to {tgt}"),
+        FileMode::Fnox => format!("write the file fnox stores for {tgt}"),
         FileMode::Permissions => format!("chmod {:04o} {tgt}", req.permissions.unwrap_or_default()),
     })
 }
@@ -5345,6 +6552,10 @@ fn describe_applied(req: &FileRequest) -> Result<String> {
     Ok(match req.mode {
         FileMode::Track => format!("tracked {tgt} in place"),
         FileMode::Absent => format!("removed {tgt}"),
+        // Windows copies a file it refuses to link (see `link_path`)
+        FileMode::Symlink if symlink_fell_back_to_copy(req) => format!(
+            "copied {src} to {tgt}: Windows refused a symlink, so the copy does not follow its source (to link it, turn on Developer Mode and dotfiles.windows_symlinks, then run `mise dot apply --force \"{tgt}\"`, which replaces the copy)"
+        ),
         FileMode::Symlink => format!("created symlink {tgt} -> {src}"),
         // Windows copies each file (see `link_path`), so don't report links it didn't make
         FileMode::SymlinkEach => {
@@ -5361,6 +6572,7 @@ fn describe_applied(req: &FileRequest) -> Result<String> {
         FileMode::Copy => format!("copied {src} to {tgt}"),
         FileMode::Template => format!("rendered {src} to {tgt}"),
         FileMode::Content => format!("wrote inline content to {tgt}"),
+        FileMode::Fnox => format!("wrote the file fnox stores for {tgt}"),
         FileMode::Permissions => format!(
             "set permissions of {tgt} to {:04o}",
             req.permissions.unwrap_or_default()
@@ -5463,6 +6675,19 @@ fn print_diff(config: &Config, req: &FileRequest, rendered: Option<&str>) -> Res
                 && current != desired
             {
                 print_content_diff(config, req, &current, desired)?;
+            }
+            print_permissions_diff(req)?;
+        }
+        // the file is a secret, so a difference is named but never printed
+        FileMode::Fnox => {
+            if let Some(desired) = rendered
+                && let Some(current) = current_regular_file_for_diff(req)?
+                && current != desired.as_bytes()
+            {
+                miseprintln!(
+                    "  content differs from the file fnox stores (not shown): {}",
+                    req.target.display_user()
+                );
             }
             print_permissions_diff(req)?;
         }
@@ -5631,19 +6856,21 @@ pub fn print_diffs(
         if req.mode == FileMode::Track {
             continue;
         }
-        if req.mode.has_source() && !req.source.exists() {
+        if req.mode.has_source() && !req.source.exists() && !keeps_existing(req) {
             miseprintln!("{}: source missing", req.target_raw);
             changed = true;
             continue;
         }
         let rendered = match req.mode {
-            FileMode::Template => match render_template(config, req, secrets) {
-                Ok(rendered) => Some(rendered),
-                Err(err) => {
-                    problems.push(format!("  \"{}\": {err}", req.target_raw));
-                    continue;
+            FileMode::Template | FileMode::Fnox if !keeps_existing(req) => {
+                match computed_content(config, req, secrets) {
+                    Ok(rendered) => Some(rendered),
+                    Err(err) => {
+                        problems.push(format!("  \"{}\": {err}", req.target_raw));
+                        continue;
+                    }
                 }
-            },
+            }
             _ => None,
         };
         match check_rendered(req, rendered.as_deref()) {
@@ -5698,7 +6925,7 @@ fn touched_paths(req: &FileRequest) -> Result<Vec<(PathBuf, Capture)>> {
             paths.insert(req.target.clone(), dir_capture(&req.target));
         }
         // captured whole, so rollback restores a removed file or link
-        FileMode::Absent | FileMode::Symlink | FileMode::Content => {
+        FileMode::Absent | FileMode::Symlink | FileMode::Content | FileMode::Fnox => {
             paths.insert(req.target.clone(), Capture::Full);
         }
         FileMode::Template => {
@@ -5790,7 +7017,12 @@ fn remove_empty_dirs_upward<'a>(
     {
         let mut dir = Some(start);
         while let Some(d) = dir {
-            if !may_remove(d) || !d.is_dir() || d.read_dir()?.next().is_some() {
+            // a link to a directory is somebody's own, never an empty directory of ours
+            if !may_remove(d)
+                || file::is_symlink_or_junction(d)
+                || !d.is_dir()
+                || d.read_dir()?.next().is_some()
+            {
                 break;
             }
             debug!("files: removing empty directory {}", d.display_user());
@@ -5839,6 +7071,11 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
         // `mise dot undo` is still recognised as mise's own.
         return Ok(());
     }
+    // the plan saw nothing here; a file that appeared since is the user's
+    if keeps_existing(req) {
+        debug!("files: {} exists, leaving it", req.target.display_user());
+        return Ok(());
+    }
     debug!("files: {}", describe(req)?);
     if req.mode == FileMode::Absent {
         // checked again here, not only when planning: a directory that
@@ -5862,6 +7099,10 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
     } else {
         vec![]
     };
+    // before any directory is created, or anything removed: a link Windows then refused would
+    // leave a parent behind, and a `--force` replacement of a blocking file with nothing in
+    // its place
+    ensure_windows_links_possible(req)?;
     if req.mode != FileMode::Permissions
         && let Some(parent) = req.target.parent()
     {
@@ -5869,9 +7110,6 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
     }
     match req.mode {
         FileMode::Symlink => {
-            if let Some(dir) = req.target.parent() {
-                ensure_windows_link_possible(&req.source, dir)?;
-            }
             replace_recorded(&req.target, written, || {
                 link_path(
                     &req.source,
@@ -5897,19 +7135,27 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
             }
         }
         FileMode::SymlinkEach => {
-            // before anything is removed or created: Windows may refuse the links, and a
-            // `--force` replacement of a blocking file must not have happened by then
-            if windows_symlinks()
-                && let Some((source, _)) = walk_source_files(req)?
-                    .into_iter()
-                    .find(|(source, _)| source.is_file())
-            {
-                ensure_windows_link_possible(&source, &req.target)?;
+            // `unfold_source_links` has replaced every folded link by now; a
+            // link written beneath one that remained would land in the source
+            let folded = folded_source_links(req)?;
+            misplaced_source_link(req, &folded)?;
+            if let Some((link, _)) = folded.first() {
+                bail!(
+                    "{} still links into {}; refusing to write through it",
+                    link.display_user(),
+                    req.source.display_user()
+                );
             }
             // conflicts were vetted (or --force given): clear anything
             // blocking a directory we need
-            for dir in needed_dirs(req)? {
-                if dir.exists() && !dir.is_dir() && remove_existing(&dir)? {
+            // outermost first: once a link is gone, the paths that went through
+            // it no longer reach whatever it pointed at
+            let mut dirs = needed_dirs(req)?;
+            dirs.sort_by_key(|dir| dir.components().count());
+            for dir in dirs {
+                if (dir.exists() && !dir.is_dir() || blocking_dir_link(req, &dir))
+                    && remove_existing(&dir)?
+                {
                     written.push(dir);
                 }
             }
@@ -6020,6 +7266,14 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
             #[cfg(unix)]
             set_mode(&req.target, req.permissions.unwrap_or(0o600))?;
         }
+        FileMode::Fnox => {
+            let content = rendered.expect("content fnox stores");
+            replace_recorded(&req.target, written, || write_private(&req.target, content))?;
+            #[cfg(unix)]
+            if let Some(permissions) = req.permissions {
+                set_mode(&req.target, permissions)?;
+            }
+        }
         FileMode::Permissions => {
             // planning skipped a missing target or a symlink; this check only
             // gives the clearer message, the chmod itself never follows a
@@ -6040,7 +7294,7 @@ fn apply_one(req: &FileRequest, rendered: Option<&str>, written: &mut Vec<PathBu
 }
 
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<()> {
+pub(crate) fn set_mode(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     Ok(())
@@ -6161,7 +7415,9 @@ fn prune_stale_links(req: &FileRequest, written: &mut Vec<PathBuf>) -> Result<()
     }
     for path in &stale {
         debug!("files: removing stale link {}", path.display_user());
-        file::remove_file(path)?;
+        // a junction or directory symlink (a deleted directory link in the source) is refused
+        // by `remove_file` on Windows
+        file::remove_symlink_or_junction(path)?;
         written.push(path.clone());
     }
     let needed: HashSet<PathBuf> = needed_dirs(req)?.into_iter().collect();
@@ -6300,13 +7556,40 @@ fn windows_symlinks() -> bool {
 
 /// How many `symlink-each` entries `link_path` copies: on Windows every regular file unless
 /// `dotfiles.windows_symlinks` links them, while a source that is not a file (a directory link)
-/// still gets a junction.
+/// still gets a junction. A link already reaching its source is left in place, not copied: it
+/// is what an apply with the setting on made before it was turned off.
 fn windows_each_copies(files: &[(PathBuf, PathBuf)]) -> usize {
     if cfg!(windows) && !windows_symlinks() {
-        files.iter().filter(|(source, _)| source.is_file()).count()
+        files
+            .iter()
+            .filter(|(source, target)| source.is_file() && !link_points_to(source, target))
+            .count()
     } else {
         0
     }
+}
+
+/// Prove the links `req` makes can be created, for the entries that may need a Windows file
+/// link (see `ensure_windows_link_possible`).
+fn ensure_windows_links_possible(req: &FileRequest) -> Result<()> {
+    match req.mode {
+        FileMode::Symlink => {
+            if let Some(dir) = req.target.parent() {
+                ensure_windows_link_possible(&req.source, dir)?;
+            }
+        }
+        FileMode::SymlinkEach => {
+            if windows_symlinks()
+                && let Some((source, _)) = walk_source_files(req)?
+                    .into_iter()
+                    .find(|(source, _)| source.is_file())
+            {
+                ensure_windows_link_possible(&source, &req.target)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// With `dotfiles.windows_symlinks` on, prove a file link can be created in `links_in` (the
@@ -6430,6 +7713,26 @@ fn relative_link_path(source: &Path, target: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// A group's entries are whole-file entries or edits, so they read the `FileTomlTable` and
+    /// `EditTomlTable` keys; `group` is set by the group itself.
+    #[test]
+    fn group_entry_keys_match_the_declaration() {
+        use mise_config::de::struct_fields;
+        use mise_config::dotfiles::DotfileGroupEntryTableDecl;
+        use std::collections::BTreeSet;
+        let parsed: BTreeSet<&str> = struct_fields::<FileTomlTable>()
+            .iter()
+            .chain(struct_fields::<crate::edits::EditTomlTable>())
+            .copied()
+            .filter(|key| *key != "group")
+            .collect();
+        let declared: BTreeSet<&str> = struct_fields::<DotfileGroupEntryTableDecl>()
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(parsed, declared);
+    }
+
     /// `schema/mise.json` describes a `[dotfiles]` entry from
     /// `mise_config::dotfiles::DotfileTableDecl`. A table is read as a whole-file entry or an
     /// edit, so together those two parsers must read exactly the keys it declares.
@@ -6494,6 +7797,54 @@ variants = [
     }
 
     #[test]
+    fn variant_target_templates_are_checked_in_incoming_config_preflight() -> Result<()> {
+        let path = dirs::HOME.join(".config/mise/config.toml");
+        let check = |target: &str, mode: &str| -> Result<()> {
+            let body = format!(
+                "[dotfiles.example]\nmode = \"{mode}\"\nvariants = [{{ default = true, target = '{target}' }}]\n"
+            );
+            let mut configs = ConfigMap::new();
+            configs.insert(path.clone(), crate::host::parse_config_body(&body, &path)?);
+            validate_incoming_files(&configs)
+        };
+        check("{{ xdg_config_home }}/example", "absent")?;
+        // a control block may drop the wildcard, so only the render can tell
+        check(
+            "{% if false %}*{% endif %}{{ xdg_config_home }}/example",
+            "absent",
+        )?;
+        assert!(check("{{", "absent").is_err());
+        assert!(check("{{ xdg_config_home }}/*", "absent").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fnox_entries_need_no_source_in_incoming_config() -> Result<()> {
+        let path = dirs::HOME.join(".config/mise/config.toml");
+        let check = |body: &str| -> Result<()> {
+            let mut configs = ConfigMap::new();
+            configs.insert(path.clone(), crate::host::parse_config_body(body, &path)?);
+            validate_incoming_files(&configs)
+        };
+        let outside_home = if cfg!(windows) {
+            r"C:\service\credentials"
+        } else {
+            "/etc/service/credentials"
+        };
+        check(&format!(
+            "[dotfiles]\n'{outside_home}' = {{ mode = \"fnox\" }}\n"
+        ))?;
+        check(
+            "[dotfiles]\n\"~/.npmrc\" = { mode = \"fnox\", permissions = \"0640\", variants = [{ os = \"linux\", target = \"~/.config/npm/npmrc\" }] }\n",
+        )?;
+        assert!(
+            check("[dotfiles]\n\"~/.npmrc\" = { mode = \"fnox\", variants = [{ default = true, target = \"~/.config/*\" }] }\n")
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn destination_variants_infer_safe_root_relative_sources() -> Result<()> {
         let entry: FileTomlEntry = toml::from_str(
             r#"
@@ -6504,13 +7855,16 @@ variants = [
 ]
 "#,
         )?;
-        let FileTomlEntry::Table(FileTomlTable {
+        let FileTomlEntry::Table(table) = entry else {
+            bail!("expected a table entry with variants");
+        };
+        let FileTomlTable {
             source,
             content,
             mode,
             variants: Some(variants),
             ..
-        }) = entry
+        } = *table
         else {
             bail!("expected a table entry with variants");
         };
@@ -6660,6 +8014,9 @@ variants = [{{ {field} = "linux" }}]"#
         assert_eq!(FileMode::parse("absent"), Some(FileMode::Absent));
         assert_eq!(FileMode::Absent.name(), "absent");
         assert!(!FileMode::Absent.has_source());
+        assert_eq!(FileMode::parse("fnox"), Some(FileMode::Fnox));
+        assert_eq!(FileMode::Fnox.name(), "fnox");
+        assert!(!FileMode::Fnox.has_source());
         assert_eq!(FileMode::parse("hardlink"), None);
     }
 
@@ -6685,10 +8042,209 @@ variants = [{{ {field} = "linux" }}]"#
             variants: vec![],
             enabled: true,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: false,
             group: None,
+            depends: vec![],
         }
+    }
+
+    fn dependent(target: &str, group: Option<&str>, depends: &[&str]) -> FileRequest {
+        FileRequest {
+            group: group.map(str::to_string),
+            depends: depends.iter().map(|dep| dep.to_string()).collect(),
+            ..absent_req(Path::new(target))
+        }
+    }
+
+    #[test]
+    fn without_depends_everything_is_one_layer() -> Result<()> {
+        let requests = [dependent("/h/a", None, &[]), dependent("/h/b", None, &[])];
+        assert_eq!(layering(&requests, &requests)?, vec![vec![0, 1]]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_dependent_waits_for_a_group_or_an_entry_target() -> Result<()> {
+        let requests = [
+            dependent("/h/.workrc", None, &["secrets", "/h/.npmrc"]),
+            dependent("/h/.ssh/key", Some("secrets"), &[]),
+            dependent("/h/.config/age.toml", Some("secrets"), &[]),
+            dependent("/h/.npmrc", None, &["/h/.ssh/key"]),
+            dependent("/h/.plain", None, &[]),
+        ];
+        // the key first, then .npmrc that waits for it, then .workrc that waits for both
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![1, 2, 4], vec![3], vec![0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_cycle_is_an_error_naming_the_entries() {
+        let requests = [
+            dependent("/h/a", None, &["/h/b"]),
+            dependent("/h/b", None, &["/h/a"]),
+        ];
+        let err = layering(&requests, &requests).unwrap_err().to_string();
+        assert!(
+            err.contains("depends form a cycle: /h/a -> /h/b -> /h/a"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_name_nothing_answers_to_is_an_error() {
+        let requests = [dependent("/h/a", None, &["secrts"])];
+        let err = layering(&requests, &requests).unwrap_err().to_string();
+        assert!(err.contains("\"secrts\""), "{err}");
+    }
+
+    #[test]
+    fn a_dependency_left_out_of_a_narrowed_apply_is_satisfied() -> Result<()> {
+        let all = [
+            dependent("/h/.workrc", None, &["secrets"]),
+            dependent("/h/.ssh/key", Some("secrets"), &[]),
+        ];
+        assert_eq!(layering(&all[..1], &all)?, vec![vec![0]]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_entry_of_a_group_that_names_its_group_waits_for_the_rest() -> Result<()> {
+        let requests = [
+            dependent("/h/a", Some("g"), &["g"]),
+            dependent("/h/b", Some("g"), &[]),
+        ];
+        assert_eq!(layering(&requests, &requests)?, vec![vec![1], vec![0]]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_permissions_only_entry_waits_for_the_entries_that_create_beneath_it() -> Result<()> {
+        let mut chmod = dependent("/h/.ssh", None, &[]);
+        chmod.mode = FileMode::Permissions;
+        let mut key = dependent("/h/.ssh/key", None, &["/h/seed"]);
+        key.mode = FileMode::Content;
+        let requests = [chmod, key, dependent("/h/seed", None, &[])];
+        // the key is written in the second round, so the chmod of its directory follows it
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![2], vec![1], vec![0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_permissions_only_entry_others_wait_for_runs_before_them() -> Result<()> {
+        let mut chmod = dependent("/h/.secret", None, &[]);
+        chmod.mode = FileMode::Permissions;
+        let requests = [
+            chmod,
+            dependent("/h/.rc", None, &["/h/.secret"]),
+            dependent("/h/later", None, &["/h/.rc"]),
+        ];
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![0], vec![1], vec![2]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_permissions_only_entry_waits_for_a_tree_that_creates_its_directory() -> Result<()> {
+        let mut chmod = dependent("/h/.ssh", None, &[]);
+        chmod.mode = FileMode::Permissions;
+        let mut tree = dependent("/h", Some("home"), &["/h/seed"]);
+        tree.mode = FileMode::SymlinkEach;
+        let requests = [chmod, tree, dependent("/h/seed", None, &[])];
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![2], vec![1], vec![0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_indirect_wait_for_a_permissions_entry_is_not_a_cycle() -> Result<()> {
+        let mut chmod = dependent("/h/.ssh", None, &[]);
+        chmod.mode = FileMode::Permissions;
+        let mut key = dependent("/h/.ssh/key", None, &["/h/mid"]);
+        key.mode = FileMode::Content;
+        let requests = [chmod, key, dependent("/h/mid", None, &["/h/.ssh"])];
+        // the key waits for mid, which waits for the chmod: the chmod cannot also wait for the key
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![0], vec![2], vec![1]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_permissions_only_entry_for_an_existing_directory_keeps_its_place() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let ssh = dir.path().join(".ssh");
+        std::fs::create_dir(&ssh)?;
+        let mut chmod = dependent(&ssh.to_string_lossy(), None, &[]);
+        chmod.mode = FileMode::Permissions;
+        let mut key = dependent(&ssh.join("key").to_string_lossy(), None, &["/h/seed"]);
+        key.mode = FileMode::Content;
+        let requests = [chmod, key, dependent("/h/seed", None, &[])];
+        // the directory exists, so its mode is fixed before the key is written inside it
+        assert_eq!(layering(&requests, &requests)?, vec![vec![0, 2], vec![1]]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_read_only_mode_for_an_existing_directory_follows_the_writes_into_it() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let ssh = dir.path().join(".ssh");
+        std::fs::create_dir(&ssh)?;
+        let mut chmod = dependent(&ssh.to_string_lossy(), None, &[]);
+        chmod.mode = FileMode::Permissions;
+        chmod.permissions = Some(0o500);
+        let mut key = dependent(&ssh.join("key").to_string_lossy(), None, &["/h/seed"]);
+        key.mode = FileMode::Content;
+        let requests = [chmod, key, dependent("/h/seed", None, &[])];
+        assert_eq!(
+            layering(&requests, &requests)?,
+            vec![vec![2], vec![1], vec![0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_entry_naming_its_own_target_is_a_cycle() {
+        let requests = [dependent("/h/a", None, &["/h/a"])];
+        let err = layering(&requests, &requests).unwrap_err().to_string();
+        assert!(err.contains("depends form a cycle: /h/a -> /h/a"), "{err}");
+    }
+
+    #[test]
+    fn a_deselected_group_is_a_known_name() -> Result<()> {
+        let applied = [dependent("/h/.workrc", None, &["secrets"])];
+        let mut deselected = dependent("/h/.ssh/key", Some("secrets"), &[]);
+        deselected.enabled = false;
+        let known = [applied[0].clone(), deselected];
+        assert_eq!(layering(&applied, &known)?, vec![vec![0]]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_pass_that_selects_some_entries_takes_what_they_wait_for() {
+        let all = [
+            dependent("/h/.config/mise/conf.d/x.toml", None, &["/h/.ssh/key"]),
+            dependent("/h/.ssh/key", None, &[]),
+            dependent("/h/.other", None, &[]),
+        ];
+        let kept = with_dependencies(&all, |req| req.target.ends_with("x.toml"));
+        let targets = kept
+            .iter()
+            .map(|req| req.target_raw.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(targets, ["/h/.config/mise/conf.d/x.toml", "/h/.ssh/key"]);
     }
 
     fn validate_incoming_body(body: &str) -> Result<()> {
@@ -6950,6 +8506,22 @@ source = "oldrc""#,
         }
     }
 
+    /// `format` belongs to a merge; on a whole-file entry it would be dropped
+    /// silently and the file linked or copied over the one being merged into.
+    #[test]
+    fn whole_file_entries_reject_format() {
+        for entry in [
+            "source = \"s.json\"\nformat = \"jsonc\"",
+            "mode = \"copy\"\nsource = \"s.json\"\nformat = \"jsonc\"",
+        ] {
+            let value: toml::Value = toml::from_str(entry).expect("toml");
+            assert!(
+                parse_file_entry("~/settings.json", value, Path::new("/mise.toml")).is_none(),
+                "{entry}"
+            );
+        }
+    }
+
     /// Only regular files and symlinks are removed: a socket (like a FIFO or
     /// device node) may belong to a running service.
     #[cfg(unix)]
@@ -6988,6 +8560,7 @@ source = "oldrc""#,
             base: PathBuf::from("/"),
             config_path: PathBuf::from("/mise.toml"),
             origin: origin.clone(),
+            group: None,
         };
         let err =
             validate_absent_edit_targets(&[absent_req(&target)], &[edit(&target)]).unwrap_err();
@@ -7202,9 +8775,11 @@ source = "oldrc""#,
             variants: vec![],
             enabled: true,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: false,
             group: None,
+            depends: vec![],
         };
         let mut first = request(vec!["sessions"], true);
         first.override_from(request(vec!["cache"], true));
@@ -7322,9 +8897,11 @@ source = "oldrc""#,
             variants: vec![],
             enabled: true,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: false,
             group: None,
+            depends: vec![],
         }
     }
 
@@ -7506,6 +9083,21 @@ source = "oldrc""#,
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn remove_empty_dirs_upward_leaves_a_directory_link() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty)?;
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&empty, &link)?;
+        let removed = remove_empty_dirs_upward([link.as_path()], |_| true)?;
+        assert!(removed.is_empty());
+        assert!(link.is_symlink());
+        assert!(empty.is_dir());
+        Ok(())
+    }
+
     #[test]
     fn create_recorded_lists_a_target_the_failed_write_created() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -7669,6 +9261,42 @@ source = "oldrc""#,
 
         assert!(reconciliation.stale_links.is_empty());
         assert!(reconciliation.targets.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconciliation_leaves_links_beneath_a_users_directory_link() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source_dir = dir.path().join("src");
+        let outside = dir.path().join("outside");
+        let target = dir.path().join("home");
+        file::create_dir_all(&source_dir)?;
+        file::create_dir_all(&outside)?;
+        file::create_dir_all(&target)?;
+        file::write(source_dir.join("a"), "managed")?;
+        std::os::unix::fs::symlink(source_dir.join("a"), outside.join("a"))?;
+        std::os::unix::fs::symlink(&outside, target.join("sub"))?;
+        let stored = SymlinkEachState {
+            version: SYMLINK_EACH_STATE_VERSION,
+            source: source_dir.clone(),
+            target: target.clone(),
+            links: vec![ManagedLink {
+                source: source_dir.join("a"),
+                target: target.join("sub/a"),
+            }],
+            group: None,
+        };
+        let active = SymlinkEachState {
+            source: dir.path().join("other-src"),
+            links: vec![],
+            ..stored.clone()
+        };
+        let selected_targets = [target].into_iter().collect();
+
+        let reconciliation = reconcile_symlink_each_states(&[active], &selected_targets, &[stored]);
+
+        assert!(reconciliation.stale_links.is_empty());
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -8345,14 +9973,14 @@ source = "oldrc""#,
     #[test]
     fn a_permissions_only_table_is_a_whole_file_entry() {
         let value: toml::Value = toml::from_str(r#"permissions = "0600""#).unwrap();
-        let Some(FileTomlEntry::Table(FileTomlTable {
+        let Some(FileTomlEntry::Table(table)) = file_entry_from_toml("~/.ssh/config", value) else {
+            panic!("expected a whole-file table entry");
+        };
+        let FileTomlTable {
             source,
             permissions,
             ..
-        })) = file_entry_from_toml("~/.ssh/config", value)
-        else {
-            panic!("expected a whole-file table entry");
-        };
+        } = *table;
         assert_eq!(source, None);
         assert_eq!(permissions.as_deref(), Some("0600"));
 
@@ -8890,6 +10518,67 @@ source = "oldrc""#,
     }
 
     #[test]
+    fn create_if_missing_is_rejected_outside_copy_template_and_content() -> Result<()> {
+        let path = dirs::HOME.join(".config/mise/config.toml");
+        let validate = |entry: &str| -> Result<()> {
+            let body = format!("[dotfiles]\n\"~/.create-if-missing-test\" = {entry}\n");
+            let mut configs = ConfigMap::new();
+            configs.insert(path.clone(), crate::host::parse_config_body(&body, &path)?);
+            validate_incoming_files(&configs)
+        };
+        validate(r#"{ source = "a", mode = "copy", create_if_missing = true }"#)?;
+        validate(r#"{ source = "a.tera", mode = "template", create_if_missing = true }"#)?;
+        validate(r#"{ content = "x", permissions = "0600", create_if_missing = true }"#)?;
+        validate(r#"{ source = "a", mode = "symlink", create_if_missing = false }"#)?;
+        for entry in [
+            r#"{ source = "a", mode = "symlink", create_if_missing = true }"#,
+            r#"{ source = "a", mode = "symlink-each", create_if_missing = true }"#,
+            r#"{ permissions = "0600", create_if_missing = true }"#,
+            r#"{ mode = "absent", create_if_missing = true }"#,
+            r#"{ mode = "track", create_if_missing = true }"#,
+        ] {
+            assert!(validate(entry).is_err(), "{entry} should be rejected");
+        }
+
+        let origin = ResourceOrigin {
+            config: PathBuf::from("/mise.toml"),
+            config_root: PathBuf::from("/"),
+            environment: vec![],
+            source: None,
+        };
+        let merge = |entry: &str| {
+            let entry: FileTomlEntry = toml::from_str(entry).unwrap();
+            let mut merged = IndexMap::new();
+            merge_file_entry(
+                "~/.create-if-missing-test".into(),
+                entry,
+                Path::new("/"),
+                &origin,
+                &mut merged,
+            );
+            merged.into_values().collect::<Vec<_>>()
+        };
+        for entry in [
+            "source = \"a\"\nmode = \"copy\"\ncreate_if_missing = true",
+            "source = \"a.tera\"\nmode = \"template\"\ncreate_if_missing = true",
+            "content = \"x\"\ncreate_if_missing = true",
+        ] {
+            let accepted = merge(entry);
+            assert!(accepted[0].create_if_missing, "{entry}");
+        }
+        assert!(!merge("source = \"a\"\nmode = \"copy\"")[0].create_if_missing);
+        for entry in [
+            "source = \"a\"\nmode = \"symlink\"\ncreate_if_missing = true",
+            "permissions = \"0600\"\ncreate_if_missing = true",
+            "mode = \"absent\"\ncreate_if_missing = true",
+            "mode = \"track\"\ncreate_if_missing = true",
+        ] {
+            assert!(merge(entry).is_empty(), "{entry}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn track_local_is_tracking_kept_on_this_machine() -> Result<()> {
         let origin = ResourceOrigin {
             config: PathBuf::from("/mise.toml"),
@@ -9294,6 +10983,46 @@ source = "oldrc""#,
             .map(|(req, (_, dirs))| (req, dirs.clone()))
             .collect::<Vec<_>>();
         prune_created_dirs(&pairs, claimed, home, false);
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_apply_removes_only_the_empty_dirs_it_created() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let target = tmp.path().join("new-parent/mid/target/file");
+        let created = missing_ancestors(&target);
+        std::fs::create_dir_all(target.parent().unwrap())?;
+        remove_empty_created_dirs(&created);
+        assert!(!tmp.path().join("new-parent").exists());
+
+        // a directory something landed in stays, and so does everything above it
+        std::fs::create_dir_all(target.parent().unwrap())?;
+        std::fs::write(tmp.path().join("new-parent/mid/kept"), "")?;
+        remove_empty_created_dirs(&created);
+        assert!(!tmp.path().join("new-parent/mid/target").exists());
+        assert!(tmp.path().join("new-parent/mid/kept").exists());
+
+        // a link where a created directory was is not followed or removed
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&other)?;
+        std::fs::remove_file(tmp.path().join("new-parent/mid/kept"))?;
+        file::make_symlink(&other, &tmp.path().join("new-parent/mid/target"))?;
+        remove_empty_created_dirs(&created);
+        assert!(tmp.path().join("new-parent/mid/target").is_symlink());
+        assert!(other.is_dir());
+
+        // directories created beneath an entry's target go too, children before parents
+        let tree = tmp.path().join("tree");
+        let created = vec![
+            tree.clone(),
+            tree.join("a"),
+            tree.join("a/b"),
+            tree.join("c"),
+        ];
+        std::fs::create_dir_all(tree.join("a/b"))?;
+        std::fs::create_dir(tree.join("c"))?;
+        remove_empty_created_dirs(&created);
+        assert!(!tree.exists());
         Ok(())
     }
 

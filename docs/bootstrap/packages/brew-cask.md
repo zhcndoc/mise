@@ -106,35 +106,68 @@ mise 替换应用包时（例如升级过程中），macOS 可能会清除你授
 
 | Cask 制品                         | macOS                                                             | Linux                  |
 | --------------------------------- | ----------------------------------------------------------------- | ---------------------- |
-| 应用包（`app`）                    | 安装到应用目录                                                     | 否                     |
-| 二进制文件和命令包装器             | 链接到 `<prefix>/bin`                                              | 否                     |
-| 字体（`font`）                     | 安装到 `~/Library/Fonts`                                           | `$XDG_DATA_HOME/fonts` |
-| 安装包（`pkg`）                    | cask 列出 `pkgutil` ID 时通过 `installer` 安装                     | 否                     |
-| 脚本安装器（`installer`）          | 运行，但会跳过从 stdin 读取内容的安装器                             | 否                     |
-| Shell 补全                         | 链接到 prefix                                                      | 否                     |
-| 通用 `artifact` 条目               | 复制到 cask 指定的目标位置                                         | 否                     |
-| 手册页（`manpage`）                | 不建立链接                                                         | 不建立链接             |
-| 服务及其他制品类型                 | 不支持                                                             | 不支持                 |
+| App bundles (`app`)               | Installed into the application directory                          | No                     |
+| Binaries and command wrappers     | Linked into `<prefix>/bin`                                        | No                     |
+| Fonts (`font`)                    | Installed into `~/Library/Fonts`                                  | `$XDG_DATA_HOME/fonts` |
+| Installer packages (`pkg`)        | Installed with `installer`, when the cask lists its `pkgutil` IDs | No                     |
+| Script installers (`installer`)   | Run, except installers that read from stdin                       | No                     |
+| Shell completions                 | Linked into the prefix                                            | No                     |
+| Generic `artifact` entries        | Copied to the target the cask names                               | No                     |
+| Manual pages (`manpage`)          | Not linked                                                        | Not linked             |
+| Services and other artifact types | Not supported                                                     | Not supported          |
 
-mise 会先安装 cask 所依赖的 formula 和其他 cask；如果声明的 cask 存在冲突，会在执行任何更改前报错。`preflight` 和 `postflight` 步骤由 mise 自行运行。pkg 安装器和需要 root 权限的步骤会通过[mise 的 sudo 处理机制](/bootstrap/packages/#sudo)执行，因此无终端运行时必须配置免密码 sudo 或以 root 身份运行，否则会直接失败，不会等待输入密码。如果 cask 需要 mise 尚未实现的制品类型或步骤，安装会报错；mise 不会退回去调用 `brew`。
+mise installs a cask's formula and cask dependencies first, and a declared
+cask conflict fails before anything changes. It runs a cask's `preflight` and
+`postflight` steps itself. Pkg installers and steps that need root go through
+[mise's sudo handling](/bootstrap/packages/#sudo), so a run without a terminal
+needs passwordless sudo or root, and fails instead of waiting for a password. A
+cask that needs an artifact type or step mise does not implement fails with an
+error; mise never falls back to running `brew`.
 
-## 由 Homebrew 安装的 Cask
+## Casks installed by Homebrew
 
-如果 cask 是由 Homebrew 安装的，mise 会将其视为已安装并保持不变：`apply` 不执行操作，`upgrade` 会跳过它。请使用 Homebrew 升级或移除此 cask。如果 Homebrew 中的记录没有版本信息或包含多个版本，mise 会报错并说明如何在 Homebrew 中修复。
+If Homebrew installed a cask, mise counts it as installed and leaves it alone:
+`apply` does nothing and `upgrade` skips it. Use Homebrew to upgrade or remove
+it. If Homebrew's records for the cask show no version or several, mise stops
+with an error that tells you how to repair them in Homebrew.
 
-## 由 mise 安装的 Cask
+`status --json` 会区分这些软件包与 mise 管理的软件包。每个已安装的软件包都有 `managed_by` 字段：mise 交由 Homebrew 管理的为 `"homebrew"`，由 mise 安装和升级的为 `"mise"`，无法确定时为 `"unknown"`。该字段不表示应用是否会[自行更新](#self-updating-apps)；此信息由 `auto_updates` 单独报告。
 
-mise 会在 Caskroom 中使用自己的收据记录这些 cask，不会写入 Homebrew 的 cask 元数据，因此它们始终由 mise 管理。请使用 mise 而非 Homebrew 升级或清理它们。
+## Casks mise installed
 
-只要应用、字体、二进制文件和补全文件都在相应位置，该 cask 就被视为已安装。已安装应用内部发生变化（例如应用自行更新）不会导致 mise 重新安装。二进制文件或补全链接损坏或指向其他位置时，下次运行 `apply` 会重新安装；安装曾被中断时也一样。
+mise 会在 Caskroom 中使用自己的收据记录这些软件包，默认不会写入 Homebrew 的 cask 元数据，因此它们仍由 mise 管理。请使用 mise 而不是 Homebrew 来升级或清理它们。Homebrew 不会识别这些软件包：`brew upgrade` 和 `brew outdated` 会跳过它们，`brew doctor` 则会报告其 Caskroom 目录没有有效元数据。
 
-## 升级
+### 交由 Homebrew 升级 {#let-homebrew-upgrade-them}
 
-`mise bootstrap packages upgrade --manager brew-cask` 会为每个已配置且当前安装版本不同于 Homebrew 版本的 cask 安装最新版本。Homebrew 版本为 `latest` 的 cask 会被跳过；[自动更新的应用](#self-updating-apps)则遵循各自的规则。
+如果你同时使用 Homebrew，并希望通过 `brew upgrade` 管理所有 cask，请在 `[bootstrap.brew]` 下设置 `homebrew_metadata`：
 
-## 清理
+```toml
+[bootstrap.brew]
+homebrew_metadata = true
+```
 
-[`mise bootstrap packages prune --manager brew-cask`](/cli/bootstrap/packages/prune.html) 只会移除由 mise 安装且之后未发生变化的 cask。当前配置或 mise 跟踪的任一可信配置文件中声明的 cask 都会保留：
+mise 安装 cask 后，会写入 Homebrew 所需的元数据文件（`.metadata/<version>/<timestamp>/Casks/<token>.json`，内容为 `{}`，与 Homebrew 通过 API 加载的 cask 相同），并在旁边写入 `INSTALL_RECEIPT.json`。这样 `brew info` 会显示安装时间，并表明该 cask 是你主动安装的，而不是作为依赖安装的。Homebrew 会从 API 读取 cask 定义，并从 Caskroom 目录名获取已安装版本，因此 `brew upgrade`、`brew outdated` 和 `brew doctor` 都会像处理 Homebrew 安装的软件包一样处理它。
+
+这会将 cask 的管理权交给 Homebrew，详见[由 Homebrew 安装的 cask](#casks-installed-by-homebrew)：从此 mise 不再管理它，`apply`、`upgrade` 和 `prune` 都会跳过。mise 之前安装的 cask 会在下次 `apply` 时补上元数据。第三方 tap 中的 cask 仍由 mise 管理，因为 Homebrew 记录的只有 token，并会到 `homebrew/cask` 中查找它。安装在默认应用目录之外的 cask（通过 `appdir` 条目或 `MISE_BREW_CASK_OPT_APPDIR` 设置）也仍由 mise 管理，因为 `brew upgrade` 会将其重新安装到 `/Applications`。该设置仅适用于 Apple 芯片 Mac，因为 mise 和 Homebrew 共用 Caskroom；并且要求 Homebrew 版本不低于 6.0.22。较旧版本在收据中没有卸载步骤时，会从未经签名的端点获取卸载步骤（参见 [GHSA-rg9r-ppxp-87hm](https://github.com/Homebrew/brew/security/advisories/GHSA-rg9r-ppxp-87hm)），因此 mise 在这些版本上不会交出管理权。
+
+A cask counts as installed while its app, font, binary, and completion files
+are in place. Changes inside an installed app, such as a self-update, do not
+make mise reinstall it. A broken or retargeted binary or completion link does,
+on the next `apply`. So does an install that was interrupted.
+
+## Upgrade
+
+`mise bootstrap packages upgrade --manager brew-cask` installs the current
+version of each configured cask whose installed version differs from
+Homebrew's. Casks whose Homebrew version is `latest` are skipped, and
+[self-updating apps](#self-updating-apps) follow their own rules.
+
+## Prune
+
+[`mise bootstrap packages prune --manager brew-cask`](/cli/bootstrap/packages/prune.html)
+removes only casks that mise installed and that are unchanged since. It keeps
+every cask declared in the current configuration or any trusted config file
+mise tracks:
 
 ```sh
 mise bootstrap packages prune --manager brew-cask --dry-run
@@ -142,7 +175,15 @@ mise bootstrap packages prune --manager brew-cask --dry-run
 
 Prune 会跳过以下项目并逐项说明原因：由 Homebrew 安装的 cask；已接管的应用和自动更新应用；包含 pkg 安装器、脚本安装器、命令包装器或通用制品的 cask；包含安装或卸载步骤的 cask；文件已更改或与其他 cask 共用文件的 cask；安装过程被中断的 cask；以及由未记录 prune 信息的旧版 mise 安装的 cask（升级刷新记录后即可清理）。Prune 不会运行 cask 的 `zap` 清理步骤。无法导入 cask。
 
-删除 `brew-cask:` 条目不会立即卸载对应 cask；只有运行 prune 后才会卸载。
+如果 prune 仅因 mise 无法确认 cask 未更改而跳过它（例如会自行更新的应用，或包含安装步骤的 cask），请传入 `--force` 移除：
+
+```sh
+mise bootstrap packages prune --manager brew-cask --force
+```
+
+Prune 会列出因上述原因跳过、但传入 `--force` 后会移除的 cask。强制清理会移除 mise 记录安装的应用、二进制文件、字体和补全文件（但不会移除当前已指向其他位置的链接），以及 cask 的 Caskroom 目录。cask 自身安装步骤创建的内容（例如特权辅助程序或启动代理）会保留。`--force` 不会移除由 Homebrew 安装的 cask、没有 mise 收据的 cask、中断的安装，或与其他 cask 共用的文件。
+
+Deleting a `brew-cask:` entry does not uninstall the cask until you prune.
 
 ## 故障排除
 

@@ -1,6 +1,6 @@
 ---
-description: "在后台运行自定义程序和 mise 内置服务，或启动并启用现有的 Linux 系统服务。"
-socialDescription: "为当前用户运行后台服务，或管理 Linux 系统服务。"
+description: "在后台运行自己的程序和 mise 内置服务，或启动并启用现有的 Linux 系统级和用户级 unit。"
+socialDescription: "为当前用户运行后台服务，或管理现有的 Linux unit。"
 ---
 
 # 服务
@@ -11,12 +11,13 @@ socialDescription: "为当前用户运行后台服务，或管理 Linux 系统�
 
 | 需求                                                                  | 使用                                                          |
 | --------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 在 Linux、macOS 和 Windows 上于后台运行程序                           | [用户服务](#user-services)（`scope = "user"`）                |
-| 在后台保存 dotfiles 编辑，或更新工具                                   | [内置服务](#built-in-services)                                |
-| 启动、停止或启用软件包或托管文件提供的单元                             | [系统服务](#system-services)                                  |
-| 使用 systemd 定时器、依赖关系或安全加固等功能                         | [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)  |
-| 使用 launchd 日历计划或队列目录等功能                                 | [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html) |
-| 运行容器                                                              | [`[bootstrap.compose]`](/bootstrap/compose.html)              |
+| Run one program in the background on Linux, macOS, and Windows        | A [user service](#user-services) (`scope = "user"`)           |
+| Save dotfile edits or update tools in the background                  | A [built-in service](#built-in-services)                      |
+| Start, stop, or enable a unit that a package or managed file provides | A [system service](#system-services)                          |
+| 启动、停止或启用软件包提供的 systemd 用户级 unit | [现有用户级 unit](#existing-user-units) |
+| Use systemd features such as timers, dependencies, or hardening       | [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)  |
+| Use launchd features such as calendar schedules or queue directories  | [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html) |
+| Run containers                                                        | [`[bootstrap.compose]`](/bootstrap/compose.html)              |
 
 <a id="user-services"></a>
 
@@ -51,8 +52,12 @@ mise 会为当前平台创建服务定义并启动服务：
 | macOS    | `~/Library/LaunchAgents/dev.mise.<name>.plist`                                           | `launchctl`        |
 | Windows  | 计划任务 `mise\<name>`，定义文件位于 `$MISE_STATE_DIR/user-services/`                    | `schtasks`         |
 
-mise 会直接运行 `command`，不会通过 Shell 执行，因此管道、重定向和 glob 模式都不起作用；请将此类
-命令放进脚本，或使用 `sh -c '...'` 执行。程序路径开头的 `~/` 会展开为主目录。
+在 Windows 11 24H2、Windows Server 2025 及更高版本中，mise 内置服务和环境启动器会将私有 Windows Terminal 控制台替换为无窗口控制台。
+服务启动的控制台程序会继承该控制台。在 mise 完成替换前，启动期间可能会出现终端窗口。替换时间取决于启动任务和系统负载。如果 Windows Terminal 的配置文件设置为保留已终止的标签页，它可能会继续显示已断开的标签页。在共享交互式控制台中启动的文件监视器不会更改该控制台。经典控制台主机窗口会直接隐藏。旧版 Windows 保留原有的窗口隐藏行为，因此 Windows Terminal 仍可能可见。
+
+mise runs `command` directly, not through a shell, so pipes, redirection, and
+globs do not work there; put such a command in a script or run `sh -c '...'`.
+A leading `~/` in the program path is expanded.
 
 在 Linux 上，命令会成为单元的 `ExecStart=` 行，因此 systemd 会展开 `$VAR`、`${VAR}` 和
 `%h` 等说明符；要表示字面值 `$` 或 `%`，请写成 `$$` 或 `%%`。macOS 上的 launchd 会原样
@@ -67,7 +72,25 @@ mise 会直接运行 `command`，不会通过 Shell 执行，因此管道、重�
 [搭建开发环境](/daemons/development-stack.html#keep-the-supervisor-available-at-login)提供了
 完整示例：使用用户服务在登录时启动并持续运行 Pitchfork 管理进程。
 
-### 内置服务 {#built-in-services}
+### 现有用户级 unit {#existing-user-units}
+
+某些软件包会安装 systemd 用户级 unit，例如 `gnome-keyring` 提供的 `gnome-keyring-daemon`。若要启动并启用现有 unit，而不编写自己的定义，请设置 `scope = "user"`，并省略 `command` 和 `builtin`：
+
+```toml
+[bootstrap.packages]
+"pacman:gnome-keyring" = "latest"
+
+[bootstrap.services.gnome-keyring-daemon]
+scope = "user"
+state = "running"
+enabled = true
+```
+
+mise 会针对已有 unit 运行 `systemctl --user`，无需 root，也不会写入 `dev.mise.*` unit。不带后缀的名称会补上 `.service`；`gnome-keyring-daemon.socket` 等 socket 和 timer 也适用。`state`、`enabled` 和 `masked` 的行为与[系统服务](#system-service-options)相同。`command`、`builtin`、`description`、`restart`、`environment`、`working_directory`、`requires_tools` 和 `state = "absent"` 都用于配置服务定义，因此此处不接受这些选项；若要定义服务，请改为添加 `command`。
+
+此功能仅适用于 Linux。如果 unit 不存在或用户级管理器不可用（例如容器中没有登录会话），mise 不会猜测处理：状态和计划会将服务报告为 `unknown`，apply 则会失败。`mise bootstrap` 会先应用软件包，再处理服务，因此同一份配置可以安装软件包并启动其 unit。受管理文件无法对用户级 unit 使用 [`notify`](/bootstrap/files.html#restart-a-service-after-a-change)。
+
+### Built-in services
 
 内置服务会运行 mise 本身。通过 `builtin` 指定服务类型，此设置也隐含
 `scope = "user"`：

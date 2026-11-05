@@ -80,7 +80,7 @@ at runtime. For AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault or PGP,
 install the `sops` CLI, sign in to the provider, and set
 [`sops.rops = false`](/configuration/settings.html#sops.rops) so mise runs
 `sops decrypt` instead. mise looks for `sops` in the project's tools first, then
-on `PATH`.
+请确保 `sops` 位于 `PATH` 中；mise 会跳过 shim 和命令包装器目录，以免解密时再次调用 mise。仅有 shim 不足以满足查找要求：如果没有安装配置的版本，也没有其他位于 `PATH` 中的 `sops` 可执行文件，严格模式会报告 `sops command not found`。
 
 The `sops` CLI cannot read TOML. With `sops.rops = false`, use `.env.json` or
 `.env.yaml`; an encrypted `.env.toml` fails with an error.

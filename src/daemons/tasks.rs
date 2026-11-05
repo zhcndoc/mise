@@ -230,7 +230,7 @@ pub async fn start(
         } else {
             // Keeps the install path out of this future entirely, so callers
             // inside a spawned task can await it.
-            let ts = super::glue::toolset_resolved(&scoped, false).await?;
+            let ts = super::glue::toolset_resolved(&scoped).await?;
             (scoped, ts)
         };
         let rt = super::glue::runtime_from_toolset(&scoped, &ts, Some(&previous.bin)).await?;
@@ -397,6 +397,7 @@ mod tests {
                             exports: Default::default(),
                             imported: false,
                             port: None,
+                            named_ports: Default::default(),
                             host: None,
                         },
                     )

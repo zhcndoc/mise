@@ -236,7 +236,8 @@ version_order = "semver"
 
 ## 要求产物证明 {#required-attestations}
 
-如果项目为发行版资源文件发布 [GitHub 产物证明](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)，请在其 `github:` 后端设置 `attestations_since`，并指定资源文件全部带有证明的首个版本：
+When a project publishes
+如果项目为发布制品提供 [GitHub 制品证明](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)，请在其 `github:` 后端，或声明了 `github_artifact_attestations` 的 aqua 配方对应的 `aqua:` 后端中，将 `attestations_since` 设为所有制品都带有证明的首个版本：
 
 <!-- schema: skip -->
 
@@ -247,22 +248,38 @@ backends = [
 version_order = "semver"
 ```
 
-从该版本开始，除非相应 GitHub 产物证明验证成功，否则 mise 不会安装或锁定资源文件，包括 `additional_asset_patterns` 中的资源文件。如果未找到证明，安装会因可能发生降级而失败，不会跳过验证；即使共享 mise-versions 缓存或锁文件报告缺少证明，也同样如此。SLSA 等其他来源证明不计入此项。
+从该版本开始，除非 GitHub 制品证明验证通过，否则 mise 会拒绝安装或锁定制品；`github:` 后端的 `additional_asset_patterns` 制品也适用此规则。对于 `aqua:` 后端，证明会根据配方声明的位置进行检查，可以在制品本身，也可以在其校验和文件中查找。未找到证明时会因可能发生降级而失败，而不是跳过验证；即使共享 mise-versions 缓存或锁文件显示缺少证明，也会失败。SLSA 等其他来源证明不计入此项。
+Earlier versions, versions that are not semantic versions (`nightly`, `1.0`,
+`2024.01.15`), and users who turn off
+[`github_attestations`](/configuration/settings.html#github_attestations) or
+[`github.github_attestations`](/configuration/settings.html#github.github_attestations)
+are unaffected.
 
-更早的版本、非语义化版本（`nightly`、`1.0`、`2024.01.15`），以及关闭了 [`github_attestations`](/configuration/settings.html#github_attestations) 或 [`github.github_attestations`](/configuration/settings.html#github.github_attestations) 的用户不受影响。
+不支持 aqua 的旧版 mise 会拒绝 `aqua:` 后端中的 `attestations_since`；浮动注册表中的某个条目被拒绝时，mise 会回退到内置注册表。请等这些旧版本不再使用后，再为 aqua 配置此版本门槛。
 
-此值必须是完整的语义化版本。工具的 `version_order` 可以是任意值：mise 只会将待安装版本与边界进行比较。
+The value must be a complete semantic version. The tool's `version_order` can be
+anything: mise compares only the version being installed with the boundary.
 
-只要证明中指明了工具所在仓库，以下任意一种 GitHub 证明都符合要求：
+Either kind of GitHub attestation counts, as long as it names the tool's
+repository:
 
-- 项目工作流生成的构建来源证明（`actions/attest-build-provenance`）。使用 `gh attestation verify <file> --repo owner/repo` 检查。
-- GitHub 为不可变发行版中的每个资源文件生成的发行版证明。使用 `gh release verify-asset <tag> <file> --repo owner/repo` 检查。
+- A build provenance attestation from the project's workflow
+  (`actions/attest-build-provenance`). Check it with
+  `gh attestation verify <file> --repo owner/repo`.
+- The release attestation that GitHub creates for every asset of an immutable
+  release. Check it with `gh release verify-asset <tag> <file> --repo owner/repo`.
 
-请检查边界发行版及其前一个发行版中的每个资源文件。边界应是所有资源文件均验证通过的首个发行版，此后每个语义化版本也都必须通过验证。留意以乱序方式发布回移版本的项目：如果某个旧版本分支的补丁是首个带证明的发行版，那么在它之前发布的较新分支发行版也会被错误地要求提供证明。
+Check every asset of the boundary release and of the release before it. The
+boundary is the first release where every asset passes, and every later
+semantic version must pass too. Watch for projects that publish backports out
+of order: if a patch to an older line was the first attested release, a newer
+line released before it would wrongly be required to have attestations.
 
-## 惯用版本文件 {#idiomatic-version-files}
+## Idiomatic version files {#idiomatic-version-files}
 
-注册表条目可以让用户从该工具已有的[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)中读取版本。对于文件名，使用 mise 的纯文本解析器：
+An entry can let users read the tool's version from the
+[idiomatic version files](/dev-tools/versions.html#idiomatic-version-files) the
+tool already uses. A file name uses mise's plain-text parser:
 
 <!-- schema: skip -->
 
@@ -282,17 +299,28 @@ idiomatic_files = [
 ]
 ```
 
-- `version_regex`：提取所有匹配项；存在捕获组时使用第一个捕获组。
-- `version_json_path`：使用 mise 类似 jq 的 JSON 路径语法提取值。
-- `version_expr`：使用 [expr-lang](https://expr-lang.org/) 表达式提取或后处理版本。文件内容位于 `body` 中，`version_regex` 或 `version_json_path` 找到的版本位于 `versions` 中。
+- `version_regex`: extracts every match, using the first capture group when
+  there is one.
+- `version_json_path`: extracts values with mise's jq-like JSON path syntax.
+- `version_expr`: extracts or post-processes versions with an
+  [expr-lang](https://expr-lang.org/) expression. The file's contents are in
+  `body`, and versions found by `version_regex` or `version_json_path` are in
+  `versions`.
 
-这些解析器由 mise 自行运行，不能执行 Shell 命令。
+mise runs these parsers itself; they cannot run shell commands.
 
-只提取能表明项目使用的工具版本的值，例如确切版本，或特意与 CLI 主版本绑定的配置格式主版本。不要提取最低兼容版本：`cmake_minimum_required` 或 `package.json` 中的 `engines` 等下限描述的是使用者所需的版本，解析后会将用户固定在最旧的受支持发行版（参阅[mise 会读取哪些字段](/dev-tools/versions.html#which-fields-mise-reads)）。不要提取无关的项目版本、依赖项版本、锁文件架构修订号，或不会限制工具版本的通用 `version` 字段。
+Extract only a value that states the version the project is built with, such as
+an exact version, or a config-format major that is deliberately tied to the CLI
+major. Do not extract a minimum compatible version: a floor such as
+`cmake_minimum_required` or `package.json`'s `engines` says what a consumer
+needs, and resolving it pins users to the oldest supported release (see
+[which fields mise reads](/dev-tools/versions.html#which-fields-mise-reads)).
+Do not extract unrelated project versions, dependency versions, lockfile schema
+revisions, or generic `version` fields that do not constrain the tool.
 
-要停用一个用于读取版本下限的现有文件，请在对应表格中添加 `deprecated = "<reason>"`。该文件仍会被解析，mise 会警告用户将版本移到 `mise.toml` 中。
-
-请列出工具官方读取的所有文件名，包括 `.config/tool.yml` 这样的文档化嵌套路径。后缀重叠时，mise 会采用匹配最具体的路径。用户仍需为工具启用惯用版本文件：
+List every file name the tool officially reads, including documented nested
+paths such as `.config/tool.yml`. When suffixes overlap, mise uses the most
+specific matching path. Users still have to enable idiomatic files for the tool:
 
 ```sh
 mise settings add idiomatic_version_file_enable_tools your-tool

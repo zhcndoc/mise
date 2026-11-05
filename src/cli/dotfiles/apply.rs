@@ -118,8 +118,10 @@ impl DotfilesApply {
         reload: &IndexMap<String, String>,
         is_config: impl Fn(&Path) -> bool,
     ) -> Result<Option<Vec<String>>> {
-        let (mut files, mut edits) = self.requests(config)?;
-        files.retain(|req| is_config(&req.target));
+        let (files, mut edits) = self.requests(config)?;
+        // what the config entries wait for is written in this pass too, so a
+        // template there reads the files its dependencies created
+        let files = system::files::with_dependencies(&files, |req| is_config(&req.target));
         edits.retain(|req| is_config(&req.path));
         // a dry run reads the live file to check an edit, which the copy
         // about to replace it may have changed; the edits the new config
@@ -131,39 +133,14 @@ impl DotfilesApply {
             return Ok(Some(vec![]));
         }
         let secrets = system::secrets::resolve(config, self.prompt_secrets)?;
-        // what this pass writes, so the second one does not repeat it. A
-        // template is not listed: the reloaded config may change what it
-        // renders, though a dry run lists it because it never renders one.
-        // Nor is an entry already in place, which the second pass still has
-        // to record.
-        let mut handled = vec![];
-        let done = write_and_reload_with(reload, self.dry_run, |written| {
-            if !files.is_empty() {
-                let opts = self.file_opts();
-                let plan = system::files::plan_apply(config, &files, &opts, &secrets)?;
-                // an applied config reports nothing: the rest of the apply
-                // may still have work, and "all files are applied" would
-                // read as the end of the command
-                if !plan.is_noop() {
-                    handled.extend(
-                        plan.planned_requests()
-                            .into_iter()
-                            .filter(|req| {
-                                self.dry_run || req.mode != system::files::FileMode::Template
-                            })
-                            .map(|req| format!("{req:?}")),
-                    );
-                    if !system::files::execute_apply(config, plan, &opts, written)? {
-                        return Ok(false);
-                    }
-                }
-            }
-            if edits.is_empty() {
-                return Ok(true);
-            }
-            system::edits::apply(config, &edits, &self.edit_opts(), written)
-        })?;
-        Ok(done.then_some(handled))
+        let pass = ConfigPass {
+            reload,
+            dry_run: self.dry_run,
+            files: self.file_opts(),
+            edits: self.edit_opts(),
+            secrets: &secrets,
+        };
+        apply_config_entries(config, &files, &edits, &pass)
     }
 
     /// The apply without an operation of its own, for a caller that already
@@ -250,7 +227,7 @@ impl DotfilesApply {
         }
         if !edits.is_empty() {
             let opts = self.edit_opts();
-            if !system::edits::apply(config, edits, &opts, written)? {
+            if !system::edits::apply(config, edits, &opts, secrets, written)? {
                 return Ok(false);
             }
         }
@@ -322,4 +299,68 @@ pub(crate) fn prune_orphans(
         written.extend(system::dotfile_groups::remove_recorded(&record, &opts)?);
     }
     Ok(())
+}
+
+/// What [`apply_config_entries`] needs besides the requests.
+pub(crate) struct ConfigPass<'a> {
+    pub(crate) reload: &'a IndexMap<String, String>,
+    pub(crate) dry_run: bool,
+    pub(crate) files: system::files::ApplyOpts,
+    pub(crate) edits: system::edits::ApplyOpts,
+    pub(crate) secrets: &'a system::secrets::SecretValues,
+}
+
+/// Writes `files` and `edits`, which the caller has already narrowed to the
+/// entries that deploy mise's own configuration, then runs the matching reload
+/// commands. Returns the targets it handled, or `None` when a prompt was
+/// declined. Shared by `mise dot apply` and the dotfiles phase of `mise
+/// bootstrap`, so both read the new configuration before planning the rest.
+pub(crate) fn apply_config_entries(
+    config: &Config,
+    files: &[system::files::FileRequest],
+    edits: &[system::edits::EditRequest],
+    pass: &ConfigPass<'_>,
+) -> Result<Option<Vec<String>>> {
+    // what this pass writes, so the second one does not repeat it. A
+    // template is not listed: the reloaded config may change what it
+    // renders, though a dry run lists it because it never renders one.
+    // Nor is an entry already in place, which the second pass still has
+    // to record.
+    let mut handled = vec![];
+    let done = write_and_reload_with(pass.reload, pass.dry_run, |written| {
+        if !files.is_empty() {
+            // an applied config reports nothing: the rest of the apply
+            // may still have work, and "all files are applied" would
+            // read as the end of the command
+            let applied = system::files::apply_layers(
+                config,
+                files,
+                &pass.files,
+                pass.secrets,
+                written,
+                |plan| {
+                    if plan.is_noop() {
+                        return false;
+                    }
+                    handled.extend(
+                        plan.planned_requests()
+                            .into_iter()
+                            .filter(|req| {
+                                pass.dry_run || req.mode != system::files::FileMode::Template
+                            })
+                            .map(|req| format!("{req:?}")),
+                    );
+                    true
+                },
+            )?;
+            if !applied {
+                return Ok(false);
+            }
+        }
+        if edits.is_empty() {
+            return Ok(true);
+        }
+        system::edits::apply(config, edits, &pass.edits, pass.secrets, written)
+    })?;
+    Ok(done.then_some(handled))
 }

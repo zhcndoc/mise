@@ -136,11 +136,11 @@ Shims 不会在 Shell 本身设置 `[env]` 变量，详见 [Shims 与 PATH](/dev
 
 | 功能                                 | Bash | Zsh | Fish | Nushell            | Elvish | Xonsh | PowerShell  |
 | ------------------------------------ | ---- | --- | ---- | ------------------ | ------ | ----- | ----------- |
-| `mise activate`                      | 是   | 是  | 是   | 是                 | 是     | 是    | 是          |
-| `mise shell` 和 `mise deactivate`   | 是   | 是  | 是   | 是                 | 是     | 是    | 是          |
-| 切换目录时更新                       | 是   | 是  | 是   | 下次显示提示符     | 是     | 是    | 7 及更新版本 |
-| [Shell 别名](/shell-aliases.html)    | 是   | 是  | 是   | 否                 | 否     | 否    | 否          |
-| `mise completion`                    | 是   | 是  | 是   | 否                 | 否     | 否    | 是          |
+| `mise activate`                      | Yes  | Yes | Yes  | Yes                | Yes    | Yes   | Yes         |
+| `mise shell` and `mise deactivate`   | Yes  | Yes | Yes  | Yes                | Yes    | Yes   | Yes         |
+| Update on directory change           | Yes  | Yes | Yes  | At the next prompt | Yes    | Yes   | 7 and newer |
+| [Shell aliases](/shell-aliases.html) | Yes  | Yes | Yes  | No                 | No     | No    | No          |
+| `mise completion`                    | Yes  | Yes | Yes  | Yes                | No     | No    | Yes         |
 
 Elvish 需要使用[对应章节](#elvish)中的 `mise` 别名，才能运行 `mise shell` 和 `mise deactivate`。PowerShell 5.1 和 Nushell 会在下次显示提示符时更新环境，而非在切换目录时立即更新，因此在同一行运行 `cd dir; node -v` 仍会使用上一个目录的工具。各 Shell 的处理方式详见[目录切换](/dev-tools/shims.html#hook-on-cd)。
 
@@ -150,7 +150,7 @@ Elvish 需要使用[对应章节](#elvish)中的 `mise` 别名，才能运行 `m
 
 Homebrew、Arch Linux (pacman)、Ubuntu PPA 和 COPR (dnf) 软件包会自动安装 bash、zsh 和 fish 的补全脚本。extrepo apt 仓库、yum 和 zypper 仓库以及 mise.run 安装脚本不会自动安装。
 
-`--install` 会将脚本写入 Shell 查找补全脚本的位置，但不会修改启动文件；对于 zsh 和 PowerShell，它会输出一条需要手动添加的语句：
+`--install` 会将脚本写入 Shell 查找脚本的位置，但不会编辑启动文件；对于 zsh、Nushell 和 PowerShell，它会打印一行需要手动添加的语句：
 
 ::: code-group
 
@@ -167,6 +167,12 @@ mise completion zsh --install
 ```sh [fish]
 mise completion fish --install
 # writes ~/.config/fish/completions/mise.fish
+```
+
+```sh [nushell]
+mise completion nu --install
+# writes ~/.config/nushell/completions/mise.nu
+# and prints the `source` line to add to your config.nu
 ```
 
 ```powershell [PowerShell]

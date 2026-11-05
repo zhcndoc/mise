@@ -12,6 +12,7 @@ mod confirm;
 mod decl;
 mod decls;
 mod dep;
+mod lock;
 mod outputs;
 mod schema;
 mod secrets;
@@ -21,6 +22,7 @@ pub use confirm::TaskConfirm;
 pub use decl::{TaskDecl, TaskTemplate};
 pub use decls::{TaskDecls, TaskTemplateDecls};
 pub use dep::TaskDep;
+pub use lock::TaskLock;
 pub use outputs::TaskOutputs;
 pub(crate) use schema::{defs as schema_defs, task_template as template_schema};
 pub use secrets::{G7_TEXT, TaskSecrets};
@@ -619,6 +621,9 @@ pub enum TaskOutput {
     #[default]
     Prefix,
     Replacing,
+    /// One line for each task that passed, and everything a failed task
+    /// printed, once it ends.
+    Summary,
     Timed,
     Quiet,
     Silent,

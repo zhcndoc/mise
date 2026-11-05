@@ -5,7 +5,7 @@ socialDescription: "在由其他程序维护的文件中管理代码块、行或
 
 # 编辑文件片段
 
-编辑条目只管理文件中的一部分，其他内容保持不变：可以是标记注释之间的代码块、单行内容，或 JSON、TOML、YAML 文件中的少数几个键。适用于你或应用程序也会手动编辑的文件。
+编辑条目只管理文件中的一部分，其余内容保持不变：可以是标记注释之间的代码块、单行，或 JSON、TOML、YAML、INI 文件中的少量键值。适用于你或应用也会手动编辑的文件。
 
 编辑条目位于 `[dotfiles]` 中。每个键由目标路径和标识该文件中编辑项的 ID 组成：
 
@@ -38,7 +38,7 @@ alias la='ls -la'
 
 mise 会根据文件扩展名选择标记注释：Lua 使用 `--`，`.vim` 文件使用 `"`，Lisp 使用 `;;`，INI 使用 `;`，JavaScript、Go 和 Rust 等类 C 语言使用 `//`，其他文件则使用 `#`，包括没有扩展名的文件（例如 `.zshrc`）。设置 `comment = "..."` 可使用其他前缀。`~/.vimrc` 没有扩展名，因此默认使用 Vim 不会识别为注释的 `#`；编辑 `~/.vimrc` 时请将 `comment = '"'`。
 
-JSON 等不支持行注释的文件不能使用代码块。若要设置 JSON、TOML 或 YAML 文件中的键，请使用[合并条目](#merge)；其他情况请[管理整个文件](/dotfiles/managed.html)。
+JSON 等不支持行注释的文件不能使用代码块。若要设置 JSON、TOML、YAML 或 INI 文件中的键，请使用 [merge 条目](#merge)；否则请[管理整个文件](/dotfiles/managed.html)。
 
 ### 从文件读取代码块内容 {#block-content-from-a-file}
 
@@ -61,7 +61,15 @@ JSON 等不支持行注释的文件不能使用代码块。若要设置 JSON、T
 "~/.omp/agent/config.yml/shared" = { source = "omp/shared.yml", merge = true }
 ```
 
-源文件以与目标相同的格式保存所需键，mise 会根据目标文件的 `.json`、`.toml`、`.yaml` 或 `.yml` 扩展名推断格式。`codex/shared.toml` 的内容如下：
+来源文件包含需要的键，并使用与目标相同的格式。mise 会根据目标的 `.json`、`.jsonc`、`.toml`、`.yaml`、`.yml` 或 `.ini` 扩展名推断格式。如果文件扩展名无法表明格式，请将 `format` 设为 `"json"`、`"jsonc"`、`"toml"`、`"yaml"` 或 `"ini"`：
+
+```toml
+[dotfiles]
+"~/.config/Code/User/settings.json/shared" = { source = "vscode/shared.json", merge = true, format = "jsonc" }
+"~/.config/pip/pip.conf/shared" = { source = "pip/shared.conf", merge = true, format = "ini" }
+```
+
+With `codex/shared.toml` containing:
 
 <!-- schema: skip -->
 
@@ -72,21 +80,43 @@ model = "gpt-5"
 theme = "light"
 ```
 
-应用时会设置 `model` 和 `tui.theme`，并保留 `~/.codex/config.toml` 中的其他内容，包括应用写入的 `[plugins.*]` 表和注释。如果目标文件不存在，则会根据源文件创建。
+applying sets `model` and `tui.theme` and leaves the rest of
+`~/.codex/config.toml` as it is, including `[plugins.*]` tables and comments
+the application wrote. A missing target is created from the source.
 
-- 两侧都存在的表或对象会递归合并。其他值（包括数组）都会被源文件中的值替换。
-- 仅存在于目标文件中的键不会更改；从源文件中删除的键也不会从目标文件中移除。
-- `mise dot status` 和 `mise dot diff` 只检查源文件中的键，因此应用新增的键不会被视为偏离配置。
-- TOML 和 YAML 会就地编辑，因此注释、键顺序以及未触及键的格式都会保留。JSON 不支持注释；mise 会保留其键顺序和缩进，并且仅在受管理的键不同时才重写文件。如果目标文件不是有效的 JSON、TOML 或 YAML（包括带注释的 JSON），系统会报告错误且不会覆盖文件。
-- 与代码块相同，设置 `template = "tera"` 时会先渲染源文件。
-- 与 `symlink` 条目类似，未设置 `source` 的合并条目会使用目标路径在 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下的对应文件。因此，`"~/.codex/config.toml/shared" = { merge = true }` 会读取 `<dotfiles.root>/.codex/config.toml`。
-- 若要将条目从 `symlink` 切换为 `merge`，请让合并条目指向相同源文件。如果目标是指向该源文件的链接，`mise dot apply` 会先将链接替换为普通副本再进行合并，因此之后缩减源文件、只保留自己管理的键时，应用拥有的键仍会保留。若目标链接到其他位置，则操作会被拒绝。
+- A table or object that exists on both sides merges recursively. Any other
+  value, including an array, is replaced by the source's value.
+- Keys that only the target has are never changed, and keys you remove from
+  the source are not removed from the target.
+- `mise dot status` and `mise dot diff` look only at the keys in the source, so
+  keys the application adds never show up as drift.
+- TOML 和 YAML 会原地编辑，因此注释、键顺序及未触及键的格式都会保留。JSON 不支持注释；mise 会保留键顺序和缩进，只有受管理的键发生差异时才重写文件。目标文件若不是有效的 JSON、TOML、YAML 或 INI（包括带注释的 JSON），mise 会报告错误且不会覆盖。
+- JSONC 是支持注释和尾随逗号的 JSON 格式，例如 VS Code 的 `settings.json`。它像 TOML 和 YAML 一样原地编辑，注释、缩进、尾随逗号以及未触及键的文本都会保留。`format = "jsonc"` 设置（或 `.jsonc` 扩展名）也会应用于来源文件，因此来源中也可以包含注释。其他 JSON5 语法（例如单引号字符串或不带引号的键）不受支持。
+- 使用 `format = "ini"` 或 `.ini` 扩展名时，INI 格式遵循 Python `configparser` 的解析规则。`[name]` 表示一个段；第一个段之前的键不属于任何段。`key = value` 和 `key: value` 都可设置键；不含这两种分隔符的行表示值为空的键；缩进比键更深的行会续接该值，包括中间的空行。只有以 `#` 或 `;` 开头的行才是注释，因此 `a = b ; c` 会将 `a` 设为 `b ; c`。值均按字符串处理，段不嵌套，因此来源段会逐键合并。键和段名按原样比较，包括大小写。重复的键或段使用最后一个值，mise 也会设置为该值。来源中未设置的键所在行不会被重写。
+- `template = "tera"` renders the source first, as for blocks.
+- Like a `symlink` entry, a merge entry without `source` uses the target's path
+  under [`dotfiles.root`](/configuration/settings.html#dotfiles.root), so
+  `"~/.codex/config.toml/shared" = { merge = true }` reads
+  `<dotfiles.root>/.codex/config.toml`.
+- To switch an entry from `symlink` to `merge`, point the merge at the same
+  source. If the target is a link to that source, `mise dot apply` replaces the
+  link with a regular copy before merging, so the application's keys survive
+  when you later trim the source down to the keys you own. A target that links
+  anywhere else is refused.
 
-如果两个合并条目为同一文件中的同一个键设置不同值，mise 会拒绝操作，而不会让它们相互覆盖。设置了 `template = "tera"` 的条目只会在应用时渲染，因此仅当两个条目在同一次运行中应用时，mise 才能发现冲突；通过目标过滤单独应用其中一个条目时则不会发现。mise 不会比较同一文件的合并条目与代码块或单行编辑，因此不要让它们同时管理同一个键。
+Two merge entries that set the same key of one file to different values are
+refused instead of fighting over it. An entry with `template = "tera"` is
+rendered only when it is applied, so mise finds a conflict with it when both
+entries are applied in the same run, not when one is applied alone through a
+target filter. mise does not compare a merge with a block or line edit of the
+same file, so do not let both own one key.
 
-### 应用可以更改的默认值 {#merge-missing}
+### Defaults the application may change {#merge-missing}
 
-有些键适合作为默认值提供，但应用一旦选定具体值后就应由应用管理，例如 `/model` 命令写入的模型。对此类键请使用 `merge = "missing"`。它只会设置目标中尚无值的键；你要强制管理的键则另用常规的 `merge = true` 条目：
+Some keys are worth shipping as a default but belong to the application once
+it has picked a value, such as the model a `/model` command writes. Use
+`merge = "missing"` for those. It sets only the keys the target has no value
+for, next to a regular `merge = true` entry for the keys you enforce:
 
 ```toml
 [dotfiles]
@@ -94,15 +124,68 @@ theme = "light"
 "~/.codex/config.toml/defaults" = { source = "codex/defaults.toml", merge = "missing" }
 ```
 
-- 目标中已有的键会保留当前值，即使与默认值不同也是如此。若应用删除某个键，下次应用配置时会重新补入该键。
-- 两侧都存在的表会逐键检查，因此会添加其中缺少的默认值，而不影响同级键。非表值会被视为已存在，因此其下的源表会跳过。
-- `mise dot status` 和 `mise dot diff` 只会报告缺少的键，不会报告值不同。
-- `missing` 条目不会与其他设置同一键的条目冲突：无论先应用哪一项，另一条目的值都会生效。
+- A key the target already has keeps its value, even a different one. A key
+  the application removes is filled in again on the next apply.
+- A table that exists on both sides is compared key by key, so a default
+  inside it is added without touching its siblings. A value that is not a
+  table counts as present, so a source table under it is skipped.
+- `mise dot status` and `mise dot diff` report only missing keys, never a
+  differing value.
+- A `missing` entry never conflicts with another entry for the same key: the
+  other entry's value wins whichever applies first.
 
-## 冲突和移除 {#conflicts}
+### 由 mise 创建文件时设置权限 {#merge-permissions}
 
-编辑项会在不使用 `--force` 的情况下应用。如果代码块标记已损坏，或目标是符号链接，mise 会报告错误；请改为将编辑项指向要更改的实际文件。编辑 `/etc/hosts` 等归 root 所有的文件需要以 root 身份运行 mise；详见[主目录之外的文件](/dotfiles/managed.html#root-owned-files)。
+`merge` 条目可使用 `permissions` 设置权限，值为八进制字符串，例如 `"0600"`。apply 创建目标文件时，mise 会设置该权限；如果文件已存在，则不会更改权限，因为该文件由写入它的应用管理。这适合先用占位内容初始化、之后再填写的文件，例如令牌文件：
 
-从配置中删除编辑条目不会移除文件中的代码块、行或键。`mise dot unapply` 会连同标记一起移除代码块。普通行没有标记可证明它由 mise 添加，因此移除该行需要运行 `mise dot unapply --force`。合并的键会保留，因为应用可能已更改其值。
+```toml
+[dotfiles]
+"~/.config/mise/conf.d/private.local.toml/seed" = { source = "templates/private.toml", merge = "missing", permissions = "0600" }
+```
 
-不同配置文件中的编辑条目按目标路径和 ID 合并，因此更靠近当前目录的配置会替换同 ID 编辑项。[参考文档](/dotfiles/reference.html#edit-keys)列出了所有编辑键。
+首次 apply 会根据来源创建文件，并设为 `0600`。之后的 apply 只会添加缺少的键，因此你填写的令牌会保留；如果文件被删除，也会重新创建。若还要保留现有文件的权限，请为同一路径添加[仅设置权限的条目](/dotfiles/managed.html#permissions)。同一文件的 merge 条目若声明了不同权限，mise 会拒绝应用；在 Windows 上，`permissions` 会被忽略并显示警告。代码块和单行编辑不支持 `permissions`。
+
+### 为缺失的键填入密钥 {#merge-secrets}
+
+设置 `template = "tera"` 的 `merge = "missing"` 条目可通过 <code v-pre>{{ secret(name="...") }}</code> 读取已声明的[密钥输入](/bootstrap/secrets.html)。只有当目标缺少待填写的键时，mise 才会读取或提示输入密钥；已设置的键不会再次要求输入：
+
+```toml
+[bootstrap.secrets]
+github_token = "MISE_GITHUB_TOKEN"
+npm_token = "NPM_TOKEN"
+
+[dotfiles]
+"~/.config/mise/conf.d/private.local.toml/seed" = { source = "templates/private.toml", template = "tera", merge = "missing", permissions = "0600" }
+```
+
+```toml
+# templates/private.toml
+[env]
+MISE_GITHUB_TOKEN = "{{ secret(name='github_token') }}"
+NPM_TOKEN = "{{ secret(name='npm_token') }}"
+```
+
+在新机器上运行 `mise dot apply --prompt-secrets` 时，系统会提示输入这两个令牌并创建文件。之后在来源中添加 `PYPI_TOKEN` 并再次 apply，mise 只会提示输入该令牌，其他两个令牌保持不变。
+
+- `mise dot status` 和 `mise dot diff` 不会读取或提示输入密钥。尚未填入密钥的键会报告为缺失，差异中会用 <code v-pre>‹secret:name›</code> 代替其值。
+- 即使对应的键已经设置，未在 `[bootstrap.secrets]` 中声明的密钥仍会导致错误。
+- 每个 `secret()` 都必须原样插入。若使用 `| upper` 等过滤器更改或移除它，会导致错误，因为 mise 无法判断结果对应哪个密钥。
+- `mise bootstrap` 无法预先检查这些密钥，因为是否需要密钥取决于当时文件中的键。密钥不可用时，流程会在该条目处停止。
+- 与其他模板一样，密钥值会原样插入；含引号或换行的值可能需要按格式进行转义。如果插入密钥后文件无法解析，mise 会报告错误，但不会打印文件内容。
+- 强制应用的 `merge = true` 条目不能使用 `secret()`，因为它会覆盖你之后修改的值。
+
+## Conflicts and removal {#conflicts}
+
+Edits apply without `--force`. mise reports an error when a block's markers
+are damaged, or when the target is a symlink; point the edit at the real file
+you want to change instead. Editing a root-owned file, such as `/etc/hosts`,
+requires running mise as root; see
+[Files outside your home directory](/dotfiles/managed.html#root-owned-files).
+
+Deleting an edit entry from your config leaves its block, line, or keys in the
+file. [`mise dot unapply`](/cli/dotfiles/unapply.html) removes a block
+together with its markers. A plain line has no marker to prove mise added it,
+so removing one needs `mise dot unapply --force`. Merged keys stay, because
+the application may have changed them since.
+
+编辑条目会按目标路径和 ID 在多个配置文件间合并，因此更靠近项目的配置会替换相同 ID 的编辑项。在[dotfile 组](/dotfiles/groups.html#group-edits)中声明的编辑项仅在选中该组时应用。[参考](/dotfiles/reference.html#edit-keys)列出了所有编辑键。

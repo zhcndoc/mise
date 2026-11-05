@@ -11,17 +11,10 @@ use aqua_registry::encode_package_rkyv;
 use aqua_registry::types::{AquaPackage, AquaPackageType, RegistryPackageRow, RegistryYaml};
 use eyre::{Result, eyre};
 
-#[path = "build/lockfile_rollout.rs"]
-mod lockfile_rollout;
 #[path = "build/registry_url.rs"]
 mod registry_url;
 
 fn main() -> Result<()> {
-    let release = (
-        env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>()?,
-        env!("CARGO_PKG_VERSION_MINOR").parse::<u32>()?,
-    );
-    lockfile_rollout::check_release(release.0, release.1);
     cfg_aliases::cfg_aliases! {
         asdf: { any(feature = "asdf", not(target_os = "windows")) },
         macos: { target_os = "macos" },
@@ -382,8 +375,8 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                                 .as_str()
                                 .expect("backend attestations_since must be a string");
                             assert!(
-                                full.starts_with("github:"),
-                                "[{short}] backend attestations_since is only supported for github: backends"
+                                full.starts_with("github:") || full.starts_with("aqua:"),
+                                "[{short}] backend attestations_since is only supported for github: and aqua: backends"
                             );
                             semver::Version::parse(value)
                                 .expect("backend attestations_since must be a semantic version");
@@ -509,7 +502,7 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                     .iter()
                     .map(|f| match f {
                         toml::Value::String(path) => format!(
-                            "RegistryIdiomaticFile {{ path: {}, version_regex: None, version_json_path: None, version_expr: None, deprecated: None }}",
+                            "RegistryIdiomaticFile {{ path: {}, version_regex: None, version_json_path: None, version_expr: None }}",
                             raw_string_literal(path)
                         ),
                         toml::Value::Table(spec) => {
@@ -521,7 +514,6 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                                             | "version_regex"
                                             | "version_json_path"
                                             | "version_expr"
-                                            | "deprecated"
                                     ),
                                     "[{short}] unknown idiomatic file field: {key}"
                                 );
@@ -549,12 +541,11 @@ fn codegen_registry(aqua_packages: &[RegistryPackageRow]) {
                                     .unwrap_or_else(|| "None".to_string())
                             };
                             format!(
-                                "RegistryIdiomaticFile {{ path: {}, version_regex: {}, version_json_path: {}, version_expr: {}, deprecated: {} }}",
+                                "RegistryIdiomaticFile {{ path: {}, version_regex: {}, version_json_path: {}, version_expr: {} }}",
                                 raw_string_literal(required("path")),
                                 optional("version_regex"),
                                 optional("version_json_path"),
                                 optional("version_expr"),
-                                optional("deprecated"),
                             )
                         }
                         _ => panic!(

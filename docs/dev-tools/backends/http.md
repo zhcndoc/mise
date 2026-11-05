@@ -52,12 +52,13 @@ mise exec -- my-tool --version
 
 ::: v-pre
 
-- `{{ version }}`：正在安装的版本
-- `{{ os() }}`：`linux`、`macos` 或 `windows`
-- `{{ arch() }}`：`x64` 或 `arm64`
-- `{{ os_family() }}`：`unix` 或 `windows`
-- `{{ libc() }}`：`gnu` 或 `musl`
-- `{{ avx2() }}`：`yes` 或 `no`
+- `{{ version }}`: the version being installed
+  也可对版本使用 Tera 过滤器，例如 `{{ version | replace(from='-build1', to='') }}`。
+- `{{ os() }}`: `linux`, `macos` or `windows`
+- `{{ arch() }}`: `x64` or `arm64`
+- `{{ os_family() }}`: `unix` or `windows`
+- `{{ libc() }}`: `gnu` or `musl`
+- `{{ avx2() }}`: `yes` or `no`
 
 :::
 
@@ -376,6 +377,8 @@ size = "12345678"
 若要使用 HTTP Basic 身份验证，请将主机添加到 netrc 文件；参见
 [`netrc`](/configuration/settings.html#netrc) 设置。令牌或 API 密钥则通过 `headers` 配置。
 
+URL 中的凭据不会写入 `mise.lock`：userinfo（`https://user:token@host/...`）会从记录的 URL 中移除；若 URL 查询字符串中包含凭据（例如 `?token=`、`?access_token=`、`?key=`、`?sig=`、`?X-Amz-Signature=`），则会拒绝使用该 URL。因此，`mise lock` 以及会写入锁文件的安装操作会失败，并指出参数名称。请将此类凭据移至 `headers` 或 netrc。
+
 ### `headers`
 
 下载请求，以及 [`version_list_url`](#version-list-url) 和
@@ -394,8 +397,7 @@ linux-x64 = { url = "https://ghcr.io/v2/acme/polaris/blobs/sha256:...", format =
 macos-arm64 = { url = "https://ghcr.io/v2/acme/polaris/blobs/sha256:...", format = "tar.gz" }
 ```
 
-mise 会在调试输出中隐藏标头值；标头设置不会改变工具的安装位置。`headers` 中的条目会
-替换 mise 原本可能发送到同一主机的令牌。
+mise 会在调试输出中脱敏 header 值，且不会将其与安装信息一起记录。header 不会改变工具的安装位置。`headers` 条目会替换 mise 原本要发送到同一主机的任何令牌。
 
 mise 只会向 `url` 中的主机发送标头。如果服务器重定向到其他主机、端口或协议，mise 会在
 重定向链的后续请求中移除所有标头；GHCR 的签名 blob URL 需要这种行为。同源重定向则会
@@ -458,8 +460,9 @@ strip_components = 1
 
 ### `bin_path` {#bin-path}
 
-相对于安装目录的路径，指定可执行文件所在目录，或 mise 放置单个下载文件的位置。此值支持
-模板；设置后会关闭自动移除目录层级的功能。
+The directory, relative to the install directory, that holds the executables,
+or where mise places a single downloaded file. It is a template, and setting it
+turns off the automatic stripping. 绝对路径或包含 `..` 的路径会被拒绝。
 
 ::: v-pre
 如果归档的目录结构为 `my-tool-1.0.0/bin/my-tool`，可以像下方示例那样移除最外层目录；

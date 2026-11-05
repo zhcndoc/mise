@@ -99,7 +99,8 @@ env = { ASC_KEY_ID = { required = true, redact = true } }
 run = "./deploy.sh"
 ```
 
-mise 会匹配具体的值，而不是变量名：标记某个值后，mise 会在处理的输出中将该文本全部替换。
+mise matches values, not names: once a value is marked, mise replaces that text
+该值在 mise 处理的输出中无论出现在哪里都会被替换。任务输出按行脱敏，因此多行值（例如私钥，或从末尾带换行符的文件中读取的令牌）的每一行都会单独替换；短于四个字符的行会保留原样。
 
 ### 遮蔽范围 {#what-redaction-covers}
 

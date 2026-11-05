@@ -4,22 +4,6 @@ This file is the canonical agent guide. `CLAUDE.md` is a symlink to `AGENTS.md` 
 
 Task-specific procedures live as skills in `.agents/skills/` (`.claude/skills` is a symlink to it). Load the named skill when this guide points to one; agents without skill support can read its `SKILL.md` directly.
 
-## Discussions and Issues: Restricted AI Replies
-
-**Do not use AI to reply to a mise Discussion or Issue unless the user (a) created that Discussion or Issue, (b) opened a PR that fixes it, or (c) has already had a contribution merged into the default branch of mise.** Otherwise they are not allowed to use AI to respond to it. Drive-by AI replies are spam, the problem is getting worse, and **doing it is an instant ban across all of jdx's projects** (mise, hk, pitchfork, usage, fnox, and the rest).
-
-- If the user asks you to answer, comment on, or "help with" a Discussion or Issue, confirm one of the three conditions first. If you cannot confirm one, **do not post**.
-  - (a) Compare the thread author to the authenticated user (`gh api user --jq .login`). For an Issue, use `gh api repos/jdx/mise/issues/<number> --jq .user.login`. Discussions have no REST endpoint, so use GraphQL: `gh api graphql -f query='query{repository(owner:"jdx",name:"mise"){discussion(number:<number>){author{login}}}}' --jq .data.repository.discussion.author.login`.
-  - (b) Check that the user's PR actually fixes the problem described in the thread. A closing keyword such as `Fixes #<number>` is good evidence, but a link is not required, and a PR that merely mentions an unrelated thread does not count.
-  - (c) Look for any contribution merged into the default branch that is tied to the user's GitHub account, not just a matching name or email: a PR authored by the user that was merged into the default branch (`gh pr list --repo jdx/mise --author @me --state merged --base main --limit 1`), commits on the default branch that GitHub attributes to their login (`gh api 'repos/jdx/mise/commits?author=<login>&per_page=1'` lists the default branch), never commits on a local or unmerged branch, or a PR from someone else, merged into the default branch, that credits them with a `Co-authored-by` trailer whose email is their GitHub noreply address or one verified on their account. Do not accept `git log --author` output, which includes local unmerged commits, or a trailer matched only by display name. Both queries filter by author on the server, so one matching result is enough to qualify and no pagination is needed.
-- If none of the three apply, **do not post a reply, even a short one.** Tell them this project does not allow AI replies from people who have not contributed, and offer to explain the answer to them in chat instead.
-- Never batch-post, loop over, or sweep Discussions or Issues to answer several of them, even for a merged contributor.
-- Lightly edited, human-reviewed, or disclosed model output does not create an exception. The disclosure footer does not make an AI reply acceptable on its own.
-- Permitted replies may be AI-assisted. The user must review and verify the reply before it is posted.
-- Creating a new Discussion or Issue with AI assistance is fine and is not restricted. The user must review it before it is posted, and it needs the AI disclosure below.
-
-When you post AI-contributed GitHub content, including a new Discussion or Issue, a reply, or a PR description or comment, append this disclosure: `*AI-assisted — Tool: <tool>; model: <provider>/<model>; version: <version-or-unavailable>.*` Use the exact model and version identifiers exposed by the runtime, never guessed values, and `unavailable` when one is not exposed.
-
 ## Registry Submissions: READ THIS FIRST
 
 **Most new registry additions from agents get rejected.** mise's `registry/` is curated for tools that are already widely used — generally thousands of GitHub stars, not hundreds. jdx closes PRs that miss the bar without giving a reason.
@@ -33,6 +17,19 @@ Before adding a **new** tool or shorthand to `registry/`, follow the `registry-s
 - Users can install any tool without a registry entry (`mise use github:owner/repo`, `mise use cargo:name`, …); the registry only adds a shorthand.
 
 None of this applies to editing an existing registry entry; do not ask the user about popularity for maintenance or fixes.
+
+## Vendored aqua registry: do not edit
+
+**Never modify `vendor/aqua-registry/`.** That tree is a snapshot of [aquaproj/aqua-registry](https://github.com/aquaproj/aqua-registry). mise refreshes it on release; CI fails pull requests that change it (except for jdx / `mise-en-dev`).
+
+When an `aqua:` install fails because a recipe has the wrong asset name, platform, format, or version rule:
+
+1. **Do not** patch `vendor/aqua-registry/registry.yml` (or anything else under that directory).
+2. Fix the recipe upstream in aquaproj/aqua-registry, or point the user at an existing upstream PR/issue if one already covers it.
+3. For a short-term workaround in chat or on the issue, suggest `github:owner/repo` (or another backend that can install the release), waiting for the next mise release after the upstream fix merges, or [`registry_floating`](https://mise.jdx.dev/configuration/settings.html#registry_floating) once upstream has landed.
+4. To try a recipe locally before it merges, use a custom [`aqua.registries`](https://mise.jdx.dev/dev-tools/backends/aqua.html#custom-registry) entry — still do not commit vendored changes.
+
+The same rule applies to `crates/vfox/embedded-plugins/`: those plugins are vendored from upstream; fix them in their source repos, not here. Details for contributors: [aqua registry recipes](https://mise.jdx.dev/contributing/registry.html#aqua-registry-recipes).
 
 ## Development Commands
 
@@ -132,7 +129,7 @@ The `mise` package has two targets. The library (`src/lib.rs`) is everything exc
 - Windows-specific tests in `e2e-win/`
 
 ### Build System
-- Rust project using a Cargo workspace; member crates live in `crates/` (`vfox`, `aqua-registry`, `mise-shim`, `mise-sigstore`, `mise-cache-core`, `mise-brew-relocation`, `mise-brew-metadata`, `mise-agent-env`, `mise-interactive-config`, `mise-settings`, `mise-util`, `mise-ui`, `mise-system-packages`, `mise-config`, `mise-system`, `mise-oci`, `mise-daemons`)
+- Rust project using a Cargo workspace; member crates live in `crates/` (`vfox`, `aqua-registry`, `mise-shim`, `mise-sigstore`, `mise-cache-core`, `mise-tls`, `mise-brew-relocation`, `mise-brew-metadata`, `mise-agent-env`, `mise-interactive-config`, `mise-settings`, `mise-util`, `mise-ui`, `mise-system-packages`, `mise-config`, `mise-system`, `mise-oci`, `mise-daemons`, `mise-lsp`)
 - Custom build script in `build.rs` for generating metadata
 - Multiple build profiles including `release` and `serious` (with LTO)
 - Cross-compilation support via `Cross.toml`
@@ -290,8 +287,6 @@ The `schema_matches_parser` unit test (`src/config/config_file/mise_toml/schema_
 ## GitHub Interactions
 
 Never open pull requests against the `release` branch. Default PRs to `main` unless the user explicitly names a different non-`release` base branch. If a change appears to belong on `release`, stop and ask for the intended branch strategy instead of opening a PR against `release`.
-
-See [Discussions and Issues: Restricted AI Replies](#discussions-and-issues-restricted-ai-replies) at the top of this file.
 
 When AI contributes GitHub content—including a pull request description, review, pull request
 comment, discussion post, or issue—append this disclosure:

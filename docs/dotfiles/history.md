@@ -296,14 +296,39 @@ mise dot history diff 42 --operation --patch
 mise dot untrack ~/.zshrc
 ```
 
-[`mise dot untrack`](/cli/dotfiles/untrack.html) 会移除跟踪条目，但文件仍保留在原处。之后的检查点不会再记录它，但其早期版本仍保存在 Git 中，且仍可共享。
-若要保留文件历史但绝不共享，请改用 [`mode = "track-local"`](/dotfiles/history.html#local-only) 跟踪。
-对于从其他配置文件（例如系统配置）继承的条目，`untrack` 会改为在 `config.local.toml` 中设置 `enabled = false`。
-也可以在后续配置文件中设置 `enabled = false`，以关闭任何继承条目。
+[`mise dot untrack`](/cli/dotfiles/untrack.html) removes the tracking entry.
+The file stays in place. Future checkpoints leave it out, but its earlier
+versions remain in Git and can still be shared. To keep a file's history
+without ever sharing it, track it with
+[`mode = "track-local"`](/dotfiles/history.html#local-only) instead. For an entry inherited from another config file, such as
+system config, `untrack` sets `enabled = false` in your `config.local.toml`
+instead. You can turn off any inherited entry the same way, with
+也可以在后续配置文件中使用 `enabled = false` 关闭任一继承的条目。若要清除较早的版本，请参阅[从历史记录中清除文件](#purge)。
 
 若要停止保存跟踪目录中的部分内容（例如日志或缓存），请改用[排除规则](#exclude-files-from-one-directory)。
 
-## 选择历史记录的内容 {#explicit-tracking-and-exclusions}
+### 取消误跟踪的文件 {#undo-an-accidental-track}
+
+`track` 会立即保存。`untrack`、`rollback` 和 `undo` 会更改跟踪状态或当前文件，但不会删除旧提交，因此误跟踪的密钥仍会保留在历史记录中。请先使用 `mise dot track --dry-run <path>` 预览目录。若要清除已保存的版本，请先轮换凭据，再运行 `mise dot untrack <path>`，避免下次保存时再次记录该文件，然后[从历史记录中清除文件](#purge)。已推送到 origin 的历史记录需要按[从历史记录中移除明文](/dotfiles/encryption.html#remove-plaintext-from-history)中的手动步骤处理。
+
+## 从历史记录中清除文件 {#purge}
+
+`untrack`、`rollback` 和 `undo` 只会添加检查点，因此误跟踪的密钥仍能从早期检查点中读取。若要清除它，请先轮换密钥并停止跟踪该文件，然后运行 [`mise dot history purge`](/cli/dotfiles/history/purge.html)：
+
+```sh
+mise dot untrack ~/.aws/credentials
+mise dot history purge ~/.aws/credentials
+```
+
+命令会列出包含该文件的检查点，并在重写前询问确认（`--dry-run` 只显示列表后退出，`--yes` 跳过询问）。只更改了该文件的检查点会被删除。其他检查点会保留，但不再包含该文件；其说明、日期、标签和编号也会保留，因此 `mise dot history`、`rollback` 和 `undo` 仍可使用。之后，mise 会从其仓库中删除被替换的对象。传入 `--keep-objects` 可保留这些对象，或传入 `--backup` 将旧历史保存在 `refs/mise/purge-backup/` 下，但备份仍包含该密钥。
+
+请先停止[监视器](#automatic-saves)，避免命令运行期间再次保存该文件。如果文件仍在跟踪，下次保存时会重新记录其当前内容。
+
+mise 永远不会重写已同步到 [origin](/dotfiles/sync.html) 的历史记录，因此如果该路径的任何已保存版本曾经同步过，命令会拒绝执行。请按[从历史记录中移除明文](/dotfiles/encryption.html#remove-plaintext-from-history)中的方式使用 Git 从 origin 中移除文件，然后在其他机器上重新接管历史记录。清除操作只会删除 mise 自己的副本；备份、仓库克隆或已同步的 origin 都会保留各自的副本。
+
+使用 [`mode = "track-local"`](#local-only) 跟踪的文件拥有独立历史记录：取消跟踪后，请运行 `mise dot --local history purge` 清除它。
+
+## Choose what history saves {#explicit-tracking-and-exclusions}
 
 在全局配置中声明要保存的每个文件或目录：
 
@@ -323,9 +348,12 @@ mise 只会从系统和全局配置读取跟踪条目。项目配置中的 `mode
 符号链接会以链接形式保存。若要保存链接目标的内容，请单独跟踪目标。如果父目录是符号链接，请跟踪该链接，并使用实际目录路径跟踪其下文件。
 主目录和 mise 配置目录本身也可以是符号链接；mise 会将它们映射到每台机器上对应的目录。
 
-跟踪条目不能包含 `source`、`content`、`manifest`、`permissions`、`remove_empty`、`relative`、`dot_prefix` 或变体 `target` 覆盖项；
-详见[模式和键表](/dotfiles/reference.html#modes-and-keys)。`mise dot paths` 会将此类条目标记为无效并从历史记录中排除；
-如果 `mise dot track` 写入的条目未生效，该命令会以非零状态退出。
+A tracking entry cannot contain `source`, `content`, `manifest`,
+`permissions`, `remove_empty`, `create_if_missing`, `relative`, `dot_prefix`, or variant `target`
+overrides; see the [modes and keys table](/dotfiles/reference.html#modes-and-keys).
+`mise dot paths` reports such an entry as invalid and leaves it out of
+history, and `mise dot track` exits non-zero if the entry it writes is not
+active.
 
 建议从单个配置文件开始跟踪，以便自行选择保存内容。不要将日志、缓存、数据库和应用会话状态纳入历史记录。
 以 `.local.toml` 结尾的文件属于机器本地配置，永远不会保存，即使设置了 `encrypt = true` 也一样。

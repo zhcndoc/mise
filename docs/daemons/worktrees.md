@@ -87,7 +87,23 @@ port = 26258
 ports.http_port = 8081
 ```
 
-Daemon 的主端口和命名端口必须各不相同。设置 `port = "auto"` 后，命名端口会随主端口一起偏移，因此每个检出目录都有一组完整的端口。手动设置的命名端口则会按填写值使用。
+A daemon's primary port and named ports must all differ. With `port = "auto"`,
+the named ports move with the primary port, so each checkout keeps a complete
+set. 设为整数的命名端口会按原样使用。
+
+若要为命名端口指定独立范围，可像主端口一样按工作树分配，并设置自己的 `base`：
+
+```toml
+[daemons.cockroach]
+preset = "cockroachdb"
+version = "26"
+port = { auto = true, base = 26258 }
+ports.http_port = { auto = true, base = 27000 }
+```
+
+主检出目录会使用 `27000`；每个关联工作树会像主端口一样加上相同的槽位，因此无论主端口的 `base` 如何设置，每个检出目录都会获得独立的 HTTP 端口。省略 `base` 时会从预设为该端口设置的默认值开始（本例为 `8080`）。即使主端口是固定整数，也可以使用此方式；此时槽位取自项目根目录。与[自动端口](#automatic-ports)一样，`stride` 用于拉开槽位间距，默认值为 `1`。未设置 `auto` 的命名端口仍为整数或预设默认值，因此不会影响现有配置。
+
+mise 加载配置时会拒绝以下自动分配的命名端口：解析后与同一项目中的其他守护进程端口冲突，或在工作树中超过 65535。该检查仅覆盖单个检出目录中的一个项目。mise 不会跨工作树或项目比较端口，因此不同位置的范围仍可能重叠并发生冲突：槽位最多会达到 `511 * stride`，所以一个工作树中的 `27000` 可能等于另一检出目录中其他守护进程的 `27000 + n`。请为每个守护进程及命名端口设置相隔至少 512 的 `base`；`stride` 更大时还需增加间距。
 
 mise 会将每个命名端口导出为 `<NAME>_<PORT_NAME>`，daemon 名称按[端口变量](#port-variables)中的规则转换：使用 `cockroachdb` 预设的 `crdb` daemon 会导出 `CRDB_HTTP_PORT`，名为 `authz` 的 `spicedb` daemon 则会导出 `AUTHZ_HTTP_PORT` 和 `AUTHZ_METRICS_PORT`。这些变量的值就是 daemon 使用的端口，因此请直接读取，而不要自行增加偏移量：
 
@@ -177,7 +193,11 @@ run = "exec npm run dev -- --port $API_PORT"
 port = 3100
 ```
 
-## 为每个 worktree 分配稳定 URL {#stable-urls-per-worktree}
+### 无法按工作树拆分的资源
+
+有些资源在整台机器上只有一份：测试未按名称隔离的数据库、测试套件写死的端口、模拟器或设备。请为使用这些资源的任务添加[`锁`](/tasks/task-configuration.html#lock)，让不同工作树中的运行依次执行，避免冲突。
+
+## Stable URLs per worktree
 
 不同的端口意味着每项服务都必须知道其他服务的位置。对于 HTTP 服务，pitchfork 反向代理可以省去此步骤：它会将固定主机名路由到 daemon 绑定的端口，而 mise 加载配置时也会生成相同的主机名。必须在 pitchfork 中启用代理；请参阅开发环境指南中的[开始之前](/daemons/development-stack.html#before-you-start)。
 

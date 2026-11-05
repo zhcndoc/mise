@@ -7,7 +7,7 @@ socialDescription: "在 mise.toml 中声明 macOS LaunchAgent 并使用 launchct
 
 在 `[bootstrap.macos.launchd.agents]` 中为 macOS 用户声明 LaunchAgent。运行 [`mise bootstrap`](/bootstrap.html) 或 [`mise bootstrap macos launchd-agents apply`](/cli/bootstrap/macos/launchd-agents/apply.html) 后，每个代理都会写入 `~/Library/LaunchAgents/dev.mise.<name>.plist` 并加载到当前登录会话。
 
-若要用一份声明在 macOS、Linux 和 Windows 上后台运行同一个程序，请改用[用户服务](/bootstrap/services.html#user-services)。需要日历计划、队列目录或进程类型等 launchd 功能时，请使用 LaunchAgent。同一名称不能同时在两处声明，因为两者会写入同一个 plist。
+若要用同一份声明在 macOS、Linux 和 Windows 后台运行程序，请改用[用户服务](/bootstrap/services.html#user-services)。需要日历计划、启动事件、队列目录或进程类型等 launchd 功能时，请使用 LaunchAgent。两个位置不能声明相同名称，因为它们会写入同一个 plist。
 
 ## 示例
 
@@ -50,7 +50,25 @@ start_calendar_interval = [{ hour = 3, minute = 0 }, { hour = 12, minute = 0, we
 
 只要 `queue_directories` 列出的目录中有一个非空，launchd 就会启动代理，并预期代理会清空这些目录。每个条目都必须是绝对路径、`~` 或以 `~/` 开头的路径。
 
-## 保持程序运行
+## 在启动事件时运行
+
+`launch_events` 会写入 launchd 的 `LaunchEvents` 字典。按事件流嵌套配置表，再按自选的事件名称嵌套。每个事件中的属性必须使用 launchd 原有名称，且区分大小写：
+
+```toml
+[bootstrap.macos.launchd.agents.usb-handler]
+program = "~/.local/bin/device-handler"
+
+[bootstrap.macos.launchd.agents.usb-handler.launch_events."com.apple.iokit.matching".apple-usb]
+IOProviderClass = "IOUSBHostDevice"
+idVendor = 1452
+IOMatchLaunchStream = true
+```
+
+此配置会订阅匹配的 Apple USB 设备。程序必须通过 `xpc_set_event_stream_handler` 接收事件流；`LaunchEvents` 不是在收到通知时运行任意命令的通用机制。请使用支持所选事件流的处理程序。
+
+事件属性会保留字符串、布尔值、整数、实数、数组和嵌套表。TOML 日期时间值不受支持。事件流名称中包含点号时请加引号，以便 TOML 将其视为单个键。字符串值支持模板，但事件属性中的 `~` 会原样传递。
+
+## Keep a program running
 
 - `run_at_load = true` 会在代理加载时启动程序，包括 apply 时和用户登录时。
 - `keep_alive = true` 会在程序每次退出后重新启动。
@@ -120,34 +138,39 @@ mise bootstrap macos launchd-agents apply --yes       # apply without prompting
 
 ## 参考
 
-| 配置键                    | plist 键                                 | 说明                                                                      |
-| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
-| `program`                 | `ProgramArguments[0]`                    | Required; `~` expanded                                                    |
-| `args`                    | `ProgramArguments[1..]`                  | 按原样传递                                                                  |
-| `run_at_load`             | `RunAtLoad`                              | 加载时启动                                                                  |
-| `keep_alive`              | `KeepAlive`                              | 无论何种退出情况都会重启                                                    |
-| `keep_alive_on_failure`   | `KeepAlive = { SuccessfulExit = false }` | 失败后重启；不能与 `keep_alive` 同时使用                                    |
-| `start_interval`          | `StartInterval`                          | 秒                                                                        |
-| `start_calendar_interval` | `StartCalendarInterval`                  | 单个表或表数组，可包含 `minute`、`hour`、`day`、`weekday`、`month`         |
-| `queue_directories`       | `QueueDirectories`                       | 绝对路径或 `~/` 路径                                                        |
-| `throttle_interval`       | `ThrottleInterval`                       | 两次启动之间的最短间隔秒数                                                  |
-| `process_type`            | `ProcessType`                            | `Background`、`Standard`、`Adaptive` 或 `Interactive`                      |
-| `nice`                    | `Nice`                                   | -20 到 20                                                                 |
-| `environment`             | `EnvironmentVariables`                   | 环境变量表                                                                  |
-| `working_directory`       | `WorkingDirectory`                       | 会展开 `~`                                                                  |
-| `stdout_path`             | `StandardOutPath`                        | 会展开 `~`                                                                  |
-| `stderr_path`             | `StandardErrorPath`                      | 会展开 `~`                                                                  |
-| `kickstart`               | 不写入 plist                             | 加载后运行 `launchctl kickstart`                                            |
+| Key                       | plist key                                | Notes                                                                      |
+| ------------------------- | ---------------------------------------- | -------------------------------------------------------------------------- |
+| `program`                 | `ProgramArguments[0]`                    | Required; `~` expanded                                                     |
+| `args`                    | `ProgramArguments[1..]`                  | Passed as written                                                          |
+| `run_at_load`             | `RunAtLoad`                              | Start when loaded                                                          |
+| `keep_alive`              | `KeepAlive`                              | Restart after any exit                                                     |
+| `keep_alive_on_failure`   | `KeepAlive = { SuccessfulExit = false }` | Restart after a failure; not with `keep_alive`                             |
+| `start_interval`          | `StartInterval`                          | Seconds                                                                    |
+| `start_calendar_interval` | `StartCalendarInterval`                  | Table or array of tables with `minute`, `hour`, `day`, `weekday`, `month`  |
+| `queue_directories`       | `QueueDirectories`                       | Absolute paths or `~/` paths                                               |
+| `launch_events`           | `LaunchEvents`                           | 按事件流和事件名称组织配置表；属性保留原始大小写 |
+| `throttle_interval`       | `ThrottleInterval`                       | Minimum seconds between launches                                           |
+| `process_type`            | `ProcessType`                            | `Background`, `Standard`, `Adaptive`, or `Interactive`                     |
+| `nice`                    | `Nice`                                   | -20 to 20                                                                  |
+| `environment`             | `EnvironmentVariables`                   | Table of variables                                                         |
+| `working_directory`       | `WorkingDirectory`                       | `~` expanded                                                               |
+| `stdout_path`             | `StandardOutPath`                        | `~` expanded                                                               |
+| `stderr_path`             | `StandardErrorPath`                      | `~` expanded                                                               |
+| `kickstart`               | Not written to the plist                 | Run `launchctl kickstart` after loading                                    |
 
-代理名称可以包含字母、数字、`.`、`_` 和 `-`。每个代理的标签为 `dev.mise.<name>`。
+Agent names may contain letters, numbers, `.`, `_`, and `-`. Each agent's label
+is `dev.mise.<name>`.
 
-## Linux 和 Windows
+## On Linux and Windows
 
-在其他平台上会忽略此配置段，因此同一份配置可供多台机器使用。`status` 会将每个代理列为 skipped，`apply` 不执行任何操作；完整的 `mise bootstrap` 会在后续摘要中注明跳过的代理。
+The section is ignored on other platforms, so one config can serve several
+machines. `status` lists each agent as skipped, `apply` does nothing, and the
+full `mise bootstrap` notes the skipped agents in its follow-up summary.
 
-## 故障排查
+## Troubleshooting
 
-若代理已加载但未运行，可使用 launchd 检查代理并查看其输出文件：
+To see why an agent is loaded but not running, inspect it with launchd and read
+its output files:
 
 ```sh
 launchctl print gui/$(id -u)/dev.mise.my-sync

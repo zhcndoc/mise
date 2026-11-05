@@ -69,7 +69,9 @@ mise trust .env
 - Trust is bound to content. `mise trust` stores a hash of the file, and any edit
   makes it untrusted again.
 - Each file is trusted on its own. Trusting `mise.toml` does not trust
-  `mise.local.toml` beside it.
+  `mise.local.toml` beside it, 也不会信任旁边的任务文件或它指定的本地
+  [`aqua.registries`](/dev-tools/backends/aqua.html) 文件。请分别运行
+  `mise trust <file>` 信任这些文件。
 - `mise run`, `mise install`, `mise exec`, `mise watch` and the `mise daemons`
   start, restart and register commands do not trust the config they load.
 - CI does not make config trusted, and `--yes`, `MISE_YES=1` and `CI` do not
@@ -155,4 +157,10 @@ accepts that answer, and a lockfile written afterwards records no provenance.
 
 `provenance` 类别会在跳过验证前，通过 GitHub 确认“无 attestation”的结果。每个没有 attestations 的资源文件会额外消耗一次 GitHub API 请求。
 
-在两种模式下，如果 mise-versions 无法响应（例如超时、连接中断，或返回 `429`、`5xx`），mise 都会改为查询 GitHub attestation API，并以相同方式验证 GitHub 返回的结果。如果 GitHub 也失败，则由 [`provenance_api_failures_fatal`](/configuration/settings.html#provenance_api_failures_fatal) 决定后续处理方式。
+如果 mise 注册表规定某个发行版必须带有证明，则这两种模式都不接受将其证明设为 `"none"`：对于 `github:` 后端，或配方声明了证明的 `aqua:` 后端，达到 [`attestations_since`](/contributing/registry.html#required-attestations) 指定版本及之后的发行版，缺少证明会导致安装和 `mise lock` 失败。
+
+In either mode, when mise-versions fails to answer (a timeout, a lost
+connection, or a `429` or `5xx` response), mise asks GitHub's attestation API
+instead and verifies what GitHub returns the same way.
+[`provenance_api_failures_fatal`](/configuration/settings.html#provenance_api_failures_fatal)
+then decides what happens if GitHub fails too.

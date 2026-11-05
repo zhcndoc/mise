@@ -100,28 +100,32 @@ mise ERROR Invalid choice for arg environment: qa, expected one of dev, staging,
 
 | 规范                                               | 含义                                                                                      |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `arg "<file>"`                                     | 必需的位置参数                                                                             |
-| `arg "[file]"`                                     | 可选的位置参数                                                                             |
-| `default="config.toml"`                            | 未提供参数或选项时使用的值                                                                  |
-| `arg "[files]" var=#true`                          | 零个或多个值；`arg "<files>" var=#true` 至少需要一个值                                      |
-| `var_min=2`、`var_max=5`                            | 限制可变参数的值数量                                                                        |
-| `arg "<level>" { choices "debug" "info" "warn" }`  | 只接受列出的值                                                                             |
-| `env="API_TOKEN"`                                  | 从环境变量读取值；参见[环境变量回退](#environment-variable-backing)                         |
-| `flag "-f --force"`                                | 布尔选项；也可以只写 `flag "-f"` 或 `flag "--force"`                                      |
-| `flag "-o --output <file>"`                        | 需要提供值的选项                                                                            |
-| `required=#true`                                   | 未传入该选项时任务失败                                                                      |
-| `flag "-v --verbose" count=#true`                  | 可重复传入的选项，其值为传入次数，例如 `-vvv` 对应 `3`                                      |
-| `flag "--color" negate="--no-color" default=#true` | 布尔选项；传入 `--no-color` 可将其关闭                                                      |
-| `help="…"`                                         | 单行帮助文本                                                                               |
-| `long_help="…"`                                    | 较长的帮助文本，在 `--help` 输出中取代 `help`                                               |
-| `hide=#true`                                       | 在帮助信息中隐藏该参数或选项                                                                |
-| `double_dash="required"`                           | 仅接受 `--` 后面的参数值                                                                    |
-| `arg "<file>"`、`arg "<dir>"`                      | 参数名为 `file` 或 `path` 时补全文件名；参数名为 `dir` 时补全目录名                         |
-| `complete "user" run="mycli users"`                | 根据命令输出补全 `user` 参数或选项；每行一个候选值                                          |
+| `arg "<file>"`                                     | Required positional argument                                                              |
+| `arg "[file]"`                                     | Optional positional argument                                                              |
+| `default="config.toml"`                            | Value used when the argument or flag is not given                                         |
+| `arg "[files]" var=#true`                          | Zero or more values; `arg "<files>" var=#true` needs at least one                         |
+| `var_min=2`, `var_max=5`                           | Limits on the number of values for a variadic argument                                    |
+| `arg "<level>" { choices "debug" "info" "warn" }`  | Accept only the listed values                                                             |
+| `env="API_TOKEN"`                                  | Take the value from an environment variable; see [backing](#environment-variable-backing) |
+| `flag "-f --force"`                                | Boolean flag; also `flag "-f"` or `flag "--force"` alone                                  |
+| `flag "-o --output <file>"`                        | Flag that takes a value                                                                   |
+| `required=#true`                                   | Fail unless the flag is passed                                                            |
+| `flag "-v --verbose" count=#true`                  | Repeatable flag whose value is the count, such as `3` for `-vvv`                          |
+| `flag "--color" negate="--no-color" default=#true` | Boolean flag that `--no-color` turns off                                                  |
+| `help="…"`                                         | One-line help                                                                             |
+| `long_help="…"`                                    | Longer help that replaces `help` in `--help` output                                       |
+| `hide=#true`                                       | Hide the argument or flag from help                                                       |
+| `double_dash="required"`                           | Accept the argument's values only after `--`                                              |
+| `arg "<file>"`, `arg "<dir>"`                      | An argument named `file` or `path` completes file names; `dir` completes directories      |
+| `complete "user" run="mycli users"`                | Complete the `user` argument or flag from a command's output, one value per line          |
 
-属性也可以像下一例中的 `choices` 和 `long_help` 一样，每行一个写在代码块中。所有选项详见 [usage 规范](https://usage.jdx.dev/spec/)。
+Properties can also go in a block, one per line, as `choices` and `long_help`
+do in the next example. See the [usage spec](https://usage.jdx.dev/spec/) for
+every option.
 
-### 长帮助文本
+只有项目[受信任](/security.html#what-needs-trust)后，补全才会运行项目任务中的命令，例如 `complete run=`。
+
+### Long help
 
 ```mise-toml
 [tasks.complex]
@@ -395,7 +399,10 @@ mise 解析 usage 规范后才会应用任务和项目的 `env` 指令，因此�
 exec ./target/release/mycli "$@"
 ```
 
-shell 补全请求任务规范时会运行挂载命令，因此该命令必须能在任务进程之外独立运行。如示例所示，调用任务本身可以让 mise 先应用任务配置，再转发 `--usage-spec`。
+The mount command runs when shell completion asks for the task's spec, so it
+must work outside the task's own process. Calling the task itself, as shown,
+lets mise apply the task's configuration before it forwards `--usage-spec`.
+只有项目[受信任](/security.html#what-needs-trust)后，补全才会运行 mount。
 
 ## 从 Tera 参数函数迁移 <Badge type="danger" text="已弃用" /> {#tera-templates}
 

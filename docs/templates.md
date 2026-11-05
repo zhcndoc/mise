@@ -11,12 +11,13 @@ mise 会在配置值中渲染 [Tera](https://keats.github.io/tera/) 模板，因
 
 | 文件或配置段                                                  | 渲染内容                                                                                                                                                        | 额外上下文                                                      |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `mise.toml`                                                 | 大多数配置段中的字符串值，例如 `[env]`、`[tools]`、`[vars]`、`[hooks]` 和 `[plugins]`。键不会渲染，且文件必须先是有效的 TOML。 | `config_source`                                               |
-| `[bootstrap]`                                               | 仅渲染部分值；参见 [bootstrap 模板](/bootstrap.html#templates)                                                                                                  | 无                                                            |
-| 任务字段（例如 `run`）                                        | 任务运行时                                                                                                                                                      | `usage`、`tools`、[`task_source_files()`](#task-source-files) |
-| `mode = "template"` 的[点文件](/dotfiles/managed.html)          | 源文件内容                                                                                                                                                      | 参见点文件页面                                                   |
-| `.tool-versions`                                            | 整个文件                                                                                                                                                        | `config_source`                                               |
-| `.miserc.toml`                                              | 解析前的整个文件                                                                                                                                                 | 有限支持；参见[下文](#miserc-template-support)                    |
+| `mise.toml`                                                 | String values in most sections, such as `[env]`, `[tools]`, `[vars]`, `[hooks]`, and `[plugins]`. Keys are not rendered, and the file must be valid TOML first. | `config_source`                                               |
+| `[settings]`                                                | 仅支持 `dotfiles.root`、`write_targets` 路径，以及 `age` 密钥和身份文件；详见[设置模板](#settings-templates) | 与 `.miserc.toml` 一样，受限 |
+| `[bootstrap]`                                               | Some values only; see [bootstrap templates](/bootstrap.html#templates)                                                                                          | None                                                          |
+| Task fields, such as `run`                                  | When the task runs                                                                                                                                              | `usage`, `tools`, [`task_source_files()`](#task-source-files) |
+| [Dotfiles](/dotfiles/managed.html) with `mode = "template"` | The source file's content                                                                                                                                       | See the dotfiles page                                         |
+| `.tool-versions`                                            | The whole file                                                                                                                                                  | `config_source`                                               |
+| `.miserc.toml`                                              | The whole file, before it is parsed                                                                                                                             | Limited; see [below](#miserc-template-support)                |
 
 ## 示例
 
@@ -74,22 +75,25 @@ Tera v2 还支持切片（`parts[0:2]`、`parts[-1]`）、展开（`[first, ...r
 
 | 变量                                                                     | 值                                                                                                                                                                                                             | 可用位置                                                                         |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `env`                                                                  | 环境变量：mise 启动时的环境，以及目前已解析的 `[env]` 值                                                                                                                                                        | 所有位置                                                                         |
-| `vars`                                                                 | [配置变量](/configuration/vars.html)                                                                                                                                                                           | `mise.toml` 和任务                                                               |
-| `cwd`                                                                  | mise 运行时所在目录                                                                                                                                                                                            | 所有位置                                                                         |
-| `config_root`                                                          | 文件的[配置根目录](/configuration.html#config-root)，即项目目录；即使配置文件是 `.config/mise.toml` 也一样。在 `[bootstrap.files]` 内容模板中，它指声明该条目的文件所在目录 | 所有位置                                                                         |
-| `config_source`                                                        | 模板所在配置文件的绝对路径，使用文件被访问时的路径，不解析符号链接                                                                                                                                              | `mise.toml` 值、`.tool-versions`、`[env]` 指令和任务自己的 `env`                    |
-| `mise_bin`                                                             | 当前 mise 可执行文件的路径                                                                                                                                                                                     | 除 `.miserc.toml` 外的所有位置                                                    |
-| `mise_pid`                                                             | 当前 mise 进程的进程 ID                                                                                                                                                                                        | 除 `.miserc.toml` 外的所有位置                                                    |
-| `mise_env`                                                             | 所选[配置环境](/configuration/environments.html)列表。未选择环境时该变量未定义，因此应使用 <span v-pre>`{% if mise_env is defined %}`</span> 检查 | 除 `.miserc.toml` 外的所有位置                                                    |
-| `xdg_cache_home`、`xdg_config_home`、`xdg_data_home`、`xdg_state_home` | XDG 基目录                                                                                                                                                                                                     | 所有位置                                                                         |
-| `system_brew_prefix`                                                   | mise 内置 [Homebrew 支持](/bootstrap/packages/brew.html)使用的前缀：macOS 上为 `/opt/homebrew`，其他平台为 `/home/linuxbrew/.linuxbrew`                                                                           | 所有位置                                                                         |
-| `tools`                                                                | 已安装且当前启用的工具（见下文）                                                                                                                                                                                | 任务，以及设置了 `tools = true` 的 `[env]` 指令                                    |
-| `usage`                                                                | 已解析的任务参数；参见[任务参数](#task-arguments)                                                                                                                                                                | 任务的 `run` 脚本                                                                |
+| `env`                                                                  | Environment variables: the environment mise started with, plus `[env]` values resolved so far                                                                                                                 | Everywhere                                                                       |
+| `vars`                                                                 | [Config variables](/configuration/vars.html)                                                                                                                                                                  | `mise.toml` and tasks                                                            |
+| `cwd`                                                                  | The directory mise runs in                                                                                                                                                                                    | Everywhere                                                                       |
+| `config_root`                                                          | The [config root](/configuration.html#config-root) of the file: the project directory, even for `.config/mise.toml`. In `[bootstrap.files]` content templates, the directory that contains the declaring file | Everywhere                                                                       |
+| `config_source`                                                        | Absolute path of the config file the template is in, as reached; symlinks are not resolved                                                                                                                    | `mise.toml` values, `.tool-versions`, `[env]` directives, and a task's own `env` |
+| `mise_bin`                                                             | Path of the running mise executable                                                                                                                                                                           | Everywhere except `.miserc.toml`                                                 |
+| `mise_pid`                                                             | Process ID of the running mise                                                                                                                                                                                | Everywhere except `.miserc.toml`                                                 |
+| `mise_env`                                                             | List of the [config environments](/configuration/environments.html) you selected. Undefined when none is selected, so check it with <span v-pre>`{% if mise_env is defined %}`</span>                         | Everywhere except `.miserc.toml`                                                 |
+| `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home` | XDG base directories                                                                                                                                                                                          | Everywhere                                                                       |
+| `mise_config_dir`                                                      | mise 解析出的配置目录：优先使用 `MISE_CONFIG_DIR`，否则为 `xdg_config_home` + `/mise` | 所有位置 |
+| `system_brew_prefix`                                                   | The prefix of mise's built-in [Homebrew support](/bootstrap/packages/brew.html): `/opt/homebrew` on macOS, `/home/linuxbrew/.linuxbrew` elsewhere                                                             | Everywhere                                                                       |
+| `tools`                                                                | Active tools that are installed (see below)                                                                                                                                                                   | Tasks, and `[env]` directives with `tools = true`                                |
+| `usage`                                                                | Parsed task arguments; see [Task arguments](#task-arguments)                                                                                                                                                  | Task `run` scripts                                                               |
 
-除 `env` 以外的任务字段（例如 `run` 和 `dir`）以及文件任务头部可以使用 `config_root`，但不能使用 `config_source`。
+Task fields other than `env`, such as `run` and `dir`, and file task headers
+have `config_root` but not `config_source`.
 
-`config_source` 可让链接到 `conf.d` 中的共享配置将自身的 `bin` 目录加入 `PATH`：
+`config_source` lets a shared config symlinked into `conf.d` add its own `bin`
+directory to `PATH`:
 
 ```toml
 [env]
@@ -146,7 +150,8 @@ VERSION = "{{ read_file(path='VERSION') | trim }}"
 AWS_ACCOUNT_ID = "{{ exec(command='aws sts get-caller-identity --query Account --output text', cache_key='aws-account', cache_duration='1d') }}"
 ```
 
-这两个函数都要求配置文件已[受信任](/security.html#configuration-trust)。在[安全模式](/security.html#safe-mode)（`MISE_SAFE=1`）下，它们会报错而不会运行；`.miserc.toml` 中也不能使用这两个函数。
+Both functions need a [trusted](/security.html#configuration-trust) config. In
+[安全模式](/security.html#safe-mode)（`MISE_SAFE=1`）下，这些函数会报错而不会运行，而且 `.miserc.toml` 中也无法使用它们。安全模式还会拒绝 `get_env()` 以及 `hash_file`、`file_size` 和 `last_modified` 过滤器；全局和系统配置文件之外的模板中，`env` 为空。
 
 ::: warning
 每次渲染模板时都会运行 `exec()`，包括使用 `--dry-run` 时。因此只能用它运行没有副作用的命令。
@@ -361,14 +366,37 @@ aws ecs update-service --region {{ region | quote }} --cluster prod --service {{
 
 组件必须定义在调用它的同一个模板字符串中；mise 没有共享组件库。在 `[vars]` 中定义的组件会在配置加载时渲染，而不是等到任务运行时渲染（参见[变量的解析时机](/configuration/vars.html#when-vars-are-resolved)）。要共享整个任务，请使用[任务模板](/tasks/templates.html)；要在多个脚本间共享 shell 逻辑，请加载 shell 文件。组件要求使用默认的 Tera v2 引擎，不能与 `tera_v1` 配合使用。
 
-## .miserc.toml 中的模板 {#miserc-template-support}
+## 设置中的模板 {#settings-templates}
+
+大多数设置会按字面值处理，不会渲染其中的模板。少数路径设置需要根据声明它们的文件解析，因此支持模板：
+
+- [`dotfiles.root`](/configuration/settings.html#dotfiles.root)
+- [`write_targets`](/configuration/settings.html#write_targets) paths
+- [`age.key_file`](/configuration/settings.html#age.key_file),
+  [`age.identity_files`](/configuration/settings.html#age.identity_files) and
+  [`age.ssh_identity_files`](/configuration/settings.html#age.ssh_identity_files)
+
+mise 读取设置时会渲染这些模板，因此它们可使用全局 [`.miserc.toml`](#miserc-template-support) 的受限上下文，以及 `config_source`。与项目 `.miserc.toml` 不同，项目 `mise.toml` 在此处也可以使用 `env`。`config_root` 是设置所在文件的[配置根目录](/configuration.html#config-root)，相对路径会基于该目录解析。
+
+<div v-pre>
+
+```toml [~/.dotfiles/mise.toml]
+[settings]
+dotfiles.root = "{{ mise_config_dir }}/home"
+```
+
+</div>
+
+## Templates in .miserc.toml {#miserc-template-support}
 
 mise 会先渲染 [`.miserc.toml`](/configuration.html#miserc)，再读取 `mise.toml` 或设置，因此此处只能使用操作系统提供的信息：
 
-- `env`：mise 启动时的环境变量
-- `config_root`：包含 `.miserc.toml` 文件的目录
+- `env`：仅在全局和系统文件中可访问 mise 启动时的环境（详见[下文](#miserc-project-templates)）
+- `config_root`: the directory that holds the `.miserc.toml` file
 - `cwd`
 - `xdg_cache_home`, `xdg_config_home`, `xdg_data_home`, `xdg_state_home`
+- `mise_config_dir`
+- `mise_config_dir`
 - `system_brew_prefix`
 - 无需项目上下文的函数，例如 `arch()`、`os()`、`os_family()`、`libc()`、`avx2()`、`num_cpus()`、`choice()` 和 `get_env()`
 - 所有[过滤器](#filters)和[测试条件](#tests)
@@ -399,7 +427,31 @@ ceiling_paths = ["{{ env.HOME }}/work"]
 
 </div>
 
-如果模板渲染失败（例如遇到未定义变量或调用 `exec()`），mise 会静默地使用文件未经渲染的原始内容。由于 mise 读取 `.miserc.toml` 时日志系统尚未启动，因此不会打印警告。若要保留字面量 <span v-pre>`{{`</span>，请使用 [`raw` 块](#syntax)。
+If a template fails to render, for example because of an undefined variable or
+a call to `exec()`, mise silently uses the file's raw, unrendered content. No
+不会打印警告，因为 mise 会在启动日志记录前读取 `.miserc.toml`。在全局和系统文件中，若要保留字面量 <span v-pre>`{{`</span>，请使用 [`raw` 代码块](#syntax)。
+
+### 项目 .miserc.toml 文件 {#miserc-project-templates}
+
+项目中的 `.miserc.toml`、`.miserc.local.toml` 或 `.config/miserc.toml` 无需[信任](/security.html#configuration-trust)即可加载，因此其中的模板受到限制；全局和系统文件则仍具有上文列出的能力：
+
+- `env` 为空，且无法使用 `get_env()`，因此仓库不能将你的环境复制到它选择的配置环境中。
+- 唯一可用的语句是 `if`、`elif`、`else` 和 `endif`，因此模板不能循环。唯一可用的函数是 `arch()`、`os()`、`os_family()`、`libc()`、`avx2()` 和 `num_cpus()`。可用过滤器包括 `default`、`lower`、`upper`、`capitalize`、`title`、`trim`、`trim_start`、`trim_end`、`basename`、`dirname`、`extname`、`file_stem`、`first`、`last`、`length`、`str`、`int`、`float` 以及 `kebabcase` 等大小写转换过滤器；可用测试包括 `defined`、`undefined`、`string`、`number`、`starting_with`、`ending_with` 和 `containing`。
+- 文件大小不得超过 16 KiB。
+
+这些限制可避免模板无限占用时间或内存，否则项目下的每条 mise 命令（包括 Shell 提示符钩子）都可能卡住。违反限制的文件会保留未渲染状态，并显示警告。
+
+<div v-pre>
+
+```toml [.miserc.toml]
+{% if os() == "macos" %}
+env = ["mac"]
+{% else %}
+env = ["{{ config_root | basename }}"]
+{% endif %}
+```
+
+</div>
 
 ## 从 Tera v1 迁移 {#tera-v2-migration}
 

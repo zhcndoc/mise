@@ -398,12 +398,13 @@
         },
         "output": {
           "type": "string",
-          "description": "output style for this task (prefix, interleave, keep-order, replacing, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
+          "description": "output style for this task (prefix, interleave, keep-order, replacing, summary, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
           "enum": [
             "prefix",
             "interleave",
             "keep-order",
             "replacing",
+            "summary",
             "timed",
             "quiet",
             "silent"
@@ -503,6 +504,29 @@
         "timeout": {
           "type": "string",
           "description": "timeout for this task"
+        },
+        "lock": {
+          "description": "resources this task holds while its commands run, so runs that need the same one wait their turn",
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "`true` lets one run of this task at a time across every worktree of its repository; `false` takes no lock"
+            },
+            {
+              "type": "string",
+              "description": "a lock name shared by every task on this machine that names it",
+              "pattern": "^[^,]*\\S[^,]*$"
+            },
+            {
+              "type": "array",
+              "description": "lock names shared by every task on this machine that names them, taken in sorted order",
+              "items": {
+                "type": "string",
+                "description": "a lock name shared by every task on this machine that names it",
+                "pattern": "^[^,]*\\S[^,]*$"
+              }
+            }
+          ]
         },
         "skip_if": {
           "type": "string",
@@ -622,7 +646,7 @@
               ]
             },
             "path": {
-              "description": "directories to add to the front of PATH",
+              "description": "directories to add to PATH, ahead of tool paths unless `position = \"append\"`",
               "oneOf": [
                 {
                   "type": "object",
@@ -637,6 +661,9 @@
                     },
                     "tools": {
                       "$ref": "#/$defs/env_tools"
+                    },
+                    "position": {
+                      "$ref": "#/$defs/env_path_position"
                     }
                   },
                   "oneOf": [
@@ -682,6 +709,9 @@
                           },
                           "tools": {
                             "$ref": "#/$defs/env_tools"
+                          },
+                          "position": {
+                            "$ref": "#/$defs/env_path_position"
                           }
                         }
                       }
@@ -1953,6 +1983,10 @@
           "type": "string",
           "description": "release tag prefix stripped from versions and re-added when resolving tags"
         },
+        "version_regex": {
+          "type": "string",
+          "description": "regex a release tag must match to be listed; versions are still derived from the tag as usual"
+        },
         "asset_pattern": {
           "type": "string",
           "description": "glob (* and ?) matched against release asset names, tera templated; replaces autodetection"
@@ -2671,6 +2705,11 @@
         "registry_url": {
           "type": "string",
           "description": "version-listing url containing a {} placeholder for the package name"
+        },
+        "registry_index": {
+          "type": "string",
+          "description": "how dependency locking uses registry_url: default replaces PyPI, priority searches it before PyPI",
+          "enum": ["default", "priority"]
         }
       }
     },
@@ -2936,6 +2975,12 @@
       "items": {
         "type": "string"
       }
+    },
+    "env_path_position": {
+      "type": "string",
+      "description": "where env._.path puts the directory. prepend (the default) adds it ahead of tool paths. append adds it after tool paths and ahead of the inherited PATH",
+      "enum": ["prepend", "append"],
+      "default": "prepend"
     },
     "os_filter": {
       "description": "operating system filters to install on",

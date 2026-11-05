@@ -256,20 +256,35 @@ class Pathname
   end
   private :install_one
 
+  # Like Homebrew, a relative source is resolved against this directory, so
+  # `bin.install_symlink "foo" => "bar"` links bin/bar to bin/foo.
   def install_symlink(*sources)
     mkpath
     sources.flatten.each do |src|
       case src
       when Hash
-        src.each { |from, to| make_relative_symlink(Pathname.new(from.to_s), self + to) }
+        src.each { |from, to| make_relative_symlink(Pathname.new(from.to_s).expand_path(self), self + to) }
       else
-        src = Pathname.new(src.to_s)
+        src = Pathname.new(src.to_s).expand_path(self)
         make_relative_symlink(src, self + src.basename)
       end
     end
   end
 
   def make_relative_symlink(target, link)
+    # Checked before anything is unlinked: `bin.install_symlink "tool"` with an
+    # existing bin/tool would otherwise replace the file with a link to itself.
+    # The parents are also compared physically, so `"alias/tool" => "tool"` with
+    # bin/alias pointing at bin is caught too; the leaf is not resolved, since
+    # replacing an existing link that already points at the target is fine.
+    same_entry_through_aliased_parent =
+      target.basename == link.basename &&
+      target.dirname.exist? && link.dirname.exist? &&
+      target.dirname.realpath == link.dirname.realpath
+    if target.expand_path == link.expand_path || same_entry_through_aliased_parent
+      raise "cannot symlink #{link} to itself"
+    end
+
     link.dirname.mkpath
     link.unlink if link.symlink? || link.file?
     link.make_symlink(target.relative_path_from(link.dirname))
@@ -557,6 +572,61 @@ module Language
   module Python
     module Shebang; end
     module Virtualenv; end
+  end
+end
+
+# Homebrew's Requirement base class (Library/Homebrew/requirement.rb). A tap
+# formula can subclass it to declare a custom platform check, then name the
+# subclass in `depends_on`. The subclass body only uses the class-level DSL
+# (`fatal`, `satisfy`, `default_formula`, ...), and `satisfy` blocks reference
+# Homebrew internals such as `MacOS`, so they are never evaluated here.
+class Requirement
+  class << self
+    def method_missing(*) = nil
+    def respond_to_missing?(*) = true
+  end
+end
+
+# Homebrew vendors ruby-macho as `MachO` (Library/Homebrew/vendor), and a tap
+# formula's `post_install` can use it to rewrite install names. Like the
+# `Language` mixins it is a constant reference, so it must exist for the
+# formula to even reach the call. mise does not vendor ruby-macho, and it does
+# not relocate source-built kegs either, so a `post_install` that edits dylibs
+# is normally undoing Homebrew's own relocation. While `post_install` runs,
+# each call warns and returns an inert value (no dylibs, no change) so the rest
+# of the method still runs; anywhere else, such as `install`, it fails the
+# build.
+$shim_in_post_install = false
+
+def shim_macho_call!(feature, result = nil)
+  shim_unsupported!(feature) unless $shim_in_post_install
+  opoo "skipping #{feature}: mise's source-build shim has no Mach-O support"
+  result
+end
+
+class MachOFileStub
+  LIST_READERS = %i[linked_dylibs rpaths dylib_id_and_rpaths].freeze
+
+  def method_missing(name, *)
+    shim_macho_call!("MachO file #{name}", LIST_READERS.include?(name) ? [] : nil)
+  end
+
+  def respond_to_missing?(*) = true
+end
+
+module MachO
+  class << self
+    def open(*) = shim_macho_call!("MachO.open", MachOFileStub.new)
+    def method_missing(name, *) = shim_macho_call!("MachO.#{name}")
+    def respond_to_missing?(*) = true
+  end
+
+  module Tools
+    class << self
+      def dylibs(*) = shim_macho_call!("MachO::Tools.dylibs", [])
+      def method_missing(name, *) = shim_macho_call!("MachO::Tools.#{name}")
+      def respond_to_missing?(*) = true
+    end
   end
 end
 
@@ -949,7 +1019,9 @@ def main
   ohai "#{MISE_BREW_NAME}: running install"
   formula.prefix.mkpath
   formula.install
+  $shim_in_post_install = true
   formula.post_install
+  $shim_in_post_install = false
 
   if formula.prefix.children.empty?
     odie "install completed but the keg at #{formula.prefix} is empty"

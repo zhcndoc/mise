@@ -260,6 +260,7 @@ async fn execute(
             use std::os::windows::io::AsHandle;
             c.env_clear();
             c.envs(env.iter());
+            c.current_dir(root);
             c.stdout(std::io::stderr().as_handle().try_clone_to_owned()?);
             let status = c.status()?;
             if !status.success() {
@@ -268,11 +269,13 @@ async fn execute(
             return Ok(());
         }
     }
+    // Run in the project root, like the task form and install hooks, so a relative path in
+    // `run` names the project's file and not one in the shell's current directory.
     crate::inline_command::optimize_expression(
-        cmd(program, args).full_env(&env),
+        cmd(program, args).full_env(&env).dir(root),
         run,
         &env,
-        None,
+        Some(root),
         direct_enabled,
     )
     .stdout_to_stderr()
@@ -304,6 +307,11 @@ async fn execute_task(
     env.insert(
         crate::secrets::DENIED_MARKER.to_string(),
         "watch_files".to_string(),
+    );
+    // Nobody typed this `mise run`, so it must not trust the config it loads.
+    env.insert(
+        crate::config::config_file::REQUIRE_EXPLICIT_TRUST_ENV.to_string(),
+        "1".to_string(),
     );
     if let Some(cwd) = &*dirs::CWD {
         env.insert(
@@ -362,6 +370,9 @@ pub(crate) fn glob(root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
         require_literal_separator: true,
         ..Default::default()
     };
+    // only the patterns are globs; the root is a literal directory
+    let escaped_root = glob::Pattern::escape(&root.to_string_lossy());
+    let root = Path::new(&escaped_root);
     Ok(patterns
         .iter()
         .map(|pattern| root.join(pattern).to_string_lossy().to_string())

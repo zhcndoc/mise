@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use tera::Context;
 
 use crate::host::Config;
-use mise_util::tera::{TeraEngine, contains_template_syntax, get_tera_without_exec, render_str};
+use mise_util::tera::{TeraEngine, contains_template_syntax, get_tera_without_exec};
 
 pub(crate) use mise_config::templating::Templated;
 
@@ -41,7 +41,7 @@ impl<T: DeserializeOwned> TemplatedExt<T> for Templated<T> {
         let mut ctx = config.bootstrap_tera_ctx(config_path).clone();
         if ctx.get("config_root").is_none() {
             let config_root = crate::host::config_root(config_path);
-            ctx.insert("config_root", &config_root);
+            ctx.insert("config_root", &config_root.to_string_lossy());
         }
         self.render_with(&ctx, config_path)
     }
@@ -56,7 +56,7 @@ impl<T: DeserializeOwned> TemplatedExt<T> for Templated<T> {
         remove_ignored_fields(&mut raw, &self.ignored);
         // Flatten the cause into the message: these surface through `warn!`,
         // which prints only the top-level error.
-        render_value(&mut raw, &mut tera, ctx).map_err(|err| {
+        render_value(&mut raw, &mut tera, ctx, config_path).map_err(|err| {
             eyre!(
                 "failed to render template in {}: {err}",
                 config_path.display()
@@ -91,19 +91,24 @@ fn value_contains_template_syntax(value: &toml::Value) -> bool {
     }
 }
 
-fn render_value(value: &mut toml::Value, tera: &mut TeraEngine, ctx: &Context) -> Result<()> {
+fn render_value(
+    value: &mut toml::Value,
+    tera: &mut TeraEngine,
+    ctx: &Context,
+    config_path: &Path,
+) -> Result<()> {
     match value {
         toml::Value::String(s) if contains_template_syntax(s) => {
-            *s = render_str(tera, s, ctx)?;
+            *s = crate::host::render_config_str(tera, s, ctx, config_path)?;
         }
         toml::Value::Array(values) => {
             for value in values {
-                render_value(value, tera, ctx)?;
+                render_value(value, tera, ctx, config_path)?;
             }
         }
         toml::Value::Table(table) => {
             for (_, value) in table.iter_mut() {
-                render_value(value, tera, ctx)?;
+                render_value(value, tera, ctx, config_path)?;
             }
         }
         _ => {}

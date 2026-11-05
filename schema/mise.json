@@ -144,10 +144,35 @@
                   }
                 }
               ]
+            },
+            "run_windows": {
+              "description": "shell command or commands to run instead of `run` on Windows; set alone, the hook does nothing on other platforms",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "description": {
+              "type": "string",
+              "description": "what `mise bootstrap` prints instead of the command; `--verbose` and `--dry-run` print the command"
             }
           },
-          "required": ["run"],
-          "additionalProperties": true
+          "additionalProperties": true,
+          "anyOf": [
+            {
+              "required": ["run"]
+            },
+            {
+              "required": ["run_windows"]
+            }
+          ]
         }
       ]
     },
@@ -643,6 +668,20 @@
               "os": {
                 "description": "OS or OS/arch selectors; omit to run everywhere.",
                 "$ref": "#/$defs/os_filter"
+              },
+              "depends": {
+                "description": "Names of checks that must pass first. If one does not pass, this check is reported as blocked and its command does not run.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
               }
             },
             "required": ["run"]
@@ -687,7 +726,7 @@
               ]
             },
             "path": {
-              "description": "directories to add to the front of PATH",
+              "description": "directories to add to PATH, ahead of tool paths unless `position = \"append\"`",
               "oneOf": [
                 {
                   "type": "object",
@@ -702,6 +741,9 @@
                     },
                     "tools": {
                       "$ref": "#/$defs/env_tools"
+                    },
+                    "position": {
+                      "$ref": "#/$defs/env_path_position"
                     }
                   },
                   "oneOf": [
@@ -747,6 +789,9 @@
                           },
                           "tools": {
                             "$ref": "#/$defs/env_tools"
+                          },
+                          "position": {
+                            "$ref": "#/$defs/env_path_position"
                           }
                         }
                       }
@@ -1053,6 +1098,12 @@
           }
         }
       ]
+    },
+    "env_path_position": {
+      "type": "string",
+      "description": "where env._.path puts the directory. prepend (the default) adds it ahead of tool paths. append adds it after tool paths and ahead of the inherited PATH",
+      "enum": ["prepend", "append"],
+      "default": "prepend"
     },
     "env_paths": {
       "type": "array",
@@ -1883,6 +1934,11 @@
           "description": "[experimental] Cache computed environments on disk for nested mise commands.",
           "type": "boolean"
         },
+        "env_cache_redacted": {
+          "default": false,
+          "description": "[experimental] Let the environment cache hold values marked `redact = true`.",
+          "type": "boolean"
+        },
         "env_cache_ttl": {
           "default": "1h",
           "description": "How long a cached environment stays valid.",
@@ -1905,6 +1961,16 @@
               }
             }
           ]
+        },
+        "env_sets": {
+          "description": "Named sets of config environments, which `env` and `-E` can name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
         "env_shell_expand": {
           "default": true,
@@ -1939,6 +2005,15 @@
         "experimental": {
           "description": "Enable experimental features, which may change or be removed in any release.",
           "type": "boolean"
+        },
+        "extra_ca_certs": {
+          "description": "PEM bundle of CA certificates mise trusts in addition to its usual roots.",
+          "type": "string"
+        },
+        "extract_max_ratio": {
+          "default": 100,
+          "description": "How many times its own size a downloaded archive or compressed file may unpack to.",
+          "type": "integer"
         },
         "fetch_remote_versions_cache": {
           "description": "How long a tool's cached list of available versions stays fresh.",
@@ -1978,6 +2053,14 @@
               "default": "",
               "description": "Command that prints a GitHub token on stdout.",
               "type": "string"
+            },
+            "enterprise_hosts": {
+              "default": [],
+              "description": "Extra GitHub Enterprise hosts that receive your GitHub token on their `/api/v3` URLs.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "gh_cli_tokens": {
               "default": true,
@@ -2324,11 +2407,6 @@
             "type": "string"
           }
         },
-        "idiomatic_version_file_ignore_minimum_versions": {
-          "default": false,
-          "description": "Ignore idiomatic version file fields that only declare a minimum compatible version.",
-          "type": "boolean"
-        },
         "ignored_config_paths": {
           "default": [],
           "description": "Config files and directories mise does not load.",
@@ -2346,6 +2424,11 @@
           "description": "[experimental] Name installations by what they are (`identity`) instead of `installs/<tool>/<version>` (`legacy`).",
           "type": "string",
           "enum": ["legacy", "identity"]
+        },
+        "ipv4_only": {
+          "default": false,
+          "description": "Connect to remote hosts over IPv4 only.",
+          "type": "boolean"
         },
         "java": {
           "type": "object",
@@ -2394,6 +2477,10 @@
           "description": "Require tool versions and download URLs to come from the lockfile.",
           "type": "boolean"
         },
+        "locked_require_checksum": {
+          "description": "Make locked mode fail when the lockfile has no checksum for a download.",
+          "type": "boolean"
+        },
         "locked_scopes": {
           "default": ["global", "project", "system"],
           "description": "Config scopes where invocation-wide locked mode is enforced.",
@@ -2418,7 +2505,8 @@
           "type": "boolean"
         },
         "lockfile_mode": {
-          "description": "How lockfiles are written: entry by entry, or rebuilt from the current requests.",
+          "default": "generate",
+          "description": "How lockfiles are written: rebuilt from the current requests, or entry by entry.",
           "type": "string",
           "enum": ["merge", "generate"]
         },
@@ -2577,6 +2665,11 @@
               "type": "string",
               "enum": ["auto", "npm", "aube", "aube_cli", "bun", "pnpm"]
             },
+            "provenance": {
+              "default": true,
+              "description": "Verify the Sigstore provenance npm publishes for an `npm:` tool's own package.",
+              "type": "boolean"
+            },
             "shell_out": {
               "default": false,
               "description": "Use the npm CLI instead of mise's built-in client for `npm:` version metadata and default installs.",
@@ -2682,7 +2775,7 @@
           ]
         },
         "pin": {
-          "description": "Make `mise use` write the resolved version, such as `24.14.0` for `node@24`, instead of the requested one.",
+          "description": "Make `mise use` and `mise upgrade --bump` write the resolved version, such as `24.14.0` for `node@24`, instead of the requested one.",
           "type": "boolean"
         },
         "pipx": {
@@ -3050,7 +3143,6 @@
               "type": "boolean"
             },
             "dir": {
-              "default": ".claude/skills",
               "description": "Where `mise skills sync` links skills: a path under the project root, or under the home directory with `--global`.",
               "type": "string"
             },
@@ -3310,6 +3402,10 @@
               "description": "Build task usage specs only from the `usage` field, ignoring deprecated `arg()`, `option()` and `flag()` in run scripts.",
               "type": "boolean"
             },
+            "lock_timeout": {
+              "description": "How long a task waits for a lock another run holds before it fails.",
+              "type": "string"
+            },
             "monorepo_depth": {
               "default": 5,
               "description": "Maximum directory depth for automatic monorepo discovery, which is deprecated.",
@@ -3336,6 +3432,7 @@
                 "interleave",
                 "keep-order",
                 "replacing",
+                "summary",
                 "timed",
                 "quiet",
                 "silent"
@@ -4124,12 +4221,13 @@
         },
         "output": {
           "type": "string",
-          "description": "output style for this task (prefix, interleave, keep-order, replacing, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
+          "description": "output style for this task (prefix, interleave, keep-order, replacing, summary, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
           "enum": [
             "prefix",
             "interleave",
             "keep-order",
             "replacing",
+            "summary",
             "timed",
             "quiet",
             "silent"
@@ -4229,6 +4327,29 @@
         "timeout": {
           "type": "string",
           "description": "timeout for this task"
+        },
+        "lock": {
+          "description": "resources this task holds while its commands run, so runs that need the same one wait their turn",
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "`true` lets one run of this task at a time across every worktree of its repository; `false` takes no lock"
+            },
+            {
+              "type": "string",
+              "description": "a lock name shared by every task on this machine that names it",
+              "pattern": "^[^,]*\\S[^,]*$"
+            },
+            {
+              "type": "array",
+              "description": "lock names shared by every task on this machine that names them, taken in sorted order",
+              "items": {
+                "type": "string",
+                "description": "a lock name shared by every task on this machine that names it",
+                "pattern": "^[^,]*\\S[^,]*$"
+              }
+            }
+          ]
         },
         "skip_if": {
           "type": "string",
@@ -4927,6 +5048,10 @@
         "version_prefix": {
           "type": "string",
           "description": "release tag prefix stripped from versions and re-added when resolving tags"
+        },
+        "version_regex": {
+          "type": "string",
+          "description": "regex a release tag must match to be listed; versions are still derived from the tag as usual"
         },
         "asset_pattern": {
           "type": "string",
@@ -5899,6 +6024,11 @@
         "registry_url": {
           "type": "string",
           "description": "version-listing url containing a {} placeholder for the package name"
+        },
+        "registry_index": {
+          "type": "string",
+          "description": "how dependency locking uses registry_url: default replaces PyPI, priority searches it before PyPI",
+          "enum": ["default", "priority"]
         }
       }
     },
@@ -7011,7 +7141,7 @@
               },
               "mode": {
                 "type": "string",
-                "description": "how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. \"absent\" removes a file or symlink at the target and takes no source. \"track\" saves the file's history where it is, and \"track-local\" saves it in this machine's local-only history, which is never shared",
+                "description": "how to apply a whole-file source to the target; omitted uses dotfiles.default_mode. \"absent\" removes a file or symlink at the target and takes no source. \"track\" saves the file's history where it is, and \"track-local\" saves it in this machine's local-only history, which is never shared. \"fnox\" writes the file fnox stores for the target (`fnox set --file`) with mode 0600 and takes no source",
                 "anyOf": [
                   {
                     "enum": [
@@ -7021,7 +7151,8 @@
                       "template",
                       "absent",
                       "track",
-                      "track-local"
+                      "track-local",
+                      "fnox"
                     ]
                   },
                   {
@@ -7053,6 +7184,11 @@
                 "description": "template mode only: remove the target when the template renders empty or whitespace-only; a target that changed since mise last wrote it needs --force",
                 "default": false
               },
+              "create_if_missing": {
+                "type": "boolean",
+                "description": "copy and template modes, or inline content: write the target only when nothing exists there yet, leaving an existing file's content and permissions alone; a target that was deleted is created again on the next apply. Not for directory sources",
+                "default": false
+              },
               "dot_prefix": {
                 "type": "boolean",
                 "description": "symlink-each and directory copy only: deploy each source path component named \"dot-<name>\" as \".<name>\", like GNU Stow's --dotfiles; exclude still matches source names",
@@ -7064,7 +7200,7 @@
               },
               "permissions": {
                 "type": "string",
-                "description": "octal permissions for the target, such as \"0600\"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target (Unix only)",
+                "description": "octal permissions for the target, such as \"0600\"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target; on a merge entry it sets the mode only when apply creates the target, never on one that exists (Unix only)",
                 "pattern": "^(0o)?[0-7]{1,4}$"
               },
               "autosave": {
@@ -7113,13 +7249,25 @@
                 "description": "comment prefix for edit marker lines; inferred from the file extension when omitted"
               },
               "merge": {
-                "description": "edit entry: true sets the keys of source (default: the target's path under dotfiles.root) on a JSON, TOML, or YAML target and leaves the target's other keys to the application that also writes it; \"missing\" sets only the keys the target has no value for; the format comes from the target's extension",
+                "description": "edit entry: true sets the keys of source (default: the target's path under dotfiles.root) on a JSON, JSONC, TOML, YAML, or INI target and leaves the target's other keys to the application that also writes it; \"missing\" sets only the keys the target has no value for; the format comes from the target's extension unless \"format\" names it",
                 "oneOf": [
                   {
                     "type": "boolean"
                   },
                   {
                     "const": "missing"
+                  }
+                ]
+              },
+              "format": {
+                "type": "string",
+                "description": "merge only: the format of the target and source when the target's extension doesn't name it, such as \"jsonc\" for VS Code's settings.json or \"ini\" for an extensionless INI file",
+                "anyOf": [
+                  {
+                    "enum": ["json", "jsonc", "toml", "yaml", "ini"]
+                  },
+                  {
+                    "type": "string"
                   }
                 ]
               },
@@ -7162,6 +7310,13 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "depends": {
+                "type": "array",
+                "description": "dotfile groups (by name) and whole-file entries (by target path) mise writes before it renders or reads this entry, so a template, a fnox file or a copy can use files they create. A dependency that fails stops this entry and everything after it; a cycle or a name that is neither is an error. Not for edits or track modes",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "allOf": [
@@ -7178,7 +7333,6 @@
                   "properties": {
                     "mode": false,
                     "content": false,
-                    "permissions": false,
                     "exclude": false,
                     "include": false,
                     "manifest": false,
@@ -7188,9 +7342,11 @@
                     "variants": false,
                     "enabled": false,
                     "remove_empty": false,
+                    "create_if_missing": false,
                     "relative": false,
                     "dot_prefix": false,
                     "group": false,
+                    "depends": false,
                     "block": false,
                     "line": false,
                     "position": false,
@@ -7275,6 +7431,7 @@
                     "manifest": false,
                     "permissions": false,
                     "remove_empty": false,
+                    "create_if_missing": false,
                     "dot_prefix": {
                       "const": false
                     },
@@ -7355,10 +7512,9 @@
                   {
                     "properties": {
                       "mode": {
-                        "enum": ["copy", "template"]
+                        "enum": ["copy", "template", "fnox"]
                       },
                       "block": false,
-                      "template": false,
                       "comment": false
                     },
                     "required": ["permissions"],
@@ -7378,6 +7534,20 @@
                           "manifest": false,
                           "encrypt": false
                         }
+                      }
+                    ],
+                    "allOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "template": false
+                            }
+                          },
+                          {
+                            "required": ["merge"]
+                          }
+                        ]
                       }
                     ]
                   },
@@ -7459,6 +7629,108 @@
                     }
                   }
                 ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "create_if_missing": {
+                        "const": false
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "mode": {
+                        "enum": ["copy", "template"]
+                      },
+                      "block": false,
+                      "line": false,
+                      "template": false,
+                      "comment": false
+                    },
+                    "anyOf": [
+                      {
+                        "required": ["source"]
+                      },
+                      {
+                        "required": ["content"]
+                      },
+                      {
+                        "required": ["mode"]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "format": false
+                    }
+                  },
+                  {
+                    "properties": {
+                      "merge": {
+                        "enum": [true, "missing"]
+                      }
+                    },
+                    "required": ["merge"]
+                  }
+                ]
+              },
+              {
+                "if": {
+                  "properties": {
+                    "mode": {
+                      "const": "fnox"
+                    }
+                  },
+                  "required": ["mode"]
+                },
+                "then": {
+                  "properties": {
+                    "source": false,
+                    "content": false,
+                    "exclude": false,
+                    "manifest": false,
+                    "remove_empty": false,
+                    "create_if_missing": false,
+                    "dot_prefix": {
+                      "const": false
+                    },
+                    "relative": {
+                      "const": false
+                    },
+                    "encrypt": {
+                      "const": false
+                    },
+                    "merge": false,
+                    "format": false,
+                    "block": false,
+                    "line": false,
+                    "position": false,
+                    "template": false,
+                    "comment": false
+                  }
+                }
+              },
+              {
+                "if": {
+                  "required": ["depends"]
+                },
+                "then": {
+                  "properties": {
+                    "block": false,
+                    "line": false,
+                    "mode": {
+                      "not": {
+                        "enum": ["track", "track-local"]
+                      }
+                    }
+                  }
+                }
               }
             ],
             "anyOf": [
@@ -7499,6 +7771,13 @@
             "description": "target directory, absolute or starting with ~/",
             "default": "~"
           },
+          "depends": {
+            "type": "array",
+            "description": "dotfile groups (by name) and whole-file entries (by target path) mise writes before it deploys this group and its entries",
+            "items": {
+              "type": "string"
+            }
+          },
           "mode": {
             "type": "string",
             "description": "how the tree is deployed",
@@ -7528,9 +7807,9 @@
           },
           "entries": {
             "type": "object",
-            "description": "whole-file entries for parts of the tree, keyed by target path inside the group's target and written like [dotfiles] entries; each is cut out of the walk. A missing source is found under the root at the entry's path inside the target, and a relative source starts at the root",
+            "description": "entries for parts of the tree, written like [dotfiles] entries and applied only while the group is selected. A whole-file entry is keyed by its target path inside the group's target and cut out of the walk; a block, line, or merge edit is keyed by the path of the file it edits, inside the group's target, then \"/\" and an id. A missing source is found under the root at the entry's path inside the target, and a relative source starts at the root",
             "additionalProperties": {
-              "description": "a whole-file entry for a path inside the group's target: its source path, or a table as in [dotfiles]",
+              "description": "an entry for a path inside the group's target: a whole-file entry's source path, or a table as in [dotfiles] for a whole-file entry or a block, line, or merge edit",
               "oneOf": [
                 {
                   "type": "string",
@@ -7538,7 +7817,637 @@
                 },
                 {
                   "type": "object",
-                  "description": "whole-file entry, as in [dotfiles]"
+                  "description": "whole-file entry or file edit, as in [dotfiles]",
+                  "additionalProperties": false,
+                  "properties": {
+                    "encrypt": {
+                      "type": "boolean",
+                      "description": "encrypt tracked file contents before storing them in Git; the live file remains plaintext",
+                      "default": false
+                    },
+                    "allow_plaintext": {
+                      "type": "boolean",
+                      "description": "allow this directly tracked credential-named file to be saved in plaintext history and any connected origin",
+                      "default": false
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "source file or directory"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "literal inline file content; alternative to source"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "how to apply a whole-file source to the target; omitted uses the group's mode. \"absent\" removes a file or symlink at the target and takes no source. \"track\" saves the file's history where it is, and \"track-local\" saves it in this machine's local-only history, which is never shared",
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "symlink",
+                            "symlink-each",
+                            "copy",
+                            "template",
+                            "absent",
+                            "track",
+                            "track-local"
+                          ]
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "exclude": {
+                      "type": "array",
+                      "description": "glob patterns to skip when the mode walks a directory (symlink-each, copy with a directory source, or a tracked directory, where they are relative to the tracked path); a pattern without \"/\" matches any path component, one with \"/\" is anchored to the root",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "include": {
+                      "type": "array",
+                      "description": "history only (mode = \"track\"): the only paths of the tracked directory that are captured, relative to it and matched like \"exclude\"; without it the whole tree is captured with the builtin credential filtering, and an explicit \"exclude\" still wins. A selected file is captured even when it looks like a credential store, in plaintext unless the entry sets encrypt",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "manifest": {
+                      "type": "string",
+                      "description": "source manifest used to select managed files from a directory",
+                      "enum": ["git"]
+                    },
+                    "remove_empty": {
+                      "type": "boolean",
+                      "description": "template mode only: remove the target when the template renders empty or whitespace-only; a target that changed since mise last wrote it needs --force",
+                      "default": false
+                    },
+                    "create_if_missing": {
+                      "type": "boolean",
+                      "description": "copy and template modes, or inline content: write the target only when nothing exists there yet, leaving an existing file's content and permissions alone; a target that was deleted is created again on the next apply. Not for directory sources",
+                      "default": false
+                    },
+                    "dot_prefix": {
+                      "type": "boolean",
+                      "description": "symlink-each and directory copy only: deploy each source path component named \"dot-<name>\" as \".<name>\", like GNU Stow's --dotfiles; exclude still matches source names",
+                      "default": false
+                    },
+                    "relative": {
+                      "type": "boolean",
+                      "description": "symlink and symlink-each only: link by a path relative to the link's directory instead of an absolute one; overrides the dotfiles.relative_symlinks setting (ignored on Windows)"
+                    },
+                    "permissions": {
+                      "type": "string",
+                      "description": "octal permissions for the target, such as \"0600\"; overrides what copy, template, and inline content entries set, and on its own manages only the permissions of an existing target; on a merge entry it sets the mode only when apply creates the target, never on one that exists (Unix only)",
+                      "pattern": "^(0o)?[0-7]{1,4}$"
+                    },
+                    "autosave": {
+                      "type": "boolean",
+                      "description": "track only: false saves the path only on `mise dotfiles save <path>`"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "false turns off an entry inherited from another config file"
+                    },
+                    "variants": {
+                      "type": "array",
+                      "description": "OS/profile variants: history streams for track mode, or optional destinations for deployment modes",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "os": {
+                            "description": "operating system (linux, macos, windows, or unix), optionally with an architecture such as linux/arm64; a list matches any of its values",
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            ]
+                          },
+                          "profile": {
+                            "type": "string",
+                            "description": "mise environment selected with -E or MISE_ENV"
+                          },
+                          "default": {
+                            "type": "boolean",
+                            "description": "true marks the fallback for machines that match no other variant; takes no os or profile"
+                          },
+                          "machine": {
+                            "type": "boolean",
+                            "description": "track mode only: a separate stream on every machine, never applied on another machine; must be the only variant and cannot be combined with encrypt"
+                          },
+                          "target": {
+                            "type": "string",
+                            "description": "deployment destination override; requires either an explicit source or a safe relative entry key when every variant has a target, and is not supported in track mode"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "depends": {
+                      "type": "array",
+                      "description": "dotfile groups (by name) and whole-file entries (by target path) mise writes before it renders or reads this entry, in addition to the group's own. Not for edits or track modes",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "block": {
+                      "type": "string",
+                      "description": "edit entry: block content, maintained between marker comments"
+                    },
+                    "template": {
+                      "type": "string",
+                      "description": "template engine to render block content with; currently only \"tera\"",
+                      "anyOf": [
+                        {
+                          "enum": ["tera"]
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "line": {
+                      "type": "string",
+                      "description": "edit entry: exact line to ensure exists"
+                    },
+                    "position": {
+                      "type": "string",
+                      "description": "where to insert a missing line",
+                      "default": "append",
+                      "anyOf": [
+                        {
+                          "enum": ["append", "prepend"]
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "comment": {
+                      "type": "string",
+                      "description": "comment prefix for edit marker lines; inferred from the file extension when omitted"
+                    },
+                    "merge": {
+                      "description": "edit entry: true sets the keys of source (default: the file's path under the group root) on a JSON, JSONC, TOML, or YAML target and leaves the target's other keys to the application that also writes it; \"missing\" sets only the keys the target has no value for; the format comes from the target's extension unless \"format\" names it",
+                      "oneOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "const": "missing"
+                        }
+                      ]
+                    },
+                    "format": {
+                      "type": "string",
+                      "description": "merge only: the format of the target and source when the target's extension doesn't name it, such as \"jsonc\" for VS Code's settings.json",
+                      "anyOf": [
+                        {
+                          "enum": ["json", "jsonc", "toml", "yaml"]
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "merge": {
+                            "enum": [true, "missing"]
+                          }
+                        },
+                        "required": ["merge"]
+                      },
+                      "then": {
+                        "properties": {
+                          "mode": false,
+                          "content": false,
+                          "exclude": false,
+                          "include": false,
+                          "manifest": false,
+                          "autosave": false,
+                          "encrypt": false,
+                          "allow_plaintext": false,
+                          "variants": false,
+                          "enabled": false,
+                          "remove_empty": false,
+                          "create_if_missing": false,
+                          "relative": false,
+                          "dot_prefix": false,
+                          "group": false,
+                          "depends": false,
+                          "block": false,
+                          "line": false,
+                          "position": false,
+                          "comment": false
+                        }
+                      }
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "relative": {
+                              "const": false
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "mode": {
+                              "enum": ["symlink", "symlink-each"]
+                            }
+                          },
+                          "required": ["mode"]
+                        },
+                        {
+                          "properties": {
+                            "mode": false,
+                            "content": false,
+                            "permissions": false,
+                            "block": false,
+                            "line": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "remove_empty": {
+                              "const": false
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "mode": {
+                              "const": "template"
+                            },
+                            "content": false,
+                            "block": false,
+                            "line": false
+                          },
+                          "anyOf": [
+                            {
+                              "required": ["source"]
+                            },
+                            {
+                              "required": ["mode"]
+                            },
+                            {
+                              "properties": {
+                                "permissions": false
+                              }
+                            }
+                          ]
+                        }
+                      ],
+                      "if": {
+                        "properties": {
+                          "mode": {
+                            "const": "absent"
+                          }
+                        },
+                        "required": ["mode"]
+                      },
+                      "then": {
+                        "properties": {
+                          "source": false,
+                          "content": false,
+                          "exclude": false,
+                          "manifest": false,
+                          "permissions": false,
+                          "remove_empty": false,
+                          "create_if_missing": false,
+                          "dot_prefix": {
+                            "const": false
+                          },
+                          "encrypt": {
+                            "const": false
+                          },
+                          "block": false,
+                          "line": false,
+                          "position": false,
+                          "template": false,
+                          "comment": false
+                        }
+                      }
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "source": {},
+                            "content": false,
+                            "permissions": false,
+                            "mode": {
+                              "enum": ["copy", "symlink-each"]
+                            },
+                            "exclude": {},
+                            "manifest": {},
+                            "block": false,
+                            "line": false,
+                            "template": false,
+                            "comment": false
+                          },
+                          "required": ["manifest"]
+                        },
+                        {
+                          "properties": {
+                            "manifest": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "dot_prefix": {
+                            "const": true
+                          }
+                        },
+                        "required": ["dot_prefix"]
+                      },
+                      "then": {
+                        "properties": {
+                          "content": false,
+                          "mode": {
+                            "enum": ["copy", "symlink-each"]
+                          },
+                          "block": false,
+                          "line": false,
+                          "template": false,
+                          "comment": false
+                        },
+                        "anyOf": [
+                          {
+                            "required": ["source"]
+                          },
+                          {
+                            "required": ["mode"]
+                          },
+                          {
+                            "properties": {
+                              "permissions": false
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "mode": {
+                              "enum": ["copy", "template", "fnox"]
+                            },
+                            "block": false,
+                            "comment": false
+                          },
+                          "required": ["permissions"],
+                          "anyOf": [
+                            {
+                              "required": ["source"]
+                            },
+                            {
+                              "required": ["content"]
+                            },
+                            {
+                              "required": ["mode"]
+                            },
+                            {
+                              "properties": {
+                                "exclude": false,
+                                "manifest": false,
+                                "encrypt": false
+                              }
+                            }
+                          ],
+                          "allOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "properties": {
+                                    "template": false
+                                  }
+                                },
+                                {
+                                  "required": ["merge"]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "permissions": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "source": false,
+                            "manifest": false,
+                            "mode": false,
+                            "exclude": false,
+                            "block": false,
+                            "line": false,
+                            "position": false,
+                            "template": false,
+                            "comment": false
+                          },
+                          "required": ["content"]
+                        },
+                        {
+                          "properties": {
+                            "content": false,
+                            "permissions": false,
+                            "mode": false,
+                            "exclude": false,
+                            "source": false,
+                            "block": false,
+                            "template": false,
+                            "comment": false
+                          },
+                          "required": ["line"]
+                        },
+                        {
+                          "properties": {
+                            "content": false,
+                            "line": false,
+                            "position": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "mode": {
+                              "enum": ["track", "track-local"]
+                            }
+                          },
+                          "required": ["include", "mode"]
+                        },
+                        {
+                          "properties": {
+                            "include": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "mode": {
+                              "enum": ["track", "track-local"]
+                            }
+                          },
+                          "required": ["allow_plaintext", "mode"]
+                        },
+                        {
+                          "properties": {
+                            "allow_plaintext": false
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "create_if_missing": {
+                              "const": false
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "mode": {
+                              "enum": ["copy", "template"]
+                            },
+                            "block": false,
+                            "line": false,
+                            "template": false,
+                            "comment": false
+                          },
+                          "anyOf": [
+                            {
+                              "required": ["source"]
+                            },
+                            {
+                              "required": ["content"]
+                            },
+                            {
+                              "required": ["mode"]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "format": false
+                          }
+                        },
+                        {
+                          "properties": {
+                            "merge": {
+                              "enum": [true, "missing"]
+                            }
+                          },
+                          "required": ["merge"]
+                        }
+                      ]
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "mode": {
+                            "const": "fnox"
+                          }
+                        },
+                        "required": ["mode"]
+                      },
+                      "then": {
+                        "properties": {
+                          "source": false,
+                          "content": false,
+                          "exclude": false,
+                          "manifest": false,
+                          "remove_empty": false,
+                          "create_if_missing": false,
+                          "dot_prefix": {
+                            "const": false
+                          },
+                          "relative": {
+                            "const": false
+                          },
+                          "encrypt": {
+                            "const": false
+                          },
+                          "merge": false,
+                          "format": false,
+                          "block": false,
+                          "line": false,
+                          "position": false,
+                          "template": false,
+                          "comment": false
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "required": ["depends"]
+                      },
+                      "then": {
+                        "properties": {
+                          "block": false,
+                          "line": false,
+                          "mode": {
+                            "not": {
+                              "enum": ["track", "track-local"]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "encrypt": {
+                          "const": false
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "content": false,
+                        "block": false,
+                        "line": false,
+                        "template": false
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -7887,7 +8796,7 @@
           "description": "System services and portable user services managed by mise bootstrap, keyed by service name",
           "additionalProperties": {
             "type": "object",
-            "description": "Linux systemd system unit that mise starts, stops, enables, or masks, or a user service mise defines from command or builtin",
+            "description": "Linux systemd unit that mise starts, stops, enables, or masks (a system unit, or with scope user an existing user unit), or a user service mise defines from command or builtin",
             "properties": {
               "state": {
                 "type": "string",
@@ -8411,6 +9320,19 @@
                           "type": "string",
                           "minLength": 1,
                           "pattern": "^(?:/|~$|~/|\\{[{%])"
+                        }
+                      },
+                      "launch_events": {
+                        "type": "object",
+                        "description": "write LaunchEvents, keyed by event stream, then event name, with launchd's case-sensitive property names",
+                        "additionalProperties": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "$ref": "#/$defs/macos_defaults_value"
+                            }
+                          }
                         }
                       },
                       "environment": {
@@ -9010,8 +9932,8 @@
           "properties": {
             "login_shell": {
               "type": "string",
-              "description": "current user's desired login shell, applied with `chsh -s`; a template that must render to an absolute path",
-              "pattern": "^\\s*(?:/|\\{[{%])"
+              "description": "current user's desired login shell, applied with `chsh -s`; an absolute path or a bare shell name resolved after packages are installed; may be a template",
+              "pattern": "^\\s*(?:/|\\{[{%]|[^/\\\\{\\s][^/\\\\]*$)"
             }
           },
           "additionalProperties": false
@@ -9043,6 +9965,10 @@
             "adopt": {
               "type": "boolean",
               "description": "adopt existing app artifacts by default for configured brew-cask packages"
+            },
+            "homebrew_metadata": {
+              "type": "boolean",
+              "description": "write Homebrew's cask metadata after mise installs a brew-cask package, so `brew upgrade` and `brew outdated` manage it afterwards"
             },
             "taps": {
               "type": "object",
@@ -9775,6 +10701,9 @@
                   "required": ["args"]
                 },
                 {
+                  "required": ["image"]
+                },
+                {
                   "required": ["provider"]
                 },
                 {
@@ -9824,6 +10753,9 @@
                   "required": ["project"]
                 },
                 {
+                  "required": ["image"]
+                },
+                {
                   "required": ["provider"]
                 },
                 {
@@ -9856,10 +10788,38 @@
                 "type": "object",
                 "description": "Overrides for the preset's additional named ports.",
                 "additionalProperties": {
-                  "type": "integer",
-                  "description": "Port for this named port of the preset.",
-                  "minimum": 1,
-                  "maximum": 65535
+                  "description": "Port for this named port of the preset: a fixed port, or an allocation that gives each linked git worktree its own.",
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "maximum": 65535,
+                      "minimum": 1
+                    },
+                    {
+                      "type": "object",
+                      "description": "Offset a base port by the same worktree slot the daemon's `port = \"auto\"` uses.",
+                      "additionalProperties": false,
+                      "properties": {
+                        "auto": {
+                          "description": "Enable per-worktree allocation of this named port.",
+                          "const": true
+                        },
+                        "base": {
+                          "type": "integer",
+                          "description": "Port used by the primary checkout. Defaults to the preset's default for this port; independent of the daemon's own `port`.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "stride": {
+                          "type": "integer",
+                          "description": "Distance between consecutive worktree slots. Defaults to 1.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": ["auto"]
+                    }
+                  ]
                 }
               },
               "options": {
@@ -9887,6 +10847,163 @@
             "additionalProperties": true,
             "not": {
               "anyOf": [
+                {
+                  "required": ["project"]
+                },
+                {
+                  "required": ["task"]
+                },
+                {
+                  "required": ["args"]
+                },
+                {
+                  "required": ["image"]
+                },
+                {
+                  "required": ["provider"]
+                },
+                {
+                  "required": ["resource"]
+                }
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "image": {
+                "type": "string",
+                "description": "Container image the daemon runs with Docker or Podman, for example `postgres:18`. mise runs it in the foreground, so its output is the daemon's log, and stops it when the daemon stops.",
+                "minLength": 1
+              },
+              "runtime": {
+                "type": "string",
+                "description": "Docker or Podman. `auto` uses Docker when it is on PATH, otherwise Podman. The MISE_CONTAINER_RUNTIME environment variable overrides this with any docker-compatible CLI.",
+                "enum": ["auto", "docker", "podman"]
+              },
+              "command": {
+                "description": "The command and arguments the container runs in place of the image's default: shell text, or an argument array.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
+              },
+              "port": {
+                "$ref": "#/$defs/daemon_port"
+              },
+              "container_port": {
+                "type": "integer",
+                "description": "Port the container listens on for `port`. Defaults to the port's `base`, or to the port itself when it is fixed.",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "ports": {
+                "type": "object",
+                "description": "More published ports by name, each exported as <NAME>_<PORT>_PORT.",
+                "additionalProperties": {
+                  "description": "A port the container listens on, published on 127.0.0.1 only. An integer publishes the same port number on the host; a table sets the container port and either a fixed host port or a per-worktree one.",
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "maximum": 65535,
+                      "minimum": 1
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "container": {
+                          "type": "integer",
+                          "description": "Port the container listens on.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "host": {
+                          "type": "integer",
+                          "description": "Fixed host port. Defaults to the container port.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "auto": {
+                          "description": "Enable per-worktree port allocation, instead of a fixed host port.",
+                          "const": true
+                        },
+                        "base": {
+                          "type": "integer",
+                          "description": "Host port used by the primary checkout. Defaults to the container port.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "stride": {
+                          "type": "integer",
+                          "description": "Distance between consecutive worktree slots. Defaults to 1.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": ["container"]
+                    }
+                  ]
+                }
+              },
+              "volumes": {
+                "type": "array",
+                "description": "Volumes as `source:target[:options]`. A source starting with `.`, `/` or `~` is a path, relative to the project root, and is created when missing; anything else is a named volume.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "data_mount": {
+                "type": "string",
+                "description": "Path inside the container where a host data directory is mounted. The directory is data_dir, or per-checkout mise state storage by default.",
+                "pattern": "^/"
+              },
+              "data_dir": {
+                "type": "string",
+                "description": "Host directory mounted at data_mount, relative to the declaring project root or absolute. Defaults to mise state storage.",
+                "minLength": 1
+              },
+              "runtime_args": {
+                "type": "array",
+                "description": "Extra arguments for `<runtime> run`, such as `--shm-size=1g`, placed before the image.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "init": {
+                "$ref": "#/$defs/daemon_init"
+              },
+              "mise": {
+                "type": "boolean",
+                "description": "false runs setup commands and readiness checks without the project's tool environment."
+              },
+              "proxy": {
+                "$ref": "#/$defs/daemon_proxy"
+              },
+              "proxy_tls": {
+                "$ref": "#/$defs/daemon_proxy_tls"
+              },
+              "proxy_idle_timeout": {
+                "$ref": "#/$defs/daemon_proxy_idle_timeout"
+              }
+            },
+            "required": ["image"],
+            "additionalProperties": true,
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["run"]
+                },
+                {
+                  "required": ["preset"]
+                },
                 {
                   "required": ["project"]
                 },
@@ -9963,10 +11080,38 @@
             "type": "object",
             "description": "Overrides for the preset's additional named ports.",
             "additionalProperties": {
-              "type": "integer",
-              "description": "Port for this named port of the preset.",
-              "minimum": 1,
-              "maximum": 65535
+              "description": "Port for this named port of the preset: a fixed port, or an allocation that gives each linked git worktree its own.",
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "maximum": 65535,
+                  "minimum": 1
+                },
+                {
+                  "type": "object",
+                  "description": "Offset a base port by the same worktree slot the daemon's `port = \"auto\"` uses.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "auto": {
+                      "description": "Enable per-worktree allocation of this named port.",
+                      "const": true
+                    },
+                    "base": {
+                      "type": "integer",
+                      "description": "Port used by the primary checkout. Defaults to the preset's default for this port; independent of the daemon's own `port`.",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "stride": {
+                      "type": "integer",
+                      "description": "Distance between consecutive worktree slots. Defaults to 1.",
+                      "minimum": 1,
+                      "maximum": 65535
+                    }
+                  },
+                  "required": ["auto"]
+                }
+              ]
             }
           },
           "options": {

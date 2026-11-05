@@ -37,6 +37,8 @@ mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
 
 请修复该位置的语法错误。在项目文件能够成功解析之前，mise 无法判断是否需要信任它，因此有语法错误且不受信任的文件会先报 [`Config files in <path> are not trusted`](#untrusted-config)。该错误上方的 `TOML parse error at line <N>, column <M>` 警告会指出实际问题。
 
+如果项目文件本身是符号链接，或 mise 通过 `.config` 等链接配置目录访问该文件，则不会显示代码片段，因为文本属于链接目标，而不是项目本身。mise 会单独打印位置和解析器消息：`Invalid TOML in config file <path>:<line>:<column>: <message>`。全局和系统配置目录中的链接属于用户自身配置，仍会显示代码片段。
+
 ### `Config files in <path> are not trusted` {#untrusted-config}
 
 mise 找到了一个需要先信任才能加载的项目配置文件：其中包含 `[env]`、hooks、模板、工具选项或设置。通常 `<path>` 指配置文件，且此消息会出现在 `error parsing config file: <path>` 行之后。检查文件后再信任它：
@@ -177,6 +179,8 @@ mise 会从 [mise-versions](https://mise-versions.jdx.dev) 主机获取公开发
 你在一个没有配置文件为该工具选择版本的目录中运行了 [shim](/dev-tools/shims.html)。请使用 `mise use <tool>@<version>` 添加版本，或使用 `mise use -g <tool>@<version>` 为所有目录设置默认版本；错误消息会列出可供选择的已安装版本。
 
 `Tool not installed for shim` 表示配置选择的版本尚未安装，且未触发自动安装。请运行 `mise install`。
+
+`<command> is not provided by the active <tool>@<version> (set by <config>)` 表示配置确实选择了该工具版本，但此版本没有对应的可执行文件，而其他已安装版本有（错误消息会列出这些版本）。软件包管理器可能会为某个版本添加可执行文件，例如升级 Ruby 后安装的 gem。请为当前活动版本安装该可执行文件，或切换到包含它的版本。
 
 ### `<tool>@<version> not installed` / `<command> is not a mise bin` {#not-installed}
 

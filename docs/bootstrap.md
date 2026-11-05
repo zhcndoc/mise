@@ -46,7 +46,7 @@ mise bootstrap: running `bootstrap` task
 
 实际运行会写入激活配置块、安装 Node.js 并执行任务。添加 `--yes` 可跳过确认提示并直接应用；mise 修改 shell 启动文件后，请重新打开 shell。
 
-同样的配置也可以放在项目的 `mise.toml` 中，但 mise 读取项目配置前需要先运行 [`mise trust`](/cli/trust.html)；全局配置无需信任。
+相同配置也可以放在项目 `mise.toml` 中，但 mise 读取前必须先通过 [`mise trust`](/cli/trust.html) 信任项目文件；全局配置无需信任。仅包含 `[tasks]` 的项目文件无需信任即可加载，但其中的任务可能按名称替换你的任务，因此只有当 `bootstrap` 任务及其调用链中的所有任务（包括其 `depends` 和 `run` 条目引用的任务）都来自全局配置或受信任的项目时，才会运行该任务。其他项目任务不受影响。如果调用链中有任务不受信任，请信任该项目、从其他目录运行 `mise bootstrap`，或传入 `--skip task`。
 
 ## 可声明的内容 {#what-goes-where}
 
@@ -143,25 +143,37 @@ mise bootstrap --skip tools,task
 
 以下选项会改变选中部分的行为：
 
-| 选项               | 作用                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `--update`         | 安装软件包前刷新包管理器元数据，并更新[已声明的仓库](/bootstrap/repos.html)                                      |
-| `--force-dotfiles` | 整个文件形式的 `[dotfiles]` 条目与现有文件冲突时，直接替换而不是停止                                             |
-| `--prune-dotfiles` | 移除由 dotfile 组部署、但现在没有任何活动条目部署的文件；等同于 `mise dot apply --prune`                          |
-| `--skip-dirty`     | 跳过有本地更改的 `[bootstrap.repos]` 检出目录，而不是报错                                                       |
-| `--prompt-secrets` | 提示输入环境中缺失的[密钥输入](/bootstrap/secrets.html)                                                         |
-| `--prompt-vars`    | 提示输入尚无已保存答案、且带有 `prompt` 的 [`[vars]`](/configuration/vars.html#prompt)                           |
-| `-y`、`--yes`      | 应用配置时跳过确认提示                                                                                         |
+| 标志               | 作用                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--update`         | 快进更新[全局配置检出目录](/bootstrap/from-repository.html)，刷新软件包元数据，并更新[声明的仓库](/bootstrap/repos.html) |
+| `--force-dotfiles` | 替换与整文件 `[dotfiles]` 条目冲突的现有文件，而不是停止执行                                                                                                   |
+| `--prune-dotfiles` | 移除由 dotfile 组部署、且当前没有活动条目继续部署的文件，类似于 `mise dot apply --prune`                                                                          |
+| `--skip-dirty`     | 跳过存在本地更改的 `[bootstrap.repos]` 检出目录，而不是报错                                                                                                      |
+| `--prompt-secrets` | 提示输入环境中缺少的[密钥输入](/bootstrap/secrets.html)                                                                                                         |
+| `--prompt-vars`    | 提示输入尚无已保存答案的 [`[vars]` `prompt`](/configuration/vars.html#prompt)                                                                                  |
+| `--save-env`       | 将 `-E` 或 `MISE_ENV` 指定的环境保存到 `miserc.local.toml`，让后续运行无需 `-E` 即可选中这些环境 |
+| `-y`, `--yes`      | 无需确认提示，直接应用配置                                                                                                                                      |
 
-元数据刷新方式取决于包管理器：apk 添加 `--update-cache`；apt 运行 `apt-get update`；dnf、nix 和 AUR helper 添加 `--refresh`；pacman 运行 `pacman -Sy`；zypper 运行 `zypper refresh`；scoop 运行 `scoop update`；winget 运行 `winget source update`。Homebrew、Flatpak、`macos-app` 和 mas 没有单独的刷新操作。
+元数据刷新方式取决于包管理器：apk 会添加 `--update-cache`；apt 会运行 `apt-get update`；dnf、nix 和 AUR helper 会添加 `--refresh`；pacman 会运行 `pacman -Sy`；zypper 会运行 `zypper refresh`；scoop 会运行 `scoop update`；winget 会运行 `winget source update`。Homebrew、Chocolatey、Flatpak、`macos-app` 和 mas 没有单独的元数据刷新操作。
 
-## 预览与检查 {#previewing-changes}
+## Preview and inspect {#previewing-changes}
 
-`mise bootstrap --dry-run` 会预览选中的部分，列出每个部分将要进行的更改，并打印钩子命令和 `bootstrap` 任务，而不实际运行它们。它不会渲染 `[dotfiles]` 模板，但会渲染 `[bootstrap.files]` 内容模板（`template = true`），以便与磁盘上的文件比较。因此，模板中的 `exec()` 调用会在试运行期间执行；`mise bootstrap plan` 和 `mise bootstrap status` 也会执行模板中的 `exec()`。参见[会运行命令的模板](#templates-that-run-commands)。
+`mise bootstrap --dry-run` previews the selected parts. It lists the changes each
+part would make, and it prints hook commands and the `bootstrap` task instead of
+running them. It does not render `[dotfiles]` templates, but it does render
+`[bootstrap.files]` content templates (`template = true`) to compare them with
+the files on disk, so an `exec()` call in one of them runs during the dry run,
+as it does for `mise bootstrap plan` and `mise bootstrap status`. See
+[Templates that run commands](#templates-that-run-commands).
 
-### 规划声明式资源
+### Plan declarative resources
 
-`mise bootstrap plan` 会按依赖顺序列出声明式资源的更改：账户、软件包（包括插件提供的软件包）、系统文件和目录、系统服务和用户服务、防火墙策略和规则，以及 Compose 项目。它不涵盖 dotfiles、仓库、shell 激活、macOS 默认设置、LaunchAgents、systemd 用户单元、登录 shell、工具、钩子或 `bootstrap` 任务。要预览这些内容，请使用 `mise bootstrap --dry-run`。
+`mise bootstrap plan` lists the changes to declarative resources in dependency
+order: accounts, packages (including packages from plugins), system files and
+directories, system and user services, firewall policy and rules, and Compose
+projects. It does not cover dotfiles, repositories, shell activation, macOS
+defaults, LaunchAgents, systemd user units, the login shell, tools, hooks, or
+the `bootstrap` task. Use `mise bootstrap --dry-run` for those.
 
 ```sh
 mise bootstrap plan
@@ -213,19 +225,57 @@ run = [
 run = "mise exec -- gh auth status"
 ```
 
-可用阶段包括 `pre-packages`、`post-packages`、`pre-repos`、`post-repos`、`pre-dotfiles`、`post-dotfiles`、`pre-defaults`、`post-defaults`、`pre-user`、`post-user`、`pre-tools`、`post-tools` 和 `final`。[执行顺序](#how-it-runs)中列出了每个阶段的运行时点。所有配置文件中的钩子都会合并，且先处理全局配置，因此全局配置可以设置机器，项目也可以添加自己的命令。
+在 Windows 上，`run_windows` 会取代 `run`。如果表中只设置了 `run_windows`，其他平台不会执行该 hook：
 
-钩子会在 `mise bootstrap` 期间运行。`pre-dotfiles` 和 `post-dotfiles` 也会在 [`mise dot apply`](/cli/dotfiles/apply.html) 前后运行。其他部分的子命令（例如 `mise bootstrap repos apply`）不会运行钩子；`--no-hooks`、`MISE_NO_HOOKS=1` 和[安全模式](/security.html#safe-mode)会跳过所有钩子。
+```toml
+[bootstrap.hooks.post-tools]
+run = "mise exec -- node --version"
+run_windows = "mise exec -- node.exe --version"
+```
 
-每条命令都像内联任务一样，使用 [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) 指定的 shell；Windows 上则使用 [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)。钩子失败会终止运行；试运行会打印命令而不是执行它。试运行期间绝不会调用 `exec()`，因此如果钩子模板调用了 `exec()`，或读取由其计算得到的变量，mise 会原样打印钩子，并附上渲染错误说明。钩子运行在 mise 自身环境中，而不是任务环境中，因此需要使用 `[tools]` 中工具的命令应像上例一样通过 `mise exec --` 运行，或移到 [`bootstrap` 任务](#the-bootstrap-task)中。
+配置表还可以设置 `description`。`mise bootstrap` 会显示该说明，而不是命令本身；当命令是较长脚本时，这很有用：
 
-钩子命令是 [Tera 模板](/templates.html)，会使用声明配置文件的上下文进行渲染，例如 <code v-pre>{{ config_root }}</code>、<code v-pre>{{ xdg_config_home }}</code> 和 <code v-pre>{{ vars.name }}</code>。
+```toml
+[bootstrap.hooks.final]
+description = "Remove the root copy of pam_reattach if Homebrew removed the module"
+run = '''
+copy=/usr/local/lib/pam/pam_reattach.so
+if [ ! -e /opt/homebrew/lib/pam/pam_reattach.so ] && [ -e "$copy" ]; then
+  sudo rm -f "$copy"
+fi
+'''
+```
 
-## bootstrap 任务
+未设置 `description` 时，mise 会像[任务](/tasks/)一样显示 `$` 和命令首行，并按终端宽度截断。`run` 为数组时，说明只会在第一条命令前显示一次。`--verbose` 会打印每条完整命令；`--dry-run` 也会这样显示，以说明实际运行会执行哪些命令。如果[远程主机](/bootstrap/remote.html)的自身配置和共享配置在同一阶段都定义了 hook，mise 会合并两者的命令，并且不显示说明。
 
-其他部分运行完毕后，如果存在名为 `bootstrap` 的任务（例如 `[tasks.bootstrap]` 表），`mise bootstrap` 就会运行它。该任务与其他[任务](/tasks/)一样运行，并可以使用 `[tools]` 中的工具。
+阶段包括 `pre-packages`、`post-packages`、`pre-repos`、`post-repos`、`pre-dotfiles`、`post-dotfiles`、`pre-defaults`、`post-defaults`、`pre-user`、`post-user`、`pre-tools`、`post-tools` 和 `final`。[执行顺序](#how-it-runs)展示了每个阶段的运行位置。所有配置文件中的 hook 都会合并，并优先使用全局配置，因此全局配置可以设置整台机器，而项目配置可以添加自己的命令。
 
-如果 mise 可以检查并应用某项状态，请使用声明式配置部分。对于这些部分无法涵盖的设置（例如检查身份验证或初始化本地数据），请使用任务：
+hook 会在 `mise bootstrap` 期间运行。`pre-dotfiles` 和 `post-dotfiles` hook 也会在 [`mise dot apply`](/cli/dotfiles/apply.html) 前后运行。其他分区子命令（例如 `mise bootstrap repos apply`）不会运行 hook；`--no-hooks`、`MISE_NO_HOOKS=1` 和[安全模式](/security.html#safe-mode)会跳过所有 hook。
+
+Each command runs with the shell from
+[`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args)
+(or
+[`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args)),
+as inline tasks do. A failing hook stops the run, and a dry run prints each
+command instead of running it. A dry run never calls `exec()`, so it prints a
+hook whose template calls `exec()`, or reads a var computed with it, as written,
+with a note that gives the render error. Hooks run in mise's own environment, not a task
+environment, so a command that needs tools from `[tools]` should go through
+`mise exec --`, as above, or move to the [`bootstrap` task](#the-bootstrap-task).
+
+Hook commands are [Tera templates](/templates.html) rendered with the declaring
+config's context, such as <code v-pre>{{ config_root }}</code>,
+<code v-pre>{{ xdg_config_home }}</code>, and <code v-pre>{{ vars.name }}</code>.
+
+## The bootstrap task
+
+After the other parts, `mise bootstrap` runs the task named `bootstrap` if one
+exists, such as a `[tasks.bootstrap]` table. It runs like any other
+[task](/tasks/), with the tools from `[tools]` available.
+
+Use the declarative sections when mise can check and apply the state. Use the
+task for setup they do not cover, such as checking authentication or seeding
+local data:
 
 ```toml
 [tasks.bootstrap]

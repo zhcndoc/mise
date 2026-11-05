@@ -270,6 +270,13 @@ pub struct TrackedSet {
     /// this machine's own history: never this history's to capture, apply,
     /// or publish (see [`Self::keep_local_out`]).
     pub local: Vec<PathBuf>,
+    /// The exclusions [`Self::keep_local_out`] added to an entry, by entry
+    /// path. An identical pattern the declaration already carried is shared.
+    pub private_exclude: Vec<(PathBuf, String)>,
+    /// Portable paths that a `config.<env>.toml` of an environment not
+    /// selected here declares as tracked. This machine does not see the
+    /// declaration, but it is not an instruction to stop tracking.
+    pub unselected: BTreeSet<String>,
 }
 
 /// What a walk of the tracked set found.
@@ -334,6 +341,7 @@ impl TrackedSet {
             .into_iter()
             .filter(|request| crate::files::declaration_is_global(config, request));
         set.add_requests(requests);
+        set.unselected = unselected_declarations();
         for invalid in crate::files::invalid_declarations() {
             if !crate::files::tracking_config_is_global(config, &invalid.config) {
                 continue;
@@ -407,21 +415,7 @@ impl TrackedSet {
                 continue;
             }
             let target = normalize_target(&request.target);
-            let portable =
-                if let Ok(relative) = target.strip_prefix(normalize(&global_config_dir())) {
-                    Some(
-                        format!("config/{}", relative.to_string_lossy().replace('\\', "/"))
-                            .trim_end_matches('/')
-                            .to_owned(),
-                    )
-                } else if let Ok(relative) = target.strip_prefix(normalize(&dirs::HOME)) {
-                    Some(format!(
-                        "home/{}",
-                        relative.to_string_lossy().replace('\\', "/")
-                    ))
-                } else {
-                    None
-                };
+            let portable = portable_path(&target);
             let Some(path) = portable.filter(|path| super::sync::layout::is_safe_branch_path(path))
             else {
                 set.invalid.push(PathReason { path: display_path(&target), reason: "tracking requires a portable path under home or the mise configuration directory".into() });
@@ -535,24 +529,40 @@ impl TrackedSet {
                 if relative.as_os_str().is_empty() {
                     continue;
                 }
-                // a leading `/` anchors the pattern to the entry, and a
-                // pattern matching a directory skips everything under it
-                let pattern = format!(
-                    "/{}",
-                    glob::Pattern::escape(
-                        &relative
-                            .components()
-                            .map(|part| part.as_os_str().to_string_lossy())
-                            .collect::<Vec<_>>()
-                            .join("/")
-                    )
-                );
+                let pattern = local_exclusion(relative);
                 let exclude = entry.exclude.get_or_insert_with(Vec::new);
                 if !exclude.contains(&pattern) {
+                    self.private_exclude
+                        .push((entry.path.clone(), pattern.clone()));
                     exclude.push(pattern);
                 }
             }
         }
+    }
+
+    /// `coverage` as a checkpoint read back from Git would describe it: the
+    /// private exclusions [`Self::keep_local_out`] added are never published,
+    /// so they are not part of the saved record.
+    pub(crate) fn shared_coverage(&self, mut coverage: Coverage, walk: &Walk) -> Coverage {
+        for (record, entry) in coverage.entries.iter_mut().zip(&walk.entries) {
+            let private: Vec<&String> = self
+                .private_exclude
+                .iter()
+                .filter(|(path, _)| *path == entry.path)
+                .map(|(_, pattern)| pattern)
+                .collect();
+            if private.is_empty() {
+                continue;
+            }
+            let Some(exclude) = &mut record.exclude else {
+                continue;
+            };
+            exclude.retain(|pattern| !private.contains(&pattern));
+            if exclude.is_empty() {
+                record.exclude = None;
+            }
+        }
+        coverage
     }
 
     /// Adds explicit enrollment, rejecting conflicting encryption policies.
@@ -936,6 +946,22 @@ impl TrackedSet {
             nested: walk.nested.clone(),
         }
     }
+}
+
+/// The pattern excluding `relative`, a local path under an entry. A leading
+/// `/` anchors it to the entry, and a pattern matching a directory skips
+/// everything under it.
+fn local_exclusion(relative: &Path) -> String {
+    format!(
+        "/{}",
+        glob::Pattern::escape(
+            &relative
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        )
+    )
 }
 
 /// Walks one entry, recording its files, omissions, and symlinks.
@@ -2295,6 +2321,95 @@ pub(crate) fn hard_exclusions() -> Vec<PathBuf> {
     dirs
 }
 
+/// The portable branch path of a tracked target, when it has one.
+fn portable_path(target: &Path) -> Option<String> {
+    if let Ok(relative) = target.strip_prefix(normalize(&global_config_dir())) {
+        Some(
+            format!("config/{}", relative.to_string_lossy().replace('\\', "/"))
+                .trim_end_matches('/')
+                .to_owned(),
+        )
+    } else if let Ok(relative) = target.strip_prefix(normalize(&dirs::HOME)) {
+        Some(format!(
+            "home/{}",
+            relative.to_string_lossy().replace('\\', "/")
+        ))
+    } else {
+        None
+    }
+}
+
+/// The tracked paths declared by environment config files in the global
+/// config directory whose environment is not selected here. Best effort: a
+/// file that cannot be read or parsed declares nothing.
+pub(crate) fn unselected_declarations() -> BTreeSet<String> {
+    unselected_declarations_with(&BTreeMap::new())
+}
+
+/// Whether `path` is the config file of an environment this machine does
+/// not select, in the global config directory.
+pub(crate) fn is_unselected_env_config(path: &Path, selected: &[String]) -> bool {
+    // incoming paths are rooted at the normalized config directory
+    if path.parent().map(normalize) != Some(normalize(&global_config_dir())) {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.strip_prefix("config.")
+        .or_else(|| name.strip_prefix("mise."))
+        .and_then(|rest| rest.strip_suffix(".toml"))
+        .is_some_and(|env| env != "local" && !selected.iter().any(|active| active == env))
+}
+
+/// As [`unselected_declarations`], with incoming file bodies laid over the
+/// directory: `Some` replaces or adds a file, `None` deletes it.
+pub(crate) fn unselected_declarations_with(
+    incoming: &BTreeMap<PathBuf, Option<String>>,
+) -> BTreeSet<String> {
+    let selected = select::active_environments();
+    let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(global_config_dir()) {
+        for entry in entries.flatten() {
+            let path = normalize(&global_config_dir()).join(entry.file_name());
+            if is_unselected_env_config(&path, &selected)
+                && !incoming.contains_key(&path)
+                && let Ok(text) = std::fs::read_to_string(&path)
+            {
+                files.insert(path, text);
+            }
+        }
+    }
+    for (path, body) in incoming {
+        if let Some(body) = body {
+            files.insert(path.clone(), body.clone());
+        }
+    }
+    let mut paths = BTreeSet::new();
+    for (_, text) in files {
+        let Ok(doc) = text.parse::<toml::Table>() else {
+            continue;
+        };
+        let Some(dotfiles) = doc.get("dotfiles").and_then(|value| value.as_table()) else {
+            continue;
+        };
+        for (target, value) in dotfiles {
+            let tracked = value.as_table().is_some_and(|table| {
+                table.get("mode").and_then(|mode| mode.as_str()) == Some("track")
+                    && table
+                        .get("enabled")
+                        .and_then(|enabled| enabled.as_bool())
+                        .unwrap_or(true)
+            });
+            if tracked && let Some(path) = portable_path(&normalize_target(Path::new(target))) {
+                paths.insert(path);
+            }
+        }
+    }
+    paths
+}
+
 /// The global config directory (where `--adopt` checks out).
 pub fn global_config_dir() -> PathBuf {
     mise_util::env::MISE_GLOBAL_CONFIG_FILE
@@ -2620,6 +2735,54 @@ mod tests {
         assert_eq!(set.entries[0].exclude.as_ref().map(Vec::len), Some(1));
     }
 
+    #[test]
+    fn shared_coverage_leaves_out_private_exclusions() {
+        let mut set = TrackedSet {
+            entries: vec![TrackedEntry::new(
+                "/home/u/.config/app".into(),
+                "track",
+                FilePolicy::for_mode(FileMode::Track),
+            )],
+            local: vec!["/home/u/.config/app/state.json".into()],
+            ..Default::default()
+        };
+        set.keep_local_out();
+        let walk = Walk {
+            entries: set.entries.clone(),
+            ..Default::default()
+        };
+        let coverage = set.coverage(&walk);
+        assert_eq!(
+            coverage.entries[0].exclude.as_deref(),
+            Some(&["/state.json".to_string()][..])
+        );
+        let shared = set.shared_coverage(coverage, &walk);
+        assert!(shared.entries[0].exclude.is_none());
+
+        // a pattern the declaration already carried is shared, not private
+        let mut entry = TrackedEntry::new(
+            "/home/u/.config/app".into(),
+            "track",
+            FilePolicy::for_mode(FileMode::Track),
+        );
+        entry.exclude = Some(vec!["/state.json".into()]);
+        let mut set = TrackedSet {
+            entries: vec![entry],
+            local: vec!["/home/u/.config/app/state.json".into()],
+            ..Default::default()
+        };
+        set.keep_local_out();
+        let walk = Walk {
+            entries: set.entries.clone(),
+            ..Default::default()
+        };
+        let shared = set.shared_coverage(set.coverage(&walk), &walk);
+        assert_eq!(
+            shared.entries[0].exclude.as_deref(),
+            Some(&["/state.json".to_string()][..])
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn local_only_backslash_name_is_excluded_literally() {
@@ -2664,6 +2827,11 @@ mod tests {
             ..Default::default()
         };
         assert!(manifest.tracking().is_err());
+        // a stale entry is reported, not allowed to fail the whole read
+        let lenient = manifest.tracking_lenient()?;
+        assert!(lenient.entries.is_empty());
+        assert_eq!(lenient.invalid.len(), 1);
+        assert!(lenient.invalid[0].reason.contains("symlinked parent"));
         Ok(())
     }
 
@@ -3654,9 +3822,11 @@ mod tests {
                 variants: vec![],
                 enabled: true,
                 remove_empty: false,
+                create_if_missing: false,
                 dot_prefix: false,
                 relative: false,
                 group: None,
+                depends: vec![],
             }]);
         }
         assert!(set.entries.is_empty());
@@ -4864,9 +5034,11 @@ mod tests {
             variants: vec![],
             enabled: true,
             remove_empty: false,
+            create_if_missing: false,
             dot_prefix: false,
             relative: false,
             group: None,
+            depends: vec![],
         }]);
         assert_eq!(set.manifest.enrollment.len(), 1);
         assert_eq!(

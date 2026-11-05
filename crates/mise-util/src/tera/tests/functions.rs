@@ -82,6 +82,11 @@ async fn test_xdg_config_home() {
     assert!(s.ends_with("/.config")); // test dir is not deterministic
 }
 #[tokio::test]
+async fn test_mise_config_dir() {
+    let s = render("{{mise_config_dir}}");
+    assert_eq!(s, env::MISE_CONFIG_DIR.to_string_lossy());
+}
+#[tokio::test]
 #[cfg(unix)]
 async fn test_xdg_data_home() {
     let s = render("{{xdg_data_home}}");
@@ -302,6 +307,24 @@ async fn test_read_file() {
     )
     .unwrap();
     assert_eq!(s, "test content\nwith multiple lines");
+}
+
+/// A file the filters cannot hash or date is a render error, not a panic: a
+/// `.miserc.toml` is rendered before any trust check and can name any path.
+#[test]
+#[cfg(unix)]
+fn test_file_filters_error_on_bad_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old.txt");
+    std::fs::write(&old, "").unwrap();
+    filetime::set_file_mtime(&old, filetime::FileTime::from_unix_time(-1, 0)).unwrap();
+    let mut context = BASE_CONTEXT.clone();
+    context.insert("old", old.to_str().unwrap());
+    context.insert("missing", dir.path().join("missing.txt").to_str().unwrap());
+
+    let mut tera = TeraEngine::V2(Box::new(get_tera_v2(Some(dir.path()))));
+    assert!(render_str(&mut tera, "{{ old | last_modified }}", &context).is_err());
+    assert!(render_str(&mut tera, "{{ missing | hash_file }}", &context).is_err());
 }
 
 #[test]
@@ -554,4 +577,77 @@ fn dry_run_cases() {
     let out = render("{{ choice(n=8, alphabet='ab') }}", &pending);
     assert_eq!(out.len(), 8, "{out}");
     assert!(out.chars().all(|c| c == 'a' || c == 'b'), "{out}");
+}
+
+#[test]
+fn test_safe_mode_hides_env_and_files() {
+    let _lock = crate::testing::lock_ignoring_poison(&crate::testing::SETTINGS_LOCK);
+    // restore the default settings even if an assertion fails, before the lock is released
+    struct ResetSettings;
+    impl Drop for ResetSettings {
+        fn drop(&mut self) {
+            crate::testing::reset_settings(None);
+        }
+    }
+    let _reset = ResetSettings;
+    let mut ctx = Context::new();
+    ctx.insert("env", &json!({ "SECRET": "hunter2" }));
+    ctx.insert("p", "/etc");
+    let refused = [
+        ("{{ get_env(name='PATH', default='') }}", "get_env() is"),
+        ("{{ 'Cargo.toml' | hash_file }}", "the hash_file filter is"),
+        ("{{ 'Cargo.toml' | file_size }}", "the file_size filter is"),
+        (
+            "{{ 'Cargo.toml' | last_modified }}",
+            "the last_modified filter is",
+        ),
+        (
+            "{{ 'Cargo.toml' | canonicalize }}",
+            "the canonicalize filter is",
+        ),
+        ("{% if p is dir %}x{% endif %}", "the dir test is"),
+        ("{% if p is file %}x{% endif %}", "the file test is"),
+        ("{% if p is exists %}x{% endif %}", "the exists test is"),
+    ];
+    for v1 in [false, true] {
+        let mut settings = mise_settings::SettingsPartial::empty();
+        settings.safe = Some(true);
+        settings.tera_v1 = Some(v1);
+        crate::testing::reset_settings(Some(settings));
+        for mut tera in [get_tera(None), get_miserc_tera()] {
+            assert!(render_str(&mut tera, "{{ env.SECRET }}", &ctx).is_err());
+            assert_eq!(
+                render_str(&mut tera, "{{ env.SECRET | default(value='unset') }}", &ctx).unwrap(),
+                "unset"
+            );
+            // global and system config keep the environment
+            assert_eq!(
+                render_str_with_env(&mut tera, "{{ env.SECRET }}", &ctx).unwrap(),
+                "hunter2"
+            );
+            for (template, message) in refused {
+                let err = render_str_with_env(&mut tera, template, &ctx).unwrap_err();
+                assert!(
+                    format!("{err:?}")
+                        .contains(&format!("{message} disabled in safe mode (MISE_SAFE=1)")),
+                    "{template}: {err:?}"
+                );
+            }
+        }
+        assert!(render_str_v2(&mut get_tera_v2(None), "{{ env.SECRET }}", &ctx).is_err());
+        // work for a tool from global config renders that config's options with env
+        let trusted = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(with_trusted_templates(async {
+                render_str(&mut get_tera(None), "{{ env.SECRET }}", &ctx)
+            }));
+        assert_eq!(trusted.unwrap(), "hunter2");
+    }
+    // outside safe mode nothing changes
+    crate::testing::reset_settings(None);
+    assert_eq!(
+        render_str(&mut get_tera(None), "{{ env.SECRET }}", &ctx).unwrap(),
+        "hunter2"
+    );
 }

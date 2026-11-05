@@ -16,6 +16,8 @@ fn slsa_detection_requires_signer_fields() {
         slsa_min_level: None,
         slsa_signer_identity: None,
         slsa_signer_issuer: None,
+        slsa_source_repository: None,
+        slsa_source_tag: None,
     };
     assert!(attestation_to_verified(attestation).is_none());
 }
@@ -30,6 +32,7 @@ impl Vfox {
             install_dir: PathBuf::from("test/installs"),
             skip_verification: false,
             cmd_env: None,
+            hook_dependencies: None,
             default_inline_shell: None,
             raw_stdio: false,
             terminal_lock: None,
@@ -38,6 +41,7 @@ impl Vfox {
             runtime_env_type: None,
             url_rewriter: None,
             http_headers_resolver: None,
+            download_progress: None,
             log_tx: None,
             log_handler: None,
         }
@@ -604,4 +608,130 @@ async fn test_download_plugin_authorization_replaces_resolver_authorization() {
     vfox.download(&url, &plugin, "1.0.0", temp.path(), Some(&headers))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn get_sdk_exposes_a_cache_dir_under_the_vfox_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vfox = Vfox::test();
+    vfox.cache_dir = dir.path().to_path_buf();
+
+    let plugin = vfox.get_sdk("dummy").unwrap();
+    let seen: Option<String> = plugin
+        .eval_async(mlua::chunk! { return RUNTIME.cacheDirPath })
+        .await
+        .unwrap();
+
+    let expected = dir.path().join("plugins").join("dummy");
+    assert_eq!(seen, Some(expected.to_string_lossy().to_string()));
+    assert!(expected.is_dir());
+}
+
+#[tokio::test]
+async fn cache_dir_is_nil_when_it_cannot_be_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    let mut vfox = Vfox::test();
+    vfox.cache_dir = blocker;
+
+    let plugin = vfox.get_sdk("dummy").unwrap();
+    let seen: Option<String> = plugin
+        .eval_async(mlua::chunk! { return RUNTIME.cacheDirPath })
+        .await
+        .unwrap();
+
+    assert_eq!(seen, None);
+}
+
+#[test]
+fn usable_cache_dir_path_is_none_when_it_cannot_be_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    let mut vfox = Vfox::test();
+    vfox.cache_dir = blocker;
+    assert_eq!(vfox.get_sdk("dummy").unwrap().usable_cache_dir_path(), None);
+
+    vfox.cache_dir = dir.path().join("ok");
+    let plugin = vfox.get_sdk("dummy").unwrap();
+    assert_eq!(
+        plugin.usable_cache_dir_path(),
+        Some(dir.path().join("ok/plugins/dummy"))
+    );
+}
+
+#[test]
+fn path_like_plugin_names_get_no_cache_dir() {
+    let vfox = Vfox::test();
+    for name in ["..", ".", "a/b"] {
+        let mut plugin = Plugin::from_dir(Path::new("plugins/dummy")).unwrap();
+        plugin.name = name.to_string();
+        vfox.configure_plugin(&mut plugin);
+        assert_eq!(plugin.cache_dir_path, None, "{name}");
+    }
+}
+
+#[test]
+fn empty_cache_root_gets_no_plugin_cache_dir() {
+    let mut vfox = Vfox::test();
+    vfox.cache_dir = PathBuf::new();
+    let mut plugin = Plugin::from_dir(Path::new("plugins/dummy")).unwrap();
+    vfox.configure_plugin(&mut plugin);
+    assert_eq!(plugin.cache_dir_path, None);
+}
+
+#[tokio::test]
+async fn test_download_to_sends_plugin_headers() {
+    use reqwest::header::HeaderValue;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/artifact.zip"))
+        .and(header("Authorization", "Bearer secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"artifact"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("artifact");
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
+    let url = Url::parse(&format!("{}/artifact.zip", server.uri())).unwrap();
+    Vfox::test()
+        .download_to(&url, &dest, Some(&headers))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(dest).unwrap(), b"artifact");
+}
+
+#[tokio::test]
+async fn test_download_to_reports_progress() {
+    use std::sync::Mutex;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/artifact.zip"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"artifact"))
+        .mount(&server)
+        .await;
+
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("artifact");
+    let url = Url::parse(&format!("{}/artifact.zip", server.uri())).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut vfox = Vfox::test();
+    vfox.set_download_progress({
+        let seen = seen.clone();
+        move |written, total| seen.lock().unwrap().push((written, total))
+    });
+    vfox.download_to(&url, &dest, None).await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.first(), Some(&(0, Some(8))));
+    assert_eq!(seen.last(), Some(&(8, Some(8))));
 }

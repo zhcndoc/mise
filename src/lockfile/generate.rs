@@ -1,6 +1,7 @@
 //! Generate selected scope from requests with an immutable previous lockfile.
 use super::*;
 use crate::ui::multi_progress_report::MultiProgressReport;
+use crate::ui::progress_report::{QuietReport, SingleReport};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static INSTALL_FAILED: AtomicBool = AtomicBool::new(false);
@@ -8,6 +9,13 @@ static INSTALL_FAILURE_DETAIL: Lazy<Mutex<Option<String>>> = Lazy::new(Default::
 type ResolutionCell = Arc<tokio::sync::OnceCell<LockResolutionResult>>;
 static RESOLUTIONS: Lazy<Mutex<HashMap<String, ResolutionCell>>> = Lazy::new(Default::default);
 static PREPARE_SLOTS: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
+
+tokio::task_local! {
+    /// Set while `prepare_install` generates in the background of an install, which
+    /// draws no rows of its own: the lockfile is written, and reported, once the
+    /// install is done.
+    static IN_BACKGROUND: ();
+}
 
 #[derive(Default)]
 pub(crate) struct PreparationBatch {
@@ -156,7 +164,11 @@ pub fn read_previous(config: &Config, path: &Path, upgrade: bool) -> Result<Lock
             }
             previous.lockfile_version = previous.lockfile_version.max(legacy.lockfile_version);
         }
+        let stubs = live_tool_stub_paths(&legacy, &source);
         merge_lockfile_preserving_root(&mut previous, legacy);
+        for stub in stubs {
+            previous.add_tool_stub(path, &stub)?;
+        }
     }
     Ok(previous)
 }
@@ -182,22 +194,31 @@ pub(crate) async fn prepare_install(config: &Arc<Config>, tv: &ToolVersion) -> R
     platforms.retain(|platform| platform.to_key() != Platform::current().to_key());
     // Reserve at most one background worker, leaving the remaining workers for installs.
     let _permit = PREPARE_SLOTS.acquire().await?;
-    let mut candidate = generate(
-        &previous,
-        &[(tv.ba().clone(), tv.clone())],
-        &platforms,
-        true,
-        PlatformSelection::Default,
-        1,
-        &[],
-    )
-    .await?;
+    let mut candidate = IN_BACKGROUND
+        .scope(
+            (),
+            generate(
+                &previous,
+                &[(tv.ba().clone(), tv.clone())],
+                &platforms,
+                true,
+                PlatformSelection::Default,
+                1,
+                &[],
+            ),
+        )
+        .await?;
+    // With no foreign target (for example `lockfile_platforms` limited to the
+    // host) the candidate has no entry for the tool, so there is no graph to
+    // attach to.
+    let graph_tools = tools_on_platforms(&[(tv.ba().clone(), tv.clone())], &platforms);
     Box::pin(populate_uv_locks(
         config,
         &mut candidate,
-        &[(tv.ba().clone(), tv.clone())],
+        &graph_tools,
         false,
         true,
+        false,
     ))
     .await?;
     Ok(())
@@ -257,7 +278,12 @@ pub fn is_current(
 ) -> Result<bool> {
     if tools.is_empty()
         || platforms.is_empty()
-        || (auto_prune && previous.tools.len() != tools.len())
+        || (auto_prune
+            && previous.tools.len()
+                != tools
+                    .iter()
+                    .filter(|(_, tv)| platforms.iter().any(|p| tv.request.is_os_supported_on(p)))
+                    .count())
         || !previous.conda_packages.is_empty()
         || Settings::get().force_provenance_verify()
     {
@@ -267,6 +293,14 @@ pub fn is_current(
     for (ba, tv) in tools {
         if !shorts.insert(&ba.short) {
             return Ok(false);
+        }
+        // A tool the `os` option excludes from every target has nothing to
+        // lock; it is current as long as the lockfile holds no entry for it.
+        if !platforms.iter().any(|p| tv.request.is_os_supported_on(p)) {
+            if previous.tools_for(&ba.short).is_some() {
+                return Ok(false);
+            }
+            continue;
         }
         let Some(entries) = previous.tools_for(&ba.short) else {
             return Ok(false);
@@ -282,11 +316,12 @@ pub fn is_current(
         let specifier = tv.request.version();
         let mut covered: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
         for platform in platforms {
+            if !tv.request.is_os_supported_on(platform) {
+                continue;
+            }
             for platform in backend.platform_variants_for(tv, platform) {
-                let options = backend.resolve_lockfile_options(
-                    &tv.request,
-                    &PlatformTarget::new(platform.clone()),
-                )?;
+                let options = backend
+                    .lockfile_options(&tv.request, &PlatformTarget::new(platform.clone()))?;
                 let Some((index, entry)) = entries.iter().enumerate().find(|(_, entry)| {
                     entry.version == tv.version
                         && entry.backend.as_deref() == Some(stored_backend.as_str())
@@ -316,7 +351,7 @@ pub fn is_current(
                 let Some(info) = entry.platforms.get(&key) else {
                     return Ok(false);
                 };
-                if !bindings_current || !can_reuse(info) {
+                if !bindings_current || !can_reuse(info, &tv.version) {
                     return Ok(false);
                 }
                 validate_provenance_settings(ba, tv, &key, info)?;
@@ -347,14 +382,19 @@ pub fn is_current(
     Ok(true)
 }
 
-fn can_reuse(info: &PlatformInfo) -> bool {
+/// An entry whose URL names another release was left behind when its `version`
+/// was rewritten (Renovate does this), so it is refreshed, not reused.
+fn can_reuse(info: &PlatformInfo, version: &str) -> bool {
     info.checksum.is_some()
-        && info.url.is_some()
-        && info.signer.is_none()
         && info
-            .additional_artifacts
-            .iter()
-            .all(|artifact| artifact.checksum.is_some())
+            .url
+            .as_deref()
+            .is_some_and(|url| super::url_contradicts_version(version, url).is_none())
+        && info.signer.is_none()
+        && info.additional_artifacts.iter().all(|artifact| {
+            artifact.checksum.is_some()
+                && super::url_contradicts_version(version, &artifact.url).is_none()
+        })
         && !Settings::get().force_provenance_verify()
 }
 
@@ -394,18 +434,34 @@ pub async fn generate(
         tool_stubs: previous.tool_stubs.clone(),
         ..Default::default()
     };
-    let selected: BTreeSet<_> = tools.iter().map(|(ba, _)| ba.short.as_str()).collect();
+    // Compared with lockfile keys, which are credential-free.
+    let selected: BTreeSet<String> = tools
+        .iter()
+        .map(|(ba, _)| crate::toolset::install_state::state_short(&ba.short).into_owned())
+        .collect();
     let mut targets = Vec::new();
     let mut keys = BTreeSet::new();
     for (ba, tv) in tools {
         let backend = tv.backend()?;
         for platform in platforms {
+            if !tv.request.is_os_supported_on(platform) {
+                // Nothing is locked here, but an explicit selection still owns
+                // these keys, so rows an earlier `os` option allowed are dropped.
+                for platform in backend.platform_variants_for(tv, platform) {
+                    keys.insert((
+                        crate::toolset::install_state::state_short(&ba.short).into_owned(),
+                        platform.to_key(),
+                    ));
+                }
+                continue;
+            }
             for platform in backend.platform_variants_for(tv, platform) {
-                let options = backend.resolve_lockfile_options(
-                    &tv.request,
-                    &PlatformTarget::new(platform.clone()),
-                )?;
-                keys.insert((ba.short.clone(), platform.to_key()));
+                let options = backend
+                    .lockfile_options(&tv.request, &PlatformTarget::new(platform.clone()))?;
+                keys.insert((
+                    crate::toolset::install_state::state_short(&ba.short).into_owned(),
+                    platform.to_key(),
+                ));
                 targets.push((ba.clone(), tv.clone(), platform, options));
             }
         }
@@ -413,7 +469,7 @@ pub async fn generate(
     for (short, entries) in &previous.tools {
         for entry in entries {
             let mut untouched = entry.clone();
-            if selected.contains(short.as_str()) {
+            if selected.contains(short) {
                 if !matches!(platform_selection, PlatformSelection::Explicit(_)) {
                     continue;
                 }
@@ -434,7 +490,11 @@ pub async fn generate(
         }
     }
     candidate.conda_packages = previous.conda_packages.clone();
-    let report = MultiProgressReport::get().add("lock");
+    let report: Box<dyn SingleReport> = if IN_BACKGROUND.try_with(|_| ()).is_ok() {
+        Box::new(QuietReport::new())
+    } else {
+        MultiProgressReport::get().add("lock")
+    };
     let mut progress = ProgressGuard {
         report: report.as_ref(),
         finished: false,
@@ -480,7 +540,9 @@ pub async fn generate(
         }
         // Complete cached artifacts need neither I/O nor a spawned task. Keep them
         // in the same ordered result stream so all downgrade checks still run.
-        let reusable = previous_info.as_ref().filter(|info| can_reuse(info));
+        let reusable = previous_info
+            .as_ref()
+            .filter(|info| can_reuse(info, &tv.version));
         if actual.is_none()
             && let Some(info) = reusable
         {
@@ -488,7 +550,7 @@ pub async fn generate(
                 ordinal,
                 tv.request.version(),
                 (
-                    ba.short.clone(),
+                    crate::toolset::install_state::state_short(&ba.short).into_owned(),
                     tv.version.clone(),
                     ba.stored_full(),
                     platform,
@@ -505,7 +567,7 @@ pub async fn generate(
             let _permit = semaphore.acquire().await?;
             let mut resolution = if let Some(info) = actual {
                 (
-                    ba.short.clone(),
+                    crate::toolset::install_state::state_short(&ba.short).into_owned(),
                     tv.version.clone(),
                     ba.stored_full(),
                     platform,
@@ -618,6 +680,55 @@ pub async fn generate(
             });
         }
     }
+    // A pin is the repository the install verified, or else the one already
+    // recorded for this version. An install that showed another repository
+    // than the recorded one must not replace the pin.
+    for (short, entries) in &mut candidate.tools {
+        for entry in entries.iter_mut() {
+            let verified = installed
+                .iter()
+                .filter(|tv| {
+                    crate::toolset::install_state::state_short(&tv.ba().short) == short.as_str()
+                        && tv.version == entry.version
+                        && tv.ba().stored_full() == entry.backend.clone().unwrap_or_default()
+                })
+                .find_map(|tv| tv.npm_provenance.clone());
+            let recorded = previous
+                .tools_for(short)
+                .and_then(|previous_entries| {
+                    // The repository is a property of the package, so a pin
+                    // survives a change of install options: prefer the entry
+                    // with the same options, else any of the same version.
+                    let same_package = |previous: &&LockfileTool| {
+                        previous.version == entry.version && previous.backend == entry.backend
+                    };
+                    previous_entries
+                        .iter()
+                        .filter(same_package)
+                        .find(|previous| {
+                            previous.options == entry.options && previous.provenance.is_some()
+                        })
+                        .or_else(|| {
+                            previous_entries
+                                .iter()
+                                .filter(same_package)
+                                .find(|previous| previous.provenance.is_some())
+                        })
+                })
+                .and_then(|previous| previous.provenance.clone());
+            if let (Some(verified), Some(recorded)) = (&verified, &recorded)
+                && verified != recorded
+            {
+                bail!(
+                    "{short}@{} was built from {}, but mise.lock pins its provenance to {}; previous files were preserved",
+                    entry.version,
+                    verified.repository,
+                    recorded.repository
+                );
+            }
+            entry.provenance = verified.or(recorded);
+        }
+    }
     for (short, entries) in &mut candidate.tools {
         for entry in entries.iter_mut().filter(|entry| entry.uv.is_none()) {
             entry.uv = previous
@@ -632,9 +743,17 @@ pub async fn generate(
                 .and_then(|old| old.uv.clone());
         }
     }
+    // A tool the `os` option excludes from every target has no graph to
+    // resolve. Without embedded aube the full list stays, so stale graphs are
+    // still cleared.
+    let aube_tools = if crate::backend::npm::NPMBackend::uses_embedded_aube() {
+        tools_on_platforms(tools, platforms)
+    } else {
+        tools.to_vec()
+    };
     Box::pin(populate_aube_locks(
         &mut candidate,
-        tools,
+        &aube_tools,
         Some(report.as_ref()),
         false,
     ))
@@ -643,6 +762,16 @@ pub async fn generate(
     report.finish_with_message(format!("{completed} targets checked"));
     progress.finished = true;
     Ok(candidate)
+}
+
+/// The tools whose `os` option allows at least one of `platforms`. The others
+/// get no lockfile entry, so graph passes that bind to an entry must skip them.
+pub fn tools_on_platforms(tools: &[Tool], platforms: &[Platform]) -> Vec<Tool> {
+    tools
+        .iter()
+        .filter(|(_, tv)| platforms.iter().any(|p| tv.request.is_os_supported_on(p)))
+        .cloned()
+        .collect()
 }
 
 pub async fn populate_aube_locks(
@@ -655,13 +784,13 @@ pub async fn populate_aube_locks(
         return Ok(());
     }
     if !crate::backend::npm::NPMBackend::uses_embedded_aube() {
-        let selected_npm_tools: BTreeSet<_> = tools
+        let selected_npm_tools: BTreeSet<String> = tools
             .iter()
             .filter(|(ba, _)| ba.backend_type() == BackendType::Npm)
-            .map(|(ba, _)| ba.short.as_str())
+            .map(|(ba, _)| crate::toolset::install_state::state_short(&ba.short).into_owned())
             .collect();
         for (short, entries) in &mut lockfile.tools {
-            if selected_npm_tools.contains(short.as_str()) {
+            if selected_npm_tools.contains(short) {
                 for entry in entries {
                     entry.aube = None;
                 }
@@ -674,8 +803,7 @@ pub async fn populate_aube_locks(
         if backend.get_type() != BackendType::Npm {
             continue;
         }
-        let options =
-            backend.resolve_lockfile_options(&tv.request, &PlatformTarget::from_current())?;
+        let options = backend.lockfile_options(&tv.request, &PlatformTarget::from_current())?;
         let backend_name = ba.stored_full();
         let npm = crate::backend::npm::NPMBackend::from_arg(ba.clone());
         if !force
@@ -722,6 +850,7 @@ pub async fn populate_uv_locks(
     tools: &[Tool],
     force: bool,
     best_effort: bool,
+    strict_options: bool,
 ) -> Result<()> {
     if lockfile.lockfile_version() < 2 {
         return Ok(());
@@ -731,10 +860,21 @@ pub async fn populate_uv_locks(
             continue;
         }
         let backend = crate::backend::pipx::PIPXBackend::from_arg(ba.clone());
-        let options =
-            backend.resolve_lockfile_options(&tv.request, &PlatformTarget::from_current())?;
+        let options = backend.lockfile_options(&tv.request, &PlatformTarget::from_current())?;
         let backend_name = ba.stored_full();
-        if !backend.uv_lock_allowed(tv) {
+        // Tools the user named explicitly still fail on installer arguments uv
+        // cannot lock; a sweep over every tool degrades to version-only.
+        let options_supported = backend.uv_lock_options_supported(tv);
+        if strict_options && !options_supported {
+            backend.validate_lock_options(tv)?;
+        }
+        if !options_supported || !backend.uv_lock_allowed(tv) {
+            if !options_supported && !best_effort {
+                warn!(
+                    "{} dependency graph skipped because uvx_args or pipx_args are configured; locking with version-only resolution",
+                    ba.short
+                );
+            }
             if let Some(entries) = lockfile.tools_for_mut(&ba.short) {
                 for entry in entries
                     .iter_mut()
@@ -779,6 +919,16 @@ pub async fn populate_uv_locks(
             );
             continue;
         }
+        if let Err(error) = backend.validate_lock_options(tv) {
+            if best_effort {
+                debug!(
+                    "{} dependency graph skipped during automatic locking: {error:#}",
+                    ba.short
+                );
+                continue;
+            }
+            return Err(error);
+        }
         let graph = match backend.resolve_uv_lock(config, tv).await {
             Ok(graph) => graph,
             Err(error) if best_effort => {
@@ -788,7 +938,21 @@ pub async fn populate_uv_locks(
                 );
                 continue;
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                warn!(
+                    "{} dependency graph unavailable; keeping a version-only lock entry: {error:#}",
+                    ba.short
+                );
+                if let Some(entries) = lockfile.tools_for_mut(&ba.short) {
+                    for entry in entries
+                        .iter_mut()
+                        .filter(|entry| entry.version == tv.version && entry.options == options)
+                    {
+                        entry.uv = None;
+                    }
+                }
+                continue;
+            }
         };
         lockfile.set_uv_lock(&ba.short, &tv.version, &backend_name, &options, graph)?;
     }
@@ -877,7 +1041,7 @@ fn ensure_no_downgrade(old: &PlatformInfo, new: &PlatformInfo, backend: &str) ->
     Ok(())
 }
 
-fn provenance_is_downgrade(
+pub(super) fn provenance_is_downgrade(
     old: Option<&ProvenanceType>,
     new: Option<&ProvenanceType>,
     packslip_signer_replaces_provenance: bool,
@@ -962,18 +1126,31 @@ async fn complete_artifact_checksums(info: &mut PlatformInfo) -> Result<()> {
     if info.checksum.is_none()
         && let Some(url) = &info.url
     {
-        info.checksum = Some(artifact_checksum(url, info.url_api.as_deref()).await?);
+        info.checksum = Some(
+            artifact_checksum(url, info.url_api.as_deref(), info.download_headers.as_ref()).await?,
+        );
     }
     for artifact in &mut info.additional_artifacts {
         if artifact.checksum.is_none() {
             artifact.checksum =
-                Some(artifact_checksum(&artifact.url, artifact.url_api.as_deref()).await?);
+                Some(artifact_checksum(&artifact.url, artifact.url_api.as_deref(), None).await?);
         }
     }
     Ok(())
 }
 
-async fn artifact_checksum(url: &str, api_url: Option<&str>) -> Result<String> {
+async fn artifact_checksum(
+    url: &str,
+    api_url: Option<&str>,
+    headers: Option<&reqwest::header::HeaderMap>,
+) -> Result<String> {
+    // A `file://` artifact is hashed in place, as the http backend installs it.
+    if let Some(local) = crate::backend::http::local_artifact_path(url)? {
+        return Ok(format!(
+            "sha256:{}",
+            crate::hash::file_hash_sha256(&local, None)?
+        ));
+    }
     let temp = tempfile::tempdir()?;
     let path = temp.path().join("artifact");
     let url = if let Some(api_url) = api_url {
@@ -981,7 +1158,12 @@ async fn artifact_checksum(url: &str, api_url: Option<&str>) -> Result<String> {
     } else {
         url.to_owned()
     };
-    crate::http::HTTP.download_file(&url, &path, None).await?;
+    match headers.filter(|headers| !headers.is_empty()) {
+        Some(headers) => {
+            crate::backend::vfox::download_with_plugin_headers(&url, &path, headers).await?
+        }
+        None => crate::http::HTTP.download_file(&url, &path, None).await?,
+    }
     Ok(format!(
         "sha256:{}",
         crate::hash::file_hash_sha256(&path, None)?
@@ -994,7 +1176,10 @@ pub(crate) async fn download_for_verification(
 ) -> Result<tempfile::TempDir> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("artifact");
-    crate::http::HTTP.download_file(url, &path, None).await?;
+    match crate::backend::http::local_artifact_path(url)? {
+        Some(local) => crate::file::copy(&local, &path)?,
+        None => crate::http::HTTP.download_file(url, &path, None).await?,
+    }
     if let Some((algorithm, expected)) = checksum.as_deref().and_then(|value| value.split_once(':'))
     {
         crate::hash::ensure_checksum(&path, expected, None, algorithm)?;
@@ -1272,6 +1457,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let graph = super::super::GraphRef::Sidecar {
             dir: temp.path().join("missing"),
+            base: temp.path().to_path_buf(),
             digest: "sha256:recorded".into(),
             cell: std::sync::OnceLock::new(),
         };
@@ -1321,6 +1507,50 @@ mod tests {
             .unwrap();
             assert_eq!(old.tools, generated.tools);
         }
+    }
+
+    #[tokio::test]
+    async fn tool_excluded_from_every_platform_by_os_is_current() {
+        crate::backend::load_tools().await.unwrap();
+        let ba = BackendArg::new("fixture".into(), Some("http:fixture".into()));
+        let mut options = ToolVersionOptions::default();
+        options.core.os = Some(vec!["windows".into()]);
+        let request =
+            ToolRequest::new_with_options(Arc::new(ba.clone()), "1", options, ToolSource::Argument)
+                .unwrap();
+        let tools = vec![(ba, ToolVersion::new(request, "1.0".into()))];
+        let platforms = vec![
+            Platform::parse("linux-x64").unwrap(),
+            Platform::parse("macos-arm64").unwrap(),
+        ];
+        for auto_prune in [false, true] {
+            assert!(is_current(&Lockfile::default(), &tools, &platforms, auto_prune).unwrap());
+        }
+        // A stale entry for the excluded tool must still be pruned.
+        for auto_prune in [false, true] {
+            assert!(!is_current(&previous(), &tools, &platforms, auto_prune).unwrap());
+        }
+    }
+
+    #[test]
+    fn entry_with_another_releases_url_is_not_reusable() {
+        let mut info = PlatformInfo {
+            url: Some("https://github.com/o/r/releases/download/v2.1.17/r_2.1.17_arm64.gz".into()),
+            checksum: Some("sha256:old".into()),
+            ..Default::default()
+        };
+        assert!(can_reuse(&info, "2.1.17"));
+        assert!(!can_reuse(&info, "2.2.2"));
+        info.url = Some("https://example.invalid/never-download".into());
+        assert!(can_reuse(&info, "2.2.2"));
+        info.additional_artifacts
+            .push(crate::lockfile::ArtifactInfo {
+                checksum: Some("sha256:old".into()),
+                url: "https://github.com/o/r/releases/download/v2.1.17/r.sig".into(),
+                ..Default::default()
+            });
+        assert!(can_reuse(&info, "2.1.17"));
+        assert!(!can_reuse(&info, "2.2.2"));
     }
 
     #[tokio::test]
@@ -1456,6 +1686,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_generation_drops_rows_for_os_excluded_platforms() {
+        crate::backend::load_tools().await.unwrap();
+        let ba = BackendArg::new("fixture".into(), Some("http:fixture".into()));
+        let mut options = ToolVersionOptions::default();
+        options.core.os = Some(vec!["linux".into()]);
+        let request =
+            ToolRequest::new_with_options(Arc::new(ba.clone()), "1", options, ToolSource::Argument)
+                .unwrap();
+        let tools = vec![(ba, ToolVersion::new(request, "1.0".into()))];
+        let platforms = [
+            Platform::parse("linux-x64").unwrap(),
+            Platform::parse("macos-arm64").unwrap(),
+        ];
+        let generated = generate(
+            &previous(),
+            &tools,
+            &platforms,
+            false,
+            PlatformSelection::Explicit(BTreeSet::new()),
+            2,
+            &[],
+        )
+        .await
+        .unwrap();
+        let platforms = &generated.tools_for("fixture").unwrap()[0].platforms;
+        assert!(platforms.contains_key("linux-x64"));
+        assert!(!platforms.contains_key("macos-arm64"));
+    }
+
+    /// A tool configured with URL credentials is selected under its
+    /// credential-free lockfile key, so neither a partial run nor explicit
+    /// platforms keep its old entry as untouched next to the new one.
+    #[tokio::test]
+    async fn a_credentialed_tool_is_selected_by_its_lockfile_key() {
+        crate::backend::load_tools().await.unwrap();
+        let raw = "http:https://ci:t0ken@example.invalid/fixture";
+        let clean = "http:https://example.invalid/fixture";
+        let ba = BackendArg::new(raw.into(), Some(raw.into()));
+        let request = ToolRequest::new_with_options(
+            Arc::new(ba.clone()),
+            "1",
+            ToolVersionOptions::default(),
+            ToolSource::Argument,
+        )
+        .unwrap();
+        let tool = (ba, ToolVersion::new(request, "1.0".into()));
+        let mut old = Lockfile::default();
+        for platform in ["linux-x64", "macos-arm64"] {
+            old.set_platform_info(
+                clean,
+                "1.0",
+                Some(clean),
+                &BTreeMap::new(),
+                platform,
+                PlatformInfo {
+                    url: Some("https://example.invalid/never-download".into()),
+                    checksum: Some("sha256:unchanged".into()),
+                    provenance_verified: Some(false),
+                    ..Default::default()
+                },
+            );
+        }
+        let linux = [Platform::parse("linux-x64").unwrap()];
+        for (retain, selection) in [
+            (true, PlatformSelection::Default),
+            (false, PlatformSelection::Explicit(BTreeSet::new())),
+        ] {
+            let generated = generate(
+                &old,
+                std::slice::from_ref(&tool),
+                &linux,
+                retain,
+                selection,
+                1,
+                &[],
+            )
+            .await
+            .unwrap();
+            assert_eq!(generated.tools.keys().collect::<Vec<_>>(), [clean]);
+            assert_eq!(generated.tools[clean].len(), 1, "{:?}", generated.tools);
+            // A selected tool is rebuilt for the targeted platforms; only an
+            // explicit platform selection carries the others forward.
+            let platforms = generated.tools[clean][0]
+                .platforms
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            let expected: &[&str] = if retain {
+                &["linux-x64"]
+            } else {
+                &["linux-x64", "macos-arm64"]
+            };
+            assert_eq!(platforms, expected, "retain={retain}");
+        }
+    }
+
+    #[tokio::test]
     async fn fresh_generation_drops_obsolete_tools_but_filter_keeps_them() {
         crate::backend::load_tools().await.unwrap();
         let old = previous();
@@ -1476,6 +1803,7 @@ mod tests {
         let mut retained = old.tools["fixture"][0].clone();
         retained.aube = Some(super::super::GraphRef::Sidecar {
             dir: PathBuf::from(".mise/locks/npm-retained/1.0.0"),
+            base: PathBuf::new(),
             digest: "sha256:recorded".into(),
             cell: std::sync::OnceLock::new(),
         });
@@ -1554,7 +1882,7 @@ mod tests {
         let mut old = Lockfile::default();
         for platform in &platforms {
             let options = backend
-                .resolve_lockfile_options(&tv.request, &PlatformTarget::new(platform.clone()))
+                .lockfile_options(&tv.request, &PlatformTarget::new(platform.clone()))
                 .unwrap();
             old.set_platform_info(
                 "erlang",
@@ -1780,5 +2108,56 @@ mod tests {
         assert!(ensure_no_downgrade(&old, &new, "github:o/r").is_err());
         new.additional_artifacts.pop();
         assert!(ensure_no_downgrade(&old, &new, "github:o/r").is_err());
+    }
+
+    #[tokio::test]
+    async fn artifact_checksum_hashes_local_file_urls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = tmp.path().join("probe");
+        std::fs::write(&artifact, b"artifact").unwrap();
+        let url = url::Url::from_file_path(&artifact).unwrap().to_string();
+        let mut info = PlatformInfo {
+            url: Some(url.clone()),
+            ..Default::default()
+        };
+        complete_artifact_checksums(&mut info).await.unwrap();
+        let expected = format!(
+            "sha256:{}",
+            crate::hash::file_hash_sha256(&artifact, None).unwrap()
+        );
+        assert_eq!(info.checksum.as_deref(), Some(expected.as_str()));
+        // The recorded URL stays as written.
+        assert_eq!(info.url.as_deref(), Some(url.as_str()));
+
+        let mut checksum = None;
+        download_for_verification(&url, &mut checksum)
+            .await
+            .unwrap();
+        assert_eq!(checksum.as_deref(), Some(expected.as_str()));
+    }
+
+    #[tokio::test]
+    async fn artifact_checksum_sends_plugin_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/artifact.zip")
+            .match_header("authorization", "Bearer secret")
+            .with_body("artifact")
+            .create_async()
+            .await;
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        let mut info = PlatformInfo {
+            url: Some(format!("{}/artifact.zip", server.url())),
+            download_headers: Some(headers),
+            ..Default::default()
+        };
+        complete_artifact_checksums(&mut info).await.unwrap();
+        mock.assert_async().await;
+        let checksum = info.checksum.clone().unwrap();
+        assert!(checksum.starts_with("sha256:"));
+        // The headers are never persisted.
+        let written = toml::to_string(&info).unwrap();
+        assert!(!written.contains("secret"), "{written}");
     }
 }

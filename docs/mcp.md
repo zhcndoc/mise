@@ -43,29 +43,41 @@ claude mcp add mise -- mise --cd /absolute/path/to/project mcp
 
 Connect the server only to a project and a client you trust.
 
-- 读取 `mise://env` 时会计算项目的环境配置并返回变量值，其中可能包含机密信息。读取资源还可能会
-  计算模板和环境指令，因此读取未经审查的配置并不具备沙箱保护。
-- 资源读取遵循 mise 的[信任规则](/security.html#configuration-trust)，但服务器无法显示信任
-  提示。如果项目配置需要信任（例如包含 `[env]`、模板或工具选项），读取会因配置文件尚未受信任而
-  返回 `Failed to load config` 错误；在项目中运行 `mise trust` 后即可恢复。
-- `run_task` 会以你的账户权限运行项目命令，`install_tool` 会安装工具。与在终端中运行
-  `mise run` 和 `mise install` 不同，这两个工具都不会代你信任项目：如果配置文件尚未受信任，它们
-  会拒绝操作，并列出你审查文件后需要运行的 `mise trust` 命令。它们启动的 `mise` 进程本身也不会
-  自动信任任何配置，因此它访问到的子目录配置也必须获得信任。
-- `run_task` 不会连接 stdin，并会设置 `MISE_YES=1`，从而自动确认 mise 的其他提示。请通过客户端
-  的工具审批设置决定允许运行哪些任务，并在批准前检查任务定义。
+- Reading `mise://env` evaluates the project's environment config and returns
+  the values, which can include secrets. Resource reads can also evaluate
+  templates and environment directives, so a read is not a sandbox for config
+  you have not reviewed.
+- Resource reads follow mise's
+  [trust rules](/security.html#configuration-trust), and the server cannot show
+  the trust prompt. If the project's config needs trust, for example because
+  it has `[env]`, templates or tool options, reads fail with
+  a `Failed to load config` error that says the config files are not trusted,
+  until you run `mise trust` in the project.
+- `run_task` runs the project's commands with your account's access, and
+  `install_tool` installs tools. Unlike `mise run` and `mise install` in a
+  terminal, neither trusts the project for you: both refuse a project whose
+  config files are not trusted, and list the `mise trust` commands to run after
+  you review the files. The `mise` they start trusts nothing on its own either,
+  因此，它在子目录中访问的配置也必须受信任；没有配置文件的项目中的[文件任务](/tasks/file-tasks.html)同样需要信任：请对包含 `mise-tasks/` 的目录运行 `mise trust <dir>`。`run_task` 接受任务名称，而不是要运行的脚本路径。
+- `install_tool` 接受工具和版本，不接受[工具选项](/dev-tools/#tool-options)：它会拒绝 `"tool[option=value]"`，因为 `postinstall` 等选项会运行命令。
+- `run_task` runs without stdin and sets `MISE_YES=1`, which answers mise's
+  other confirmation prompts. Use your client's tool approval settings to decide
+  which tasks may run, and review task definitions before allowing them.
 
-若要让助手检查尚未信任的项目，请在服务器配置中添加
-`"env": { "MISE_SAFE": "1" }`。在[安全模式](/security.html#safe-mode)下，
-`mise://env` 不会返回项目变量，`run_task` 会失败；其他资源仍会列出项目工具、任务和配置文件。
+To let an assistant inspect a project you have not trusted, add
+`"env": { "MISE_SAFE": "1" }` to the server entry. In
+[safe mode](/security.html#safe-mode), `mise://env` returns no project values
+and `run_task` fails, while the other resources still list the project's tools,
+tasks and config files.
 
-## 资源 {#available-resources}
+## Resources {#available-resources}
 
-资源以 JSON 文本形式返回。服务器只在启动时加载一次项目配置，并在退出前一直使用该配置。因此，
-修改 `mise.toml` 或任务文件后，请通过客户端重启服务器以刷新资源。每次调用 `run_task` 都会启动
-新的 `mise run` 进程，并始终使用当前文件。
+Resources return JSON text. The server loads the project's configuration once
+and keeps it until it exits, so after you edit `mise.toml` or task files,
+restart the server from your client to refresh the resources. `run_task` starts
+a new `mise run` each time and always uses the current files.
 
-| URI                                  | 内容                                                                                                                                                                                                                                           |
+| URI                                  | Contents                                                                                                                                                                                                                                       |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mise://tools`                       | 当前启用的工具版本、请求的版本、安装路径、是否已安装，以及请求该工具的配置文件。                                                                                                      |
 | `mise://tools?include_inactive=true` | 当前启用的工具及其他已安装版本。                                                                                                                                                      |

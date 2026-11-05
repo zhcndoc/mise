@@ -28,7 +28,7 @@ env:
 jobs:
   bump-alpine:
     runs-on: ubuntu-latest
-    container: ghcr.io/jdx/mise:alpine@sha256:02aa6abf49b0ccbf644f10b00bf1d9a1ffbc474c22c8dfcf6ba1e1078c6f0707
+    container: ghcr.io/jdx/mise:alpine@sha256:ec486f0e268d36521d87b5244d965bfc7c66a123134344ccfacb5d4cee7b528f
     timeout-minutes: 60
     if: |
       (github.event_name == 'release' && 

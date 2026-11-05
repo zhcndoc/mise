@@ -21,13 +21,15 @@ use crate::args::BackendArg;
 use crate::backend::unalias_backend;
 use crate::config::config_file::config_root;
 use crate::config::config_file::{
-    ConfigFile, TaskConfig, ToolConfig, config_trust_root, is_config_ignored_via_setting,
-    is_persisted_ignored, trust, trust_check,
+    ConfigFile, TaskConfig, ToolConfig, ToolOptionTemplate, config_trust_root,
+    ensure_versions_are_not_templates, is_config_ignored_via_setting, is_persisted_ignored,
+    trust_after_write, trust_check, trust_check_before_write,
 };
 use crate::config::env_directive::{AgeFormat, EnvDirective, EnvValue};
 use crate::config::settings::SettingsPartial;
 use crate::config::{
-    Alias, AliasMap, CommandWrapper, Config, Settings, safe_mode_ignores_bootstrap,
+    Alias, AliasMap, CommandWrapper, Config, Settings, SettingsExt, is_global_config,
+    safe_mode_ignores_bootstrap,
 };
 use crate::deps::{DepsConfig, DepsTemplateContext};
 use crate::env_diff::EnvMap;
@@ -37,7 +39,7 @@ use crate::oci::OciConfig;
 use crate::redactions::Redactions;
 use crate::registry::REGISTRY;
 use crate::task::{Task, TaskTemplate};
-use crate::tera::{BASE_CONTEXT, contains_template_syntax, get_tera, render_str};
+use crate::tera::{BASE_CONTEXT, contains_template_syntax, get_tera, render_config_str};
 use crate::toolset::{ToolRequest, ToolRequestSet, ToolSource, ToolVersionOptions};
 use crate::watch_files::WatchFile;
 use crate::{env, file};
@@ -49,7 +51,7 @@ use mise_config::task::TaskDecls;
 
 use super::diagnostic::toml_parse_error;
 use super::min_version::MinVersionSpec;
-use super::version_requires_trust;
+use super::{tool_key_requires_trust, version_requires_trust};
 
 const LEGACY_ENV_KEYS_DEPRECATED_WARN_AT: &str = "2026.4.17";
 const LEGACY_ENV_KEYS_DEPRECATED_REMOVE_AT: &str = "2027.4.0";
@@ -163,6 +165,42 @@ fn auto_update_value(auto_update: &str) -> Value {
         "true" => Value::from(true),
         "false" => Value::from(false),
         _ => Value::from(auto_update),
+    }
+}
+
+/// Replace each option of `request` that a template renders to with the template as it is
+/// written. Entries with the request's version and `os` come first, so a value two entries'
+/// templates both render to gets the template of the entry the request came from.
+fn restore_option_templates(request: &mut ToolRequest, templates: &[ToolOptionTemplate]) {
+    let version = request.version();
+    let os = request.os().clone();
+    let own: Vec<&ToolOptionTemplate> = templates
+        .iter()
+        .filter(|t| t.version == version && t.written.os == os)
+        .collect();
+    let candidates = if own.is_empty() {
+        templates.iter().collect()
+    } else {
+        own
+    };
+    let options = request.options_mut();
+    for (k, v) in options.opts.iter_mut() {
+        if let Some(w) = candidates.iter().find_map(|t| {
+            (t.rendered.opts.get(k) == Some(&*v))
+                .then(|| t.written.opts.get(k))
+                .flatten()
+        }) {
+            v.clone_from(w);
+        }
+    }
+    for (k, v) in options.core.install_env.iter_mut() {
+        if let Some(w) = candidates.iter().find_map(|t| {
+            (t.rendered.install_env.get(k) == Some(&*v))
+                .then(|| t.written.install_env.get(k))
+                .flatten()
+        }) {
+            v.clone_from(w);
+        }
     }
 }
 
@@ -462,7 +500,7 @@ impl MiseToml {
         let mut context = BASE_CONTEXT.clone();
         context.insert(
             "config_root",
-            config_root::config_root(path).to_str().unwrap(),
+            &config_root::config_root(path).to_string_lossy(),
         );
         context.insert("config_source", &config_root::config_source(path));
         let mut rf = Self {
@@ -475,7 +513,7 @@ impl MiseToml {
     }
 
     pub fn from_file(path: &Path) -> eyre::Result<Self> {
-        let body = file::read_to_string(path)?;
+        let body = file::read_config_to_string(path)?;
         Self::from_str(&body, path)
     }
 
@@ -679,7 +717,7 @@ impl MiseToml {
         rf.context = BASE_CONTEXT.clone();
         rf.context.insert(
             "config_root",
-            config_root::config_root(path).to_str().unwrap(),
+            &config_root::config_root(path).to_string_lossy(),
         );
         rf.context
             .insert("config_source", &config_root::config_source(path));
@@ -711,7 +749,7 @@ impl MiseToml {
     /// [`Self::is_trust_exempt`]). Returns false for unreadable files and for
     /// non-mise.toml files (e.g. `.tool-versions`), which have their own flow.
     pub(crate) fn path_is_trust_exempt(path: &Path) -> bool {
-        file::read_to_string(path).is_ok_and(|body| Self::is_trust_exempt(&body, path))
+        file::read_config_to_string(path).is_ok_and(|body| Self::is_trust_exempt(&body, path))
     }
 
     /// Whether this config body can be loaded without trusting the file.
@@ -741,7 +779,22 @@ impl MiseToml {
             .lock()
             .unwrap()
             .get_or_try_init(|| {
-                let body = file::read_to_string(&self.path).unwrap_or_default();
+                // A missing file is a new config. Any other failure, such as the
+                // file having grown past the size limit, must not turn into an
+                // empty document that a later `save` would write over the file.
+                let body = match file::read_config_to_string(&self.path) {
+                    Ok(body) => body,
+                    Err(err)
+                        if err.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                        }) =>
+                    {
+                        String::new()
+                    }
+                    Err(err) => return Err(err),
+                };
                 Ok(body.parse()?)
             })
             .cloned()
@@ -1220,10 +1273,8 @@ impl MiseToml {
         }
     }
 
-    fn build_tool_request_set(&self, skip_templated: bool) -> eyre::Result<ToolRequestSet> {
-        let source = ToolSource::MiseToml(self.path.clone());
-        let mut trs = ToolRequestSet::new();
-        let tools = self.tools.lock().unwrap();
+    /// The context a tool's version and options are rendered with.
+    fn tool_template_context(&self) -> TeraContext {
         let mut context = self.context.clone();
         if let Some(config) = Config::maybe_get()
             && let Some(env_results) = config.env_results_cached()
@@ -1249,6 +1300,94 @@ impl MiseToml {
             context.insert("env", &env_vars);
         }
         Self::insert_resolved_vars(&mut context);
+        context
+    }
+
+    /// Render the templates in a tool's backend options and `install_env`.
+    fn render_tool_options(
+        &self,
+        context: &TeraContext,
+        ba: &BackendArg,
+        options: &mut ToolVersionOptions,
+    ) -> eyre::Result<()> {
+        // Add placeholder for version since it's not available at config load time
+        // This preserves {{ version }} in the output for install-time rendering
+        let mut opts_context = context.clone();
+        opts_context.insert("version", "{{ version }}");
+        // The http and s3 backends re-render their url/checksum_url per
+        // target platform (host at install, any target during `mise
+        // lock`), so only those two options defer os()/arch() instead of
+        // resolving them now. Every other option (here and for other
+        // backends) is consumed verbatim, so it keeps host resolution at
+        // config load — deferring it would leak raw `{{ os() }}`
+        // fragments into consumers that never render again (e.g.
+        // checksum_expr).
+        let defer_os_arch = matches!(
+            ba.backend_type(),
+            crate::backend::backend_type::BackendType::Http
+                | crate::backend::backend_type::BackendType::S3
+        );
+        // `install_env` is a typed core option, so it never reaches the
+        // `opts` loop below and its values went to the installer
+        // unrendered — `{{ env.HOME }}` arrived literally, unlike every
+        // other tool option (#13306). Render it here, with `version`
+        // bound to itself so the placeholder still round-trips: core
+        // options are deliberately exempt from the backend `{version}`
+        // normalization, and nothing renders `install_env` again later.
+        let mut install_env_context = context.clone();
+        install_env_context.insert("version", "{{version}}");
+        for value in options.core.install_env.values_mut() {
+            if let EnvValue::String(s) = value {
+                *s = self.parse_template_with_context(&install_env_context, s)?;
+            }
+        }
+        for (k, v) in options.opts.iter_mut() {
+            self.parse_tool_option_value_template(&opts_context, Some(k), v, defer_os_arch)?;
+        }
+        Ok(())
+    }
+
+    /// The templates `replace_versions` can write back for `ba`: this file's, and those of the
+    /// other loaded configs, which `mise use` copies options from. Each is rendered by the config
+    /// that declares it. An inherited template is kept only for the options it renders the same
+    /// way here: one that depends on its own file, such as `{{ config_root }}/bin`, means another
+    /// path in this file, so its value is written rendered, keeping what it pointed to.
+    fn templates_for_rewrite(&self, ba: &BackendArg) -> Vec<ToolOptionTemplate> {
+        let mut templates = self.tool_option_templates(ba);
+        let Some(config) = Config::maybe_get() else {
+            return templates;
+        };
+        let mut context = None;
+        for cf in config.config_files.values() {
+            if cf.get_path() == self.path {
+                continue;
+            }
+            for mut template in cf.tool_option_templates(ba) {
+                let context = context.get_or_insert_with(|| self.tool_template_context());
+                let mut here = template.written.clone();
+                if self.render_tool_options(context, ba, &mut here).is_err() {
+                    continue;
+                }
+                template
+                    .rendered
+                    .opts
+                    .retain(|k, v| here.opts.get(k) == Some(v));
+                template
+                    .rendered
+                    .core
+                    .install_env
+                    .retain(|k, v| here.install_env.get(k) == Some(v));
+                templates.push(template);
+            }
+        }
+        templates
+    }
+
+    fn build_tool_request_set(&self, skip_templated: bool) -> eyre::Result<ToolRequestSet> {
+        let source = ToolSource::MiseToml(self.path.clone());
+        let mut trs = ToolRequestSet::new();
+        let tools = self.tools.lock().unwrap();
+        let context = self.tool_template_context();
         for (ba, tvp) in tools.iter() {
             for tool in &tvp.0 {
                 if skip_templated && tool_has_template(tool) {
@@ -1258,45 +1397,7 @@ impl MiseToml {
                 // taken before `ba` is consumed below
                 let short = ba.short.clone();
                 let tvr = if let Some(mut options) = tool.options.clone() {
-                    // Add placeholder for version since it's not available at config load time
-                    // This preserves {{ version }} in the output for install-time rendering
-                    let mut opts_context = context.clone();
-                    opts_context.insert("version", "{{ version }}");
-                    // The http and s3 backends re-render their url/checksum_url per
-                    // target platform (host at install, any target during `mise
-                    // lock`), so only those two options defer os()/arch() instead of
-                    // resolving them now. Every other option (here and for other
-                    // backends) is consumed verbatim, so it keeps host resolution at
-                    // config load — deferring it would leak raw `{{ os() }}`
-                    // fragments into consumers that never render again (e.g.
-                    // checksum_expr).
-                    let defer_os_arch = matches!(
-                        ba.backend_type(),
-                        crate::backend::backend_type::BackendType::Http
-                            | crate::backend::backend_type::BackendType::S3
-                    );
-                    // `install_env` is a typed core option, so it never reaches the
-                    // `opts` loop below and its values went to the installer
-                    // unrendered — `{{ env.HOME }}` arrived literally, unlike every
-                    // other tool option (#13306). Render it here, with `version`
-                    // bound to itself so the placeholder still round-trips: core
-                    // options are deliberately exempt from the backend `{version}`
-                    // normalization, and nothing renders `install_env` again later.
-                    let mut install_env_context = context.clone();
-                    install_env_context.insert("version", "{{version}}");
-                    for value in options.core.install_env.values_mut() {
-                        if let EnvValue::String(s) = value {
-                            *s = self.parse_template_with_context(&install_env_context, s)?;
-                        }
-                    }
-                    for (k, v) in options.opts.iter_mut() {
-                        self.parse_tool_option_value_template(
-                            &opts_context,
-                            Some(k),
-                            v,
-                            defer_os_arch,
-                        )?;
-                    }
+                    self.render_tool_options(&context, ba, &mut options)?;
                     let mut ba = ba.clone();
                     // The registry entry this version is routed to supplies the defaults:
                     // a backend can carry other options for another version range, and a
@@ -1363,10 +1464,11 @@ impl MiseToml {
         }
         let dir = self.path.parent();
         let mut tera = get_tera(dir);
-        let output = render_str(&mut tera, input, context).wrap_err_with(|| {
-            let p = display_path(&self.path);
-            eyre!("failed to parse template {input} in {p}")
-        })?;
+        let output =
+            render_config_str(&mut tera, input, context, &self.path).wrap_err_with(|| {
+                let p = display_path(&self.path);
+                eyre!("failed to parse template {input} in {p}")
+            })?;
         Ok(output)
     }
 
@@ -1409,10 +1511,11 @@ impl MiseToml {
         }
         let dir = self.path.parent();
         let mut tera = crate::tera::get_tera_preserving_os_arch(dir);
-        let output = render_str(&mut tera, input, context).wrap_err_with(|| {
-            let p = display_path(&self.path);
-            eyre!("failed to parse template {input} in {p}")
-        })?;
+        let output =
+            render_config_str(&mut tera, input, context, &self.path).wrap_err_with(|| {
+                let p = display_path(&self.path);
+                eyre!("failed to parse template {input} in {p}")
+            })?;
         Ok(output)
     }
 
@@ -1426,11 +1529,13 @@ impl MiseToml {
         match value {
             toml::Value::String(s) => {
                 let preserve_os_arch = defer_os_arch && matches!(key, Some("url" | "checksum_url"));
-                *s = if preserve_os_arch {
-                    self.parse_tool_option_template(context, s)?
+                let (shielded, deferred) = shield_version_expressions(s);
+                let rendered = if preserve_os_arch {
+                    self.parse_tool_option_template(context, &shielded)?
                 } else {
-                    self.parse_template_with_context(context, s)?
+                    self.parse_template_with_context(context, &shielded)?
                 };
+                *s = restore_version_expressions(rendered, &deferred);
             }
             toml::Value::Array(values) => {
                 for value in values {
@@ -1451,6 +1556,45 @@ impl MiseToml {
         }
         Ok(())
     }
+}
+
+static VERSION_EXPRESSION: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"\{\{.*?\}\}").unwrap());
+static VERSION_WORD: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"(^|[^.\w])version\b").unwrap());
+
+static QUOTED_LITERAL: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r#""[^"]*"|'[^']*'|`[^`]*`"#).unwrap());
+
+const VERSION_SHIELD: &str = "__mise_deferred_version_expression_";
+
+/// `version` is not known at config load, so a bare `{{ version }}` renders to itself through a
+/// placeholder. A filter or function on it (`{{ version | replace(..) }}`) would instead act on
+/// that placeholder text, so every other `{{ }}` expression that reads `version` is swapped for
+/// a marker here and put back verbatim afterwards, to be rendered once the version is known.
+fn shield_version_expressions(input: &str) -> (String, Vec<String>) {
+    let mut deferred = vec![];
+    let shielded = VERSION_EXPRESSION.replace_all(input, |caps: &regex::Captures| {
+        let expr = &caps[0];
+        let inner = expr
+            .trim_start_matches("{{")
+            .trim_end_matches("}}")
+            .trim_matches(['-', ' ']);
+        let code = QUOTED_LITERAL.replace_all(inner, "");
+        if inner == "version" || !VERSION_WORD.is_match(&code) {
+            return expr.to_string();
+        }
+        deferred.push(expr.to_string());
+        format!("{VERSION_SHIELD}{}__", deferred.len() - 1)
+    });
+    (shielded.into_owned(), deferred)
+}
+
+fn restore_version_expressions(mut rendered: String, deferred: &[String]) -> String {
+    for (i, expr) in deferred.iter().enumerate() {
+        rendered = rendered.replace(&format!("{VERSION_SHIELD}{i}__"), expr);
+    }
+    rendered
 }
 
 /// Whether anything that selects or configures a tool is a template: its version,
@@ -1560,8 +1704,21 @@ impl ConfigFile for MiseToml {
         Ok(())
     }
 
-    fn replace_versions(&self, ba: &BackendArg, versions: Vec<ToolRequest>) -> eyre::Result<()> {
+    fn replace_versions(
+        &self,
+        ba: &BackendArg,
+        mut versions: Vec<ToolRequest>,
+    ) -> eyre::Result<()> {
         trace!("replacing versions {ba:?} {versions:?}");
+        ensure_versions_are_not_templates(&self.path, ba, &versions)?;
+        // A request only has its options rendered, whether it inherited them from a config entry
+        // (`mise use`) or is a copy of one (`mise upgrade --bump`). Writing those back would
+        // replace `{{ env.TOKEN }}` with the token, so a value that a template renders to is
+        // written as that template.
+        let templates = self.templates_for_rewrite(ba);
+        for tr in &mut versions {
+            restore_option_templates(tr, &templates);
+        }
         let mut tools = self.tools.lock().unwrap();
         let is_tools_sorted = is_tools_sorted(&tools); // was it previously sorted (if so we'll keep it sorted)
         let existing = tools.entry(ba.clone()).or_default();
@@ -1721,11 +1878,13 @@ impl ConfigFile for MiseToml {
 
     fn save(&self) -> eyre::Result<()> {
         let contents = self.dump()?;
+        trust_check_before_write(&self.path)?;
         if let Some(parent) = self.path.parent() {
             create_dir_all(parent)?;
         }
         file::write_atomic(&self.path, contents)?;
-        trust(&config_trust_root(&self.path))?;
+        super::note_saved(&self.path);
+        trust_after_write(&self.path)?;
         Ok(())
     }
 
@@ -1747,6 +1906,34 @@ impl ConfigFile for MiseToml {
 
     fn to_tool_request_set_skipping_templated(&self) -> eyre::Result<ToolRequestSet> {
         self.build_tool_request_set(true)
+    }
+
+    fn tool_option_templates(&self, ba: &BackendArg) -> Vec<ToolOptionTemplate> {
+        let tools = self.tools.lock().unwrap();
+        let entries = tools
+            .get(ba)
+            .into_iter()
+            .flat_map(|tvp| &tvp.0)
+            .filter(|tool| tool_has_template(tool))
+            .filter_map(|tool| Some((&tool.request, tool.options.as_ref()?)))
+            .collect_vec();
+        if entries.is_empty() {
+            return vec![];
+        }
+        let context = self.tool_template_context();
+        entries
+            .into_iter()
+            .filter_map(|(request, written)| {
+                let version = self.parse_template_with_context(&context, request).ok()?;
+                let mut rendered = written.clone();
+                self.render_tool_options(&context, ba, &mut rendered).ok()?;
+                Some(ToolOptionTemplate {
+                    version,
+                    written: written.clone(),
+                    rendered,
+                })
+            })
+            .collect()
     }
 
     fn templated_tool_backends(&self) -> Vec<String> {
@@ -1965,6 +2152,17 @@ impl ConfigFile for MiseToml {
         let Some(decl) = self.deps.clone() else {
             return Ok(None);
         };
+        // A provider is a command line that `mise deps`, `mise exec` and
+        // `mise deps add` run. Safe mode loads project config without trust,
+        // so like project `[env]` and `[wrappers]` only global and system
+        // config may declare providers there.
+        if Settings::safe_mode() && !is_global_config(&self.path) {
+            debug!(
+                "ignoring [deps] in {}: safe mode (MISE_SAFE=1)",
+                display_path(&self.path)
+            );
+            return Ok(None);
+        }
         let mut deps = DepsConfig::from_decl(decl);
         let context = self.template_context();
         for (provider_id, provider) in &mut deps.providers {
@@ -1984,6 +2182,25 @@ impl ConfigFile for MiseToml {
 
     fn doctor_config(&self) -> crate::config::doctor::DoctorConfig {
         self.doctor.clone()
+    }
+
+    fn render_doctor_check(
+        &self,
+        check: &crate::config::doctor::DoctorCheck,
+    ) -> eyre::Result<crate::config::doctor::DoctorCheck> {
+        let mut check = check.clone();
+        check.run = self.parse_template(&check.run)?;
+        check.description = check
+            .description
+            .as_deref()
+            .map(|s| self.parse_template(s))
+            .transpose()?;
+        check.hint = check
+            .hint
+            .as_deref()
+            .map(|s| self.parse_template(s))
+            .transpose()?;
+        Ok(check)
     }
 
     fn bootstrap_config(&self) -> Option<BootstrapTomlConfig> {
@@ -2428,7 +2645,9 @@ impl<'de> de::Deserialize<'de> for BackendArg {
 ///   excluded because options like `postinstall` and `install_env` run code
 ///   or alter the install environment. Options can also ride in the key
 ///   (`"tool[postinstall=...]" = "1"`), so keys with inline options are
-///   excluded too. A `path:` version is excluded as well: it needs no install,
+///   excluded too, and so is an `spm:` key naming a self-hosted forge by URL,
+///   whose host would receive the user's forge token like an `api_url`
+///   option's. A `path:` version is excluded as well: it needs no install,
 ///   so it would put a directory of the repository on PATH as soon as the
 ///   config loads.
 /// - `[tasks]` definitions are inert until the user explicitly runs one
@@ -2461,7 +2680,7 @@ fn is_safe_config_body(body: &str) -> bool {
         }),
         "tools" => value.as_table().is_some_and(|tools| {
             tools.iter().all(|(tool, version)| {
-                !tool.contains('[')
+                !tool_key_requires_trust(tool)
                     && match version {
                         toml::Value::String(v) => !version_requires_trust(v),
                         toml::Value::Array(versions) => versions.iter().all(
@@ -2742,6 +2961,38 @@ mod tests {
             assert_snapshot!(cf);
             assert_debug_snapshot!(cf);
         });
+    }
+
+    /// The editable document is read lazily. If the file can no longer be read
+    /// by then (here it has grown past the size limit), an edit must fail
+    /// rather than start from an empty document that `save` writes back.
+    #[tokio::test]
+    async fn test_edit_fails_when_the_file_can_no_longer_be_read() {
+        let _config = Config::get().await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("mise.toml");
+        file::write(&p, "[tools]\nnode = \"22\"\n").unwrap();
+        let mut cf = MiseToml::from_file(&p).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_len(file::CONFIG_FILE_LIMIT + 1)
+            .unwrap();
+
+        let err = cf
+            .set_backend_alias(&"node".into(), "npm:node")
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("larger than 16 MiB"), "{err:#}");
+        assert!(cf.save().is_err());
+        assert_eq!(
+            std::fs::metadata(&p).unwrap().len(),
+            file::CONFIG_FILE_LIMIT + 1
+        );
+
+        // A config that does not exist yet still starts from an empty document.
+        let missing = MiseToml::init(&tmp.path().join("new.toml"));
+        assert_eq!(missing.dump().unwrap(), "");
     }
 
     #[tokio::test]
@@ -3509,6 +3760,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_http_url_defers_version_filters() {
+        crate::toolset::install_state::init().await.unwrap();
+        let cf = MiseToml::from_str(
+            r#"
+            [tools."http:foo"]
+            version = "1.2.3--4--foobar"
+            url = "https://example.com/{{ version }}/{{ version | replace(from='--4--foobar', to='') }}.tgz"
+            "#,
+            std::path::Path::new("mise.toml"),
+        )
+        .unwrap();
+        let trs = cf.to_tool_request_set().unwrap();
+        let (_, requests, _) = trs.iter().next().unwrap();
+
+        assert_eq!(
+            requests[0].options().get("url"),
+            Some(
+                "https://example.com/{{ version }}/{{ version | replace(from='--4--foobar', to='') }}.tgz"
+            )
+        );
+    }
+
+    #[test]
+    fn test_shield_ignores_quoted_version() {
+        let (out, deferred) =
+            shield_version_expressions("{{ vars['version'] }}/{{ version | upper }}");
+        assert_eq!(deferred, vec!["{{ version | upper }}"]);
+        assert!(out.starts_with("{{ vars['version'] }}/"));
+
+        let (_, deferred) = shield_version_expressions("{{ (`'` ~ version ~ `'`) | upper }}");
+        assert_eq!(deferred.len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_env_source_var_in_tool() {
         let cwd = CWD.as_ref().unwrap();
         let script = cwd.join("set-go-version.sh");
@@ -3911,6 +4196,30 @@ run = "cargo build"
         file::remove_all(&p).unwrap();
     }
 
+    /// Versions are rendered as templates when the file is loaded, and `--pin` and `--bump`
+    /// write versions that came from a version list or release API.
+    #[tokio::test]
+    async fn test_replace_versions_rejects_template_syntax() {
+        let _config = Config::get().await.unwrap();
+        let p = CWD.as_ref().unwrap().join(".template-version.mise.toml");
+        let input = "[tools]\ndummy = \"1.0.0\"\n";
+        file::write(&p, input).unwrap();
+        let cf = MiseToml::from_file(&p).unwrap();
+        let ba: Arc<BackendArg> = Arc::new("dummy".into());
+        for version in [
+            "2.0.0{{exec(command='id')}}",
+            "2.0.0-{{env.GITHUB_TOKEN}}",
+            "2.0.0{%if x%}",
+            "2.0.0{#x#}",
+        ] {
+            let tr = ToolRequest::new_version_for_test(ba.clone(), version, ToolSource::Unknown);
+            let err = cf.replace_versions(&ba, vec![tr]).unwrap_err();
+            assert!(err.to_string().contains("template syntax"), "{err}");
+        }
+        assert_eq!(cf.dump().unwrap(), input);
+        file::remove_file(&p).unwrap();
+    }
+
     #[tokio::test]
     async fn test_replace_versions_preserves_standard_tool_table() {
         let _config = Config::get().await.unwrap();
@@ -3951,6 +4260,152 @@ run = "cargo build"
         assert_eq!(
             cf.dump().unwrap(),
             input.replace("version = \"1.0.0\"", "version = \"2.0.0\"")
+        );
+        file::remove_file(&p).unwrap();
+    }
+
+    /// Options are rendered when the file is loaded. Rewriting an entry writes each option as the
+    /// template it was written as, not the secret it renders to.
+    #[tokio::test]
+    async fn test_replace_versions_keeps_option_templates() {
+        let _config = Config::get().await.unwrap();
+        let p = CWD.as_ref().unwrap().join(".option-templates.mise.toml");
+        let dummy = BackendArg::from("dummy");
+        let env = "[env]\nTOKEN = \"s3cr3t\"\n\n";
+        for tools in [
+            indoc! {r#"
+                [tools]
+                dummy = { version = "1.0.0", url = "https://{{ env.TOKEN }}@example.com", headers = { auth = "{{ env.TOKEN }}" }, install_env = { AUTH = "{{ env.TOKEN }}" } }
+            "#},
+            indoc! {r#"
+                [tools.dummy]
+                version = "1.0.0"
+                url = "https://{{ env.TOKEN }}@example.com"
+                headers = { auth = "{{ env.TOKEN }}" }
+                install_env = { AUTH = "{{ env.TOKEN }}" }
+            "#},
+            indoc! {r#"
+                [tools]
+                dummy = [{ version = "1.0.0", url = "https://{{ env.TOKEN }}@example.com" }, { version = "1.0.0", os = ["plan9"], install_env = { AUTH = "{{ env.TOKEN }}" } }]
+            "#},
+        ] {
+            file::write(&p, format!("{env}{tools}")).unwrap();
+            let cf = MiseToml::from_file(&p).unwrap();
+            // the requests as every caller has them: rendered
+            let versions = cf.to_tool_request_set().unwrap().tools[&dummy]
+                .iter()
+                .map(|tr| {
+                    let options = tr.options();
+                    assert!(format!("{options:?}").contains("s3cr3t"));
+                    let ba = Arc::new(dummy.clone());
+                    ToolRequest::new_with_options(ba, "2.0.0", options, ToolSource::Unknown)
+                        .unwrap()
+                })
+                .collect();
+
+            cf.replace_versions(&dummy, versions).unwrap();
+
+            assert_eq!(
+                cf.dump().unwrap(),
+                format!("{env}{}", tools.replace("1.0.0", "2.0.0"))
+            );
+        }
+        file::remove_file(&p).unwrap();
+    }
+
+    /// Two entries whose templates render to the same value each keep their own template.
+    #[tokio::test]
+    async fn test_replace_versions_keeps_each_entrys_option_template() {
+        let _config = Config::get().await.unwrap();
+        let p = CWD
+            .as_ref()
+            .unwrap()
+            .join(".option-templates-per-entry.mise.toml");
+        let dummy = BackendArg::from("dummy");
+        let input = indoc! {r#"
+            [env]
+            A = "same"
+            B = "same"
+
+            [tools]
+            dummy = [{ version = "1.0.0", install_env = { AUTH = "{{ env.A }}" } }, { version = "2.0.0", install_env = { AUTH = "{{ env.B }}" } }]
+        "#};
+        file::write(&p, input).unwrap();
+        let cf = MiseToml::from_file(&p).unwrap();
+        // what `mise unuse dummy@1.0.0` writes back: the remaining, rendered request
+        let remaining = cf.to_tool_request_set().unwrap().tools[&dummy]
+            .iter()
+            .filter(|tr| tr.version() == "2.0.0")
+            .cloned()
+            .collect_vec();
+        assert_eq!(remaining.len(), 1);
+
+        cf.replace_versions(&dummy, remaining).unwrap();
+
+        assert_eq!(
+            cf.dump().unwrap(),
+            indoc! {r#"
+                [env]
+                A = "same"
+                B = "same"
+
+                [tools]
+                dummy = { version = "2.0.0", install_env = { AUTH = "{{ env.B }}" } }
+            "#}
+        );
+        file::remove_file(&p).unwrap();
+    }
+
+    /// An option given on the command line differs from what the template renders to, so it
+    /// still replaces the template.
+    #[tokio::test]
+    async fn test_replace_versions_writes_changed_option_over_template() {
+        let _config = Config::get().await.unwrap();
+        let p = CWD
+            .as_ref()
+            .unwrap()
+            .join(".option-template-changed.mise.toml");
+        file::write(
+            &p,
+            indoc! {r#"
+                [env]
+                TOKEN = "s3cr3t"
+
+                [tools]
+                dummy = { version = "1.0.0", url = "https://{{ env.TOKEN }}@example.com", auth = "{{ env.TOKEN }}" }
+            "#},
+        )
+        .unwrap();
+        let cf = MiseToml::from_file(&p).unwrap();
+        let dummy = BackendArg::from("dummy");
+        let mut options = cf.to_tool_request_set().unwrap().tools[&dummy][0].options();
+        options
+            .opts
+            .insert("url".to_string(), "https://example.org".into());
+
+        cf.replace_versions(
+            &dummy,
+            vec![
+                ToolRequest::new_with_options(
+                    Arc::new(dummy.clone()),
+                    "1.0.0",
+                    options,
+                    ToolSource::Unknown,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            cf.dump().unwrap(),
+            indoc! {r#"
+                [env]
+                TOKEN = "s3cr3t"
+
+                [tools]
+                dummy = { version = "1.0.0", url = "https://example.org", auth = "{{ env.TOKEN }}" }
+            "#}
         );
         file::remove_file(&p).unwrap();
     }
@@ -4527,6 +4982,23 @@ run = "cargo build"
         assert!(!is_safe_config_body(indoc! {r#"
         [tools]
         "github:owner/repo[api_url=http://example.com/api/v3]" = "latest"
+        "#}));
+        // an spm URL on a self-hosted forge picks the host that gets the token,
+        // as api_url does
+        assert!(!is_safe_config_body(indoc! {r#"
+        [tools]
+        "spm:https://evil.example/o/r.git" = "latest"
+        "#}));
+        assert!(!is_safe_config_body(indoc! {r#"
+        [tools]
+        "spm:https://evil.example/o/gitlab.com.git" = "latest"
+        "#}));
+        // github.com and gitlab.com use the public APIs
+        assert!(is_safe_config_body(indoc! {r#"
+        [tools]
+        "spm:https://github.com/o/r.git" = "latest"
+        "spm:https://gitlab.com/o/r.git" = "latest"
+        "spm:o/r" = "latest"
         "#}));
         // tasks with templates render (and can exec) while loading
         assert!(!is_safe_config_body(indoc! {r#"

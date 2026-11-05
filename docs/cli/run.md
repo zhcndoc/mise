@@ -64,6 +64,7 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
   - `replacing` - Stdout is replaced each time, stderr is printed as is
   - `timed` - Only show stdout lines if they are displayed for more than 1 second
   - `keep-order` - Print stdout/stderr by line, prefixed with the task's label, but keep the order of the output
+  - `summary` - Print one line for each task that passed, and all of a failed task's output once it ends
   - `quiet` - Deprecated; use `--output interleave --quiet`
   - `silent` - Do not show any output, including the task's stdout and stderr, except errors
 
@@ -135,6 +136,9 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 - **`--timeout <TIMEOUT>`** — Stop the run if it takes longer than this, e.g. 30s or 5m
 
   Overrides the `task.timeout` setting.
+- **`--lock-timeout <LOCK_TIMEOUT>`** — Fail a task that waits longer than this for a lock, e.g. 30s or 5m
+
+  Overrides the `task.lock_timeout` setting.
 
 ## 示例
 

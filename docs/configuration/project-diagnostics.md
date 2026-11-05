@@ -62,8 +62,9 @@ Each `[doctor.checks.<name>]` table accepts:
 | `dir`         | Working directory. Defaults to the [config root](/configuration.html#config-root) of the declaring file, and relative paths resolve from it; `~/` and absolute paths are used as given. In global or system config, the directory mise runs in takes the place of the config root.                                 |
 | `shell`       | Program and arguments, including the command flag, such as `"bash -c"` or `"pwsh -Command"`. Defaults to [`unix_default_inline_shell_args`](/configuration/settings.html#unix_default_inline_shell_args) or [`windows_default_inline_shell_args`](/configuration/settings.html#windows_default_inline_shell_args). |
 | `os`          | An OS or OS/architecture selector, or a list of them, such as `"linux/arm64"` or `["linux", "macos"]`. Omit it to run everywhere.                                                                                                                                                                                  |
+| `depends`     | 必须先通过的检查名称或名称列表。若其中一项未通过，此检查会报告为 `blocked`，且不会运行其命令。 |
 
-`os` accepts the same aliases as tool filters, such as `darwin`, `win`, and
+`run`、`description` 和 `hint` 会在声明它们的文件上下文中作为模板渲染，因此可使用 <code v-pre>{{ vars.name }}</code>、<code v-pre>{{ env.NAME }}</code> 等[模板](/templates.html)值；`run` 中的路径请使用 `quote` 过滤器。`os` 接受与工具筛选器相同的别名，例如 `darwin`、`win` 和
 `amd64`; an empty list is rejected. `dir` can point outside the project, such as
 a sibling checkout, and is not rendered as a template. A `shell` override follows
 task quoting rules and honors
@@ -76,6 +77,25 @@ its hint and `dir`.
 
 Checks run in parallel, up to [`jobs`](/configuration/settings.html#jobs) at a
 time. Set `jobs = 1` to run them one at a time.
+
+## 依赖其他检查
+
+如果某项检查只有在其他检查通过后才有意义，请使用 `depends`。依赖项会等待其指定的检查完成，这样同一个根本原因只会报告一次，而不会显示为多个错误：
+
+```toml
+[doctor.checks."examplectl:auth"]
+description = "Logged in to examplectl"
+run = "examplectl auth status"
+hint = "examplectl auth login"
+
+[doctor.checks."examplectl:project"]
+description = "The default project is set"
+depends = ["examplectl:auth"]
+run = 'test -n "$(examplectl config get project)"'
+hint = "examplectl config set project <name>"
+```
+
+`examplectl:auth` 失败时，`examplectl:project` 会标记为 `blocked`：不会运行该检查，也不会显示其提示。依赖项以 `fail`、`error`、`skipped`（被 `os` 排除）或 `blocked` 结束时，其依赖检查都会被阻止。未设置 `depends` 的检查仍按原方式运行。`depends` 指定了未知检查，或检查之间出现循环依赖时，会报错且不运行任何检查。
 
 ## What a check sees
 
@@ -93,12 +113,14 @@ key directly under `[doctor]` produces a warning.
 
 Each check ends with one of these statuses:
 
-| Status    | Meaning                                                                                                                                                   |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pass`    | The command exited with status 0.                                                                                                                         |
-| `fail`    | The command exited with another status. A shell that reports a missing command this way also counts as `fail`.                                            |
-| `error`   | mise could not run or finish the check: a timeout, too much output, invalid options, a shell that failed to start, or an unavailable project environment. |
-| `skipped` | The check's `os` selection excludes this machine.                                                                                                         |
+| Status    | Meaning                                                                                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pass`    | The command exited with status 0.                                                                                                                                                  |
+| `fail`    | The command exited with another status. A shell that reports a missing command this way also counts as `fail`.                                                                     |
+| `error`   | mise could not run or finish the check: a timeout, too much output, invalid options, a shell that failed to start, or an unavailable project environment.                          |
+| `blocked` | 依赖的检查未通过，因此没有运行此检查。`blocked` 本身不会导致整体运行失败：依赖项为 `fail` 或 `error` 时会失败，但依赖项为 `skipped` 时不会。 |
+| `blocked` | A check named in `depends` did not pass, so the command was not run. `blocked` does not fail the run by itself: a `fail` or `error` dependency does, but a `skipped` one does not. |
+| `skipped` | The check's `os` selection excludes this machine.                                                                                                                                  |
 
 `mise doctor project` exits with status 1 when any check fails or errors. With
 no checks, or only skipped ones, it exits with status 0.

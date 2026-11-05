@@ -128,7 +128,12 @@ fn complete_spec(
         answer
             .candidates
             .into_iter()
+            // Project data answers here; a value carrying a control character would be read
+            // as protocol rather than as a candidate.
+            .filter(|(value, _)| is_completable(value))
+            .filter(|(value, description)| !shadowed_by_command(spec, request, value, description))
             .map(|(value, description)| {
+                let description = strip_control_chars(&description);
                 if description.is_empty() {
                     usage_rs::complete::Candidate::new(value)
                 } else {
@@ -142,6 +147,91 @@ fn complete_spec(
         files: answer.files.then_some(usage_rs::complete::Files::Any),
     };
     Ok(usage_rs::complete::render_request(&answer, request))
+}
+
+/// Whether `value` can be offered to a shell as a candidate.
+///
+/// An answer is one line per candidate with tab-separated fields, and a line opening with `\x01`
+/// is an instruction to the generated script: zsh pastes what follows `\x01extensions` into a
+/// glob, where a qualifier such as `(e:cmd:)` runs `cmd`. usage-rs writes values as they are,
+/// relying on none containing a control character. That holds for its compiled tables but not
+/// for task names or `run=` completer output, which come from project files that need not be
+/// trusted. A value that could be read as protocol, or that would start a line of its own, is
+/// left out rather than escaped: no name a shell can complete needs a control character.
+/// Whether a candidate is a task named like a command `mise <name>` runs instead.
+///
+/// With a default subcommand, the first word completes both the commands and the mounted task
+/// names. A task called `upgrade` is then offered beside the built-in `upgrade`, and a shell
+/// that lists one entry per name shows the task's description over the command's. `mise
+/// upgrade` runs the command, so the task is only reachable as `mise run upgrade`. A candidate
+/// that carries a command's name or alias without that command's description is the task.
+fn shadowed_by_command(
+    spec: &usage::Spec,
+    request: &usage_rs::complete::CompletionRequest,
+    value: &str,
+    description: &str,
+) -> bool {
+    if spec.default_subcommand.is_none() {
+        return false;
+    }
+    // Only the first word that is not a flag, or a flag's separate value, picks a command.
+    let Some(before) = request.split.words.get(1..request.split.cword) else {
+        return false;
+    };
+    let takes_value = |word: &str| {
+        let flag = |f: &&usage::SpecFlag| match word.strip_prefix("--") {
+            Some(long) => f.long.iter().any(|l| l == long),
+            None => word.chars().nth(1).is_some_and(|c| f.short.contains(&c)),
+        };
+        // `--jobs=2` and `-j2` carry their value; a short cluster such as `-xj` is not parsed.
+        !word.contains('=')
+            && (word.starts_with("--") || word.chars().count() == 2)
+            && spec
+                .cmd
+                .flags
+                .iter()
+                .find(flag)
+                .is_some_and(|f| f.arg.is_some())
+    };
+    // After `--`, even right behind a flag, the next word is a task, not a command.
+    if before.iter().any(|word| word == "--") {
+        return false;
+    }
+    let mut words = before.iter();
+    while let Some(word) = words.next() {
+        if !word.starts_with('-') {
+            return false;
+        }
+        if takes_value(word) {
+            words.next();
+        }
+    }
+    spec.cmd.subcommands.values().any(|cmd| {
+        let named = cmd.name == value
+            || cmd
+                .aliases
+                .iter()
+                .chain(&cmd.hidden_aliases)
+                .any(|alias| alias == value);
+        let help = cmd.help.as_deref().unwrap_or_default().lines().next();
+        named && help.unwrap_or_default() != description
+    })
+}
+
+fn is_completable(value: &str) -> bool {
+    !value.chars().any(char::is_control)
+}
+
+/// A description with its control characters turned into spaces.
+///
+/// Descriptions come from the same untrusted places as values. They are shown rather than
+/// inserted, and usage-rs only folds line breaks and tabs in them, so anything else, such as an
+/// escape sequence, would otherwise reach the terminal as it is.
+fn strip_control_chars(description: &str) -> String {
+    description
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Generate shell completions
@@ -324,6 +414,9 @@ impl Completion {
 enum Shell {
     Bash,
     Fish,
+    #[strum(serialize = "nu")]
+    #[usage(name = "nu", visible_alias = "nushell")]
+    Nu,
     #[strum(serialize = "powershell")]
     #[usage(name = "powershell", visible_alias = "pwsh")]
     Powershell,
@@ -336,6 +429,7 @@ impl Shell {
         match self {
             Shell::Bash => "bash",
             Shell::Fish => "fish",
+            Shell::Nu => "nu",
             Shell::Powershell => "powershell",
             Shell::Zsh => "zsh",
         }
@@ -347,6 +441,7 @@ impl From<Shell> for usage_rs::complete::Shell {
         match shell {
             Shell::Bash => Self::Bash,
             Shell::Fish => Self::Fish,
+            Shell::Nu => Self::Nu,
             Shell::Powershell => Self::PowerShell,
             Shell::Zsh => Self::Zsh,
         }
@@ -434,11 +529,23 @@ mod shell_name_tests {
     }
 
     #[test]
+    fn nushell_is_accepted_as_nu() {
+        assert!(matches!(
+            <Shell as ValueEnum>::from_choice("nu"),
+            Some(Shell::Nu)
+        ));
+        assert!(matches!(
+            <Shell as ValueEnum>::from_choice("nushell"),
+            Some(Shell::Nu)
+        ));
+    }
+
+    #[test]
     fn the_primary_names_are_unchanged() {
         // Only the *names* -- the alias is rendered into the CLI docs, so asserting it absent
         // here would state something false. This pins that adding it renamed nothing.
         let listed: Vec<&str> = Shell::DETAILS.iter().map(|choice| choice.value).collect();
-        assert_eq!(listed, ["bash", "fish", "powershell", "zsh"]);
+        assert_eq!(listed, ["bash", "fish", "nu", "powershell", "zsh"]);
     }
 
     #[test]
@@ -475,6 +582,167 @@ mod shell_name_tests {
             answer.contains("tools.node.version\tversion of the tool to install\n"),
             "{answer}"
         );
+    }
+
+    #[test]
+    fn a_forwarded_command_completes_files_after_its_first_word() {
+        let ask = |line: &str| {
+            let argv: Vec<OsString> = ["__complete_word__", "--shell", "bash", "--line", line]
+                .into_iter()
+                .map(OsString::from)
+                .collect();
+            completion_request(&argv).unwrap()
+        };
+        // Every word after the command is a file, as in a bare shell. The command word is
+        // covered by `a_forwarded_command_word_completes_commands`. One request per test: each
+        // builds the whole completion spec, and nextest kills a unit test after a second, which
+        // a debug build on a slow runner reaches with three.
+        assert_eq!(ask("mise x node@22 -- ls -l src/"), "\u{1}files\n");
+    }
+
+    /// The command word is the one thing after `--` that is not a file. `PATH` holds a single
+    /// directory, so listing the commands stays cheap on a host with a large one.
+    #[cfg(unix)]
+    #[test]
+    fn a_forwarded_command_word_completes_commands() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("forwardedtool");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut environment = mise_util::testing::EnvVarGuard::new();
+        environment.set("PATH", dir.path());
+
+        let argv: Vec<OsString> = [
+            "__complete_word__",
+            "--shell",
+            "bash",
+            "--line",
+            "mise x -- forwarded",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert_eq!(completion_request(&argv).unwrap(), "forwardedtool\n");
+    }
+
+    #[test]
+    fn a_candidate_cannot_forge_a_protocol_line() {
+        // The zsh script globs for what follows `\x01extensions`, and a glob qualifier there
+        // runs code. Neither a name opening with the marker nor one carrying it onto a line of
+        // its own may reach the answer, and a description cannot carry a control character to
+        // the terminal either.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.kdl");
+        std::fs::write(
+            &path,
+            concat!(
+                "name \"mise\"\n",
+                "cmd \"build\" help=\"esc \\u{1b}]0;title\\u{7}\"\n",
+                "cmd \"\\u{1}extensions\" help=\"*)(e:id:) x(\"\n",
+                "cmd \"b\\n\\u{1}extensions\\t*)(e:id:) x(\"\n",
+            ),
+        )
+        .unwrap();
+        let encoded = crate::packslip::completions::encode_spec_path(&path);
+        for shell in ["bash", "fish", "powershell", "zsh"] {
+            let argv: Vec<OsString> = [
+                "__usage_complete_word",
+                &encoded,
+                "--shell",
+                shell,
+                "--line",
+                "mise ",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+            let answer = usage_spec_request(&argv).unwrap().unwrap();
+            assert!(answer.contains("build"), "{answer:?}");
+            assert!(!answer.contains('\u{1}'), "{answer:?}");
+            assert!(!answer.contains('\u{1b}'), "{answer:?}");
+            assert!(!answer.contains("(e:id:)"), "{answer:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_completer_does_not_evaluate_the_words_it_is_given() {
+        // The words arrive with the shell's quoting already removed, and the `run=` they are
+        // rendered into goes to `sh -c`. A mounted task can offer such a word as a choice and
+        // then name its next argument after one of these completers. One line per completer
+        // that reads the words.
+        //
+        // The completers call `mise`, which here is a stub that records its arguments: the real
+        // one would load config and reach for the network on every line, and whichever `mise`
+        // happens to be on PATH is not what is under test. The record also shows the completer
+        // ran, so the test cannot pass by never reaching it.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("evaluated");
+        let calls = dir.path().join("calls");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let stub = bin.join("mise");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '[%s]' \"$@\" >>'{}'\necho >>'{}'\n",
+                calls.display(),
+                calls.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut env = mise_util::testing::EnvVarGuard::new();
+        env.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+
+        // Built once: the runtime spec is what `completion_request` answers these lines from,
+        // and building it costs far more than answering a line.
+        let spec = super::super::usage::completion_spec();
+        let literal = format!("$(touch {})", marker.display());
+        let word = format!("'{literal}'");
+        for (line, expected) in [
+            (
+                format!("mise tool-alias unset {word} "),
+                Some(format!("[alias][ls][--][{literal}]")),
+            ),
+            (
+                format!("mise ls-remote {word} "),
+                Some(format!("[ls-remote][--][{literal}]")),
+            ),
+            (
+                format!("mise lock {word}"),
+                Some(format!("[search][--complete][--][{literal}]")),
+            ),
+            (
+                format!("mise use {word}"),
+                Some(format!("[search][--complete-ids][{literal}]")),
+            ),
+            // `installed_tool@version` only passes the word on once it holds an `@`
+            (format!("mise uninstall {word}"), None),
+        ] {
+            let _ = std::fs::remove_file(&calls);
+            let argv: Vec<OsString> = ["__complete_word__", "--shell", "fish", "--line", &line]
+                .into_iter()
+                .map(OsString::from)
+                .collect();
+            let request = usage_rs::complete::CompletionRequest::parse(&argv).unwrap();
+            complete_spec(&spec, &request).unwrap();
+            assert!(!marker.exists(), "{line}");
+            let recorded = std::fs::read_to_string(&calls).unwrap_or_default();
+            assert!(
+                !recorded.is_empty(),
+                "the completer for {line:?} did not run"
+            );
+            if let Some(expected) = expected {
+                assert!(
+                    recorded.lines().any(|l| l == expected),
+                    "{line:?} passed {recorded:?}, not {expected:?}"
+                );
+            }
+        }
     }
 
     #[test]

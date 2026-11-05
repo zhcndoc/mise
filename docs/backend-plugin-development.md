@@ -222,12 +222,34 @@ mise 不会验证 `BackendInstall` 下载的内容，也不会在 `mise.lock` �
 
 | `ctx` 字段     | 含义                                                    | 示例                                                          |
 | -------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
-| `tool`         | 工具名称                                               | `"deploy"`                                                  |
-| `version`      | 已安装的版本                                           | `"2.1.0"`                                                   |
-| `install_path` | 安装目录                                               | `"/home/user/.local/share/mise/installs/acme-deploy/2.1.0"` |
-| `options`      | 工具选项，参见[工具选项](#tool-options)                 | `{ mirror = "https://..." }`                                |
+| `tool`         | The tool name                                         | `"deploy"`                                                  |
+| `version`      | The installed version                                 | `"2.1.0"`                                                   |
+| `install_path` | The install directory                                 | `"/home/user/.local/share/mise/installs/acme-deploy/2.1.0"` |
+| `options`      | The tool's options; see [Tool options](#tool-options) | `{ mirror = "https://..." }`                                |
 
-请返回 `{ env_vars = { { key = ..., value = ... }, ... } }`。即使没有要添加的内容，也必须实现此钩子并返回 `{ env_vars = {} }`。每个 `PATH` 目录都应单独作为一项返回；mise 会使用当前平台的路径分隔符拼接重复键。如果没有返回 `PATH` 项，mise 会将 `install_path` 下的 `bin` 加入其中。mise 会按版本和选项缓存结果，因此钩子应尽可能快速。
+Return `{ env_vars = { { key = ..., value = ... }, ... } }`. Implement this hook
+even when you have nothing to add, and return `{ env_vars = {} }`. Return each
+`PATH` directory as its own entry; mise joins repeated keys with the platform's
+path separator. If you return no `PATH` entry, mise adds `install_path`'s `bin`.
+
+mise 会像缓存工具插件的 [`EnvKeys`](/tool-plugin-development.html#envkeys-caching) 一样，按版本和选项组合缓存结果。以下两个字段可控制此缓存：
+
+| Field         | Value                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| `watch_files` | 文件发生更改、新建或删除时重新运行 hook |
+| `cacheable`   | 设为 `false` 时每次运行 hook；默认为 `true` |
+
+```lua [hooks/backend_exec_env.lua]
+function PLUGIN:BackendExecEnv(ctx)
+    local file = require("file")
+    local config = file.join_path(os.getenv("HOME"), ".acme", "config.json")
+    local env_vars = { { key = "PATH", value = file.join_path(ctx.install_path, "bin") } }
+    if file.exists(config) then
+        table.insert(env_vars, { key = "ACME_CONFIG", value = config })
+    end
+    return { env_vars = env_vars, watch_files = { config } }
+end
+```
 
 ### BackendUninstall
 

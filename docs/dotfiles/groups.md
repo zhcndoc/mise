@@ -9,7 +9,7 @@ socialDescription: "将 dotfiles 目录树作为组部署，并为每台机器�
 
 ## 定义组 {#define-a-group}
 
-Declare a group with a `[dotfile_groups.<name>]` table that names its `root`:
+使用 `[dotfile_groups.<name>]` 配置表声明一个组，并指定其 `root`：
 
 ```toml
 [dotfile_groups.zsh]
@@ -27,22 +27,30 @@ mise 会遍历根目录，并将每个文件部署到目标目录下的相同路
 
 ### 组键 {#group-keys}
 
-| 键            | 默认值         | 含义                                                                                                                                                                |
-| ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `root`       | （必填）       | 要部署的目录树。相对路径以 `dotfiles.root` 为基准。                                                                                                               |
-| `target`     | `~`            | 部署目录树的目标位置。                                                                                                                                              |
-| `mode`       | `symlink-each` | `symlink-each` 会为每个文件创建符号链接，`copy` 会复制每个文件，`symlink` 会为整个目录树创建符号链接。`dot_prefix`、`manifest` 和 `entries` 需要使用 `symlink-each` 或 `copy`。 |
-| `exclude`    |                | 要跳过的根目录下路径，使用[模式语法](/dotfiles/reference.html#patterns)。                                                                                           |
-| `dot_prefix` | `false`        | 按照[源文件的可见名称](/dotfiles/managed.html#dot-prefix)说明，将 `dot-<name>` 部署为 `.<name>`。                                                               |
-| `manifest`   |                | 设置为 `"git"` 时，仅部署 Git 索引中的文件，详见[仅部署已提交到 Git 的文件](/dotfiles/managed.html#git-tracked-directories)。                                     |
-| `relative`   |                | 使用相对路径创建链接，详见[相对符号链接](/dotfiles/managed.html#relative)。                                                                                        |
-| `entries`    |                | 为目录树的部分内容指定整文件条目；详见[组条目](#group-entries)。需要使用 `symlink-each` 或 `copy`。                                                               |
+| Key          | Default        | Meaning                                                                                                                                                                           |
+| ------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `root`       | (required)     | The directory tree to deploy. A relative path starts at `dotfiles.root`.                                                                                                          |
+| `target`     | `~`            | The directory the tree deploys into.                                                                                                                                              |
+| `mode`       | `symlink-each` | `symlink-each` links each file, `copy` copies each file, and `symlink` links the whole tree. `dot_prefix`, `manifest`, and `entries` need `symlink-each` or `copy`.               |
+| `exclude`    |                | Paths under the root to skip, using the [pattern syntax](/dotfiles/reference.html#patterns).                                                                                      |
+| `dot_prefix` | `false`        | Deploy `dot-<name>` names as `.<name>`, as described in [Visible source names](/dotfiles/managed.html#dot-prefix).                                                                |
+| `manifest`   |                | `"git"` deploys only files in Git's index, as described in [Deploy only files committed to Git](/dotfiles/managed.html#git-tracked-directories).                                  |
+| `relative`   |                | Link by relative paths, as described in [Relative symlinks](/dotfiles/managed.html#relative).                                                                                     |
+| `depends`    |                | 按名称指定组、按目标路径指定整文件条目；mise 会先写入这些依赖，再写入此组及其条目。详见[等待其他条目](/dotfiles/managed.html#depends)。 |
+| `entries`    |                | Whole-file entries for parts of the tree; see [Group entries](#group-entries). Requires `symlink-each` or `copy`.                                                                 |
 
-组的 `mode = "symlink"` 不能与 `entries` 表同时使用；如果同时设置，mise 会发出警告并忽略整个组。使用 `symlink` 时，mise 也会忽略 `dot_prefix` 和 `manifest`。
+A group with `mode = "symlink"` and an `entries` table is invalid: mise warns
+and ignores the whole group. With `symlink`, mise also ignores `dot_prefix`
+and `manifest`.
 
-## 组条目 {#group-entries}
+## Group entries {#group-entries}
 
-`[dotfile_groups.<name>.entries]` 使用与 [`[dotfiles]` 条目](/dotfiles/managed.html#whole-file-entries)相同的语法描述目录树中的部分内容，并以目标路径为键。每个条目都会从目录遍历中单独处理，决定其路径的部署方式。例如，若要为整个目录创建链接，而不是分别链接其中的文件（这样应用在该目录中创建的文件也会进入 dotfiles）：
+`[dotfile_groups.<name>.entries]` describes parts of the tree with the same
+syntax as [`[dotfiles]` entries](/dotfiles/managed.html#whole-file-entries),
+keyed by target path. Each entry is cut out of the walk, so it decides how its
+path is deployed. For example, to link a directory as a whole instead of each
+file in it, so that files the application creates there also land in your
+dotfiles:
 
 ```toml
 [dotfile_groups.home]
@@ -56,31 +64,83 @@ dot_prefix = true
 "~/.kitty-old.conf" = { mode = "absent" }
 ```
 
-- 未设置 `source` 的条目会在根目录中查找文件，路径与其在组目标目录中的路径一致：`home` 组中的 `~/.config/kitty` 会读取 `~/.dotfiles/home/dot-config/kitty`。
-  使用 `mode = "template"` 时，若文件不存在，则会回退到同一路径并附加 `.tera` 后缀。因此，`"~/.config/git/config" = { mode = "template" }` 会渲染 `home/dot-config/git/config.tera`，且不会再部署带后缀的文件。
-- 相对的 `source` 路径以根目录为基准。如果它位于根目录内，或位于另一个会遍历目录的条目目录树中，则该目录遍历会跳过此文件。因此，`git/config.tmpl` 会渲染到 `~/.gitconfig`，不会同时链接到 `~/git/config.tmpl`。
-- 未设置 `mode` 的条目会沿用组的部署方式：目录按组的方式部署；在 `copy` 组中，文件会作为单个链接或单个副本部署。
-- 遍历目录的条目会继承组的 `dot_prefix`、`manifest`，以及不含 `/` 的 `exclude` 模式，除非条目另有设置。
-- 每个条目（包括 `variants` 中命名的各目标）都必须位于组的目标目录内，且不能与目标目录本身相同。如果条目位于另一个目录遍历条目之下，也会从该条目的遍历中排除。若条目位于整目录符号链接之下，就会更改根目录中的文件，因此 mise 会在写入前将其报告为冲突。
+- An entry without `source` finds it under the root, at its path inside the
+  group's target: `~/.config/kitty` in the `home` group reads
+  `~/.dotfiles/home/dot-config/kitty`.
+  With `mode = "template"`, a missing file falls back to the same path plus
+  `.tera`, so `"~/.config/git/config" = { mode = "template" }` renders
+  `home/dot-config/git/config.tera` and does not also deploy it with the suffix.
+- A relative `source` starts at the root. When it lies inside the root, or
+  inside the tree of another entry that walks a directory, that walk skips it,
+  so `git/config.tmpl` is rendered to `~/.gitconfig` and not also linked to
+  `~/git/config.tmpl`.
+- An entry without `mode` deploys like the group: a directory the group's way,
+  a file as one link, or as one copy in a `copy` group.
+  例外情况是仅设置 `permissions` 的条目：它不会继承组的 `mode`，也不会部署文件，只会调整现有目标的权限（详见[权限](/dotfiles/managed.html#permissions)）。若要部署文件并设置权限，也要设置 `mode`，例如 `{ mode = "copy", permissions = "0600" }`。
+- An entry that walks a directory inherits the group's `dot_prefix` and
+  `manifest`, and the group's `exclude` patterns that contain no `/`, unless
+  it sets its own.
+- Every entry, including each target its `variants` name, must lie inside the
+  group's target, and cannot be the target itself. An entry beneath another
+  walking entry is cut out of that one too. An entry beneath a directory
+  linked as a whole would change a file in the root itself, so mise reports it
+  as a conflict before anything is written.
 
-组条目仅支持整文件条目。请在 `[dotfiles]` 中声明[代码块、行和合并编辑项](/dotfiles/edits.html)。若要将条目放入组中，请在 `[dotfile_groups.<name>.entries]` 下声明；带有 `group` 键的 `[dotfiles]` 条目无效。
+要将条目放入组中，请在 `[dotfile_groups.<name>.entries]` 下声明；在 `[dotfiles]` 条目中设置 `group` 键无效。
 
-## 选择组 {#selecting-groups}
+### 组中的编辑项 {#group-edits}
 
-如果没有选择特定组，则会应用所有已声明的组。使用 `[bootstrap] dotfile_groups` 选择机器要应用的组，例如在该机器的 `~/.config/mise/config.local.toml` 中设置：
+条目也可以[编辑文件的一部分](/dotfiles/edits.html)，而不是部署整个文件。键的写法与 `[dotfiles]` 编辑项相同：先写文件路径，再跟 ID；值则是包含 `block`、`line` 或 `merge` 的配置表：
+
+```toml
+[dotfile_groups.common]
+root = "common"
+
+[dotfile_groups.common.entries]
+"~/.config/mise/conf.d/private.local.toml/defaults" = { source = "../templates/private.toml", merge = "missing", permissions = "0600" }
+```
+
+- 编辑项仅在选中该组时生效。选择其他组的机器不会修改此文件。
+- 相对 `source` 路径与组中其他条目一样，以组根目录为基准；未设置来源的 `merge` 会读取根目录中同一路径的文件。遍历目录的组不会重复部署编辑项读取或修改的文件。
+- 被编辑的文件必须位于组的目标目录内。编辑项可使用 `[dotfiles]` 编辑项支持的键；如果设置了仅供整文件条目使用的键（例如 `mode`），mise 会发出警告并忽略整个组。
+- 取消选择该组会停止应用编辑项，但会保留它写入的文件内容。`mise dot unapply --group` 只会移除该组部署的文件；若要移除编辑项的代码块或行，请在组仍被选中时运行 `mise dot unapply <path>`。
+
+## Select groups {#selecting-groups}
+
+Every declared group applies until you select some. Use
+`[bootstrap] dotfile_groups` to choose the groups a machine applies, for
+example in that machine's `~/.config/mise/config.local.toml`:
 
 ```toml
 [bootstrap]
 dotfile_groups = ["home", "zsh"]
 ```
 
-更靠近当前目录的配置文件中的列表会替换其他列表。无论选择哪些组，所有机器都会应用 `[dotfiles]` 条目。如果列表中包含未在任何位置声明的组，mise 会发出警告。
+更靠近当前目录的配置文件中的组列表会替换其他列表。无论机器选择了哪些组，`[dotfiles]` 条目都会应用；组中的条目（包括其[编辑项](#group-edits)）则仅在该组被选中时应用。
+
+### 无需配置表的组 {#groups-without-a-table}
+
+如果选中的名称没有对应的 `[dotfile_groups]` 配置表，但它指向 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下的一个目录，则该目录会按默认设置作为组根目录，并逐个文件部署到 `~`。这样一来，软件包目录无需额外配置表：
+
+```text
+~/.dotfiles/
+├── kitty/.config/kitty/kitty.conf
+├── nvim/.config/nvim/init.lua
+└── zsh/.zshrc
+```
+
+```toml
+[bootstrap]
+dotfile_groups = ["kitty", "nvim", "zsh"]
+```
+
+`~/.config/kitty/kitty.conf` 会链接到 `~/.dotfiles/kitty/.config/kitty/kitty.conf`，其他文件也以此类推。只有当组需要额外设置（例如 `entries`、`dot_prefix` 或其他 `target`）时才需编写配置表；配置表会替换该组的默认设置。这类组只在某个列表选中它们时存在。如果列表中的名称既未声明，也不是目录，mise 会发出警告。
 
 两个已选组不能部署到同一个目标文件；一个组也不能将目录整体链接，而另一个组又在其中放置文件。出现任一情况时，mise 会在写入前报告冲突并指出相关组名。
 
 ## 取消选择并移除组 {#deselecting-and-removing-groups}
 
-取消选择一个组或删除其配置表都不会移除该组的文件；`mise dot status` 会将这些文件列为 `orphaned`。mise 会记录每个组部署的文件，因此能够识别它们；记录保存在[状态目录](/dotfiles/reference.html#state-files)中。若已选组不再部署某个文件（例如新增了 `exclude` 模式，或删除了复制源文件），该文件也会成为孤立文件。只要仍有任何活动条目在部署某文件，该文件就不会成为孤立文件，即使条目已移至其他组也是如此。如果 mise 无法读取某个组（例如其 `root` 不存在），会对该组发出警告，而不会列出其中的文件。
+取消选择某个组或删除其配置表后，组中的文件会保留，`mise dot status` 会将其列为 `orphaned`。mise 会在[状态目录](/dotfiles/reference.html#state-files)中记录各组部署的内容，因此能够识别这些文件。如果某个已选组不再部署某个文件，例如添加了新的 `exclude` 模式或删除了复制来源文件，该文件也会成为孤立文件。只要仍有活动条目部署某个文件，该文件就不会变成孤立文件，即使条目已移至其他组也是如此。仅设置权限的条目不会部署文件，因此不能阻止文件变成孤立文件：从原先部署文件的条目中移除 `mode` 后，该文件会变成孤立文件，并由 `--prune` 移除。如果 mise 无法读取某个组（例如其 `root` 不存在），会警告该组，而不会列出其中的文件。
 
 若要移除孤立文件或某个组中的所有文件：
 
@@ -110,13 +170,17 @@ mise dot add --group home ~/.config/starship.toml   # -> ~/.dotfiles/home/dot-co
 
 组与 Stow 软件包的用途相同：
 
-| GNU Stow 功能                   | mise 中的对应设置                                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| A package directory             | A group, `[dotfile_groups.<name>]`, with that directory as `root`                                            |
-| `stow --dotfiles`               | `dot_prefix = true`                                                                                          |
-| Relative links (Stow's default) | [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks) or `relative = true` |
-| `stow -D <package>`             | `mise dot unapply --group <name>`                                                                            |
-| `stow --adopt`                  | `mise dot add --group <name> <file>`                                                                         |
-| Choosing which packages to stow | `[bootstrap] dotfile_groups`                                                                                 |
+| GNU Stow                        | mise                                                                                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 软件包目录 | `[bootstrap] dotfile_groups` 指定的 `dotfiles.root` 下的目录，详见[无需配置表的组](#groups-without-a-table) |
+| `stow --dotfiles`               | `dot_prefix = true`                                                                                                              |
+| Relative links (Stow's default) | [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks) or `relative = true`                     |
+| `stow -D <package>`             | `mise dot unapply --group <name>`                                                                                                |
+| `stow --adopt`                  | `mise dot add --group <name> <file>`                                                                                             |
+| Choosing which packages to stow | `[bootstrap] dotfile_groups`                                                                                                     |
 
-如果目录中没有其他内容，Stow 会将整个目录作为链接。`symlink-each` 组始终逐个文件创建链接；若要将目录整体链接，请为其添加 `symlink` [组条目](#group-entries)。
+Stow links a whole directory when nothing else lives in it. A `symlink-each`
+group always links file by file; to link a directory as a whole, add a
+`symlink` [group entry](#group-entries) for it.
+
+要将机器从 Stow 迁移过来，请选择相同的软件包并运行 `mise dot apply`；无需先取消 Stow 链接。如果 Stow 曾将整个目录链接（例如将 `~/.config/kitty` 链接到 `~/.dotfiles/kitty/.config/kitty`），`mise dot status` 会报告该链接，而 apply 会将其替换为真实目录，并在其中逐个链接文件。如果链接指向组根目录中的其他位置，即使传入 `--force` 也会拒绝操作，因为沿该链接写入会修改根目录中的文件。

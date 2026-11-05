@@ -8,15 +8,15 @@ description: "在 macOS、Linux 或 Windows 上安装 mise，验证可执行文�
 
 ## 选择安装方式 {#installation-methods}
 
-| 平台     | 推荐方式                                                             | 其他方式                                                                                                                  |
-| -------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| macOS    | [mise.run](#mise-run)                                              | [Homebrew](#homebrew)、[MacPorts](#macports)、[packslip](#packslip)（Apple silicon）                                     |
-| Linux    | [mise.run](#mise-run)                                              | [packslip](#packslip)、[apt](#apt)、[dnf](#dnf)、[pacman](#pacman)、[apk](#apk)、[其他方式](#linux)                       |
-| Windows  | [winget](#windows-winget)                                          | [PowerShell 脚本](#windows-script)、[Scoop](#windows-scoop)、[Chocolatey](#windows-chocolatey)、[packslip](#packslip) |
-| CI       | [mise-action 或已提交的包装脚本](/continuous-integration.html)     |                                                                                                                         |
-| Docker   | [官方镜像](/mise-cookbook/docker.html)                             |                                                                                                                         |
+| Platform | Recommended                                                        | Alternatives                                                                                                 |
+| -------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| macOS    | [mise.run](#mise-run)                                              | [Homebrew](#homebrew), [MacPorts](#macports), [packslip](#packslip) (Apple silicon)                          |
+| Linux    | [mise.run](#mise-run)                                              | [packslip](#packslip), [apt](#apt), [dnf](#dnf), [pacman](#pacman), [apk](#apk), [others](#linux)            |
+| Windows  | [PowerShell 脚本](#windows-script)                                    | [winget](#windows-winget)、[Scoop](#windows-scoop)、[Chocolatey](#windows-chocolatey)、[packslip](#packslip) |
+| CI       | [mise-action or a committed wrapper](/continuous-integration.html) |                                                                                                              |
+| Docker   | [Official images](/mise-cookbook/docker.html)                      |                                                                                                              |
 
-mise.run、packslip 和 [GitHub Releases](#github-releases) 会安装官方发行版二进制文件。这些文件使用 mise 优化过的发行配置构建，并可通过 `mise self-update` 更新。包管理器构建的版本可能落后于官方发行版；Homebrew 公式的构建速度也可能明显更慢，产物更大。
+mise.run、Windows [PowerShell 脚本](#windows-script)、packslip 和 [GitHub Releases](#github-releases) 会安装官方发布二进制文件。这些文件使用 mise 的优化发布配置构建，并可通过 `mise self-update` 更新。软件包管理器构建版本可能落后于发行版；Homebrew formula 的构建速度和体积也可能明显更差。
 
 每台机器只使用一种安装方式。如果 `PATH` 中存在两个安装位置，实际运行的可能是较旧版本；请参阅[验证可执行文件](#verify-the-executable)。
 
@@ -304,7 +304,7 @@ sudo snap install mise --classic
 
 ## Windows {#windows}
 
-在 Windows 上推荐使用 winget。安装后，请按照[设置 Windows Shell](/shell-setup.html#windows)中的说明，为 [PowerShell 启用激活](/shell-setup.html#powershell)；也可以将 shims 目录加入 cmd.exe 的 `Path`。
+在 Windows 上，推荐使用 PowerShell 脚本安装。安装后请设置 [PowerShell 激活](/shell-setup.html#powershell)，或按照 [Windows Shell](/shell-setup.html#windows) 中的说明，将 shims 目录加入 cmd.exe 的 `Path`。
 
 ### winget {#windows-winget}
 
@@ -312,7 +312,11 @@ sudo snap install mise --classic
 winget install jdx.mise
 ```
 
-[winget 清单](https://github.com/microsoft/winget-pkgs/tree/master/manifests/j/jdx/mise)
+::: warning winget 版本可能落后于最新发行版
+由于每次提交都需要审核，新版本可能要数天甚至更久才会出现在 winget 中。mise 也会对通过 winget 安装的版本关闭自更新；请使用 `winget upgrade jdx.mise` 进行升级。若要及时获取新版本，请使用 [PowerShell 脚本](#windows-script)。
+:::
+
+[winget manifest](https://github.com/microsoft/winget-pkgs/tree/master/manifests/j/jdx/mise)
 
 ### PowerShell 脚本 {#windows-script}
 

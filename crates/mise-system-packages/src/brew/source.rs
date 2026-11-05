@@ -547,6 +547,176 @@ end
         Ok(())
     }
 
+    /// `install_symlink` resolves a relative source against the receiving
+    /// directory, as Homebrew does. Without that, `relative_path_from` is
+    /// handed a relative path and an absolute base and raises "different
+    /// prefix", failing the whole build. A source that resolves to the link
+    /// itself fails the build instead of replacing the file with a self-link.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn shim_install_symlink_resolves_relative_sources() -> Result<()> {
+        let Some(ruby) = super::super::tap::test_ruby().await? else {
+            return Ok(());
+        };
+        let tmp = tempfile::tempdir()?;
+        let shim = tmp.path().join("shim.rb");
+        let buildpath = tmp.path().join("build");
+        mise_util::file::create_dir_all(&buildpath)?;
+        mise_util::file::write(&shim, SHIM_RB)?;
+        // Each run gets its own Cellar so a keg left by one cannot affect the next.
+        let run = |cellar: &str, install: &str| -> Result<std::process::Output> {
+            let formula_rb = tmp.path().join("example.rb");
+            mise_util::file::write(
+                &formula_rb,
+                format!("class Example < Formula\n  def install\n{install}\n  end\nend\n"),
+            )?;
+            Ok(std::process::Command::new(&ruby)
+                .arg(&shim)
+                .current_dir(&buildpath)
+                .env("MISE_BREW_PREFIX", tmp.path())
+                .env("MISE_BREW_CELLAR", tmp.path().join(cellar))
+                .env("MISE_BREW_FORMULA_FILE", &formula_rb)
+                .env("MISE_BREW_NAME", "example")
+                .env("MISE_BREW_VERSION", "1.0.0")
+                .env("MISE_BREW_PKG_VERSION", "1.0.0")
+                .env("MISE_BREW_BUILDPATH", &buildpath)
+                .env("MISE_BREW_CACHE", tmp.path().join("cache"))
+                .output()?)
+        };
+
+        let output = run(
+            "Cellar",
+            r##"    (bin/"example").write("#!/bin/sh\n")
+    bin.install_symlink "example" => "example-alias"
+    (libexec/"tool").write("tool")
+    bin.install_symlink libexec/"tool"
+    (libexec/"other").write("other")
+    bin.install_symlink "../libexec/other""##,
+        )?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let bin = tmp.path().join("Cellar/example/1.0.0/bin");
+        for (link, target) in [
+            ("example-alias", "example"),
+            ("tool", "../libexec/tool"),
+            ("other", "../libexec/other"),
+        ] {
+            assert_eq!(
+                std::fs::read_link(bin.join(link))?,
+                std::path::PathBuf::from(target)
+            );
+        }
+
+        let output = run(
+            "Cellar-self",
+            r##"    (bin/"example").write("#!/bin/sh\n")
+    bin.install_symlink "example""##,
+        )?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("to itself"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // The same entry reached through a parent that is a link back to bin.
+        let output = run(
+            "Cellar-alias",
+            r##"    (bin/"tool").write("#!/bin/sh\n")
+    (bin/"alias").make_symlink(".")
+    bin.install_symlink "alias/tool" => "tool""##,
+        )?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("to itself"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tool = tmp.path().join("Cellar-alias/example/1.0.0/bin/tool");
+        assert!(tool.is_file() && !tool.is_symlink());
+        Ok(())
+    }
+
+    /// A tap formula's `post_install` can rewrite install names through
+    /// Homebrew's vendored ruby-macho. mise has no equivalent, but it does not
+    /// relocate source-built kegs either, so each call is skipped with a
+    /// warning and the rest of `post_install` still runs. The same calls from
+    /// `install` must still fail the build.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn shim_skips_macho_calls_in_post_install() -> Result<()> {
+        let Some(ruby) = super::super::tap::test_ruby().await? else {
+            return Ok(());
+        };
+        let tmp = tempfile::tempdir()?;
+        let shim = tmp.path().join("shim.rb");
+        let buildpath = tmp.path().join("build");
+        mise_util::file::create_dir_all(&buildpath)?;
+        mise_util::file::write(&shim, SHIM_RB)?;
+        let run = |body: &str| -> Result<std::process::Output> {
+            let formula_rb = tmp.path().join("example.rb");
+            mise_util::file::write(
+                &formula_rb,
+                format!("class Example < Formula\n{body}\nend\n"),
+            )?;
+            Ok(std::process::Command::new(&ruby)
+                .arg(&shim)
+                .current_dir(&buildpath)
+                .env("MISE_BREW_PREFIX", tmp.path())
+                .env("MISE_BREW_CELLAR", tmp.path().join("Cellar"))
+                .env("MISE_BREW_FORMULA_FILE", &formula_rb)
+                .env("MISE_BREW_NAME", "example")
+                .env("MISE_BREW_VERSION", "1.0.0")
+                .env("MISE_BREW_PKG_VERSION", "1.0.0")
+                .env("MISE_BREW_BUILDPATH", &buildpath)
+                .env("MISE_BREW_CACHE", tmp.path().join("cache"))
+                .output()?)
+        };
+        let calls = [
+            (
+                "MachO.open",
+                r#"MachO.open("lib.dylib").linked_dylibs.each { |dep| raise "unreachable" }"#,
+            ),
+            (
+                "MachO::Tools.change_install_name",
+                r#"MachO::Tools.change_install_name("lib.dylib", "a", "@loader_path/a")"#,
+            ),
+            (
+                "MachO::Tools.dylibs",
+                r#"MachO::Tools.dylibs("lib.dylib").each { |dep| raise "unreachable" }"#,
+            ),
+            ("MachO.codesign!", r#"MachO.codesign!("lib.dylib")"#),
+        ];
+
+        for (feature, call) in calls {
+            let marker = tmp.path().join("Cellar/example/1.0.0/bin/after");
+            let _ = std::fs::remove_file(&marker);
+            let output = run(&format!(
+                "  def install\n    (prefix/\"bin\").mkpath\n  end\n  def post_install\n    {call}\n    (prefix/\"bin/after\").write(\"ran\")\n  end"
+            ))?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{feature}: {stderr}");
+            assert!(
+                stderr.contains(&format!("skipping {feature}")),
+                "{feature}: {stderr}"
+            );
+            assert_eq!(
+                mise_util::file::read_to_string(&marker)?,
+                "ran",
+                "{feature}: rest of post_install did not run"
+            );
+
+            let output = run(&format!("  def install\n    {call}\n  end"))?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{feature}: {stderr}");
+            assert!(stderr.contains(feature), "{feature}: {stderr}");
+        }
+        Ok(())
+    }
+
     /// GitHub's codeload URLs (`.../tar.gz/refs/tags/v1.0.0`) name no
     /// extension; the tarball must still be unpacked rather than staged as an
     /// opaque file the build then cannot find its sources in.

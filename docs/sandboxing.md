@@ -13,7 +13,7 @@ socialDescription: "限制 mise exec 和 mise run 启动的命令可访问的文
 
 | 限制                                                                              | Linux                                   | macOS                                   | Windows          |
 | --------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------- | ---------------- |
-| Reads and writes (`--deny-read`, `--deny-write`, `--allow-read`, `--allow-write`) | Landlock, Linux 5.13 or later           | Seatbelt (`sandbox-exec`)               | Not enforced     |
+| 文件读写（`--deny-read`、`--deny-write`、`--allow-read`、`--allow-write`） | Landlock，Linux 5.13（写入限制需 6.2） | Seatbelt (`sandbox-exec`)               | 不强制执行     |
 | All network access (`--deny-net`)                                                 | seccomp, on x86_64 and arm64            | Seatbelt                                | Not enforced     |
 | Access to particular hosts (`--allow-net`)                                        | Not supported; mise exits with an error | Not supported; mise exits with an error | Not enforced     |
 | Environment variables (`--deny-env`, `--allow-env`)                               | Filtered by mise                        | Filtered by mise                        | Filtered by mise |
@@ -50,16 +50,16 @@ mise exec --allow-env='MYAPP_*' -- node app.js
 
 | 标志                   | 任务属性           | 说明                                                                                              |
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------------------------ |
-| `--deny-all`           | `deny_all`         | 启用文件读取、写入、网络和环境变量限制                                                          |
-| `--deny-read`          | `deny_read`        | 阻止读取，但保留[隐式路径](#implicit-access)                                                      |
-| `--deny-write`         | `deny_write`       | 阻止写入，但允许写入 `/tmp` 和 `/dev`                                                          |
-| `--deny-net`           | `deny_net`         | 阻止 IPv4 和 IPv6 socket；Unix socket 仍可使用                                                    |
-| `--deny-env`           | `deny_env`         | 仅传递[必要变量](#environment-variables)                                                         |
-| `--allow-read=<path>`  | `allow_read`       | 允许读取指定路径下的内容，并阻止读取其他路径                                                      |
-| `--allow-write=<path>` | `allow_write`      | 允许读取和写入指定路径下的内容，并阻止写入其他路径                                                |
-| `--allow-env=<var>`    | `allow_env`        | 传递指定变量或 `*` 模式匹配的变量，并阻止传递其他变量                                            |
-| `--allow-net=<host>`   | `allow_net`        | 在任何平台上都不起作用；详见[访问特定主机](#access-to-particular-hosts)                            |
-|                        | `pass_through_env` | 实验性功能。传递变量但不将其加入任务缓存键；此属性本身不会过滤其他变量                            |
+| `--deny-all`           | `deny_all`         | Turn on the read, write, network and environment restrictions                                    |
+| `--deny-read`          | `deny_read`        | Block reads, except the [implicit paths](#implicit-access)                                       |
+| `--deny-write`         | `deny_write`       | Block writes, except to `/tmp` and `/dev`                                                        |
+| `--deny-net`           | `deny_net`         | 禁止网络套接字和 io_uring；Unix 套接字仍可使用 |
+| `--deny-env`           | `deny_env`         | Pass only the [essential variables](#environment-variables)                                      |
+| `--allow-read=<path>`  | `allow_read`       | Allow reads under a path, and block other reads                                                  |
+| `--allow-write=<path>` | `allow_write`      | Allow reads and writes under a path, and block other writes                                      |
+| `--allow-env=<var>`    | `allow_env`        | Pass a variable or a `*` pattern, and block other variables                                      |
+| `--allow-net=<host>`   | `allow_net`        | Does not work on any platform; see [access to particular hosts](#access-to-particular-hosts)     |
+|                        | `pass_through_env` | Experimental. Pass a variable without adding it to the task cache key; does not filter by itself |
 
 ## 对所有命令启用沙箱 {#default-restrictions}
 
@@ -97,7 +97,9 @@ allow_env = ["NODE_*", "npm_*"]
 
 设置、任务属性和标志会合并生效。任一处都可以启用限制，任务与标志中的允许列表也会合并，因此标志只是添加例外，不会替换任务列表。`mise run` 上的标志会应用于该命令运行的所有任务，包括依赖任务。
 
-任务中使用的相对路径以任务工作目录为基准，标志中的相对路径则以运行 mise 时所在的目录为基准。路径可以用 `~` 开头，任务路径也可使用 <code v-pre>{{config_root}}</code> 等模板。每个属性的说明请参阅[任务配置参考](/tasks/task-configuration.html)。
+任务中的相对路径以任务工作目录为基准，标志中的相对路径则以运行 mise 的目录为基准。路径可以以 `~` 开头，任务路径还可以使用 <code v-pre>{{config_root}}</code> 等模板。空路径或渲染为空的模板不会允许任何路径，但仍会阻止其他读取或写入。各属性详见[任务配置参考](/tasks/task-configuration.html)。
+
+项目通常包含你要放入沙箱的代码，而检出目录也可能将 `dist` 设置为指向 `/` 的符号链接。因此，如果允许路径经过当前目录、项目根目录或任务目录中的符号链接，且链接指向其所在目录之外，mise 会报错退出，而不会放行链接目标。错误示例如 `sandbox: ./dist leads out of <directory> through the symlink ...`。若仍要允许目标路径，请直接指定该路径。其他位置的符号链接（包括直接位于主目录中的链接，例如指向另一磁盘的 `~/.npm`）仍会像以前一样跟随。
 
 ## 隐式访问权限
 
@@ -125,11 +127,13 @@ allow_env = ["NODE_*", "npm_*"]
 
 启用环境变量过滤后，命令只能获得 `PATH`、`HOME`、`USER`、`SHELL`、`TERM`、`COLORTERM` 和 `LANG`，以及你明确允许的变量。除非另行允许，`[env]` 中设置的变量也会被移除。`PATH` 仍会包含 mise 添加的工具路径。任务还会保留 `pass_through_env` 中指定的变量，以及缓存 `env` 中的变量。Windows 上还会保留几个额外变量，详见 [Windows](#windows)。
 
-## 沙箱阻止操作时
+环境过滤只决定传递给命令的变量，不会隐藏其他进程持有的变量。在 Linux 上，`mise run` 会阻止命令从 mise 自身的 `/proc/<pid>/environ` 读取完整环境：运行经过环境过滤的任务时，mise 会将自身标记为不可转储，也会阻止命令通过 ptrace 附加到 mise。`mise exec` 会由命令替换自身，因此不会留下持有这些变量的 mise 进程。这些措施都不涵盖启动 mise 的 Shell 或其他进程：同一用户运行的命令仍可读取这些进程导出的变量。以 root 身份运行的命令不受这些措施保护。对于不受信任的命令，也请通过 `--deny-write` 或 `--deny-all` 限制写入：在 Linux 上，受到读写限制的命令会运行在 Landlock 域中，无法读取该域之外进程的环境。
+
+## When the sandbox blocks something
 
 被阻止的操作会在命令内部失败，具体输出由命令决定。它会收到常规错误，例如 `Permission denied` 或 `Operation not permitted`；DNS 查询被阻止时通常会显示 `Could not resolve host`。mise 不会报告这些错误。
 
-mise 会在命令运行前报告影响沙箱的问题：Linux 上允许路径不存在时会显示警告；使用 `--allow-net` 或 Landlock 不可用时则会报错。
+mise 会在命令运行前报告影响沙箱的问题：Linux 上允许路径不存在时会发出警告；`--allow-net`、允许路径经过项目符号链接指向项目之外，以及 Landlock 不可用时都会报错。
 
 ## 访问特定主机
 
@@ -144,9 +148,9 @@ mise 会在命令运行前报告影响沙箱的问题：Linux 上允许路径不
 
 ### Linux
 
-文件系统规则使用 Linux 5.13 起提供的 [Landlock](https://landlock.io/)。Landlock 在后续多个内核版本中增加了功能；mise 会使用当前运行内核所支持的功能，因此较旧的内核执行的规则较少。如果 Landlock 不可用或无法应用规则，命令会失败。
+文件系统规则使用从 Linux 5.13 开始提供的 [Landlock](https://landlock.io/)。限制写入需要 Linux 6.2 或更高版本，因为更旧的内核无法阻止命令截断文件；在此类内核上，`--deny-write`、`--allow-write` 和 `--deny-all` 会直接失败，不会以较弱的沙箱运行。如果 Landlock 不可用或无法应用规则，命令也会失败。
 
-网络规则使用 [seccomp-bpf](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html) 过滤器阻止 IPv4 和 IPv6 socket，同时允许 Unix socket。它支持 x86_64 和 arm64；其他体系结构使用 `--deny-net` 时会报错。
+网络规则使用 [seccomp-bpf](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html) 过滤器，仅允许 Unix 和 netlink 套接字，并阻止其他所有套接字类型。它还会阻止 io_uring，因为 io_uring 可以创建过滤器无法检测到的套接字；因此，需要 io_uring 的程序无法在 `--deny-net` 下运行。此功能支持 x86_64 和 arm64；在其他架构上，`--deny-net` 会报错。
 
 命令启动时，每条允许路径都必须存在。Landlock 会将规则绑定到已打开的文件，因此路径不存在时，mise 会丢弃该规则并发出警告：`sandbox: <path> does not exist, so its rule was dropped`。若要让任务创建 `node_modules`，请改为允许其已存在的父目录：
 

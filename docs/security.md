@@ -32,42 +32,72 @@ mise 的每项安全控制都针对一个阶段，涵盖从加载项目配置到
 不含模板语法（<span v-pre>`{{`</span>、`{%` 或 `{#`）且只包含以下内容的 `mise.toml` 不需要信任即可加载：
 
 - `min_version`
-- `[tools]` 中的条目，其值为版本字符串或版本字符串数组，且工具名中不含选项（`"tool[opt=value]"`）
-- `[tasks]`，前提是没有任务列出 `secrets`
+- `[tools]` 条目，其值为版本字符串或版本字符串数组，工具名称中不含选项（`"tool[opt=value]"`），且不使用 [`path:`](/dev-tools/versions.html) 版本（它会将目录加入 `PATH`，但不会安装工具）
+- `[tasks]`, as long as no task lists `secrets`
 
-其他内容都需要信任，包括工具选项表、`[env]`、`[hooks]`、`[settings]`、`[tool_alias]` 和 `include`。mise 会忽略未受信任配置文件中的 `[settings]`，因此仓库在你信任它之前无法更改镜像、构建命令或其他设置。其他文件的处理方式如下：
+Anything else needs trust, including tool option tables, `[env]`, `[hooks]`,
+`[settings]`, `[tool_alias]` and `include`. mise ignores the `[settings]` of a
+config that is not trusted, so a repository cannot change mirrors, build
+commands or other settings before you trust it. Other files follow the same
+idea:
 
-- `.tool-versions` 只有包含模板语法或内联工具选项（例如 `node[postinstall=...] 24`）时才需要信任。
-- `.nvmrc` 等惯用版本文件始终不需要信任。
-- 任务文件（包括来自 [`task_config.includes`](/tasks/task-discovery.html) 的 TOML 文件）只有包含模板语法或列出 `secrets` 时才需要信任。
-- [`.miserc.toml`](/configuration.html#miserc) 始终不需要信任。它只保存用于选择要加载哪些配置文件的早期设置，其中的模板也不能调用 `exec()`、`read_file()`、`read_json()`、`read_yaml()` 或 `read_toml()`。
+- `.tool-versions` 仅在包含模板语法、内联工具选项（例如 `node[postinstall=...] 24`）或 `path:` 版本时需要信任。
+- `.nvmrc` 等惯用版本文件仅在包含 `path:` 版本时需要信任。
+- 项目的 [`mise.lock`](/dev-tools/mise-lock.html) 会与配置一起读取。在配置受信任前，锁文件只能固定版本和校验和：如果条目将工具锁定到不同于工具键或注册表所选的后端，或添加了选项，mise 会忽略该条目；下载仍会使用后端通常采用的位置，而非锁文件中的 URL 和依赖图。
+- 任务文件（包括 [`task_config.includes`](/tasks/task-discovery.html) 中的 TOML 文件）仅在包含模板语法或列出 `secrets` 时需要信任。`mise lock` 解析带选项的任务工具前仍会询问信任，与工具选项表相同。
+- [工具桩](/dev-tools/tool-stubs.html)无需信任即可运行，因为运行它本身就代表你已批准。`mise lock` 也会读取 `mise.lock` 的 `tool-stubs` 列表中的工具桩，此时项目配置必须受信任。在安全模式下，这些工具桩的选项不会生效。
+- [`.miserc.toml`](/configuration.html#miserc) 无需信任。它只保存用于选择要加载哪些配置文件的早期设置，mise 会从当前目录向上查找它。项目的 `env` 列表可以添加环境，但不能删除或重排全局或系统 `miserc.toml` 选择的环境。项目环境排在全局环境之后，并会覆盖它们，因此全局环境只能保护项目配置无法设置的选项，例如 `paranoid`。项目文件能设置的其他键会影响加载哪些项目文件，以及 mise 向上查找配置的范围，但无法隐藏全局或系统配置。全局和系统 `conf.d` 片段只遵循各自的 `env_conf_d`。项目 `.miserc.toml` 中的模板看不到环境变量，只能使用 `if` 语句和少量函数及过滤器，因此无法泄露环境或让 mise 卡住；详见[.miserc.toml 中的模板](/templates.html#miserc-template-support)。
 
-[偏执模式](/paranoid.html)会取消这些例外，`.miserc.toml` 除外：全局和系统配置之外的所有其他配置文件都需要信任。
+无需信任即可加载的任务，在实际运行前不会执行任何内容。项目受信任前，Shell 补全不会运行任务参数 usage spec 中可指定的命令，包括 `complete run=`、`complete delegate=`、`choices run=` 和 `mount`。
 
-### mise 何时询问
+[Paranoid mode](/paranoid.html) removes these exemptions apart from
+`.miserc.toml`: every other config file outside global and system config needs
+trust.
 
-命令需要读取尚未受信任的配置时：
+### When mise asks
 
-- 在终端中，mise 会显示 `mise config files in <dir> are not trusted. Trust them?`，并提供 Yes、No 和 All。选择 All 会对该命令中的所有提示都回答 Yes；选择 No 会将目录加入忽略列表，mise 会跳过该配置，不再询问，直到你对它运行 `mise trust`。
-- 没有终端时（例如在脚本或编辑器扩展中），mise 无法询问，因此命令会以 [`Config files in <path> are not trusted`](/errors.html#untrusted-config) 错误退出。
-- Shell 激活不会询问。它会跳过不受信任的配置，显示 `<path> is not trusted, run mise trust to enable it` 警告，但仍会应用受信任的配置。
-- `mise prune` 等需要读取所有受跟踪配置的命令会跳过未受信任的配置。
+When a command needs a config that is not trusted:
 
-`mise trust --show` 会列出从当前目录到上层目录中各配置目录的信任状态。不需要信任的配置仍会显示为 `untrusted`。
+- In a terminal, mise asks
+  `mise config files in <dir> are not trusted. Trust them?` with Yes, No and
+  All, where All answers yes to every prompt in that command. No adds the
+  directory to an ignore list, and mise skips that config without asking again
+  until you run `mise trust` on it.
+- Without a terminal, such as in a script or an editor extension, mise cannot
+  ask, so the command fails with
+  [`Config files in <path> are not trusted`](/errors.html#untrusted-config).
+- Shell activation never asks. It skips the untrusted config, warns
+  `<path> is not trusted, run mise trust to enable it`, and still applies the
+  trusted ones.
+- Commands that read every tracked config, such as `mise prune`, skip untrusted
+  ones.
 
-### 隐式信任
+`mise trust --show` lists the trust status of the config directories from the
+current directory up. A config that needs no trust still shows as `untrusted`.
 
-有些命令会直接信任所加载的配置，不再询问，因为运行这些命令本身就表示你决定执行项目代码。在 CI 之外的普通模式下，这些命令包括 `mise run`、`mise build` 等任务简称、`mise install`、`mise exec`、`mise watch`，以及 `mise daemons start`、`restart` 和 `register`。它们会为加载的每个非全局配置记录信任状态，包括上层目录中的配置，效果等同于运行 `mise trust`。已在忽略列表中的配置仍会被忽略。
+### Implicit trust
 
-mise 写入配置文件时也会信任该文件，例如通过 [`mise use`](/cli/use.html) 或 [`mise set`](/cli/set.html) 写入时。
+Some commands trust the config they load without asking, because running them
+is already a decision to run the project's code. In normal mode outside CI,
+these are `mise run`, task shorthand such as `mise build`, `mise install`,
+`mise exec`, `mise watch`, and `mise daemons start`, `restart` and `register`.
+它们会记录所加载的每个非全局配置的信任状态，包括上级目录中的配置，效果与运行 `mise trust` 相同。忽略列表中的配置仍会被忽略。此类命令仅请求自身帮助（例如 `mise run --help`）时不会记录信任；mise 代你启动的命令也不会记录，例如 shim 为工具运行的 `mise x`，或任务 hook 运行的 `mise run`。
 
-### CI 和 `--yes`
+mise also trusts a config file when it writes one, for example with
+[`mise use`](/cli/use.html) 或 [`mise set`](/cli/set.html)。信任范围覆盖该文件的整个配置根目录，因此如果其中还有其他配置文件尚未受信任（例如 `mise.local.toml` 或 `mise.staging.toml`），mise 会像加载该文件时一样先询问信任。在安全模式下，写入操作不会记录信任。
 
-mise 检测到 CI（例如设置了 `CI`）时，会将所有配置视为受信任，但不会记录信任状态。忽略列表中的配置，以及位于 [`ignored_config_paths`](/configuration/settings.html#ignored_config_paths) 中路径下的配置，仍不会加载。`CI` 还会启用 [`yes`](/configuration/settings.html#yes)。
+### CI and `--yes`
 
-CI 之外，`--yes` 或 `MISE_YES=1` 会对信任提示回答 yes，并记录信任状态。偏执模式会同时关闭 CI 信任例外和 `--yes` 对信任提示的自动确认。
+When mise detects CI, for example because `CI` is set, it treats every config as
+trusted and records nothing. Configs on the ignore list or under
+[`ignored_config_paths`](/configuration/settings.html#ignored_config_paths) still
+do not load. `CI` also turns on [`yes`](/configuration/settings.html#yes).
 
-### 管理信任状态
+Outside CI, `--yes` or `MISE_YES=1` answers the trust prompt with yes, which
+records trust. Paranoid mode turns off both the CI exemption and `--yes` for
+trust.
+
+### Manage trust
 
 ```sh
 mise trust --show              # trust status from here up
@@ -78,7 +108,11 @@ mise trust --untrust           # remove trust
 mise trust --ignore            # never load this config
 ```
 
-普通模式下，信任状态以配置根目录为单位，通常是包含 `mise.toml` 的目录，因此会涵盖其中的所有配置文件，例如 `mise.local.toml`。`mise trust --all` 会遍历子目录，但跳过隐藏目录、被 Git 忽略的目录，以及 `node_modules`、`vendor`、`target`、`dist` 和 `build`。信任记录保存在[状态目录](/directories.html)中。所有标志见 [`mise trust`](/cli/trust.html)。
+普通模式下，信任状态属于配置根目录，通常是包含 `mise.toml` 的目录，因此会涵盖其中所有配置文件，例如 `mise.local.toml` 或 `.mise/config.toml`。如果 `mise/`、`.mise/` 或 `.config/` 目录本身是 Git 仓库（例如受跟踪的 `~/code/.config`），也适用此规则。
+`mise trust --all` walks subdirectories, skipping hidden and gitignored ones and
+`node_modules`, `vendor`, `target`, `dist` and `build`. Trust records are kept in
+the [state directory](/directories.html). See [`mise trust`](/cli/trust.html)
+for every flag.
 
 信任记录使用解析后的路径。如果符号链接配置（例如由 GNU Stow 安装的配置）在运行 `mise trust` 后仍显示为不受信任，请信任实际文件路径。
 
@@ -86,8 +120,15 @@ mise trust --ignore            # never load this config
 
 以下两个设置根据路径决定信任状态：
 
-- [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths) 会自动信任这些路径下的配置，不再询问，也包括之后在这些目录中创建的项目。它的优先级高于忽略列表；设置为 `["/"]` 表示信任所有内容。此设置只能用于全局配置。
-- [`ignored_config_paths`](/configuration/settings.html#ignored_config_paths) 会阻止加载这些路径下的配置。它的优先级高于 `trusted_config_paths` 和 `mise trust`。mise 会在查找配置文件前读取此设置，因此应将其写入 [`.miserc.toml`](/configuration.html#miserc) 或通过 `MISE_IGNORED_CONFIG_PATHS` 设置。
+- [`trusted_config_paths`](/configuration/settings.html#trusted_config_paths)
+  trusts configs under these paths without a prompt, including projects you
+  create there later. It overrides the ignore list, and `["/"]` trusts
+  everything. It is global-only.
+- [`ignored_config_paths`](/configuration/settings.html#ignored_config_paths)
+  stops configs under these paths from loading. It overrides
+  `trusted_config_paths` and `mise trust`. mise reads it before it looks for
+  config files, so set it in a [`.miserc.toml`](/configuration.html#miserc) or
+  in `MISE_IGNORED_CONFIG_PATHS`。项目的 `.miserc.toml` 不能忽略全局或系统配置。
 
 ```toml
 # ~/.config/mise/config.toml
@@ -99,13 +140,15 @@ trusted_config_paths = ["~/src/work"]
 
 普通模式下，信任包含 `monorepo_root = true` 的配置，也会信任其目录下的所有配置文件，因此应将子项目配置一并纳入仓库审核。详见 [Monorepo 任务](/tasks/monorepo.html)。偏执模式下，信任根配置只会信任该文件本身。
 
-### Git 工作树
+普通模式下，信任包含 `monorepo_root = true` 的配置，也会信任该目录下的所有配置文件，因此应将子项目配置一并纳入仓库审核。子项目配置只有在根配置仍受信任时才保持受信任：对根目录运行 `mise trust --ignore`，或移除覆盖该目录的 `trusted_config_paths` 条目后，子项目配置需要重新单独信任。详见[Monorepo 任务](/tasks/monorepo.html)。偏执模式下，信任根配置只会信任该文件本身。
 
 链接的 Git worktree 中的配置，如果主 checkout 中相同路径的配置已受信任，也会被信任。在 worktree 中运行 `mise trust --untrust` 时，mise 会警告该文件仍因上述原因保持受信任；如要阻止加载，请在该 worktree 中运行 `mise trust --ignore`。偏执模式不会在 worktree 之间共享信任状态。
 
 <a id="safe-mode"></a>
 
-## 安全模式
+仓库必须将工作树登记在其当前路径下：如果 `.git` 文件只指向仓库中的某个工作树，就不会共享信任状态。手动移动工作树后，请运行 `git worktree repair`。主 checkout 中的路径若本身是符号链接，或位于符号链接之下，也不会共享信任；请直接信任该工作树的配置。
+
+## Safe mode
 
 当自动化流程必须读取其无法控制的配置时（例如在 pull request 分支上解析工具版本的机器人），请设置 `MISE_SAFE=1`。安全模式会在不询问信任状态的情况下加载项目配置，同时禁止这些配置在 mise 解析版本时运行代码或更改环境：
 
@@ -121,44 +164,73 @@ MISE_SAFE=1 mise lock --bump --dry-run --json
 安全模式并不会让其他命令在未经审核的配置上运行变得安全。`mise install` 可能会从源码构建工具，并运行工具的构建脚本，例如 `cargo:` crate 的 `build.rs`。
 :::
 
-### 拒绝的操作
+### Refused operations
 
-以下操作会以 `<operation> is disabled in safe mode (MISE_SAFE=1)` 错误退出：
+These fail with `<operation> is disabled in safe mode (MISE_SAFE=1)`:
 
-- 任意配置模板中的 `exec()`、`read_file()`、`read_json()`、`read_yaml()` 和 `read_toml()`。
-- 运行任务。
-- `postinstall` 和 `install_env` 工具选项。
-- asdf 插件脚本，因此 `asdf:` 后端的工具无法列出或安装版本。
-- 安装插件。已安装或内置的 vfox 插件仍会运行，因为这是操作人员主动选择的。
-- mise secrets：`[secrets]` 来源、`mise secrets ls`、列出 `secrets` 的任务，以及 `mise run` 和 `mise exec` 的 `--secrets`、`--secrets-all`。
-- `mise daemons` 命令和任务守护进程。
-- `[doctor.checks]` 中由 `mise doctor project` 运行的诊断命令。
+- 任何配置中的模板函数 `exec()`、`read_file()`、`read_json()`、`read_yaml()`、`read_toml()`、`get_env()`，过滤器 `hash_file`、`file_size`、`last_modified`、`canonicalize`，以及测试 `dir`、`file`、`exists`。
+- Running tasks.
+- 工具选项 `postinstall` 和 `install_env`，以及 `spm:` 后端的 `install_command`。
+- asdf plugin scripts, so tools from the `asdf:` backend cannot list or install
+  versions.
+- 发往 S3 的请求会使用你的 AWS 凭据签名，因此 `s3:` 后端的工具无法列出或安装版本。
+- Installing plugins. vfox plugins that are already installed or built in still
+  run, because the operator chose them.
+- mise secrets: `[secrets]` sources, `mise secrets ls`, tasks that list
+  `secrets`, and `--secrets` and `--secrets-all` on `mise run` and `mise exec`.
+- `mise daemons` commands and task daemons.
+- The diagnostic commands in `[doctor.checks]` that `mise doctor project` runs.
 
-### 忽略的配置
+### Ignored configuration
 
-以下内容会被跳过，但不会报错，因此版本解析命令仍可继续运行：
+These are skipped without an error, so resolution commands keep working:
 
-- 所有配置中的 hook 和 `[[watch_files]]` 条目（包括全局配置和 bootstrap hook），效果与 `--no-hooks` 相同。
-- 项目 `[env]`、`[vars]` 和 `_.path`、`_.file` 等环境指令。
-- 所有配置（包括全局配置）中的 `_.source`。
-- 项目 `[shell_alias]`。
+- Hooks and `[[watch_files]]` entries from every config, including global
+  config, and bootstrap hooks, as with `--no-hooks`.
+- Project `[env]`, `[vars]` and environment directives such as `_.path` and
+  `_.file`.
+- 项目中的 `path:` 工具版本，以及指向此类版本的项目 `[tool_alias]` 版本。
+- 模板无法访问运行 mise 的进程环境：全局和系统配置文件之外的模板中，`env` 为空，因此仓库不能将你的凭据写入 mise 请求的 URL、`mise.lock` 或命令输出。模板读取没有 `default` 的变量时会失败，与变量未设置时相同。此规则也适用于项目 `.miserc.toml`。之后由后端渲染全局或系统配置中的工具选项时（包括全局 `[tool_alias]`），仍可访问 `env`。
+- `_.source` in every config, including global config.
+- Project `[shell_alias]`.
+- 项目任务 usage spec 中由 Shell 补全运行的命令。
 - 项目 `[wrappers]` 和 `rust` 工具的 `mr_boxington` 选项。
-- 项目 `[settings]`，以防仓库关闭验证或重定向后端。
-- 项目配置中的远程 `include` 条目；mise 不会获取这些内容。
-- 项目守护进程声明。切换目录时也不会启动或停止守护进程。
-- 项目 `[bootstrap]`、`[dotfiles]`、`[dotfile_groups]`，以及项目所选 `[bootstrap] config_roots`。应用这些配置会向主目录写入文件、克隆仓库并安装软件包。 [`mise bootstrap`](/cli/bootstrap.html) 和 [`mise dotfiles`](/cli/dotfiles.html) 会指出被跳过的文件，仍会应用全局和系统配置中的内容；如果项目声明了被忽略的 dotfiles，则会拒绝运行 `mise dotfiles apply --prune`。
+- 项目配置选择的主机不会使用你的凭据：项目 `api_url` 不会获得 GitHub、GitLab 或 Forgejo 令牌（除非全局配置指定了相同主机）；项目配置声明的工具也不会获得 `~/.netrc` 中针对其 `url`、`checksum_url`、`version_list_url`、`version_date_url` 或 `api_url` 所指主机的凭据。全局和系统配置中的工具仍可使用这些凭据。因此，项目指向私有代码托管服务或文件服务器时，无法在该处列出或下载版本。
+- 如果全局配置声明了某个工具，项目就不能为它设置 `[tool_alias]`，以免仓库将你的工具指向其他后端、选项或版本。
+- 项目[延迟安装工具](/dev-tools/shims.html#lazy-tools)：mise 不会为其命令写入 shims，也不会在首次使用时安装它们。
+- Project `[settings]`, so a repository cannot turn off verification or redirect
+  a backend.
+- Remote `include` entries in project config, which mise does not fetch.
+- 项目配置中的远程任务文件（`file = "https://…"` 或 `git::…`）。其任务仅根据 TOML 内容列出。
+- 项目 `[deps]`，因此 `mise deps` 和 `mise exec` 不会运行仓库的依赖提供程序；全局和系统配置中的提供程序仍会运行。
+- Project daemon declarations. Daemons also do not start or stop when you change
+  directories.
+- Project `[bootstrap]`, `[dotfiles]` and `[dotfile_groups]`, and the
+  `[bootstrap] config_roots` a project selects, because applying them writes
+  files into your home directory, clones repositories and installs packages.
+  [`mise bootstrap`](/cli/bootstrap.html) and
+  [`mise dotfiles`](/cli/dotfiles.html) name the skipped files, still apply the
+  ones in global and system config, and refuse `mise dotfiles apply --prune`
+  while a project declares dotfiles they ignore.
 
-除上述规则外，全局和系统配置仍会生效。请审核这些配置以及运行 mise 的进程环境。
+Global and system config still applies, apart from these rules. Review it and the
+environment of the process that runs mise.
 
-### 仍可使用的功能
+### What still works
 
-对于通过 HTTP API 查询版本的后端，版本解析仍可正常工作，例如内置工具、`aqua:`、`github:`、`gitlab:`、`http:`、`cargo:`、`pypi:`、`gem:`、`dotnet:` 和 `npm:`。`go:` 后端会使用 `GOTOOLCHAIN=local` 运行 `go list`，因此项目的 `go.mod` 无法让 Go 下载另一个工具链。列出已安装工具和刷新 `mise.lock` 也照常可用。
+Version resolution keeps working for backends that query HTTP APIs, such as core
+tools, `aqua:`, `github:`, `gitlab:`, `http:`, `cargo:`, `pypi:`, `gem:`,
+`dotnet:` and `npm:`. The `go:` backend runs `go list` with
+`GOTOOLCHAIN=local`, so a project's `go.mod` cannot make Go download another
+toolchain. 列出已安装工具和刷新 `mise.lock` 的操作仍可照常使用，但如果项目 `mise.lock` 的符号链接指向其目录之外，就不会通过该链接写入。
 
-即使处于偏执模式，安全模式也会加载不受信任的配置，且不会提示或报错。但这不会将配置标记为受信任，因此之后未启用安全模式时仍需信任它。语法错误和被拒绝的操作仍会失败。
+即使在偏执模式下，安全模式也会在不询问或报错的情况下加载不受信任的配置。退出安全模式后，这些配置仍不会被标记为受信任，即使命令（例如 `mise use` 或 `mise set`）修改了它们。语法错误和被拒绝的操作仍会失败。
 
-安全模式会限制项目配置能执行的操作，但它并不是操作系统级沙箱，无法隔离 mise、本身发出的网络请求或操作人员安装的插件。如需限制 mise 启动的命令，请使用[沙箱](/sandboxing.html)。
+Safe mode limits what project config can do. It is not an operating-system
+sandbox for mise, its network requests or the plugins the operator installed.
+Use [sandboxing](/sandboxing.html) to restrict the commands mise starts.
 
-## 下载验证
+## Download verification
 
 <a id="software-verification"></a>
 
@@ -173,27 +245,41 @@ mise tool jq
 
 | 后端或工具                  | 检查项目                                                                                                                                     | 设置和选项                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `aqua:`                     | 按 aqua registry 对工具的声明，验证校验和、Cosign 和 Minisign 签名、SLSA 来源证明及 GitHub 制品证明                                        | [`aqua.cosign`](/configuration/settings.html#aqua.cosign)、[`aqua.minisign`](/configuration/settings.html#aqua.minisign)、[`aqua.slsa`](/configuration/settings.html#aqua.slsa)、[`aqua.github_attestations`](/configuration/settings.html#aqua.github_attestations)                                                                                                |
-| `github:`                   | github.com 发布版本提供时验证 GitHub 制品证明；工具指定签署者时验证 SLSA 来源证明                                                            | [`github.github_attestations`](/configuration/settings.html#github.github_attestations)、[`github.slsa`](/configuration/settings.html#github.slsa)，以及 [`github_attestations`](/dev-tools/backends/github.html#github-attestations) 和 [`slsa_signer_identity`](/dev-tools/backends/github.html#slsa-signer-identity-and-slsa-signer-issuer) 工具选项 |
-| `packslip:`                 | 验证签名的发布清单、制品摘要和固定的签署者；参见[验证与策略](/dev-tools/packslip-verification.html)                                           | [工具选项](/dev-tools/backends/packslip.html#tool-options)                                                                                                                                                                                                                                                                                                      |
-| Node.js                     | 验证 `SHASUMS256.txt` 中的校验和；发布版本提供 OpenPGP 签名时也会验证签名                                                                    | [`node.verify`](/configuration/settings.html#node.verify)、[`node.gpg_verify`](/configuration/settings.html#node.gpg_verify)                                                                                                                                                                                                                                    |
-| Linux 上的 Swift            | OpenPGP 签名                                                                                                                                | [`swift.gpg_verify`](/configuration/settings.html#swift.gpg_verify)                                                                                                                                                                                                                                                                                             |
-| Zig                         | 始终验证 Minisign 签名                                                                                                                       | 无                                                                                                                                                                                                                                                                                                                                                               |
-| 预编译的 Ruby 和 Python     | GitHub 制品证明                                                                                                                              | [`ruby.github_attestations`](/configuration/settings.html#ruby.github_attestations)、[`python.github_attestations`](/configuration/settings.html#python.github_attestations)                                                                                                                                                                                    |
+| `aqua:`                     | Checksums, Cosign and Minisign signatures, SLSA provenance and GitHub artifact attestations, as the aqua registry declares them for the tool | [`aqua.cosign`](/configuration/settings.html#aqua.cosign), [`aqua.minisign`](/configuration/settings.html#aqua.minisign), [`aqua.slsa`](/configuration/settings.html#aqua.slsa), [`aqua.github_attestations`](/configuration/settings.html#aqua.github_attestations)                                                                                            |
+| `github:`                   | GitHub artifact attestations when a github.com release publishes them; SLSA provenance when the tool names its signer                        | [`github.github_attestations`](/configuration/settings.html#github.github_attestations), [`github.slsa`](/configuration/settings.html#github.slsa), and the [`github_attestations`](/dev-tools/backends/github.html#github-attestations) and [`slsa_signer_identity`](/dev-tools/backends/github.html#slsa-signer-identity-and-slsa-signer-issuer) tool options |
+| `packslip:`                 | A signed release manifest, artifact digests and a pinned signer; see [verification and policy](/dev-tools/packslip-verification.html)        | [Tool options](/dev-tools/backends/packslip.html#tool-options)                                                                                                                                                                                                                                                                                                  |
+| Node.js                     | `SHASUMS256.txt` 中的校验和及其 OpenPGP 签名；非官方构建除外，其他发布必须提供签名 | [`node.verify`](/configuration/settings.html#node.verify)、[`node.gpg_verify`](/configuration/settings.html#node.gpg_verify) |
+| `npm:`                      | 选择启用，仅适用于内置 aube：如果工具自身的软件包发布了 Sigstore 来源证明，则进行验证 | [`npm.provenance`](/configuration/settings.html#npm.provenance) |
+| Swift on Linux              | OpenPGP signatures                                                                                                                           | [`swift.gpg_verify`](/configuration/settings.html#swift.gpg_verify)                                                                                                                                                                                                                                                                                             |
+| Zig                         | Minisign signatures, always                                                                                                                  | None                                                                                                                                                                                                                                                                                                                                                            |
+| Precompiled Ruby and Python | GitHub artifact attestations                                                                                                                 | [`ruby.github_attestations`](/configuration/settings.html#ruby.github_attestations), [`python.github_attestations`](/configuration/settings.html#python.github_attestations)                                                                                                                                                                                    |
 
-默认情况下会启用这些检查。将全局 [`github_attestations`](/configuration/settings.html#github_attestations) 或 [`slsa`](/configuration/settings.html#slsa) 设置为 `false`，即可对 `aqua:` 和 `github:` 后端关闭对应检查。对于预编译的 Python 和 Ruby，`github_attestations` 只是默认值，显式设置 `python.github_attestations` 或 `ruby.github_attestations` 会覆盖它。
+这些检查默认开启，`npm:` 检查除外，它需要选择启用。将全局
+[`github_attestations`](/configuration/settings.html#github_attestations) or
+[`slsa`](/configuration/settings.html#slsa) setting to `false` turns that check
+off for the `aqua:` and `github:` backends. For precompiled Python and Ruby,
+`github_attestations` is only the default, and an explicit
+`python.github_attestations` or `ruby.github_attestations` overrides it.
 
-mise 会自行验证 OpenPGP、Cosign、Minisign、SLSA 和制品证明，因此不需要 `gpg`、`cosign` 或 `gh` 可执行文件。如果检查失败，请先阅读底层错误，再考虑关闭设置；详见[校验和错误](/errors.html#checksum-mismatch)。
+mise verifies OpenPGP, Cosign, Minisign, SLSA and attestations itself, so it
+needs no `gpg`, `cosign` or `gh` executable. If a check fails, read the
+underlying error before you turn a setting off; see
+[checksum errors](/errors.html#checksum-mismatch).
 
-[`mise.lock`](/dev-tools/mise-lock.html#provenance-and-security) 会记录 mise 验证过的校验和和来源证明，后续安装会复用该结果，而不再重复检查。设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 或启用[偏执模式](/paranoid.html)，可在每次安装时重新验证。两种方式都不会重新检查已经安装的工具。
+[`lockfile`](/dev-tools/mise-lock.html#provenance-and-security) 会记录校验和及 mise 验证过的来源证明，后续安装会复用该结果，而不再重复检查。设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 或启用[偏执模式](/paranoid.html)，可在每次安装时重新验证。两者都不会重新检查已安装的工具。`npm:` 来源证明检查不会记录到锁文件中，因此启用 [`npm.provenance`](/configuration/settings.html#npm.provenance) 后，每次安装该工具时 mise 都会验证。
 
-mise 也会检查自身发布版本：`mise self-update` 会在替换二进制文件前验证每个版本的签名。检查方式见[自我更新验证](/dev-tools/packslip-verification.html#self-update)，更新命令见[更新 mise](/installing-mise.html#updating)。
+mise checks its own releases too: `mise self-update` verifies each release's
+signature before it replaces the binary. See
+[self-update verification](/dev-tools/packslip-verification.html#self-update)
+for the checks and [Updating mise](/installing-mise.html#updating) for the
+commands.
 
-<a id="minimum-release-age"></a>
+## Minimum release age
 
-## 最低发布时长
-
-mise 为 `node@24` 或 `latest` 等请求选择版本时，会跳过发布距今短于设定时长的版本。默认时长为 24 小时。延迟可为社区发现遭入侵的版本留出时间，但并不能因此保证较早发布的版本可信。
+mise skips versions published more recently than a cutoff when it picks a
+version for a request such as `node@24` or `latest`. The default cutoff is 24
+hours. The delay gives the community time to notice a compromised release; it
+does not make an older release trustworthy.
 
 ```toml
 [settings]
@@ -240,7 +326,10 @@ minimum_release_age = "1d" # security scanner updates are time-sensitive
 
 `mise install`、`mise use`、`mise upgrade` 和 `mise lock` 等命令的 `--minimum-release-age` 标志会覆盖前两者。优先级依次为：命令行标志、工具选项、设置或内置默认值。
 
-若要让某些工具不受设置值和默认值限制，请将它们列入 [`minimum_release_age_excludes`](/configuration/settings.html#minimum_release_age_excludes)：
+若要在某个较新版本达到时长限制前单独安装它，可对该工具将时长设为 `0s`，例如运行 `mise upgrade --minimum-release-age 0s gh`。此标志只对当前命令生效。之后运行 `mise upgrade` 时，即使解析到较旧版本，也不会将以此方式安装的版本降级。
+
+To exempt tools from the setting and the default, list them in
+[`minimum_release_age_excludes`](/configuration/settings.html#minimum_release_age_excludes):
 
 ```toml
 [settings]

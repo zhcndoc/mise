@@ -53,27 +53,29 @@ mise bootstrap packages apply
 
 | 管理器                                                      | 适用系统                                          | 版本固定                                              | `state = "absent"` | 导入、清理                              |
 | ----------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- | ------------------ | ----------------------------------------- |
-| [`apk`](/bootstrap/packages/apk.html)                       | Alpine Linux                                      | 支持                                                | 不支持             | 不支持                                  |
-| [`apt`](/bootstrap/packages/apt.html)                       | Debian、Ubuntu 及其衍生版                         | 支持                                                | 不支持             | 不支持                                  |
-| [`aur`](/bootstrap/packages/aur.html)                       | 使用 `yay` 或 `paru` 的 Arch 系 Linux             | 不支持                                              | 不支持             | 不支持                                  |
-| [`brew`](/bootstrap/packages/brew.html)                     | Apple Silicon 上的 macOS、x86_64 和 arm64 Linux   | 不支持；使用带版本号的 formula，例如 `postgresql@17` | 不支持             | 支持导入和清理                          |
-| [`brew-cask`](/bootstrap/packages/brew-cask.html)           | macOS；Linux 上的字体 cask                        | 不支持                                              | 不支持             | 清理由 mise 安装的 cask                 |
-| [`dnf`](/bootstrap/packages/dnf.html)                       | Fedora、RHEL 及其衍生版                           | 支持                                                | 不支持             | 不支持                                  |
-| [`flatpak`](/bootstrap/packages/flatpak.html)               | 使用 `flatpak` 的 Linux；系统级安装                | 不支持                                              | 不支持             | 不支持                                  |
-| [`flatpak-user`](/bootstrap/packages/flatpak.html)          | 使用 `flatpak` 的 Linux；用户级安装                | 不支持                                              | 不支持             | 不支持                                  |
-| [`macos-app`](/bootstrap/packages/macos-app.html)           | macOS                                             | 必须指定                                            | 不支持             | 不支持                                  |
-| [`mas`](/bootstrap/packages/mas.html)                       | 通过 mise `[tools]` 安装或位于 `PATH` 的 macOS `mas` | 不支持                                            | 不支持             | 不支持                                  |
-| [`nix`](/bootstrap/packages/nix.html)                       | `PATH` 中有 `nix` 的 Linux 和 macOS                | 不支持；改为固定 flake 源                           | 不支持             | 不支持；可导出到 NixOS                  |
-| [`pacman`](/bootstrap/packages/pacman.html)                 | Arch 系 Linux                                     | 不支持                                              | 支持               | 不支持                                  |
-| [`scoop`](/bootstrap/packages/scoop.html)                   | 安装了 Scoop 的 Windows                           | 支持；`upgrade` 会跳过已固定版本的条目              | 支持               | 不支持                                  |
-| [`snap`](/bootstrap/packages/snap.html)                     | 使用 `snap` 的 Linux                              | 不支持；改为指定 `channel`                          | 支持               | 不支持                                  |
-| [`winget`](/bootstrap/packages/winget.html)                 | 使用 WinGet 的 Windows                            | 支持                                                | 不支持             | 不支持                                  |
-| [`zypper`](/bootstrap/packages/zypper.html)                 | openSUSE 和 SUSE Linux Enterprise                | 支持                                                | 支持               | 不支持                                  |
-| [软件包管理器插件](/bootstrap/packages/plugins.html)       | 由各插件决定                                      | 由各插件决定                                        | 不支持             | 插件支持卸载时可清理                    |
+| [`apk`](/bootstrap/packages/apk.html)                       | Alpine Linux                                      | Yes                                                 | No                 | No                                        |
+| [`apt`](/bootstrap/packages/apt.html)                       | Debian, Ubuntu, and derivatives                   | Yes                                                 | No                 | No                                        |
+| [`aur`](/bootstrap/packages/aur.html)                       | Arch-based Linux with `yay` or `paru`             | No                                                  | No                 | No                                        |
+| [`brew`](/bootstrap/packages/brew.html)                     | macOS on Apple Silicon, Linux x86_64 and arm64    | No; use a versioned formula such as `postgresql@17` | No                 | Import and prune                          |
+| [`brew-cask`](/bootstrap/packages/brew-cask.html)           | macOS; font casks on Linux                        | No                                                  | No                 | Prune casks mise installed                |
+| [`choco`](/bootstrap/packages/choco.html)                   | Windows（需安装 Chocolatey；请在提升权限的终端中运行） | 是                                                   | 否                   | 否                                         |
+| [`dnf`](/bootstrap/packages/dnf.html)                       | Fedora, RHEL, and derivatives                     | Yes                                                 | No                 | No                                        |
+| [`flatpak`](/bootstrap/packages/flatpak.html)               | Linux with `flatpak`; system-wide installation    | No                                                  | No                 | No                                        |
+| [`flatpak-user`](/bootstrap/packages/flatpak.html)          | Linux with `flatpak`; per-user installation       | No                                                  | No                 | No                                        |
+| [`macos-app`](/bootstrap/packages/macos-app.html)           | macOS                                             | Required                                            | No                 | No                                        |
+| [`mas`](/bootstrap/packages/mas.html)                       | macOS with `mas` from mise `[tools]` or on `PATH` | No                                                  | No                 | No                                        |
+| [`nix`](/bootstrap/packages/nix.html)                       | Linux and macOS with `nix` on `PATH`              | No; pin the flake source instead                    | No                 | No; can export to NixOS                   |
+| [`pacman`](/bootstrap/packages/pacman.html)                 | Arch-based Linux                                  | No                                                  | Yes                | No                                        |
+| [`scoop`](/bootstrap/packages/scoop.html)                   | Windows with Scoop                                | Yes; `upgrade` skips pinned entries                 | Yes                | No                                        |
+| [`snap`](/bootstrap/packages/snap.html)                     | Linux with `snap`                                 | No; set a `channel` instead                         | Yes                | No                                        |
+| [`winget`](/bootstrap/packages/winget.html)                 | Windows with WinGet                               | Yes                                                 | No                 | No                                        |
+| [`zypper`](/bootstrap/packages/zypper.html)                 | openSUSE and SUSE Linux Enterprise                | Yes                                                 | Yes                | No                                        |
+| [Package manager plugins](/bootstrap/packages/plugins.html) | Set by each plugin                                | Set by each plugin                                  | No                 | Prune, when the plugin supports uninstall |
 
-## 声明软件包
+## Declare packages
 
-每个键的格式为 `"manager:package"`。值可以是版本字符串，也可以是选项表：
+Each key is `"manager:package"`. The value is a version string or a table of
+options:
 
 ```toml
 [bootstrap.packages]
@@ -203,8 +205,10 @@ mise bootstrap packages apply apt:curl
 
 `--dry-run` 只打印命令而不执行。`--manager` 将运行范围限制为单个管理器；如果该管理器不可用，命令会失败。某个管理器安装或移除软件包失败时，其他管理器仍会继续运行；全部执行完后，apply 会以非零状态退出，并为每个失败的管理器打印一行信息。在交互式终端中，mise 会在安装或移除前询问；`--yes` 会跳过确认，但不会提供 sudo 密码。
 
-`--update` 会先刷新管理器的软件包元数据，例如运行 `apt-get update`、`apk add --update-cache`、`dnf install --refresh`、`pacman -Sy`、`zypper refresh`、`scoop update` 或 `winget source update`。
-`brew`、`brew-cask`、`macos-app`、`flatpak`、`mas` 和 `snap` 会忽略此选项。
+`--update` refreshes the manager's package metadata first, for example with
+`apt-get update`, `apk add --update-cache`, `dnf install --refresh`,
+`pacman -Sy`, `zypper refresh`, `scoop update`, or `winget source update`.
+`brew`, `brew-cask`, `choco`, `macos-app`, `flatpak`, `mas`, and `snap` ignore it.
 
 直接在命令行中指定的软件包（例如 `apt:curl`）会被安装，但不会记录到配置文件中；如果管理器不可用，则会报错。
 
@@ -275,17 +279,23 @@ mise bootstrap packages prune --manager brew --dry-run
 
 apk、apt、dnf、pacman、snap 和 zypper 需要 root 权限才能更改软件包。mise 未以 root 身份运行时，会先记录命令，再通过 `sudo` 执行。在交互式终端中，sudo 可以提示你输入密码。没有终端时，mise 会检查是否配置了免密码 sudo；如果没有，则报错并打印需要你手动运行的命令。如果没有安装 `sudo`，mise 会依次尝试 `run0`（systemd 256+）和 `doas`；如果这些工具也都未安装，则会提示你以 root 身份运行命令。设置
 [`system_packages.elevate_with`](/configuration/settings.html#system_packages.elevate_with)
-以固定使用某个提权工具，例如 `run0`。
+可固定使用的提权命令（例如 `run0`），也可设为空字符串，以当前用户身份运行命令而不进行提权，适用于 Termux 等环境。
 
 将 [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) 设为 `false` 可禁止提权。需要 root 权限的命令会因此失败，并改为打印命令供你手动执行。
 
 其他管理器的权限处理方式有所不同：
 
-- AUR 辅助工具会以当前用户身份构建，并自行调用 sudo 安装结果，因此 `aur` 需要相同的 sudo 权限，且拒绝以 root 身份运行。
-- `flatpak` 系统级安装通过 Flatpak 自带的 polkit 提示进行授权，而不是使用 sudo。`flatpak-user` 无需特殊权限。
-- Homebrew 前缀尚不存在时，安装 formula 需要 sudo 来创建前缀并将其所有权交给当前用户（见 [brew](/bootstrap/packages/brew.html#the-prefix)）。安装 cask 时也可能需要 sudo，例如安装 pkg 安装包或执行某些安装步骤（见 [brew-cask](/bootstrap/packages/brew-cask.html#supported-artifacts)）。
-- `nix`、`mas`、`scoop` 和 `winget` 从不使用 sudo。Windows 安装程序仍可能显示自己的 UAC 提示。
-- 软件包插件从不使用 sudo，也不能自行提权。
+- AUR helpers build as your user and call sudo themselves to install the
+  result, so `aur` needs the same sudo access and refuses to run as root.
+- `flatpak` system installs are authorized by Flatpak's own polkit prompt, not
+  sudo. `flatpak-user` needs no privileges.
+- Homebrew formulae need sudo when the prefix does not exist yet, to create it
+  and give it to your user
+  ([brew](/bootstrap/packages/brew.html#the-prefix)). Casks may need it for
+  pkg installers and some install steps
+  ([brew-cask](/bootstrap/packages/brew-cask.html#supported-artifacts)).
+- `nix`、`mas`、`scoop`、`winget` 和 `choco` 不会使用 sudo。Windows 安装程序仍可能自行显示 UAC 提示，而 `choco` 需要在提升权限的终端中运行。
+- Package plugins never use sudo and must not elevate themselves.
 
 ## 在 CI 中使用 {#ci-usage}
 

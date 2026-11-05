@@ -53,6 +53,7 @@ pub(crate) mod task_file_providers;
 pub mod task_helpers;
 pub mod task_list;
 mod task_load_context;
+pub mod task_lock;
 pub mod task_output;
 pub mod task_output_handler;
 pub mod task_results_display;
@@ -124,8 +125,8 @@ use task_sources::TaskOutputs;
 pub use task_sources::{RawOutputTemplates, TaskOutputsExt};
 
 pub use mise_config::task::{
-    RunEntry, Silent, TaskDaemons, TaskDecl, TaskRustCacheConfig, TaskToolValue, TaskToolValueMap,
-    TaskWatchOptions,
+    RunEntry, Silent, TaskDaemons, TaskDecl, TaskLock, TaskRustCacheConfig, TaskToolValue,
+    TaskToolValueMap, TaskWatchOptions,
 };
 
 /// Turning a task's tool declaration into a request, and rendering its templates, needs mise's
@@ -404,6 +405,8 @@ pub struct Task {
     pub tools: IndexMap<String, TaskToolValue>,
     pub usage: String,
     pub timeout: Option<String>,
+    /// The resources this task holds while its commands run; see `task_lock`.
+    pub lock: Option<TaskLock>,
     /// A shell command checked before the task runs; exiting 0 skips the task.
     pub skip_if: Option<String>,
 
@@ -411,6 +414,9 @@ pub struct Task {
     pub run: Vec<RunEntry>,
 
     pub run_windows: Vec<RunEntry>,
+    /// `run_windows` was written in config, even as an empty list, which skips the task's `run`
+    /// on Windows
+    pub run_windows_declared: bool,
 
     // command type
     // pub command: Option<String>,
@@ -421,6 +427,14 @@ pub struct Task {
 
     // file type
     pub file: Option<PathBuf>,
+    /// `file` is the path of a script found in a task directory, not a `file = "..."` string
+    /// from TOML.
+    ///
+    /// Only the latter is a template. A discovered path is used as it is on disk: a file name
+    /// that happens to contain `{{ ... }}` is still just a file name, and rendering it would
+    /// run `exec()` from a task directory that loaded without trust on the strength of its
+    /// template-free contents.
+    pub(crate) file_from_discovery: bool,
 
     /// This task was loaded from a TOML file in `task_config.includes`.
     ///
@@ -702,9 +716,10 @@ fn parse_mise_header_toml(body: &str) -> Result<Vec<toml::Value>> {
 const FILE_TASK_BODY_KEYS: &[&str] = &["run", "run_windows", "file", "usage"];
 
 /// Header keys whose value guards how a task runs. A bad one fails the task instead of being
-/// skipped, so a typo cannot drop a confirmation prompt or a sandbox restriction.
+/// skipped, so a typo cannot drop a confirmation prompt, a sandbox restriction or a lock.
 const FILE_TASK_GUARD_KEYS: &[&str] = &[
     "confirm",
+    "lock",
     "deny_all",
     "deny_read",
     "deny_write",
@@ -846,16 +861,25 @@ pub(crate) fn header_has_decoded_template(body: &str) -> bool {
 
 #[cfg(test)]
 fn parse_task_script_usage(file: &Path) -> usage::Result<usage::Spec> {
-    parse_task_script_usage_with_env(file, None)
+    parse_task_script_usage_with_env(file, None, "")
 }
 
+/// `preamble` is the task's `usage` field, which a file task only has from a template it
+/// extends: it comes first, ahead of the script's own `#USAGE` lines.
 fn parse_task_script_usage_with_env(
     file: &Path,
     env: Option<&EnvMap>,
+    preamble: &str,
 ) -> usage::Result<usage::Spec> {
-    let script = std::fs::read_to_string(file)?;
+    // `file` comes from config that may not be trusted yet, so it is read like
+    // a config file: only a regular file, and only up to the size limit.
+    let script = crate::file::read_config_to_string(file)
+        .map_err(|err| std::io::Error::other(format!("{err:#}")))?;
     // Same reason as the `#MISE` header scan: `#USAGE` on line 1 is invisible behind a mark.
-    let raw = extract_usage_from_comments(crate::file::strip_utf8_bom(&script));
+    let mut raw = extract_usage_from_comments(crate::file::strip_utf8_bom(&script));
+    if !preamble.trim().is_empty() {
+        raw = format!("{}\n{raw}", preamble.trim_end());
+    }
     if raw.trim().is_empty() {
         return usage::Spec::parse_script(file);
     }
@@ -886,8 +910,12 @@ pub(crate) fn parse_task_usage_field(task_name: &str, spec: &str) -> Result<usag
 ///
 /// A script that cannot be read still warns and yields an empty spec: that is not a spec
 /// problem, and `mise tasks validate` reports a missing task file on its own.
-fn parse_task_script_usage_checked(file: &Path, env: Option<&EnvMap>) -> Result<usage::Spec> {
-    match parse_task_script_usage_with_env(file, env) {
+fn parse_task_script_usage_checked(
+    file: &Path,
+    env: Option<&EnvMap>,
+    preamble: &str,
+) -> Result<usage::Spec> {
+    match parse_task_script_usage_with_env(file, env, preamble) {
         Ok(spec) => Ok(spec),
         // Reading the script is the first thing this does, and a script that was discovered
         // and has since been deleted or made unreadable fails there. Calling that an invalid
@@ -911,8 +939,12 @@ fn parse_task_script_usage_checked(file: &Path, env: Option<&EnvMap>) -> Result<
 ///
 /// A file task's spec failing must not take the whole task load down, the same way one
 /// unrecognised `#MISE` key does not: every task in the project is parsed in one loop.
-fn parse_task_script_usage_or_warn(file: &Path, env: Option<&EnvMap>) -> usage::Spec {
-    parse_task_script_usage_checked(file, env).unwrap_or_else(|err| {
+fn parse_task_script_usage_or_warn(
+    file: &Path,
+    env: Option<&EnvMap>,
+    preamble: &str,
+) -> usage::Spec {
+    parse_task_script_usage_checked(file, env, preamble).unwrap_or_else(|err| {
         warn!("{err}");
         usage::Spec::default()
     })
@@ -1157,10 +1189,55 @@ impl Task {
         }
     }
 
+    /// Whether `name` names this task: its own name, or that name without a script extension,
+    /// which is how `mise tasks` lists a `build.sh` script.
+    pub fn answers_to(&self, name: &str) -> bool {
+        self.name == name || strip_task_name_extension(&self.name) == name
+    }
+
+    /// Whether the task is a script found in a task directory, rather than a TOML task or one
+    /// inferred from a manifest such as `package.json`.
+    pub fn is_file_task(&self) -> bool {
+        self.file_from_discovery
+    }
+
     pub fn config_sources(&self) -> Vec<&Path> {
         once(self.config_source.as_path())
             .chain(self.additional_config_sources.iter().map(PathBuf::as_path))
             .collect()
+    }
+
+    /// Whether the user vouches for every file this task is defined in, so commands its
+    /// definition names may run before `mise run`, as shell completion runs a usage spec's
+    /// `complete run=` and `mount`. A `[tasks]`-only config and a template-free task file load
+    /// without trust because they are inert until run; this is what tells the two apart.
+    ///
+    /// Global and system config and the global task directories are the user's own. A
+    /// project's files count once the project is trusted: the file itself, its config root, or
+    /// one of the root's own config files, which is what lets the root's task includes load
+    /// without a check of their own. Safe mode keeps project config inert, trusted or not.
+    /// The `global` field is not consulted because a task definition can set it.
+    pub fn is_trusted(&self, config: &Config) -> bool {
+        use crate::config::config_file::{is_path_trusted, is_trusted};
+        let safe_mode = config::Settings::safe_mode();
+        let trusted = |path: &Path| {
+            config::is_global_config(path)
+                || config::is_global_task_include_path(path)
+                || (!safe_mode && is_path_trusted(path))
+        };
+        let root_trusted = || {
+            !safe_mode
+                && self.config_root.as_deref().is_some_and(|root| {
+                    is_trusted(root)
+                        || config.config_files.values().chain(&self.cf).any(|cf| {
+                            cf.config_root() == root
+                                && !config::is_global_config(cf.get_path())
+                                && is_path_trusted(cf.get_path())
+                        })
+                })
+        };
+        (trusted(&self.config_source) || root_trusted())
+            && self.additional_config_sources.iter().all(|p| trusted(p))
     }
 
     pub fn tool_args(&self) -> Result<Vec<ToolArg>> {
@@ -1201,7 +1278,7 @@ impl Task {
         Ok(task)
     }
 
-    pub(crate) fn from_path_unrendered_with_cf(
+    pub fn from_path_unrendered_with_cf(
         path: &Path,
         prefix: &Path,
         config_root: &Path,
@@ -1212,7 +1289,7 @@ impl Task {
         // Stripped before scanning: the header patterns anchor at the start of a line, so a
         // byte-order mark would hide a `#MISE` written on line 1 -- which is where a task with
         // an executable extension rather than a shebang puts it.
-        let body = file::read_to_string(path)?;
+        let body = file::read_config_to_string(path)?;
         let info = parse_mise_header_toml(file::strip_utf8_bom(&body))?
             .into_iter()
             .filter_map(|toml| toml.as_table().cloned())
@@ -1234,6 +1311,7 @@ impl Task {
         task.hide = hidden;
         task.record_late_secret_env(path)?;
         task.file = Some(path.to_path_buf());
+        task.file_from_discovery = true;
         Ok(task)
     }
 
@@ -1544,7 +1622,7 @@ impl Task {
     }
 
     pub fn run(&self) -> &Vec<RunEntry> {
-        if cfg!(windows) && !self.run_windows.is_empty() {
+        if cfg!(windows) && (self.run_windows_declared || !self.run_windows.is_empty()) {
             &self.run_windows
         } else {
             &self.run
@@ -1937,8 +2015,14 @@ impl Task {
         }
         let (mut spec, scripts) = if let Some(file) = self.file_path(config).await? {
             let include_env = self.usage_include_env(config, &file);
+            let inherited = TaskScriptParser::new(match cwd.clone() {
+                Some(cwd) => Some(cwd),
+                None => self.dir(config).await?,
+            })
+            .render_inherited_usage(config, self, false, Some(&env))
+            .await?;
             (
-                parse_task_script_usage_or_warn(&file, Some(&include_env)),
+                parse_task_script_usage_or_warn(&file, Some(&include_env), &inherited),
                 vec![],
             )
         } else {
@@ -2023,10 +2107,13 @@ impl Task {
         let dir = self.dir(config).await.unwrap_or(None);
         let mut spec = if let Some(file) = self.file_path(config).await? {
             let env = self.usage_include_env(config, &file);
+            let inherited = TaskScriptParser::new(dir.clone())
+                .render_inherited_usage(config, self, false, None)
+                .await?;
             if strict {
-                parse_task_script_usage_checked(&file, Some(&env))?
+                parse_task_script_usage_checked(&file, Some(&env), &inherited)?
             } else {
-                parse_task_script_usage_or_warn(&file, Some(&env))
+                parse_task_script_usage_or_warn(&file, Some(&env), &inherited)
             }
         } else {
             let scripts_only = self.run_script_strings();
@@ -2048,7 +2135,10 @@ impl Task {
     ) -> Result<usage::Spec> {
         let mut spec = if let Some(file) = self.file_path_raw() {
             let env = self.usage_include_env(config, &file);
-            parse_task_script_usage_or_warn(&file, Some(&env))
+            let inherited = TaskScriptParser::new(self.config_root.clone())
+                .render_inherited_usage(config, self, true, None)
+                .await?;
+            parse_task_script_usage_or_warn(&file, Some(&env), &inherited)
         } else {
             let scripts_only = self.run_script_strings();
             TaskScriptParser::new(self.config_root.clone())
@@ -2186,7 +2276,7 @@ impl Task {
     pub(crate) async fn file_path(&self, config: &Arc<Config>) -> Result<Option<PathBuf>> {
         if let Some(file) = &self.file {
             let file_str = file.to_string_lossy().to_string();
-            let rendered = if contains_template_syntax(&file_str) {
+            let rendered = if !self.file_from_discovery && contains_template_syntax(&file_str) {
                 let config_root = self.config_root.clone().unwrap_or_default();
                 let mut tera = get_tera(Some(&config_root));
                 let tera_ctx = self.tera_ctx(config).await?;
@@ -2233,7 +2323,10 @@ impl Task {
         let mut tera_ctx = config.tera_ctx.clone();
         tera_ctx.insert("env", &EnvMap::new());
         tera_ctx.insert("vars", &IndexMap::<String, String>::new());
-        tera_ctx.insert("config_root", &self.config_root);
+        tera_ctx.insert(
+            "config_root",
+            &self.config_root.as_ref().map(|p| p.to_string_lossy()),
+        );
         tera_ctx
     }
 
@@ -2260,7 +2353,10 @@ impl Task {
         // Re-insert with task-level vars merged in so callers see the final combined map,
         // with task-level values taking precedence over config-level ones.
         tera_ctx.insert("vars", &vars);
-        tera_ctx.insert("config_root", &self.config_root);
+        tera_ctx.insert(
+            "config_root",
+            &self.config_root.as_ref().map(|p| p.to_string_lossy()),
+        );
         Ok(tera_ctx)
     }
 
@@ -2358,7 +2454,7 @@ impl Task {
             .collect();
         let mut env: EnvMap = env::PRISTINE_ENV.clone();
         let mut resolve_ctx = tera_ctx.clone();
-        resolve_ctx.insert("config_root", &task_project_root);
+        resolve_ctx.insert("config_root", &task_project_root.to_string_lossy());
         let results = EnvResults::resolve(
             config,
             resolve_ctx,
@@ -2527,6 +2623,10 @@ impl Task {
             }
         }
 
+        if other.run_windows_declared {
+            self.run_windows = other.run_windows;
+            self.run_windows_declared = true;
+        }
         if !other.description.is_empty() {
             self.description = other.description;
         }
@@ -2647,6 +2747,9 @@ impl Task {
         }
         if other.timeout.is_some() {
             self.timeout = other.timeout;
+        }
+        if other.lock.is_some() {
+            self.lock = other.lock;
         }
         if other.skip_if.is_some() {
             self.skip_if = other.skip_if;
@@ -2812,6 +2915,11 @@ impl Task {
             *paths = rendered;
             Ok(())
         };
+        // An allow list implies its deny, also when every entry renders to
+        // nothing: an unset optional path allows no path, it does not lift
+        // the restriction.
+        self.deny_read |= !self.allow_read.is_empty();
+        self.deny_write |= !self.allow_write.is_empty();
         // Tilde expansion is applied later when task and CLI sandbox paths are normalized.
         render_sandbox_paths(&mut self.allow_read)?;
         render_sandbox_paths(&mut self.allow_write)?;
@@ -2953,7 +3061,7 @@ impl Task {
         let (mut env, mut env_remove, mut mise_keys) =
             ts.full_env_with_removals_and_keys(config).await?;
         if let Some(root) = &config.project_root {
-            tera_ctx.insert("config_root", &root);
+            tera_ctx.insert("config_root", &root.to_string_lossy());
         }
 
         // Convert task env directives to (EnvDirective, PathBuf) pairs
@@ -3432,7 +3540,10 @@ impl Task {
             vars: decl.vars,
             dir: decl.dir,
             hide: decl.hide.unwrap_or(false),
-            global: decl.global,
+            // Where the task was loaded from decides this, never the declaration: a
+            // project task that says `global = true` would otherwise pass for a global
+            // one, which safe mode and other checks trust.
+            global: self.global,
             raw: decl.raw.unwrap_or(false),
             raw_args: decl.raw_args.unwrap_or(false),
             interactive: decl.interactive.unwrap_or(false),
@@ -3448,9 +3559,11 @@ impl Task {
             tools: decl.tools,
             usage: decl.usage,
             timeout: decl.timeout,
+            lock: decl.lock,
             skip_if: decl.skip_if,
             run: decl.run,
-            run_windows: decl.run_windows,
+            run_windows_declared: decl.run_windows.is_some(),
+            run_windows: decl.run_windows.unwrap_or_default(),
             args: decl.args,
             file: decl.file,
             deny_all: decl.deny_all,
@@ -3516,8 +3629,10 @@ impl Default for Task {
             output: None,
             run: vec![],
             run_windows: vec![],
+            run_windows_declared: false,
             args: vec![],
             file: None,
+            file_from_discovery: false,
             is_toml_include: false,
             name_from_file: false,
             config_precedence: usize::MAX,
@@ -3525,6 +3640,7 @@ impl Default for Task {
             tools: Default::default(),
             usage: "".to_string(),
             timeout: None,
+            lock: None,
             skip_if: None,
             remote_file_source: None,
             deny_all: false,
@@ -4452,6 +4568,23 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_toml_overlay_keeps_empty_run_windows() {
+        let mut base = Task {
+            run: vec![RunEntry::Script("echo unix".to_string())],
+            ..Default::default()
+        };
+        let overlay = Task {
+            run_windows_declared: true,
+            ..Default::default()
+        };
+
+        base.merge_toml_overlay(overlay);
+
+        assert!(base.run_windows_declared);
+        assert!(base.run_windows.is_empty());
+    }
+
+    #[test]
     fn test_merge_toml_overlay_preserves_raw_paths() {
         let base_sources = vec!["base.txt".to_string(), "{{usage.name}}.txt".to_string()];
         let base_outputs = vec!["{{usage.name}}.out".to_string()];
@@ -4774,6 +4907,32 @@ exec shapeme "$@"
         }
     }
 
+    /// A task `file` from config may name a device or a pipe, which would be
+    /// read without end, so only regular files are read for a usage spec.
+    #[cfg(unix)]
+    #[test]
+    fn test_parse_task_script_usage_rejects_a_device() {
+        let err = super::parse_task_script_usage(Path::new("/dev/null")).unwrap_err();
+        assert!(err.to_string().contains("not a regular file"), "{err}");
+    }
+
+    /// A task `file` from untrusted config is read for its usage spec by
+    /// `mise tasks ls` and completion, so it stops at the config size limit.
+    #[test]
+    fn test_parse_task_script_usage_refuses_an_oversized_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "#!/bin/sh\n#USAGE flag \"--verbose\"\n").unwrap();
+        // Sparse padding past the limit after a valid header.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(tmp.path())
+            .unwrap()
+            .set_len(crate::file::CONFIG_FILE_LIMIT + 1)
+            .unwrap();
+        let err = super::parse_task_script_usage(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("larger than 16 MiB"), "{err}");
+    }
+
     #[test]
     fn test_parse_task_script_usage_resolves_relative_includes() {
         let dir = tempfile::tempdir().unwrap();
@@ -5055,6 +5214,23 @@ exec proxy "$@"
 
         assert_eq!(task.allow_read, vec![crate::env::HOME.join("read")]);
         assert_eq!(task.allow_write, vec![crate::env::HOME.join("write")]);
+    }
+
+    /// A list whose only entry renders to nothing allows no path; it must not
+    /// turn the write restriction off.
+    #[tokio::test]
+    async fn test_render_sandbox_allow_paths_keeps_deny_when_all_render_empty() {
+        let config = Config::get().await.unwrap();
+        let mut task = Task {
+            allow_write: vec![Path::new("{{ \"\" }}").into()],
+            ..Default::default()
+        };
+
+        task.render(&config, Path::new(".")).await.unwrap();
+
+        assert!(task.allow_write.is_empty());
+        assert!(task.deny_write);
+        assert!(!task.deny_read);
     }
 
     #[tokio::test]
@@ -5374,6 +5550,40 @@ echo "hello world"
         // not the whole header and not the task.
         assert_eq!(task.description, "still parsed");
         assert!(task.run_windows.is_empty());
+    }
+
+    #[test]
+    fn test_empty_run_windows_is_declared() {
+        let decl: mise_config::task::TaskDecl =
+            toml::from_str("run = 'echo hi'\nrun_windows = []").unwrap();
+        let task = Task::from_decl(decl);
+        assert!(task.run_windows.is_empty());
+        assert!(task.run_windows_declared);
+        #[cfg(windows)]
+        assert!(task.run().is_empty());
+        #[cfg(not(windows))]
+        assert_eq!(task.run().len(), 1);
+
+        let decl: mise_config::task::TaskDecl = toml::from_str("run = 'echo hi'").unwrap();
+        assert!(!Task::from_decl(decl).run_windows_declared);
+    }
+
+    /// A project task cannot pass for a global one by declaring it: safe mode
+    /// fetches only global tasks' remote files.
+    #[test]
+    fn test_declared_global_is_ignored() {
+        let decl: mise_config::task::TaskDecl =
+            toml::from_str("file = 'https://example.com/x.sh'\nglobal = true").unwrap();
+        assert!(!Task::from_decl(decl).global);
+
+        // Loading from a global config still marks it, after the declaration.
+        let decl: mise_config::task::TaskDecl = toml::from_str("run = 'echo hi'").unwrap();
+        let mut task = Task {
+            global: true,
+            ..Default::default()
+        };
+        task.apply_decl(decl);
+        assert!(task.global);
     }
 
     #[test]
@@ -6107,6 +6317,22 @@ echo "hello world"
         assert!(result.is_ok());
     }
 
+    /// A script found in a task directory loads without trust when its contents are
+    /// template-free, so its name must not be rendered: a name holding `{{ exec(...) }}` would
+    /// otherwise run the command whenever the path is resolved, as completing `mise run` does.
+    #[tokio::test]
+    async fn test_file_path_of_a_discovered_script_is_not_a_template() {
+        let config = Config::get().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join("mise-tasks");
+        std::fs::create_dir(&tasks_dir).unwrap();
+        let path = tasks_dir.join("{{ exec(command='echo rendered') }}");
+        std::fs::write(&path, "#!/bin/sh\necho hi\n").unwrap();
+
+        let task = Task::from_path_unrendered_with_cf(&path, &tasks_dir, dir.path(), None).unwrap();
+        assert_eq!(task.file_path(&config).await.unwrap(), Some(path));
+    }
+
     #[test]
     fn toml_overlay_replaces_a_file_task_daemon_requirement() {
         use super::TaskDaemons;
@@ -6432,6 +6658,7 @@ echo "hello world"
 #MISE skip_if="test -f done.txt"
 #MISE vars={GREETING="hi"}
 #MISE timeout="5m"
+#MISE lock=["sim", "test-db"]
 #MISE global=true
 #MISE args=["--verbose"]
 #MISE deny_all=true
@@ -6509,7 +6736,12 @@ echo "test"
 
         assert_eq!(task.vars.0.len(), 1);
         assert_eq!(task.timeout, Some("5m".to_string()));
-        assert!(task.global);
+        assert_eq!(
+            task.lock,
+            Some(super::TaskLock::Names(vec!["sim".into(), "test-db".into()]))
+        );
+        // Where a task was loaded from makes it global, never its own header.
+        assert!(!task.global);
         assert_eq!(task.args, ["--verbose"]);
         assert!(
             task.deny_all && task.deny_read && task.deny_write && task.deny_net && task.deny_env
@@ -6618,7 +6850,11 @@ echo "test"
         let tasks_dir = temp_dir.path().join("tasks");
         fs::create_dir(&tasks_dir).unwrap();
         let config = Config::get().await.unwrap();
-        for (name, header) in [("confirm", "confirm=1"), ("deny-net", "deny_net=\"yes\"")] {
+        for (name, header) in [
+            ("confirm", "confirm=1"),
+            ("deny-net", "deny_net=\"yes\""),
+            ("lock", "lock=1"),
+        ] {
             let task_file = tasks_dir.join(name);
             fs::write(
                 &task_file,

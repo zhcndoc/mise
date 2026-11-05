@@ -10,12 +10,12 @@ use serde::{Deserialize, Deserializer, de::Error as _};
 
 use super::shapes::{
     RustCacheDecl, SilentDecl, TaskAlias, TaskCacheDecl, TaskConfirmDecl, TaskDaemonsDecl,
-    TaskDepends, TaskDependsPost, TaskOutputDecl, TaskOutputsDecl, TaskRunDecl, TaskSecretsDecl,
-    TaskSourcesDecl, TaskWaitFor,
+    TaskDepends, TaskDependsPost, TaskLockDecl, TaskOutputDecl, TaskOutputsDecl, TaskRunDecl,
+    TaskSecretsDecl, TaskSourcesDecl, TaskWaitFor,
 };
 use super::{
-    G7_TEXT, RunEntry, Silent, TaskCacheConfig, TaskConfirm, TaskDaemons, TaskDep, TaskOutput,
-    TaskOutputs, TaskRustCacheConfig, TaskSecrets, TaskToolValue, TaskWatchOptions,
+    G7_TEXT, RunEntry, Silent, TaskCacheConfig, TaskConfirm, TaskDaemons, TaskDep, TaskLock,
+    TaskOutput, TaskOutputs, TaskRustCacheConfig, TaskSecrets, TaskToolValue, TaskWatchOptions,
 };
 use crate::env::EnvList;
 
@@ -110,9 +110,9 @@ pub struct TaskDecl {
     #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
     #[schemars(with = "TaskRunDecl")]
     pub run: Vec<RunEntry>,
-    #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
+    #[serde(default, deserialize_with = "crate::de::deserialize_opt_arr")]
     #[schemars(with = "TaskRunDecl")]
-    pub run_windows: Vec<RunEntry>,
+    pub run_windows: Option<Vec<RunEntry>>,
     /// Execute an external script
     #[serde(default)]
     pub file: Option<PathBuf>,
@@ -131,6 +131,9 @@ pub struct TaskDecl {
     /// timeout for this task
     #[serde(default)]
     pub timeout: Option<String>,
+    #[serde(default)]
+    #[schemars(with = "Option<TaskLockDecl>")]
+    pub lock: Option<TaskLock>,
     /// shell command checked before the task runs; if it exits 0, the task is skipped and counts as successful
     // A shell command checked before the task runs; exiting 0 skips the task.
     #[serde(default)]
@@ -249,11 +252,13 @@ pub struct TaskTemplate {
     #[serde(default)]
     pub timeout: Option<String>,
     #[serde(default)]
+    pub lock: Option<TaskLock>,
+    #[serde(default)]
     pub skip_if: Option<String>,
     #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
     pub run: Vec<RunEntry>,
-    #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
-    pub run_windows: Vec<RunEntry>,
+    #[serde(default, deserialize_with = "crate::de::deserialize_opt_arr")]
+    pub run_windows: Option<Vec<RunEntry>>,
     #[serde(default)]
     pub file: Option<String>,
     /// Block reads, writes, network, and env vars

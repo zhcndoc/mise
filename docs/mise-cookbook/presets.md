@@ -77,7 +77,4 @@ then run `mise run test`. After cloning, teammates run `mise run sync` to instal
 the locked dependencies. Commit `mise.toml`, `pyproject.toml` and `uv.lock`, and
 add `.venv/` to `.gitignore`.
 
-In a project that already has a `mise.toml`, the task adds to it, but
-`mise tasks add` replaces a task with the same name and `mise use` replaces the
-existing `python` and `uv` versions. Run `mise tasks ls` first to check whether
-the project already defines `sync` or `test`.
+如果项目已有 `mise.toml`，该任务会添加到其中；再次运行不会产生变化。`mise use` 会替换已有的 `python` 和 `uv` 版本。如果项目已定义了不同的 `sync` 或 `test` 任务，该任务会被覆盖：`mise tasks add` 会替换同名任务。不带 `--force` 替换任务的用法已弃用；mise 将从 2027.5.0 起发出警告，并从 2028.5.0 起拒绝此用法。请先运行 `mise tasks ls --hidden`，检查项目是否已定义 `sync` 或 `test`，包括隐藏任务。

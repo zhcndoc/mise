@@ -77,13 +77,7 @@ A `DENO_INSTALL_ROOT` set in `[env]` takes precedence over the one mise sets.
 
 ## How mise installs Deno
 
-mise lists Deno versions from its
-[versions host](/configuration/settings.html#use_versions_host), or from
-`deno.com/versions.json` when `use_versions_host` is off. It downloads the
-release archive for your platform from `dl.deno.land` and runs `deno -V` to
-check it. On Linux, mise installs the glibc builds that Deno publishes.
-[`mise lock`](/cli/lock.html) records the checksum from the `.sha256sum` file
-published next to each archive.
+mise 会从[版本服务器](/configuration/settings.html#use_versions_host)读取 Deno 版本；关闭 `use_versions_host` 时则从 `deno.com/versions.json` 读取。它会从 `dl.deno.land` 下载适用于当前平台的发行归档，并运行 `deno -V` 检查。在 Linux 上，mise 会安装 Deno 发布的 glibc 构建。归档会与同目录发布的 `.sha256sum` 文件核对；[`mise lock`](/cli/lock.html) 会按平台记录该校验和。如果无法获取该文件或其中没有校验和，安装会失败；只有从未发布校验和的版本才会在警告后跳过验证并安装。
 
 An installed plugin named `deno` takes precedence over the built-in
 installer. If mise behaves differently from this page, check

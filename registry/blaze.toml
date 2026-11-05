@@ -1,0 +1,15 @@
+bins = ["blaze"]
+description = "Incremental Rust build daemon that recompiles only the functions an edit changed (formerly ra-jit)"
+os = ["linux", "macos"]
+test = { cmd = "blaze --version", expected = "blaze {{version}}" }
+version_order = "source"
+
+[[backends]]
+full = "github:indexable-inc/blaze"
+platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
+
+[backends.options]
+# blaze has no tagged release yet, only the `nightly` prerelease. The
+# `pgo-profiles` prerelease holds profile data, not a build.
+prerelease = true
+version_regex = '^(v\d+\.\d+\.\d+|nightly)$'

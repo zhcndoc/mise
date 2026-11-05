@@ -43,7 +43,27 @@ depends = ["test", "render"]
 run = "echo pre-commit"
 ```
 
-## 常用属性
+`--env local` 会将任务写入 `mise.local.toml`，使其不进入版本控制；`--global` 和 `--path` 可选择其他文件，行为与 [`mise use`](/configuration.html#target-file-for-write-operations) 相同。`--env-var KEY=VALUE`、`--tools node@24`、`--usage` 和 `--confirm` 等标志可设置其他字段：
+
+```sh
+mise tasks add --env local deploy --env-var STAGE=prod --tools node@24 --confirm "Deploy now?" -- ./deploy.sh
+```
+
+```mise-toml [mise.local.toml]
+[tasks.deploy]
+confirm = "Deploy now?"
+env = { STAGE = "prod" }
+tools = { node = "24" }
+run = "./deploy.sh"
+```
+
+[`mise tasks set`](/cli/tasks/set.html) 可以修改现有任务的部分字段，并保留文件的其他内容；[`mise tasks rm`](/cli/tasks/rm.html) 可移除任务。这三个命令都支持 `--json` 和 `--dry-run`，以便脚本在写入前检查更改。
+
+::: warning 不带 `--force` 替换任务的用法已弃用
+若要替换文件中已有同名任务，请在 `mise tasks add` 中传入 `--force`。不传该参数时，mise 仍会替换任务。mise 将从 2027.5.0 开始对此发出警告，并从 2028.5.0 起拒绝该用法。延迟弃用是因为不认识 `--force` 的旧版 mise 会拒绝此标志，因此共享给这些旧版本机器的脚本暂时无法避免警告。再次添加完全相同的任务不算替换：不会发生更改，也不会发出警告。
+:::
+
+## Common properties
 
 ### 运行命令
 

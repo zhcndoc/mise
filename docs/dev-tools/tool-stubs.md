@@ -178,7 +178,7 @@ mise generate tool-stub ./bin/node --lock
 与 `mise.toml` 一样，存根会保留其版本请求（`24`），而 `mise.lock` 会为锁文件中已有的平台（或新锁文件中的默认平台）记录解析后的版本。如果存根上方找不到项目配置，`--lock` 将失败。
 
 ```toml [mise.lock]
-lockfile_version = 3
+lockfile_version = 4
 tool-stubs = ["bin/node"]
 
 [[tools.node]]
@@ -188,9 +188,20 @@ specifiers = ["24"]
 # ...platform URLs and checksums
 ```
 
-`tool-stubs` 列出了锁文件中包含条目的存根路径，路径相对于锁文件所在目录。由于这些工具并未在配置文件中声明，`mise lock` 会通过此列表判断哪些条目应保留，并在更新其他锁定项时一并刷新。删除列表中的存根后，`mise lock` 会将其从列表移除并清理对应条目。
+`tool-stubs` lists the stubs whose entries the lockfile holds, relative to the
+lockfile. No config declares those tools, so the list is how `mise lock` knows
+to keep their entries and refresh them with the rest of the lockfile. When a
+listed stub is deleted，或引用现在通过符号链接目录指向项目之外时，`mise lock` 会从列表中移除该 stub 并清理其条目。
 
-存根根据其文件所在位置查找锁文件，而不是根据运行时的工作目录；如果存根是符号链接，则会跟随链接找到实际位置。因此，无论当前工作目录为何，`./bin/node` 和指向它的 `~/.local/bin/node` 符号链接都会使用项目的 `mise.lock`。本地配置和环境配置（`mise.local.toml`、`mise.{env}.toml`）不会参与，因此提交到仓库的存根在每台机器上都会以相同方式锁定。在锁定模式下，如果当前平台没有对应条目，存根会像任何未锁定的工具一样被拒绝。
+A stub 会设置工具选项，因此只有项目配置[受信任](/security.html#configuration-trust)时，`mise lock` 才会读取列表中的 stub。在[安全模式](/security.html#safe-mode)下，如果列表中的 stub 设置了工具选项（例如 `url` 或 `install_env`），mise 会跳过它，并保留对应条目。引用路径必须位于包含锁文件的 Git 检出目录中。
+
+A stub finds its lockfile from where the stub file lives, not from the
+directory it runs in, and a symlinked stub or one in a symlinked directory is followed to its actual location.
+`./bin/node` and a `~/.local/bin/node` symlink to it both use the project's
+`mise.lock` from any working directory. Local and environment configs
+(`mise.local.toml`, `mise.{env}.toml`) are not used, so a committed stub locks
+the same way on every machine. In locked mode, a stub without an entry for the
+current platform is rejected like any unlocked tool.
 
 ### 更新已锁定的版本 {#bumping-a-locked-version}
 

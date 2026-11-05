@@ -85,7 +85,9 @@ RUSTUP_UPDATE_ROOT = "https://mirror.example.com/rustup"
 
 `RUSTUP_DIST_SERVER` 是 rustup 下载工具链的服务器。mise 也会从 `$RUSTUP_DIST_SERVER/dist/channel-rust-nightly.toml` 读取 `nightly` 通道清单，以解析 `rust@nightly`。设置 `RUSTUP_UPDATE_ROOT` 后，mise 会从 `$RUSTUP_UPDATE_ROOT/dist/<host-triple>/rustup-init` 下载 `rustup-init`，而不是访问 `https://sh.rust.rs`。Triple 使用 mise 的构建目标；如果设置了 [`arch`](/configuration/settings.html#arch)，则使用该设置中的体系结构。
 
-## 使用 Mr Boxington 缓存 Cargo 构建 {#share-cargo-builds-with-mr-boxington}
+设置 `RUSTUP_DIST_SERVER` 后，mise 不会向 GitHub 查询 Rust 版本。镜像没有发行索引，因此 `latest` 会解析为其 `stable` 通道指向的版本。如果镜像没有提供该版本的清单，`latest` 会回退到 `stable` 通道。若镜像提供 `dist/channel-rust-1.80.0.toml`，则接受 `1.80.0` 这样的精确版本。由于无法发现更旧版本，`1.80` 这样的前缀选择器只会匹配当前 stable 版本；如果 [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 的截止时间晚于该构建，则解析会失败，而不会选择更旧的版本。
+
+## Cache Cargo builds with Mr Boxington {#share-cargo-builds-with-mr-boxington}
 
 [Mr Boxington](https://mr-boxington.jdx.dev/)（`mbx`）可在项目、工作树和 CI 之间缓存 Rust 编译，并在共享的 CPU 和内存预算内调度并行 Cargo 命令。详见其[基准测试](https://mr-boxington.jdx.dev/benchmarks)。启用 `mr_boxington` 工具选项，并将 mbx 添加为独立工具：
 
@@ -101,19 +103,42 @@ rust = { version = "latest", mr_boxington = true }
 mr-boxington = "latest"
 ```
 
-之后，无论是在 `mise exec`、任务、已激活的 Shell，还是通过 mise 的 shims 运行 Cargo，都会经由 mbx 执行，无需 `mbx setup` 或 postinstall 步骤。绕过 mise 的调用（例如 rustup 的 Cargo 代理或工具链的 `cargo` 二进制文件）不会使用 mbx，因此请让编辑器和编码代理调用 mise 的 Cargo shim 或使用 `mise exec`。仅将 `mbx` 加入 `PATH` 并不足够；当前生效的 `[tools]` 中必须包含 `mr-boxington`。
+Cargo then runs through mbx under `mise exec`, in tasks, in activated shells
+and through mise's shims, with no `mbx setup` or postinstall step. Calls that
+bypass mise, such as rustup's Cargo proxy or a toolchain's `cargo` binary, do
+not use it, so point editors and coding agents at mise's Cargo shim or
+`mise exec`. Having `mbx` on `PATH` is not enough; `mr-boxington` must be in the
+active `[tools]`.
 
-此选项会应用于配置为当前平台选择的第一个 Rust 版本。mbx 有自己的版本和锁文件条目，与 Rust 相互独立。在[安全模式](/security.html#safe-mode)中，项目配置无法启用此选项。若要关闭从其他配置继承的选择加入设置，请在项目的 Rust 条目中设置 `mr_boxington = false`。
+The option applies to the first Rust version the configuration selects for this
+platform. mbx keeps its own version and lockfile entry, independent of Rust. In
+[safe mode](/security.html#safe-mode), project config cannot turn the option
+on：只有全局 Rust 条目或 `rust[mr_boxington=true]` 参数设置该选项时才会生效；由 `[tool_alias]` 添加或从 `rust@<version>` 参数继承时则不会生效。若要关闭从其他配置继承的启用状态，请设置
+`mr_boxington = false` in the project's Rust entry.
 
-显式配置的 [`[wrappers.cargo]`](/dev-tools/shims.html#command-wrappers) 优先于此选项。若 Rust 由 mise 以外的工具管理，请直接配置该包装器。
+An explicit [`[wrappers.cargo]`](/dev-tools/shims.html#command-wrappers) takes
+precedence over the option. When Rust is managed outside mise, configure that
+wrapper directly.
 
-## mise 如何安装 Rust
+## How mise installs Rust
 
-如果尚未初始化 rustup，mise 会从 `sh.rustup.rs` 下载 `rustup-init`（Windows 上为 `win.rustup.rs`），然后按配置的方案、组件和目标运行 `rustup toolchain install`。工具链保存在 `RUSTUP_HOME` 中，而非 mise 的安装目录；mise 会在其中维护一个链接以跟踪版本。即使工具链已安装，`mise install` 仍会补齐缺少的已配置组件和目标，以及 `minimal` 或 `default` 方案所需的组件，例如 `cargo`、`rustc` 和适用于主机的 `rust-std`。`rust.default_host` 设置传给 `rustup-init` 的主机 Triple。 (详见 [rust.default_host](/lang/rust.html#rust.default_host)。)
+mise downloads `rustup-init` from `sh.rustup.rs` (`win.rustup.rs` on Windows)
+when rustup is not set up, then runs `rustup toolchain install` with the
+configured profile, components and targets. The toolchains live in
+`RUSTUP_HOME`, not in mise's installs directory; mise keeps a link there to
+track the version. When the toolchain is already installed, `mise install`
+still adds missing configured components and targets, and the components of
+its `minimal` or `default` profile, such as `cargo`, `rustc` and the host's
+`rust-std`.
+[`rust.default_host`](/lang/rust.html#rust.default_host) sets the host triple passed to
+`rustup-init`.
 
-已安装且名为 `rust` 的插件优先于内置安装器。如果 mise 的行为与本页所述不同，请检查 [`mise plugins ls`](/cli/plugins/ls.html)，并参阅[选择其他实现](/core-tools.html#selecting-another-implementation)。
+An installed plugin named `rust` takes precedence over the built-in
+installer. If mise behaves differently from this page, check
+[`mise plugins ls`](/cli/plugins/ls.html) and see
+[selecting another implementation](/core-tools.html#selecting-another-implementation).
 
-## 工具选项
+## Tool options
 
 ### `components`
 

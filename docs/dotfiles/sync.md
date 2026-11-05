@@ -57,25 +57,54 @@ mise dot status
 mise dot origin set git@gitea.example.com:you/setup.git --sync sync
 ```
 
-URL 中不能包含凭据、查询字符串或片段。请通过 SSH agent 身份验证，或为 HTTPS 配置 Git 凭据助手。
+The URL must not contain credentials, a query string, or a fragment.
+Authenticate with an SSH agent, or with a Git credential helper for HTTPS.
 
-只适用于某一台机器的文件（例如显示器布局）不应应用到其他机器上。请使用 [`machine` 变体](/dotfiles/history.html#machine-variants)跟踪这类文件，让每台机器保留自己的版本。
+Files that describe one machine, such as a monitor layout, should not be
+applied on the others. Track them with a
+[`machine` variant](/dotfiles/history.html#machine-variants) so each machine
+keeps its own version.
 
-mise 会先预览连接操作，再进行连接。如果没有指定 `--sync`，它会先询问要使用哪种同步模式，因为 `sync` 模式允许 origin 写入当前文件。使用 `--sync sync` 时，监视器会推送已保存的更改，并定期获取和应用其他机器上的更改。除非通过 `--branch` 指定分支，否则 mise 会使用仓库的默认分支；没有任何分支的仓库会使用 `main`，并在首次推送时创建该分支。
+mise prints a preview of the connection and then connects. Without `--sync`,
+it asks which sync mode to use first, because `sync` lets the origin write your
+live files. With `--sync sync`, the
+watcher pushes saved changes and periodically fetches and applies changes from
+other machines. mise uses the repository's default branch unless you pass
+`--branch`; a repository with no branches gets `main`, which the first push
+creates.
 
-mise 会将连接信息写入 `~/.config/mise/config.local.toml` 中的 `[history.origin]`，因此连接仅对当前机器生效；同步模式则写入 [`history.sync`](/configuration/settings.html#history.sync) 设置。`mise dot origin` 会显示当前连接；`mise dot origin --remove` 会断开连接，但本地检查点和已获取的历史记录会保留。
+mise writes the connection to `[history.origin]` in your
+`~/.config/mise/config.local.toml`, so it stays on this machine, and the mode
+to the [`history.sync`](/configuration/settings.html#history.sync) setting.
+`mise dot origin` shows what is connected, and `mise dot origin --remove`
+disconnects; local checkpoints and fetched history stay.
 
-要将另一台机器加入相同配置，请按照[设置机器](/bootstrap/setup.html#set-up-another-machine)操作，使用 [`mise bootstrap --adopt`](/bootstrap/from-repository.html#shared-dotfile-history) 接管仓库。
+To bring another machine into the same setup, follow
+[Set up a machine](/bootstrap/setup.html#set-up-another-machine), which adopts
+the repository with
+[`mise bootstrap --adopt`](/bootstrap/from-repository.html#shared-dotfile-history).
 
-### origin 与全局配置 {#origin-and-global-config}
+### The origin and your global config {#origin-and-global-config}
 
-origin 保存 mise 对受跟踪文件的历史记录。`origin set` 不会拉取或推送本机上的 Git 检出目录，例如通过 [`mise bootstrap --adopt`](/bootstrap/from-repository.html#global-mise-configuration) 接管的 `~/.config/mise`；请自行使用 Git 同步该检出目录。
+The origin holds mise's history of your tracked files. `origin set` never pulls
+or pushes a Git checkout on this machine, such as a `~/.config/mise` that you
+adopted with
+[`mise bootstrap --adopt`](/bootstrap/from-repository.html#global-mise-configuration);
+keep that checkout in sync with Git yourself.
 
-请为 origin 单独创建仓库。若将全局配置仓库用作 origin，mise 的历史记录可能会进入其默认分支；此后运行 `mise bootstrap --adopt` 时，它会将该仓库作为 setup 仓库还原，而不是克隆到 `~/.config/mise`。如果仍要将历史记录保存在该仓库中，请按照[保留本地检查点](#keep-local-checkpoints)的方式将其放到独立分支，并在其他机器上通过 `mise bootstrap --adopt '<url>?ref=<branch>'` 接管。如果要通过 origin 共享全局配置，请跟踪该配置文件：`mise dot track ~/.config/mise/config.toml`。
+Give the origin a repository of its own. Connecting your global config
+repository can put mise's history on its default branch, and from then on
+`mise bootstrap --adopt` restores it as a setup repository instead of cloning
+it into `~/.config/mise`. To keep the history in that repository anyway, put it
+on a branch of its own as in [Keep your local checkpoints](#keep-local-checkpoints),
+and adopt it on other machines with `mise bootstrap --adopt '<url>?ref=<branch>'`.
+若要通过 origin 共享全局配置，请跟踪整个目录：运行 `mise dot track ~/.config/mise`。以 `.local.toml` 结尾的文件仍保留在各自机器上。
 
-### 仓库身份验证 {#repository-authentication}
+### Repository authentication {#repository-authentication}
 
-网络命令会使用你的 Git 配置，包括凭据助手、SSH 和 URL 重写。访问私有 GitHub 仓库时，可通过 mise 全局安装 GitHub CLI 并配置凭据助手：
+Network commands use your Git configuration, including credential helpers,
+SSH, and URL rewrites. For a private GitHub repository, install the GitHub CLI
+globally through mise and configure its credential helper:
 
 ```sh
 mise use -g gh
@@ -222,7 +251,34 @@ git_email = "mise@{hostname}"
 
 创建提交时，mise 会将 `{hostname}` 替换为机器的主机名，因此在 `work-mbp.local` 上保存时会使用 `mise <mise@work-mbp.local>`。此设置也适用于监视器提交和 mise 创建的合并提交。该值也可以是固定的电子邮件地址。它只影响新提交；已有提交会保留原有身份。
 
-## 处理无关历史记录 {#resolve-unrelated-histories}
+## 从使用符号链接的 dotfiles 仓库迁移 {#move-from-a-symlinked-repository}
+
+通过 `mode = "symlink"` 将 dotfiles 链接到目标位置的 Git 仓库，与 `mise dot track` 保存历史记录的仓库是两个独立的 Git 仓库。`~/dev/dotfiles` 这样的检出目录保存文件本身；历史记录则保存在 mise 管理的裸仓库中，`mise dot status` 会在 Repository 下将其列为 Local history。因此，将 `mise dot origin set` 指向 dotfiles 检出目录的远程仓库，会连接两个无关历史记录，mise 会拒绝合并。
+
+要将文件从符号链接改为跟踪状态：
+
+1. 将符号链接替换为其指向文件的普通副本。跟踪符号链接只会保存链接本身，而不会保存文件内容。
+2. 将声明该文件的条目替换为跟踪条目。跟踪条目不接受 `source`、`content` 或 `manifest`，因此也请一并移除这些配置：
+
+   ```toml
+   [dotfiles]
+   "~/.bashrc" = { mode = "track" }
+   ```
+
+   也可以运行 `mise dot track ~/.bashrc`，这会保留现有条目，并将跟踪条目添加到 `~/.config/mise/conf.d/dotfiles-tracking.toml`。若采用此方式，请从你手动编辑的配置文件中移除重复条目。
+
+3. 运行 `mise dot paths` 检查每个条目来自哪个配置文件，然后运行 `mise dot save`。
+
+若要继续使用相同的远程仓库，请将本地历史发布到单独的分支，以免修改默认分支。先用 `mise dot status` 找到历史记录仓库，然后运行：
+
+```sh
+git --git-dir <local-history> push <url> refs/heads/main:refs/heads/mise-history
+mise dot origin set <url> --branch mise-history
+```
+
+如果不需要将两者放在同一处，使用一个独立的空私有仓库会更简单。若要连接已有提交的 origin，请参阅[解决无关历史记录](#resolve-unrelated-histories)。
+
+## Resolve unrelated histories {#resolve-unrelated-histories}
 
 如果本地检查点与 origin 分支没有共同的 Git 历史，`mise dot origin set` 和 `mise dot sync` 会拒绝合并。即使文件内容完全相同，也不会替换任一方的历史记录。重试前，请先选择要保留哪一方的历史。
 
@@ -234,7 +290,7 @@ git_email = "mise@{hostname}"
 mise dot origin set <empty-repository-url>
 ```
 
-如果要使用已有仓库，请先使用 Git 将本地历史推送到该仓库的新分支，然后连接该分支：
+若要改用现有仓库，请先使用 Git 将本地历史记录推送到其中的新分支（`mise dot status` 会将其路径列为 Local history），然后连接该分支：
 
 ```sh
 mise dot origin set <url> --branch <name>

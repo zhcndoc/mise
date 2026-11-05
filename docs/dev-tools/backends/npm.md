@@ -165,7 +165,14 @@ aube 的 `trustPolicy=no-downgrade` 检查会比较依赖项的已选版本与�
 名称写入安装目录中的 `.config/aube/config.toml`。添加例外前，请先阅读[调查信任级别降级](#investigating-trust-downgrades)和
 aube 的[信任策略文档](https://aube.sh/security#trust-policy)。
 
-### 下载量低或新发布的软件包 {#low-download-and-new-packages}
+### 来源证明 {#provenance}
+
+信任策略会读取发布的证明元数据结构，但不会验证签名包。默认情况下，mise 会验证它（[`npm.provenance`](/configuration/settings.html#npm.provenance)；即使该项关闭，[`paranoid`](/configuration/settings.html#paranoid) 的 `provenance` 类别也会启用验证）。mise 会验证 npm 为工具自身软件包发布的 Sigstore 来源证明。证明中必须包含与安装锁定值相同的 sha512 完整性摘要；aube 会在解压前对每个 tarball 进行核对。
+
+未发布来源证明的软件包，以及未提供来源证明的私有注册表，仍可像关闭此设置时一样安装；但如果 `mise.lock` 固定了工具的[来源仓库](/dev-tools/mise-lock-reference.html#npm-package-provenance)，停止发布来源证明的软件包就会安装失败。不会检查依赖项。只有内置的 aube 软件包管理器支持此功能；使用其他 [`npm.package_manager`](/configuration/settings.html#npm.package_manager) 时，安装不会进行来源证明检查。设置了 `checksum` 选项的工具会安装已下载的归档；除非锁定，否则没有来源证明可验证。启用偏执模式的 `provenance` 类别后，上述两种安装都会失败，而不会跳过验证；通过其他软件包管理器安装且 `mise.lock` 条目固定了来源仓库的工具也会失败。
+设置 `npm.provenance = false` 可跳过验证，但偏执模式的 `provenance` 类别启用时仍会执行验证。
+
+### Low-download and new packages
 
 <span id="allow-low-downloads"></span>
 
@@ -259,9 +266,15 @@ sfw mise install npm:prettier@latest
 sfw mise use -g npm:prettier
 ```
 
-这种方式在网络层生效。mise 的 npm 元数据客户端和内置 aube 都使用 aube-registry；它会遵循
-`HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`，并载入 `NODE_EXTRA_CA_CERTS` 证书包。Socket
-没有将 mise 或 aube 列为支持的包管理器，因此不保证此配置有效。
+This works at the network layer. mise's npm metadata client and embedded aube
+both use aube-registry, which honors `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
+并会加载 `NODE_EXTRA_CA_CERTS` 证书包。mise 的其他 HTTP 客户端（例如查询其他后端版本的客户端）只有通过 [`extra_ca_certs`](/configuration/settings.html#extra_ca_certs) 才会信任代理 CA，而 sfw 不会设置此项。请自行传入该 CA：
+
+```sh
+sfw sh -c 'MISE_EXTRA_CA_CERTS="$NODE_EXTRA_CA_CERTS" mise upgrade'
+```
+
+Socket 未将 mise 或 aube 列为受支持的软件包管理器，因此不保证此配置可用。
 
 <a id="choosing-an-installer"></a>
 

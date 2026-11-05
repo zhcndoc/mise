@@ -15,7 +15,7 @@ use std::sync::LazyLock as Lazy;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -52,10 +52,6 @@ pub(crate) struct SettingsLoadPolicy {
 impl SettingsLoadPolicy {
     const ENVIRONMENT_ONLY: Self = Self {
         source: SettingsSourcePolicy::EnvironmentOnly,
-        trust: SettingsTrustPolicy::AsDiscovered,
-    };
-    pub(crate) const HIERARCHY: Self = Self {
-        source: SettingsSourcePolicy::Hierarchy,
         trust: SettingsTrustPolicy::AsDiscovered,
     };
     pub(crate) const TRUSTED_HIERARCHY: Self = Self {
@@ -150,7 +146,23 @@ pub(crate) fn is_bootstrapping() -> bool {
 /// Caches the resolved `safe` value from the most recent settings load so
 static CLI_SETTINGS: Mutex<Option<SettingsPartial>> = Mutex::new(None);
 static EXPLICIT_INLINE_SHELL: RwLock<Option<bool>> = RwLock::new(None);
+/// Resolved `trusted_config_paths` entries. Unlike `canonicalize_cached` this remembers entries
+/// that don't exist: each lookup can be a slow autofs/network call, and every config checked in
+/// the process would repeat it. Cleared whenever settings change, so a path created since is seen.
+static TRUSTED_PATHS_RESOLVED: Lazy<Mutex<std::collections::HashMap<PathBuf, Option<PathBuf>>>> =
+    Lazy::new(Default::default);
+
+/// Queue key for the `lockfile_mode = "merge"` deprecation, which warns about a value rather than
+/// a whole setting, so it has no `SETTINGS_META` entry. [`warn_deprecated_now`] special-cases it.
+const LOCKFILE_MODE_MERGE: &str = "lockfile_mode.merge";
+
 static PENDING_DEPRECATED_SETTINGS: Lazy<Mutex<BTreeSet<&'static str>>> =
+    Lazy::new(Default::default);
+/// `write_targets.*` keys a non-global config set, with the first file that set each one.
+///
+/// A write target only matters to a command that writes global config, so instead of warning
+/// whenever such a file loads, the write path asks [`ignored_write_target`] and warns there.
+static IGNORED_WRITE_TARGETS: Lazy<Mutex<BTreeMap<&'static str, PathBuf>>> =
     Lazy::new(Default::default);
 /// Settings files that failed to parse, held until warnings can be printed.
 ///
@@ -318,7 +330,7 @@ fn warn_deprecated_env_settings() {
 ///
 /// Readiness is read while the queue is held, and the flush sets it while holding the same lock, so
 /// a warning cannot be queued into a set that has just been drained.
-fn warn_settings_file_error(msg: String) {
+pub(crate) fn warn_settings_file_error(msg: String) {
     {
         let mut pending = PENDING_SETTINGS_FILE_ERRORS.lock().unwrap();
         if !WARNINGS_READY.load(Ordering::SeqCst) {
@@ -376,6 +388,15 @@ fn warn_deprecated(key: &'static str) {
 }
 
 fn warn_deprecated_now(key: &'static str) {
+    if key == LOCKFILE_MODE_MERGE {
+        deprecated_at!(
+            "2027.4.0",
+            "2027.10.0",
+            LOCKFILE_MODE_MERGE,
+            "lockfile_mode=\"merge\" is deprecated. Remove the setting to use the default \"generate\" mode."
+        );
+        return;
+    }
     if let Some(meta) = SETTINGS_META.get(key)
         && let (Some(msg), Some(warn_at), Some(remove_at)) = (
             meta.deprecated,
@@ -568,12 +589,26 @@ fn strip_local_only_settings(settings: &mut toml::Table, path: &Path, is_global:
         if let Some(value) = remove_nested_toml_value(settings, key)
             && should_warn_ignored_global_only_value(&value)
         {
-            warn!(
-                "{key} in non-global config {} is ignored for security reasons",
-                path.display()
-            );
+            if key.starts_with("write_targets.") {
+                IGNORED_WRITE_TARGETS
+                    .lock()
+                    .unwrap()
+                    .entry(key)
+                    .or_insert_with(|| path.to_path_buf());
+            } else {
+                warn!(
+                    "{key} in non-global config {} is ignored for security reasons",
+                    path.display()
+                );
+            }
         }
     }
+}
+
+/// The non-global config file that set `key` (such as `write_targets.dotfiles`), which mise
+/// ignored because write targets apply only from global config.
+pub(crate) fn ignored_write_target(key: &str) -> Option<PathBuf> {
+    IGNORED_WRITE_TARGETS.lock().unwrap().get(key).cloned()
 }
 
 /// Drop settings the config loader consumes *before* any config file is read — the config
@@ -651,13 +686,50 @@ fn resolve_aqua_registry_paths(settings: &mut toml::Table, path: &Path) {
         return;
     };
     let config_root = crate::config::config_file::config_root::config_root(path);
+    let declared_by_global = crate::config::is_global_config(path);
     for entry in registries.iter_mut() {
         if let Some(value) = entry.as_str()
             && let Some(resolved) = resolve_registry_source(value, &config_root)
         {
             *entry = toml::Value::String(resolved);
         }
+        if let Some(file) = entry
+            .as_str()
+            .and_then(|value| Url::parse(value).ok())
+            .filter(|url| url.scheme() == "file")
+            .and_then(|url| url.to_file_path().ok())
+        {
+            record_local_aqua_registry(file, declared_by_global);
+        }
     }
+}
+
+/// Local `aqua.registries` files, by whether a project config names them
+/// (`true`) or only global or system config does (`false`).
+static LOCAL_AQUA_REGISTRIES: Lazy<Mutex<std::collections::HashMap<PathBuf, bool>>> =
+    Lazy::new(Default::default);
+
+fn record_local_aqua_registry(file: PathBuf, declared_by_global: bool) {
+    let mut registries = LOCAL_AQUA_REGISTRIES.lock().unwrap();
+    let by_project = registries.entry(file).or_insert(!declared_by_global);
+    // Global config trusts what it names by path, as it is itself.
+    if declared_by_global {
+        *by_project = false;
+    }
+}
+
+/// Whether a local aqua registry file was named by a project config rather
+/// than by global or system config. Paranoid mode binds a project config's
+/// trust to its own content, which does not cover a registry file that can
+/// change without it, so such a file needs trust of its own there.
+///
+/// An entry may name a directory, which the reader looks up `registry.yaml` or
+/// `registry.yml` in, so the nearest recorded ancestor of `file` decides.
+pub(crate) fn local_aqua_registry_needs_trust(file: &Path) -> bool {
+    let registries = LOCAL_AQUA_REGISTRIES.lock().unwrap();
+    file.ancestors()
+        .find_map(|path| registries.get(path).copied())
+        .unwrap_or(false)
 }
 
 /// Resolve task discovery exclusions while the settings file that declared them is still known.
@@ -713,18 +785,19 @@ fn settings_path_resolver<'a>(
     let mut tera = crate::tera::get_miserc_tera();
     let mut context = tera::Context::new();
     context.insert("env", &*env::PRISTINE_ENV);
-    context.insert("config_root", &config_root);
+    context.insert("config_root", &config_root.to_string_lossy());
     context.insert(
         "config_source",
         &crate::config::config_file::config_root::config_source(path),
     );
     if let Ok(cwd) = std::env::current_dir() {
-        context.insert("cwd", &cwd);
+        context.insert("cwd", &cwd.to_string_lossy());
     }
-    context.insert("xdg_cache_home", &*env::XDG_CACHE_HOME);
-    context.insert("xdg_config_home", &*env::XDG_CONFIG_HOME);
-    context.insert("xdg_data_home", &*env::XDG_DATA_HOME);
-    context.insert("xdg_state_home", &*env::XDG_STATE_HOME);
+    context.insert("xdg_cache_home", &env::XDG_CACHE_HOME.to_string_lossy());
+    context.insert("xdg_config_home", &env::XDG_CONFIG_HOME.to_string_lossy());
+    context.insert("xdg_data_home", &env::XDG_DATA_HOME.to_string_lossy());
+    context.insert("xdg_state_home", &env::XDG_STATE_HOME.to_string_lossy());
+    context.insert("mise_config_dir", &env::MISE_CONFIG_DIR.to_string_lossy());
     context.insert("system_brew_prefix", &env::system_brew_prefix());
 
     move |label: &str, target: &mut toml::Value| -> Result<()> {
@@ -732,7 +805,7 @@ fn settings_path_resolver<'a>(
             return Ok(());
         };
         let rendered = if crate::tera::contains_template_syntax(value) {
-            crate::tera::render_str(&mut tera, value, &context).map_err(|err| {
+            crate::tera::render_config_str(&mut tera, value, &context, path).map_err(|err| {
                 eyre!(
                     "failed to render {label} in {}: {err}",
                     file::display_path(path)
@@ -779,6 +852,31 @@ fn resolve_age_paths(settings: &mut toml::Table, path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Render templates in `dotfiles.root`, such as `{{ mise_config_dir }}/home`, so a dotfiles
+/// repository adopted as the global config can keep its sources beside it. A plain path is left
+/// as written, keeping the process-relative behavior of a root without a template.
+fn resolve_dotfiles_root_path(settings: &mut toml::Table, path: &Path) {
+    let Some(root) = settings
+        .get_mut("dotfiles")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|dotfiles| dotfiles.get_mut("root"))
+    else {
+        return;
+    };
+    if !root
+        .as_str()
+        .is_some_and(crate::tera::contains_template_syntax)
+    {
+        return;
+    }
+    let config_root = crate::config::config_file::config_root::config_root(path);
+    // A render error must not drop the file's other settings. The unrendered template is left in
+    // place, so the dotfiles sources fail to resolve and name it.
+    if let Err(err) = settings_path_resolver(path, config_root)("settings.dotfiles.root", root) {
+        warn!("{err}");
+    }
 }
 
 /// Resolve `write_targets` paths against the config root of the declaring settings file, for the
@@ -894,6 +992,11 @@ pub trait SettingsExt: Sized {
     /// Errors on invalid platform strings (same validation as `mise lock --platform`).
     fn lockfile_platforms(&self) -> Result<Option<Vec<Platform>>>;
 
+    /// The `trusted_config_paths` entries as written (with `~` expanded), without touching the
+    /// filesystem.
+    fn trusted_config_paths_as_written(&self) -> impl Iterator<Item = PathBuf> + '_;
+
+    /// The `trusted_config_paths` entries that exist, canonicalized.
     fn trusted_config_paths(&self) -> impl Iterator<Item = PathBuf> + '_;
 
     fn global_tools_file(&self) -> PathBuf;
@@ -946,6 +1049,8 @@ pub trait SettingsExt: Sized {
     fn registry_cache_ttl(&self) -> Duration;
 
     fn task_timeout_duration(&self) -> Option<Duration>;
+
+    fn task_lock_timeout_duration(&self) -> Option<Duration>;
 
     fn default_inline_shell(&self) -> Result<Vec<String>>;
 
@@ -1108,8 +1213,10 @@ impl SettingsExt for Settings {
     }
 
     fn parse_settings_file(path: &Path) -> Result<SettingsPartial> {
-        let raw = file::read_to_string(path)?;
-        let mut raw: toml::Value = toml::from_str(&raw)?;
+        let raw = file::read_config_to_string(path)?;
+        let mut raw: toml::Value = toml::from_str(&raw).map_err(|err| {
+            crate::config::config_file::diagnostic::hide_linked_source(err, &raw, path)
+        })?;
         let tera_v1_from_env = tera_v1_from_env_config(&raw);
         if let Some(settings) = raw.get_mut("settings").and_then(toml::Value::as_table_mut) {
             strip_local_only_settings(settings, path, crate::config::is_global_config(path));
@@ -1118,6 +1225,7 @@ impl SettingsExt for Settings {
             // never rewritten.
             resolve_aqua_registry_paths(settings, path);
             resolve_age_paths(settings, path)?;
+            resolve_dotfiles_root_path(settings, path);
             resolve_write_target_paths(settings, path);
             resolve_task_disable_paths(settings, path);
         }
@@ -1162,12 +1270,14 @@ impl SettingsExt for Settings {
         // Clear caches that depend on settings and environment
         crate::config::config_file::config_root::reset();
         crate::toolset::install_state::reset_tools();
+        TRUSTED_PATHS_RESOLVED.lock().unwrap().clear();
     }
 
     fn reload() -> Result<()> {
         *EXPLICIT_INLINE_SHELL.write().unwrap() = None;
         crate::config::config_file::config_root::reset();
         crate::toolset::install_state::reset_tools();
+        TRUSTED_PATHS_RESOLVED.lock().unwrap().clear();
         rebuild()
     }
 
@@ -1178,6 +1288,7 @@ impl SettingsExt for Settings {
         updater(lock.get_or_insert_with(SettingsPartial::empty));
         drop(lock);
         crate::toolset::install_state::reset_tools();
+        TRUSTED_PATHS_RESOLVED.lock().unwrap().clear();
         let result = rebuild();
         if result.is_err() {
             *CLI_SETTINGS.lock().unwrap() = previous;
@@ -1194,12 +1305,31 @@ impl SettingsExt for Settings {
         }
     }
 
-    fn trusted_config_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    fn trusted_config_paths_as_written(&self) -> impl Iterator<Item = PathBuf> + '_ {
         self.trusted_config_paths
             .iter()
             .filter(|p| !p.to_string_lossy().is_empty())
             .map(file::replace_path)
-            .filter_map(|p| file::canonicalize_cached(&p))
+    }
+
+    fn trusted_config_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.trusted_config_paths_as_written().filter_map(|p| {
+            // A relative entry resolves against the current directory, which can change.
+            if !p.is_absolute() {
+                return file::canonicalize_cached(&p);
+            }
+            if let Some(resolved) = TRUSTED_PATHS_RESOLVED.lock().unwrap().get(&p) {
+                return resolved.clone();
+            }
+            // Not `canonicalize_cached`: its own process-wide cache would survive a reset and
+            // keep a symlink entry pointing at its old target.
+            let resolved = p.canonicalize().ok();
+            TRUSTED_PATHS_RESOLVED
+                .lock()
+                .unwrap()
+                .insert(p, resolved.clone());
+            resolved
+        })
     }
 
     fn global_tools_file(&self) -> PathBuf {
@@ -1327,6 +1457,13 @@ impl SettingsExt for Settings {
     fn task_timeout_duration(&self) -> Option<Duration> {
         self.task
             .timeout
+            .as_ref()
+            .and_then(|s| duration::parse_duration(s).ok())
+    }
+
+    fn task_lock_timeout_duration(&self) -> Option<Duration> {
+        self.task
+            .lock_timeout
             .as_ref()
             .and_then(|s| duration::parse_duration(s).ok())
     }
@@ -1761,12 +1898,17 @@ fn load() -> Result<Arc<Settings>> {
     let previous = mise_settings::is_loaded()
         .then(mise_settings::last_cached)
         .flatten();
+    // The files parsed below record their ignored write targets again, so a reload forgets one a
+    // project no longer sets. A failed load keeps the records that match the kept settings.
+    let previous_ignored_write_targets =
+        std::mem::take(&mut *IGNORED_WRITE_TARGETS.lock().unwrap());
     LOAD_PARSE_CACHE.set(Some(ParseCache::new()));
     let bootstrap = Settings::load_sources_from(None, SettingsLoadPolicy::GLOBAL_HIERARCHY);
     let bootstrap = match bootstrap {
         Ok(bootstrap) => bootstrap,
         Err(err) => {
             LOAD_PARSE_CACHE.set(None);
+            *IGNORED_WRITE_TARGETS.lock().unwrap() = previous_ignored_write_targets;
             return Err(err);
         }
     };
@@ -1783,6 +1925,7 @@ fn load() -> Result<Arc<Settings>> {
                 Some(previous) => mise_settings::store(previous),
                 None => mise_settings::clear(),
             }
+            *IGNORED_WRITE_TARGETS.lock().unwrap() = previous_ignored_write_targets;
             return Err(err);
         }
     };
@@ -1813,6 +1956,9 @@ fn load() -> Result<Arc<Settings>> {
             "python.uv_venv_auto=true is deprecated. Use python.uv_venv_auto=\"create|source\" or \"source\" instead."
         );
     }
+    if !settings.generate_lockfiles() {
+        warn_deprecated(LOCKFILE_MODE_MERGE);
+    }
     if !settings.color {
         console::set_colors_enabled(false);
         console::set_colors_enabled_stderr(false);
@@ -1838,12 +1984,21 @@ fn load() -> Result<Arc<Settings>> {
     }
     trace!("Settings: {:#?}", redacted_settings_for_debug(&settings));
     let settings = Arc::new(settings);
+    mise_tls::set_ipv4_only(settings.ipv4_only);
+    mise_tls::set_extra_ca_certs(
+        settings
+            .extra_ca_certs
+            .as_deref()
+            .map(file::replace_path)
+            .as_deref(),
+    );
     // Replace the bootstrap snapshot published above; the loader's own result is not cached
     // once the cache has changed underneath it.
     mise_settings::store(settings.clone());
     let system_installs_changed = settings.system_installs_dir() != *env::MISE_SYSTEM_INSTALLS_DIR;
     if system_installs_changed {
         crate::toolset::install_state::reset_tools();
+        TRUSTED_PATHS_RESOLVED.lock().unwrap().clear();
     }
     time!("try_get done");
     Ok(settings)
@@ -1851,8 +2006,14 @@ fn load() -> Result<Arc<Settings>> {
 
 fn redacted_settings_for_debug(settings: &Settings) -> Settings {
     let mut debug_settings = settings.clone();
-    if debug_settings.task.cache.remote_token.is_some() {
-        debug_settings.task.cache.remote_token = Some("[redacted]".to_string());
+    for secret in [
+        &mut debug_settings.task.cache.remote_token,
+        &mut debug_settings.task.cache_remote_token,
+        &mut debug_settings.sops.age_key,
+    ] {
+        if secret.is_some() {
+            *secret = Some("[redacted]".to_string());
+        }
     }
     debug_settings
 }
@@ -2006,12 +2167,12 @@ mod tests {
 
     #[test]
     fn lockfile_mode_defaults_and_explicit_choices() {
-        let mut settings = Settings::default();
-        assert!(!settings.generate_lockfiles());
-        settings.lockfile_mode = Some("generate".into());
+        let mut settings = Settings::builder().load().unwrap();
         assert!(settings.generate_lockfiles());
-        settings.lockfile_mode = Some("merge".into());
+        settings.lockfile_mode = "merge".into();
         assert!(!settings.generate_lockfiles());
+        settings.lockfile_mode = "generate".into();
+        assert!(settings.generate_lockfiles());
         assert!(validate_setting_choice("lockfile_mode", "merge").is_ok());
         assert_eq!(
             validate_setting_choice("lockfile_mode", "invalid")
@@ -2253,11 +2414,25 @@ mod tests {
     fn debug_settings_redact_remote_cache_token() {
         let mut settings = Settings::default();
         settings.task.cache.remote_token = Some("super-secret-token".to_string());
+        settings.sops.age_key = Some("AGE-SECRET-KEY-1SECRET".to_string());
 
         let debug = format!("{:?}", redacted_settings_for_debug(&settings));
 
         assert!(!debug.contains("super-secret-token"));
+        assert!(!debug.contains("AGE-SECRET-KEY-1SECRET"));
         assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn settings_dictionary_redacts_the_age_key() {
+        let mut settings = Settings::default();
+        settings.sops.age_key = Some("AGE-SECRET-KEY-1SECRET".to_string());
+        settings.sops.age_key_file = Some("/keys/age.txt".into());
+
+        let encoded = toml::to_string(&settings.as_dict().unwrap()).unwrap();
+
+        assert!(!encoded.contains("AGE-SECRET-KEY-1SECRET"), "{encoded}");
+        assert!(encoded.contains("/keys/age.txt"), "{encoded}");
     }
 
     #[test]
@@ -2491,6 +2666,25 @@ mod tests {
         assert_eq!(partial.forgejo.credential_command, None);
     }
 
+    /// A repository must not name a host that then receives the GitHub token.
+    #[test]
+    fn test_parse_settings_file_strips_local_github_enterprise_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mise.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [settings.github]
+            enterprise_hosts = ["attacker.example"]
+            "#,
+        )
+        .unwrap();
+
+        let partial = Settings::parse_settings_file(&path).unwrap();
+
+        assert_eq!(partial.github.enterprise_hosts, None);
+    }
+
     #[test]
     fn test_parse_settings_file_strips_local_history_describe_command() {
         let dir = tempfile::tempdir().unwrap();
@@ -2570,6 +2764,26 @@ mod tests {
             partial.history.describe_command.as_deref(),
             Some("cat dotfiles")
         );
+    }
+
+    #[test]
+    fn test_local_config_records_ignored_write_targets() {
+        let path = Path::new("/tmp/project-with-write-target/mise.toml");
+        let mut settings = toml::from_str::<toml::Value>(
+            r#"
+            [write_targets]
+            packages = "mise.toml"
+            "#,
+        )
+        .unwrap()
+        .as_table()
+        .unwrap()
+        .clone();
+        strip_local_only_settings(&mut settings, path, false);
+        let partial = settings_partial_from_table(settings);
+
+        assert_eq!(partial.write_targets.packages, None);
+        assert!(ignored_write_target("write_targets.packages").is_some());
     }
 
     #[test]
@@ -2874,6 +3088,40 @@ mod tests {
     }
 
     #[test]
+    fn dotfiles_root_renders_templates_and_keeps_plain_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("mise.toml");
+        let mut settings = toml::from_str::<toml::Table>(
+            r#"
+            [dotfiles]
+            root = "{{ mise_config_dir }}/home"
+            "#,
+        )
+        .unwrap();
+
+        resolve_dotfiles_root_path(&mut settings, &config_path);
+
+        assert_eq!(
+            Path::new(settings["dotfiles"]["root"].as_str().unwrap()),
+            env::MISE_CONFIG_DIR.join("home")
+        );
+
+        let mut settings =
+            toml::from_str::<toml::Table>("[dotfiles]\nroot = \"dotfiles\"\n").unwrap();
+        resolve_dotfiles_root_path(&mut settings, &config_path);
+        assert_eq!(settings["dotfiles"]["root"].as_str(), Some("dotfiles"));
+
+        let mut settings =
+            toml::from_str::<toml::Table>("[dotfiles]\nroot = \"{{ missing_variable }}\"\n")
+                .unwrap();
+        resolve_dotfiles_root_path(&mut settings, &config_path);
+        assert_eq!(
+            settings["dotfiles"]["root"].as_str(),
+            Some("{{ missing_variable }}")
+        );
+    }
+
+    #[test]
     fn invalid_write_target_template_is_left_for_the_write_check_to_reject() {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = toml::from_str::<toml::Table>(
@@ -3078,6 +3326,26 @@ mod tests {
         Settings::reset(None);
         let settings = Settings::get();
         assert!(!settings.prefer_offline);
+    }
+
+    /// Settings that name the program mise runs for a step it did not get from the user's own
+    /// config. A project config must not choose them, trusted or not, so each has to be
+    /// `global_only`: `strip_local_only_settings` only drops marked keys.
+    #[test]
+    fn test_command_selecting_settings_are_global_only() {
+        let keys = [
+            "system_packages.elevate_with",
+            "unix_default_file_shell_args",
+            "unix_default_inline_shell_args",
+            "windows_default_file_shell_args",
+            "windows_default_inline_shell_args",
+        ];
+        for key in keys {
+            let meta = SETTINGS_META
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} setting should exist"));
+            assert!(meta.global_only, "{key} must be global_only");
+        }
     }
 
     #[test]

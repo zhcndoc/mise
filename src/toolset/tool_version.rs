@@ -64,6 +64,8 @@ pub struct ToolVersion {
     /// Portable dependency graph used by embedded aube installs.
     pub aube_lock: Option<crate::lockfile::GraphRef<AubeLock>>,
     pub uv_lock: Option<crate::lockfile::GraphRef<crate::lockfile::UvLock>>,
+    /// The source repository the lockfile pins this `npm:` tool's package to.
+    pub npm_provenance: Option<crate::lockfile::PackageProvenance>,
     pub uv_python: Option<(PathBuf, String)>,
     /// Install satisfaction computed during dry-run installs.
     pub install_satisfied: Option<bool>,
@@ -170,6 +172,7 @@ impl ToolVersion {
             install_path_is_explicit: false,
             conda_packages: Default::default(),
             aube_lock: None,
+            npm_provenance: None,
             uv_lock: None,
             uv_python: None,
             install_satisfied: None,
@@ -182,9 +185,16 @@ impl ToolVersion {
         opts: &ResolveOptions,
     ) -> Result<Self> {
         let install_env = request.options().core.install_env;
-        let mut tv =
-            crate::env::with_install_env(install_env, Self::resolve_(config, request, opts))
-                .await?;
+        let ba = request.ba().clone();
+        let resolve =
+            crate::toolset::with_safe_mode_tool_scope(&ba, Self::resolve_(config, request, opts));
+        let mut tv = crate::env::with_install_env(install_env, resolve).await?;
+        // Only the request has been validated so far. The version it resolved to came from a
+        // version list, a release tag or the lockfile, and for these requests it is what
+        // `logical_pathname` names the install, download and cache directories by.
+        if tv.request.uses_resolved_version_as_pathname() {
+            tool_request::validate_resolved_version(&tv.version)?;
+        }
         if tv.uv_lock.is_some() || crate::backend::pipx::has_selected_python(&tv).unwrap_or(false) {
             Box::pin(
                 crate::backend::pipx::PIPXBackend::from_arg(tv.ba().clone())
@@ -294,7 +304,7 @@ impl ToolVersion {
     /// Whether a command that runs tools may leave this lazy request unresolved
     /// rather than wait on remote version lists for a tool nobody has run yet.
     /// Installing the tool resolves the request then.
-    fn defers_missing_lazy(request: &ToolRequest, opts: &ResolveOptions) -> bool {
+    pub(crate) fn defers_missing_lazy(request: &ToolRequest, opts: &ResolveOptions) -> bool {
         opts.defer_missing_lazy_tools
             && !opts.latest_versions
             && request.options().lazy == Some(true)
@@ -344,6 +354,7 @@ impl ToolVersion {
         tv.lock_platforms = lt.platforms;
         tv.aube_lock = lt.aube;
         tv.uv_lock = lt.uv;
+        tv.npm_provenance = lt.provenance;
         tv
     }
 
@@ -485,18 +496,25 @@ impl ToolVersion {
             .uv_python
             .as_ref()
             .map(|(_, identity)| identity.as_str())?;
-        let options: BTreeMap<_, _> = self
+        let mut options: BTreeMap<_, _> = self
             .request
             .options()
             .opts_as_strings()
             .into_iter()
             .collect();
+        if self.uv_lock.is_some() {
+            // A locked graph already holds the cutoff it was resolved with, and the
+            // install replays it as it is, so a tool's own release-age options only
+            // move the installation when they change the graph.
+            options.remove("minimum_release_age");
+            options.remove("install_before");
+        }
         Some(hex::encode(Sha256::digest(
             format!(
                 "{}\n{}\n{}",
                 self.uv_lock
                     .as_ref()
-                    .map(|lock| lock.identity())
+                    .map(|lock| lock.install_identity())
                     .unwrap_or_else(|| "version-only".to_string()),
                 python,
                 toml::to_string(&options).ok()?
@@ -604,7 +622,17 @@ impl ToolVersion {
         };
         let path = self.ba().installs_path().join(&pathname);
         let path = env::find_in_shared_installs(path, &self.ba().tool_dir_name(), &pathname);
-        if path.is_dir() && is_runtime_symlink(&path) {
+        // The link stands in for this installation only while it names it: a
+        // `latest` link skips prereleases, and any link is stale during an
+        // upgrade until runtime symlinks are rebuilt.
+        let install_path = self.install_path();
+        let names_install = |target: &Path| {
+            matches!(
+                (target.canonicalize(), install_path.canonicalize()),
+                (Ok(a), Ok(b)) if a == b
+            )
+        };
+        if path.is_dir() && is_runtime_symlink(&path) && names_install(&path) {
             return path;
         }
 
@@ -615,7 +643,7 @@ impl ToolVersion {
             && let Some(parent) = path.parent()
         {
             let target = parent.join(target);
-            if target.is_dir() {
+            if target.is_dir() && names_install(&target) {
                 return target
                     .absolutize()
                     .expect("failed to absolutize path")
@@ -623,7 +651,7 @@ impl ToolVersion {
             }
         }
 
-        self.install_path()
+        install_path
     }
     pub(crate) fn cache_path(&self) -> PathBuf {
         self.ba().cache_path().join(self.state_key())
@@ -661,6 +689,7 @@ impl ToolVersion {
             warn_not_in_lockfile: base_opts.warn_not_in_lockfile,
             defer_missing_lazy_tools: false,
             defer_missing_lazy_online: false,
+            keep_moved_alias_pins: base_opts.keep_moved_alias_pins,
         };
         let tv = self.request.resolve(config, &opts).await?;
         Ok(tv.version)
@@ -765,6 +794,20 @@ impl ToolVersion {
         };
         Some(pathname.replace([':', '/'], "-"))
     }
+    /// Whether `--locked` (or `locked`) and `tool_config.locked`, in that
+    /// order, forbid resolving this request outside the lockfile.
+    fn locked_by(config: &Config, request: &ToolRequest, opts: &ResolveOptions) -> (bool, bool) {
+        let invocation_locked =
+            config.invocation_locked_for(request.source(), Settings::get().locked);
+        let tool_config_locked = request.tool_config_locked(config, opts.use_locked_version);
+        (invocation_locked, tool_config_locked)
+    }
+
+    fn resolution_locked(config: &Config, request: &ToolRequest, opts: &ResolveOptions) -> bool {
+        let (invocation_locked, tool_config_locked) = Self::locked_by(config, request, opts);
+        invocation_locked || tool_config_locked
+    }
+
     fn ensure_unlocked_resolution_allowed(
         config: &Config,
         request: &ToolRequest,
@@ -772,8 +815,7 @@ impl ToolVersion {
         opts: &ResolveOptions,
     ) -> Result<()> {
         let settings = Settings::get();
-        let tool_config_locked = request.tool_config_locked(config, opts.use_locked_version);
-        let invocation_locked = config.invocation_locked_for(request.source(), settings.locked);
+        let (invocation_locked, tool_config_locked) = Self::locked_by(config, request, opts);
         if (invocation_locked || tool_config_locked)
             && opts.use_locked_version
             && settings.lockfile_enabled()
@@ -805,6 +847,7 @@ impl ToolVersion {
         opts: &ResolveOptions,
     ) -> Result<ToolVersion> {
         let backend = request.backend()?;
+        let requested = v;
         let v = config.resolve_alias(&backend, v).await?;
         let request = request.with_registry_version(&v);
         let backend = request.backend()?;
@@ -824,8 +867,14 @@ impl ToolVersion {
         };
         if opts.use_locked_version
             && !has_linked_version(request.ba(), lock_query)
-            && let Some(lt) =
-                request.lockfile_resolve_with_prefix(config, lock_query, lock_prefix_boundary)?
+            && let Some(lt) = request.lockfile_resolve_with_prefix(
+                config,
+                lock_query,
+                lock_prefix_boundary,
+                v != requested
+                    && (opts.keep_moved_alias_pins
+                        || Self::resolution_locked(config, &request, opts)),
+            )?
         {
             return Ok(Self::from_lockfile(request.clone(), lt));
         }
@@ -1473,6 +1522,11 @@ pub struct ResolveOptions {
     /// Defer those lazy tools even when not under `prefer_offline`. For a command that
     /// manages one tool's versions and so resolves the others only to look them up.
     pub defer_missing_lazy_online: bool,
+    /// Keep a version 0 lockfile's only entry for a tool whose alias has
+    /// moved (`lts` -> `26` with `24.13.0` locked). `mise lock --upgrade`
+    /// sets it so the upgrade binds the alias to that pin instead of
+    /// re-resolving it.
+    pub keep_moved_alias_pins: bool,
 }
 
 impl Default for ResolveOptions {
@@ -1494,6 +1548,7 @@ impl Default for ResolveOptions {
             warn_not_in_lockfile: true,
             defer_missing_lazy_tools: false,
             defer_missing_lazy_online: false,
+            keep_moved_alias_pins: false,
         }
     }
 }
@@ -1754,6 +1809,36 @@ mod tests {
     }
 
     #[test]
+    fn uv_install_identity_ignores_when_the_graph_was_locked() {
+        use crate::lockfile::{GraphRef, UvLock};
+        let tv_locked_at = |cutoff: &str, age: &str| {
+            let graph_text =
+                format!("version = 1\nrevision = 3\n\n[options]\nexclude-newer = \"{cutoff}\"\n");
+            let pipx = Arc::new(BackendArg::from("pipx:ansible-lint"));
+            let mut options = ToolVersionOptions::default();
+            options.opts.insert(
+                "minimum_release_age".to_string(),
+                toml::Value::String(age.to_string()),
+            );
+            let request =
+                ToolRequest::new_with_options(pipx, "26.8.0", options, ToolSource::Argument)
+                    .unwrap();
+            let mut tv = ToolVersion::new(request, "26.8.0".into());
+            tv.uv_python = Some((PathBuf::from("/python"), "cpython-3.13".into()));
+            tv.uv_lock = Some(GraphRef::from(UvLock {
+                project: toml::Table::new(),
+                graph: graph_text.parse().unwrap(),
+                graph_text,
+            }));
+            tv
+        };
+        let monday = tv_locked_at("2026-10-26T09:00:00Z", "7d");
+        let tuesday = tv_locked_at("2026-10-27T17:30:00Z", "14d");
+        assert_eq!(monday.tv_pathname(), tuesday.tv_pathname());
+        assert_eq!(monday, tuesday);
+    }
+
+    #[test]
     fn display_version_only_hides_aube_identity_for_npm() {
         let version = "release~aube~0123456789abcdef";
         let github = Arc::new(BackendArg::from("github:owner/tool"));
@@ -1843,6 +1928,7 @@ mod tests {
                 platforms: Default::default(),
                 aube: None,
                 uv: None,
+                provenance: None,
             };
             ToolVersion::from_lockfile(request, lt).request.options()
         };
@@ -1865,6 +1951,7 @@ mod tests {
                 platforms: Default::default(),
                 aube: None,
                 uv: None,
+                provenance: None,
             };
             ToolVersion::from_lockfile(request, lt).request.options()
         };
@@ -1888,6 +1975,7 @@ mod tests {
                 platforms: Default::default(),
                 aube: None,
                 uv: None,
+                provenance: None,
             };
             ToolVersion::from_lockfile(request, lt).request.options()
         };
@@ -1939,6 +2027,7 @@ mod tests {
             platforms: Default::default(),
             aube: None,
             uv: None,
+            provenance: None,
         };
 
         let tv = ToolVersion::from_lockfile(request, lt);
@@ -2237,10 +2326,10 @@ mod tests {
         let tv = ToolVersion::new(request, "3.14.6".into());
         assert!(!tv.resolved_from_lockfile());
 
-        // Without locking, runtime_path() follows the stale fuzzy runtime symlink, so
-        // it does NOT resolve to the version just installed -- the bug behavior. (This
-        // also self-checks the stale-symlink setup above.)
-        assert_ne!(tv.runtime_path(), install_path);
+        // runtime_path() skips the stale fuzzy runtime symlink, which names a
+        // different installation, and resolves to the version just installed.
+        assert!(is_runtime_symlink(&runtime_link));
+        assert_eq!(tv.runtime_path(), install_path);
 
         // with_locked() pins runtime_path() to the exact install just made, not the
         // fuzzy runtime symlink, so the postinstall hook sees 3.14.6 (#10347).

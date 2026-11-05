@@ -308,7 +308,9 @@ node = { version = "24", lazy = true }
 
 当工具集合中包含延迟安装工具时，任务、`mise exec` 和 `mise env` 会在工具目录之后加入引导 shims，因此任务首次运行该工具的命令时会触发安装。`mise run` 不会预先安装延迟安装工具。`mise use` 更改延迟安装声明时会重建 shims；如果手动编辑声明，请运行 `mise reshim`。
 
-## 命令包装器 {#command-wrappers}
+在[安全模式](/security.html#safe-mode)下，项目配置中的延迟安装工具不会获得引导 shim，也不会在首次使用时安装。项目 `[tool_alias]` 为全局配置中的工具添加的延迟安装选项也一样。
+
+## Command wrappers {#command-wrappers}
 
 命令包装器保留命令名称，但会运行另一个程序。例如，让 `terraform` 运行 OpenTofu：
 
@@ -360,4 +362,6 @@ command = "podman"
 args = ["ps", "--format", "{% raw %}{{.Names}}{% endraw %}"]
 ```
 
-包装器运行命令时，mise 会从 `PATH` 中移除 shim 和包装器目录，因此 `mbx` 会找到真正的 Cargo：如果配置了 mise 管理的 Rust，就使用该版本；否则使用 rustup 或系统安装的版本。若要使用 mise 管理的 Rust，请参见 [Rust 指南](/lang/rust.html#share-cargo-builds-with-mr-boxington)，通过 `mr_boxington` 工具选项和 `mr-boxington` 工具完成配置。
+运行 wrapper 命令及其启动的所有进程时，该 wrapper 会被跳过，因此 `mbx` 可以找到真正的 Cargo：如果配置了由 mise 管理的 Rust，则使用 mise 版本；否则使用 rustup 或系统安装的版本。若要通过 mise 管理 Rust，请参阅 [Rust 指南](/lang/rust.html#share-cargo-builds-with-mr-boxington)，使用 `mr_boxington` 工具选项和 `mr-boxington` 工具进行配置。
+
+其他 wrapper 仍会生效。如果 `pnpm` 和 `node` 都配置了 wrapper，`pnpm` 运行的脚本会使用 `node` wrapper 及其 `args` 和 `env`；而 `pnpm` 自身查找 `pnpm` 时会直接使用真正的工具。mise 会在 `__MISE_ACTIVE_WRAPPERS` 环境变量中记录正在运行的 wrapper。

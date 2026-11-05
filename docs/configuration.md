@@ -284,8 +284,16 @@ mise use --env staging node@24  # writes mise.staging.toml
 
 其他命令的写入规则不同：
 
-- [`mise config get`](/cli/config/get.html) 和 [`mise config set`](/cli/config/set.html) 使用当前已加载且优先级最高的 TOML 文件，该文件可能是 `mise.local.toml`。除非传入 `--override`，否则它们会跳过 [override 文件](#override-file)。使用 `--file` 可选择其他项目文件。
-- [`mise unuse`](/cli/unuse.html) 会使用首个声明了目标工具的已加载配置文件，但不包括 [override 文件](#override-file)。带版本号的参数会与配置中的请求进行精确匹配：`node@20` 匹配 `node = "20"`，不匹配 `node = "20.0.0"`。使用 `--path` 可选择文件。
+- [`mise config get`](/cli/config/get.html) and
+  [`mise config set`](/cli/config/set.html) use the highest-precedence loaded
+  TOML file, which can be `mise.local.toml`. They skip the
+  [override files](#override-file) unless you pass `--override`. Use `--file` to choose another
+  project file.
+- [`mise tasks set`](/cli/tasks/set.html) 和 [`mise tasks rm`](/cli/tasks/rm.html) 会使用加载到的、定义该任务的唯一配置文件；如果有多个定义则会停止。请使用 `--env`、`--global` 或 `--path` 选择文件。
+- [`mise unuse`](/cli/unuse.html) uses the first loaded config that declares a
+  requested tool, other than an [override file](#override-file). A version-qualified argument matches the configured request
+  literally: `node@20` matches `node = "20"`, not `node = "20.0.0"`. Use
+  `--path` to choose the file.
 
 ### 将全局配置分别写入不同文件 {#global-section-write-targets}
 
@@ -336,7 +344,9 @@ env = ["development"]
 [schema/miserc.json](https://github.com/jdx/mise/blob/main/schema/miserc.json).
 `ignored_config_paths` 中的相对路径以 `.miserc.toml` 所在目录为基准解析。
 
-### mise 在哪里查找 .miserc.toml {#miserc-locations}
+`env` 中保存的是名称，因此包含路径分隔符的名称会被 mise 忽略。绝对路径或包含 `..` 的覆盖文件名也会被忽略：它们只能选择 mise 已经搜索的目录中的文件。
+
+### Where mise looks for .miserc.toml {#miserc-locations}
 
 查找顺序按优先级从高到低排列：
 
@@ -346,8 +356,8 @@ env = ["development"]
 2. 无论当前目录为何，依次读取 `~/.config/mise/miserc.local.toml` 和 `~/.config/mise/miserc.toml`。
 3. `/etc/mise/miserc.toml`。
 
-文件只覆盖其中设置的键，其他键保留继承值。`env` 会替换继承的环境列表，`env = []` 则清空该列表。
-`-E` 标志以及 `MISE_ENV` 等环境变量的优先级高于所有 `.miserc.toml` 文件。
+A file overrides only the keys it sets; the others keep their inherited values.
+`env` 会替换继承的列表，`env = []` 会清空该列表，但有一个例外：从当前目录查找的文件无法移除 `~/.config/mise/miserc.local.toml`、`~/.config/mise/miserc.toml` 或 `/etc/mise/miserc.toml` 选择的环境。这些名称会按各自原有顺序保留在列表中，并排在项目环境之前，因此项目无法关闭从全局环境加载的基线设置，例如 `paranoid = true`。项目的 `env_conf_d` 同样只对项目目录生效：`~/.config/mise/conf.d` 和 `/etc/mise/conf.d` 中的片段仍遵循全局和系统配置。`-E` 标志以及 `MISE_ENV`、`MISE_ENV_CONF_D` 等环境变量会覆盖所有 `.miserc.toml` 文件。
 
 ### 个人与整台机器的环境选择
 
@@ -366,7 +376,7 @@ env = ["native"]
 env = ["work"]
 ```
 
-项目中的 `.miserc.toml` 和 `.miserc.local.toml` 仍可覆盖此设置。
+项目的 `.miserc.toml` 和 `.miserc.local.toml` 文件可以添加环境，但不能移除 `work`。请使用 `-E` 或 `MISE_ENV` 为单条命令替换它。
 
 ### 在 .miserc.toml 中使用模板
 

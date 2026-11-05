@@ -46,6 +46,47 @@ fn parse_channel_manifest_date(manifest: &str, channel: &str) -> Result<jiff::ci
         .wrap_err_with(|| format!("invalid Rust {channel} channel manifest date: {date}"))
 }
 
+/// The release number the stable channel manifest points at, such as `1.80.0` from
+/// `1.80.0 (051478957 2024-07-21)`.
+fn parse_stable_manifest_version(manifest: &str) -> Result<String> {
+    let manifest: toml::Value =
+        toml::from_str(manifest).wrap_err("failed to parse the Rust stable channel manifest")?;
+    let version = manifest
+        .get("pkg")
+        .and_then(|pkg| pkg.get("rust"))
+        .and_then(|rust| rust.get("version"))
+        .and_then(toml::Value::as_str)
+        .and_then(|v| v.split_whitespace().next())
+        .filter(|v| regex!(r"^\d+\.\d+\.\d+$").is_match(v))
+        .ok_or_else(|| eyre::eyre!("Rust stable channel manifest is missing its version"))?;
+    Ok(version.to_string())
+}
+
+/// Whether the mirror serves the manifest of a numbered release. Some mirrors reject
+/// HEAD, so a failed HEAD is retried as the GET rustup itself makes.
+async fn mirror_serves_release(url: &str) -> bool {
+    let head_ok = HTTP_FETCH
+        .head(url)
+        .await
+        .is_ok_and(|rsp| rsp.status().is_success());
+    head_ok || HTTP_FETCH.get_text(url).await.is_ok()
+}
+
+/// The release the mirror's stable channel points at, with the date of that build.
+async fn mirror_stable_release(
+    config_env: &IndexMap<String, String>,
+) -> Result<(String, Option<String>)> {
+    let url = channel_manifest_url_for(rustup_dist_server(config_env).as_deref(), "stable");
+    let manifest = HTTP_FETCH
+        .get_text_cached(&url)
+        .await
+        .wrap_err("failed to fetch the Rust stable channel manifest")?;
+    let created_at = parse_channel_manifest_date(&manifest, "stable")
+        .ok()
+        .map(channel_created_at);
+    Ok((parse_stable_manifest_version(&manifest)?, created_at))
+}
+
 fn parse_nightly_manifest(manifest: &str) -> Result<String> {
     let date = parse_channel_manifest_date(manifest, "nightly")?;
     Ok(format!("nightly-{date}"))
@@ -131,20 +172,10 @@ fn apply_rustup_mirror_env<'a>(
     cmd.envs(rustup_mirror_env(config_env))
 }
 
-/// A mirror can serve the channels without GitHub being reachable (an offline
-/// network), so a failed release listing then only loses the numbered releases.
-/// The flag says the listing is degraded, so it must not be cached as complete.
-fn releases_or_channels_only<T>(
-    releases: Result<Vec<T>>,
-    mirrored: bool,
-) -> Result<(Vec<T>, bool)> {
-    match releases {
-        Err(err) if mirrored => {
-            warn!("failed to list rust releases from GitHub, using channels only: {err:#}");
-            Ok((vec![], true))
-        }
-        other => other.map(|releases| (releases, false)),
-    }
+/// The manifest rustup publishes for a numbered release, which a mirror carries
+/// whenever it carries the release.
+fn release_manifest_url_for(dist_server: Option<&str>, version: &str) -> String {
+    channel_manifest_url_for(dist_server, version)
 }
 
 fn nightly_manifest_url_for(dist_server: Option<&str>) -> String {
@@ -711,16 +742,14 @@ impl Backend for RustPlugin {
     }
 
     async fn _list_remote_versions(&self, config: &Arc<Config>) -> Result<Vec<VersionInfo>> {
-        Ok(self._list_remote_versions_checked(config).await?.0)
-    }
-
-    async fn _list_remote_versions_checked(
-        &self,
-        config: &Arc<Config>,
-    ) -> Result<(Vec<VersionInfo>, bool)> {
+        // A mirror is the user's source for toolchains, so GitHub is not asked for the
+        // numbered releases. They resolve through the mirror's manifests instead.
         let mirrored = rustup_dist_server(&config.env().await?).is_some();
-        let (releases, degraded) =
-            releases_or_channels_only(github::list_releases("rust-lang/rust").await, mirrored)?;
+        let releases = if mirrored {
+            vec![]
+        } else {
+            github::list_releases("rust-lang/rust").await?
+        };
         let mut versions: Vec<VersionInfo> = releases
             .into_iter()
             .map(|r| {
@@ -735,6 +764,16 @@ impl Backend for RustPlugin {
             .rev()
             .collect();
         let config_env = config.env().await?;
+        if mirrored && let Ok((version, created_at)) = mirror_stable_release(&config_env).await {
+            // The newest release the mirror serves, so numbered selectors and release-age
+            // cutoffs have a concrete version to match.
+            versions.push(VersionInfo {
+                release_url: Some(format!("https://releases.rs/docs/{version}/")),
+                version,
+                created_at,
+                ..Default::default()
+            });
+        }
         let (beta_created_at, stable_created_at) = tokio::join!(
             current_channel_created_at("beta", &config_env),
             current_channel_created_at("stable", &config_env),
@@ -774,7 +813,47 @@ impl Backend for RustPlugin {
                 ..Default::default()
             },
         ]);
-        Ok((versions, degraded))
+        Ok(versions)
+    }
+
+    /// Behind a mirror `latest` is the release the mirror's stable channel points at,
+    /// read from its manifest, or the `stable` channel when that cannot be read.
+    async fn latest_stable_version(&self, config: &Arc<Config>) -> Result<Option<String>> {
+        let config_env = config.env().await?;
+        if rustup_dist_server(&config_env).is_none() {
+            return Ok(None);
+        }
+        // The numbered release is used only when the mirror serves its manifest too, so
+        // a mirror with just the channel files still installs `stable`.
+        if let Ok((version, _)) = mirror_stable_release(&config_env).await {
+            let url =
+                release_manifest_url_for(rustup_dist_server(&config_env).as_deref(), &version);
+            if mirror_serves_release(&url).await {
+                return Ok(Some(version));
+            }
+        }
+        Ok(Some("stable".to_string()))
+    }
+
+    /// Behind a mirror a numbered release is proven by its manifest, so it needs
+    /// no GitHub listing.
+    async fn resolve_exact_version(
+        &self,
+        config: &Arc<Config>,
+        version: &str,
+    ) -> Result<Option<String>> {
+        if is_dated_nightly(version) || is_dated_beta(version) {
+            return Ok(Some(version.to_string()));
+        }
+        let server = rustup_dist_server(&config.env().await?);
+        if server.is_none() || !regex!(r"^\d+\.\d+\.\d+$").is_match(version) {
+            return Ok(None);
+        }
+        let url = release_manifest_url_for(server.as_deref(), version);
+        if !mirror_serves_release(&url).await {
+            bail!("rust {version} was not found on the mirror ({url})");
+        }
+        Ok(Some(version.to_string()))
     }
 
     async fn channel_for_cutoff(
@@ -853,14 +932,6 @@ impl Backend for RustPlugin {
 
     fn is_exact_version(&self, version: &str) -> bool {
         is_dated_nightly(version) || is_dated_beta(version)
-    }
-
-    async fn resolve_exact_version(
-        &self,
-        _config: &Arc<Config>,
-        version: &str,
-    ) -> Result<Option<String>> {
-        Ok((is_dated_nightly(version) || is_dated_beta(version)).then(|| version.to_string()))
     }
 
     async fn _parse_idiomatic_file(&self, path: &Path) -> Result<Vec<String>> {
@@ -1098,38 +1169,60 @@ fn string_array(values: &[String]) -> toml::Value {
     )
 }
 
+/// Reads `[toolchain].<key>` as a string; a value of another TOML type is an error,
+/// not a panic, since the file comes from the (possibly untrusted) project.
+fn toolchain_str(toolchain: &toml::Value, key: &str) -> Result<Option<String>> {
+    toolchain
+        .get(key)
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| eyre::eyre!("rust-toolchain.toml: toolchain.{key} must be a string"))
+        })
+        .transpose()
+}
+
+/// Reads `[toolchain].<key>` as an array of strings, see [`toolchain_str`].
+fn toolchain_str_array(toolchain: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
+    toolchain
+        .get(key)
+        .map(|value| {
+            value
+                .as_array()
+                .and_then(|values| {
+                    values
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    eyre::eyre!("rust-toolchain.toml: toolchain.{key} must be an array of strings")
+                })
+        })
+        .transpose()
+}
+
 fn parse_idiomatic_file(path: &Path) -> Result<RustToolchain> {
     let content = file::read_to_string(path)?;
-    let toml: toml::Value = toml::de::from_str(&content)?;
+    let toml: toml::Value = toml::de::from_str(&content).map_err(|err| {
+        crate::config::config_file::diagnostic::hide_linked_source(err, &content, path)
+    })?;
     let mut rt = RustToolchain::default();
     if let Some(toolchain) = toml.get("toolchain") {
-        if let Some(channel) = toolchain.get("channel") {
-            rt.channel = channel.as_str().unwrap().to_string();
+        if let Some(channel) = toolchain_str(toolchain, "channel")? {
+            rt.channel = channel;
         }
-        if let Some(profile) = toolchain.get("profile") {
-            rt.profile = Some(profile.as_str().unwrap().to_string());
+        rt.profile = toolchain_str(toolchain, "profile")?;
+        if let Some(components) = toolchain_str_array(toolchain, "components")?
+            && !components.is_empty()
+        {
+            rt.components = Some(components);
         }
-        if let Some(components) = toolchain.get("components") {
-            let components = components
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|c| c.as_str().unwrap().to_string())
-                .collect::<Vec<_>>();
-            if !components.is_empty() {
-                rt.components = Some(components);
-            }
-        }
-        if let Some(targets) = toolchain.get("targets") {
-            let targets = targets
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|c| c.as_str().unwrap().to_string())
-                .collect::<Vec<_>>();
-            if !targets.is_empty() {
-                rt.targets = Some(targets);
-            }
+        if let Some(targets) = toolchain_str_array(toolchain, "targets")?
+            && !targets.is_empty()
+        {
+            rt.targets = Some(targets);
         }
     }
     Ok(rt)
@@ -1560,15 +1653,20 @@ fn external_rustup_bin_dir(
 }
 
 fn rustup_proxy_dir_is_usable(bin_dir: &Path) -> bool {
+    const PROBE_TOOLCHAIN: &str = "mise-proxy-probe:invalid";
+    // `rustup --version` also runs the active toolchain's rustc to report its
+    // version. This probe runs from hook-env and shims in directories nobody
+    // trusted, where a rust-toolchain.toml `path` would otherwise pick it.
     if !Command::new(bin_dir.join(RUSTUP_BIN))
         .arg("--version")
+        .env("RUSTUP_TOOLCHAIN", PROBE_TOOLCHAIN)
+        .env("RUSTUP_AUTO_INSTALL", "0")
         .output()
         .is_ok_and(|output| output.status.success())
     {
         return false;
     }
 
-    const PROBE_TOOLCHAIN: &str = "mise-proxy-probe:invalid";
     [CARGO_BIN, RUSTC_BIN].iter().all(|bin| {
         Command::new(bin_dir.join(bin))
             .arg("--version")
@@ -1614,6 +1712,90 @@ fn resolve_rust_home(path: PathBuf) -> PathBuf {
     } else {
         path
     }
+}
+
+/// The host locations `mise oci build` copies into an image for a rust toolchain.
+///
+/// rustup keeps the toolchain in its own homes rather than in mise's install
+/// directory, which only holds a symlink to the cargo bin directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RustOciHomes {
+    pub cargo_bin: PathBuf,
+    pub rustup_home: PathBuf,
+    /// The toolchain's directory, canonicalized.
+    pub sysroot: PathBuf,
+    /// The `nightly-<host>` toolchain mise keeps beside a dated nightly that a
+    /// rolling `nightly` request resolved to, so `cargo +nightly` works.
+    pub nightly_alias: Option<String>,
+}
+
+impl RustOciHomes {
+    /// Holds off installs, updates, and uninstalls that rewrite the homes while
+    /// they are being copied into an image.
+    pub(crate) async fn lock_state(config: &Arc<Config>) -> Result<Vec<fslock::LockFile>> {
+        lock_rust_state(&RustHomes::resolve(config).await?).await
+    }
+
+    /// Locates the homes and sysroot of the toolchain mise installed for `tv`.
+    pub(crate) async fn resolve(config: &Arc<Config>, tv: &ToolVersion) -> Result<Self> {
+        let runtime = RustRuntime::resolve_recorded_for_tool_version(config, tv).await?;
+        if runtime.is_external() {
+            bail!(
+                "{} uses the rustup proxies in {}, which are not managed by mise, so \
+                 `mise oci build` cannot package them. Remove that rustup from PATH or set \
+                 CARGO_HOME and RUSTUP_HOME, then run `mise install` again.",
+                tv.style(),
+                file::display_path(&runtime.bin_dir)
+            );
+        }
+        let rustc = runtime.bin_dir.join(RUSTC_BIN);
+        let mut rustc_cmd = cmd(&rustc, ["--print", "sysroot"])
+            .env("PATH", rustup_path_env(&runtime)?)
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked();
+        for (key, value) in rustup_env(&runtime.homes, &tv.version) {
+            rustc_cmd = rustc_cmd.env(key, value);
+        }
+        let output = rustc_cmd
+            .run()
+            .wrap_err_with(|| format!("running {}", file::display_path(&rustc)))?;
+        if !output.status.success() {
+            bail!(
+                "{} --print sysroot failed for {}: {}",
+                file::display_path(&rustc),
+                tv.style(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let sysroot = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if sysroot.is_empty() {
+            bail!("rustc reported an empty sysroot for {}", tv.style());
+        }
+        let sysroot = std::fs::canonicalize(&sysroot)
+            .wrap_err_with(|| format!("resolving the sysroot of {}", tv.style()))?;
+        let nightly_alias = (is_dated_nightly(&tv.version) && tv.request.version() != tv.version)
+            .then(|| {
+                let name = sysroot.file_name()?.to_str()?;
+                let host_suffix = name.strip_prefix(tv.version.as_str())?;
+                Some(format!("nightly{host_suffix}"))
+            })
+            .flatten();
+        Ok(Self {
+            cargo_bin: runtime.homes.cargo_bindir(),
+            rustup_home: runtime.homes.rustup.clone(),
+            sysroot,
+            nightly_alias,
+        })
+    }
+}
+
+/// The rustup proxies `mise oci build` keeps from a cargo bin directory. The
+/// rest of that directory is whatever the build host happened to install.
+pub(crate) fn oci_proxy_names() -> impl Iterator<Item = String> {
+    RUSTUP_PROXY_NAMES
+        .iter()
+        .map(|name| format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn rustup_env(homes: &RustHomes, toolchain: &str) -> BTreeMap<String, String> {
@@ -1755,16 +1937,20 @@ mod tests {
     use confique::Layer;
 
     #[test]
-    fn test_releases_or_channels_only() {
-        let fail = || Err(eyre::eyre!("dns error"));
+    fn test_parse_stable_manifest_version() {
+        let manifest =
+            "date = \"2024-07-25\"\n[pkg.rust]\nversion = \"1.80.0 (051478957 2024-07-21)\"\n";
+        assert_eq!(parse_stable_manifest_version(manifest).unwrap(), "1.80.0");
+        assert!(parse_stable_manifest_version("date = \"2024-07-25\"").is_err());
+        let malformed = "[pkg.rust]\nversion = \"nightly (051478957 2024-07-21)\"\n";
+        assert!(parse_stable_manifest_version(malformed).is_err());
+    }
+
+    #[test]
+    fn test_release_manifest_url_for_mirror() {
         assert_eq!(
-            releases_or_channels_only::<u8>(fail(), true).unwrap(),
-            (vec![], true)
-        );
-        assert!(releases_or_channels_only::<u8>(fail(), false).is_err());
-        assert_eq!(
-            releases_or_channels_only(Ok(vec![1u8]), true).unwrap(),
-            (vec![1], false)
+            release_manifest_url_for(Some("https://m.example.com/"), "1.80.0"),
+            "https://m.example.com/dist/channel-rust-1.80.0.toml"
         );
     }
 
@@ -2193,6 +2379,53 @@ targets = ["wasm32-wasip1", " wasm32-wasip1 "]
         Ok(())
     }
 
+    /// rust-toolchain.toml is read without trust, and `mise use` can write its
+    /// options into a mise.toml whose option values are templates.
+    #[tokio::test]
+    async fn rust_idiomatic_options_must_not_be_templates() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("rust-toolchain.toml");
+        for option in [
+            r#"profile = "{{ exec(command='id') }}""#,
+            r#"components = ["clippy", "{{ exec(command='id') }}"]"#,
+            r#"targets = ["{% set x = exec(command='id') %}"]"#,
+        ] {
+            std::fs::write(
+                &path,
+                format!("[toolchain]\nchannel = \"1.85.0\"\n{option}\n"),
+            )?;
+
+            let err = RustPlugin::new()
+                .parse_idiomatic_file_with_options(&path)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("template syntax"), "{err}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rust_idiomatic_file_rejects_wrongly_typed_fields() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("rust-toolchain.toml");
+        for toolchain in [
+            "channel = 1",
+            "channel = \"1.85.0\"\nprofile = false",
+            "channel = \"1.85.0\"\ncomponents = \"clippy\"",
+            "channel = \"1.85.0\"\ncomponents = [1]",
+            "channel = \"1.85.0\"\ntargets = { a = 1 }",
+        ] {
+            std::fs::write(&path, format!("[toolchain]\n{toolchain}\n"))?;
+            let err = parse_idiomatic_file(&path).unwrap_err();
+            assert!(
+                err.to_string()
+                    .starts_with("rust-toolchain.toml: toolchain."),
+                "{toolchain}: {err}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn rust_lockfile_options_include_install_args() {
         let mut opts = opts_with("profile", "minimal");
@@ -2517,6 +2750,39 @@ targets = ["wasm32-wasip1", " wasm32-wasip1 "]
 
         assert_eq!(runtime.provider, RustProvider::Managed);
         assert_eq!(runtime.bin_dir, homes.cargo_bindir());
+    }
+
+    /// Without an override, rustup resolves (and runs) the toolchain of the
+    /// working directory's rust-toolchain.toml, which a project nobody trusted
+    /// can name.
+    #[cfg(unix)]
+    #[test]
+    fn rustup_proxy_probe_never_uses_the_directory_toolchain() {
+        let root = tempfile::tempdir().unwrap();
+        let bin_dir = root.path().join("external/bin");
+        create_proxy_dir(&bin_dir, &[RUSTUP_BIN, CARGO_BIN, RUSTC_BIN]);
+        let rustup_toolchain = root.path().join("rustup-toolchain");
+        std::fs::write(
+            bin_dir.join(RUSTUP_BIN),
+            format!(
+                "#!/bin/sh\necho \"$RUSTUP_TOOLCHAIN\" > '{}'\n",
+                rustup_toolchain.display()
+            ),
+        )
+        .unwrap();
+        for bin in [CARGO_BIN, RUSTC_BIN] {
+            std::fs::write(
+                bin_dir.join(bin),
+                "#!/bin/sh\necho \"toolchain '$RUSTUP_TOOLCHAIN' is not installed\" >&2\nexit 1\n",
+            )
+            .unwrap();
+        }
+
+        assert!(rustup_proxy_dir_is_usable(&bin_dir));
+        assert_eq!(
+            std::fs::read_to_string(rustup_toolchain).unwrap().trim(),
+            "mise-proxy-probe:invalid"
+        );
     }
 
     /// The lock `lock_rust_state_for_config` takes must be the same lock the rust

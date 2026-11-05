@@ -1,17 +1,19 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use eyre::{Result, bail};
+use eyre::{Result, WrapErr, bail};
 use futures_util::future::LocalBoxFuture;
 use heck::ToKebabCase;
 use serde::Serialize;
 use serde_json::{Value, json};
 use usage_rs::spec::ValueEnum;
 
-use super::dotfiles::{Dotfiles, DotfilesApply, prune_orphans, write_and_reload_with};
+use super::dotfiles::{
+    ConfigPass, Dotfiles, DotfilesApply, apply_config_entries, prune_orphans, write_and_reload_with,
+};
 use super::install::Install;
 use super::plugins::install::install_plugin;
 use super::run;
@@ -89,6 +91,10 @@ use crate::ui::table::MiseTable;
         help = "Do the same and also load the project's mise.work.toml"
     ),
     example(
+        "mise bootstrap --from https://github.com/example/dotfiles.git --from-dir ~/.dotfiles --config-dir .config/mise",
+        help = "Clone a dotfiles repository and link ~/.config/mise to its .config/mise"
+    ),
+    example(
         "mise bootstrap --adopt example/mise-config",
         help = "Clone global config into ~/.config/mise, then apply it"
     ),
@@ -143,6 +149,19 @@ pub(crate) struct Bootstrap {
     /// Directory for the `--from` checkout (default: `$MISE_DATA_DIR/bootstrap-repo`)
     #[usage(long, value_name = "DIR", requires = "from")]
     from_dir: Option<PathBuf>,
+
+    /// Link the global config directory to this directory of the `--from` checkout
+    ///
+    /// mise links its config directory, normally ~/.config/mise, to the
+    /// directory, then bootstraps from it, so its `config.toml`,
+    /// `config.<env>.toml`, `conf.d/`, and `miserc.toml` are the global config
+    /// from this run on. The directory must exist in the checkout, and the
+    /// path to it is relative to the checkout and must stay inside it; `.` is
+    /// the checkout itself. mise's config directory, where the link goes,
+    /// must be missing, empty, or already this link. See
+    /// https://mise.jdx.dev/bootstrap/from-repository.html#global-config-elsewhere.
+    #[usage(long, value_name = "DIR", requires = "from")]
+    config_dir: Option<PathBuf>,
 
     /// Show what would change without changing anything
     ///
@@ -199,6 +218,16 @@ pub(crate) struct Bootstrap {
     #[usage(long)]
     prompt_vars: bool,
 
+    /// Save the environments of `-E` or `MISE_ENV` to `miserc.local.toml`
+    ///
+    /// Writes `env` in the `miserc.local.toml` of mise's config directory, so
+    /// later runs, including `mise bootstrap --update`, select the same
+    /// environments without `-E`. Names may be sets from `[env_sets]` in
+    /// `miserc.toml`. Other keys in the file are kept. Needs `-E` or
+    /// `MISE_ENV`, and a `--dry-run` writes nothing.
+    #[usage(long)]
+    save_env: bool,
+
     /// Skip these parts
     ///
     /// Repeat the flag or separate parts with commas. Cannot be combined with
@@ -209,7 +238,10 @@ pub(crate) struct Bootstrap {
     /// Refresh package metadata and update repositories before applying
     ///
     /// Also fast-forwards a checkout that `--from` or `--adopt` reuses. Without
-    /// `--update`, a reused checkout stays at its current commit.
+    /// either, fast-forwards the global config when it is a Git checkout with
+    /// an upstream, as `--adopt` makes, or links into one, as `--config-dir`
+    /// makes, then bootstraps from the new commit. Without `--update`, a
+    /// checkout stays at its current commit.
     #[usage(long)]
     update: bool,
 
@@ -338,6 +370,107 @@ fn warn_legacy_bootstrap_command(id: &'static str, legacy: &str, replacement: &s
 }
 
 type BootstrapPredictionGraph = HashMap<ResourceId, (ResourceAction, Vec<ResourceId>)>;
+
+/// Set for a bootstrap that runs after the global config was fast-forwarded,
+/// so that run does not fast-forward it again.
+const CONFIG_UPDATED_ENV: &str = "__MISE_BOOTSTRAP_CONFIG_UPDATED";
+
+/// The Git checkout that `mise bootstrap --update` fast-forwards for the
+/// global config: the config directory itself when it is the top of a
+/// checkout (`--adopt`), or the checkout it links into (`--config-dir`).
+/// A config directory that merely sits inside a larger repository, such as
+/// a home directory kept in Git, is not one. A branch without an upstream,
+/// or a detached HEAD, has nothing to fast-forward from.
+fn global_config_checkout() -> Result<Option<PathBuf>> {
+    let dir = system::history::tracked::global_config_dir();
+    let Ok(resolved) = dunce::canonicalize(&dir) else {
+        return Ok(None);
+    };
+    let Some(top) = git_stdout(&resolved, ["rev-parse", "--show-toplevel"]) else {
+        return Ok(None);
+    };
+    let top = dunce::canonicalize(top)?;
+    if top != resolved && !crate::file::is_symlink_or_junction(&dir) {
+        return Ok(None);
+    }
+    if git_stdout(&top, ["rev-parse", "--symbolic-full-name", "@{upstream}"]).is_none() {
+        debug!(
+            "bootstrap: {} has no upstream to fast-forward from",
+            top.display_user()
+        );
+        return Ok(None);
+    }
+    Ok(Some(top))
+}
+
+/// Runs this `mise bootstrap` again, after the global config moved to a new
+/// commit, so it reads that commit's config from the start. It starts in the
+/// directory this one started in, where a relative `--cd` or `MISE_CD`
+/// resolves as it did here.
+/// Write `env` to the `miserc.local.toml` of mise's config directory, keeping
+/// the file's other keys and comments.
+fn save_env(names: &[String], dry_run: bool) -> Result<()> {
+    if names.is_empty() {
+        bail!("--save-env needs the environments to save: pass -E or set MISE_ENV");
+    }
+    if let Some(name) = names.iter().find(|name| name.contains(['/', '\\'])) {
+        bail!("--save-env: {name:?} is not an environment name: it contains a path separator");
+    }
+    let path = dirs::CONFIG.join("miserc.local.toml");
+    if dry_run {
+        info!("would save env = {names:?} to {}", path.display_user());
+        return Ok(());
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err).wrap_err_with(|| format!("reading {}", path.display_user())),
+    };
+    let mut doc = content
+        .parse::<toml_edit::DocumentMut>()
+        .wrap_err_with(|| format!("parsing {}", path.display_user()))?;
+    let mut list = toml_edit::Array::new();
+    list.extend(names.iter().map(String::as_str));
+    doc["env"] = toml_edit::value(list);
+    if let Some(parent) = path.parent() {
+        crate::file::create_dir_all(parent)?;
+    }
+    crate::file::write_atomic(&path, doc.to_string())?;
+    info!("saved env = {names:?} to {}", path.display_user());
+    Ok(())
+}
+
+fn rerun_bootstrap_after_config_update() -> Result<()> {
+    let args = crate::env::ARGS.read().unwrap().clone();
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(args.iter().skip(1))
+        .env(CONFIG_UPDATED_ENV, "1");
+    if let Some(cwd) = crate::env::original_cwd() {
+        command.current_dir(cwd);
+    }
+    let status = command.status()?;
+    if !status.success() {
+        bail!("bootstrap from the updated global config failed with {status}");
+    }
+    Ok(())
+}
+
+/// A git command's trimmed output, or `None` when it fails.
+fn git_stdout<const N: usize>(dir: &Path, args: [&str; N]) -> Option<String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stderr(std::process::Stdio::null());
+    crate::git::sanitize_git_command(&mut command);
+    let output = command.output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
 fn run_bootstrap_git<const N: usize>(checkout: &Path, args: [&str; N]) -> Result<()> {
     let mut command = Command::new("git");
@@ -1865,6 +1998,23 @@ impl Bootstrap {
         if self.prompt_vars && self.command.is_some() {
             bail!("--prompt-vars only applies to a full `mise bootstrap` run, not a subcommand");
         }
+        if self.save_env && self.command.is_some() {
+            bail!("--save-env only applies to a full `mise bootstrap` run, not a subcommand");
+        }
+        // A full run with --update first fast-forwards a global config that is
+        // a Git checkout, or links into one. New commits can change miserc.toml
+        // and the environments, which this process has already read, so the
+        // bootstrap then runs again in a process of its own.
+        if self.update
+            && self.from.is_none()
+            && self.adopt.is_none()
+            && self.command.is_none()
+            && std::env::var_os(CONFIG_UPDATED_ENV).is_none()
+            && let Some(checkout) = global_config_checkout()?
+            && self.update_global_config_checkout(&checkout).await?
+        {
+            return rerun_bootstrap_after_config_update();
+        }
         // Every subcommand, not just the full run, applies less than project
         // config declares in safe mode; say so up front.
         if Settings::safe_mode()
@@ -1886,6 +2036,13 @@ impl Bootstrap {
         }
         if let Some(command) = self.command.take() {
             return command.run().await;
+        }
+        if self.save_env {
+            let args = crate::env::ARGS.read().unwrap().clone();
+            save_env(
+                &crate::env::explicit_environment(&args).unwrap_or_default(),
+                self.dry_run,
+            )?;
         }
         if self.prompt_vars {
             crate::config::env_directive::prompt::enable();
@@ -2247,7 +2404,98 @@ impl Bootstrap {
             // is written, so neither the apply nor the prune can change
             // which commands run
             let reload = system::history::config::reload_commands()?;
-            if (!files.is_empty() || !edits.is_empty())
+            // mise's own configuration is written first and read again, so a
+            // rule it adds applies in this run instead of the next one, as in
+            // `mise dot apply`. A dry run previews that write, then plans the
+            // rest against the sources it would write.
+            // the config a dry run simulates after the first pass; the second
+            // pass is simulated on top of it, in the order a real run writes
+            let mut dry_run_base = None;
+            let mut simulated_bodies = DryRunTexts::default();
+            let mut files = files;
+            let mut edits = edits;
+            let config_pass_files = system::files::with_dependencies(&files, |req| {
+                is_config_target(&config, &req.target)
+            });
+            let config_edits = edits
+                .iter()
+                .filter(|req| is_config_target(&config, &req.path))
+                .cloned()
+                .collect::<Vec<_>>();
+            // a dry run reads the live file to check an edit, which the copy
+            // about to replace it may have changed; the edits the new config
+            // keeps are previewed against the simulated one instead
+            let config_pass_edits = if self.dry_run {
+                vec![]
+            } else {
+                config_edits.clone()
+            };
+            if !config_pass_files.is_empty() || !config_edits.is_empty() {
+                let pass = ConfigPass {
+                    reload: &reload,
+                    dry_run: self.dry_run,
+                    files: system::files::ApplyOpts {
+                        dry_run: self.dry_run,
+                        verbose: false,
+                        force: self.force_dotfiles,
+                        force_hint: "use --force-dotfiles or run `mise dot apply --force`",
+                        yes: self.yes,
+                    },
+                    edits: system::edits::ApplyOpts {
+                        part: "dotfiles",
+                        dry_run: self.dry_run,
+                        verbose: false,
+                        yes: self.yes,
+                    },
+                    secrets: &secrets,
+                };
+                let Some(done) =
+                    apply_config_entries(&config, &config_pass_files, &config_pass_edits, &pass)?
+                else {
+                    return Ok(declined());
+                };
+                let apply_config = if self.dry_run {
+                    let simulated =
+                        simulate_dotfiles_dry_run(&config, &files, &edits, &mut simulated_bodies)?;
+                    let simulated = config.with_bootstrap_dry_run_config_files(simulated)?;
+                    dry_run_base = Some(simulated.clone());
+                    simulated
+                } else {
+                    Config::reset().await?
+                };
+                files = system::files::files_from_config(&apply_config)?;
+                edits = system::edits::edits_from_config(&apply_config)?;
+                // a file the first pass wrote is not written again: a config
+                // edit that pass made would otherwise be copied back over.
+                // A dry run wrote nothing, so a planned file that a remaining
+                // entry depends on stays in the plan
+                if self.dry_run {
+                    let pending = files
+                        .iter()
+                        .map(|req| format!("{req:?}"))
+                        .filter(|req| !done.contains(req))
+                        .collect::<HashSet<_>>();
+                    files = system::files::with_dependencies(&files, |req| {
+                        pending.contains(&format!("{req:?}"))
+                    });
+                } else {
+                    files.retain(|req| !done.contains(&format!("{req:?}")));
+                }
+                if !files.is_empty() || !edits.is_empty() {
+                    let apply_config = &apply_config;
+                    // the new config may declare secrets and templates that the
+                    // first one did not
+                    let secrets = system::secrets::resolve(apply_config, self.prompt_secrets)?;
+                    if !self.dry_run {
+                        system::files::preflight_templates(apply_config, &files, &secrets)?;
+                    }
+                    if !write_and_reload_with(&reload, self.dry_run, |written| {
+                        self.apply_dotfiles(apply_config, &files, &edits, &secrets, written)
+                    })? {
+                        return Ok(declined());
+                    }
+                }
+            } else if (!files.is_empty() || !edits.is_empty())
                 && !write_and_reload_with(&reload, self.dry_run, |written| {
                     self.apply_dotfiles(&config, &files, &edits, &secrets, written)
                 })?
@@ -2255,7 +2503,15 @@ impl Bootstrap {
                 return Ok(declined());
             }
             if self.dry_run {
-                let config_files = config_files_after_dotfiles_dry_run(&config, &files, &edits)?;
+                // on top of the first pass's simulation, so what it would write
+                // counts even when the new config no longer lists it, and an
+                // edit it applied is not replayed over a later copy
+                let config_files = simulate_dotfiles_dry_run(
+                    dry_run_base.as_ref().unwrap_or(&config),
+                    &files,
+                    &edits,
+                    &mut simulated_bodies,
+                )?;
                 config = config.with_bootstrap_dry_run_config_files(config_files.clone())?;
                 hooks = system::hooks_from_config(&config);
                 dry_run_config_files = Some(config_files);
@@ -2466,7 +2722,40 @@ impl Bootstrap {
             debug!("bootstrap: `bootstrap` task skipped");
         } else {
             let tasks = config.tasks().await?;
-            if tasks.iter().any(|(_, t)| t.is_match("bootstrap")) {
+            if tasks.iter().any(|(_, t)| {
+                t.aliases.iter().any(|a| a == "bootstrap")
+                    || (!t.name.contains(':') && t.is_match("bootstrap"))
+            }) {
+                // The task `mise run bootstrap` below starts, found the way it finds it, so an
+                // exact name wins over an alias another task declares.
+                let skip_deps = Settings::get().task.skip_depends;
+                let roots = crate::task::task_list::get_task_lists(
+                    &config,
+                    &["bootstrap".to_string()],
+                    false,
+                    skip_deps,
+                    false,
+                )
+                .await?;
+                // Tasks-only config and template-free task files load without trust because
+                // their tasks are inert until `mise run` names one. Nobody named this one, and a
+                // project task replaces a global one of the same name, so the `bootstrap` task
+                // and every task it reaches have to come from config the user trusts. Tasks it
+                // does not reach may come from anywhere. Safe mode refuses to run tasks below.
+                if !Settings::safe_mode()
+                    && let Some(task) =
+                        config::untrusted_task_reached(&config, roots, skip_deps).await?
+                {
+                    bail!(
+                        "bootstrap: not running the `bootstrap` task: it would run `{}` from {}, which is not trusted; review it and run `mise trust {}`, or pass `--skip task`",
+                        task.name,
+                        task.config_source.display_user(),
+                        config::config_file::config_trust_root(&task.config_source).display_user()
+                    );
+                }
+                // The check above follows the names as written; the executor checks the
+                // tasks it actually resolves, templated `run` entries included.
+                config::run_only_trusted_tasks();
                 info!("bootstrap: running `bootstrap` task");
                 self.run_task("bootstrap", skip.contains(&BootstrapPart::Tools))
                     .await?;
@@ -2492,6 +2781,9 @@ impl Bootstrap {
             }
             None => (None, None),
         };
+        if let Some(dir) = self.config_dir.as_deref() {
+            validate_config_dir_arg(dir)?;
+        }
         if let Some(url) = expanded.as_deref() {
             system::git_prerequisites::ensure(url, self.yes, self.dry_run).await?;
             if let Some(branch) = adopt_branch.as_deref() {
@@ -2612,38 +2904,92 @@ impl Bootstrap {
         self.run_child_bootstrap(checkout).await
     }
 
+    /// Fast-forwards the Git checkout of the global config. Returns whether
+    /// it moved to a new commit.
+    async fn update_global_config_checkout(&self, checkout: &Path) -> Result<bool> {
+        if self.dry_run {
+            miseprintln!(
+                "Would run: git -C {} pull --ff-only",
+                checkout.display_user()
+            );
+            return Ok(false);
+        }
+        let before = git_stdout(checkout, ["rev-parse", "HEAD"]);
+        let generation = OperationScope::begin("bootstrap --update", false).await?;
+        let pulled = run_bootstrap_git(checkout, ["pull", "--ff-only"]);
+        match &pulled {
+            Ok(()) => {
+                journal::note(format!(
+                    "updated the checkout of the global config in {}",
+                    checkout.display_user()
+                ));
+                generation.finish(
+                    None,
+                    Some(Summary {
+                        message: Some("checkout of the global config".into()),
+                    }),
+                );
+            }
+            Err(err) => generation.finish(Some(format!("{err:#}")), None),
+        }
+        pulled.wrap_err_with(|| {
+            format!(
+                "could not fast-forward the global config in {}",
+                checkout.display_user()
+            )
+        })?;
+        Ok(git_stdout(checkout, ["rev-parse", "HEAD"]) != before)
+    }
+
     /// Runs the bootstrap itself as a child process from `checkout` (the
     /// global configuration directory for `--adopt`), trusted for it.
     async fn run_child_bootstrap(&self, checkout: PathBuf) -> Result<()> {
         let checkout = dunce::canonicalize(&checkout)?;
         let mut command = Command::new(std::env::current_exe()?);
+        // the checkout, and with it any config directory inside it, is
+        // already where `--update` wanted it
+        command.env(CONFIG_UPDATED_ENV, "1");
         command.args(bootstrap_from_child_args(
             &checkout,
             &crate::env::ARGS.read().unwrap(),
         ));
+        if let Some(dir) = self.config_dir.as_deref() {
+            let selected = checkout_config_dir(&checkout, dir)?;
+            // a dry run changes nothing, so it previews from the directory itself
+            let config_dir = if self.dry_run {
+                selected
+            } else {
+                link_config_dir(&selected)?
+            };
+            command.env("MISE_CONFIG_DIR", config_dir);
+            // MISE_GLOBAL_CONFIG_FILE, or its MISE_CONFIG_FILE fallback, would
+            // make one file the whole global config, skipping the directory's
+            // conf.d/ and config.<env>.toml
+            command.env_remove("MISE_GLOBAL_CONFIG_FILE");
+            command.env_remove("MISE_CONFIG_FILE");
+        }
         if self.adopt.is_some() {
-            if self.dry_run {
-                command.env("MISE_CONFIG_DIR", &checkout);
-                let name = crate::env::MISE_GLOBAL_CONFIG_FILE
-                    .as_deref()
-                    .and_then(Path::file_name)
-                    .unwrap_or(std::ffi::OsStr::new("config.toml"));
-                command.env("MISE_GLOBAL_CONFIG_FILE", checkout.join(name));
+            // a dry run previews from `checkout` itself, which may be a staged
+            // copy of a setup repository's configuration
+            let config_dir = if self.dry_run {
+                checkout.clone()
             } else {
                 let config_dir = crate::env::MISE_CONFIG_DIR.as_path();
-                let config_dir = if config_dir.is_absolute() {
+                if config_dir.is_absolute() {
                     config_dir.to_path_buf()
                 } else {
                     std::env::current_dir()?.join(config_dir)
-                };
-                command.env("MISE_CONFIG_DIR", config_dir);
-
-                if let Some(file_name) = crate::env::MISE_GLOBAL_CONFIG_FILE
-                    .as_deref()
-                    .and_then(Path::file_name)
-                {
-                    command.env("MISE_GLOBAL_CONFIG_FILE", checkout.join(file_name));
                 }
+            };
+            command.env("MISE_CONFIG_DIR", config_dir);
+
+            // only a global config file the user chose: setting one otherwise
+            // would hide the directory's conf.d/ and config.<env>.toml
+            if let Some(file_name) = crate::env::MISE_GLOBAL_CONFIG_FILE
+                .as_deref()
+                .and_then(Path::file_name)
+            {
+                command.env("MISE_GLOBAL_CONFIG_FILE", checkout.join(file_name));
             }
         }
 
@@ -2692,7 +3038,7 @@ impl Bootstrap {
                 verbose: false,
                 yes: self.yes,
             };
-            if !system::edits::apply(config, edits, &opts, written)? {
+            if !system::edits::apply(config, edits, &opts, secrets, written)? {
                 return Ok(false);
             }
         }
@@ -2790,6 +3136,7 @@ impl Bootstrap {
             task_cache_explain_json: false,
             task_cache_stats: false,
             timeout: None,
+            lock_timeout: None,
             skip_deps: false,
             // a dry run must not auto-install tools before the (not actually
             // run) task, and --skip tools must keep the task runner from
@@ -2821,12 +3168,13 @@ fn bootstrap_from_child_args(checkout: &Path, args: &[String]) -> Vec<OsString> 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--replace-history" | "--take-remote-all" => {}
-            "--from" | "--adopt" | "--from-dir" | "--cd" | "-C" => {
+            "--from" | "--adopt" | "--from-dir" | "--config-dir" | "--cd" | "-C" => {
                 args.next();
             }
             _ if arg.starts_with("--from=")
                 || arg.starts_with("--adopt=")
                 || arg.starts_with("--from-dir=")
+                || arg.starts_with("--config-dir=")
                 || arg.starts_with("--cd=")
                 || arg.starts_with("-C") && arg.len() > 2 => {}
             _ => {
@@ -2840,6 +3188,97 @@ fn bootstrap_from_child_args(checkout: &Path, args: &[String]) -> Vec<OsString> 
         }
     }
     forwarded
+}
+
+/// `--config-dir` names a directory of the checkout, so it must be relative and
+/// never climb out of it. Checked before cloning, so a typo costs no clone.
+fn validate_config_dir_arg(dir: &Path) -> Result<()> {
+    let inside = dir
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
+    if !inside {
+        bail!(
+            "--config-dir {} must be a path inside the checkout, relative to it",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// The global config directory `--config-dir` selects in `checkout`. A symlink
+/// inside the repository must not point the global config outside it.
+fn checkout_config_dir(checkout: &Path, dir: &Path) -> Result<PathBuf> {
+    let joined = checkout.join(dir);
+    if !joined.is_dir() {
+        bail!(
+            "--config-dir {} is not a directory in the checkout {}",
+            dir.display(),
+            checkout.display()
+        );
+    }
+    let resolved = dunce::canonicalize(&joined)?;
+    if !resolved.starts_with(checkout) {
+        bail!(
+            "--config-dir {} resolves to {}, outside the checkout {}",
+            dir.display(),
+            resolved.display(),
+            checkout.display()
+        );
+    }
+    Ok(resolved)
+}
+
+/// Links mise's config directory to `selected`, as `--adopt` clones into it,
+/// so this bootstrap and every later command read it there, and
+/// `{{ mise_config_dir }}` names the same place on every run. Whatever is
+/// there already must be missing, an empty directory, or this link; anything
+/// else is left alone.
+fn link_config_dir(selected: &Path) -> Result<PathBuf> {
+    let link = dirs::CONFIG.to_path_buf();
+    let link = if link.is_absolute() {
+        link
+    } else {
+        std::env::current_dir()?.join(link)
+    };
+    if crate::file::is_symlink_or_junction(&link) {
+        if dunce::canonicalize(&link).is_ok_and(|resolved| resolved == selected) {
+            return Ok(link);
+        }
+        bail!(
+            "{} is already a link; remove it to use --config-dir {}",
+            link.display_user(),
+            selected.display_user()
+        );
+    }
+    match link.read_dir() {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                bail!(
+                    "{} already holds a global config; move it aside to use --config-dir {}",
+                    link.display_user(),
+                    selected.display_user()
+                );
+            }
+            std::fs::remove_dir(&link)?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) if link.exists() => bail!(
+            "{} is not a directory; move it aside to use --config-dir {}",
+            link.display_user(),
+            selected.display_user()
+        ),
+        Err(err) => return Err(err.into()),
+    }
+    if let Some(parent) = link.parent() {
+        crate::file::create_dir_all(parent)?;
+    }
+    crate::file::make_dir_link(selected, &link)?;
+    info!(
+        "bootstrap: linked {} to {}",
+        link.display_user(),
+        selected.display_user()
+    );
+    Ok(link)
 }
 
 /// Re-run this invocation with `environments` selected, preserving every other
@@ -2988,9 +3427,32 @@ fn config_files_after_dotfiles_dry_run(
     files: &[FileRequest],
     edits: &[system::edits::EditRequest],
 ) -> Result<config::ConfigMap> {
+    simulate_dotfiles_dry_run(config, files, edits, &mut DryRunTexts::default())
+}
+
+/// What a dry-run simulation knows about each config target: the text it
+/// would write, and the targets whose text is not known because a template
+/// would have to be rendered.
+#[derive(Default)]
+struct DryRunTexts {
+    bodies: indexmap::IndexMap<PathBuf, String>,
+    unavailable: HashSet<PathBuf>,
+}
+
+/// Like `config_files_after_dotfiles_dry_run`, with the simulated text of each
+/// config target kept in `bodies`, so a later pass edits what an earlier one
+/// would have written rather than the file on disk.
+fn simulate_dotfiles_dry_run(
+    config: &Config,
+    files: &[FileRequest],
+    edits: &[system::edits::EditRequest],
+    texts: &mut DryRunTexts,
+) -> Result<config::ConfigMap> {
     let mut config_files = config.config_files.clone();
-    let mut bodies = indexmap::IndexMap::new();
-    let mut unavailable_bodies = HashSet::new();
+    let DryRunTexts {
+        bodies,
+        unavailable: unavailable_bodies,
+    } = texts;
     for file in files {
         if !is_simulated_config_target(config, &file.target) {
             continue;
@@ -2998,6 +3460,7 @@ fn config_files_after_dotfiles_dry_run(
         if file.mode == FileMode::Absent {
             // removed by the apply; a later edit starts from an empty file
             config_files.shift_remove(&file.target);
+            unavailable_bodies.remove(&file.target);
             bodies.insert(file.target.clone(), String::new());
             continue;
         }
@@ -3022,6 +3485,7 @@ fn config_files_after_dotfiles_dry_run(
         match contents {
             Ok(body) => match parse_mise_config_body(&file.target, &body) {
                 Ok(cf) => {
+                    unavailable_bodies.remove(&file.target);
                     bodies.insert(file.target.clone(), body);
                     config_files.insert(file.target.clone(), cf);
                 }
@@ -4563,6 +5027,11 @@ impl BootstrapStatus {
                 if auto_updates {
                     package["auto_updates"] = json!(true);
                 }
+                if self.json
+                    && let Some(management) = mp.manager.management(&s, &mp.options).await
+                {
+                    package["managed_by"] = json!(management.as_str());
+                }
                 json_pkgs.push(package);
             }
             json_out.insert(
@@ -4669,6 +5138,7 @@ impl BootstrapStatus {
                         format!("permissions {:04o}", req.permissions.unwrap_or_default())
                     }
                     system::files::FileMode::Absent => "absent".to_string(),
+                    system::files::FileMode::Fnox => "fnox".to_string(),
                     _ => format!("{} {}", req.mode.name(), req.source.display_user()),
                 },
                 state_str,
@@ -5051,6 +5521,7 @@ impl BootstrapStatus {
         let status = system::login_shell::status(&req)?;
         let (row_state, json_state, missing) = match &status.state {
             LoginShellState::Set => ("set", "set", false),
+            LoginShellState::Unresolved => ("not installed", "unresolved", true),
             LoginShellState::Differs { .. } => ("differs", "differs", true),
             LoginShellState::MissingFromShells { .. } => {
                 ("missing from /etc/shells", "missing_from_shells", true)
@@ -5068,6 +5539,7 @@ impl BootstrapStatus {
             json!({
                 "available": true,
                 "shell": status.request.shell,
+                "resolved": status.resolved,
                 "user": status.user,
                 "current": status.current,
                 "shell_listed": status.shell_listed,
@@ -6152,6 +6624,10 @@ impl BootstrapUserStatus {
                 let status = system::login_shell::status(&req)?;
                 let state = match &status.state {
                     LoginShellState::Set => "set",
+                    LoginShellState::Unresolved => {
+                        any_missing = true;
+                        "not installed"
+                    }
                     LoginShellState::Differs { .. } => {
                         any_missing = true;
                         "differs"
@@ -6167,6 +6643,7 @@ impl BootstrapUserStatus {
                         json!({
                             "available": true,
                             "shell": status.request.shell,
+                            "resolved": status.resolved,
                             "user": status.user,
                             "current": status.current,
                             "shell_listed": status.shell_listed,
@@ -6175,7 +6652,7 @@ impl BootstrapUserStatus {
                     );
                 } else {
                     rows.push(vec![
-                        status.request.shell,
+                        status.resolved.unwrap_or(status.request.shell),
                         status.current,
                         state.to_string(),
                     ]);
@@ -6228,6 +6705,7 @@ mod tests {
 
     use super::{
         bootstrap_from_child_args, parse_adopt_source, select_remote_inventory, unapply_child_args,
+        validate_config_dir_arg,
     };
     use crate::cli::{Cli, Commands};
     use crate::system::remote;
@@ -6508,6 +6986,9 @@ mod tests {
             "--adopt=git@example.com:dotfiles.git",
             "--from-dir",
             "/old-checkout",
+            "--config-dir",
+            "mise",
+            "--config-dir=other",
             "--yes",
             "--only",
             "dotfiles",
@@ -6529,6 +7010,16 @@ mod tests {
             ]
             .map(OsString::from)
         );
+    }
+
+    #[test]
+    fn config_dir_must_stay_inside_the_checkout() {
+        for dir in [".", "mise", "dotfiles/Mise/.config/mise", "./mise"] {
+            assert!(validate_config_dir_arg(Path::new(dir)).is_ok(), "{dir}");
+        }
+        for dir in ["..", "../mise", "mise/../..", "/etc/mise"] {
+            assert!(validate_config_dir_arg(Path::new(dir)).is_err(), "{dir}");
+        }
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::backend::static_helpers::{
     apply_rename_exe, bin_name_for_download, clean_binary_name, ensure_plain_bin_name,
     ensure_safe_relative_bin_path, eval_checksum_expr, fetch_checksum_from_file_with_headers,
     fetch_checksum_from_shasums_with_headers, get_filename_from_url, lookup_value_with_fallback,
-    pinned_checksum, rename_binary_name, shasums_has_entries, template_string,
+    pinned_checksum, rename_binary_name, render_bin_path, shasums_has_entries, template_string,
     template_string_for_target, template_string_strict, verify_artifact,
 };
 use crate::backend::version_list;
@@ -28,6 +28,7 @@ use crate::ui::progress_report::SingleReport;
 use crate::{dirs, env, file, hash};
 use async_trait::async_trait;
 use eyre::{Result, WrapErr, bail};
+use mise_util::redactions::strip_url_credentials_in_value;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -507,13 +508,15 @@ impl HttpBackend {
     // Cache key generation
     // -------------------------------------------------------------------------
 
-    /// Generate a cache key based on file content and extraction options
+    /// Generate a cache key based on file content and extraction options.
+    /// `bin_path` is the rendered, checked `bin_path` option.
     fn cache_key(
         &self,
         file_path: &Path,
         opts: &HttpOptions<'_>,
         file_info: &FileInfo,
         strip_components: usize,
+        bin_path: Option<&str>,
     ) -> Result<String> {
         let checksum = hash::file_hash_blake3(file_path, None)?;
 
@@ -548,9 +551,12 @@ impl HttpBackend {
         if let Some(rename) = lookup_value_with_fallback(opts.raw(), "rename_exe") {
             parts.push(format!("rename_{}", rename_cache_token(rename)));
             // When rename_exe is used, bin_path affects where the rename happens,
-            // so different bin_path values result in different cached content
-            if let Some(bin_path) = opts.bin_path() {
-                parts.push(format!("binpath_{bin_path}"));
+            // so different bin_path values result in different cached content.
+            // The rendered path is what counts (`{{ version }}/bin` differs per
+            // version), and it is hashed like rename_exe, so no path text reaches
+            // the cache directory name.
+            if let Some(bin_path) = bin_path {
+                parts.push(format!("binpath_{}", hash::hash_blake3_to_str(bin_path)));
             }
         }
 
@@ -571,10 +577,11 @@ impl HttpBackend {
         file_path: &Path,
         effective_filename: Option<&str>,
         opts: &HttpOptions<'_>,
+        bin_path: Option<&str>,
     ) -> Result<CachePlan> {
         let file_info = FileInfo::new(file_path, effective_filename, opts);
         let strip_components = self.effective_strip_components(file_path, &file_info, opts)?;
-        let key = self.cache_key(file_path, opts, &file_info, strip_components)?;
+        let key = self.cache_key(file_path, opts, &file_info, strip_components, bin_path)?;
 
         Ok(CachePlan {
             key,
@@ -761,7 +768,9 @@ impl HttpBackend {
             || cache_plan.file_info.is_compressed_binary
         {
             opts.bin_path()
-                .map(|path| tmp_path.join(template_string(&path, tv)))
+                .map(|path| render_bin_path(&path, tv))
+                .transpose()?
+                .map(|path| tmp_path.join(path))
                 .unwrap_or_else(|| tmp_path.clone())
         } else {
             tmp_path.clone()
@@ -875,13 +884,16 @@ impl HttpBackend {
         };
 
         file::extract_archive(file_path, dest, cache_plan.file_info.format, &extract_opts)?;
+        // rename_exe below renames by name, which would follow a link the
+        // archive shipped out of the extraction directory.
+        file::ensure_symlinks_stay_within(dest)?;
 
         // Handle rename_exe option for archives
         if let Some(rename_value) = lookup_value_with_fallback(opts.raw(), "rename_exe") {
             // When bin_path is not explicitly set, auto-detect bin/ subdirectory to match
             // the same logic used by discover_bin_paths() for PATH construction
             let search_dir = if let Some(bin_path_template) = opts.bin_path() {
-                let bin_path = template_string(&bin_path_template, tv);
+                let bin_path = render_bin_path(&bin_path_template, tv)?;
                 dest.join(&bin_path)
             } else {
                 let bin_dir = dest.join("bin");
@@ -909,7 +921,7 @@ impl HttpBackend {
         opts: &HttpOptions<'_>,
     ) -> Result<()> {
         let metadata = CacheMetadata {
-            url: url.to_string(),
+            url: strip_url_credentials_in_value(url).into_owned(),
             checksum: opts.checksum(),
             size: file_path.metadata()?.len(),
             extracted_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -1017,7 +1029,7 @@ impl HttpBackend {
         if let ExtractionType::RawFile { filename } = extraction_type
             && let Some(bin_path_template) = opts.bin_path()
         {
-            let bin_path = template_string(&bin_path_template, tv);
+            let bin_path = render_bin_path(&bin_path_template, tv)?;
             let dest_dir = install_path.join(&bin_path);
             file::create_dir_all(&dest_dir)?;
 
@@ -1456,7 +1468,7 @@ impl Backend for HttpBackend {
             .into());
         };
 
-        let checksum = self.resolve_lock_checksum(&opts, tv, target, &url).await;
+        let mut checksum = self.resolve_lock_checksum(&opts, tv, target, &url).await;
 
         // A checksum source was configured but produced nothing for this target
         // (manifest miss, SHASUMS naming mismatch, unreachable file, ...). The
@@ -1477,8 +1489,17 @@ impl Backend for HttpBackend {
             );
         }
 
+        // The lockfile is committed, so it names the artifact without the
+        // credentials that fetch it. Installs take the URL from config.
+        let lock_url = strip_url_credentials_in_value(&url).into_owned();
+        if checksum.is_none() && lock_url != url && Settings::get().generate_lockfiles() {
+            // `generate` would otherwise hash what the recorded URL serves,
+            // which without the credentials is an authentication error.
+            crate::lockfile::generate::download_for_verification(&url, &mut checksum).await?;
+        }
+
         Ok(PlatformInfo {
-            url: Some(url),
+            url: Some(lock_url),
             checksum,
             ..Default::default()
         })
@@ -1510,6 +1531,11 @@ impl Backend for HttpBackend {
 
         // Get URL template
         let url_template = opts.url().ok_or_else(|| self.missing_url_error(&opts))?;
+        // Check bin_path before anything is downloaded, extracted or keyed on it.
+        let bin_path = opts
+            .bin_path()
+            .map(|bin_path| render_bin_path(&bin_path, &tv))
+            .transpose()?;
 
         let url = template_string(&url_template, &tv);
 
@@ -1517,12 +1543,12 @@ impl Backend for HttpBackend {
         let filename = get_filename_from_url(&url);
         let file_path = tv.download_path().join(&filename);
 
-        // Record URL in lock platforms
+        // Record URL in lock platforms, without the credentials that fetch it
         let platform_key = self.platform_key_for(Some(&raw_opts));
         tv.lock_platforms
             .entry(platform_key.clone())
             .or_default()
-            .url = Some(url.clone());
+            .url = Some(strip_url_credentials_in_value(&url).into_owned());
 
         // For lockfile checksum verification
         let settings = Settings::get();
@@ -1578,9 +1604,21 @@ impl Backend for HttpBackend {
         }
         verify_artifact(&tv, &file_path, opts.raw(), Some(ctx.pr.as_ref()))?;
 
+        // Verify/generate lockfile checksum (before extraction for security). A rejected
+        // download must never reach `install_path_for`, which is not always the
+        // `tv.install_path()` the caller removes when this returns an error.
+        if lockfile_enabled || has_lockfile_checksum {
+            ctx.pr.next_operation();
+        }
+        self.verify_checksum(ctx, &mut tv, &file_path)?;
+
         // Generate cache key
-        let cache_plan =
-            self.cache_plan(&file_path, download.effective_filename.as_deref(), &opts)?;
+        let cache_plan = self.cache_plan(
+            &file_path,
+            download.effective_filename.as_deref(),
+            &opts,
+            bin_path.as_deref(),
+        )?;
         ctx.pr.next_operation();
         // Explicit destinations must remain independent of the user's data dir,
         // even when the tool opts into sharing normal user installations.
@@ -1623,12 +1661,6 @@ impl Backend for HttpBackend {
         self.create_version_alias_symlink(&tv, &cache_plan.key)?;
         tv.install_path = Some(Self::install_path_for(&tv, &cache_plan.key));
 
-        // Verify checksum for lockfile
-        if lockfile_enabled || has_lockfile_checksum {
-            ctx.pr.next_operation();
-        }
-        self.verify_checksum(ctx, &mut tv, &file_path)?;
-
         Ok(tv)
     }
 
@@ -1663,7 +1695,7 @@ impl Backend for HttpBackend {
 
         // Check for explicit bin_path
         if let Some(bin_path_template) = opts.bin_path() {
-            let bin_path = template_string(&bin_path_template, &tv);
+            let bin_path = render_bin_path(&bin_path_template, &tv)?;
             return Ok(vec![runtime_path_for_install_path(
                 &tv,
                 install_path.join(bin_path),
@@ -1714,7 +1746,7 @@ impl Backend for HttpBackend {
 /// The local file a `file://` artifact URL names, so an archive fetched by hand
 /// (or from a mirror mise cannot reach) installs exactly like a downloaded one.
 /// Any other scheme is left to the HTTP client.
-fn local_artifact_path(url: &str) -> Result<Option<PathBuf>> {
+pub(crate) fn local_artifact_path(url: &str) -> Result<Option<PathBuf>> {
     let Ok(parsed) = url::Url::parse(url) else {
         return Ok(None);
     };
@@ -2110,9 +2142,11 @@ mod tests {
         let raw = FileInfo::new(artifact.path(), None, &opts);
         let redirected = FileInfo::new(artifact.path(), Some("tool.tar.gz"), &opts);
 
-        let raw_key = backend.cache_key(artifact.path(), &opts, &raw, 0).unwrap();
+        let raw_key = backend
+            .cache_key(artifact.path(), &opts, &raw, 0, None)
+            .unwrap();
         let redirected_key = backend
-            .cache_key(artifact.path(), &opts, &redirected, 0)
+            .cache_key(artifact.path(), &opts, &redirected, 0, None)
             .unwrap();
 
         assert_ne!(raw_key, redirected_key);
@@ -2138,9 +2172,11 @@ mod tests {
         let beta = FileInfo::new(artifact.path(), Some("beta.gz"), &opts);
 
         let alpha_key = backend
-            .cache_key(artifact.path(), &opts, &alpha, 0)
+            .cache_key(artifact.path(), &opts, &alpha, 0, None)
             .unwrap();
-        let beta_key = backend.cache_key(artifact.path(), &opts, &beta, 0).unwrap();
+        let beta_key = backend
+            .cache_key(artifact.path(), &opts, &beta, 0, None)
+            .unwrap();
 
         assert_ne!(alpha_key, beta_key);
     }
@@ -2158,7 +2194,7 @@ mod tests {
             let key = |options: &str| {
                 let raw_opts = crate::toolset::parse_tool_options(options);
                 backend
-                    .cache_plan(&artifact, None, &HttpOptions::new(&raw_opts))
+                    .cache_plan(&artifact, None, &HttpOptions::new(&raw_opts), None)
                     .unwrap()
                     .key
             };
@@ -2293,7 +2329,10 @@ mod tests {
             let opts = crate::toolset::parse_tool_options(opt);
             let opts = HttpOptions::new(&opts);
             let file_info = FileInfo::new(tmp.path(), None, &opts);
-            backend.cache_key(tmp.path(), &opts, &file_info, 0).unwrap()
+            let bin_path = opts.bin_path();
+            backend
+                .cache_key(tmp.path(), &opts, &file_info, 0, bin_path.as_deref())
+                .unwrap()
         };
 
         // Scalar, table, and adversarial values all yield path-safe keys.
@@ -2318,5 +2357,36 @@ mod tests {
         // Windows would otherwise collapse to the same path component.
         assert_ne!(key_for("rename_exe=tool"), key_for(r#"rename_exe="tool.""#));
         assert_ne!(key_for("rename_exe=tool"), key_for(r#"rename_exe="tool ""#));
+
+        // bin_path joins the key next to rename_exe, so it is hashed too.
+        for bin_path in ["../../evil", "/abs/dir", "a/b"] {
+            let key = key_for(&format!(r#"rename_exe=plz,bin_path="{bin_path}""#));
+            assert!(key.contains("binpath_"), "key: {key}");
+            assert!(
+                !key.contains(illegal),
+                "unsafe cache key for {bin_path}: {key}"
+            );
+            assert!(
+                !key.contains(".."),
+                "unsafe cache key for {bin_path}: {key}"
+            );
+        }
+        assert_ne!(
+            key_for(r#"rename_exe=plz,bin_path="a""#),
+            key_for(r#"rename_exe=plz,bin_path="b""#)
+        );
+
+        // The key follows the rendered bin_path: the same archive installed for
+        // two versions with `bin_path = "{{ version }}/bin"` renames in two
+        // different directories, so it must not share an extraction.
+        let opts = crate::toolset::parse_tool_options(r#"rename_exe=plz"#);
+        let opts = HttpOptions::new(&opts);
+        let file_info = FileInfo::new(tmp.path(), None, &opts);
+        let rendered = |bin_path| {
+            backend
+                .cache_key(tmp.path(), &opts, &file_info, 0, Some(bin_path))
+                .unwrap()
+        };
+        assert_ne!(rendered("1.0.0/bin"), rendered("2.0.0/bin"));
     }
 }

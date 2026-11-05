@@ -79,7 +79,12 @@ mise 会自行实现校验和、GitHub 构件证明、Cosign、SLSA 和 Minisign
 
 `aqua.*` 验证[设置](#settings)默认均已启用。部分检查还可以通过全局设置控制，例如 [`github_attestations`](/configuration/settings.html#github_attestations) 或 [`slsa`](/configuration/settings.html#slsa)。
 
-SLSA 签名者字段必须填写准确的 Fulcio 证书 URI 主体和 OIDC issuer。配方未指定签名者的软件包会跳过 SLSA 验证，但仍可能通过其他方式检查。如何指定签名者，请参阅 [`slsa_signer_identity` 和 `slsa_signer_issuer`](/dev-tools/backends/aqua.html#slsa-signer-identity-and-slsa-signer-issuer)。
+发布中存在 GitHub 制品证明时，会验证 aqua 配方中的对应声明。若发布没有证明，仍会通过其他检查后安装；但如果 mise 注册表在工具的 `aqua:` 后端中设置了 [`attestations_since`](/contributing/registry.html#required-attestations)，则从该版本开始，缺少证明会被视为可能发生降级，导致 `mise install` 和 `mise lock` 失败。更早版本以及非语义化版本不受影响。
+
+The SLSA signer fields are the exact Fulcio certificate URI subject and OIDC
+issuer. Packages whose recipe has no signer skip SLSA and may use another check.
+To supply one, see
+[`slsa_signer_identity` and `slsa_signer_issuer`](/dev-tools/backends/aqua.html#slsa-signer-identity-and-slsa-signer-issuer).
 
 经过验证的[锁文件](/dev-tools/mise-lock.html)会被信任。如果其中记录了校验和和来源证明（包括 SLSA），mise 会检查制品摘要，但不会再次验证来源证明，因此使用该锁文件安装时无需签名者信息。设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 可在锁定安装期间再次验证来源证明。
 
@@ -153,7 +158,11 @@ slsa_signer_issuer = "https://token.actions.githubusercontent.com"
 
 这两个选项必须一并设置，并且必须与证书完全匹配；它们会覆盖配方中已有的签名者信息。两个值都支持 <span v-pre>`{{.Version}}`</span> 模板。请从项目发行版的来源证明中复制签名者信息，不要使用未经审核的来源。这些选项只提供签名者信息；如果软件包的配方没有 `slsa_provenance`，它们不会启用 SLSA。
 
-## 设置
+上文所示的可复用工作流在所有调用它的仓库中都具有相同身份，因此 mise 还要求工作流运行属于软件包所在仓库：以配方的 `slsa_provenance.source_uri` 为准；若未设置，则使用发布来源证明的仓库。仓库改名或转移前构建的来源证明，只有在 api.github.com（而非 [`url_replacements`](/url-replacements.html) 镜像）确认两个名称指向同一仓库后才会通过。
+
+工作流运行还必须是从发布标签构建：优先使用配方中的 `slsa_provenance.source_tag`，否则使用该版本的标签。对从分支构建的软件包，可将 `source_tag` 设为 `-` 以关闭此检查。
+
+## Settings
 
 <script setup>
 import Settings from '/components/settings.vue';

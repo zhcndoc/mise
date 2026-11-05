@@ -181,6 +181,9 @@ impl InstallDependencyContext {
         for path in add_paths {
             path_env.add(path);
         }
+        for path in config.path_dirs_append().await?.clone() {
+            path_env.add(path);
+        }
         for path in pristine_path_without_install_dirs() {
             path_env.add(path);
         }
@@ -205,6 +208,9 @@ impl Toolset {
             path_env.add(p.clone());
         }
         for p in self.list_paths(config).await {
+            path_env.add(p);
+        }
+        for p in config.path_dirs_append().await?.clone() {
             path_env.add(p);
         }
         env.insert(PATH_KEY.to_string(), path_env.to_string());
@@ -241,12 +247,17 @@ impl Toolset {
 
         // Save to cache if enabled and no uncacheable directives
         // Use save_env_cache_split to ensure cache is compatible with env_with_path_and_split
-        if CachedEnv::is_enabled()
-            && !env_results.has_uncacheable
-            && let Err(e) =
+        if CachedEnv::is_enabled() {
+            if env_results.has_uncacheable {
+                debug!(
+                    "env_cache: not caching the environment: it has decrypted or redacted values \
+                     (see env_cache_redacted) or a directive that is not cacheable"
+                );
+            } else if let Err(e) =
                 self.save_env_cache_split(config, &env, &user_paths, &tool_paths, &env_results)
-        {
-            debug!("env_cache: failed to save: {}", e);
+            {
+                debug!("env_cache: failed to save: {}", e);
+            }
         }
 
         // Inject GitHub OAuth token (if configured) after cache save so the
@@ -305,12 +316,17 @@ impl Toolset {
         env.insert(PATH_KEY.to_string(), path_env.to_string());
 
         // Save to cache if enabled and no uncacheable directives
-        if CachedEnv::is_enabled()
-            && !env_results.has_uncacheable
-            && let Err(e) =
+        if CachedEnv::is_enabled() {
+            if env_results.has_uncacheable {
+                debug!(
+                    "env_cache: not caching the environment: it has decrypted or redacted values \
+                     (see env_cache_redacted) or a directive that is not cacheable"
+                );
+            } else if let Err(e) =
                 self.save_env_cache_split(config, &env, &user_paths, &tool_paths, &env_results)
-        {
-            debug!("env_cache: failed to save: {}", e);
+            {
+                debug!("env_cache: failed to save: {}", e);
+            }
         }
 
         // Inject GitHub OAuth token (if configured) after cache save so the
@@ -330,7 +346,16 @@ impl Toolset {
     pub async fn try_load_env_cache_full(&self, config: &Arc<Config>) -> Result<Option<CachedEnv>> {
         config.env_results().await?;
         let cache_key = self.compute_env_cache_key(config)?;
-        CachedEnv::load(&cache_key)
+        let cached = CachedEnv::load(&cache_key)?;
+        if let Some(cached) = &cached {
+            // A hit skips the directives that registered these, so mask them again.
+            config.add_redactions_excluding(
+                cached.redactions.iter().cloned(),
+                &cached.env,
+                &cached.redaction_exclusions,
+            );
+        }
+        Ok(cached)
     }
 
     /// Try to load environment from cache (returns reconstructed EnvMap)
@@ -401,6 +426,8 @@ impl Toolset {
             env_remove: env_results.env_remove.clone(),
             user_paths: user_paths.to_vec(),
             tool_paths: tool_paths.to_vec(),
+            redactions: env_results.redactions.clone(),
+            redaction_exclusions: env_results.redaction_exclusions.clone(),
             created_at: now,
             watch_files,
             watch_file_mtimes,
@@ -604,6 +631,9 @@ impl Toolset {
             path_env.add(p.clone());
         }
         for p in self.list_paths(config).await {
+            path_env.add(p);
+        }
+        for p in config.path_dirs_append().await?.clone() {
             path_env.add(p);
         }
         tera_env.insert(PATH_KEY.to_string(), path_env.to_string());

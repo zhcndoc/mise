@@ -211,13 +211,14 @@ _.source = { path = "scripts/env.sh", redact = true }
 各指令按书写顺序执行，因此 `_.path` 可以使用前面的
 `_.source` 设置的变量；`_.python.venv` 始终最后执行。
 
-| 选项      | `_.file` | `_.source` | `_.path` | 作用                                                                    |
-| --------- | -------- | ---------- | -------- | ----------------------------------------------------------------------- |
-| `path`    | 是       | 是         | 是       | 一个路径或路径列表                                                      |
-| `tools`   | 是       | 是         | 是       | 在工具加载后解析（[详情](#lazy-eval)）                                  |
-| `redact`  | 是       | 是         | 否       | 将所有载入的值标记为[敏感信息](/environments/secrets/#redaction)       |
-| `expand`  | 是       | 否         | 否       | 允许文件引用此前载入的值                                                |
-| `find_up` | 是       | 否         | 否       | 从配置文件所在目录及其父目录中搜索该文件                                |
+| Option     | `_.file` | `_.source` | `_.path` | Effect                                                                   |
+| ---------- | -------- | ---------- | -------- | ------------------------------------------------------------------------ |
+| `path`     | Yes      | Yes        | Yes      | One path or a list of paths                                              |
+| `tools`    | Yes      | Yes        | Yes      | Resolve after tools load ([details](#lazy-eval))                         |
+| `position` | 否       | 否         | 是       | `"prepend"`（默认值）或 `"append"`（[详情](#env-path)）               |
+| `redact`   | Yes      | Yes        | No       | Mark every loaded value as [sensitive](/environments/secrets/#redaction) |
+| `expand`   | Yes      | No         | No       | Let the file use values loaded before it                                 |
+| `find_up`  | Yes      | No         | No       | Search the config's directory and its parents for the file               |
 
 ### `env._.file` {#env-file}
 
@@ -305,6 +306,18 @@ _.path = [
 
 请使用 `_.path` 修改 `PATH`。`[env]` 中的 `PATH` 键会被 `mise exec`、`mise env` 和已激活的
 Shell 忽略。
+
+环境路径条目会排在工具路径之前，因此项目中的 `bin` 目录会优先于同名工具。如果要将某个条目放在工具路径之后、但仍排在 mise 继承的 `PATH` 之前，请设置 `position = "append"`：
+
+```toml [mise.toml]
+[env]
+_.path = [
+  "bin",
+  { path = ["~/bin", "~/.cargo/bin"], position = "append" },
+]
+```
+
+`position` 只用于排列 mise 添加的路径条目。设置 `tools = true` 不会改变此顺序。
 
 ### `env._.source` {#env-source}
 

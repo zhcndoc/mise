@@ -90,8 +90,10 @@ jobs:
     name: build-tarball-${{matrix.name}}
     runs-on: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || (github.event.pull_request.user.login != 'jdx' && github.event.pull_request.user.login != 'mise-en-dev')) && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64-xlarge' }}
     # PGO and cross-built release tarballs can exceed 90 minutes on
-    # loaded runners, especially once archive generation is included.
-    timeout-minutes: 150
+    # loaded runners, especially once archive generation is included. The
+    # linux-x64 PGO build normally takes about 82 minutes. The job limit
+    # leaves room for a full retry after an attempt hangs until its timeout.
+    timeout-minutes: 300
     env:
       MINIO_AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_AWS_ACCESS_KEY_ID }}
       MINIO_AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_AWS_SECRET_ACCESS_KEY }}
@@ -136,17 +138,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bolt-19
       - name: build-tarball ${{matrix.target}}
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+        uses: jdx/workflows/retry@7e4ea6cf326e2b3bb4335f733381af531aaa699d # v1.2.1
         env:
           MISE_PGO: ${{ matrix.pgo || '' }}
           MISE_BOLT: ${{ matrix.bolt || '' }}
           LLVM_BOLT: llvm-bolt-19
           MERGE_FDATA: merge-fdata-19
         with:
-          timeout_minutes: 140
+          timeout_minutes: 120
           max_attempts: 3
           command: scripts/build-tarball.sh ${{matrix.target}}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tarball-${{matrix.target}}
           path: |
@@ -175,7 +177,7 @@ jobs:
             target: aarch64-apple-darwin
             pgo: 1
     steps:
-      - uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+      - uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7.1.0
         with:
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERTS_P12 }}
           p12-password: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERTS_P12_PASS }}
@@ -188,7 +190,7 @@ jobs:
         if: matrix.pgo
         run: rustup component add --toolchain stable llvm-tools
       - name: build-tarball ${{matrix.target}}
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
+        uses: jdx/workflows/retry@7e4ea6cf326e2b3bb4335f733381af531aaa699d # v1.2.1
         env:
           MISE_PGO: ${{ matrix.pgo || '' }}
         with:
@@ -278,7 +280,7 @@ jobs:
             exit 1
           fi
           echo "notarized: submission $id"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tarball-${{matrix.target}}
           path: |
@@ -286,106 +288,68 @@ jobs:
             dist/mise-*.tar.gz
             dist/mise-*.tar.zst
           if-no-files-found: error
-  build-tarball-windows:
+  # The release PR's dry run builds the Windows zips in this run. Nothing is signed there, so the
+  # self-hosted runner is fine.
+  build-windows:
     needs: [gate]
-    if: needs.gate.outputs.build == 'true'
-    name: build-tarball-windows-${{matrix.arch}}
-    # Each arch builds on a native runner. Cross-compiling arm64 on the x64 runner
-    # with fat LTO and panic=unwind ran past the 150-minute timeout.
-    # The release PR's dry run builds x64 on the shared trusted self-hosted runner (repository variable
-    # WINDOWS_SELF_HOSTED=true; unset falls back to the hosted runner). A real release (tag push or manual
-    # dispatch) always builds on a GitHub-hosted runner: SignPath Foundation requires every job of a run
-    # it signs to run on GitHub-hosted runners. arm64 stays on a hosted native runner.
-    runs-on: ${{ matrix.arch == 'x64' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.user.login == 'jdx' || github.event.pull_request.user.login == 'mise-en-dev') && vars.WINDOWS_SELF_HOSTED == 'true' && fromJSON('["self-hosted", "jdx-win-trusted-v1"]') || matrix.runner }}
-    # Matches the Linux tarball job. Fat LTO's link varied from ~65 minutes to
-    # past this timeout on windows-latest depending on memory pressure, so
-    # scripts/build-tarball.ps1 builds with thin LTO on hosted runners and with
-    # the profile's fat LTO on the self-hosted runner, which has the RAM for it.
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-pc-windows-msvc
-            runner: windows-11-arm
-          - arch: x64
-            target: x86_64-pc-windows-msvc
-            runner: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - run: rustup target add ${{matrix.target}}
-      - run: scripts/build-tarball.ps1 ${{matrix.target}}
-        env:
-          OS: windows
-          ARCH: ${{matrix.arch}}
-      - name: Smoke-test vfox Lua errors
-        run: scripts/smoke-test-vfox-lua-error.ps1 dist/mise/bin/mise.exe
-      # The release job globs artifacts/*/mise-<version>-<platform>.zip, so the unsigned zip must not
-      # share the final name.
-      - name: Mark zip as unsigned
-        shell: pwsh
-        run: |
-          foreach ($zip in @(Get-ChildItem dist/*.zip)) {
-            Rename-Item $zip.FullName "unsigned-$($zip.Name)"
-          }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: unsigned-tarball-${{matrix.target}}
-          path: dist/*.zip
-          if-no-files-found: error
-  # Authenticode-signs mise.exe and mise-shim.exe with SignPath Foundation. Only tag runs submit a
-  # signing request; dry runs pass the unsigned zip through under the name the release job expects.
+    if: needs.gate.outputs.build == 'true' && !startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/release-windows.yml
+    secrets:
+      MISE_GH_TOKEN: ${{ secrets.MISE_GH_TOKEN }}
+  # A real release signs the Windows zips with SignPath, which rejects any run containing a
+  # non-GitHub-hosted job, and this run builds on Namespace runners. Run release-windows.yml as its
+  # own run instead and carry its signed zips over under the names the release job expects. The run
+  # can take up to 150 minutes to build and then wait up to an hour on a manual approval in SignPath, so
+  # the timeout covers both plus queueing and the artifact copy.
   sign-windows:
-    needs: [build-tarball-windows]
-    if: ${{ !cancelled() && needs.build-tarball-windows.result == 'success' }}
-    name: sign-windows-${{matrix.target}}
+    needs: [gate]
+    if: needs.gate.outputs.build == 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [aarch64-pc-windows-msvc, x86_64-pc-windows-msvc]
+    timeout-minutes: 300
+    permissions:
+      actions: write
+      contents: read
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: unsigned-tarball-${{matrix.target}}
-          path: dist
-      - name: Upload unsigned zip for SignPath
-        if: startsWith(github.ref, 'refs/tags/v')
-        id: upload-unsigned
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: signpath-unsigned-${{matrix.target}}
-          path: dist/unsigned-*.zip
-          if-no-files-found: error
-      - name: Sign with SignPath
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: mise
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY || 'release-signing' }}
-          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          # The production policy requires a manual approval in SignPath.
-          wait-for-completion-timeout-in-seconds: 3600
-          output-artifact-directory: signed
-      - name: Restore the release zip name
+      - name: Dispatch release-windows
+        id: dispatch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REQUEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          src=dist
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then src=signed; fi
-          mkdir final
-          for f in "$src"/unsigned-*.zip; do
-            cp "$f" "final/$(basename "$f" | sed 's/^unsigned-//')"
+          gh workflow run release-windows.yml --repo "$GITHUB_REPOSITORY" --ref "$REF_NAME" -f "request_id=$REQUEST_ID"
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 10
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release-windows.yml --event workflow_dispatch \
+              --limit 50 --json databaseId,displayTitle \
+              --jq "[.[] | select(.displayTitle == \"release-windows $REQUEST_ID\")][0].databaseId // empty")"
+            [ -n "$run_id" ] && break
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          if [ -z "$run_id" ]; then
+            echo "::error::Could not find the release-windows run for request $REQUEST_ID"
+            exit 1
+          fi
+          echo "release-windows run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$run_id" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+      - name: Wait for release-windows
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run-id }}
+        run: gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 30 --exit-status > /dev/null
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: tarball-${{matrix.target}}
-          path: final/*.zip
+          run-id: ${{ steps.dispatch.outputs.run-id }}
+          github-token: ${{ github.token }}
+          pattern: tarball-*-pc-windows-msvc
+          path: windows
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-aarch64-pc-windows-msvc
+          path: windows/tarball-aarch64-pc-windows-msvc/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-x86_64-pc-windows-msvc
+          path: windows/tarball-x86_64-pc-windows-msvc/*.zip
           if-no-files-found: error
   e2e-linux:
     needs: [gate, build-tarball-linux]
@@ -411,7 +375,7 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           ln -s "$(which fdfind)" "$HOME/.local/bin/fd"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-x86_64-unknown-linux-gnu
           path: dist
@@ -437,24 +401,24 @@ jobs:
     if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container: ghcr.io/jdx/mise:rpm@sha256:c5639cd52cbfe83a0358c1835232a741a0b37b66541149599697f11bec6827ce
+    container: ghcr.io/jdx/mise:rpm@sha256:fecd2e10fe4d61b8ea49a9245e6fabfbf2aea64f95f6449ea1c57c30b182c67e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7
+      - uses: jdx/workflows/gpg-import@7e4ea6cf326e2b3bb4335f733381af531aaa699d # v1.2.1
         with:
           gpg_private_key: ${{ secrets.MISE_GPG_KEY }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-x86_64-unknown-linux-gnu
           path: dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-aarch64-unknown-linux-gnu
           path: dist
       - run: scripts/build-rpm.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpm
           path: dist/rpmrepo
@@ -463,31 +427,31 @@ jobs:
     needs: [gate, build-tarball-linux]
     if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
-    container: ghcr.io/jdx/mise:deb@sha256:9f60faac83d15babcb0a2df3532d8dc0a2ebd1c4ba8dcc3e1af5d2c2349627f2
+    container: ghcr.io/jdx/mise:deb@sha256:71273134a1d3f23c225e8b303356cbcc2c2448d293db4c9f275cc62d93623698
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7
+      - uses: jdx/workflows/gpg-import@7e4ea6cf326e2b3bb4335f733381af531aaa699d # v1.2.1
         with:
           gpg_private_key: ${{ secrets.MISE_GPG_KEY }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-x86_64-unknown-linux-gnu
           path: dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-aarch64-unknown-linux-gnu
           path: dist
       - run: scripts/build-deb.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deb
           path: dist/deb
           if-no-files-found: error
   release:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     outputs:
       created: ${{ steps.create-release.outputs.created }}
@@ -501,6 +465,7 @@ jobs:
       - e2e-linux
       - build-tarball-linux
       - build-tarball-macos
+      - build-windows
       - sign-windows
     # Run even when a build failed: this is the required `release` check on
     # main, and a skipped required check counts as passed. The steps below
@@ -518,7 +483,7 @@ jobs:
           for result in \
             "${{ needs.build-tarball-linux.result }}" \
             "${{ needs.build-tarball-macos.result }}" \
-            "${{ needs.sign-windows.result }}" \
+            "${{ (needs.build-windows.result == 'success' && needs.sign-windows.result == 'skipped' || needs.build-windows.result == 'skipped' && needs.sign-windows.result == 'success') && 'success' || 'failure' }}" \
             "${{ needs.rpm.result }}" \
             "${{ needs.deb.result }}"; do
             if [ "$result" != "success" ]; then
@@ -536,6 +501,7 @@ jobs:
             echo "::error::One or more required jobs did not succeed:"
             echo "  build-tarball-linux: ${{ needs.build-tarball-linux.result }}"
             echo "  build-tarball-macos: ${{ needs.build-tarball-macos.result }}"
+            echo "  build-windows: ${{ needs.build-windows.result }}"
             echo "  sign-windows: ${{ needs.sign-windows.result }}"
             echo "  e2e-linux: ${{ needs.e2e-linux.result }} (expected $expected_e2e)"
             echo "  rpm: ${{ needs.rpm.result }}"
@@ -567,7 +533,7 @@ jobs:
             echo "No release found for $VERSION"
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7
+      - uses: jdx/workflows/gpg-import@7e4ea6cf326e2b3bb4335f733381af531aaa699d # v1.2.1
         with:
           gpg_private_key: ${{ secrets.MISE_GPG_KEY }}
           git_user_signingkey: true
@@ -582,10 +548,10 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           ln -s "$(which fdfind)" "$HOME/.local/bin/fd"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: artifacts }
       - run: ls -R artifacts
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           pattern: |
@@ -596,7 +562,7 @@ jobs:
           merge-multiple: true
       - run: echo "${{ secrets.MINISIGN_KEY }}" >minisign.key
       - run: ls -R artifacts
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-x86_64-unknown-linux-gnu
           path: dist
@@ -606,7 +572,7 @@ jobs:
       - run: mise x -- scripts/release.sh
       - name: Stage release assets for attestation
         if: startsWith(github.ref, 'refs/tags/v') && steps.check-release.outputs.exists != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: releases/${{ github.ref_name }}
@@ -688,7 +654,7 @@ jobs:
   attest-release:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.created == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       attestations: write
@@ -696,7 +662,7 @@ jobs:
       id-token: write
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: release-assets
@@ -721,7 +687,7 @@ jobs:
       - release
       - attest-release
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.attest-release.result == 'success' && needs.release.outputs.created == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: write
@@ -735,7 +701,7 @@ jobs:
       GITHUB_API_TOKEN: ""
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: release-assets
@@ -766,7 +732,7 @@ jobs:
       # writing it under packslip/, and an artifact holding files at two
       # depths keeps the directory, which the flat `sha256sum ./*` below
       # would then choke on.
-      - uses: jdx/packslip@2af36e792faa28130987c8af509e475c7458405d # v1.6.0
+      - uses: jdx/packslip@b934a22ba187f1d3928441170b9413c5119360bf # v1.11.2
         with:
           artifacts: release-assets/mise-*
           bin: mise
@@ -788,7 +754,7 @@ jobs:
       # publish-release compares the draft's assets against what this workflow
       # built, so the metadata files added here have to reach it or the diff fails.
       - name: Stage the packslip for the asset check
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-extras
           path: |
@@ -807,18 +773,18 @@ jobs:
       - attest-release
       - packslip
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.attest-release.result == 'success' && needs.packslip.result == 'success' && needs.release.outputs.created == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: write
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: release-assets
       - name: Download the packslip
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-extras
           path: release-assets
@@ -842,7 +808,7 @@ jobs:
   finish-draft-resolve:
     needs: [gate]
     if: ${{ !cancelled() && needs.gate.outputs.finish-draft == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
     outputs:
@@ -875,7 +841,7 @@ jobs:
   finish-draft-attest:
     needs: [gate, finish-draft-resolve]
     if: ${{ !cancelled() && needs.gate.outputs.finish-draft == 'true' && needs.finish-draft-resolve.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       attestations: write
@@ -896,7 +862,7 @@ jobs:
         with:
           subject-checksums: release-assets/SHASUMS256.txt
       - name: Stage release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: finish-draft-assets
           path: release-assets
@@ -906,7 +872,7 @@ jobs:
   finish-draft-packslip:
     needs: [gate, finish-draft-resolve, finish-draft-attest]
     if: ${{ !cancelled() && needs.gate.outputs.finish-draft == 'true' && needs.finish-draft-attest.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: write
@@ -917,7 +883,7 @@ jobs:
       GITHUB_API_TOKEN: ""
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: finish-draft-assets
           path: release-assets
@@ -941,7 +907,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.finish-draft-resolve.outputs.tag }}
         run: gh release upload "$TAG" mise.usage.kdl mise.bash mise.zsh mise.fish mise.powershell --clobber
-      - uses: jdx/packslip@2af36e792faa28130987c8af509e475c7458405d # v1.6.0
+      - uses: jdx/packslip@b934a22ba187f1d3928441170b9413c5119360bf # v1.11.2
         with:
           artifacts: release-assets/mise-*
           bin: mise
@@ -958,7 +924,7 @@ jobs:
           out: "."
           token: ${{ secrets.MISE_GH_TOKEN }}
       - name: Stage the packslip for the asset check
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: finish-draft-extras
           path: |
@@ -975,18 +941,18 @@ jobs:
     needs:
       [gate, finish-draft-resolve, finish-draft-attest, finish-draft-packslip]
     if: ${{ !cancelled() && needs.gate.outputs.finish-draft == 'true' && needs.finish-draft-packslip.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: write
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: finish-draft-assets
           path: release-assets
       - name: Download the packslip
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: finish-draft-extras
           path: release-assets

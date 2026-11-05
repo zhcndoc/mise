@@ -13,9 +13,10 @@ use crate::task::task_cache::{
 use crate::task::task_context_builder::TaskContextBuilder;
 use crate::task::task_helpers::task_gets_keep_order_slot;
 use crate::task::task_list::split_task_spec;
+use crate::task::task_lock;
 use crate::task::task_output::{TaskOutput, trunc};
 use crate::task::task_output_handler::OutputHandler;
-use crate::task::task_scheduler::SchedMsg;
+use crate::task::task_scheduler::{Cover, SchedMsg};
 use crate::task::task_script_parser::subcommand_name_from_parse;
 use crate::task::task_source_checker::{
     remove_auto_output, save_checksum, sources_are_fresh, task_cwd,
@@ -49,7 +50,7 @@ use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, mpsc, oneshot};
 use xx::file;
 
 use crate::secrets::{SecretBroker, SecretsDenied, SpawnSecrets};
@@ -75,6 +76,9 @@ pub struct TaskRunContext<'a> {
     pub otel_span_cx: Option<opentelemetry::trace::SpanContext>,
     /// A task another task's run entry started. It never receives a command-line grant.
     pub injected: bool,
+    /// Started by a run entry of a task that holds task locks: it runs under that task's
+    /// `--jobs` permit and terminal and never takes either itself.
+    pub covered: Cover,
 }
 
 #[derive(Clone, Copy)]
@@ -91,6 +95,8 @@ struct TaskExecContext<'a> {
     /// The values this task was granted. Added to the child's env only inside `exec_program`,
     /// after every render and after `__MISE_DIFF` was computed.
     secrets: Option<&'a SpawnSecrets>,
+    /// Runs under its locked parent's terminal, so it never takes the runtime lock.
+    covered: Cover,
 }
 
 struct TaskRunEntriesContext<'a> {
@@ -102,6 +108,9 @@ struct TaskRunEntriesContext<'a> {
     completion_state: &'a TaskCompletionState,
     semaphore: Arc<Semaphore>,
     permit: &'a mut Option<OwnedSemaphorePermit>,
+    /// The task holds task locks, so it keeps its permit and terminal while tasks its run
+    /// entries start run under them.
+    holds_locks: bool,
 }
 
 struct PreparedTaskContext {
@@ -207,6 +216,8 @@ struct TaskInjectionContext<'a> {
     sched_tx: &'a Arc<mpsc::UnboundedSender<SchedMsg>>,
     completion_state: &'a TaskCompletionState,
     allow_during_interruption: bool,
+    /// The injected tasks run under the parent's permit and terminal.
+    covered: Cover,
 }
 
 #[allow(dead_code)] // Guards are held for their Drop impl, not read
@@ -378,6 +389,8 @@ pub struct TaskExecutorConfig {
     pub task_cache: TaskCacheMode,
     pub task_cache_explain: bool,
     pub task_cache_explain_json: bool,
+    /// `mise run --lock-timeout` or `task.lock_timeout`: how long a task waits for a lock.
+    pub lock_timeout: Option<Duration>,
     /// CLI-level sandbox overrides (merged with task-level sandbox config)
     pub sandbox: crate::sandbox::SandboxConfig,
     /// Where `as_file` secrets are written for this run (0700, removed with the run).
@@ -409,6 +422,7 @@ pub struct TaskExecutor {
     pub task_cache: TaskCacheMode,
     pub task_cache_explain: bool,
     pub task_cache_explain_json: bool,
+    pub lock_timeout: Option<Duration>,
     pub sandbox: crate::sandbox::SandboxConfig,
     secrets: Arc<SecretBroker>,
     secrets_file_dir: PathBuf,
@@ -468,6 +482,7 @@ impl TaskExecutor {
             task_cache: config.task_cache,
             task_cache_explain: config.task_cache_explain,
             task_cache_explain_json: config.task_cache_explain_json,
+            lock_timeout: config.lock_timeout,
             sandbox: config.sandbox,
             secrets: Arc::new(SecretBroker::default()),
             secrets_file_dir: config.secrets_file_dir,
@@ -591,7 +606,18 @@ impl TaskExecutor {
             // Filled in by `resolve_paths` below.
             symlinked_allow_paths: vec![],
         };
-        sandbox.resolve_paths();
+        // The task's directory, its config root and the project root hold what
+        // the task may have written, so a symlink there must not lead an
+        // allowed path out of them.
+        let project_roots: Vec<&Path> = [
+            task_base.as_deref(),
+            task.config_root.as_deref(),
+            config.project_root.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        sandbox.resolve_paths(&project_roots)?;
         Ok(sandbox)
     }
 
@@ -628,7 +654,15 @@ impl TaskExecutor {
             allow_during_interruption,
             otel_span_cx,
             injected,
+            covered,
         } = ctx;
+        // Every task reaches this point before it runs, whether it was named, a dependency, or
+        // the rendered name of a `run` entry, so this is where a run that must not execute
+        // untrusted tasks checks the task it actually resolved.
+        if crate::config::runs_only_trusted_tasks() && !crate::config::task_is_trusted(config, task)
+        {
+            return Err(crate::errors::Error::UntrustedConfig(task.config_source.clone()).into());
+        }
         let prefix = task.estyled_prefix();
         let total_start = std::time::Instant::now();
         Self::check_interruption(allow_during_interruption)?;
@@ -713,7 +747,16 @@ impl TaskExecutor {
 
         // Confirmation must happen before a cache restore because restoring
         // outputs mutates the working tree just like executing the task.
-        let confirm_guard = if task.interactive {
+        // A task without `interactive` holds the terminal shared with other tasks, so an
+        // interactive task it covers could only take it by waiting on its own parent.
+        if task.interactive && covered == Cover::Shared {
+            eyre::bail!(
+                "task {}: an interactive task cannot run from a `run` entry of a locked task \
+                 that is not interactive; set `interactive = true` on the task that holds the lock",
+                task.name
+            );
+        }
+        let mut confirm_guard = if task.interactive && !covered.is_covered() {
             Some(acquire_runtime_lock(task.interactive).await)
         } else {
             None
@@ -819,6 +862,9 @@ impl TaskExecutor {
                     if let Some(output) = current_output {
                         if !self.quiet(Some(task)) {
                             self.eprint(task, &prefix, "sources up-to-date, skipping");
+                        }
+                        if self.output(Some(task)) == TaskOutput::Summary {
+                            self.output_handler.summary_up_to_date(task);
                         }
                         self.output_handler
                             .replay_cached_output(task, &prefix, &output);
@@ -928,7 +974,8 @@ impl TaskExecutor {
                 executor: self,
                 task,
                 prefix: &prefix,
-                holds_write: task.interactive,
+                // A locked parent that holds the terminal for itself holds it for this task.
+                holds_write: task.interactive || covered == Cover::Exclusive,
             };
             self.secrets
                 .prepare_spawn(
@@ -946,7 +993,8 @@ impl TaskExecutor {
                         terminal: &terminal,
                         ctx_builder: &self.context_builder,
                         denied: self.secrets_denied,
-                        interactive: crate::secrets::is_interactive(),
+                        // Under a parent that shares the terminal, nothing may prompt.
+                        interactive: crate::secrets::is_interactive() && covered != Cover::Shared,
                     },
                 )
                 .await
@@ -965,6 +1013,113 @@ impl TaskExecutor {
                     err
                 })?
         };
+        // Taken once the task has decided to run and has its secrets, just before its first
+        // command, so a skipped or restored task never waits, and held until every run entry
+        // ends.
+        let mut task_env = task_env;
+        let lock_keys = task_lock::requested(task);
+        let task_locks = if lock_keys.is_empty() || (task.run().is_empty() && task_file.is_none()) {
+            None
+        } else if self.dry_run {
+            if let Some(locks) = task_lock::describe(task) {
+                self.eprint(
+                    task,
+                    &prefix,
+                    &format!("lock: {locks} (not taken: dry run)"),
+                );
+            }
+            None
+        } else {
+            let inherited = task_lock::inherited(&env);
+            let to_take: Vec<_> = lock_keys
+                .iter()
+                .filter(|key| !inherited.contains(key.id()))
+                .cloned()
+                .collect();
+            task_lock::check_nested_order(task, &inherited, &to_take)?;
+            // A task that takes locks takes its `--jobs` permit and its hold on the terminal
+            // (write for an interactive task, read otherwise) with them, all or nothing, and
+            // keeps all of them until it ends; tasks its run entries start run under them. It
+            // never waits for one while holding another: waiting for a lock it gives back the
+            // permit and the terminal, and waiting for those it gives back its locks. Otherwise
+            // a task holding the permit or the terminal could start a nested `mise run` that
+            // waits for one of these locks while this task waits for what that task holds.
+            // A covered task already runs under its locked parent's permit and terminal.
+            let needs_permit = !covered.is_covered();
+            let needs_terminal = !covered.is_covered();
+            if needs_permit && permit.is_none() {
+                // A task with only `{ task = ... }` entries took no permit, but the tasks it
+                // starts will run under its permit, so it needs one.
+                confirm_guard = None;
+                *permit = Some(semaphore.clone().acquire_owned().await?);
+            }
+            if needs_terminal && confirm_guard.is_none() {
+                confirm_guard = Some(acquire_runtime_lock(task.interactive).await);
+            }
+            // Time spent waiting for another run's locks, across retries.
+            let mut lock_waited = Duration::ZERO;
+            let held = loop {
+                let mut acquisition = task_lock::LockAcquisition::new(task, to_take.clone())?;
+                if acquisition.try_take()? {
+                    break acquisition.into_held();
+                }
+                *permit = None;
+                confirm_guard = None;
+                let held = acquisition
+                    .wait(
+                        self.lock_timeout,
+                        &mut lock_waited,
+                        |line| self.eprint(task, &prefix, line),
+                        || Self::check_interruption(allow_during_interruption),
+                    )
+                    .await?;
+                let permit_now = if needs_permit {
+                    match semaphore.clone().try_acquire_owned() {
+                        Ok(p) => Some(p),
+                        Err(TryAcquireError::NoPermits) => None,
+                        Err(err) => return Err(err.into()),
+                    }
+                } else {
+                    None
+                };
+                let terminal_now = if !needs_terminal {
+                    None
+                } else if task.interactive {
+                    TASK_RUNTIME_LOCK
+                        .try_write()
+                        .ok()
+                        .map(RuntimeLockGuard::Write)
+                } else {
+                    TASK_RUNTIME_LOCK
+                        .try_read()
+                        .ok()
+                        .map(RuntimeLockGuard::Read)
+                };
+                if permit_now.is_some() == needs_permit && terminal_now.is_some() == needs_terminal
+                {
+                    *permit = permit_now;
+                    confirm_guard = terminal_now;
+                    break held;
+                }
+                // Busy: release the locks, wait for the permit and the terminal holding no
+                // lock, then try the locks again.
+                drop(held);
+                drop(terminal_now);
+                *permit = match permit_now {
+                    Some(p) => Some(p),
+                    None if needs_permit => Some(semaphore.clone().acquire_owned().await?),
+                    None => None,
+                };
+                if needs_terminal {
+                    confirm_guard = Some(acquire_runtime_lock(task.interactive).await);
+                }
+            };
+            let locks = task_lock::exported(&inherited, &lock_keys);
+            env.insert(task_lock::LOCKS_ENV.to_string(), locks.clone());
+            // Tasks a run entry injects inherit `task_env`, so they see the locks this task holds.
+            task_env.push((task_lock::LOCKS_ENV.to_string(), locks));
+            Some(held)
+        };
         let exec_ctx = TaskExecContext {
             task,
             env: &env,
@@ -974,6 +1129,7 @@ impl TaskExecutor {
             allow_during_interruption,
             otel_span_cx: otel_span_cx.as_ref(),
             secrets: spawn_secrets.as_ref(),
+            covered,
         };
 
         let timer = std::time::Instant::now();
@@ -1015,6 +1171,7 @@ impl TaskExecutor {
                     completion_state: &completion_state,
                     semaphore,
                     permit,
+                    holds_locks: task_locks.as_ref().is_some_and(|held| !held.is_empty()),
                 },
             )
             .await?;
@@ -1027,6 +1184,19 @@ impl TaskExecutor {
         }
 
         let execution_duration = timer.elapsed();
+        // A task that only has dependencies ran nothing, and gets no line; a
+        // dry run ran nothing either, and shows the commands it would run.
+        if self.output(Some(task)) == TaskOutput::Summary
+            && !self.dry_run
+            && (task.file.as_ref().is_some() || !task.run_script_strings().is_empty())
+        {
+            // As for the `Finished in` line: `--no-timings` wins, then
+            // `--timings`, then the setting.
+            let timings =
+                !self.no_timings && (self.timings || Settings::get().task.timings != Some(false));
+            self.output_handler
+                .summary_duration(task, timings.then_some(execution_duration));
+        }
         if self.task_timings(Some(task))
             && (task.file.as_ref().is_some() || !task.run_script_strings().is_empty())
         {
@@ -1120,8 +1290,20 @@ impl TaskExecutor {
             completion_state,
             semaphore,
             permit,
+            holds_locks,
         } = ctx;
         let task = exec.task;
+        // A task that holds locks, or runs under a parent that does, keeps its permit and
+        // terminal across the tasks its run entries start, and those run under them.
+        let covers_children = if exec.covered.is_covered() {
+            exec.covered
+        } else if holds_locks && task.interactive {
+            Cover::Exclusive
+        } else if holds_locks {
+            Cover::Shared
+        } else {
+            Cover::Own
+        };
         use crate::task::RunEntry;
         let mut script_iter = rendered_scripts.into_iter();
         let mut completion_state = completion_state.clone();
@@ -1146,6 +1328,7 @@ impl TaskExecutor {
         // and temporarily dropped around inject_and_wait to avoid deadlocking.
         let mut guard = match existing_guard {
             Some(g) => Some(g),
+            None if exec.covered.is_covered() => None,
             None => Some(acquire_runtime_lock(task.interactive).await),
         };
         for raw_entry in task.run() {
@@ -1161,7 +1344,7 @@ impl TaskExecutor {
             match entry {
                 RunEntry::Script(_) => {
                     if let Some((script, args)) = script_iter.next() {
-                        if guard.is_none() {
+                        if guard.is_none() && !exec.covered.is_covered() {
                             guard = Some(acquire_runtime_lock(task.interactive).await);
                         }
                         self.exec_script(&script, &args, exec).await?;
@@ -1187,12 +1370,14 @@ impl TaskExecutor {
                     } else {
                         Some(override_env.as_slice())
                     };
-                    guard = None; // drop lock before waiting on sub-tasks
-                    // Release the semaphore permit before waiting on sub-tasks to
-                    // avoid deadlock when MISE_JOBS=1 (the sub-task needs a permit
-                    // but we're holding the only one).
-                    let had_permit = permit.is_some();
-                    *permit = None;
+                    // Release the terminal and the semaphore permit before waiting on
+                    // sub-tasks to avoid deadlock when MISE_JOBS=1 (the sub-task needs a
+                    // permit but we're holding the only one), unless the sub-tasks run
+                    // under them.
+                    let had_permit = !covers_children.is_covered() && permit.take().is_some();
+                    if !covers_children.is_covered() {
+                        guard = None;
+                    }
                     let completed = self
                         .inject_and_wait(
                             &[resolved_spec],
@@ -1205,6 +1390,7 @@ impl TaskExecutor {
                                 sched_tx: &sched_tx,
                                 completion_state: &completion_state,
                                 allow_during_interruption: exec.allow_during_interruption,
+                                covered: covers_children,
                             },
                         )
                         .await?;
@@ -1218,9 +1404,10 @@ impl TaskExecutor {
                         .iter()
                         .map(|t| crate::task::resolve_task_pattern(t, Some(task)))
                         .collect();
-                    guard = None; // drop lock before waiting on sub-tasks
-                    let had_permit = permit.is_some();
-                    *permit = None;
+                    let had_permit = !covers_children.is_covered() && permit.take().is_some();
+                    if !covers_children.is_covered() {
+                        guard = None; // drop lock before waiting on sub-tasks
+                    }
                     let completed = self
                         .inject_and_wait(
                             &resolved_tasks,
@@ -1233,6 +1420,7 @@ impl TaskExecutor {
                                 sched_tx: &sched_tx,
                                 completion_state: &completion_state,
                                 allow_during_interruption: exec.allow_during_interruption,
+                                covered: covers_children,
                             },
                         )
                         .await?;
@@ -1260,69 +1448,48 @@ impl TaskExecutor {
             sched_tx,
             completion_state,
             allow_during_interruption,
+            covered,
         } = ctx;
-        use crate::task::TaskLoadContext;
         trace!("inject start: {}", specs.join(", "));
-        // Build tasks list from specs
-        // Create a TaskLoadContext from the specs to ensure project tasks are loaded
-        let ctx = TaskLoadContext::from_patterns(specs.iter().map(|s| {
-            let (name, _) = split_task_spec(s);
-            name
-        }));
-        let tasks = config.tasks_with_context(Some(&ctx)).await?;
-        let tasks_map: BTreeMap<String, Task> = tasks
-            .values()
-            .flat_map(|t| {
-                t.aliases
-                    .iter()
-                    .map(|a| (a.to_string(), t.clone()))
-                    .chain(once((t.name.clone(), t.clone())))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
         let mut to_run: Vec<Task> = vec![];
-        for spec in specs {
-            let (name, args) = split_task_spec(spec);
-            let matches = tasks_map.get_matching(name)?;
-            ensure!(!matches.is_empty(), "task not found: {}", name);
-            for t in matches {
-                let mut t = (*t).clone();
-                t.args = override_args
-                    .map(|a| a.to_vec())
-                    .unwrap_or_else(|| args.clone());
-                // Apply entry-level env via with_dependency_env (high priority,
-                // consistent with depends/depends_post) so it overrides the
-                // sub-task's own declared env.
-                if let Some(env) = override_env {
-                    let env_directives: Vec<EnvDirective> = env
-                        .iter()
-                        .map(|(k, v)| EnvDirective::Val(k.clone(), v.clone(), Default::default()))
-                        .collect();
-                    t = t.with_dependency_env(&env_directives);
-                    if let Some(config_root) = t.config_root.clone() {
-                        let env_map: IndexMap<String, String> = env.iter().cloned().collect();
-                        t.outputs.re_render_with_env(
-                            &mut t.raw_outputs,
-                            &mut t.raw_path_env,
-                            &env_map,
-                            &config_root,
-                        )?;
-                    } else {
-                        trace!(
-                            "re_render_with_env skipped: task {} has no config_root",
-                            t.name
-                        );
-                    }
+        for mut t in resolve_injected_tasks(config, specs, override_args, self.skip_deps).await? {
+            // Apply entry-level env via with_dependency_env (high priority,
+            // consistent with depends/depends_post) so it overrides the
+            // sub-task's own declared env.
+            if let Some(env) = override_env {
+                let env_directives: Vec<EnvDirective> = env
+                    .iter()
+                    .map(|(k, v)| EnvDirective::Val(k.clone(), v.clone(), Default::default()))
+                    .collect();
+                t = t.with_dependency_env(&env_directives);
+                if let Some(config_root) = t.config_root.clone() {
+                    let env_map: IndexMap<String, String> = env.iter().cloned().collect();
+                    t.outputs.re_render_with_env(
+                        &mut t.raw_outputs,
+                        &mut t.raw_path_env,
+                        &env_map,
+                        &config_root,
+                    )?;
+                } else {
+                    trace!(
+                        "re_render_with_env skipped: task {} has no config_root",
+                        t.name
+                    );
                 }
-                if self.skip_deps {
-                    t.depends.clear();
-                    t.depends_post.clear();
-                    t.wait_for.clear();
-                }
-                to_run.push(t);
             }
+            to_run.push(t);
         }
         let sub_deps = Deps::new_pruned(config, to_run, completion_state).await?;
+        // Scheduling an injected task installs its tools before `run_task_sched` looks at it,
+        // so a run that must not execute untrusted tasks refuses the whole sub-graph here,
+        // before any of it is scheduled.
+        if crate::config::runs_only_trusted_tasks()
+            && let Some(task) = sub_deps
+                .all()
+                .find(|t| !crate::config::task_is_trusted(config, t))
+        {
+            return Err(crate::errors::Error::UntrustedConfig(task.config_source.clone()).into());
+        }
         // Give these tasks their keep-order slots now, while the order they were
         // written in is still known and before any of them can produce a line.
         // Reaching this from `&self` is fine: the state is behind the shared
@@ -1386,6 +1553,7 @@ impl TaskExecutor {
                                 task,
                                 sub_deps_clone.clone(),
                                 allow_during_interruption,
+                                covered,
                             ));
                         }
                         Ok(None) => {
@@ -1420,6 +1588,7 @@ impl TaskExecutor {
                                 task,
                                 sub_deps_clone.clone(),
                                 allow_during_interruption,
+                                covered,
                             ));
                         }
                         None => {
@@ -1528,6 +1697,16 @@ impl TaskExecutor {
         }
 
         if script.starts_with("#!") {
+            // The rendered script can hold secrets that templates put there, so
+            // other users must not be able to enter its directory while it runs.
+            #[cfg(unix)]
+            let dir = {
+                use std::os::unix::fs::PermissionsExt;
+                tempfile::Builder::new()
+                    .permissions(std::fs::Permissions::from_mode(0o700))
+                    .tempdir()?
+            };
+            #[cfg(not(unix))]
             let dir = tempfile::tempdir()?;
             let file = dir.path().join("script");
             tokio::fs::write(&file, script.as_bytes()).await?;
@@ -1785,7 +1964,7 @@ impl TaskExecutor {
             self.eprint(ctx.task, ctx.prefix, &cmd);
         }
 
-        let _guard = if guard.is_some() {
+        let _guard = if guard.is_some() || ctx.covered.is_covered() {
             guard
         } else {
             Some(acquire_runtime_lock(ctx.task.interactive).await)
@@ -1855,6 +2034,7 @@ impl TaskExecutor {
             allow_during_interruption,
             otel_span_cx,
             secrets,
+            covered: _,
         } = ctx;
         #[cfg(not(windows))]
         let _ = cmd_verbatim;
@@ -1909,6 +2089,11 @@ impl TaskExecutor {
         let sandbox_env;
         let env = if sandbox.is_active() {
             let mut filtered = sandbox.filter_env(env);
+            // Lock names, not a secret: without them a nested `mise run` waits on its own
+            // parent's lock.
+            if let Some(locks) = env.get(task_lock::LOCKS_ENV) {
+                filtered.insert(task_lock::LOCKS_ENV.to_string(), locks.clone());
+            }
             // filter_env reads allowed names back from mise's own process
             // environment, which still holds inherited secrets. `env_remove`
             // cannot undo this because the runner sets `env` afterwards.
@@ -2085,6 +2270,32 @@ impl TaskExecutor {
                         } else {
                             self.eprint(task, prefix, &line);
                         }
+                    });
+                } else if output_capture.is_some() {
+                    cmd = cmd.with_on_stderr(|_| {});
+                } else {
+                    cmd = cmd.stderr(Stdio::null());
+                }
+            }
+            TaskOutput::Summary => {
+                if !task.silent.suppresses_stdout() {
+                    let handler = self.output_handler.clone();
+                    let task_clone = task.clone();
+                    let prefix_str = prefix.to_string();
+                    cmd = cmd.with_on_stdout(move |line| {
+                        handler.summary_stdout(&task_clone, &prefix_str, &line);
+                    });
+                } else if output_capture.is_some() {
+                    cmd = cmd.with_on_stdout(|_| {});
+                } else {
+                    cmd = cmd.stdout(Stdio::null());
+                }
+                if !task.silent.suppresses_stderr() {
+                    let handler = self.output_handler.clone();
+                    let task_clone = task.clone();
+                    let prefix_str = prefix.to_string();
+                    cmd = cmd.with_on_stderr(move |line| {
+                        handler.summary_stderr(&task_clone, &prefix_str, &line);
                     });
                 } else if output_capture.is_some() {
                     cmd = cmd.with_on_stderr(|_| {});
@@ -3165,6 +3376,55 @@ fn shell_from_shebang(path: &Path) -> Option<Vec<String>> {
     };
     let args: Vec<String> = parts.map(|s| s.to_string()).collect();
     Some(once(shell.to_string()).chain(args).collect())
+}
+
+/// The tasks a `run` entry's `specs` start, as the executor injects them: looked up among the
+/// tasks loaded for those names, by name or alias with `get_matching`'s preference for an exact
+/// name, each given `override_args` (the entry's `args`) or else the arguments written after its
+/// name. With `skip_deps` (`--skip-deps`, `task.skip_depends`) they start without their
+/// dependencies. A name that matches nothing is an error.
+pub(crate) async fn resolve_injected_tasks(
+    config: &Arc<Config>,
+    specs: &[String],
+    override_args: Option<&[String]>,
+    skip_deps: bool,
+) -> Result<Vec<Task>> {
+    use crate::task::TaskLoadContext;
+    // Create a TaskLoadContext from the specs to ensure project tasks are loaded
+    let ctx = TaskLoadContext::from_patterns(specs.iter().map(|s| {
+        let (name, _) = split_task_spec(s);
+        name
+    }));
+    let tasks = config.tasks_with_context(Some(&ctx)).await?;
+    let tasks_map: BTreeMap<String, Task> = tasks
+        .values()
+        .flat_map(|t| {
+            t.aliases
+                .iter()
+                .map(|a| (a.to_string(), t.clone()))
+                .chain(once((t.name.clone(), t.clone())))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut resolved = vec![];
+    for spec in specs {
+        let (name, args) = split_task_spec(spec);
+        let matches = tasks_map.get_matching(name)?;
+        ensure!(!matches.is_empty(), "task not found: {}", name);
+        for t in matches {
+            let mut t = (*t).clone();
+            t.args = override_args
+                .map(|a| a.to_vec())
+                .unwrap_or_else(|| args.clone());
+            if skip_deps {
+                t.depends.clear();
+                t.depends_post.clear();
+                t.wait_for.clear();
+            }
+            resolved.push(t);
+        }
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]

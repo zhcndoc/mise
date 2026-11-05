@@ -9,8 +9,10 @@ use crate::dirs;
 ///
 /// Writes one symlink per skill into DIR, named after the skill and pointing
 /// at the directory of the version that is active here. DIR defaults to the
-/// `skills.dir` setting, `.claude/skills`, under the project root: the
-/// directory of the nearest mise config. Run it again after `mise use` changes
+/// `skills.dir` setting under the project root: the directory of the nearest
+/// mise config. Unset, that is `.agents/skills` if it exists, then
+/// `.claude/skills` if it exists; with neither, mise creates `.agents/skills`
+/// and a `.claude/skills` symlink to it. Run it again after `mise use` changes
 /// a version and the links follow, or set `skills.auto_sync` to have mise do
 /// that after every install and `mise use`.
 ///
@@ -23,7 +25,7 @@ use crate::dirs;
     verbatim_doc_comment,
     example(
         r###"mise skills sync"###,
-        help = r###"Link skills into the project's skills.dir (default .claude/skills)"###
+        help = r###"Link skills into the project's skills.dir (default .agents/skills)"###
     ),
     example(
         r###"mise skills sync --dir .agents/skills --prune"###,
@@ -38,7 +40,7 @@ pub(super) struct SkillsSync {
 
     /// Link into the skills.dir directory under your home directory instead of the project's
     ///
-    /// With the default skills.dir, that is ~/.claude/skills.
+    /// With no skills.dir set, that follows the same rule as in a project.
     #[usage(long, short, conflicts = "dir")]
     global: bool,
 
@@ -50,17 +52,10 @@ pub(super) struct SkillsSync {
 impl SkillsSync {
     pub(super) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
-        let skills = crate::packslip::active_skills(&config).await?;
-        for missing in &skills.missing {
-            warn!("{missing}");
-        }
-        let nothing_declared = skills.missing.is_empty();
-        let skills = skills.found;
-        let settings = Settings::get();
-        let dir = match (&self.dir, self.global) {
-            (Some(dir), _) => dir.clone(),
-            (None, true) => crate::packslip::skills_dir(&dirs::HOME),
-            (None, false) => crate::packslip::skills_dir(
+        let target = match (&self.dir, self.global) {
+            (Some(dir), _) => crate::packslip::SkillsTarget::at(dir.clone()),
+            (None, true) => crate::packslip::skills_target(&dirs::HOME),
+            (None, false) => crate::packslip::skills_target(
                 &config
                     .project_root
                     .clone()
@@ -68,6 +63,29 @@ impl SkillsSync {
                     .unwrap_or_else(std::env::current_dir)?,
             ),
         };
+        // Without --dir, the project's directory takes the project's own
+        // tools, and the global ones go to --global, as auto_sync does. Where
+        // the two would be the same directory, whether a project root is
+        // loaded or not, it takes both.
+        let skills = if self.global {
+            crate::packslip::global_skills(&config).await?
+        } else if self.dir.is_none()
+            && !crate::packslip::same_dir(
+                &target.dir,
+                &crate::packslip::skills_target(&dirs::HOME).dir,
+            )
+        {
+            crate::packslip::project_skills(&config).await?
+        } else {
+            crate::packslip::active_skills(&config).await?
+        };
+        for missing in &skills.missing {
+            warn!("{missing}");
+        }
+        let nothing_declared = skills.missing.is_empty();
+        let skills = skills.found;
+        let settings = Settings::get();
+        let dir = target.dir.clone();
         let prune = self.prune || settings.skills.prune;
         if skills.is_empty() && !prune {
             if nothing_declared {
@@ -83,6 +101,9 @@ impl SkillsSync {
             &[*dirs::INSTALLS, *dirs::INSTALL_STORE],
             prune,
         )?;
+        if let Err(err) = target.link_alias() {
+            warn!("could not update .claude/skills: {err}");
+        }
         for name in &report.linked {
             let skill = skills.iter().find(|s| &s.name == name);
             miseprintln!(

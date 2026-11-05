@@ -83,7 +83,13 @@ pub(crate) fn resolve(
             }
         })?;
     }
-    let mut manifest = reconcile(&saved, current, previous.as_ref(), &historical);
+    let mut manifest = reconcile(
+        &saved,
+        current,
+        previous.as_ref(),
+        &historical,
+        &tracked.unselected,
+    );
     let roots = super::sync::layout::Roots::current();
     for path in enroll {
         if let Some(portable) = roots.branch_path(path, None)
@@ -131,7 +137,7 @@ pub(crate) fn resolve(
     }
     manifest.enrollment.sort_by(|a, b| a.path.cmp(&b.path));
     manifest.remove_unenrolled_permissions();
-    let mut resolved = manifest.tracking()?;
+    let mut resolved = manifest.tracking_lenient()?;
     for entry in &mut resolved.entries {
         entry.declared_in = tracked
             .entries
@@ -140,11 +146,21 @@ pub(crate) fn resolve(
             .and_then(|declared| declared.declared_in.clone());
     }
     resolved.required_sources = tracked.required_sources.clone();
-    resolved.invalid = tracked.invalid.clone();
+    for invalid in &tracked.invalid {
+        // the lenient read may already have reported the same path
+        if !resolved
+            .invalid
+            .iter()
+            .any(|seen| seen.path == invalid.path && seen.reason == invalid.reason)
+        {
+            resolved.invalid.push(invalid.clone());
+        }
+    }
     resolved.invalid_local = tracked.invalid_local.clone();
     resolved.declarations = Some(current.clone());
     resolved.disabled = tracked.disabled.clone();
     resolved.local = tracked.local.clone();
+    resolved.unselected = tracked.unselected.clone();
     resolved.keep_local_out();
     Ok(resolved)
 }
@@ -154,6 +170,7 @@ fn reconcile(
     current: &Manifest,
     previous: Option<&Manifest>,
     historical: &[Manifest],
+    unselected: &std::collections::BTreeSet<String>,
 ) -> Manifest {
     let mut result = saved.clone();
     for entry in &current.enrollment {
@@ -246,10 +263,13 @@ fn reconcile(
     }
     if let Some(previous) = previous {
         for old in &previous.enrollment {
+            // an entry that moved into a config of an environment not
+            // selected here is still tracked, by the machines that select it
             if !current
                 .enrollment
                 .iter()
                 .any(|entry| entry.path == old.path)
+                && !unselected.contains(&old.path)
             {
                 result.enrollment.retain(|entry| entry.path != old.path);
             }
@@ -287,13 +307,23 @@ pub(crate) fn confirm(state_dir: &Path, repo: &HistoryRepo, tracked: &TrackedSet
     if let Some(declarations) = &tracked.declarations
         && let Some(head) = repo.ref_oid(HistoryRepo::HISTORY_REF)?
     {
-        super::store::write_json(
-            &cache_path(state_dir),
-            &Observation {
-                head,
-                declarations: declarations.clone(),
-            },
-        )?;
+        let mut declarations = declarations.clone();
+        // an entry kept because an unselected environment still declares it
+        // stays observed, so deleting that declaration later is a removal
+        if !tracked.unselected.is_empty()
+            && let Ok(bytes) = std::fs::read(cache_path(state_dir))
+            && let Ok(old) = serde_json::from_slice::<Observation>(&bytes)
+        {
+            for entry in old.declarations.enrollment {
+                if tracked.unselected.contains(&entry.path)
+                    && !declarations.enrollment.iter().any(|e| e.path == entry.path)
+                {
+                    declarations.enrollment.push(entry);
+                }
+            }
+            declarations.enrollment.sort_by(|a, b| a.path.cmp(&b.path));
+        }
+        super::store::write_json(&cache_path(state_dir), &Observation { head, declarations })?;
     }
     Ok(())
 }
@@ -302,6 +332,33 @@ pub(crate) fn confirm(state_dir: &Path, repo: &HistoryRepo, tracked: &TrackedSet
 mod tests {
     use super::*;
     use crate::history::manifest::Enrollment;
+    use std::collections::BTreeSet;
+
+    fn reconcile(
+        saved: &Manifest,
+        current: &Manifest,
+        previous: Option<&Manifest>,
+        historical: &[Manifest],
+    ) -> Manifest {
+        super::reconcile(saved, current, previous, historical, &BTreeSet::new())
+    }
+
+    #[test]
+    fn an_entry_moved_to_an_unselected_environment_stays_enrolled() {
+        let saved = manifest("home/.yabairc");
+        let old = saved.clone();
+        let current = Manifest::default();
+        assert!(
+            super::reconcile(&saved, &current, Some(&old), &[], &BTreeSet::new())
+                .enrollment
+                .is_empty()
+        );
+        let unselected = BTreeSet::from(["home/.yabairc".to_string()]);
+        assert_eq!(
+            super::reconcile(&saved, &current, Some(&old), &[], &unselected),
+            saved
+        );
+    }
 
     fn manifest(path: &str) -> Manifest {
         Manifest {

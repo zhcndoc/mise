@@ -122,36 +122,53 @@ mise packslip pins --json
    mise packslip forget github.com/jdx/hk
    ```
 
-4. 如果 `mise.lock` 记录了旧签名者，请删除该工具的条目并运行 `mise lock` 记录新签名者。
-5. 检查并提交锁定文件更改。
+4. If `mise.lock` records the old signer, delete the tool's entries and run
+   `mise lock` to record the new one.
+5. Review and commit the lockfile change.
 
-`mise packslip forget` 也会重置项目记住的发行版列表状态，但不会更改盖章者列表状态。关于会被拒绝的更改，参见[签名者连续性](/dev-tools/packslip-verification.html#signer-continuity)。
+`mise packslip forget` also resets the project's remembered release-list state.
+It does not change stamper-list state. See
+[signer continuity](/dev-tools/packslip-verification.html#signer-continuity)
+for the changes that are refused.
 
-### 重命名的仓库 {#renamed-repositories}
+### Renamed repositories {#renamed-repositories}
 
-mise 会根据 GitHub 和 GitLab 项目的托管服务仓库 ID 固定项目身份，而不仅仅依赖名称。仓库重命名或转移后仍可继续安装，包括由新名称下的身份签署的发行版；mise 会使用新名称发出一次警告，请在方便时更新配置。固定记录和 `mise.lock` 中的约束会随仓库转移，因此无需运行 `mise packslip forget`。
+mise pins GitHub and GitLab projects by the forge's repository ID, not only by
+name. A renamed or transferred repository keeps installing, including releases
+signed under the new name, and mise warns once with the new name; update your
+configuration when convenient. The pin and the `mise.lock` commitment follow the
+repository, so you do not need `mise packslip forget`.
 
-若另一个仓库占用了旧名称，mise 会拒绝安装，因为被删除后由他人抢注的仓库看起来正是如此。错误消息会指出固定原仓库身份的记录：此机器上的固定记录、`mise.lock` 条目或两者。只有在项目确认由原项目重新创建了仓库后，才应清除错误消息中指出的记录（运行 `mise packslip forget` 或删除锁定文件条目）。
+没有仓库 ID 的固定项或 `mise.lock` 条目只按名称固定，不会跟随仓库改名。若要更新机器固定项，请运行 `mise packslip forget <tool>` 后重新安装；若要更新 `mise.lock` 条目，请删除该条目并再次运行 `mise lock`。
 
-在没有固定记录和锁定文件条目的机器上首次安装时，mise 会信任当时拥有该名称的仓库，因此请提交 `mise.lock`。详情及限制参见[已重命名、已转移和重新创建的仓库](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)。
+A different repository that takes the old name is refused, because that is what
+a deleted repository whose name someone else took looks like. The error names
+the record that pins the original: this machine's pin, the `mise.lock` entries,
+or both. Clear what it names (`mise packslip forget`, or delete the lockfile
+entries) only after the project confirms it re-created the repository itself.
 
-<a id="tool-options"></a>
+The first install on a machine with no pin and no lockfile entry trusts
+whichever repository has the name at that moment, so commit `mise.lock`. See
+[renamed, transferred, and re-created repositories](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)
+for the details and limits.
 
-## 工具选项
+## Tool options
 
-这些[工具选项](/dev-tools/#tool-options)适用于 `[tools]` 中的单个条目。`packslip.exec`、`packslip.stampers` 和 `skills.*` 设置则应放在 `[settings]` 中。
+These [tool options](/dev-tools/#tool-options) apply to one entry in `[tools]`.
+The `packslip.exec`, `packslip.stampers`, and `skills.*` settings go under
+`[settings]` instead.
 
-| 选项                                                                      | 默认值                         | 用途                                                         |
-| ------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------ |
-| [`variant`](#variant)                                                     | 无变体                         | 选择发布者声明的替代构建版本                                  |
-| [`pubkey`](#pubkey)                                                       | 未设置                         | 固定 minisign 格式的公钥或公钥文件                            |
-| [`identity`, `identity_prefix`, `issuer`](#identity-identity-prefix-issuer) | 从已识别的 forge 派生           | 设置预期的无密钥签名者和 OIDC 颁发者                         |
-| [`workflow`](#workflow)                                                     | 仓库的任意工作流               | 固定在标签上为发布签名的仓库工作流                           |
-| [`list_identity_prefix`](#list-identity-prefix)                           | 发布签名者策略                 | 为供应商发布列表固定不同的工作流                              |
-| [`prerelease`](#prerelease)                                               | `false`                        | 包含预发布版本                                               |
-| [`trust`](#trust)                                                         | 应用已配置的盖章者             | 使用 `"vendor"` 使此工具免于盖章要求                         |
-| [`allow_unlogged`](#allow-unlogged)                                       | `false`                        | 接受没有透明度日志证据的密钥签名 bundle                       |
-| [`ignore_requirements`](#ignore-requirements)                             | `false`                        | 即使已确认主机要求失败，也继续安装                            |
+| Option                                                                      | Default                         | Purpose                                                      |
+| --------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------ |
+| [`variant`](#variant)                                                       | No variant                      | Select a publisher-declared alternative build.               |
+| [`pubkey`](#pubkey)                                                         | Unset                           | Pin a minisign-format public key or public-key file.         |
+| [`identity`, `identity_prefix`, `issuer`](#identity-identity-prefix-issuer) | Derived from a recognized forge | Set the expected keyless signer and OIDC issuer.             |
+| [`workflow`](#workflow)                                                     | Any workflow of the repository  | Pin the repository workflow that signs releases on a tag.    |
+| [`list_identity_prefix`](#list-identity-prefix)                             | Release signer policy           | Pin a different workflow for the vendor release list.        |
+| [`prerelease`](#prerelease)                                                 | `false`                         | Include prerelease versions.                                 |
+| [`trust`](#trust)                                                           | Apply configured stampers       | Use `"vendor"` to exempt this tool from stamp requirements.  |
+| [`allow_unlogged`](#allow-unlogged)                                         | `false`                         | Accept key-signed bundles without transparency-log evidence. |
+| [`ignore_requirements`](#ignore-requirements)                               | `false`                         | Install despite confirmed host requirement failures.         |
 
 ### `variant`
 
@@ -164,7 +181,9 @@ mise 会根据 GitHub 和 GitLab 项目的托管服务仓库 ID 固定项目身�
 
 ### `pubkey`
 
-对于使用密钥签名的项目，请通过可信渠道获取发布者的公钥。将 `pubkey` 设置为 minisign 格式的公钥行，或其 `.pub` 文件的路径。发行版列表和 bundle 都必须通过该公钥验证。
+For a key-signed project, get the publisher's public key through a channel you
+trust. Set `pubkey` to the minisign-format public-key line or the path of its
+`.pub` 文件。如果某个值可解析为密钥，则无论同名文件是否存在，都会将其视为密钥；只有无法解析为密钥时才会按路径查找，相对路径以运行 mise 的目录为基准。发行列表和 bundle 都必须通过该密钥验证。
 
 ```toml
 [tools]
@@ -191,7 +210,14 @@ mise 会根据 GitHub 和 GitLab 项目的托管服务仓库 ID 固定项目身�
 "packslip:github.com/example/tool" = { version = "latest", workflow = "release.yaml" }
 ```
 
-此设置会在 GitHub 的 OIDC 颁发者下展开为身份前缀 `https://github.com/example/tool/.github/workflows/release.yaml@refs/tags/`，因此在分支上运行的工作流无法签署发行版。它不能与 `pubkey`、`identity`、`identity_prefix` 或 `issuer` 同时使用；这些选项可用于固定其他 ref 或代码托管服务。注册表为简写提供 `workflow` 默认值时，如果在简写上设置了这些选项之一，你的设置会替换默认值。与这些选项相同，`workflow` 会按名称固定签名者，因此仓库重命名后需要在此处更新名称。
+This expands to the identity prefix
+`https://github.com/example/tool/.github/workflows/release.yaml@refs/tags/` with
+GitHub's OIDC issuer, so a workflow run on a branch cannot sign a release. It
+cannot be combined with `pubkey`, `identity`, `identity_prefix`, or `issuer`;
+use those to pin another ref or forge. When the registry supplies a `workflow`
+default and you set one of those options on the shorthand, yours replaces the
+default. Like those options, it pins the signer by name, so a renamed repository
+needs the new name here. 与这些选项不同，发布仍必须对应 mise 为项目固定的[仓库 ID](/dev-tools/packslip-verification.html#renamed-transferred-and-re-created-repositories)，因此若有仓库以该名称重新创建，仍会被拒绝。
 
 如果你要安装的项目发行版曾由不同工作流签署，可以指定多个工作流；其中任一个签署的发行版都会被接受：
 
@@ -208,7 +234,11 @@ mise 会根据 GitHub 和 GitLab 项目的托管服务仓库 ID 固定项目身�
 
 ### `list_identity_prefix` {#list-identity-prefix}
 
-如果供应商的发行版列表由另一个工作流签名，请单独固定该工作流的证书身份前缀。此设置只会替换供应商列表所用的 `identity` 和 `identity_prefix`；发行版 bundle 仍然需要原签名者。OIDC `issuer` 是共用的，包括从代码托管服务项目推导出的颁发者。如果不设置此选项，列表会沿用发行版 bundle 的策略。
+When a different workflow signs the vendor's release list, pin its certificate
+identity prefix separately. It replaces `identity` and `identity_prefix` for the
+vendor's list only; release bundles still need their original signer. The OIDC
+`issuer` is shared, including an issuer derived from a forge project. Without
+this option, the list uses the same policy as release bundles. 对于 GitHub 或 GitLab 项目，列表仍必须对应 mise 固定的[仓库 ID](#renamed-repositories)：其证书必须记录该项目仓库。
 
 该值必须为非空字符串，且必须同时配置颁发者。它不能与 `pubkey` 同时使用，也不会影响已配置的盖章者；盖章者列表使用各自的固定记录。
 

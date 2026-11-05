@@ -44,7 +44,7 @@ mise 每次加载配置时都会读取所有 `[env]` 值，并解密 [SOPS](/env
 mise use fnox
 ```
 
-mise 需要 fnox 1.39.0 或更新版本。它会先在项目工具中查找 fnox CLI，再从 `PATH` 中查找。
+mise 需要 fnox 1.39.0 或更高版本；若要从 fnox 守护进程读取，则需要 1.43.0 或更高版本。mise 会先在项目工具中查找 fnox CLI，然后再检查 `PATH`。
 
 ### 2. 将 fnox 设为密钥来源并授权密钥
 
@@ -262,7 +262,7 @@ jobs:
 
 ### 使用 fnox 守护进程缓存 {#caching-with-the-fnox-daemon}
 
-如果 fnox 守护进程正在运行且已缓存密钥值，mise 会直接从其 socket 读取：
+fnox 守护进程运行且已缓存你的值时，mise 会直接从守护进程套接字读取。这需要 fnox 1.43.0 或更高版本，其守护进程使用协议 7：
 
 ```toml [fnox.toml]
 root = true
@@ -271,47 +271,99 @@ root = true
 enabled = true
 ```
 
-- 命中缓存时，mise 会通过一次 socket 往返读取密钥，取代解析密钥时的 `fnox env --json` 调用：不访问提供程序，也不会提示登录。设置 `MISE_DEBUG=1` 后会显示 `secrets: fnox daemon hit`。mise 仍会在每次运行时调用一次 `fnox env --json --describe`，以检查授权。
-- 缓存未命中时（密钥尚未缓存或需要租约），mise 会在终端中运行 `fnox env --json`。fnox 会解析密钥、在需要时提示登录，并将值存入守护进程；因此，下次运行时无需租约的密钥都会命中缓存。
-- 当 fnox 配置中设置 `[daemon] enabled = false`、设置了 `FNOX_DAEMON=0`、守护进程未运行、协议版本不匹配、socket 不属于当前用户、处于 CI 或无终端环境，以及在 Windows 上（fnox 没有 Windows 守护进程）时，mise 会改用 fnox CLI。mise 会通过 `fnox env --json --describe` 读取 fnox 自身的判断，因此过旧的 fnox 若无法报告该信息，也只会使用 CLI。
-- 如果守护进程接受连接但未及时响应，本次运行的后续操作会跳过它；之后 fnox CLI 会以 `--no-daemon` 运行，但仍可交互。
-- 解析结果为空的可选密钥以及需要租约的密钥始终通过 CLI 获取。
+- A hit replaces the resolving `fnox env --json` call with one socket round
+  trip: no provider calls and no prompt. `MISE_DEBUG=1` shows
+  `secrets: fnox daemon hit`. mise still runs `fnox env --json --describe` once
+  per run to check the grants.
+- On a miss, when a key is not cached or needs a lease, mise runs
+  `fnox env --json` on your terminal. fnox resolves the values, prompts if it
+  must, and stores them in the daemon, so the next run hits for every key that
+  does not need a lease.
+- mise runs the fnox CLI and does not use the daemon when fnox's config sets
+  `[daemon] enabled = false` or `FNOX_DAEMON=0` is set, when no daemon is
+  正在运行（1.43.0 之前版本的 fnox 守护进程监听的套接字不在 mise 的查找范围内，因此会视为未运行）、守护进程使用其他协议或其套接字不归你所有、处于 CI 或没有终端，以及使用没有 fnox 守护进程的 Windows 时，都会退回 CLI。mise 会通过 `fnox env --json --describe` 读取 fnox 自身的决定；若 fnox 版本过旧，无法报告该信息，也只会使用 CLI。
+- A daemon that accepts the connection but does not answer in time is skipped
+  for the rest of the run; the fnox CLI then runs with `--no-daemon`, still
+  interactively.
+- Optional keys that resolve to nothing, and keys that need a lease, always go
+  through the CLI.
 
-## mise 如何保护密钥 {#where-values-go-and-where-they-never-go}
+## How mise protects values {#where-values-go-and-where-they-never-go}
 
-### 密钥值的去向 {#where-values-go}
+### Where values go {#where-values-go}
 
-mise 会在渲染完所有模板后，将密钥值加入任务进程。它们不会传到你的 Shell、`mise env`、你手动运行的 shim、任务缓存、mise 环境缓存或任务命令行中。fnox 以文件形式提供密钥（`as_file = true`）时，mise 会将文件写入仅所有者可访问的目录，把 `KEY` 设为文件路径，并在任务结束时删除文件。
+mise adds the values to the task's process after it renders every template.
+They never reach your shell, `mise env`, shims you run yourself, the task cache,
+mise's env cache, or the task's command line. Keys that fnox provides as files
+(`as_file = true`) are written to a directory with owner-only permissions, `KEY`
+is set to the file's path, and the files are deleted when the task ends.
 
-任务与 mise 以相同的操作系统用户身份运行。授权机制可以阻止未获授权的任务读取密钥，但不能隔离同一用户的其他进程：任务运行期间，这些进程仍可读取获授权任务的环境变量和密钥文件。
+Tasks run as the same operating system user as mise. Grants keep a secret away
+from tasks that were not granted it, but they do not isolate it from other
+processes of that user: such a process can read a granted task's environment
+and its secret files while it runs.
 
-由于 mise 会在渲染 `run` 后才注入密钥，因此其中的 <span v-pre>`{{ env.DEPLOY_KEY }}`</span> 无法读取已授权密钥。请改为从环境变量读取（`"$DEPLOY_KEY"`）。mise 会在运行任何任务前报告此问题。
+<span v-pre>`{{ env.DEPLOY_KEY }}`</span> in `run` cannot see a granted secret,
+because mise adds the secret after it renders `run`. Read it from the
+environment instead (`"$DEPLOY_KEY"`). mise reports this before it runs
+anything.
 
-如果 mise 也通过 `[env]`、任务的 `env`、工具或设置为任务设置了同名变量，就会报错：通过 shim 启动的工具会重新计算该变量，从而覆盖密钥。若任务沙箱会丢弃该变量，也会报错；请将它加入 `allow_env`。
+A key that mise also sets for the task, through `[env]`, the task's `env`, a
+tool or a setting, is an error: tools started through shims recompute it and
+would replace the secret. A key that the task's sandbox would drop is an error
+too; add it to `allow_env`.
 
-### 密钥隐藏、原始输出与 stdin {#redaction-raw-output-and-stdin}
+### Redaction, raw output and stdin {#redaction-raw-output-and-stdin}
 
-接收密钥的任务始终会隐藏输出，因此 mise 会忽略其 `--raw` 和 `raw` 设置，也不会连接 stdin。若在任务中设置 `raw = true` 或 `interactive = true`，mise 会将终端交给任务，此时不再隐藏其输出。此行为仅在 mise 于终端中运行时适用：像 CI 这样的无终端环境中，mise 会发出警告，但仍会隐藏任务输出。
+A task that receives secrets always has its output redacted, so mise ignores
+`--raw` and the `raw` setting for it and does not connect stdin. Set
+`raw = true` or `interactive = true` on the task to hand it the terminal; its
+output is then not redacted. This applies only when mise runs in a terminal:
+without one, as in CI, mise warns and still redacts the task's output.
 
-### 任务缓存 {#artifact-cache}
+### Artifact cache {#artifact-cache}
 
-接收密钥的任务不会使用[任务制品缓存](/tasks/caching.html)，因为缓存的输出可能包含密钥。普通的 `sources`/`outputs` 新鲜度检查仍然有效。
+A task that receives secrets does not use the
+[task artifact cache](/tasks/caching.html), because cached output could hold a
+secret. The plain `sources`/`outputs` freshness check still applies.
 
-### 不支持密钥授权的调用方式 {#launchers-that-refuse-grants}
+### Where secrets cannot be used {#launchers-that-refuse-grants}
 
-- 由 mise 钩子、`watch_files`、pitchfork 守护进程或 `mise bootstrap` 启动时，声明了密钥的任务不会运行。请直接使用 `mise run` 启动。
-- 来自远程来源（`git::`、`oci::` 或 URL include）的任务，以及在全局或系统配置中定义的任务，不能声明密钥。
-- 文件任务或 `[tasks]` 条目只要声明了密钥，其配置就必须受信任；普通任务定义则没有此要求。
+- A task that lists secrets does not run when a mise hook, `watch_files`, a
+  pitchfork daemon or `mise bootstrap` starts it. Run it directly with
+  `mise run`.
+- Tasks from remote sources (`git::`, `oci::` or URL includes) and tasks
+  defined in global or system config cannot list secrets.
+- A task file or a `[tasks]` entry that lists secrets requires its config to be
+  trusted, even though plain task definitions do not.
 
-带有 `shell = ...` 的钩子会在你自己的 Shell 中运行，因此脚本运行期间，mise 会用 `__MISE_SECRETS_DENIED` 标记该 Shell。如果脚本提前返回或被中断，该标记会保留，`mise run` 在此 Shell 中就不会授予密钥；请打开新的 Shell，或运行 `unset __MISE_SECRETS_DENIED`。该标记可避免任务意外收到无人授权的密钥；脚本本身也可以将其清除。
+A hook with `shell = ...` runs in your own shell, so mise marks that shell with
+`__MISE_SECRETS_DENIED` while the script runs. If the script returns early or is
+interrupted, the mark stays, and `mise run` refuses secrets in that shell until
+you open a new one or run `unset __MISE_SECRETS_DENIED`. The mark keeps a task
+from receiving secrets that nobody asked for; a script can unset it itself.
 
-### 信任 {#trust}
+### 来自个人 fnox 配置的密钥 {#personal-keys}
 
-在 [`paranoid`](/paranoid.html) 模式以外，`mise run` 会隐式信任当前配置；在 CI 中，mise 会信任所有配置文件。因此，克隆仓库并在其中运行任务时，该仓库的所有任务都会运行，包括声明了密钥的任务。在常运行 AI 智能体或处理不受信任仓库的机器上，请设置 `paranoid = true`，要求显式信任每个配置文件。
+fnox 会将其全局配置（`~/.config/fnox/config.toml`，由 `fnox set --global` 写入）应用于每个项目，也会读取上级目录（包括主目录）中的 `fnox.toml`。其中定义的密钥属于你个人，而非项目；值插入了此类密钥的项目密钥（例如 `default = "x-${MY_KEY}"`）也属于个人密钥。项目不能授权使用这两类密钥：
 
-## 故障排查 {#troubleshooting}
+- 任务的 `secrets` 列表或 <span v-pre>`{{ secrets.NAME }}`</span> 引用了此类密钥时会报错，且不会解析任何密钥。
+- `--secrets-all` 会排除此类密钥。
+- `mise run --secrets NAME` 和 `mise x --secrets NAME` 仍会提供该密钥，因为这是你主动指定的。
 
-可以先运行以下命令，逐步定位问题：
+若要将密钥归项目所有，请在项目的 `fnox.toml` 中定义。只有当 fnox 在 `fnox env --json --describe` 的 `source` 字段中报告来源时，mise 才能判断密钥来源；使用较旧的 fnox 时，所有密钥都会视为项目密钥。
+
+### Trust {#trust}
+
+Outside [`paranoid`](/paranoid.html) mode, `mise run` implicitly trusts the
+active config, and in CI mise trusts every config file, so cloning a repository
+and running a task in it runs that repository's tasks, including any that list
+secrets. On machines where AI agents or untrusted repositories are common, set
+`paranoid = true` so every config must be trusted explicitly.
+
+## Troubleshooting {#troubleshooting}
+
+Start with these; each narrows the problem to one layer:
 
 ```sh
 mise secrets ls                       # 检查密钥来源、密钥和授权状态
@@ -320,33 +372,34 @@ mise x -- fnox check --all            # 检查 fnox 能否解析所有密钥
 MISE_DEBUG=1 mise run deploy          # 查看 mise 如何调用 fnox 以及守护进程是否响应
 ```
 
-| 错误信息包含                                                   | 处理方式                                                                                                                       |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `unknown secret X`                                            | fnox 配置方案中没有此密钥。请检查 `mise secrets ls`、密钥拼写和配置方案。                                                      |
-| `--secrets after the task name`                               | 将 mise 选项放在任务名前：`mise run --secrets X deploy`。                                                                      |
-| `X is a file secret (as_file = true)`                         | `mise x` 无法传递文件。请使用任务（`mise run`）或 `fnox exec -- <command>`。                                                   |
-| `X cannot be injected`                                        | fnox 为该密钥设置了 `env = false`。请通过 `fnox get X` 读取，或在 `fnox.toml` 中将 `env` 设为 `"exec"`。                       |
-| `is not a valid environment variable name`                    | 使用符合 `[A-Za-z_][A-Za-z0-9_]*` 的名称。                                                                                    |
-| `secrets = true is not supported`                             | 列出密钥名称，例如 `secrets = ["DEPLOY_KEY"]`。                                                                               |
-| `per-task source options`                                     | 目前不支持 `secrets = { fnox = ... }`；请改为列出密钥名称。                                                                    |
-| `wildcards are not supported`                                 | 逐一列出密钥。                                                                                                                |
-| `secrets is not allowed in [task_templates.<t>]`              | 在每个任务中分别设置 `secrets`。                                                                                               |
-| `comes from a remote source`                                  | 远程任务不能声明密钥。请将任务复制到项目中。                                                                                  |
-| `which is not project config`                                 | 全局和系统配置不能声明密钥。请将任务移到项目配置中。                                                                          |
-| `but it was started by`                                       | 直接运行任务：`mise run <task>`。Shell 钩子被中断后，请打开新 Shell 或运行 `unset __MISE_SECRETS_DENIED`。                     |
-| `X is both a secret and a mise env var`                       | 只保留一个定义：将默认值移到 `fnox.toml`，或重命名 mise 环境变量。                                                             |
-| `secret name PATH is reserved by mise`                        | 不能授权 mise 自身使用的名称。                                                                                                |
-| `but its sandbox denies env vars`                             | 在任务中添加 `allow_env = ["X"]`，或传入 `--allow-env X`。                                                                    |
-| `fnox could not resolve X`                                    | fnox 提供程序解析失败。请登录或向 CI 提供程序凭据。其余错误信息来自 fnox。                                                     |
-| `not retrying X`                                              | fnox 在本次运行中较早时已解析该密钥失败；请先修复最初的错误。                                                                 |
-| <span v-pre>`{{ env.X }} in run cannot see the secret`</span> | 请改为从环境变量读取：`"$X"`。                                                                                                |
+| Message contains                                              | What to do                                                                                                                       |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `unknown secret X`                                            | The key is not in fnox's profile. Check `mise secrets ls`, the spelling, and the profile.                                        |
+| `--secrets after the task name`                               | Put mise flags before the task name: `mise run --secrets X deploy`.                                                              |
+| `X is a file secret (as_file = true)`                         | `mise x` cannot give files. Use a task (`mise run`) or `fnox exec -- <command>`.                                                 |
+| `X comes from your own fnox config`                           | 在项目的 `fnox.toml` 中定义它，或主动指定：`mise run --secrets X <task>`。详见[个人密钥](#personal-keys)。 |
+| `X cannot be injected`                                        | fnox sets `env = false` for it. Read it with `fnox get X`, or set `env = "exec"` in `fnox.toml`.                                 |
+| `is not a valid environment variable name`                    | Use names matching `[A-Za-z_][A-Za-z0-9_]*`.                                                                                     |
+| `secrets = true is not supported`                             | List key names: `secrets = ["DEPLOY_KEY"]`.                                                                                      |
+| `per-task source options`                                     | `secrets = { fnox = ... }` is not supported yet; list key names.                                                                 |
+| `wildcards are not supported`                                 | List each key.                                                                                                                   |
+| `secrets is not allowed in [task_templates.<t>]`              | Move `secrets` to each task.                                                                                                     |
+| `comes from a remote source`                                  | Remote tasks cannot list secrets. Copy the task into your project.                                                               |
+| `which is not project config`                                 | Global and system config cannot list secrets. Move the task into the project.                                                    |
+| `but it was started by`                                       | Run the task directly: `mise run <task>`. After an interrupted shell hook, open a new shell or `unset __MISE_SECRETS_DENIED`.    |
+| `X is both a secret and a mise env var`                       | Keep one: move the default into `fnox.toml` or rename the mise variable.                                                         |
+| `secret name PATH is reserved by mise`                        | Names mise uses itself cannot be granted.                                                                                        |
+| `but its sandbox denies env vars`                             | Add `allow_env = ["X"]` to the task or pass `--allow-env X`.                                                                     |
+| `fnox could not resolve X`                                    | fnox's provider failed. Sign in, or give CI the provider's credentials. The rest of the message comes from fnox.                 |
+| `not retrying X`                                              | fnox failed for it earlier in this run; fix the first error.                                                                     |
+| <span v-pre>`{{ env.X }} in run cannot see the secret`</span> | Read `"$X"` from the environment instead.                                                                                        |
 
 ## `mise secrets ls` {#mise-secrets-ls}
 
 [`mise secrets ls`](/cli/secrets/ls.html) 会显示现有密钥以及列出它们的任务，但不会显示密钥值。
 
 ```text
-fnox · profile dev · ~/src/app (mise.toml) · fnox 1.39.0 · daemon: running (protocol 6)
+fnox · profile dev · ~/src/app (mise.toml) · fnox 1.43.0 · daemon: running (protocol 7)
 KEY                ENV    FILE  SCOPES     TASKS   DESCRIPTION
 AWS_ACCESS_KEY_ID  -      no    run, exec          (lease aws)
 DATABASE_URL       true   no    run, exec  deploy  app database
@@ -378,8 +431,8 @@ SIGNING_KEY        false  no    -                  release signing key
     "declared_in": ["/home/me/src/app/mise.toml"],
     "profile": "dev",
     "tool": {
-      "path": "/home/me/.local/share/mise/installs/fnox/1.39.0/fnox",
-      "version": "1.39.0"
+      "path": "/home/me/.local/share/mise/installs/fnox/1.43.0/fnox",
+      "version": "1.43.0"
     }
   },
   "keys": [

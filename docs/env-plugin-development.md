@@ -212,7 +212,9 @@ _.my-env-plugin = {}
 
 只有用户启用实验性 [`env_cache`](/configuration/settings.html#env_cache) 设置（`MISE_ENV_CACHE=1`）后才会缓存；默认关闭。之后，mise 会复用缓存结果，直到 [`env_cache_ttl`](/configuration/settings.html#env_cache_ttl) 到期、配置文件或插件发生变化，或 `watch_files` 中的文件发生变化。
 
-mise 无法感知远程服务中的变化，因此只有当最多一个 TTL 之前的结果仍可接受时，才应返回 `cacheable = true`。无论 `cacheable` 的值如何，包含脱敏值的指令都不会被缓存。需要获取最新值的用户可以设置 `MISE_ENV_CACHE=0`。详见[环境缓存](/cache-behavior.html#environment-caching)。
+mise cannot see changes in a remote service, so return `cacheable = true` only
+when a result up to one TTL old is acceptable. A directive whose values are
+即使设置了 `cacheable`，已脱敏的指令值也不会缓存；除非用户启用 [`env_cache_redacted`](/configuration/settings.html#env_cache_redacted)。需要获取最新值的用户可以设置 `MISE_ENV_CACHE=0`。详见[环境缓存](/cache-behavior.html#environment-caching)。
 
 ## 脱敏 {#redaction}
 

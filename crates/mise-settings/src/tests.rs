@@ -42,11 +42,12 @@ fn validate_string_choices_checks_each_strict_setting() {
     let mut settings = Settings::default();
     settings.status.missing_tools = "always".into();
     settings.windows_shim_mode = "exe".into();
+    settings.lockfile_mode = "generate".into();
     assert!(settings.validate_string_choices().is_ok());
     let error = |settings: &Settings| settings.validate_string_choices().unwrap_err().to_string();
 
     let mut bad = settings.clone();
-    bad.lockfile_mode = Some("bogus".into());
+    bad.lockfile_mode = "bogus".into();
     assert!(error(&bad).starts_with("invalid lockfile_mode value \"bogus\""));
     let mut bad = settings.clone();
     bad.status.missing_tools = "bogus".into();
@@ -418,4 +419,52 @@ fn only_the_provenance_category_forces_provenance_verification() {
         assert!(!verify(Paranoid::only([category])), "{category}");
     }
     assert!(!verify(Paranoid::none()));
+}
+
+#[test]
+fn secret_names_are_recognized_by_their_shape() {
+    for name in [
+        "MISE_GITHUB_TOKEN",
+        "MISE_SOPS_AGE_KEY",
+        "MISE_AGE_KEY",
+        "MISE_TASK_CACHE_REMOTE_TOKEN",
+        "MISE_FORGEJO_TOKEN",
+        "remote_token",
+        "age_key",
+    ] {
+        assert!(is_secret_name(name), "{name}");
+    }
+    for name in [
+        "MISE_SOPS_AGE_KEY_FILE",
+        "age_key_file",
+        "gh_cli_tokens",
+        "MISE_GITHUB_TOKEN_COMMAND",
+        "age_recipients",
+    ] {
+        assert!(!is_secret_name(name), "{name}");
+    }
+}
+
+#[test]
+fn settings_table_redacts_secret_values_at_any_depth() {
+    let mut table: toml::Table = toml::from_str(
+        r#"
+        [sops]
+        age_key = "AGE-SECRET-KEY-1"
+        age_key_file = "/keys/age.txt"
+        [task.cache]
+        remote_token = "rtc"
+        "#,
+    )
+    .unwrap();
+    redact_settings_table(&mut table);
+    assert_eq!(table["sops"]["age_key"].as_str(), Some("[redacted]"));
+    assert_eq!(
+        table["sops"]["age_key_file"].as_str(),
+        Some("/keys/age.txt")
+    );
+    assert_eq!(
+        table["task"]["cache"]["remote_token"].as_str(),
+        Some("[redacted]")
+    );
 }

@@ -306,7 +306,7 @@ fn encryption_cache_key(dir: &Path) -> Result<[u8; 32]> {
 impl HistoryRepo {
     pub(crate) const HISTORY_REF: &'static str = "refs/heads/main";
     const MATCHER_TRAILER: &'static str = "Mise-History-Matcher: ";
-    const RECORD_TRAILER: &'static str = "Mise-History: ";
+    pub(crate) const RECORD_TRAILER: &'static str = "Mise-History: ";
     pub fn path_in(state_dir: &Path) -> PathBuf {
         repo_dir_in(state_dir)
     }
@@ -1308,6 +1308,24 @@ impl HistoryRepo {
         if let Some(bytes) = self.transient_blob(oid) {
             return Ok(bytes.starts_with(prefix));
         }
+        if let Some(id) = Self::object_id(oid) {
+            // gix reads a full object id without starting Git; a blob
+            // shorter than the prefix cannot match, so it is never read
+            let repo = self.gix()?;
+            let header = repo
+                .find_header(id)
+                .wrap_err_with(|| format!("reading {id}"))?;
+            if header.kind() != gix::object::Kind::Blob {
+                bail!("reading {id}: a {} is not a blob", header.kind());
+            }
+            if header.size() < prefix.len() as u64 {
+                return Ok(false);
+            }
+            let object = repo
+                .find_object(id)
+                .wrap_err_with(|| format!("reading {id}"))?;
+            return Ok(object.data.starts_with(prefix));
+        }
         self.git.blob_starts_with(oid, prefix)
     }
 
@@ -1331,14 +1349,22 @@ impl HistoryRepo {
         self.cat_object(oid)
     }
 
+    /// Writes `bytes` as a blob, as `hash-object -w --stdin` does (no
+    /// filters), without starting Git once per file of a snapshot.
     pub(crate) fn hash_blob(&self, bytes: &[u8]) -> Result<String> {
-        self.output_str(PlumbingCall::new(["hash-object", "-w", "--stdin"]).stdin(bytes))
+        Ok(self
+            .gix()?
+            .write_blob(bytes)
+            .wrap_err("writing a blob")?
+            .to_string())
     }
 
     /// Compute the normal Git identity without writing an object. Read APIs
     /// can resolve it in memory until this repository handle is dropped.
     pub(crate) fn transient_blob_id(&self, bytes: &[u8]) -> Result<String> {
-        let oid = self.output_str(PlumbingCall::new(["hash-object", "--stdin"]).stdin(bytes))?;
+        let oid =
+            gix::objs::compute_hash(self.gix()?.object_hash(), gix::object::Kind::Blob, bytes)?
+                .to_string();
         self.transient
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -1796,7 +1822,21 @@ impl HistoryRepo {
                 .index_file(index)
                 .stdin(&info),
         )?;
-        self.output_str(PlumbingCall::new(["write-tree"]).index_file(index))
+        self.write_tree_retrying(index)
+    }
+
+    /// `git write-tree` over `index`, tried again when Windows refuses a loose
+    /// object write.
+    ///
+    /// **Two writers of one object collide on Windows.** Composing trees at
+    /// the same time writes the same blobs and subtrees, and Git cannot
+    /// replace a loose object another process holds open, so it fails with
+    /// `Permission denied`. The object is then written by the other process,
+    /// and a second attempt finds it already there.
+    fn write_tree_retrying(&self, index: &Path) -> Result<String> {
+        retry_on_permission_denied(|| {
+            self.output_str(PlumbingCall::new(["write-tree"]).index_file(index))
+        })
     }
 
     /// [`Self::compose`] as Git applies it, one overlay at a time: the
@@ -1932,6 +1972,56 @@ impl HistoryRepo {
         )
     }
 
+    /// A commit carrying another commit's identity: its author and committer
+    /// as `[name, email, "seconds offset"]`, and its message verbatim.
+    pub(crate) fn commit_tree_as(
+        &self,
+        tree: &str,
+        parents: Vec<&str>,
+        message: &[u8],
+        author: &[String; 3],
+        committer: &[String; 3],
+    ) -> Result<String> {
+        let mut args = vec!["commit-tree".to_string(), tree.to_string()];
+        for parent in parents {
+            args.push("-p".to_string());
+            args.push(parent.to_string());
+        }
+        self.output_str(
+            PlumbingCall::new(args)
+                .stdin(message)
+                .env("GIT_AUTHOR_NAME", author[0].as_str())
+                .env("GIT_AUTHOR_EMAIL", author[1].as_str())
+                .env("GIT_AUTHOR_DATE", author[2].as_str())
+                .env("GIT_COMMITTER_NAME", committer[0].as_str())
+                .env("GIT_COMMITTER_EMAIL", committer[1].as_str())
+                .env("GIT_COMMITTER_DATE", committer[2].as_str()),
+        )
+    }
+
+    /// A tree from `mktree -z` records (`<mode> <type> <oid>\t<name>\0`).
+    pub(crate) fn mktree_z(&self, listing: &[u8]) -> Result<String> {
+        self.output_str(PlumbingCall::new(["mktree", "-z"]).stdin(listing))
+    }
+
+    /// Forgets the reflog, which keeps replaced commits reachable.
+    pub(crate) fn expire_reflog(&self) -> Result<()> {
+        self.git.run(PlumbingCall::new([
+            "reflog",
+            "expire",
+            "--expire=now",
+            "--expire-unreachable=now",
+            "--all",
+        ]))
+    }
+
+    /// Deletes every object no ref reaches.
+    pub(crate) fn prune_now(&self) -> Result<()> {
+        self.git
+            .run(PlumbingCall::new(["repack", "-a", "-d", "-q"]))?;
+        self.git.run(PlumbingCall::new(["prune", "--expire=now"]))
+    }
+
     /// Moves `name` to `commit` only if it still points at `expected`
     /// (`None`: must not exist).
     pub(crate) fn update_ref(
@@ -2037,6 +2127,32 @@ impl HistoryRepo {
         Ok(out.lines().map(str::to_string).collect())
     }
 
+    /// The paths under `stream` that some commit reachable from `head`
+    /// deleted: files that were saved and no longer are, whether or not a
+    /// later commit saved them again.
+    pub(crate) fn deleted_paths_under(&self, head: &str, stream: &str) -> Result<BTreeSet<String>> {
+        let literal = format!(":(literal){stream}");
+        let out = self.output_str(PlumbingCall::new([
+            "log",
+            "-z",
+            "--format=",
+            "--name-only",
+            "--diff-filter=D",
+            "--no-renames",
+            "--full-history",
+            // a merge that drops a file deletes it against each parent
+            "-m",
+            head,
+            "--",
+            &literal,
+        ]))?;
+        Ok(out
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
     pub(crate) fn rev_list_after(&self, head: &str, verified: &str) -> Result<Vec<String>> {
         let exclude = format!("^{verified}");
         let out = self.output_str(PlumbingCall::new([
@@ -2102,7 +2218,7 @@ impl HistoryRepo {
         self.git.network_output(PlumbingCall::new(args))
     }
 
-    const ANNOTATION_TRAILER: &'static str = "Mise-Annotation: ";
+    pub(crate) const ANNOTATION_TRAILER: &'static str = "Mise-Annotation: ";
 
     /// An annotation is an empty ordinary child commit, so labels and
     /// descriptions travel with the same ancestry without rewriting it.
@@ -2174,6 +2290,22 @@ pub(crate) fn unavailable_reason() -> String {
     }
 }
 
+/// Runs `run`, again after a short pause while it fails with `Permission
+/// denied`, up to five attempts in all; any other error is returned at once.
+fn retry_on_permission_denied<T>(mut run: impl FnMut() -> Result<T>) -> Result<T> {
+    const ATTEMPTS: u32 = 5;
+    let mut attempt = 1;
+    loop {
+        match run() {
+            Err(err) if attempt < ATTEMPTS && format!("{err:#}").contains("Permission denied") => {
+                std::thread::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2201,6 +2333,74 @@ mod tests {
         let checkpoint = repo.read_meta(&commit).unwrap();
         assert_eq!(checkpoint.uuid, commit);
         assert_eq!(checkpoint.description, "sha256 history");
+    }
+
+    /// Blobs written in-process get the ids `hash-object` gives them, in
+    /// either object format, and Git reads back the same bytes.
+    #[test]
+    fn blob_ids_match_git_hash_object() {
+        let Some(binary) = mise_util::git::plumbing_binary() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let contents: [&[u8]; 6] = [
+            b"",
+            b"line\n",
+            b"crlf\r\nline\r\n",
+            b"\0\xff\xfe binary \x00\n",
+            b"../target/of/a/symlink",
+            &vec![7; 8 * 1024 * 1024 + 1],
+        ];
+        for format in ["sha1", "sha256"] {
+            let path = temp.path().join(format!("{format}.git"));
+            let output = std::process::Command::new(binary)
+                .args(["init", "--bare", "--quiet"])
+                .arg(format!("--object-format={format}"))
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let repo = super::HistoryRepo {
+                git: mise_util::git::GitPlumbing::new(path),
+                transient: Default::default(),
+            };
+            for bytes in contents {
+                let expected = repo
+                    .output_str(PlumbingCall::new(["hash-object", "--stdin"]).stdin(bytes))
+                    .unwrap();
+                assert_eq!(repo.transient_blob_id(bytes).unwrap(), expected);
+                assert!(repo.object_type(&expected).unwrap().is_none());
+                assert_eq!(repo.hash_blob(bytes).unwrap(), expected);
+                assert_eq!(repo.hash_blob(bytes).unwrap(), expected);
+                assert_eq!(
+                    repo.git
+                        .output(PlumbingCall::new(["cat-file", "blob", &expected]))
+                        .unwrap(),
+                    bytes
+                );
+            }
+        }
+    }
+
+    /// The header check reads full object ids in-process and agrees with
+    /// the Git-backed check on matches, mismatches, short blobs and trees.
+    #[test]
+    fn blob_starts_with_matches_git() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = super::HistoryRepo::open_or_init_in(temp.path())
+            .unwrap()
+            .unwrap();
+        let magic: &[u8] = b"mise-encrypted-file-v1\n";
+        let encrypted = repo.hash_blob(b"mise-encrypted-file-v1\nbody").unwrap();
+        let plain = repo.hash_blob(b"mise-encrypted-file-v2\nbody").unwrap();
+        let short = repo.hash_blob(b"mise").unwrap();
+        for (oid, expected) in [(&encrypted, true), (&plain, false), (&short, false)] {
+            assert_eq!(repo.blob_starts_with(oid, magic).unwrap(), expected);
+            assert_eq!(repo.git.blob_starts_with(oid, magic).unwrap(), expected);
+        }
+        let tree = repo.empty_object("tree").unwrap();
+        assert!(repo.blob_starts_with(&tree, magic).is_err());
+        assert!(repo.blob_starts_with(&"0".repeat(40), magic).is_err());
     }
 
     #[test]
@@ -3255,6 +3455,41 @@ mod tests {
                 .is_none()
         );
         assert!(repo.object_at(&without, "home/.zshrc").unwrap().is_some());
+    }
+
+    #[test]
+    fn permission_denied_is_retried_until_it_clears() {
+        let mut calls = 0;
+        let result = retry_on_permission_denied(|| {
+            calls += 1;
+            if calls < 3 {
+                bail!("unable to write file: Permission denied");
+            }
+            Ok(calls)
+        });
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn permission_denied_gives_up_after_five_attempts() {
+        let mut calls = 0;
+        let result: Result<()> = retry_on_permission_denied(|| {
+            calls += 1;
+            bail!("unable to write file: Permission denied")
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 5);
+    }
+
+    #[test]
+    fn other_errors_are_not_retried() {
+        let mut calls = 0;
+        let result: Result<()> = retry_on_permission_denied(|| {
+            calls += 1;
+            bail!("fatal: not a git repository")
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
     }
 
     #[test]

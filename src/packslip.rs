@@ -25,7 +25,7 @@ use crate::config::{Config, Settings};
 use crate::file;
 use crate::github;
 use crate::http::{HTTP, HTTP_FETCH};
-use crate::toolset::{ToolVersion, Toolset};
+use crate::toolset::{ConfigScope, ToolSource, ToolVersion, Toolset, ToolsetBuilder};
 use crate::ui::progress_report::SingleReport;
 
 /// Resources fetched from outside the artifact live here in the install.
@@ -141,7 +141,7 @@ pub(crate) fn repo_file_request(
     let rel = url_path(rel);
     if let Some(path) = repo.strip_prefix("https://github.com/") {
         let url = format!("https://raw.githubusercontent.com/{path}/{commit}/{rel}");
-        let headers = github::get_headers(&url)?;
+        let headers = github::get_headers(&url, github::API_URL)?;
         Ok(Some((url, headers)))
     } else {
         Ok(repo.strip_prefix("https://gitlab.com/").map(|path| {
@@ -168,7 +168,7 @@ fn headers_for(url: &str) -> Result<HeaderMap> {
         || url.starts_with("https://api.github.com/")
         || url.starts_with("https://raw.githubusercontent.com/")
     {
-        github::get_headers(url)
+        github::get_headers(url, github::API_URL)
     } else {
         Ok(HeaderMap::new())
     }
@@ -258,16 +258,22 @@ fn downloaded_sign_in_page(url: &str, dest: &Path) -> bool {
     is_sign_in_page(url, &head[..read])
 }
 
+/// Most bytes a packslip manifest may hold. It is read whole into memory
+/// before anything has verified it, and a genuine one is a few tens of KiB.
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Download a file a packslip names, falling back to the authenticated GitHub
 /// release-asset endpoint when its browser URL is unreachable. See [`retry_url`].
+/// With `max_bytes`, the download fails once more than that has arrived.
 pub(crate) async fn download_file(
     url: &str,
     dest: &Path,
     pin: Option<&str>,
     pr: Option<&dyn SingleReport>,
+    max_bytes: Option<u64>,
 ) -> Result<()> {
     let reason = match HTTP
-        .download_file_linked(url, dest, &headers_for(url)?, pin, pr)
+        .download_file_linked_limited(url, dest, &headers_for(url)?, pin, pr, max_bytes)
         .await
     {
         Ok(_) if !downloaded_sign_in_page(url, dest) => return Ok(()),
@@ -277,7 +283,7 @@ pub(crate) async fn download_file(
     let Some(api_url) = retry_url(url, &reason).await else {
         return Err(reason.into_error(url));
     };
-    HTTP.download_file_linked(&api_url, dest, &headers_for(&api_url)?, pin, pr)
+    HTTP.download_file_linked_limited(&api_url, dest, &headers_for(&api_url)?, pin, pr, max_bytes)
         .await
         .map(|_| ())
 }
@@ -376,7 +382,9 @@ pub(crate) async fn fetch_files(
                     let signed = statement
                         .digest_of(name)
                         .map(|sha256| format!("sha256:{sha256}"));
-                    if let Err(err) = download_file(url, &dest, signed.as_deref(), Some(pr)).await {
+                    if let Err(err) =
+                        download_file(url, &dest, signed.as_deref(), Some(pr), None).await
+                    {
                         let _ = file::remove_all(&dest);
                         warn!("{}: could not fetch {name}: {err}", tv.style());
                         continue;
@@ -634,7 +642,8 @@ fn unpack_skill(archive: &Path, dir: &Path, pr: &dyn SingleReport) -> Result<()>
             pr: Some(pr),
             ..Default::default()
         },
-    );
+    )
+    .and_then(|()| file::ensure_symlinks_stay_within(&staging));
     into_place(&staging, dir, unpacked)
 }
 
@@ -678,6 +687,10 @@ fn into_place(staging: &Path, dir: &Path, built: Result<()>) -> Result<()> {
 /// raw.githubusercontent.com, neither of which spends the GitHub API's rate
 /// limit. A private repository, which only the user's token can read, is
 /// listed and fetched through the contents API instead.
+///
+/// The listings decide how deep the tree goes, so it is walked from a list
+/// of directories still to fetch rather than by recursion, whose nested
+/// futures would all be polled on one stack.
 async fn fetch_repo_dir(
     repo: &str,
     commit: &str,
@@ -685,15 +698,30 @@ async fn fetch_repo_dir(
     dest: &Path,
     pr: &dyn SingleReport,
 ) -> Result<()> {
+    let mut dirs = vec![(rel.to_string(), dest.to_path_buf())];
+    while let Some((rel, dest)) = dirs.pop() {
+        fetch_repo_dir_entries(repo, commit, &rel, &dest, pr, &mut dirs).await?;
+    }
+    Ok(())
+}
+
+/// One directory of [`fetch_repo_dir`]: its files are downloaded into
+/// `dest`, and its subdirectories added to `dirs`.
+async fn fetch_repo_dir_entries(
+    repo: &str,
+    commit: &str,
+    rel: &str,
+    dest: &Path,
+    pr: &dyn SingleReport,
+    dirs: &mut Vec<(String, PathBuf)>,
+) -> Result<()> {
     let listing = github::list_repo_dir(repo, commit, rel).await?;
     file::create_dir_all(dest)?;
     for entry in listing.entries {
         let name = entry.name;
         let path = format!("{rel}/{name}");
         match repo_entry_action(&name, &entry.kind) {
-            RepoEntryAction::Recurse => {
-                Box::pin(fetch_repo_dir(repo, commit, &path, &dest.join(&name), pr)).await?;
-            }
+            RepoEntryAction::Recurse => dirs.push((path, dest.join(&name))),
             RepoEntryAction::Download => {
                 let contents_url = format!(
                     "https://api.github.com/repos/{repo}/contents/{}?ref={commit}",
@@ -716,7 +744,7 @@ async fn fetch_repo_dir(
                 HTTP.download_file_with_headers(
                     &file_url,
                     &dest.join(&name),
-                    &github::get_headers(&file_url)?,
+                    &github::get_headers(&file_url, github::API_URL)?,
                     Some(pr),
                 )
                 .await?;
@@ -1062,8 +1090,48 @@ pub(crate) fn skills_of(
 /// The skills of every tool active in the current directory.
 pub async fn active_skills(config: &Arc<Config>) -> Result<DeclaredSkills> {
     let ts = config.get_toolset().await?;
+    skills_of_toolset(config, ts, |_| true)
+}
+
+/// The skills of the active tools, leaving out the tools only the global
+/// config asks for. Those belong in the home directory, so a project's skills
+/// directory does not list them a second time. A tool a project file also
+/// lists keeps whatever version is active, and so does one `MISE_*_VERSION`
+/// selects.
+pub async fn project_skills(config: &Arc<Config>) -> Result<DeclaredSkills> {
+    let local = ToolsetBuilder::new()
+        .with_scope(ConfigScope::LocalOnly)
+        .without_runtime_env()
+        .build_unresolved(config)?;
+    let ts = config.get_toolset().await?;
+    skills_of_toolset(config, ts, |tv| {
+        matches!(tv.request.source(), ToolSource::Environment(..))
+            || local.versions.keys().any(|ba| ba.short == tv.ba().short)
+    })
+}
+
+/// The skills of the tools the global and system config select, wherever
+/// the command runs and whatever a project or `MISE_*_VERSION` asks for. It
+/// is what belongs in the home directory's skills.
+pub async fn global_skills(config: &Arc<Config>) -> Result<DeclaredSkills> {
+    let ts = ToolsetBuilder::new()
+        .with_scope(ConfigScope::GlobalOnly)
+        .without_runtime_env()
+        .build(config)
+        .await?;
+    skills_of_toolset(config, &ts, |_| true)
+}
+
+fn skills_of_toolset(
+    config: &Arc<Config>,
+    ts: &Toolset,
+    keep: impl Fn(&ToolVersion) -> bool,
+) -> Result<DeclaredSkills> {
     let mut skills = DeclaredSkills::default();
     for (backend, tv) in ts.list_current_installed_versions(config) {
+        if !keep(&tv) {
+            continue;
+        }
         let install_path = tv.install_path();
         let statement = match statement(&install_path) {
             Ok(Some(statement)) => statement,
@@ -1092,28 +1160,183 @@ pub async fn active_skills(config: &Arc<Config>) -> Result<DeclaredSkills> {
 }
 
 /// Where skills are linked under `root`, a project root or the home
-/// directory: the `skills.dir` setting, or that setting itself when it
-/// is absolute.
-pub fn skills_dir(root: &Path) -> PathBuf {
-    root.join(&Settings::get().skills.dir)
+/// directory, and the symlink to create beside them once there is something
+/// to link.
+pub struct SkillsTarget {
+    pub dir: PathBuf,
+    /// The `.claude/skills` beside a default `.agents/skills`: where mise
+    /// makes its link, and whether it may make one now.
+    alias: Option<PathBuf>,
+    create_alias: bool,
+}
+
+impl SkillsTarget {
+    /// An explicit directory, with nothing to link beside it.
+    pub fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            alias: None,
+            create_alias: false,
+        }
+    }
+
+    /// Make `.claude/skills` a symlink to the directory, for a target mise
+    /// chose because neither default existed. A path that is already there,
+    /// even a dangling link, is somebody's and is left alone.
+    pub fn link_alias(&self) -> Result<()> {
+        let Some(alias) = &self.alias else {
+            return Ok(());
+        };
+        let Some(parent) = alias.parent() else {
+            return Ok(());
+        };
+        // A `.claude` that is itself a link may be shared with other
+        // projects: nothing here is ours to make, change or un-hide in it.
+        if file::is_symlink_or_junction(parent) {
+            if self.create_alias && self.dir.is_dir() {
+                warn!(
+                    "{} is a link, so mise did not make {}; link it to {} to have Claude Code read these skills",
+                    file::display_path(parent),
+                    file::display_path(alias),
+                    file::display_path(&self.dir)
+                );
+            }
+            return Ok(());
+        }
+        if alias.symlink_metadata().is_ok() {
+            // Somebody replaced the link with a real directory of their own
+            // (or it never was ours): stop hiding it from git.
+            if !file::is_symlink_or_junction(alias) {
+                crate::packslip_exclude::exclude_links(parent, [], SYNC_STATE)?;
+            }
+            return Ok(());
+        }
+        if !self.create_alias || !self.dir.is_dir() {
+            return Ok(());
+        }
+        file::create_dir_all(parent)?;
+        // Relative, so a project that moves keeps its link. A Windows
+        // junction needs the absolute path.
+        let target = if cfg!(windows) {
+            self.dir.clone()
+        } else {
+            PathBuf::from("../.agents/skills")
+        };
+        file::make_symlink(&target, alias)?;
+        crate::packslip_exclude::exclude_links(parent, ["skills"], SYNC_STATE)
+    }
+}
+
+/// The directory under `root` to link skills into: the `skills.dir`
+/// setting, or that setting itself when it is absolute. Unset, an existing
+/// `.agents/skills` wins, then an existing `.claude/skills`; with neither,
+/// `.agents/skills` is used and `.claude/skills` is linked to it.
+pub fn skills_target(root: &Path) -> SkillsTarget {
+    if let Some(dir) = &Settings::get().skills.dir {
+        return SkillsTarget::at(root.join(dir));
+    }
+    let agents = root.join(".agents/skills");
+    let claude = root.join(".claude/skills");
+    if agents.is_dir() {
+        return SkillsTarget {
+            dir: agents,
+            alias: Some(claude),
+            create_alias: false,
+        };
+    }
+    if claude.is_dir() {
+        return SkillsTarget::at(claude);
+    }
+    SkillsTarget {
+        dir: agents,
+        alias: Some(claude),
+        create_alias: true,
+    }
 }
 
 /// With `skills.auto_sync` on, link the active tools' skills into the
-/// project after an install or a version change. Nothing fails an install
-/// here: a problem is reported and the tools stay installed. Outside a
-/// project root there is nowhere to link into, so nothing happens.
+/// project after an install or a version change, and the global tools' skills
+/// into the home directory. Nothing fails an install here: a problem is
+/// reported and the tools stay installed. Outside a project root only the
+/// global links are kept up to date.
 pub async fn auto_sync_skills(config: &Arc<Config>) {
-    let settings = Settings::get();
-    let Some(root) = &config.project_root else {
-        return;
+    // Installing or upgrading a global tool moves its skills too. Where the
+    // project and the home directory share one skills directory (a project
+    // rooted at home, or an absolute `skills.dir`), one pass writes there with
+    // the tools of both, and a second would undo or prune it.
+    let shared = project_shares_home_dir(config);
+    if let Some(root) = &config.project_root {
+        let scope = if shared {
+            SkillsScope::Active
+        } else {
+            SkillsScope::Project
+        };
+        auto_sync_skills_into(config, root, scope).await;
+    }
+    if !shared {
+        auto_sync_global_skills(config).await;
+    }
+}
+
+/// Which tools a sync links the skills of.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SkillsScope {
+    /// Every tool active in the directory, global ones included.
+    Active,
+    /// Only the tools a project config file selects.
+    Project,
+    /// Only the tools the global config selects.
+    Global,
+}
+
+/// [`auto_sync_skills`] for a global change such as `mise use -g`: the links
+/// go under the home directory, as `mise skills sync --global` writes them.
+pub async fn auto_sync_global_skills(config: &Arc<Config>) {
+    // A project whose directory is the home one has links for its own tools
+    // there too, which a global-only pass would replace or prune.
+    let scope = if project_shares_home_dir(config) {
+        SkillsScope::Active
+    } else {
+        SkillsScope::Global
     };
+    auto_sync_skills_into(config, &crate::dirs::HOME, scope).await;
+}
+
+fn project_shares_home_dir(config: &Config) -> bool {
+    config.project_root.as_ref().is_some_and(|root| {
+        same_dir(
+            &skills_target(root).dir,
+            &skills_target(&crate::dirs::HOME).dir,
+        )
+    })
+}
+
+/// Whether two skills directories are the same one, through symlinks such as
+/// a home directory reached by its physical path.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+}
+
+async fn auto_sync_skills_into(config: &Arc<Config>, root: &Path, scope: SkillsScope) {
+    let settings = Settings::get();
     if !settings.skills.auto_sync {
-        hint_skills(config).await;
+        if scope != SkillsScope::Global {
+            hint_skills(config, scope).await;
+        }
         return;
     }
-    let dir = skills_dir(root);
+    let target = skills_target(root);
+    let dir = target.dir.clone();
     let result = async {
-        let skills = active_skills(config).await?;
+        let skills = match scope {
+            SkillsScope::Global => global_skills(config).await?,
+            SkillsScope::Project => project_skills(config).await?,
+            SkillsScope::Active => active_skills(config).await?,
+        };
         // Reported, not warned: this runs after every install, and a skill
         // that is missing on purpose must not nag on each one. `mise skills
         // ls` is where someone asks the question, and it warns.
@@ -1133,6 +1356,9 @@ pub async fn auto_sync_skills(config: &Arc<Config>) {
     .await;
     match result {
         Ok(report) => {
+            if let Err(err) = target.link_alias() {
+                warn!("could not link .claude/skills: {err}");
+            }
             for name in &report.linked {
                 info!("linked skill {name} into {}", file::display_path(&dir));
             }
@@ -1156,11 +1382,15 @@ pub async fn auto_sync_skills(config: &Arc<Config>) {
 /// A tool may ship an agent skill that nothing links anywhere until
 /// `mise skills sync` runs, and with `skills.auto_sync` off nothing ever
 /// says so. Mention it once, and only when there is a skill to link.
-async fn hint_skills(config: &Arc<Config>) {
+async fn hint_skills(config: &Arc<Config>, scope: SkillsScope) {
     if !crate::hint::hint_would_display("skills") {
         return;
     }
-    let Ok(skills) = active_skills(config).await else {
+    let skills = match scope {
+        SkillsScope::Active => active_skills(config).await,
+        _ => project_skills(config).await,
+    };
+    let Ok(skills) = skills else {
         return;
     };
     if skills.found.is_empty() {
@@ -1338,6 +1568,18 @@ pub(crate) enum CompletionSource {
     },
 }
 
+/// How narrowly an entry is scoped: naming the artifact beats any platform
+/// field, then the one naming the most of `os`, `arch`, and `libc` wins.
+fn specificity(r: &Resource) -> (bool, usize) {
+    (
+        r.artifact.is_some(),
+        [&r.os, &r.arch, &r.libc]
+            .into_iter()
+            .filter(|f| f.is_some())
+            .count(),
+    )
+}
+
 /// The entries of one kind that apply to the selected artifact, keeping
 /// only the most specific of them: a resource may carry `os`, `arch`, or
 /// `libc` when layouts differ by platform, and the one naming the most of
@@ -1346,15 +1588,6 @@ pub(crate) fn applicable<'a>(
     resources: impl Iterator<Item = &'a Resource>,
     artifact: Option<&Artifact>,
 ) -> Vec<&'a Resource> {
-    let specificity = |r: &Resource| {
-        (
-            r.artifact.is_some(),
-            [&r.os, &r.arch, &r.libc]
-                .into_iter()
-                .filter(|f| f.is_some())
-                .count(),
-        )
-    };
     let fits: Vec<&Resource> = resources
         .filter(|r| match artifact {
             Some(artifact) => resource_fits(r, artifact),
@@ -1371,21 +1604,40 @@ pub(crate) fn applicable<'a>(
         .collect()
 }
 
-fn selected_resources<'a>(
+/// The resources to use with the selected artifact, as
+/// `packslip::select_resources` chooses them: for each thing the entries
+/// describe, those that fit the artifact and, of them, the most specific,
+/// in document order. Computed here in one pass over the list, where the
+/// crate rescans the whole list once per thing it describes: the vendor
+/// decides how long the list is, and the prompt hook is one of the readers.
+pub(crate) fn selected_resources<'a>(
     statement: &'a Statement,
     artifact: Option<&Artifact>,
 ) -> Vec<&'a Resource> {
-    match artifact {
-        Some(artifact) => packslip::select_resources(statement, artifact),
-        None => statement
-            .predicate
-            .resources
-            .iter()
+    let resources = statement.predicate.resources.iter();
+    let Some(artifact) = artifact else {
+        return resources
             .filter(|r| {
                 r.artifact.is_none() && r.os.is_none() && r.arch.is_none() && r.libc.is_none()
             })
-            .collect(),
+            .collect();
+    };
+    let sole_bin = statement.sole_bin();
+    let fits: Vec<_> = resources
+        .filter(|r| resource_fits(r, artifact))
+        .map(|r| (r, r.identities_for(sole_bin)))
+        .collect();
+    let mut best: BTreeMap<_, (bool, usize)> = BTreeMap::new();
+    for (r, identities) in &fits {
+        for identity in identities {
+            let best = best.entry(identity).or_default();
+            *best = specificity(r).max(*best);
+        }
     }
+    fits.iter()
+        .filter(|(r, identities)| identities.iter().any(|i| best[i] == specificity(r)))
+        .map(|(r, _)| *r)
+        .collect()
 }
 
 /// Every way the statement offers a `shell` completion, in the order the
@@ -1412,12 +1664,27 @@ pub(crate) fn completion_sources(
     artifact: Option<&Artifact>,
     tool: Option<&str>,
 ) -> Vec<CompletionSource> {
-    let bin = completion_bin(statement, tool);
-    let describes =
-        |r: &&Resource| r.bin.as_deref().or_else(|| statement.sole_bin()) == bin && bin.is_some();
     // Select per identity before considering source order. A completion
     // for one executable must never hide or complete another executable.
     let selected = selected_resources(statement, artifact);
+    completion_sources_among(&selected, statement, install_path, shell, artifact, tool)
+}
+
+/// [`completion_sources`] given the statement's [`selected_resources`].
+/// What is selected does not depend on the executable asked about, so a
+/// caller asking about every executable of a release, as the prompt hook
+/// does, selects once rather than once for each.
+pub(crate) fn completion_sources_among(
+    selected: &[&Resource],
+    statement: &Statement,
+    install_path: &Path,
+    shell: &str,
+    artifact: Option<&Artifact>,
+    tool: Option<&str>,
+) -> Vec<CompletionSource> {
+    let bin = completion_bin(statement, tool);
+    let describes =
+        |r: &&Resource| r.bin.as_deref().or_else(|| statement.sole_bin()) == bin && bin.is_some();
     let completion_entries = applicable(
         selected.iter().copied().filter(describes).filter(|r| {
             r.kind == "completion"
@@ -1976,6 +2243,52 @@ mod tests {
         mock.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn test_fetch_repo_dir_does_not_nest_a_call_per_directory() {
+        use crate::config::SettingsExt;
+        use crate::config::settings::SettingsPartial;
+        use confique::Layer;
+        // Deeper than a call per directory gets on a test thread's stack.
+        const DEPTH: usize = 64;
+        let _config = crate::config::Config::get().await.unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let _settings = crate::test::SettingsGuard::lock();
+        let mut settings = SettingsPartial::empty();
+        settings.url_replacements = Some(indexmap::indexmap! {
+            "https://api.github.com".to_string() => server.url(),
+        });
+        Settings::reset(Some(settings));
+        let mut rel = "skill".to_string();
+        for _ in 0..DEPTH {
+            server
+                .mock("GET", format!("/repos/o/r/contents/{rel}?ref=c").as_str())
+                .with_body(r#"[{"name":"a","type":"dir"}]"#)
+                .create_async()
+                .await;
+            rel.push_str("/a");
+        }
+        server
+            .mock("GET", format!("/repos/o/r/contents/{rel}?ref=c").as_str())
+            .with_body(r#"[{"name":"notes.md","type":"file"}]"#)
+            .create_async()
+            .await;
+        server
+            .mock(
+                "GET",
+                format!("/repos/o/r/contents/{rel}/notes.md?ref=c").as_str(),
+            )
+            .with_body("notes")
+            .create_async()
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let pr = crate::ui::progress_report::QuietReport::new();
+        fetch_repo_dir("o/r", "c", "skill", &dir.path().join("skill"), &pr)
+            .await
+            .unwrap();
+        let notes = dir.path().join(rel).join("notes.md");
+        assert_eq!(file::read_to_string(notes).unwrap(), "notes");
+    }
+
     #[test]
     fn test_sign_in_page_is_recognized_only_at_a_github_release_url() {
         const RELEASE: &str = "https://github.com/o/r/releases/download/v1/t.tar.gz";
@@ -2010,7 +2323,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("tool.tar.gz");
         let url = format!("{}/tool.tar.gz", server.url());
-        download_file(&url, &dest, None, None).await.unwrap();
+        download_file(&url, &dest, None, None, None).await.unwrap();
         assert_eq!(file::read_to_string(&dest).unwrap(), "payload");
         mock.assert_async().await;
     }
@@ -2093,6 +2406,54 @@ mod tests {
         let unknown = selected_resources(&s, None);
         assert!(unknown.contains(&&s.predicate.resources[0]));
         assert!(!unknown.contains(&&s.predicate.resources[1]));
+    }
+
+    #[test]
+    fn selecting_agrees_with_the_specification() {
+        let s = statement_with(
+            r#"[
+            {"kind":"completion","bin":"t","shells":["bash","zsh"],"exec":["t","completion","{shell}"]},
+            {"kind":"completion","bin":"t","shell":"zsh","archive":"linux/_t","os":"linux"},
+            {"kind":"completion","bin":"t","shell":"zsh","archive":"gnu/_t","os":"linux","libc":"gnu"},
+            {"kind":"completion","bin":"t","shell":"zsh","repo":"gnu/_t","os":"linux","libc":"gnu"},
+            {"kind":"completion","bin":"t","shell":"zsh","archive":"macos/_t","os":"macos"},
+            {"kind":"completion","bin":"u","shell":"zsh","archive":"generic/_u"},
+            {"kind":"completion","bin":"u","shell":"bash","archive":"named/u","artifact":"t-linux-x64.tar.xz"},
+            {"kind":"completion","bin":"u","shell":"bash","archive":"scoped/u","os":"linux","arch":"x86_64","libc":"gnu"},
+            {"kind":"cli-spec","format":"usage","bin":"t","archive":"t.kdl"},
+            {"kind":"cli-spec","format":"usage","bin":"t","archive":"linux/t.kdl","os":"linux"},
+            {"kind":"man","bin":"t","archive":"t.1"},
+            {"kind":"man","bin":"u","archive":"t.1","arch":"x86_64"},
+            {"kind":"license","archive":"LICENSE"},
+            {"kind":"skill","name":"t","asset":"t-skill.tar.gz"}
+        ]"#,
+        );
+        let artifact = &s.predicate.artifacts[0];
+        let selected = selected_resources(&s, Some(artifact));
+        assert_eq!(selected, packslip::select_resources(&s, artifact));
+        assert!(selected.len() < s.predicate.resources.len());
+    }
+
+    #[test]
+    fn selecting_takes_one_pass_over_a_long_resource_list() {
+        // The vendor decides how long the list is, and the prompt hook reads
+        // it on every directory change: selecting must not rescan the list
+        // for each thing it describes.
+        let entries: Vec<String> = (0..20_000)
+            .map(|i| {
+                format!(r#"{{"kind":"completion","bin":"t","shell":"s{i}","archive":"c/{i}"}}"#)
+            })
+            .collect();
+        let s = statement_with(&format!("[{}]", entries.join(",")));
+        let started = std::time::Instant::now();
+        let selected = selected_resources(&s, Some(&s.predicate.artifacts[0]));
+        assert_eq!(selected.len(), entries.len());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "selecting {} resources took {:?}",
+            entries.len(),
+            started.elapsed()
+        );
     }
 
     #[test]

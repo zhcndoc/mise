@@ -154,17 +154,54 @@ mise bootstrap mise-shell-activate apply --yes       # apply without a prompt
 login_shell = "/opt/homebrew/bin/fish"
 ```
 
-`mise bootstrap` 会先安装软件包，再更改登录 Shell，因此一次运行即可完成两项操作。单独运行 `mise bootstrap user apply` 时，请先安装 Shell。路径必须是绝对路径，例如 `/bin/zsh`；如果使用相对路径，mise 会忽略它并显示警告。
+`mise bootstrap` installs packages before it changes the login shell, so one run
+does both. When you run `mise bootstrap user apply` on its own, install the
+请先安装 Shell。该值可以是绝对路径（例如 `/bin/zsh`），也可以是单独的 Shell 名称，详见[下文](#use-a-shell-name)。如果设置相对路径（例如 `bin/zsh`），mise 会发出警告并忽略。
 
-许多系统只接受 `/etc/shells` 中列出的 Shell，因此若路径尚未列出，mise 会先将其添加。随后，如果账户当前的 Shell 与目标不同，mise 会运行 `chsh -s /opt/homebrew/bin/fish`；此操作可能会要求输入密码。
+### 使用 Shell 名称 {#use-a-shell-name}
 
-`/etc/shells` 通常归 root 所有。mise 无法直接写入时会使用 sudo；交互式终端可以提示输入密码，否则需要配置免密 sudo。如果 [`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) 为 `false`，mise 不会提权。
+如果各台机器上的 Shell 安装路径不同，可填写可执行文件名称而不是路径，以便共享同一份配置：
 
-此操作只会更改账户的登录 Shell，不会影响当前 Shell。因此 `mise bootstrap` 结束时会提醒你启动新的登录会话。它也不会在新 Shell 中设置[mise 激活](#activate-mise-in-your-shell)。
+```toml
+[bootstrap.packages]
+"brew:fish" = "latest"
 
-`login_shell` 是一个模板，因此可以使用 `[vars]` 和其他[模板变量](/templates.html)，例如 <code v-pre>login_shell = "{{ vars.brew_prefix }}/bin/zsh"</code>。mise 会渲染该值，但不会执行 `exec()`。
+[bootstrap.user]
+login_shell = "fish"
+```
 
-项目配置可以覆盖全局 `login_shell`；以最靠近当前目录的值为准。mise 只会在运行 `mise bootstrap` 或 `mise bootstrap user apply` 时更改登录 Shell。mise 自身通过 `sudo` 运行时，会检查并更改 `SUDO_USER` 的 Shell，而不是 root 的 Shell；普通 root 会话（例如容器）则会更改 root 的 Shell。在 Windows 或缺少 `chsh` 的系统上，mise 会跳过此设置，并在 `status` 中报告为已跳过。
+mise 会在检查或应用该设置时解析名称，因此会在 `bootstrap.packages` 安装 Shell 后进行查找。它会先搜索 `PATH`（不搜索 mise 的 shims 目录），再检查常见的软件包管理器安装位置（`/opt/homebrew/bin`、`/usr/local/bin`、`/home/linuxbrew/.linuxbrew/bin`、`~/.linuxbrew/bin`、`/usr/bin` 和 `/bin`），并使用找到的第一个可执行文件。解析出的路径会写入 `/etc/shells`，供 `chsh` 使用；`mise bootstrap user status` 也会显示该路径（`--json` 中为 `resolved`）。
+
+完整运行 `mise bootstrap` 时，[软件包管理器插件](/bootstrap/packages/plugins.html)提供的 Shell 会在设置登录 Shell 的阶段之后安装（详见[运行顺序](/bootstrap.html#how-it-runs)），因此首次运行时找不到名称；使用绝对路径也无法避免这一问题。请先运行 `mise bootstrap --skip user` 安装插件软件包，再运行 `mise bootstrap user apply`。
+
+如果未找到可执行文件，`status` 会报告 `not installed`；`apply` 会失败，但不会修改 `/etc/shells` 或用户账户；`apply --dry-run` 则会说明安装后才能解析路径。
+
+Many systems accept only shells listed in `/etc/shells`, so mise adds the path
+there when it is missing. Then, if the account's shell differs, mise runs
+`chsh -s /opt/homebrew/bin/fish`, which may ask for your password.
+
+`/etc/shells` is usually owned by root. When mise cannot write it directly, it
+uses sudo, which can prompt for a password in an interactive terminal; otherwise
+mise needs passwordless sudo, and it never elevates when
+[`system_packages.sudo`](/configuration/settings.html#system_packages.sudo) is
+`false`.
+
+This changes only the account's login shell. It does not affect the shell you
+are in, so `mise bootstrap` ends with a follow-up reminding you to start a new
+login session. It also does not set up [activation](#activate-mise-in-your-shell)
+in the new shell.
+
+`login_shell` is a template, so it can use `[vars]` and the other
+[template variables](/templates.html), such as
+<code v-pre>login_shell = "{{ vars.brew_prefix }}/bin/zsh"</code>. mise renders it without
+`exec()`.
+
+A project config can override a global `login_shell`; the most local value
+wins. mise changes the login shell only when you run `mise bootstrap` or
+`mise bootstrap user apply`. When mise itself runs under `sudo`, it checks and
+changes the shell of `SUDO_USER` rather than root, while a plain root session,
+such as a container, changes root's shell. On Windows, or where `chsh` is
+missing, mise skips the setting and `status` reports it as skipped.
 
 ```sh
 mise bootstrap user status            # show the login shell state

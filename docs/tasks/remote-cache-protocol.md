@@ -190,7 +190,10 @@ URL 前缀 `/v1` 表示协议主版本。兼容性扩展通过能力声明，不
 }
 ```
 
-每类节点列表都按 `name` 的 UTF-8 字节排序。名称必须是单个路径组件，不得为空、为 `.` 或 `..`、包含斜杠或 NUL，也不得与其他节点重名。恢复时必须拒绝绝对符号链接目标，以及逃逸出已声明输出根目录的目标。
+Each node list is sorted by the UTF-8 bytes of `name`. A name must be a single
+path component and must not be empty, `.`, or `..`, contain a slash or NUL, or
+collide with another node. Absolute symlink targets and targets that escape the
+恢复时必须拒绝指向声明输出根目录之外的目标。只有在目标开头才允许 `..` 组件；如果它出现在名称组件之后（该组件本身可能是符号链接），就无法在不解析整个目录树的情况下进行检查。
 
 可移植元数据包括文件内容、目录结构、符号链接、可执行状态，以及 `mode` 中可移植的权限位。不恢复所有者、组、时间戳、设备、套接字、FIFO、平台 ACL 或扩展属性。硬链接可以恢复为彼此独立的文件。包含不支持对象的任务结果不符合远程缓存条件；协议不会静默改写该对象。
 

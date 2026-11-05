@@ -20,7 +20,7 @@ curl -fsSL https://mise.run | sh
 
 安装脚本会将 `mise` 可执行文件放在 `~/.local/bin/mise`。如果后续步骤中的 Shell 找不到 `mise`，请先使用完整路径 `~/.local/bin/mise`；第 4 步[启用 mise](#activate-mise)后，它会加入 `PATH`。
 
-在 Windows 上运行 `winget install jdx.mise`。Homebrew、apt、dnf 和其他包管理器的安装方式请参阅[安装 mise](/installing-mise.html)。
+在 Windows 上，请在 PowerShell 中运行 `irm https://mise.run/powershell | iex`。Homebrew、apt、dnf 和其他包管理器的安装方式请参阅[安装 mise](/installing-mise.html)。
 
 ## 2. 运行工具 {#mise-exec-run}
 

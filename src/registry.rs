@@ -147,11 +147,6 @@ pub struct RegistryIdiomaticFile {
     pub version_regex: Option<&'static str>,
     pub version_json_path: Option<&'static str>,
     pub version_expr: Option<&'static str>,
-    /// Set when this file should no longer be read. The value is the reason, shown in
-    /// the deprecation warning emitted when the file still resolves a version. Used for
-    /// files that only declare a minimum compatible version rather than the version the
-    /// project is built with.
-    pub deprecated: Option<&'static str>,
 }
 
 impl RegistryIdiomaticFile {
@@ -179,7 +174,8 @@ pub struct RegistryBackend {
     pub max_version: Option<&'static str>,
     /// The first version whose release assets carry GitHub attestations. From
     /// it on, a missing attestation is a downgrade, not a tool that doesn't
-    /// publish them. Only the one version being installed is compared, never
+    /// publish them. `github:` and `aqua:` backends only; for `aqua:` the
+    /// recipe must also declare the attestations. Only the one version being installed is compared, never
     /// a version list, so unlike `min_version` any `version_order` works: a
     /// version that isn't semver is simply not required.
     pub attestations_since: Option<&'static str>,
@@ -520,7 +516,11 @@ fn parse_registry_tool(short: &str, value: &toml::Value) -> Result<(RegistryTool
     };
     let overrides = string_array(table.get("overrides"), "overrides")?;
     let os = string_array(table.get("os"), "os")?;
-    let idiomatic_files = parse_registry_idiomatic_files(table.get("idiomatic_files"))?;
+    let mut idiomatic_files = parse_registry_idiomatic_files(table.get("idiomatic_files"))?;
+    // Archives published before the floor was deprecated list it with no marker.
+    if short == "cmake" {
+        idiomatic_files.retain(|file| file.path != "CMakeLists.txt");
+    }
     let detect = string_array(table.get("detect"), "detect")?;
     let description = table
         .get("description")
@@ -581,12 +581,16 @@ fn parse_registry_idiomatic_files(
                 .as_array()
                 .ok_or_else(|| eyre::eyre!("idiomatic_files must be an array"))?
                 .iter()
+                // A file an older registry marked `deprecated` is no longer read.
+                .filter(|file| file.get("deprecated").is_none())
                 .map(parse_registry_idiomatic_file)
                 .collect()
         })
         .transpose()
         .map(Option::unwrap_or_default)
 }
+
+crate::remove_by!("2027.10.0", "registry-idiomatic-file-deprecated");
 
 fn parse_registry_idiomatic_file(value: &toml::Value) -> Result<RegistryIdiomaticFile> {
     match value {
@@ -595,18 +599,13 @@ fn parse_registry_idiomatic_file(value: &toml::Value) -> Result<RegistryIdiomati
             version_regex: None,
             version_json_path: None,
             version_expr: None,
-            deprecated: None,
         }),
         toml::Value::Table(table) => {
             for key in table.keys() {
                 ensure!(
                     matches!(
                         key.as_str(),
-                        "path"
-                            | "version_regex"
-                            | "version_json_path"
-                            | "version_expr"
-                            | "deprecated"
+                        "path" | "version_regex" | "version_json_path" | "version_expr"
                     ),
                     "unknown idiomatic file field: {key}"
                 );
@@ -629,7 +628,6 @@ fn parse_registry_idiomatic_file(value: &toml::Value) -> Result<RegistryIdiomati
                 version_regex: string("version_regex")?,
                 version_json_path: string("version_json_path")?,
                 version_expr: string("version_expr")?,
-                deprecated: string("deprecated")?,
             })
         }
         _ => Err(eyre::eyre!(
@@ -685,8 +683,8 @@ fn parse_registry_backend(value: &toml::Value) -> Result<RegistryBackend> {
                         eyre::eyre!("backend attestations_since must be a string")
                     })?;
                     ensure!(
-                        full.starts_with("github:"),
-                        "backend attestations_since is only supported for github: backends"
+                        full.starts_with("github:") || full.starts_with("aqua:"),
+                        "backend attestations_since is only supported for github: and aqua: backends"
                     );
                     semver::Version::parse(value)
                         .wrap_err("backend attestations_since must be a semantic version")?;
@@ -1802,7 +1800,10 @@ backends = [{{ full = "{full}", attestations_since = {since} }}]
         }
         // Any version order: only the installed version is compared.
         assert!(parse("source", "github:example/tool", r#""2.50.0""#).is_ok());
-        assert!(parse("semver", "aqua:example/tool", r#""2.50.0""#).is_err());
+        // aqua recipes that declare GitHub attestations take the same cutoff.
+        let (tool, _) = parse("semver", "aqua:example/tool", r#""2.50.0""#).unwrap();
+        assert_eq!(tool.backends[0].attestations_since, Some("2.50.0"));
+        assert!(parse("semver", "npm:example-tool", r#""2.50.0""#).is_err());
     }
 
     #[test]
@@ -1936,7 +1937,7 @@ idiomatic_files = [
   ".example-version",
   { path = "example.json", version_json_path = ".tool.version" },
   { path = "example.txt", version_regex = 'version=(\S+)', version_expr = "versions[0]" },
-  { path = "example.conf", version_regex = 'minimum=(\S+)', deprecated = "it declares a minimum." },
+  { path = "example.conf", version_regex = 'minimum=(\S+)', deprecated = "written by mise before 2026.11.0." },
 ]
 test = { cmd = "example --version", expected = "{{version}}", tools = ["node"] }
 "#
@@ -1977,12 +1978,8 @@ test = { cmd = "example --version", expected = "{{version}}", tools = ["node"] }
             Some(r"version=(\S+)")
         );
         assert_eq!(tool.idiomatic_files[2].version_expr, Some("versions[0]"));
-        assert_eq!(tool.idiomatic_files[2].deprecated, None);
-        assert_eq!(tool.idiomatic_files[3].path, "example.conf");
-        assert_eq!(
-            tool.idiomatic_files[3].deprecated,
-            Some("it declares a minimum.")
-        );
+        // a file an older published registry marked `deprecated` is dropped, not read
+        assert_eq!(tool.idiomatic_files.len(), 3);
         assert_eq!(tool.test.as_ref().unwrap().tools, &["node"]);
         assert!(!registry.missing_version_order);
     }
@@ -2005,6 +2002,22 @@ test = { cmd = "example --version", expected = "{{version}}", tools = ["node"] }
             Some(VersionOrder::Source)
         );
         assert!(registry.missing_version_order);
+    }
+
+    #[test]
+    fn test_dynamic_registry_drops_the_retired_cmake_floor_file() {
+        let registry = registry_from_sources(BTreeMap::from([(
+            "cmake".to_string(),
+            r#"
+backends = ["aqua:Kitware/CMake"]
+version_order = "semver"
+idiomatic_files = [{ path = "CMakeLists.txt", version_regex = 'cmake_minimum_required\((\S+)' }]
+"#
+            .to_string(),
+        )]))
+        .unwrap();
+
+        assert!(registry.get("cmake").unwrap().idiomatic_files.is_empty());
     }
 
     #[test]

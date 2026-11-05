@@ -67,26 +67,27 @@ mise install github:user/repo
 
 | 选项                                                                                         | 用途                                                               |
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`asset_pattern`](#asset-pattern)                                                            | 指定要下载的资源文件名称                                           |
-| [`matching`](#matching), [`matching_regex`](#matching-regex)                                 | 缩小自动检测的候选范围                                             |
-| [`no_app`](#no-app)                                                                          | 优先使用命令行归档，而非 macOS `.app` 包                            |
-| [`additional_asset_patterns`](#additional-asset-patterns)                                    | 从同一发行版解压其他归档到安装目录                                 |
-| [`version_prefix`](#version-prefix)                                                          | 读取前缀不是 `v` 的标签版本                                        |
-| [`prerelease`](#prerelease)                                                                  | 包含预发行版                                                       |
-| [`version_order`](#version-order)                                                            | 按语义化版本排序                                                   |
-| [`url`](#platform-specific-urls)                                                             | 在某个平台下载指定 URL，而非发行版资源文件                         |
-| [`format`](#format)                                                                          | 指定归档格式                                                       |
-| [`strip_components`](#strip-components)                                                      | 解压时移除开头的目录                                               |
-| [`bin_path`](#bin-path)                                                                      | 指定可执行文件所在目录                                             |
-| [`bin`](#bin)                                                                                | 指定单文件下载的名称                                               |
-| [`rename_exe`](#rename-exe)                                                                  | 重命名从归档中解压出的可执行文件                                   |
-| [`filter_bins`](#filter-bins)                                                                | 仅将部分可执行文件加入 `PATH`                                      |
-| [`checksum`](#checksum), [`size`](#size)                                                     | 固定产物的摘要和大小                                               |
-| [`github_attestations`](#github-attestations)                                                | 对单个工具跳过 GitHub 产物证明检查（仅 GitHub）                    |
-| [`slsa_signer_identity`, `slsa_signer_issuer`](#slsa-signer-identity-and-slsa-signer-issuer) | 验证 SLSA 来源信息（仅 GitHub）                                    |
-| [`api_url`](#api-url)                                                                        | 使用 GitHub Enterprise Server 或其他 Forge 主机                   |
+| [`asset_pattern`](#asset-pattern)                                                            | Name the asset to download                                         |
+| [`matching`](#matching), [`matching_regex`](#matching-regex)                                 | Narrow the assets that autodetection chooses from                  |
+| [`no_app`](#no-app)                                                                          | Prefer a command-line archive over a macOS `.app` bundle           |
+| [`additional_asset_patterns`](#additional-asset-patterns)                                    | Extract more archives from the same release into the install       |
+| [`version_prefix`](#version-prefix)                                                          | Read versions from tags with a prefix other than `v`               |
+| [`version_regex`](#version-regex)                                                            | 仅列出符合模式的发布标签                                           |
+| [`prerelease`](#prerelease)                                                                  | Include prereleases                                                |
+| [`version_order`](#version-order)                                                            | Order versions by semantic version                                 |
+| [`url`](#platform-specific-urls)                                                             | Download a URL instead of a release asset on one platform          |
+| [`format`](#format)                                                                          | Set the archive format                                             |
+| [`strip_components`](#strip-components)                                                      | Remove leading directories when extracting                         |
+| [`bin_path`](#bin-path)                                                                      | Name the directory that holds the executables                      |
+| [`bin`](#bin)                                                                                | Name a single-file download                                        |
+| [`rename_exe`](#rename-exe)                                                                  | Rename executables extracted from an archive                       |
+| [`filter_bins`](#filter-bins)                                                                | Put only some executables on `PATH`                                |
+| [`checksum`](#checksum), [`size`](#size)                                                     | Pin the artifact's digest and size                                 |
+| [`github_attestations`](#github-attestations)                                                | Skip GitHub artifact attestation checks for one tool (GitHub only) |
+| [`slsa_signer_identity`, `slsa_signer_issuer`](#slsa-signer-identity-and-slsa-signer-issuer) | Verify SLSA provenance (GitHub only)                               |
+| [`api_url`](#api-url)                                                                        | Use GitHub Enterprise Server or another forge host                 |
 
-### 选择资源文件 {#selecting-assets}
+### Selecting assets
 
 #### `asset_pattern` {#asset-pattern}
 
@@ -161,6 +162,20 @@ linux-x64 = {
 
 设置 `version_prefix = "release-"` 后，mise 只会列出以 `release-` 开头的标签，将 `release-1.0.0` 显示为 `1.0.0`，并在运行 `mise use github:user/repo@1.0.0` 时安装对应标签。设置 `version_prefix = ""` 可保留标签发布时的原样内容，包括开头的 `v`。
 
+#### `version_regex` {#version-regex}
+
+列出发布标签前必须匹配的正则表达式。若仓库发布的内容并非全是工具版本（例如某个发布只包含构建数据），可使用此项筛选：
+
+```toml
+[tools]
+"github:owner/tool" = { version = "latest", prerelease = true, version_regex = '^(v\d+\.\d+\.\d+|nightly)$' }
+```
+
+此设置会列出 `v1.2.3` 发布和 `nightly` 预发布，并排除其他标签。模式可以匹配标签中的任意位置；若要匹配整个标签，请使用 `^` 和 `$` 锚定。此项只负责筛选：mise 仍按未设置该项时的方式命名版本，因此 `v1.2.3` 标签仍显示为 `1.2.3`。
+同时设置 `version_prefix` 时，标签必须以此前缀开头并匹配该模式。安装时绝不会使用被模式排除的标签；例如，在仓库同时含有
+`1.2.3` 和 `v1.2.3` 两个标签时，`version_regex` 模式会选择 `1.2.3` 发行：
+并安装该版本。
+
 #### `prerelease`
 
 默认情况下，mise 会在 `mise ls-remote`、`latest` 和版本前缀解析中排除 GitHub 标记为预发行版的发行版。设置 `prerelease = true` 可将其纳入：
@@ -224,6 +239,8 @@ URL 中必须自行包含 `v` 等标签前缀。此后端会忽略顶层的 `url
 
 ### 解压和命名可执行文件 {#extracting-and-naming-executables}
 
+如果归档包含指向安装目录之外的符号链接，或发布制品的名称不是普通文件名，mise 会拒绝处理。
+
 #### `format`
 
 归档格式，例如 `tar.gz`、`tar.xz` 或 `zip`。如果资源文件没有扩展名，或扩展名不正确，请设置此选项；否则 mise 会根据文件名检测格式。对于非归档文件，请使用 `raw`。
@@ -246,7 +263,9 @@ URL 中必须自行包含 `v` 等标签前缀。此后端会忽略顶层的 `url
 
 #### `bin_path` {#bin-path}
 
-相对于安装目录、用于存放可执行文件的目录。如果 mise 没有找到可执行文件，请设置此选项。mise 会在应用 `strip_components` 后再应用该路径；设置此选项后会关闭自动移除目录。
+The directory, relative to the install directory, that holds the executables.
+Set it when mise does not find them. mise applies it after `strip_components`,
+设置该项会关闭自动剥离。绝对路径或包含 `..` 的路径会被拒绝。
 
 ::: v-pre
 对于目录结构为 `tool-1.0.0/bin/tool` 的归档，可像下面这样设置 `strip_components = 1` 和 `bin_path = "bin"`，也可以通过 `bin_path = "tool-{{ version }}/bin"` 保留外层目录。
@@ -381,7 +400,11 @@ slsa_signer_issuer = "https://token.actions.githubusercontent.com"
 身份必须与证书中的工作流引用完全一致。此值支持[模板](#templates)，其中 `{{ version }}` 表示解析后的版本。
 :::
 
-如果没有同时设置这两个选项，mise 会跳过 SLSA 来源信息验证，并使用其他检查。锁文件条目同时记录校验和与 SLSA 来源信息时，安装会跳过重复验证；设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance) 后则会重新验证，且未设置签名者选项也会报错。这些选项仅适用于 GitHub。
+生成来源证明的工作流运行还必须属于工具的仓库（本例中为 `myorg/mytool`），或属于存放签名工作流的仓库。`slsa-framework/slsa-github-generator` 等可复用工作流在所有调用它的仓库中具有相同身份，因此仅凭身份无法确定签署的是哪个仓库的发布。来源证明记录的是构建发布时的仓库名称，因此仓库改名或转移后，mise 会询问 api.github.com 两个名称是否指向同一仓库。API 的 [`url_replacements`](/url-replacements.html) 镜像无法确认仓库改名。
+
+来源证明还必须由正在安装的发布标签构建。否则，可复用工作流为旧版本生成的来源证明也可能通过新版本的验证。若工具发布是从分支而非标签构建，则无法使用此方式验证。
+
+同时设置两个选项时，如果资源文件没有可供 mise 验证的 SLSA 来源证明（因为发布未提供，或文件为空、不可读），安装和锁定都会失败，除非 GitHub 制品证明先通过验证。未同时设置两个选项时，mise 会跳过 SLSA 来源证明并使用其他检查。锁文件条目记录了校验和及 SLSA 来源证明时，安装不会重复验证，除非设置了 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)；该设置还会在缺少签名者选项时报告错误。锁文件条目只记录校验和而不含来源证明时，即使同时设置两个选项，安装也只会依据校验和验证；启用 `locked_verify_provenance` 或[偏执模式](/paranoid.html)中的来源证明检查时除外。以上选项仅适用于 GitHub。
 
 ### 模板
 
@@ -453,7 +476,13 @@ API 的基础 URL。此处默认值为 `https://api.github.com`；`gitlab` 后�
 
 ## 版本列表的生成方式 {#version-listing}
 
-`mise ls-remote` 会列出仓库中至少附带一个资源文件的发行版。mise 从发行版资源文件安装，绝不会使用 GitHub 自动生成的源代码归档，因此没有资源文件的发行版无法安装。即使某个发行版的资源文件不支持你的平台，它仍会列出，这样所有机器上的版本列表一致，跨平台锁文件也能正常工作。草稿发行版永远不会列出；预发行版仅在设置 [`prerelease`](#prerelease) 后列出。
+`mise ls-remote` lists the repository's releases that have at least one asset
+attached. mise installs from release assets and never from GitHub's generated
+source archives, so a release without assets has nothing to install. A release
+whose assets do not cover your platform is still listed, so the version list is
+the same on every machine and cross-platform lockfiles work. Draft releases are
+never listed, and prereleases only with [`prerelease`](#prerelease).
+[`version_prefix`](#version-prefix) 和 [`version_regex`](#version-regex) 会排除不匹配的标签。
 
 如果所有受支持的平台都设置了 [`url`](#platform-specific-urls)，那么无论发行版是否附带资源文件，mise 都会列出它们。如果只为部分平台设置 `url`，mise 也会在所有平台上列出没有资源文件的发行版；在没有设置 `url` 的平台上安装此类发行版会失败。
 

@@ -79,7 +79,9 @@ mise exec node@24 -- node --version  # Node 24 for this one command
 
 ### mise 支持 Windows 吗？ {#windows-support}
 
-可以。mise 可原生运行于 Windows，并支持 PowerShell 激活、shims、`mise exec` 和 `mise run`。可通过 `winget install jdx.mise` 安装；Scoop 和 Chocolatey 的安装方式请参阅 [Windows 安装说明](/installing-mise.html#windows)。PowerShell、Git Bash 或 `cmd.exe` 的设置方法请参阅 [Shell 配置](/shell-setup.html#windows)。
+Yes. mise runs natively on Windows, with PowerShell activation, shims,
+`mise exec` 和 `mise run`。在 PowerShell 中运行 `irm https://mise.run/powershell | iex` 安装，或参阅 [Windows](/installing-mise.html#windows) 了解 winget、Scoop 和 Chocolatey。若要设置
+PowerShell, Git Bash, or `cmd.exe`, see [Shell setup](/shell-setup.html#windows).
 
 asdf 插件提供的工具无法在原生 Windows 上运行，因为这类插件是 shell 脚本。如果工具本身支持 Windows，核心工具及 aqua、github、http、npm 和 vfox 等后端都可以运行。`mise registry <tool>` 会列出该工具可用的后端。在 WSL 中，请安装 Linux 版 mise 并在其中管理 Linux 工具。Windows 问题请参阅[故障排查](/troubleshooting.html#windows-problems)。
 
@@ -153,7 +155,31 @@ mise install
 
 若要通过内部镜像下载，请使用 [URL 替换](/url-replacements.html)。mise 运行的包管理器和插件（例如 npm、pip、cargo 及 asdf 插件）会读取各自的代理和证书设置。
 
-## 从 asdf 迁移 {#migration}
+### mise 如何处理 TLS 证书？{#tls-certificates}
+
+mise 会使用操作系统的信任库验证 HTTPS 连接，因此安装在其中的证书颁发机构（CA）也会受信任，例如企业 CA 或流量检查代理的 CA。官方发布的二进制文件（包括据此构建的 deb 和 rpm 软件包）同样适用此规则。它们使用 rustls 和平台证书验证器。使用默认 Cargo 功能从源码构建（例如 `cargo install`）时，则使用平台 TLS 库（Linux 上为 OpenSSL）。详见[构建功能](/packaging.html#build-features)。
+
+在 Linux 上，发布二进制文件还会遵循 `SSL_CERT_FILE` 和 `SSL_CERT_DIR`。设置其中任一项都会**替换**系统信任库，而非在其上追加；因此，如果证书包中只有私有 CA，访问所有公共网站都会因 `UnknownIssuer` 而失败：
+
+```sh
+# trusts only this file: the bundle must include the public roots too
+export SSL_CERT_FILE=/etc/ssl/corporate-bundle.pem
+mise install
+```
+
+若要在任意平台上额外信任某个 CA、而不替换系统信任库，请将 [`extra_ca_certs`](/configuration/settings.html#extra_ca_certs) 指向包含该 CA 的 PEM 证书包。mise 会将其中的证书添加到现有信任根中：
+
+```sh
+# adds to the system store: the bundle only needs the extra CA
+export MISE_EXTRA_CA_CERTS=/etc/ssl/proxy-ca.pem
+mise install
+```
+
+该设置仅从环境变量和全局配置读取，不会从项目的 `mise.toml` 读取。
+
+如果完全无法加载证书（例如精简容器中未安装 `ca-certificates`，或 `SSL_CERT_FILE` 指向不存在的文件），mise 会发出警告，并在自己的 HTTP 客户端中信任内置的 Mozilla 根证书副本，例如下载、`mise self-update`、vfox 插件、远程任务缓存和证明查询使用的客户端。Git 操作和 sigstore 信任根更新使用独立客户端，不受此规则影响。请安装 `ca-certificates` 或修正路径，以恢复使用系统信任库。已成功加载的证书不会再补充其他证书，因此能成功加载的证书包仍会像上文所述那样替换系统信任库。此回退适用于 Linux 和 macOS 以外的其他 Unix 系统，且仅限使用 rustls 的发布二进制文件。npm 后端始终会在系统信任库之外额外信任相同的内置根证书。mise 启动的软件包管理器和插件会读取各自的证书设置，例如 node 使用 `NODE_EXTRA_CA_CERTS`，Python requests 使用 `REQUESTS_CA_BUNDLE`。
+
+## Coming from asdf {#migration}
 
 ### 如何从 asdf 切换？ {#how-do-i-migrate-from-asdf}
 

@@ -20,10 +20,8 @@ use crate::{Result, lock_file::LockFile};
 use crate::{dirs, file, plugins, sysconfig, versions_host};
 use async_trait::async_trait;
 use eyre::{bail, eyre};
-use flate2::read::GzDecoder;
 use itertools::Itertools;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock as Lazy;
 use std::sync::{Arc, OnceLock};
@@ -309,10 +307,7 @@ impl PythonPlugin {
             .get_or_try_init_async(async || {
                 let settings = Settings::get();
                 let url_path = python_precompiled_url_path(&settings);
-                let rsp = versions_host::python_precompiled(&url_path).await?;
-                let mut decoder = GzDecoder::new(rsp.as_ref());
-                let mut raw = String::new();
-                decoder.read_to_string(&mut raw)?;
+                let raw = versions_host::python_precompiled(&url_path).await?;
                 let platform = python_precompiled_platform();
                 let flavor = settings.python.precompiled_flavor.clone();
                 // order by version, whether it is a release candidate, date, and in the preferred order of install types
@@ -545,6 +540,11 @@ impl PythonPlugin {
                         let platform = python_precompiled_platform();
                         bail!("no precompiled python found for {tv} on {platform}");
                     }
+                    if ctx.locked {
+                        bail!(
+                            "no precompiled python found for {tv} and locked mode requires the locked precompiled artifact"
+                        );
+                    }
                     let available = precompiled_versions.iter().map(|(v, _, _)| v).collect_vec();
                     if available.is_empty() {
                         debug!("no precompiled python found for {}", tv.version);
@@ -673,9 +673,13 @@ impl PythonPlugin {
             return Err(eyre!("Ref versions not supported for python"));
         }
         ctx.pr.set_message("python-build".into());
+        file::create_dir_all(tv.install_path())?;
         let mut cmd = CmdLineRunner::new(self.python_build_bin())
+            // python-build looks for its definition argument as a file first,
+            // so it must not start in the project's directory.
+            .current_dir(tv.install_path())
             .with_pr(ctx.pr.as_ref())
-            .arg(tv.version.as_str())
+            .arg(plugins::core::build_definition_name(&tv.version)?)
             .arg(tv.install_path())
             .envs(ctx.config.env().await?)
             .env_values(tv.install_env())
@@ -831,10 +835,7 @@ impl PythonPlugin {
 
         let platform = format!("{arch}-{os}");
         let url_path = format!("python-precompiled-{arch}-{os}.gz");
-        let rsp = versions_host::python_precompiled(&url_path).await?;
-        let mut decoder = GzDecoder::new(rsp.as_ref());
-        let mut raw = String::new();
-        decoder.read_to_string(&mut raw)?;
+        let raw = versions_host::python_precompiled(&url_path).await?;
 
         let flavor = settings.python.precompiled_flavor.clone();
 
@@ -993,6 +994,11 @@ impl PythonPlugin {
 impl Backend for PythonPlugin {
     fn ba(&self) -> &Arc<BackendArg> {
         &self.ba
+    }
+
+    fn resolves_locked_url_from_checksum(&self) -> bool {
+        // Only the precompiled path checks the download against the locked checksum.
+        cfg!(windows) || Settings::get().python_compile(CompilePurpose::Install) != Some(true)
     }
 
     async fn _list_remote_versions(&self, _config: &Arc<Config>) -> eyre::Result<Vec<VersionInfo>> {

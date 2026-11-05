@@ -232,7 +232,7 @@ mise 会按以下顺序检查来源，并使用找到的第一个令牌：
 
 如果优先级较高的来源提供了错误或过期的令牌，后续来源中可用的令牌也会被遮蔽，因为 mise 找到第一个令牌后就会停止查找。
 
-令牌按主机查找。`api.github.com` 和 `raw.githubusercontent.com` 使用 `github.com` 的令牌，因此令牌文件和 CLI 登录都应使用 `github.com` 作为键。GitLab 和 Forgejo 令牌只会发送到工具 `api_url` 的源站。
+令牌按主机查找。`api.github.com` 和 `raw.githubusercontent.com` 使用 `github.com` 的令牌，因此令牌文件和 CLI 登录都应以 `github.com` 为键。GitLab 和 Forgejo 令牌只会发送到工具 `api_url` 的源站。GitHub Enterprise Server 仅会在该源站下的 `/api/v3` URL 中收到 GitHub 令牌，或在 [`github.enterprise_hosts`](#enterprise-hosts) 中列出的主机上收到令牌。
 
 ## GitHub Enterprise 和自托管主机 {#github-enterprise}
 
@@ -245,7 +245,7 @@ mise 会按以下顺序检查来源，并使用找到的第一个令牌：
 "forgejo:myorg/mytool" = { version = "latest", api_url = "https://forgejo.mycompany.com/api/v1" }
 ```
 
-mise 会根据 `api_url` 的主机查找令牌，本例中分别为 `github.mycompany.com`、`gitlab.mycompany.com` 和 `forgejo.mycompany.com`。未设置 `api_url` 时，Forgejo 后端会使用 Codeberg。对于具有数据驻留功能的 GitHub Enterprise Cloud（`api.<name>.ghe.com`），令牌文件中应使用 `<name>.ghe.com` 作为键。
+mise 会根据 `api_url` 的主机查找令牌，本例中分别为 `github.mycompany.com`、`gitlab.mycompany.com` 和 `forgejo.mycompany.com`。未设置 `api_url` 时，Forgejo 后端会使用 Codeberg。对于启用数据驻留的 GitHub Enterprise Cloud（`api.<name>.ghe.com`），请使用 `<name>.ghe.com` 作为令牌键。GitHub `api_url` 只有使用 `https` 或回环地址（例如本地代理）时才会收到令牌。
 
 `MISE_GITHUB_TOKEN` 和其他通用变量也适用于 Enterprise 主机。若要为 github.com 和 Enterprise 主机使用不同令牌，请设置 `MISE_GITHUB_ENTERPRISE_TOKEN` 或使用按主机配置的来源。单个 Enterprise 变量不能用于多个需要不同令牌的实例；这种情况请改用令牌文件、CLI 登录、凭据命令或 Git 凭据助手：
 
@@ -254,7 +254,23 @@ gh auth login --hostname github.mycompany.com
 gh auth login --hostname github.other-company.com
 ```
 
-对于支持设备流程的 Enterprise 实例，如需使用原生 OAuth，还要设置 [`github.oauth_auth_url`](/configuration/settings.html#github.oauth_auth_url) 和 [`github.oauth_api_url`](/configuration/settings.html#github.oauth_api_url)。其他选项参见 [github](/dev-tools/backends/github.html)、[gitlab](/dev-tools/backends/gitlab.html) 和 [forgejo](/dev-tools/backends/forgejo.html) 后端文档。
+### github 后端之外的 Enterprise URL {#enterprise-hosts}
+
+任何服务器都可以响应 `/api/v3` 路径，因此 mise 不会仅因路径相同，就向 Enterprise URL 发送 GitHub 令牌。令牌只会发送到 `github:` 工具 `api_url` 的源站。通过其他方式传给 mise 的 Enterprise `/api/v3` URL（例如 `http:` 工具的 `url`、aqua 软件包或远程任务的 `file`）不会收到令牌，除非你在全局配置中列出对应主机：
+
+```toml [~/.config/mise/config.toml]
+[settings.github]
+enterprise_hosts = ["github.mycompany.com"]
+```
+
+或设置 `MISE_GITHUB_ENTERPRISE_HOSTS=github.mycompany.com`。列出的主机只会通过 `https` 在 `/api/v3` 下的路径中收到令牌。mise 会忽略项目配置中的 [`github.enterprise_hosts`](/configuration/settings.html#github.enterprise_hosts)，因此仓库无法自行添加主机。
+
+For native OAuth with an Enterprise instance that supports device flow, also
+set [`github.oauth_auth_url`](/configuration/settings.html#github.oauth_auth_url)
+and [`github.oauth_api_url`](/configuration/settings.html#github.oauth_api_url).
+See the [github](/dev-tools/backends/github.html),
+[gitlab](/dev-tools/backends/gitlab.html) and
+[forgejo](/dev-tools/backends/forgejo.html) backends for their other options.
 
 ## GitHub Actions 和其他 CI {#ci-github-actions}
 

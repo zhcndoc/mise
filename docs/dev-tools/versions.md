@@ -19,52 +19,63 @@ ripgrep = "latest"   # 后端定义的最新版本
 
 | 请求                              | 示例                               | 选择结果                                                                                                |
 | --------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 精确版本                          | `"24.11.1"`                        | 指定的版本。                                                                                             |
-| 前缀                              | `"24"`、`"3.14"`                   | 以该前缀开头的版本。如果恰好有版本号与前缀相同，则选择该版本。                                         |
-| `latest`                          | `"latest"`                         | 工具后端认定的最新版本。                                                                                 |
-| 别名                              | `"lts"`、`"project-lts"`           | 别名所代表的请求，例如 Node.js 的 `lts`（即 `24`）或[工具别名](/dev-tools/aliases.html)。              |
-| `prefix:`                         | `"prefix:1.20"`                    | 选择以前缀开头的版本，即使存在名称恰好等于该前缀的版本。                                                 |
-| `ref:`、`tag:`、`branch:`、`rev:` | `"ref:main"`                       | 在支持源码构建的后端中，基于版本控制引用构建。                                                           |
-| `path:`                           | `"path:/opt/homebrew/opt/node@24"` | 将现有目录用作安装目录。                                                                                 |
-| `system`                          | `"system"`                         | 不通过 mise 安装。mise 不会将该工具的任何目录加入 `PATH`，因此会运行 `PATH` 中已有的版本。               |
-| `sub-`                            | `"sub-1:latest"`                   | 将另一请求解析出的版本号减去指定值后得到的版本。                                                         |
+| Exact version                     | `"24.11.1"`                        | That release.                                                                                             |
+| Prefix                            | `"24"`, `"3.14"`                   | A release that starts with the prefix. If a release is named exactly the prefix, that release is chosen.  |
+| `latest`                          | `"latest"`                         | The release the tool's backend considers newest.                                                          |
+| Alias                             | `"lts"`, `"project-lts"`           | The request an alias stands for, such as Node.js `lts` (`24`) or a [tool alias](/dev-tools/aliases.html). |
+| `prefix:`                         | `"prefix:1.20"`                    | A release that starts with the prefix, even when a release has exactly that name.                         |
+| `ref:`, `tag:`, `branch:`, `rev:` | `"ref:main"`                       | A build from a version-control reference, on backends that build from source.                             |
+| `path:`                           | `"path:/opt/homebrew/opt/node@24"` | An existing directory, used as the installation.                                                          |
+| `system`                          | `"system"`                         | No mise installation. mise adds nothing to `PATH` for the tool, so the copy already on `PATH` runs.       |
+| `sub-`                            | `"sub-1:latest"`                   | The result of subtracting from another request's resolved version.                                        |
 
-前缀匹配会考虑分隔符：`1.2` 可以匹配 `1.2.3` 和 `1.2+build`，但不会匹配 `1.20`。除非
-你精确请求某个预发行版本，或设置 `prerelease`[工具选项](/dev-tools/#tool-options)，
-否则前缀和 `latest` 都会跳过 `1.0.0-rc1` 这类预发行版本。
+A prefix matches at separators: `1.2` matches `1.2.3` and `1.2+build`, but not
+`1.20`. Prefixes and `latest` skip prereleases such as `1.0.0-rc1` unless you
+request one exactly or set the `prerelease` [tool option](/dev-tools/#tool-options).
 
-相同的请求也适用于命令行（`mise use node@24`、`mise exec go@prefix:1.20 -- go version`）
-和 `.tool-versions`。在 `package.json` 以外，mise 不接受 `^24` 或 `>=20` 这类 npm 风格的
-版本范围：它会发出警告，并将该范围当成字面版本处理，导致安装失败。
+The same requests work on the command line (`mise use node@24`,
+`mise exec go@prefix:1.20 -- go version`) and in `.tool-versions`. mise does not
+accept npm-style ranges such as `^24` or `>=20` outside `package.json`: it warns
+and then treats the range as a literal version, which fails to install.
 
-不带版本运行 `mise use node` 会写入 `latest`。`mise install node` 和 `mise exec node` 会
-使用配置选定的版本；如果配置中没有声明该工具，则使用 `latest`。
+`mise use node` without a version writes `latest`. `mise install node` and
+`mise exec node` use the version the config selects, or `latest` when no config
+declares the tool.
 
-### 前缀、引用、路径和减法请求 {#scopes}
+### Prefix, reference, path, and subtraction requests {#scopes}
 
-`prefix:<PREFIX>` 适用于发布版本名称本身就是前缀的工具。Go 1.21 之前的版本依次命名为
-`1.20`、`1.20.1` 等，因此 `go = "1.20"` 会选择名称恰好为 `1.20` 的版本；而
-`go = "prefix:1.20"` 则会选择最新的 1.20.x 版本。
+`prefix:<PREFIX>` exists for tools that publish a release named like a prefix.
+Go releases before 1.21 were named `1.20`, then `1.20.1`, so `go = "1.20"`
+selects the `1.20` release itself. `go = "prefix:1.20"` selects the newest
+1.20.x release instead.
 
-`ref:<REF>` 会基于分支、标签或提交构建。`tag:`、`branch:` 和 `rev:` 可显式指定引用类型。
-是否支持取决于后端：来自 Git 的 npm 软件包支持这四种形式；来自 Git 的 cargo 软件包支持
-`tag:`、`branch:` 和 `rev:`，但不支持 `ref:`；`spm` 软件包支持 `ref:` 和 `rev:`；插件则
-支持各自实现的引用类型。Python 和 Erlang 核心工具不支持基于引用构建。
+`ref:<REF>` builds from a branch, tag, or commit. `tag:`, `branch:`, and `rev:`
+name the kind of reference explicitly. Support depends on the backend: npm
+packages from Git accept all four, cargo packages from Git accept `tag:`,
+`branch:`, and `rev:` but not `ref:`, `spm` packages accept `ref:` and `rev:`,
+and plugins accept the references they implement. The Python and Erlang core
+tools do not build from references.
 
-`path:<PATH>` 会使用你在其他位置构建或安装的目录，例如 Homebrew keg
-（`path:/opt/homebrew/opt/node@24`）。`~/` 会展开为主目录；相对路径相对于声明它的配置文件
-[配置根目录](/configuration.html#config-root)解析，在命令行中则相对于当前目录解析。在
-Windows 上，两种路径分隔符都可用，mise 会以正斜杠形式保存路径。在 TOML 的双引号字符串中，
-反斜杠会开始转义序列，因此 Windows 路径应使用字面字符串（`{ path = 'C:\tools\node' }`）
-或将反斜杠加倍（`"C:\\tools\\node"`）。`"C:\tools\node"` 不会报错，但 TOML 会将 `\t`
-解析为制表符，导致路径被悄悄改写。在 Windows 上，如果路径包含 `cmd.exe` 元字符
-（`& | < > ^ %`），mise 会拒绝该路径，因为它会被传给使用该路径构建 Shell 命令的插件。
+`path:<PATH>` uses a directory you built or installed elsewhere, such as a
+Homebrew keg (`path:/opt/homebrew/opt/node@24`). `~/` expands to your home
+directory, and a relative path resolves from the declaring config's
+[config root](/configuration.html#config-root), or from the current directory on
+the command line. On Windows, both separators work and mise stores the
+forward-slash form. In TOML, a backslash starts an escape inside a
+double-quoted string, so write a Windows path as a literal string
+(`{ path = 'C:\tools\node' }`) or double the backslashes (`"C:\\tools\\node"`).
+`"C:\tools\node"` is not rejected: TOML reads `\t` as a tab, so the path
+silently changes. On Windows, mise rejects a path that contains a `cmd.exe`
+metacharacter (`& | < > ^ %`), because the path is passed to plugins that build
+shell commands with it. 该目录会在未安装工具的情况下直接使用，因此项目配置中指定此类路径时[需要信任](/security.html#what-needs-trust)，而[安全模式](/security.html#safe-mode)会忽略它。
 
-`sub-<PARTIAL>:<REQUEST>` 会先解析 `REQUEST`，再从结果中对应的版本号部分减去 `PARTIAL`，
-最后将剩余部分作为前缀解析。`sub-2:lts` 会将 Node.js `24` 变为 `22`；`sub-0.1:latest`
-会将 Python `3.14.8` 变为 `3.13` 请求。这是对版本号做算术运算，并非请求向前数第 N 个发行版。
+`sub-<PARTIAL>:<REQUEST>` resolves `REQUEST`, subtracts `PARTIAL` from the
+matching components of the result, and resolves what remains as a prefix.
+`sub-2:lts` turns Node.js `24` into `22`, and `sub-0.1:latest` turns Python
+`3.14.8` into a request for `3.13`. This is arithmetic on version numbers, not a
+request for the Nth previous release.
 
-在 `mise.toml` 中，也可以通过表格形式指定请求类型，而不是使用前缀：
+In `mise.toml`, a table can name the request kind instead of a prefix:
 
 ```toml [mise.toml]
 [tools]
@@ -182,7 +193,9 @@ mise settings add idiomatic_version_file_enable_tools node
 
 这些文件接受与对应工具相同的别名，因此包含 `lts/hydrogen` 的 `.nvmrc` 可同时用于 mise 和 nvm。
 
-### 启用生态惯用版本文件 {#enabling-idiomatic-version-files}
+`.tool-versions` 或惯用版本文件可以是符号链接，指向其他位置同名的版本文件，例如 monorepo 中共享的文件。如果链接指向不同名称的文件，mise 不会读取该文件，并会警告 `not reading <path>: it is a symlink to a file of another name`：否则，项目可能将它指向 `~/.netrc` 等文件，并让其内容作为工具名称和版本显示。你自己的文件不受此限制：全局配置中的 `~/.tool-versions` 以及直接位于主目录中的版本文件可以链接到任意名称的文件。目标文件仍会以自身名称读取：如果 `.nvmrc` 链接到旁边的 `.node-version`，mise 会跳过 `.nvmrc` 且不发出警告，并读取 `.node-version`。
+
+### Enable idiomatic version files {#enabling-idiomatic-version-files}
 
 [`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools)
 列出 mise 会读取其惯用版本文件的工具。默认列表为空，原因见
@@ -211,7 +224,6 @@ mise settings add idiomatic_version_file_disable_files node:package.json
 | bazel         | `.bazelversion`                                                                                                                                                                                                                                                                                            |
 | bun           | `.bun-version`, `package.json`                                                                                                                                                                                                                                                                             |
 | chezmoi       | `.chezmoiversion`                                                                                                                                                                                                                                                                                          |
-| cmake         | `CMakeLists.txt`                                                                                                                                                                                                                                                                                           |
 | crystal       | `.crystal-version`                                                                                                                                                                                                                                                                                         |
 | dagger        | `dagger.json`                                                                                                                                                                                                                                                                                              |
 | deno          | `.deno-version`, `package.json`                                                                                                                                                                                                                                                                            |
@@ -246,37 +258,32 @@ mise settings add idiomatic_version_file_disable_files node:package.json
 
 <!-- mise:idiomatic-version-files:end -->
 
-asdf 和 vfox 插件还可以声明各自支持的文件。注册表条目可以使用与
-[HTTP 后端](/dev-tools/backends/http.html)相同的 `version_regex`、`version_json_path` 和
-`version_expr` 解析器，从结构化文件中提取版本。因此，通过 `aqua:`、`github:` 等后端安装的
-工具，无需插件也可以读取 JSON 清单及其他工具专属文件。`.bazelversion` 的取值方式请参阅
-[Bazel 指南](/mise-cookbook/bazel.html)。
+asdf and vfox plugins can declare more files of their own. Registry entries can
+describe how to extract a version from a structured file with the same
+`version_regex`, `version_json_path`, and `version_expr` parsers as the
+[HTTP backend](/dev-tools/backends/http.html), so tools installed through
+backends such as `aqua:` and `github:` can read JSON manifests and other
+tool-specific files without a plugin. For `.bazelversion` values, see the
+[Bazel cookbook](/mise-cookbook/bazel.html).
 
-asdf 将这些文件称为“旧版版本文件”。mise 称其为“生态惯用版本文件”，以便区分各生态系统
-自身的约定和 mise 配置。
+asdf calls these files "legacy version files". mise calls them idiomatic
+version files to separate an ecosystem's own conventions from mise's
+configuration.
 
-### mise 会读取哪些字段 {#which-fields-mise-reads}
+### Which fields mise reads {#which-fields-mise-reads}
 
-mise 只读取声明项目实际使用哪个版本构建的字段，不读取声明最低兼容版本的字段；最低兼容版本
-是面向项目使用者的下限。一个仍支持 Node.js 18 或 CMake 3.25 的库，几乎肯定并非用这些版本
-开发。若将最低版本下限当作请求解析，就会把所有人固定在最旧的受支持版本；若将其视为范围，
-则会选到最新版本。
+mise reads only fields that declare the version a project is built with. It
+ignores fields that declare a minimum compatible version, which is a floor for
+the project's consumers. A library that still supports Node.js 18 or CMake 3.25
+is almost certainly not developed with it, so resolving the floor would pin
+everyone to the oldest supported release or, read as a range, to the newest.
 
-配置格式的主版本号则不同。GoReleaser 配置中的 `version: 2` 指定了与 CLI 主版本绑定的架构，
-因此 mise 会读取它，并选择最新的 GoReleaser 2.x。
+A configuration-format major is different. A GoReleaser config's `version: 2`
+selects a schema that is tied to the CLI major, so mise reads it and selects the
+newest GoReleaser 2.x.
 
-::: warning 已弃用的最低版本字段
-mise 过去会将两个最低版本下限当作版本请求读取：`go.mod` 中的 `go X.Y` 指令，以及
-`CMakeLists.txt` 中的 `cmake_minimum_required`。这两种用法现已弃用；解析版本时会发出警告，
-并将从 mise 2026.11.0 起停止读取。对于 Go，请在 `go.mod` 中添加 `toolchain goX.Y.Z` 行，
-或使用 `.go-version`、`mise.toml`。对于 CMake，请使用 `mise.toml`。
-
-在此之前，若要忽略这些最低版本下限并关闭警告，请设置
-`idiomatic_version_file_ignore_minimum_versions`。此设置及其控制的行为都会在 2026.11.0 中移除：
-
-```sh
-mise settings idiomatic_version_file_ignore_minimum_versions=true
-```
+::: tip 最低版本字段已移除
+mise 不再将两个最低版本字段作为版本请求读取：`go.mod` 中的 `go X.Y` 指令和 `CMakeLists.txt` 中的 `cmake_minimum_required`。对于 Go，请在 `go.mod` 中添加 `toolchain goX.Y.Z` 行，或使用 `.go-version`、`mise.toml`。对于 CMake，请使用 `mise.toml`。
 
 :::
 

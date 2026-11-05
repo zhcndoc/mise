@@ -100,7 +100,9 @@ mise lock --global   # writes ~/.config/mise/mise.lock (and /etc/mise/mise.lock)
 
 如果 `~/.config/mise/config.toml` 是指向 dotfiles 仓库的符号链接，例如 `~/dotfiles/mise.toml`，那么在仓库内运行 `mise lock` 会提示没有可锁定的内容，因为 mise 将该文件视为全局配置。请在仓库内运行 `mise lock --global`，以写入 `~/dotfiles/mise.lock`。从其他目录运行时，mise 会读写 `~/.config/mise/mise.lock`，因此也应将此路径链接到 `~/dotfiles/mise.lock`。旁文件会跟随符号链接目标。
 
-### Monorepo
+mise 会更新符号链接锁文件的目标，并保留该链接。只有在全局或系统配置中，或在[受信任](/security.html#configuration-trust)且未启用[安全模式](/security.html#safe-mode)的项目配置中，才会跟随指向锁文件目录之外的链接。其他情况下写入会失败，避免检出目录决定 `mise lock` 替换你的哪些文件。
+
+### Monorepos
 
 在 [monorepo](/tasks/monorepo.html)（`monorepo_root = true`）中，设置 `[monorepo] lockfile = true` 可将所有子项目工具的锁文件集中放在根目录：`packages/api/mise.toml` 中的工具会写入根目录的 `mise.lock`，环境和本地配置则写入根目录下的 `mise.ci.lock`、`mise.local.lock` 等文件。
 
@@ -222,7 +224,15 @@ MISE_LOCKED=1 mise install   # the same, set through the environment
 
 对于会记录下载 URL 的后端，锁文件条目还必须包含当前平台对应的 URL。大多数不记录 URL 的后端仍可使用只记录版本的锁文件；参见[后端支持](#backend-support)。格式版本为 2 或更高的锁文件还要求 npm 和 PyPI 工具包含其[依赖关系图](#dependency-graphs)。
 
-若要将锁定模式设为个人默认值，请在全局配置中设置 [`locked = true`](/configuration/settings.html#locked)。锁定模式会读取锁文件，因此当 `lockfile = false` 时会失败。
+上述每个 URL 都必须有校验和，否则 mise 会在下载前报错，并指出工具、平台和 URL。若发布未提供校验和，`mise lock` 会下载制品并计算校验和。手动编写的条目或 [`lockfile_mode = "merge"`](/configuration/settings.html#lockfile_mode) 生成的条目可能没有校验和；merge 模式不强制要求校验和。若仍要安装此类条目，请将 [`locked_require_checksum`](/configuration/settings.html#locked_require_checksum) 设为 `false`：
+
+```sh
+MISE_LOCKED_REQUIRE_CHECKSUM=0 mise install --locked
+```
+
+To make locked mode your personal default, set
+[`locked = true`](/configuration/settings.html#locked) in your global config.
+Locked mode reads the lockfile, so it fails when `lockfile = false`.
 
 ### 指定锁定范围
 
@@ -287,50 +297,93 @@ mise install --locked
 
 | 后端                                                                                                | `mise.lock` 记录的内容                                                                                     |
 | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| aqua、github、gitlab、forgejo、http、s3                                                            | 每个平台的 URL；发行版提供或 mise 可计算时，还会记录校验和                                                 |
-| packslip                                                                                           | 每个平台的 URL、校验和，以及项目固定的签名者；安装时会检查策略                                             |
-| conda                                                                                              | 每个平台的 URL、校验和，以及软件包依赖                                                                     |
-| 会下载归档的核心工具：Bun、Deno、Elixir、Erlang、Go、Java、Node.js、Python、Ruby、Zig                  | 每个平台的 URL；存在校验和时也会记录                                                                      |
-| core:swift                                                                                         | 每个平台和 Linux 发行版的 URL 及校验和；锁定模式不要求提供 URL                                              |
-| npm（内置 aube）和 pypi（uv）                                                                       | 版本，以及格式版本 2 起包含的[依赖关系图](#dependency-graphs)                                               |
-| cargo、dotnet、gem、go、spinel、core:dotnet、core:rust                                              | 仅顶层版本；语言对应的安装器会解析依赖和构建输入                                                           |
-| vfox 工具插件                                                                                      | 插件钩子返回的 URL；锁定模式要求这些 URL                                                                   |
-| asdf 和 vfox 后端插件                                                                               | 仅版本；安装由插件执行                                                                                     |
-| spm                                                                                                 | 仅版本                                                                                                     |
+| aqua, github, gitlab, forgejo, http, s3                                                            | A URL per platform and a checksum where the release provides one or mise can compute it                   |
+| packslip                                                                                           | URL and checksum per platform, and the signer the project committed to; policy is checked at installation |
+| conda                                                                                              | URL and checksum per platform, and the package's dependencies                                             |
+| Core tools that download archives: Bun, Deno, Elixir, Erlang, Go, Java, Node.js, Python, Ruby, Zig | A URL per platform and a checksum where one is available                                                  |
+| core:swift                                                                                         | URL and checksum per platform and Linux distro; locked mode does not require the URL                      |
+| npm (embedded aube) and pypi (uv)                                                                  | The version, plus a [dependency graph](#dependency-graphs) in format version 2 and later                  |
+| cargo, dotnet, gem, go, spinel, core:dotnet, core:rust                                             | The top-level version only; the language's installer resolves dependencies and build inputs               |
+| vfox tool plugins                                                                                  | URLs that the plugin's hooks return, which locked mode requires                                           |
+| asdf and vfox backend plugins                                                                      | The version only; the plugin performs the installation                                                    |
+| spm                                                                                                | 版本；从制品包安装时还会记录软件包的 URL 和校验和 |
 
-对于 `asdf`、`cargo`、`dotnet`、`gem`、`go`、`npm`、`pypi`（`pipx`）、`spinel`、`spm`、`ubi`、`core:dotnet`、`core:rust`、`core:swift` 和 vfox 后端插件，锁定模式不要求 URL，因为这些后端不会记录 URL。此豁免仅适用于制品 URL；npm 和 PyPI 依赖关系图仍有各自的检查。
+锁定模式不要求 `asdf`、`cargo`、`dotnet`、`gem`、`go`、`npm`、`pypi`（`pipx`）、`spinel`、`spm`、`ubi`、`core:dotnet`、`core:rust`、`core:swift` 和 vfox 后端插件提供 URL。它们大多不会记录 URL；`spm`（安装制品包时）和 `core:swift` 会记录 URL 及校验和，且仍会验证已记录的校验和。豁免仅适用于制品 URL；npm 和 PyPI 依赖图有各自的检查。
 
-存在 `provenance` 字段并不代表 mise 已验证制品内容；参见[来源信息与验证](#provenance-and-security)。
+A `provenance` field is not proof that mise verified the bytes; see
+[provenance and verification](#provenance-and-security).
 
-## 依赖关系图
+### 来自 mise-versions 的校验和 {#checksums}
 
-格式版本 2 起，锁文件会记录 npm 和 PyPI 工具的传递依赖，而不只记录顶层版本。mise 会在旁文件目录中，以软件包管理器自己的格式保存每个依赖关系图（默认目录为 `.mise/locks/`）：通过内置 aube 安装的 npm 工具使用 `aube-lock.yaml`；安装了 uv 0.12.10 或更高版本时，PyPI 工具使用 `uv.lock`。`mise.lock` 会记录目录位置和依赖关系图摘要。请将旁文件目录与 `mise.lock` 一起提交；运行 `mise lock --sidecars` 可列出该目录。
+对于公开的 GitHub 仓库，`mise lock` 会从 [mise-versions](/configuration/settings.html#use_versions_host) 读取发布元数据，包括每个制品的校验和，并在不下载制品的情况下记录下来。此类校验和会标记为：
 
-即使顶层版本没有变化，`mise lock --bump npm:prettier` 也会刷新该工具的依赖关系图；`mise install --locked` 则会按记录的关系图重新安装，不再解析依赖。同一软件包版本如果对应不同的锁定关系图，项目会分别安装。生命周期脚本在不同机器上仍可能生成不同结果。旁文件目录结构及其编辑方法见[原生依赖旁文件](/dev-tools/mise-lock-reference.html#native-dependency-sidecars)；安装器限制请参阅 [npm](/dev-tools/backends/npm.html) 和 [PyPI](/dev-tools/backends/pypi.html) 后端说明。
+```toml [mise.lock]
+[tools.ripgrep."platforms.linux-x64"]
+checksum = "sha256:…"
+checksum_source = "mise-versions"
+url = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
+```
 
-## 恢复的缓存和已安装工具 {#restored-caches}
+mise 会像验证其他校验和一样，在实际下载后将标记的校验和与文件进行比较，但绝不会使用它来复用已缓存的下载。否则 mise-versions 可能决定从[下载缓存](#restored-caches)中安装哪个文件。`mise lock` 在锁定时为来源证明检查而对照下载验证的校验和不会带此标记。较旧版本的 mise 会忽略此字段。
+
+## Dependency graphs
+
+Format version 2 and later lock the transitive dependencies of npm and PyPI
+tools, not only their top-level version. mise stores each graph in the package
+manager's own format, `aube-lock.yaml` for npm tools installed with embedded aube
+and `uv.lock` for PyPI tools when uv 0.12.10 or newer is installed, in a sidecar
+directory (`.mise/locks/` by default). `mise.lock` records the directory and a
+digest of the graph. Commit the sidecar directory with `mise.lock`;
+`mise lock --sidecars` lists it.
+
+`mise lock --bump npm:prettier` refreshes a tool's dependency graph even when its
+top-level version does not change, and `mise install --locked` replays the
+recorded graph without resolving dependencies again. Projects that lock
+different graphs for the same package version get separate installations.
+Lifecycle scripts can still produce different output on each machine. See
+[native dependency sidecars](/dev-tools/mise-lock-reference.html#native-dependency-sidecars)
+for the layout and for editing sidecars, and the [npm](/dev-tools/backends/npm.html)
+and [PyPI](/dev-tools/backends/pypi.html) backend pages for installer limits.
+
+## Restored caches and installed tools {#restored-caches}
 
 ::: warning
 `mise.lock` 验证的是 mise 下载的内容，而不是磁盘上已有的文件。恢复的 CI 缓存或共享解压目录会被直接信任。
 :::
 
-mise 无法根据锁文件验证已安装目录。校验和只覆盖下载的制品，而安装目录本来就允许变化：工具可能自行更新，`postinstall` 钩子也会修改文件。对于 Ruby 等从源码编译的工具，锁文件不保证编译产物的内容；工具自行下载的源码也可能完全没有对应校验和。
+mise can't validate an installed tree against the lockfile. The checksum covers
+the downloaded artifact, and installs are mutable on purpose: tools update
+themselves and `postinstall` hooks change files. For tools compiled from source,
+such as Ruby, the lockfile doesn't vouch for the compiled output, and a tool
+that downloads its own source may record no checksum for it at all.
 
-下载文件的处理方式不同。mise 会将其保存在缓存中；只有服务器确认文件未变化，或文件哈希符合固定校验和时，才会复用缓存。下载后始终会检查固定校验和；如果没有校验和，则会信任任何可被写入的缓存。使用 `--locked` 时只会复用带固定校验和的下载文件，因此恢复的下载缓存可以安全信任。参见 [`download_cache`](/configuration/settings.html#download_cache) 和 [CI 中的下载缓存](/continuous-integration.html#trusted-cache)。
+下载文件的缓存规则不同。mise 只会在服务器确认文件未变，或文件哈希与固定校验和一致且下载自同一 URL 时复用缓存。锁文件校验和不会让 mise 复用由其他 URL 提供的文件；来自 [mise-versions](#checksums) 的校验和则完全不会复用缓存文件。固定校验和总会在下载后验证；如果没有固定校验和，则任何人都能写入的缓存都会被视为可信。使用 `--locked` 时，只会复用带固定校验和的下载，因此可安全信任恢复的下载缓存。详见 [`download_cache`](/configuration/settings.html#download_cache) 和 [在 CI 中缓存下载](/continuous-integration.html#trusted-cache)。
 
-因此，应将已安装文件缓存视为可信构建输入：
+So treat a cache of installed files as trusted build input:
 
-- 不要恢复由不可信分支或触发事件写入的缓存。
-- 在可信 CI 元数据中、缓存目录之外记录缓存清单，并用它检查恢复的文件。保存在缓存中的清单也可能随缓存一起被替换；这种检查只能证明缓存自 CI 保存后未变化，不能证明其内容符合锁文件。
-- 若要根据锁文件验证安装结果，请使用空数据目录运行 `mise install --locked`。这样会重新下载每个制品，并对会记录校验和的后端检查锁文件中的校验和。
+- Don't restore caches written by untrusted refs or triggers.
+- Record a manifest of the cache outside it, in trusted CI metadata, and check
+  the restored files against it. A manifest stored in the cache can be replaced
+  along with it. That proves the cache is unchanged since CI saved it, not that
+  it matches the lockfile.
+- To check an install against the lockfile, run `mise install --locked` with an
+  empty data directory. Every artifact is then downloaded and checked against
+  the checksum the lockfile records, for the backends that record one.
 
-## 来源信息与验证 {#provenance-and-security}
+## Provenance and verification {#provenance-and-security}
 
-对于受支持的后端，`mise lock` 会记录 SLSA、Cosign、Minisign 或 GitHub 制品证明等来源信息。写入之前，mise 会根据每个目标平台的制品验证新的来源信息。
+对于受支持的后端，`mise lock` 会记录 SLSA、Cosign、Minisign 或 GitHub 制品证明等来源信息。mise 会先针对每个目标平台的制品验证新的来源信息，再写入锁文件。若 aqua 软件包声明支持 GitHub 制品证明以及 Cosign、Minisign 或 SLSA，那么在没有制品证明的发布中，`mise lock` 也会像安装时一样，先通过其他验证才能记录。
 
-如果条目同时包含校验和与来源信息，`mise install` 可以跳过重复的来源验证。因此，锁文件本身属于信任输入：请审查其变更，并只从可信的项目来源获取。每次下载时仍会验证校验和。
+已记录的来源信息与校验和绑定。如果锁定版本的制品发生变化，而 mise 无法为新字节确认相同的来源信息，`mise lock` 会失败并保留原条目。确认发布真实可信后，再从 `mise.lock` 中删除该条目以锁定新制品。
 
-若要在每次安装时重新验证来源信息，请设置 [`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance)；[paranoid 模式](/paranoid.html)也会启用此项：
+When an entry has both a checksum and provenance, `mise install` can skip
+repeating the provenance check. That makes the lockfile a trust input: review
+changes to it, and take it only from a trusted project source. Checksums are
+still verified on every download.
+
+To repeat provenance checks on every install, set
+[`locked_verify_provenance`](/configuration/settings.html#locked_verify_provenance),
+which [paranoid mode](/paranoid.html) also turns on:
 
 ```sh
 MISE_LOCKED_VERIFY_PROVENANCE=1 mise install

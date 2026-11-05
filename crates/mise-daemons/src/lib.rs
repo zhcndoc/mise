@@ -1,4 +1,5 @@
 //! Project daemons: custom pitchfork definitions and embedded database presets.
+pub mod container;
 pub mod host;
 #[macro_use]
 mod macros;
@@ -81,6 +82,10 @@ pub struct Daemon {
     /// The resolved allocation for a `port = "auto"` daemon, persisted so it
     /// survives a later change to the slot derivation.
     pub port: Option<PortClaim>,
+    /// A preset's named ports as resolved, by port name. Only those declared
+    /// with `ports.<name> = { auto = true }` are marked auto; the rest are the
+    /// numbers they ended up as, recorded for collision reporting.
+    pub named_ports: IndexMap<String, PortClaim>,
     /// The hostname pitchfork's proxy routes to this daemon, unless it set
     /// `proxy = false`. Unlike the port it does not move between checkouts.
     pub host: Option<String>,
@@ -484,22 +489,86 @@ pub fn load(files: &ConfigMap) -> Result<DaemonSet> {
     // Keyed by the canonical root, because that is what the port was derived
     // from: two roots reaching one directory through different paths resolve to
     // one port, and comparing the paths as written would call them distinct.
-    let mut claimed_ports: BTreeMap<(PathBuf, u16), String> = BTreeMap::new();
+    //
+    // A preset's named ports take part when they are `auto`: the daemon asked
+    // for a slot-derived number, so a clash with a sibling is a mistake in the
+    // declarations. A named port left at its default or fixed by hand is not
+    // compared, as before, so a config that loaded keeps loading.
+    let mut claimed_ports: BTreeMap<(PathBuf, u16), Vec<PortUse<'_>>> = BTreeMap::new();
     for daemon in set.daemons.values() {
-        let Some(claim) = daemon.port else {
-            continue;
-        };
         let root = canonical_root(&daemon.root);
-        if let Some(other) = claimed_ports.insert((root, claim.port), daemon.name.clone())
-            && other != daemon.name
-        {
-            bail!(
-                "daemons {other} and {} both use port {} in {}; give one of them its own port, or a different `base` if they use port = \"auto\"",
-                daemon.name,
-                claim.port,
-                daemon.root.display()
-            );
+        let primary = daemon.port.map(|claim| PortUse {
+            port: claim.port,
+            daemon: &daemon.name,
+            root: &daemon.root,
+            what: "port".into(),
+            kind: PortKind::Primary,
+        });
+        let named = daemon.named_ports.iter().map(|(key, claim)| PortUse {
+            port: claim.port,
+            daemon: &daemon.name,
+            root: &daemon.root,
+            what: format!("ports.{key}"),
+            // A container (the only daemon besides a preset with named ports) lists
+            // every port it publishes, fixed or allocated, and a fixed one clashing
+            // with a sibling fails to bind just the same. Presets keep the old rule.
+            kind: if claim.is_auto() || daemon.preset.is_none() {
+                PortKind::AutoNamed
+            } else {
+                PortKind::PlainNamed
+            },
+        });
+        for claimant in primary.into_iter().chain(named) {
+            claimed_ports
+                .entry((root.clone(), claimant.port))
+                .or_default()
+                .push(claimant);
         }
+    }
+    for ((_, port), claimants) in &claimed_ports {
+        for (i, later) in claimants.iter().enumerate() {
+            if let Some(earlier) = claimants[..i].iter().find(|e| e.conflicts_with(later)) {
+                bail!(
+                    "daemons {} ({}) and {} ({}) both use port {port} in {}; give one of them its own port, or a different `base` if it uses an automatic port",
+                    earlier.daemon,
+                    earlier.what,
+                    later.daemon,
+                    later.what,
+                    later.root.display()
+                );
+            }
+        }
+    }
+    // A container's `ports.http` is exported as `<NAME>_HTTP_PORT`, which is also the
+    // primary port of a daemon called `<name>-http`. The two are collected by
+    // different checks while loading, so compare the finished exports: a variable
+    // two daemons would set to different ports is withheld from both.
+    let mut exporters: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for daemon in set
+        .daemons
+        .values()
+        .filter(|d| !d.imported && d.preset.is_none())
+    {
+        for var in daemon.exports.keys().filter(|var| var.ends_with("_PORT")) {
+            let owners = exporters.entry(var.clone()).or_default();
+            if !owners.contains(&daemon.name.as_str()) {
+                owners.push(&daemon.name);
+            }
+        }
+    }
+    let clashing: BTreeMap<String, Vec<String>> = exporters
+        .into_iter()
+        .filter(|(_, owners)| owners.len() > 1)
+        .map(|(var, owners)| (var, owners.into_iter().map(str::to_owned).collect()))
+        .collect();
+    for (var, owners) in &clashing {
+        warn_once!(
+            "[daemons] {} would all export {var}, so none of them exports it. Rename one of them.",
+            owners.join(", ")
+        );
+    }
+    for daemon in set.daemons.values_mut().filter(|d| !d.imported) {
+        daemon.exports.retain(|var, _| !clashing.contains_key(var));
     }
     // A preset's exports are its declared interface; `<NAME>_PORT` and
     // `<NAME>_URL` are a convenience derived from a name. When a custom
@@ -635,6 +704,37 @@ impl LoadState {
     }
 }
 
+/// How a resolved port was asked for, which decides what it is compared with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PortKind {
+    /// The daemon's own `port`, compared with every other daemon's.
+    Primary,
+    /// A named port declared `{ auto = true }`, or any port a container publishes.
+    AutoNamed,
+    /// A named port left at the preset default or fixed by hand.
+    PlainNamed,
+}
+
+struct PortUse<'a> {
+    port: u16,
+    daemon: &'a str,
+    root: &'a Path,
+    what: String,
+    kind: PortKind,
+}
+
+impl PortUse<'_> {
+    /// Two primary ports have always been compared; a named port is compared
+    /// only when it was allocated, so a config whose default or hand-set named
+    /// ports happen to overlap keeps loading, as it did before `auto` named ports.
+    fn conflicts_with(&self, other: &Self) -> bool {
+        self.daemon != other.daemon
+            && ((self.kind == PortKind::Primary && other.kind == PortKind::Primary)
+                || self.kind == PortKind::AutoNamed
+                || other.kind == PortKind::AutoNamed)
+    }
+}
+
 /// Turn one declaration into a daemon owned by `root`.
 fn build(
     name: &str,
@@ -677,6 +777,16 @@ fn build(
     let init = take_init(&mut table, name)?;
     let task = take_string(&mut table, "task")?;
     let args = take_args(&mut table, name)?;
+    // `image` makes this a container daemon: mise writes its `run` below.
+    let container = container::take(name, &mut table)?;
+    if container.is_some() {
+        if preset.is_some() {
+            bail!("[daemons.{name}] cannot combine image with preset");
+        }
+        if task.is_some() || table.contains_key("run") {
+            bail!("[daemons.{name}] cannot combine image with run or task");
+        }
+    }
     if preset.is_some() {
         // Name the key actually present; `args` without `task` is a
         // different mistake from `preset` with `task`.
@@ -790,10 +900,16 @@ fn build(
         }
     }
     // A task daemon's generated `run` may be an argv; one declared with `run` is a command line.
-    if task.is_none() && table.get("run").and_then(toml::Value::as_str).is_none() {
-        bail!("[daemons.{name}] requires run, task, preset, or project");
+    if task.is_none()
+        && container.is_none()
+        && table.get("run").and_then(toml::Value::as_str).is_none()
+    {
+        bail!("[daemons.{name}] requires run, task, image, preset, or project");
     }
     let claim = match request {
+        Some(PortRequest::Passthrough(_)) if container.is_some() => bail!(
+            "[daemons.{name}].port must be an integer or {{ auto = true, base = <port> }}; pitchfork's structured port is not available on container daemons"
+        ),
         Some(PortRequest::Passthrough(value)) => {
             table.insert("port".into(), value);
             None
@@ -804,8 +920,49 @@ fn build(
         }
         None => None,
     };
-    if let Some(claim) = claim {
-        table.insert("port".into(), expected_port(claim.port));
+    let mut data_dir = None;
+    let mut container_ports = IndexMap::new();
+    if let Some(container) = container {
+        let namespace = runtime::resolve_namespace(&root, Some(settings))?;
+        let env = table
+            .get("env")
+            .and_then(toml::Value::as_table)
+            .map(|env| env.keys().cloned().collect())
+            .unwrap_or_default();
+        let built = container.build(container::Context {
+            name,
+            root: &root,
+            namespace: &namespace,
+            claim,
+            env,
+            default_data_dir: state_dir(&root).join("data").join(name),
+        })?;
+        container::render_probes(name, &mut table, &built.probe_vars)?;
+        // The command is a POSIX shell script. Loading must still succeed on Windows,
+        // where `mise env` reads this project too; only starting the daemon fails.
+        let run = if cfg!(windows) {
+            format!(
+                "echo mise: daemon {name} cannot start: container daemons are not supported on Windows 1>&2 & exit /b 1"
+            )
+        } else {
+            built.run
+        };
+        table.insert("run".into(), toml::Value::String(run));
+        // pitchfork stops after 5s by default, in the middle of `<runtime> stop`.
+        table
+            .entry("stop_signal".to_string())
+            .or_insert_with(container::stop_signal);
+        data_dir = built.data_dir;
+        container_ports = built.ports;
+    }
+    // Every published port is reserved, so a taken one fails the start by name.
+    let expect: Vec<u16> = claim
+        .iter()
+        .map(|claim| claim.port)
+        .chain(container_ports.values().map(|claim| claim.port))
+        .collect();
+    if !expect.is_empty() {
+        table.insert("port".into(), expected_ports(&expect));
     }
     let proxy = urls::proxy_settings();
     let urls::Applied { host, .. } = urls::apply(
@@ -847,6 +1004,25 @@ fn build(
             }
         }
     }
+    // A container's named ports are exported like a preset's, as
+    // `<NAME>_<PORT>_PORT`.
+    if !imported
+        && !container_ports.is_empty()
+        && let Some(base) = env_var_base(name)
+    {
+        for (key, port) in &container_ports {
+            let var = presets::named_port_var(&base, key);
+            if let Some(other) = state.port_vars.insert(var.clone(), name.to_string())
+                && other != name
+            {
+                warn_once!(
+                    "[daemons] {other} and {name} both map to {var}; their names differ only by punctuation, so neither port is exported. Rename one of them."
+                );
+                state.ambiguous.insert(var.clone());
+            }
+            exports.entry(var).or_insert_with(|| port.port.to_string());
+        }
+    }
     table
         .entry("mise".to_string())
         .or_insert(toml::Value::Boolean(true));
@@ -863,13 +1039,14 @@ fn build(
         root,
         table,
         preset: None,
-        data_dir: None,
+        data_dir,
         task,
         tool: None,
         provider: None,
         exports,
         imported,
         port: claim,
+        named_ports: container_ports,
         host,
     })
 }
@@ -2029,6 +2206,160 @@ mod tests {
             set.daemons["api"].table["port"]["expect"][0].as_integer(),
             Some(3000)
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn container_daemons_are_custom_daemons_with_a_generated_run() {
+        let config = files(&[(
+            "/project/mise.toml",
+            "[daemons.crdb]\nimage = 'cockroachdb/cockroach:v25.1.0'\ncommand = 'start-single-node --insecure'\nport = { auto = true, base = 26257 }\nports.http = { container = 8080, auto = true, base = 27000 }\nready_cmd = '{{ runtime }} exec {{ container }} true'\nenv = { A = 'b' }\n",
+        )]);
+        let daemon = &load(&config).unwrap().daemons["crdb"];
+        let table = &daemon.table;
+        let run = table["run"].as_str().unwrap();
+        assert!(run.contains("-p 127.0.0.1:26257:26257"), "{run}");
+        assert!(run.contains("-p 127.0.0.1:27000:8080"), "{run}");
+        assert!(run.contains(" -e A "), "{run}");
+        assert!(run.contains("start-single-node --insecure"), "{run}");
+        assert!(run.contains("name='mise-project-"), "{run}");
+        // Reserved with pitchfork, and exported like a preset's ports.
+        assert_eq!(table["port"]["expect"][0].as_integer(), Some(26257));
+        assert_eq!(table["port"]["expect"][1].as_integer(), Some(27000));
+        assert_eq!(daemon.exports["CRDB_PORT"], "26257");
+        assert_eq!(daemon.exports["CRDB_HTTP_PORT"], "27000");
+        // Container keys never reach pitchfork, and the probe knows the container.
+        for key in ["image", "command", "ports", "runtime", "volumes"] {
+            assert!(!table.contains_key(key), "{key}");
+        }
+        let ready = table["ready_cmd"].as_str().unwrap();
+        assert!(ready.contains(" exec mise-project-"), "{ready}");
+        assert_eq!(table["mise"].as_bool(), Some(true));
+        // pitchfork waits longer than the runtime's own grace period before SIGKILL.
+        assert_eq!(table["stop_signal"]["signal"].as_str(), Some("SIGTERM"));
+        assert_eq!(table["stop_signal"]["timeout"].as_str(), Some("15s"));
+        let config = files(&[(
+            "/project/mise.toml",
+            "[daemons.db]\nimage = 'x'\nstop_signal = 'SIGINT'\n",
+        )]);
+        let set = load(&config).unwrap();
+        assert_eq!(
+            set.daemons["db"].table["stop_signal"].as_str(),
+            Some("SIGINT")
+        );
+    }
+
+    #[test]
+    fn container_named_ports_take_part_in_collision_checks() {
+        let two = |second: &str| {
+            format!(
+                "[daemons.a]\nimage = 'x'\nports.http = {{ container = 80, auto = true, base = 27000 }}\n[daemons.b]\nimage = 'x'\n{second}"
+            )
+        };
+        let err = load(&files(&[(
+            "/project/mise.toml",
+            &two("ports.http = { container = 80, auto = true, base = 27000 }\n"),
+        )]))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("both use port 27000"), "{err}");
+        // A different base is fine.
+        load(&files(&[(
+            "/project/mise.toml",
+            &two("ports.http = { container = 80, auto = true, base = 27100 }\n"),
+        )]))
+        .unwrap();
+    }
+
+    #[test]
+    fn container_fixed_ports_are_checked_against_siblings_and_exports() {
+        let err = load(&files(&[(
+            "/project/mise.toml",
+            "[daemons.a]\nrun = 'x'\nport = 5000\n[daemons.b]\nimage = 'x'\nports.http = 5000\n",
+        )]))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("both use port 5000"), "{err}");
+        // `api`'s `http` port and `api-http`'s own port would both be API_HTTP_PORT.
+        let set = load(&files(&[(
+            "/project/mise.toml",
+            "[daemons.api]\nimage = 'x'\nports.http = 8080\n[daemons.api-http]\nrun = 'x'\nport = 3000\n",
+        )]))
+        .unwrap();
+        for daemon in set.daemons.values() {
+            assert!(
+                !daemon.exports.contains_key("API_HTTP_PORT"),
+                "{}",
+                daemon.name
+            );
+        }
+    }
+
+    #[test]
+    fn container_daemons_do_not_combine_with_other_forms() {
+        for body in [
+            "[daemons.db]\nimage = 'x'\nrun = 'y'\n",
+            "[daemons.db]\nimage = 'x'\ntask = 'y'\n",
+            "[daemons.db]\nimage = 'x'\npreset = 'postgres'\nversion = '18'\n",
+            "[daemons.db]\nrun = 'y'\nvolumes = ['a:b']\n",
+            "[daemons.db]\nimage = 'x'\nport = 'auto'\n",
+            "[daemons.db]\nimage = 'x'\nport = { expect = [1] }\n",
+        ] {
+            assert!(
+                load(&files(&[("/project/mise.toml", body)])).is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn container_daemons_get_their_own_ports_and_name_per_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("project");
+        std::fs::create_dir_all(primary.join(".git")).unwrap();
+        std::fs::write(primary.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let worktree = |name: &str| {
+            let private = primary.join(".git").join("worktrees").join(name);
+            std::fs::create_dir_all(&private).unwrap();
+            std::fs::write(private.join("commondir"), "../..\n").unwrap();
+            let root = tmp.path().join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(
+                root.join(".git"),
+                format!("gitdir: {}\n", private.display()),
+            )
+            .unwrap();
+            root
+        };
+        let body = "[daemons.db]\nimage = 'postgres:18'\nport = { auto = true, base = 5432 }\nports.admin = { container = 9000, auto = true, base = 9000 }\n";
+        let load_in = |root: &Path| {
+            let path = root.join("mise.toml");
+            let set = load(&files(&[(path.to_str().unwrap(), body)])).unwrap();
+            set.daemons["db"].clone()
+        };
+        let main = load_in(&primary);
+        assert_eq!(main.exports["DB_PORT"], "5432");
+        assert_eq!(main.exports["DB_ADMIN_PORT"], "9000");
+        let (a, b) = (worktree("wt-a"), worktree("wt-b"));
+        let (da, db) = (load_in(&a), load_in(&b));
+        let name = |d: &Daemon| {
+            let run = d.table["run"].as_str().unwrap();
+            run.lines()
+                .find(|l| l.starts_with("name="))
+                .unwrap()
+                .to_string()
+        };
+        // A worktree's name carries its own root, so two checkouts never share a container.
+        assert_ne!(name(&main), name(&da));
+        assert_ne!(name(&da), name(&db));
+        for d in [&da, &db] {
+            let port: u16 = d.exports["DB_PORT"].parse().unwrap();
+            let admin: u16 = d.exports["DB_ADMIN_PORT"].parse().unwrap();
+            assert!(port > 5432 && admin > 9000);
+            // The named port shares the primary's slot.
+            assert_eq!(port - 5432, admin - 9000);
+        }
     }
 
     /// A project whose daemons another project can import. The filename has to
@@ -3372,6 +3703,75 @@ three = ["two", "c"]
             set.daemons["main"].port.unwrap().port,
             set.daemons["analytics"].port.unwrap().port
         );
+    }
+
+    /// An `auto` named port takes part in the same check as the primary ports:
+    /// a sibling already holding the number it resolves to is named in the error.
+    #[test]
+    fn an_auto_named_port_cannot_land_on_a_sibling_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (primary, _) = checkout_pair(tmp.path());
+        let load_body = |body: &str| {
+            load(&files(&[(
+                primary.join("mise.toml").to_str().unwrap(),
+                body,
+            )]))
+        };
+        // Distinct bases keep every port apart, and each export carries its own.
+        let set = load_body(
+            "[daemons.cockroach]\npreset = 'cockroachdb'\nversion = '26'\n\
+             [daemons.cockroach.port]\nauto = true\nbase = 26258\n\
+             [daemons.cockroach.ports]\nhttp_port = { auto = true, base = 27000 }\n\
+             [daemons.nats]\npreset = 'nats'\nversion = '2'\n\
+             [daemons.nats.port]\nauto = true\nbase = 4223\n\
+             [daemons.nats.ports]\nmonitor_port = { auto = true, base = 28000 }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            set.daemons["cockroach"].exports["COCKROACH_HTTP_PORT"],
+            "27000"
+        );
+        assert_eq!(set.daemons["nats"].exports["NATS_MONITOR_PORT"], "28000");
+
+        for (body, expected) in [
+            // The same named base for two daemons of one project.
+            (
+                "[daemons.a]\npreset = 'cockroachdb'\nversion = '26'\nport = 26300\n\
+                 [daemons.a.ports]\nhttp_port = { auto = true, base = 27000 }\n\
+                 [daemons.b]\npreset = 'cockroachdb'\nversion = '26'\nport = 26301\n\
+                 [daemons.b.ports]\nhttp_port = { auto = true, base = 27000 }\n",
+                "both use port 27000",
+            ),
+            // An auto named port against another daemon's primary port.
+            (
+                "[daemons.a]\npreset = 'cockroachdb'\nversion = '26'\n\
+                 [daemons.a.ports]\nhttp_port = { auto = true, base = 4222 }\n\
+                 [daemons.b]\npreset = 'nats'\nversion = '2'\nport = 'auto'\n",
+                "both use port 4222",
+            ),
+            // And against another daemon's fixed named port.
+            (
+                "[daemons.a]\npreset = 'cockroachdb'\nversion = '26'\n\
+                 [daemons.a.ports]\nhttp_port = { auto = true, base = 9000 }\n\
+                 [daemons.b]\npreset = 'nats'\nversion = '2'\nport = 4300\n\
+                 [daemons.b.ports]\nmonitor_port = 9000\n",
+                "both use port 9000",
+            ),
+        ] {
+            let err = load_body(body).unwrap_err().to_string();
+            assert!(err.contains(expected), "{body:?} produced {err}");
+            assert!(err.contains("ports.http_port"), "{err}");
+        }
+
+        // Without an `auto` named port nothing changes: two cockroach daemons
+        // that both keep the default http_port still load, as before.
+        let set = load_body(
+            "[daemons.a]\npreset = 'cockroachdb'\nversion = '26'\nport = 26300\n\
+             [daemons.b]\npreset = 'cockroachdb'\nversion = '26'\nport = 26301\n",
+        )
+        .unwrap();
+        assert_eq!(set.daemons["a"].exports["A_HTTP_PORT"], "8080");
+        assert_eq!(set.daemons["b"].exports["B_HTTP_PORT"], "8080");
     }
 
     /// A group covers the daemons its project declares. Naming one reached

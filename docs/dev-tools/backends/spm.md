@@ -76,7 +76,10 @@ mise exec -- swift-testing-revolutionary --help
 
 ### `api_url` {#api-url}
 
-代码平台的 API URL。对于自托管软件包，请填写完整软件包 URL，以便源码构建从该服务器克隆。mise 会根据主机名推导 API URL：GitHub 使用 `https://<host>/api/v3`，GitLab 使用 `https://<host>/api/v4`。如果 API 位于其他地址，请设置 `api_url`：
+The provider's API URL. For a self-hosted package, write the full package URL,
+so that source builds clone from that server. mise derives the API URL from its
+host, `https://<host>/api/v3` for GitHub or `https://<host>/api/v4` for GitLab;
+set `api_url` when the API lives somewhere else. 该主机会收到你的 GitHub 或 GitLab 令牌，因此，通过此方式指定 github.com 或 gitlab.com 之外主机上软件包的配置需要[信任](/cli/trust.html)，与 `api_url` 相同。[安全模式](/security.html#safe-mode)会拒绝此类软件包，除非设置了 `api_url`：
 
 ```toml
 [tools]
@@ -93,6 +96,8 @@ mise exec -- swift-testing-revolutionary --help
 ### `artifactbundle`
 
 是否使用 SwiftPM 制品包。未设置时，mise 会先尝试使用匹配的 `*.artifactbundle.zip` 发行版资源，如果没有匹配项，则从源码构建。设置 `artifactbundle = true` 可强制使用制品包：如果没有与当前 Swift 目标三元组匹配的制品包，安装就会失败。设置 `artifactbundle = false` 可始终从源码构建；此设置与 [`spm.artifactbundle_only`](/configuration/settings.html#spm.artifactbundle_only) 冲突。
+
+从 bundle 安装时会将其校验和记录到 `mise.lock`。只要锁文件为当前平台记录了校验和，若发布中缺少 bundle、校验和不匹配，或 bundle 没有当前 Swift 目标所需的二进制文件，安装就会失败，而不会回退到源码构建。设置 `artifactbundle = false` 可改为从源码构建。
 
 ```toml
 [tools]
@@ -122,7 +127,14 @@ mise exec -- swift-testing-revolutionary --help
 
 ### `install_command` {#install-command}
 
-mise 会在软件包检出目录中运行此命令，以替代查找可执行产品和运行 `swift build --product`。命令通过 mise 的默认内联 Shell 运行，并可使用[`install_env`](#install-env)、由 mise 管理且位于 `PATH` 中的 Swift，以及设为安装目录的 `PREFIX` 和 `MISE_TOOL_INSTALL_PATH`。此项仅适用于源码构建，且不能与 `filter_bins` 同时使用。除非在此处进行配置，否则 mise 不会运行软件包的 Makefile 或安装脚本。
+A command to run in the checked-out package directory instead of discovering
+executable products and running `swift build --product`. It runs with mise's
+default inline shell and gets [`install_env`](#install-env), the Swift that mise
+manages on `PATH`, and `PREFIX` and `MISE_TOOL_INSTALL_PATH` set to the install
+directory. It applies
+only to source builds and cannot be combined with `filter_bins`. mise never runs
+a package's Makefile or install script unless you configure it here.
+[安全模式](/security.html#safe-mode)会拒绝安装设置了此项的工具。
 
 如果软件包除可执行文件外还需安装其他内容（例如动态库或通过软件包自身 `make install` 安装的 Swift 模块），请使用此项：
 
@@ -133,7 +145,16 @@ mise 会在软件包检出目录中运行此命令，以替代查找可执行产
 
 某些安装脚本即使 `swift build` 失败也会返回成功，因此 mise 会检查命令是否至少将一个可执行文件放入 `bin/`；如果没有，安装仍会失败。
 
-## 设置
+`danger-swift` 注册表简称会提供官方安装器选项，因此项目无需重复设置 `install_command`。在 macOS 上，安装会使用 `xcrun` 选定的 Swift 工具链，与执行 Dangerfile 时保持一致。还需要 Danger JS。若要通过 npm 后端进行全新安装，请分别声明 Node 和 Danger JS：
+
+```toml
+[tools]
+node = "24"
+danger-js = "13.0.10"
+danger-swift = "3.22.1"
+```
+
+## Settings
 
 <script setup>
 import Settings from '/components/settings.vue';

@@ -32,8 +32,7 @@ WinGet itself, and it reports WinGet failures unchanged.
 
 [`mise bootstrap remote`](/bootstrap/remote.html) needs a POSIX shell on the
 target and cannot drive a native Windows host, so run `mise bootstrap` on the
-Windows machine itself. For Scoop apps, use the
-[`scoop`](/bootstrap/packages/scoop.html) manager. Chocolatey is not supported.
+Windows machine itself. 安装 Scoop 应用时请使用 [`scoop`](/bootstrap/packages/scoop.html) 管理器；安装 Chocolatey 软件包时请使用 [`choco`](/bootstrap/packages/choco.html) 管理器。
 
 ## Package names
 

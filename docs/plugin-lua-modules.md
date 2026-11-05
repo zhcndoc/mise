@@ -29,11 +29,12 @@ local http = require("http")
 
 | 字段                    | 值                                                                                                                          |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `RUNTIME.osType`        | `linux`、`darwin` 或 `windows`                                                                                              |
-| `RUNTIME.archType`      | `amd64`、`arm64` 或其他体系结构名称，例如 `x86` 或 `riscv64`                                                                |
-| `RUNTIME.envType`       | Linux 上的 `gnu` 或 `musl`，取自 [`libc`](/configuration/settings.html#libc) 设置或检测结果；其他系统上为 `nil`             |
-| `RUNTIME.version`       | mise 实现的 vfox API 版本（`0.6.0`），并非 mise 版本                                                                        |
-| `RUNTIME.pluginDirPath` | 插件的安装目录                                                                                                              |
+| `RUNTIME.osType`        | `linux`, `darwin` or `windows`                                                                                              |
+| `RUNTIME.archType`      | `amd64`, `arm64`, or another architecture name such as `x86` or `riscv64`                                                   |
+| `RUNTIME.envType`       | `gnu` or `musl` on Linux, from the [`libc`](/configuration/settings.html#libc) setting or detection; `nil` on other systems |
+| `RUNTIME.version`       | The vfox API version mise implements (`0.6.0`), not the mise version                                                        |
+| `RUNTIME.pluginDirPath` | The plugin's installed directory                                                                                            |
+| `RUNTIME.cacheDirPath`  | 插件专用的[持久缓存目录](#plugin-cache-dir)                                                            |
 
 ```lua
 local platform = {
@@ -45,7 +46,13 @@ local platform = {
 
 当 [`mise lock`](/cli/lock.html) 记录其他平台时，会针对每个平台运行 `PreInstall`，并由 `RUNTIME` 描述相应平台，此时 `envType` 为 `nil`。请使用 `RUNTIME` 选择制品。在钩子中运行 `uname` 得到的是宿主机信息，可能会为正在锁定的平台选错下载文件。
 
-### 加载自己的代码
+#### 持久缓存目录 {#plugin-cache-dir}
+
+`RUNTIME.cacheDirPath` 是 mise 缓存目录（`$MISE_CACHE_DIR/plugins/<plugin-name>`）下的插件专属目录。mise 会在运行 hook 前创建该目录（若创建失败，`RUNTIME.cacheDirPath` 为 `nil`）。插件中的每个 hook 都会看到相同路径，因此服务多个工具的后端插件可以将大型下载保存一次，而不必为每个工具重复获取。
+
+与 `pluginDirPath` 不同，该目录在重新安装插件后仍会保留。[`mise cache clear`](/cli/cache/clear.html) 会删除该目录，因此插件必须能够随时应对目录为空或不存在的情况。
+
+### Loading your own code
 
 `require` 会先在插件根目录中查找 `NAME.lua`，再依次查找 `hooks/` 和 `lib/`，因此 `require("util")` 会加载 `lib/util.lua`。请将共用辅助函数放在 `lib/` 中。
 
@@ -117,6 +124,7 @@ mise 会根据这些文件判断插件类型。包含 `hooks/backend_install.lua
 | [`semver`](#semver-module)     | `compare`, `parse`, `sort`, `sort_by`                                         |
 | [`html`](#html-module)         | `parse`                                                                       |
 | [`env`](#environment-module)   | `setenv`                                                                      |
+| [`mise.cache`](#cache-module)  | `watch_files`、`disable`                                                      |
 | [`log`](#log-module)           | `trace`, `debug`, `info`, `warn`, `error`                                     |
 
 ## 错误处理
@@ -243,7 +251,10 @@ end
 
 ## `archiver` {#archiver-module}
 
-`archiver.decompress(archive, destination[, options])` 会解压归档文件。它根据文件名判断格式，支持 `.tar.gz`、`.tar.xz`、`.tar.bz2` 和 `.zip`。其他扩展名（包括 `.tgz`）都会导致错误。此函数不会下载或验证归档文件。
+`archiver.decompress(archive, destination[, options])` extracts an archive. It
+picks the format from the file name: `.tar.gz`, `.tar.xz`, `.tar.bz2` or
+`.zip`. Any other name, including `.tgz`, raises an error. It does not download
+也不会验证归档。如果目标目录中的符号链接指向目录之外，会报错。
 
 ```lua
 local archiver = require("archiver")
@@ -448,6 +459,24 @@ cmd.exec("make", { env = { CC = "clang" } })
 ```
 
 若要向用户的 `PATH` 添加目录，请在 `MisePath` 中将每个目录作为独立条目返回，并使用 `file.join_path` 构造路径；也可以从 `EnvKeys` 或 `BackendExecEnv` 返回 `PATH` 键。mise 会使用宿主机对应的分隔符拼接这些路径，因此要兼容 Windows 的插件不要构造以冒号分隔的字符串。
+
+## `mise.cache` {#cache-module}
+
+mise 会缓存 `EnvKeys` 和 `BackendExecEnv` 的结果，只有依赖项发生变化时才重新运行 hook；详见[缓存](/tool-plugin-development.html#envkeys-caching)。mise 已会跟踪 hook 通过 `os.getenv` 读取的变量。请在 hook 中调用以下函数，指定结果依赖的其他内容：
+
+| Function             | Effect                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `watch_files(paths)` | 当指定的文件或目录发生更改、新建或删除时重新运行 hook。相对路径以当前目录为基准解析，结果也仅在该目录中使用 |
+| `disable()`          | 不缓存此结果；每次都运行 hook |
+
+在其他 hook 中，这两个函数都不起作用。该模块是 mise 的扩展功能，因此若插件也要在 vfox CLI 或较旧版本的 mise 中运行，请使用 `pcall` 加载：
+
+```lua
+local ok, cache = pcall(require, "mise.cache")
+if ok then
+    cache.watch_files({ file.join_path(os.getenv("PWD"), "Pipfile.lock") })
+end
+```
 
 ## `log` {#log-module}
 

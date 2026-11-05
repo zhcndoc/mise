@@ -22,7 +22,12 @@ socialDescription: "从你维护的来源链接、复制或渲染 dotfiles。"
 
 相对 `source` 路径以声明该条目的配置文件所在目录为起点。例如，`~/.config/mise/config.toml` 中的 `source = "ssh/config"` 指向 `~/.config/mise/ssh/config`。像上例 `~/.config/nvim` 条目这样的字符串值表示来源，并使用 [`dotfiles.default_mode`](/configuration/settings.html#dotfiles.default_mode) 指定的模式。
 
-若要检查配置，可运行 `mise dot apply --dry-run` 预览（添加 `--verbose` 可查看内容差异），或运行 [`mise dot diff`](/cli/dotfiles/diff.html)；使用 `mise dot apply` 应用，并通过 [`mise dot status`](/cli/dotfiles/status.html) 确认。已匹配的目标会被跳过。[配置参考](/dotfiles/reference.html#entry-keys)列出了所有条目键。
+To check your work, preview with `mise dot apply --dry-run` (add `--verbose`
+to see content diffs) or [`mise dot diff`](/cli/dotfiles/diff.html), apply with
+`mise dot apply`, and confirm with
+[`mise dot status`](/cli/dotfiles/status.html). Apply skips targets that
+already match. `mise dot diff` 会读取配置中声明的所有条目，而不仅是通过 `mise dot add` 创建的条目。它会显示每个将发生变化的目标的差异。如果没有需要更改的内容，整文件条目会显示 `files: all files are applied`，[编辑条目](/dotfiles/edits.html)会显示 `edits: all edits are applied`；`track` 条目会跳过，因为它们由 [`mise dot history diff`](/cli/dotfiles/history/diff.html) 处理。
+[reference](/dotfiles/reference.html#entry-keys) lists every entry key.
 
 ## 模式 {#modes}
 
@@ -30,11 +35,12 @@ socialDescription: "从你维护的来源链接、复制或渲染 dotfiles。"
 
 | 模式           | 应用时的行为                                                      | 适用场景                                                              |
 | -------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `symlink`      | 为文件或整个目录创建一个链接。                                    | 希望通过目标进行的编辑能修改来源时。                                  |
-| `symlink-each` | 创建目录，并为其中每个文件分别创建链接。                          | 目标目录还包含需要由 mise 保留的其他文件时。                          |
-| `copy`         | 复制文件或目录，并覆盖目标中匹配的文件。                          | 应用程序需要普通文件，或会自行写入配置时。                            |
-| `template`     | 使用[模板引擎](/templates.html)渲染来源文件。                    | 输出取决于特定机器上的变量时。                                        |
-| `absent`       | 删除目标处的文件或符号链接；不接受来源。                          | 不再使用的文件不应在任何机器上存在时。                                |
+| `symlink`      | Create one link to a file or a whole directory.                   | Edits through the target should change the source.                    |
+| `symlink-each` | Create directories and link each file within them.                | The target directory also holds files you want mise to leave alone.   |
+| `copy`         | Copy a file or directory, overwriting matching files.             | The application needs a regular file or writes its own configuration. |
+| `template`     | Render a source file with the [template engine](/templates.html). | The output depends on machine-specific variables.                     |
+| `absent`       | Remove a file or symlink at the target; takes no source.          | A file you no longer use should not exist on any machine.             |
+| `fnox`         | 将 fnox 为目标路径保存的文件写入目标位置；无需来源。 | 文件包含不应进入版本库的机密信息。 |
 
 `mode = "track"` 和 `mode = "track-local"` 不是部署模式：它们会在文件原处保存历史记录，不需要来源。详见[Dotfiles 历史记录](/dotfiles/history.html)。在 Windows 上，除非启用 [`dotfiles.windows_symlinks`](/configuration/settings.html#dotfiles.windows_symlinks)，否则 `symlink` 创建链接失败时会回退为复制，而 `symlink-each` 会复制文件；详见 [Windows](#windows)。
 
@@ -53,7 +59,26 @@ socialDescription: "从你维护的来源链接、复制或渲染 dotfiles。"
 应用 `copy` 条目会覆盖直接在目标文件中进行的更改。请先使用 `mise dot add` 将更改保存到来源；详见[接管文件并捕获编辑](#capturing-changes)。
 :::
 
-## 模板 {#templates}
+## 仅在文件不存在时创建 {#create-if-missing}
+
+`copy`、`template` 和内联 `content` 条目每次 apply 都会覆盖目标文件。若要初始化一个之后会在本机编辑的文件（例如本地 API 令牌模板），请设置 `create_if_missing = true`：
+
+```toml
+[dotfiles]
+"~/.config/mise/conf.d/private.local.toml" = { source = "templates/private.toml", mode = "copy", permissions = "0600", create_if_missing = true }
+```
+
+- 如果目标不存在，apply 会创建文件并设置 `permissions`。
+- 如果目标位置存在除目录以外的任何内容（包括符号链接），apply 都会原样保留，包括文件内容和权限。`status` 会将其报告为已应用，`diff` 不显示差异，因此你所做的修改不会被视为偏离。
+- 如果删除目标文件，下次 apply 会重新创建它。
+
+只要目标存在，就不会读取来源文件或渲染模板，因此即使删除了来源，`apply` 和 `status` 也不会失败。目标位置若存在目录，仍会视为[冲突](#conflicts)。`create_if_missing` 需要文件来源，因此不能与目录来源、`symlink`、`symlink-each`、`absent`、`track` 或仅设置权限的条目组合使用。
+
+如果应用会重写文件，而你只需要管理其中部分键，更适合使用 [`merge`](/dotfiles/edits.html#merge) 条目：它只设置随项目提供的键，并保留其他内容。
+
+由于后续编辑过的文件并非由 mise 写入，`mise dot unapply` 默认会保留该文件；传入 `--force` 才会移除，详见[取消应用](#unapplying)。如果目标位于版本库中，请将其加入忽略规则，避免提交你添加的令牌。
+
+## Templates {#templates}
 
 每次应用时，`template` 条目都会使用 mise 的 [Tera 模板](/templates.html)渲染其来源：
 
@@ -121,9 +146,61 @@ mise 为目标创建的父目录在变为空目录后会随目标一并删除。
 "~/.config/example.conf" = { content = "enabled = true\n" }
 ```
 
-`content` 会替代 `source` 和 `mode`。它可以与 `permissions` 组合，但不能与 `source`、`mode`、`exclude`、`manifest`、`encrypt = true`、`remove_empty`、`dot_prefix`、`relative = true`、目标 `variants`、仅跟踪键 `include` 和 `allow_plaintext`，或编辑选项 `block`、`line`、`template` 和 `comment` 同时使用。[模式与键表](/dotfiles/reference.html#modes-and-keys)列出了所有条目类型的对比。
+`content` 会取代 `source` 和 `mode`。它可以与 `permissions` 和 [`create_if_missing`](#create-if-missing) 一起使用，但不能与 `source`、`mode`、`exclude`、`manifest`、
+`encrypt = true`, `remove_empty`, `dot_prefix`, `relative = true`, target
+`variants`, the track-only keys `include` and `allow_plaintext`, or the edit
+options `block`, `line`, `template`, and `comment`. The
+[modes and keys table](/dotfiles/reference.html#modes-and-keys) compares all
+entry kinds.
 
-## 权限 {#permissions}
+## 将文件存储在 fnox 中 {#fnox}
+
+`mode = "fnox"` 会部署由 [fnox](https://fnox.jdx.dev) 保存内容的文件，例如凭据文件，因此文件内容不会存放在 dotfiles 版本库中。fnox 使用与目标相同的路径作为文件标识，所以此条目不需要 `source`：
+
+```toml
+[dotfiles]
+"~/.npmrc" = { mode = "fnox" }
+```
+
+请先使用 fnox 1.44.0 或更高版本保存该文件。fnox 会通过 age 等提供程序加密文件，并将其保存在全局配置中：
+
+```sh
+mise use -g fnox
+fnox set --file ~/.npmrc
+```
+
+`mise dot apply` 会针对目标运行 `fnox get --file`，并以 `0600` 权限写入结果；如果 [`permissions`](#permissions) 设置了其他权限，则使用该设置。`mise dot edit ~/.npmrc` 会运行 `fnox edit --file`，并将修改保存到 fnox；再次 apply 即可部署修改。mise 要求 `fnox` 位于 `PATH` 中。如果变体选择了其他 `target`，fnox 会按该路径查找文件，因此请用 `fnox set --file` 将文件保存到对应路径。`mise dot add` 不会捕获 fnox 文件，以免将机密复制到 dotfiles 版本库中。
+
+从 fnox 读取文件时可能会出现提示，例如要求输入密码短语。`--dry-run` 会列出 fnox 条目但不读取文件；`mise dot diff` 会说明内容存在差异，但不会打印内容。与渲染模板一样，`mise dot status` 会读取文件进行比较。`mise oci build` 会跳过 fnox 条目，因为任何能够拉取镜像的人都可以读取镜像层。
+
+## 等待其他条目 {#depends}
+
+默认情况下，`mise dot apply` 会先规划所有条目，再开始写入。因此，模板或 [fnox](#fnox) 条目无法使用同一次 apply 创建的文件。`depends` 可让条目等待其他条目完成；值中按名称列出 dotfile 组，按目标路径列出整文件条目：
+
+```toml
+[dotfile_groups.secrets]
+root = "secrets"
+mode = "copy"
+target = "~/.config/fnox"
+
+[dotfiles]
+"~/.workrc" = { mode = "fnox", depends = ["secrets"] }
+"~/.npmrc" = { mode = "fnox", depends = ["~/.ssh/encryption_ed25519"] }
+"~/.ssh/encryption_ed25519" = { mode = "template", source = "ssh/encryption_ed25519.tera" }
+```
+
+mise 会先写入依赖项，再渲染或读取依赖它们的条目。没有设置 `depends` 的条目会在第一轮写入。
+
+- 组可以依赖其他组和条目。组中的条目会等待组依赖，以及各自声明的依赖。
+- 如果 apply 未包含某个依赖项（例如 `mise dot apply <target>` 未指定该条目），该依赖会视为已应用。
+- 名称既不是组也不是条目目标路径时会报错；存在循环依赖时也会报错。
+- 某一轮失败后，mise 会停止执行：之前轮次写入的内容会保留，并列出因此未应用的条目。
+- `--dry-run` 会列出依赖其他条目的项目，但不会渲染或读取它们；每轮只显示一次确认提示。
+- 编辑条目和 `mode = "track"` 条目不能设置 `depends`。
+
+`mise dot status` 会读取磁盘上的条目，因此在首次 apply 前，如果模板依赖尚不存在的文件，状态检查会报告该问题。
+
+## Permissions {#permissions}
 
 将 `permissions` 设为八进制字符串，可为目标指定权限，覆盖其原本会获得的权限。该设置可用于来源为文件的 `copy` 和 `template` 条目，以及内联 `content`：
 
@@ -159,15 +236,31 @@ mise 为目标创建的父目录在变为空目录后会随目标一并删除。
 "~/.oldrc" = { mode = "absent" }
 ```
 
-如果 `~/.oldrc` 存在，`mise dot apply` 会将其删除；文件不存在时则不执行操作。该条目本身就是删除指令，因此 mise 会直接移除普通文件或符号链接，而不比较其内容。它只会删除符号链接本身，不会删除链接指向的文件或目录。`mise dot apply --dry-run` 会输出 `rm <target>`；文件存在时，`mise dot status` 会将条目标记为 `would remove`，文件删除后则标记为 `absent`。
+`mise dot apply` deletes `~/.oldrc` if it exists and does nothing once it is
+gone. The entry is the instruction, so mise removes a regular file or a symlink
+without comparing its content. It removes a symlink itself, never the file or
+directory the link points to. `mise dot apply --dry-run` prints
+`rm <target>`, and `mise dot status` shows the entry as `would remove` while
+the file is there and `absent` once it is gone.
 
-`absent` 条目绝不会删除目录，或套接字、FIFO 等既非普通文件也非符号链接的内容。遇到这类目标时，即使使用 `--force`，`status` 和 `apply` 仍会报告包含路径的错误，需要你手动删除。唯一例外是 mise 在先前条目写入此目标时创建的父目录：目标文件删除且目录变空后，该目录也会一并删除，规则与[模板](#remove-empty)相同。
+An `absent` entry never removes a directory, or anything else that is not a
+regular file or symlink, such as a socket or FIFO. For those targets, `status`
+and `apply` report an error naming the path, even with `--force`, and you
+remove it yourself. The one exception is a parent directory that mise created
+when an earlier entry wrote this target: once the file is gone and the
+directory is empty, it goes too, as [for templates](#remove-empty).
 
-`absent` 条目不接受 `source`、`content`、`exclude`、`manifest`、`permissions`、`encrypt = true`、`remove_empty`、`relative = true`、`dot_prefix`，也不接受 block 和 line 编辑键；设置这些键时，mise 会发出警告并忽略该条目。其他条目不能在 `absent` 目标下放置文件，编辑条目也不能修改它要删除的文件。目标必须明确指向一个路径，因此不能包含 `*`、`?` 或 `[`。若要删除名称中含有这些字符的文件，请在 [`[bootstrap.files]`](/bootstrap/files.html#removing-resources) 下声明 `state = "absent"`。
+`absent` 条目不能设置 `source`、`content`、`exclude`、`manifest`、`permissions`、`encrypt = true`、`remove_empty`、`create_if_missing`、`relative = true`、`dot_prefix` 或块和行编辑键；若设置这些键，mise 会发出警告并忽略条目。其他条目不能在 `absent` 目标下放置文件，编辑条目也不能修改它要删除的文件。目标必须是单一路径，因此不能包含 `*`、`?` 或 `[`。若要删除名称中包含这些字符的文件，请在 [`[bootstrap.files]`](/bootstrap/files.html#removing-resources) 下声明 `state = "absent"`。
 
-删除路径被[跟踪](/dotfiles/history.html)时，该删除会像其他应用操作一样被记录，因此 `mise dot undo` 可以恢复文件。`mise dot unapply` 不会处理目标，因为该文件不是 mise 创建的。在使用实验性 [`mise oci build`](/dev-tools/mise-oci.html#bootstrap-and-dotfiles-in-oci-images) 构建的镜像中，`absent` 条目会隐藏基础镜像中该路径下的文件。
+When the removed path is [tracked](/dotfiles/history.html), the removal is
+recorded like any other apply, so `mise dot undo` restores the file.
+`mise dot unapply` leaves the target alone, because mise did not create the
+file. In an image built with the experimental
+[`mise oci build`](/dev-tools/mise-oci.html#bootstrap-and-dotfiles-in-oci-images),
+an `absent` entry hides the base image's file at that path.
 
-[`absent` 也支持目标变体](#platform-specific-destinations)，因此你可以只在部分机器上删除文件：
+[Target variants](#platform-specific-destinations) work with `absent`, so you
+can remove a file on some machines only:
 
 ```toml
 [dotfiles."~/.bash_profile"]
@@ -204,7 +297,9 @@ variants = [{ os = "macos" }]
 
 对于 `symlink-each`，排除 mise 之前链接的文件会在下次应用时移除对应链接，效果与删除来源文件相同。目录 `copy` 是增量操作：排除规则会阻止后续复制，但会保留已有目标文件。若要从[跟踪目录](/dotfiles/history.html#exclude-files-from-one-directory)中排除文件，请使用跟踪条目自己的 `exclude` 列表。
 
-### 只部署已提交到 Git 的文件 {#git-tracked-directories}
+`exclude` 是条目的字段，请在配置中编辑对应条目来设置。[`mise dot exclude`](/cli/dotfiles/exclude.html) 是另一项全局规则：它会向 `[history] exclude` 添加一个 glob，并应用于所有受跟踪的路径。
+
+### Deploy only files committed to Git {#git-tracked-directories}
 
 在 `symlink-each` 或目录 `copy` 条目中设置 `manifest = "git"`，即可只管理 Git 索引中的文件。适用于 `.gitignore` 忽略所有内容（`*`），再通过 `git add -f` 选择要纳入的文件的 dotfiles 仓库：Git 索引本身已是待部署文件列表，无需在 mise 中重复声明：
 
@@ -254,7 +349,28 @@ variants = [
 
 变体中的 `target` 会覆盖表键。每个变体都提供 `target` 时，表键可以使用逻辑名称，如上例所示。否则，表键必须是绝对目标路径或相对于主目录的路径。每个目标都必须是绝对路径或以 `~/` 开头。
 
-每个变体都提供 `target` 时，可以省略 `source`，mise 会将条目键作为 `dotfiles.root` 下的路径读取来源：
+变体的 `target` 是模板，因此目标路径可以根据机器配置变化，例如 `XDG_CONFIG_HOME` 不等于 `~/.config` 时：
+
+```toml
+[dotfiles.examplectl]
+source = "dotfiles/examplectl"
+mode = "symlink"
+variants = [{ default = true, target = "{{ xdg_config_home }}/examplectl" }]
+```
+
+如果要链接到 mise 读取配置的目录，即使该目录由 `MISE_CONFIG_DIR` 指定，也可以使用 `{{ mise_config_dir }}`：
+
+```toml
+[dotfiles."git-tools"]
+source = "git"
+mode = "symlink"
+variants = [{ default = true, target = "{{ mise_config_dir }}/conf.d/git-tools" }]
+```
+
+该模板包含所有配置文件都可使用的上下文（`env`、`xdg_config_home`、`config_root` 等），但不包含 `exec()` 或 `vars`。渲染结果必须是绝对路径或以 `~/` 开头的路径。条目键不会经过渲染。
+
+When every variant supplies a `target`, you can omit `source`, and mise reads
+the source from the entry key as a path under `dotfiles.root`:
 
 ```toml
 [dotfiles."vscode/settings.json"]
@@ -279,7 +395,24 @@ variants = [
 
 `status`、`diff`、`apply` 和 `unapply` 都会使用所选目标。更改机器所选的目标路径，不会删除先前部署到旧路径的文件。
 
-若要让一组条目只用于某种操作系统，可启用 [`auto_env`](/configuration/settings.html#auto_env)，并将它们放进 `config.macos.toml` 之类的平台配置文件；详见[平台环境](/configuration/environments.html#platform-environments)。只有单个条目需要在不同机器上使用不同目标时，才使用 `variants`。
+### 仅为特定配置部署条目 {#only-for-a-profile}
+
+没有 `target` 的变体只负责选择。若没有 `default` 变体，未匹配任何变体的机器会跳过该条目，因此可以让一个条目等待某个环境，而由另一个文件选择其余配置。`mise.ssh.toml` 中的此条目仅在同时选择 `work` 时部署：
+
+```toml
+[dotfiles."~/.ssh/work_key"]
+source = "ssh/work_key"
+mode = "symlink"
+variants = [{ profile = "work" }]
+```
+
+`MISE_ENV=ssh` 会跳过 `~/.ssh/work_key`，而 `MISE_ENV=ssh,work` 会创建该链接。
+
+To give a whole set of entries to one operating system, put them in a
+platform config file such as `config.macos.toml` instead, with the
+[`auto_env`](/configuration/settings.html#auto_env) setting on; see
+[Platform environments](/configuration/environments.html#platform-environments).
+Use `variants` when one entry needs a different target on each machine.
 
 ## 相对符号链接 {#relative}
 
@@ -306,10 +439,10 @@ mise dot add ~/.inputrc
 
 mise 会将文件移动到 `dotfiles.root` 下的来源路径（`~/.dotfiles/.inputrc`），在全局配置中添加条目并应用它。默认使用 `symlink` 模式，因此 `~/.inputrc` 会变成指向已移动文件的链接。如果来源位于另一文件系统，mise 会改为复制文件，并保留符号链接和权限。
 
-- `--mode copy` 会在目标处保留普通文件；`--mode` 可接受任意模式。
-- `--source <path>` 使用指定来源，而不是 `dotfiles.root` 下的来源。
-- `--no-apply` 会将文件复制到来源路径并写入条目，但不更改原文件，方便先检查两者。
-- `--dry-run` 只打印来源和配置将发生的更改，不会实际执行。
+- `--mode copy` keeps a regular file at the target; `--mode` takes any mode.
+- `--source <path>` 使用指定来源，而不是 `dotfiles.root` 下的来源。相对路径以当前目录为起点；如果来源位于配置文件所在目录中，条目会记录相对于该目录的路径，否则记录绝对路径。
+- `--no-apply` 会将文件复制到来源并写入条目，但不更改原文件，方便先检查两者。它仍会写入来源：如果来源已存在且内容不同，`add` 会用当前文件覆盖来源，并且只会在终端中先询问（`--force` 或 `--yes` 可跳过提示）。对于每个已存在的目标，`--dry-run` 都会打印一条 `cp` 命令，无论其内容是否已与来源一致；因此添加前请自行比较已有来源与当前文件。
+- `--dry-run` prints the source and config changes without making them.
 
 条目会写入全局配置，或写入 [`write_targets.dotfiles`](/configuration/settings.html#write_targets.dotfiles) 指定的文件。使用 `--local` 可写入项目配置，使用 `--path` 可指定其他文件。对于可推断的来源和默认 `symlink` 模式，`add` 会省略相应配置，因此上例会写入 `"~/.inputrc" = {}`。通过 `--mode` 传入的模式总会写入配置。
 
@@ -320,27 +453,54 @@ $EDITOR ~/.config/starship.toml
 mise dot add ~/.config/starship.toml
 ```
 
-`mise dot add --changed` 会将所有已更改的普通文件更新回来源，但仅限以 `copy` 模式托管的文件；也包括在目录树中发现的、由 `copy` 模式[分组](/dotfiles/groups.html)托管的文件。每个文件对应的配置都必须受信任。此命令会跳过其他目录复制、符号链接、模板和内联内容。
+`mise dot add` 不会捕获 `template` 目标，因为渲染后的文件会覆盖来源中的模板代码及其 `exec()` 输出；请改为编辑来源。传入 `--force` 仍会覆盖来源。
 
-若目标位于[分组](/dotfiles/groups.html#adding-files-to-a-group)目录树中，捕获的文件会存入该分组根目录，而不会新建条目。
+`mise dot add --changed` updates the sources of every changed regular file
+managed in `copy` mode, including the files a copy-mode
+[group](/dotfiles/groups.html) discovers in its tree. Each file's config must
+be trusted. It skips other directory copies, symlinks, templates, and inline
+content.
 
-[`mise dot edit <target>`](/cli/dotfiles/edit.html) 会在编辑器中打开目标的来源；指定 `--apply` 后，编辑器退出时会应用目标。对于跟踪条目或仅权限条目，它会打开文件本身；对于内联 `content`、`absent` 条目，或没有来源文件的编辑项，它会打开声明该条目的配置文件。若目标尚未托管，命令会先像 `mise dot add --no-apply` 一样添加它，并在执行前询问你（使用 `--yes` 可跳过询问）。
+A target inside a [group](/dotfiles/groups.html#adding-files-to-a-group)'s
+tree is captured into that group's root instead, without a new entry.
 
-## 冲突 {#conflicts}
+[`mise dot edit <target>`](/cli/dotfiles/edit.html) opens the target's source
+in your editor, and `--apply` applies the target when the editor exits. For a
+tracked or permissions-only entry it opens the file itself, and for inline
+`content`, an `absent` entry, or an edit without a source file it opens the
+config file that declares it. For a target that is not managed yet, it first
+adds it the way `mise dot add --no-apply` does, after asking (`--yes` skips
+the question).
 
-`symlink` 或 `symlink-each` 条目不会替换链接目标位置上的真实文件或目录，也不会替换本应放置文件的目录。应用操作会停止并列出冲突路径；运行 `mise dot apply --force` 可替换这些路径。即使真实文件的内容和权限与来源完全相同，也需要 `--force`。若要保留该文件内容，请使用 `mise dot add` 将其[接管](#capturing-changes)。指向其他位置的现有符号链接会直接改为指向新来源，无需 `--force`。
+## Conflicts {#conflicts}
 
-`copy`、`template` 或内联 `content` 条目无需 `--force` 即可覆盖目标内容，并会将目标处的符号链接替换为文件。但若本应放置复制文件、模板或内联文件的位置是目录，或本应复制目录的位置是文件，仍属于冲突，需要使用 `--force`。更改目标所用的来源前，请先检查 `mise dot diff`。
+A `symlink` or `symlink-each` entry never replaces a real file or directory
+where a link should go, or a directory where a file should go. Apply stops
+and lists the conflicting paths; `mise dot apply --force` replaces them. A
+real file needs `--force` even when its contents and permissions match the
+source. To keep the file's content instead, [adopt it](#capturing-changes)
+with `mise dot add`. An existing symlink that points elsewhere is repointed
+without `--force`.
 
-[编辑条目](/dotfiles/edits.html#conflicts)无需 `--force` 即可应用。
+`copy`、`template` 或内联 `content` 条目无需 `--force` 即可覆盖目标内容，并会将目标位置的符号链接替换为文件。目录若位于复制、模板或内联文件的目标位置，或文件位于目录复制的目标位置，仍会视为冲突，需要 `--force`。如果 `apply` 即将覆盖自 mise 上次写入后被你修改过的 `template` 目标，会先发出警告，方便你将修改移入来源。更改目标来源前，请先运行 `mise dot diff` 检查差异。
 
-## 撤销应用 {#unapplying}
+[Edit entries](/dotfiles/edits.html#conflicts) apply without `--force`.
 
-从配置中删除条目不会移除它创建的文件、代码块或行。请先运行 [`mise dot unapply <target>`](/cli/dotfiles/unapply.html)，趁 mise 仍能识别该条目创建的内容时将其撤销；也可以将条目改为 [`mode = "absent"`](#absent)，以便在已应用该条目的机器上删除文件。对于没有任何条目创建的文件，也可在 [`[bootstrap.files]`](/bootstrap/files.html#removing-resources) 下声明 `state = "absent"` 来删除。
+## Unapply {#unapplying}
 
-`mise dot unapply` 会移除目标，但不会删除对应的 `[dotfiles]` 条目或来源文件。它会根据当前配置、文件系统，以及 mise 对先前应用操作的记录，判断每个条目所拥有的内容：
+Deleting an entry from your config leaves its file, block, or line in place.
+Run [`mise dot unapply <target>`](/cli/dotfiles/unapply.html) first, while
+mise can still identify what the entry created, or replace the entry with
+[`mode = "absent"`](#absent) to remove the file on machines that already
+applied it. A `state = "absent"` declaration under
+[`[bootstrap.files]`](/bootstrap/files.html#removing-resources) also removes a
+file that no entry created.
 
-| 条目                                    | unapply 移除的内容                                                                            |
+`mise dot unapply` removes targets without removing their `[dotfiles]`
+entries or source files. It uses the current config, the filesystem, and what
+mise recorded about earlier applies to decide what each entry owns:
+
+| Entry                                   | What unapply removes                                                                         |
 | --------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `symlink`                               | 仅当链接仍指向配置的来源时，移除该链接。                                                       |
 | `symlink-each`                          | 移除来源到目标的精确链接，包括来源已删除后留下的失效链接；其他文件保留。                         |
@@ -373,10 +533,23 @@ dotfiles.root = "~/.dotfiles"
 "~/.config/mise/config.toml" = "~/src/dotfiles/mise/config.toml"
 ```
 
-首次运行 `mise dot apply` 或 `mise bootstrap` 前，请先克隆真实仓库（此处为 `~/src/dotfiles`）。首次运行所需的来源应使用真实仓库路径，因为 `~/.dotfiles` 要等 mise 创建链接后才会存在。替换 `~/.config/mise/config.toml` 会改变之后每个 mise 命令读取的配置，因此应用前请确认来源中包含有效配置。
+Clone the real repository (`~/src/dotfiles` here) before the first
+`mise dot apply` or `mise bootstrap`. Use the real repository path for sources
+the first run needs, because `~/.dotfiles` does not exist until mise creates
+that link. Replacing `~/.config/mise/config.toml` changes what every later
+mise command reads, so make sure the source holds a valid config before you
+apply it.
 
-## Windows 上的行为 {#windows}
+## Windows {#windows}
 
-文件的 `symlink` 条目会在 Windows 允许时创建符号链接；启用开发者模式后无需提升权限即可创建，否则会复制文件。目录链接则是 junction。`symlink-each` 始终逐个复制文件，因此应编辑来源而非目标，然后运行 `mise dot apply`。`mise dot status` 可以识别磁盘上的这两种形式。Windows 会忽略 `relative` 和 `permissions`。
+Windows 允许时，文件型 `symlink` 条目会创建符号链接；启用开发者模式后，无需提权即可创建，否则会复制文件。目录链接会使用 junction。`symlink-each` 会复制每个文件，且副本不会跟随来源。来源更改后，副本仍是普通文件，而不是应有的链接；`mise dot apply` 会拒绝在未传入 `--force` 时覆盖它，因为你或应用可能已经修改了副本。可运行 `mise dot apply --force <target>` 刷新某个条目的副本；若希望 apply 始终覆盖文件，请使用 `mode = "copy"`；也可以启用 `dotfiles.windows_symlinks`（见下文），让目标跟随来源。`mise dot status` 接受磁盘上的任一形式。Windows 会忽略 `relative` 和 `permissions`。
 
-将 [`dotfiles.windows_symlinks`](/configuration/settings.html#dotfiles.windows_symlinks) 设为 `true`，两种模式都会创建真正的文件链接。此时 `symlink-each` 会逐个链接文件；若无法创建链接，应用操作会失败而不会回退为复制，因此需要启用开发者模式或使用提升权限的 Shell。之前应用时复制的文件会阻挡链接替换，需要使用 `--force`。之后关闭此设置只会影响新文件：已有链接仍保持链接；若 `symlink-each` 条目包含链接，除非重新启用该设置，否则执行 `mise dot unapply` 需要 `--force`。
+Set [`dotfiles.windows_symlinks`](/configuration/settings.html#dotfiles.windows_symlinks)
+to `true` to get real file links from both modes. `symlink-each` then links
+each file, and a file that cannot be linked fails the apply instead of
+becoming a copy, so Developer Mode or an elevated shell is required. Files
+earlier applies copied are regular files in the way, so replacing them with
+links needs `--force`. Turning the setting off again changes only what new
+files get: links already in place stay links, and `mise dot unapply` of a
+`symlink-each` entry that holds links needs `--force` unless the setting is
+on.

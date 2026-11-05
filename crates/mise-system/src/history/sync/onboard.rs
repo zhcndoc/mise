@@ -109,10 +109,13 @@ fn preview_configuration(store: &Store) -> Result<tempfile::TempDir> {
             crate::history::replay::write_path(repo, &temp.path().join(relative), &mode, &oid)?;
         }
     }
-    // Machine-local inputs are not published, but affect the real bootstrap.
-    let local = global_config_dir().join("config.local.toml");
-    if local.is_file() {
-        std::fs::copy(local, temp.path().join("config.local.toml"))?;
+    // Machine-local inputs are not published, but affect the real bootstrap:
+    // miserc.local.toml chooses which config.<env>.toml files it reads.
+    for name in ["config.local.toml", "miserc.local.toml"] {
+        let local = global_config_dir().join(name);
+        if local.is_file() {
+            std::fs::copy(local, temp.path().join(name))?;
+        }
     }
     Ok(temp)
 }
@@ -585,6 +588,7 @@ async fn durable_access(url: &str, branch: &str) -> bool {
         return false;
     }
     let mut command = tokio::process::Command::new(git);
+    mise_util::git::detach_git_command(command.as_std_mut());
     command
         .args(["ls-remote", "--exit-code", "--heads", "--", url, branch])
         .env("GIT_TERMINAL_PROMPT", "0")

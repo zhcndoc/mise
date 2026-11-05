@@ -11,82 +11,117 @@ socialDescription: "查阅所有 [dotfiles] 配置项、匹配规则、状态和
 
 整文件条目以目标路径为键，路径必须是绝对路径或以 `~/` 开头。字符串值是 `{ source = "<value>" }` 的简写。
 
-| 键                | 类型           | 说明                                                                                                                                                                                                                      |
-| ----------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | 路径           | 要部署的文件或目录。相对路径以声明该条目的配置文件所在目录为起点。默认使用目标路径在 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下对应的路径。                                                     |
-| `mode`            | 字符串         | `symlink`、`symlink-each`、`copy`、`template`、`absent`、`track` 或 `track-local`。默认值为 [`dotfiles.default_mode`](/configuration/settings.html#dotfiles.default_mode)。详见[模式](/dotfiles/managed.html#modes)。       |
-| `content`         | 字符串         | 内联写入的整个文件内容。详见[内联内容](/dotfiles/managed.html#inline-content)。                                                                                                                                             |
-| `permissions`     | 八进制字符串   | 目标权限，例如 `"0600"`。单独使用时，只管理现有路径的权限。详见[权限](/dotfiles/managed.html#permissions)。                                                                                                            |
-| `exclude`         | glob 列表      | 遍历源目录或跟踪目录时要跳过的路径。详见[匹配模式语法](#patterns)。                                                                                                                                                        |
-| `manifest`        | `"git"`        | 只部署源仓库 Git 索引中的文件。详见[只部署已提交到 Git 的文件](/dotfiles/managed.html#git-tracked-directories)。                                                                                                          |
-| `dot_prefix`      | 布尔值         | 将源名称 `dot-<name>` 部署为 `.<name>`。详见[可见的源名称](/dotfiles/managed.html#dot-prefix)。                                                                                                                           |
-| `relative`        | 布尔值         | `symlink` 和 `symlink-each`：使用相对路径创建链接。此设置会覆盖 [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks)。                                                               |
-| `remove_empty`    | 布尔值         | 模板渲染结果为空时移除目标。详见[模板渲染为空时移除目标](/dotfiles/managed.html#remove-empty)。                                                                                                                            |
-| `variants`        | 表格列表       | 按机器进行选择：部署条目可为每台机器指定目标路径，跟踪条目可保存不同内容。详见[变体选择器](#variant-selectors)。                                                                                                         |
-| `enabled`         | 布尔值         | 设为 `false` 可关闭从其他配置文件继承的条目。                                                                                                                                                                              |
-| `include`         | glob 列表      | 仅用于跟踪：指定跟踪目录要保存的文件。详见[选择目录中的文件](/dotfiles/history.html#choose-which-files-a-directory-saves)。                                                                                                |
-| `autosave`        | 布尔值         | 仅用于跟踪：设为 `false` 后，只能通过 `mise dot save <path>` 保存该路径。详见[仅按需保存文件](/dotfiles/history.html#save-on-request)。                                                                                    |
-| `encrypt`         | 布尔值         | 仅用于跟踪：保存到 Git 前加密内容。详见[加密文件](/dotfiles/encryption.html)。                                                                                                                                              |
-| `allow_plaintext` | 布尔值         | 仅用于跟踪：直接跟踪凭据名称文件时，允许以明文保存。详见[凭据筛选](/dotfiles/history.html#credential-filtering-and-omissions)。                                                                                             |
+| Key                 | Type            | Meaning                                                                                                                                                                                                                   |
+| ------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`            | path            | The file or directory to deploy. Relative paths start at the declaring config file's directory. Defaults to the target's path under [`dotfiles.root`](/configuration/settings.html#dotfiles.root).                        |
+| `mode`              | string          | `symlink`, `symlink-each`, `copy`, `template`, `absent`, `track`, or `track-local`. Defaults to [`dotfiles.default_mode`](/configuration/settings.html#dotfiles.default_mode). See [Modes](/dotfiles/managed.html#modes). |
+| `content`           | string          | The whole file, written inline. See [Inline content](/dotfiles/managed.html#inline-content).                                                                                                                              |
+| `permissions`       | octal string    | Permissions for the target, such as `"0600"`. On its own, manages an existing path's permissions only. See [Permissions](/dotfiles/managed.html#permissions).                                                             |
+| `exclude`           | list of globs   | Paths to skip in a walked source directory or a tracked directory. See [Pattern syntax](#patterns).                                                                                                                       |
+| `manifest`          | `"git"`         | Deploy only files in the source repository's Git index. See [Deploy only files committed to Git](/dotfiles/managed.html#git-tracked-directories).                                                                         |
+| `dot_prefix`        | boolean         | Deploy source names `dot-<name>` as `.<name>`. See [Visible source names](/dotfiles/managed.html#dot-prefix).                                                                                                             |
+| `relative`          | boolean         | `symlink` and `symlink-each`: link by a relative path. Overrides [`dotfiles.relative_symlinks`](/configuration/settings.html#dotfiles.relative_symlinks).                                                                 |
+| `remove_empty`      | boolean         | Remove the target when the template renders empty. See [Remove the target when a template renders empty](/dotfiles/managed.html#remove-empty).                                                                            |
+| `create_if_missing` | boolean         | 仅当目标不存在时才写入；已有文件保持不变。详见[仅在文件不存在时创建](/dotfiles/managed.html#create-if-missing)。 |
+| `variants`          | list of tables  | Per-machine selection: a target per machine for deployed entries, separate contents for tracked ones. See [Variant selectors](#variant-selectors).                                                                        |
+| `depends`           | list of strings | 按名称指定组，按目标路径指定整文件条目；mise 会在渲染或读取此条目前先写入这些依赖。详见[等待其他条目](/dotfiles/managed.html#depends)。编辑项和 track 模式不支持此项。 |
+| `enabled`           | boolean         | `false` turns off an entry inherited from another config file.                                                                                                                                                            |
+| `include`           | list of globs   | Track only: the files a tracked directory saves. See [Select files in a directory](/dotfiles/history.html#choose-which-files-a-directory-saves).                                                                          |
+| `autosave`          | boolean         | Track only: `false` saves the path only on `mise dot save <path>`. See [Save some files only on request](/dotfiles/history.html#save-on-request).                                                                         |
+| `encrypt`           | boolean         | Track only: encrypt contents before saving them to Git. See [Encrypted files](/dotfiles/encryption.html).                                                                                                                 |
+| `allow_plaintext`   | boolean         | Track only: save a credential-named file that you track directly in plaintext. See [Credential filtering](/dotfiles/history.html#credential-filtering-and-omissions).                                                     |
 
-`[dotfiles]` 条目不接受 `group` 键；分组条目应声明在 [`[dotfile_groups.<name>.entries]`](/dotfiles/groups.html#group-entries) 下。
+A `[dotfiles]` entry takes no `group` key; declare a group's entries under
+[`[dotfile_groups.<name>.entries]`](/dotfiles/groups.html#group-entries).
 
-## 编辑键 {#edit-keys}
+## Edit keys {#edit-keys}
 
-编辑条目以目标路径后接 `/<id>` 为键，例如 `"~/.zshrc/aliases"`。ID 可包含字母、数字、`_`、`-` 和 `.`。详见[编辑文件的一部分](/dotfiles/edits.html)。
+An edit entry is keyed by the target path followed by `/<id>`, such as
+`"~/.zshrc/aliases"`. Ids can contain letters, digits, `_`, `-`, and `.`. See
+[Edit part of a file](/dotfiles/edits.html).
 
-| 键         | 类型                      | 说明                                                                                                                                                                                                              |
-| ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `block`    | 字符串                    | 要保留在标记注释之间的内联内容。                                                                                                                                                                                  |
-| `source`   | 路径                      | 包含代码块内容的文件（设置 `template = "tera"` 时），或包含待合并键的文件（设置 `merge` 时）。                                                                                                                    |
-| `template` | `"tera"`                  | 先使用 Tera 渲染 `source`。                                                                                                                                                                                       |
-| `comment`  | 字符串                    | 标记注释的前缀。默认根据文件扩展名推断。                                                                                                                                                                          |
-| `line`     | 字符串                    | 要确保存在的一行精确内容。                                                                                                                                                                                        |
-| `position` | `"append"` 或 `"prepend"` | 缺少 `line` 时要将其添加到何处。默认为 `"append"`。                                                                                                                                                               |
-| `merge`    | `true` 或 `"missing"`     | 将 `source` 中的键写入 `.json`、`.toml`、`.yaml` 或 `.yml` 目标。`"missing"` 只设置目标中尚无值的键；详见[应用程序可能更改的默认值](/dotfiles/edits.html#merge-missing)。                                    |
+| Key           | Type                                                | Meaning                                                                                                                                                                                                                             |
+| ------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `block`       | string                                              | Inline content to keep between marker comments.                                                                                                                                                                                     |
+| `source`      | path                                                | A file with the block content (with `template = "tera"`) or the keys to merge (with `merge`).                                                                                                                                       |
+| `template`    | `"tera"`                                            | Render `source` with Tera first.                                                                                                                                                                                                    |
+| `comment`     | string                                              | The marker comment prefix. Defaults to one inferred from the file extension.                                                                                                                                                        |
+| `line`        | string                                              | One exact line to ensure exists.                                                                                                                                                                                                    |
+| `position`    | `"append"` or `"prepend"`                           | Where a missing `line` goes. Defaults to `"append"`.                                                                                                                                                                                |
+| `merge`       | `true` 或 `"missing"`                                | 将 `source` 中的键设置到 `.json`、`.jsonc`、`.toml`、`.yaml`、`.yml` 或 `.ini` 目标文件中。`"missing"` 只设置目标中没有值的键；详见[应用可能更改的默认值](/dotfiles/edits.html#merge-missing)。 |
+| `format`      | `"json"`、`"jsonc"`、`"toml"`、`"yaml"` 或 `"ini"` | 配合 `merge` 使用；当目标文件扩展名无法表明格式时指定格式，例如为 VS Code 的 `settings.json` 指定 `"jsonc"`。 |
+| `permissions` | 八进制字符串 | 仅用于 `merge`：apply 创建目标文件时设置的权限；已有文件会保留原权限。详见[由 mise 创建文件时设置权限](/dotfiles/edits.html#merge-permissions)。 |
 
-`block` 和 `source` 不能同时使用，且两者都不能与 `line` 组合。`position` 仅适用于 `line`。未设置 `source` 的 `merge` 条目会从 [`dotfiles.root`](/configuration/settings.html#dotfiles.root) 下读取与目标路径相同的路径，且不能使用 `block`、`line`、`position` 或 `comment`。编辑条目不接受 `permissions`。编辑内容不会加密。
+`block` and `source` are mutually exclusive, and neither combines with
+`line`。`position` 仅适用于 `line`；`format` 和 `permissions` 仅适用于 `merge`。未设置 `source` 的 `merge` 条目
+reads the target's path under
+[`dotfiles.root`](/configuration/settings.html#dotfiles.root), and takes no
+`block`, `line`, `position`, or `comment`. Only a `merge` entry takes
+`permissions`. Edits are never encrypted.
 
-## 模式与键 {#modes-and-keys}
+## Modes and keys {#modes-and-keys}
 
-下表列出了各类整文件条目接受的键。包含 `content` 的条目是内联内容条目；只包含 `permissions`（没有 `source`、`content` 或 `mode`）的条目是仅权限条目。所有条目都接受 `enabled`。
+The table shows which whole-file keys each kind of entry accepts. An entry
+with `content` is an inline-content entry, and one with only `permissions`
+(no `source`, `content`, or `mode`) is a permissions-only entry. Every entry
+also accepts `enabled`.
 
-| 条目类型         | 接受的键                                                                                                                                        | 接受但不起作用的键               |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `symlink`        | `source`、`relative`、`variants`（选择器和 `target`）                                                                                         | `exclude`、`autosave`、`encrypt` |
-| `symlink-each`   | `source`（目录）、`exclude`、`manifest`、`dot_prefix`、`relative`、`variants`（选择器和 `target`）                                               | `autosave`、`encrypt`            |
-| `copy`           | `source`、`variants`（选择器和 `target`）；来源为目录时可用 `exclude`、`manifest`、`dot_prefix`；来源为文件时可用 `permissions`                  | `autosave`、`encrypt`            |
-| `template`       | `source`（文件）、`permissions`、`remove_empty`、`variants`（选择器和 `target`）                                                                | `exclude`、`autosave`、`encrypt` |
-| `content`        | `content`、`permissions`、`variants`（仅选择器）                                                                                              | `autosave`                       |
-| 仅权限           | `permissions`、`variants`（选择器和 `target`）                                                                                                 | `autosave`                       |
-| `absent`         | `variants`（选择器和 `target`）                                                                                                                | `autosave`                       |
-| `track`          | `exclude`、`include`、`autosave`、`encrypt`、`allow_plaintext`、`variants`（仅选择器）                                                          |                                  |
-| `track-local`    | `exclude`、`include`、`autosave`、`allow_plaintext`                                                                                           |                                  |
+| Entry            | Accepts                                                                                                                                                             | Accepted, no effect              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `symlink`        | `source`, `relative`, `variants` (selectors and `target`)                                                                                                           | `exclude`, `autosave`, `encrypt` |
+| `symlink-each`   | `source` (a directory), `exclude`, `manifest`, `dot_prefix`, `relative`, `variants` (selectors and `target`)                                                        | `autosave`, `encrypt`            |
+| `copy`           | `source`、`variants`（选择条件和 `target`）；来源为目录时支持 `exclude`、`manifest`、`dot_prefix`；来源为文件时支持 `permissions`、`create_if_missing` | `autosave`、`encrypt` |
+| `template`       | `source`（文件）、`permissions`、`remove_empty`、`create_if_missing`、`variants`（选择条件和 `target`） | `exclude`、`autosave`、`encrypt` |
+| `content`        | `content`、`permissions`、`create_if_missing`、`variants`（仅选择条件） | `autosave` |
+| Permissions only | `permissions`, `variants` (selectors and `target`)                                                                                                                  | `autosave`                       |
+| `absent`         | `variants` (selectors and `target`)                                                                                                                                 | `autosave`                       |
+| `fnox`           | `permissions`、`variants`（选择条件和 `target`） | `autosave` |
+| `track`          | `exclude`, `include`, `autosave`, `encrypt`, `allow_plaintext`, `variants` (selectors only)                                                                         |                                  |
+| `track-local`    | `exclude`, `include`, `autosave`, `allow_plaintext`                                                                                                                 |                                  |
 
-对于 `encrypt` 和 `relative`，表中的限制指值为 `true` 的情况；`encrypt = false` 和 `relative = false` 在所有条目中都可使用，但仅权限和 `track-local` 条目不接受任何 `encrypt` 键，包括 `encrypt = false`。`track-local` 详见[仅本地历史记录](/dotfiles/history.html#local-only)。
+For `encrypt` and `relative`, the table means the `true` value; `encrypt =
+false` and `relative = false` are accepted everywhere except that
+permissions-only and `track-local` entries reject any `encrypt` key, including
+`encrypt = false`. See [Local-only history](/dotfiles/history.html#local-only)
+for `track-local`.
 
-条目设置了其类型不接受的[条目键](#entry-keys)时，mise 会发出警告并忽略该条目；对于 `track` 条目，`mise dot paths` 也会将其列为无效。完全不属于条目键的键会被忽略且不发出警告，但从其他机器拉取的配置除外，pull 操作会拒绝应用此类配置。目录源不能使用 `permissions`；文件源不能使用 `manifest` 或 `dot_prefix`，否则命令会报错并停止。条目同时设置 `permissions` 和 `manifest` 时会发出警告并忽略该条目。
+mise warns about and ignores an entry that sets one of the
+[entry keys](#entry-keys) its kind does not accept; for a `track` entry,
+`mise dot paths` also lists it as invalid. A key that is not an entry key at
+all is ignored without a warning, except in configuration arriving from
+another machine, which a pull refuses to apply. `permissions` with a
+directory source, and `manifest` or `dot_prefix` with a file source, stop the
+command with an error. An entry that sets both `permissions` and `manifest` is
+ignored with a warning.
 
-## 条目的合并方式 {#how-entries-combine}
+## How entries combine {#how-entries-combine}
 
-- 条目会跨[配置层级](/configuration.html#configuration-hierarchy)合并。整文件条目按目标路径合并，编辑条目按目标路径和 ID 合并。更本地的配置文件会替换具有相同键的条目，包括其变体。
-- 如果更本地的声明无效，或其所有变体都与当前机器不匹配，则继续使用继承而来的条目。
-- 同一路径的跟踪条目和部署条目是两个独立条目；详见[跟踪 mise 同时部署的文件](/dotfiles/history.html#ownership)。
-- mise 只从系统和全局配置中读取跟踪条目及 `[history]` 表。
-- 遇到未知模式或编辑操作时，mise 会发出警告并跳过该条目，因此为较新版本 mise 编写的配置仍可加载。
+- Entries merge across the [config hierarchy](/configuration.html#configuration-hierarchy).
+  Whole-file entries merge by target path, and edit entries by target path
+  and id. A more local config file replaces an entry with the same key,
+  including its variants.
+- If a more local declaration is invalid, or none of its variants matches this
+  machine, the inherited entry stays active.
+- A tracking entry and a deployed entry for the same path are separate
+  entries; see [Track files that mise also deploys](/dotfiles/history.html#ownership).
+- mise reads tracking entries, and the `[history]` table, only from system and
+  global config.
+- mise warns about and skips an entry with an unknown mode or edit operation,
+  so a config written for a newer mise still loads.
 
-## 变体选择器 {#variant-selectors}
+## Variant selectors {#variant-selectors}
 
-`variants` 中的每个元素都使用以下键来选择机器：
+Each element of `variants` selects machines with these keys:
 
-| 键        | 匹配对象                                                                                                                                                                                      |
+| Key       | Matches                                                                                                                                                                                       |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `os`      | 操作系统（`linux`、`macos`、`windows`）、`unix` 系列，或在其后通过 `/` 指定架构，例如 `linux/arm64` 或 `unix/x64`。列表可匹配其中任一值。                                                |
 | `profile` | 通过 `-E` 或 `MISE_ENV` 选择的[配置环境](/configuration/environments.html)。                                                                                                                    |
 | `default` | 设为 `true` 时，作为未匹配其他变体时使用的回退项。不能同时设置 `os` 或 `profile`，且每个条目最多只能有一个默认变体。                                                                         |
 | `machine` | 设为 `true` 时，为每台机器保存独立版本；详见[每台机器一个版本](/dotfiles/history.html#machine-variants)。它必须是条目唯一的变体，且不能与 `encrypt` 组合。                                      |
 
-同时指定 `os` 和 `profile` 的变体必须两者都匹配才算命中。若多个变体都匹配，mise 会为其评分并选择得分最高者：
+A variant with both `os` and `profile` matches only when both do. `profile` 会在其名称出现在所选环境列表中的任意位置时匹配，因此 `MISE_ENV=ssh,work` 会同时匹配 `profile = "work"` 和 `profile = "ssh"`。When several
+variants match, mise scores each one and the highest score wins:
 
 | 选择器                        | 分值   |
 | ----------------------------- | ------ |

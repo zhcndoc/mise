@@ -15,9 +15,10 @@ description: "从 PyPI 或 Git 安装 Python 命令行应用，每个应用都�
 
 <span id="dependencies"></span>
 
-安装 uv 或 pipx，并同时安装 Python：pipx 运行时需要 Python；从[依赖关系图](#dependency-locking)
-安装时也需要使用已安装的解释器，而不是由 uv 下载的解释器。如果配置中包含 `uv`、`pipx` 或
-`python`，mise 会在 Python 工具之前安装它们。`with`、
+Install uv, or pipx. Add Python as well: pipx needs one to run, and installs
+from a [dependency graph](#dependency-locking) need an installed interpreter
+rather than one uv downloads. 未配置解释器时，mise 会仅按版本安装；如果传入 `--locked`，则会失败。When `uv`, `pipx` or `python` is in your config,
+mise installs it before your Python tools. The [`with`](#with),
 [`expose`](#expose) and [`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases)
 选项需要 uv。
 
@@ -131,7 +132,7 @@ Git 来源和 pipx 安装始终只锁定版本；pipx 也无法重放 uv 生成�
 [`dependency_prereleases`](/dev-tools/backends/pypi.html#dependency-prereleases)，并直接配置
 [Python](#choosing-python) 和[注册表 URL](#registry-url)。
 
-`mise lock` 可以根据软件包元数据解析依赖关系图，无需先安装所选解释器。根据依赖关系图安装时会使用所选的 mise Python，不会另行下载 Python。如果锁文件格式为 2 或更高版本，但缺少该工具的依赖关系图，锁定安装会失败；请运行 `mise lock` 创建依赖关系图。
+`mise lock` 无需先安装所选解释器，即可根据软件包元数据解析依赖关系图。如果 mise 已安装所选 Python，则会使用该版本解析，无论它是否在 `PATH` 中；如果某个工具指定的 `python` 尚未安装，uv 可能会下载该版本用于解析，除非设置了 [`offline`](/configuration/settings.html#offline)。通过依赖关系图安装时，会使用 mise 选定的 Python，不会再下载其他版本。使用格式 2 或更高版本锁文件进行锁定安装时，如果缺少该工具的依赖关系图就会失败；请运行 `mise lock` 创建图。
 
 依赖关系图覆盖所有已锁定要求支持的 Python 版本范围（从 Python 3.8 起），并保留每个已发布的
 wheel 平台，因此旁文件可能较大。锁定安装会复用 uv 的制品缓存。不同的依赖关系图和 Python
@@ -141,14 +142,19 @@ wheel 平台，因此旁文件可能较大。锁定安装会复用 uv 的制品�
 
 <span id="private-indexes-and-release-age"></span>
 
-若要让所有工具都使用另一个索引，请设置
-[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url)：mise 会从该索引列出版本，并在安装时
-将其简单索引传给 uv 和 pip。单个工具的 [`registry_url`](#registry-url) 选项会更改该工具的版本列表
-和依赖锁定；仅锁定版本的安装还需在 `uvx_args` 或 `pipx_args` 中指定索引。仅提供简单索引的服务
-必须在所选发行版的 wheel 链接中提供 `data-requires-python` 元数据。请将注册表凭据放在安装器的
-环境或凭据提供程序中：包含凭据或查询字符串的 URL 无法写入锁文件。
+To use another index for every tool, set
+[`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url): mise lists versions from it and
+passes its simple index to uv and pip for installs. The per-tool
+[`registry_url`](#registry-url) option changes version listing and dependency
+locking for one tool; its version-only installs also need the index in
+`uvx_args` or `pipx_args`. Simple-only indexes must provide
+`data-requires-python` metadata on the selected release's wheel links. Keep
+registry credentials in the installer's environment or credential provider: a
+URL containing credentials or a query string cannot be recorded in the
+lockfile。若 `uvx_args` 或 `pipx_args` 中的 URL 带有凭据，锁文件会记录这些选项，但移除凭据。
 
-如果索引通过 keyring 进行身份验证，请在 URL 中设置用户名且不填密码，并将
+When the index authenticates through a keyring, write the URL with a username
+and no password, and set
 [`pypi.keyring_provider`](/dev-tools/backends/pypi.html#pypi.keyring_provider)
 设为 `subprocess`。这样 mise 自身在列出版本和锁定依赖时，也会像 uv 一样通过 `keyring get` 读取密码：
 
@@ -164,7 +170,9 @@ mise 解析依赖关系图时， [`minimum_release_age`](/configuration/settings
 重放已有依赖关系图时则不会筛选。对于仅锁定版本的安装，mise 会向 uv 传递 `--exclude-newer`
 （需 uv 0.2.22 或更新版本），或通过 pipx 向 pip 传递 `--uploaded-prior-to`。
 
-## 选择 Python
+索引协议允许不提供上传时间，许多自托管注册表也不会发布此信息。mise 会放行无法确定日期的发布，因此当工具自身的发布缺少上传时间时，`mise lock` 会从传给 uv 的截止条件中豁免该软件包（`--exclude-newer-package <name>=false`）。有日期的发布和工具依赖仍受截止时间限制；uv 会延后没有上传时间的依赖。如果因此无法锁定依赖关系图，mise 会发出警告并保留仅包含版本的条目；将该工具的 `minimum_release_age` 设为 `"0s"` 后即可锁定依赖图。
+
+## Choosing Python
 
 在 mise 中配置解释器：
 
@@ -247,10 +255,11 @@ ansible = { version = "latest", uvx = false, expose = [], pipx_args = "--include
 
 | 选项                     | 安装器                    |
 | ------------------------ | ------------------------- |
-| `registry_url`           | uv 和 pipx                |
-| `install_env`            | uv 和 pipx                |
-| `extras`                 | uv 和 pipx                |
-| `package_name`           | uv 和 pipx                |
+| `registry_url`           | uv and pipx               |
+| `registry_index`         | 依赖关系图锁定             |
+| `install_env`            | uv and pipx               |
+| `extras`                 | uv and pipx               |
+| `package_name`           | uv and pipx               |
 | `with`                   | uv                        |
 | `expose`                 | uv 0.8.5 或更新版本       |
 | `dependency_prereleases` | uv                        |
@@ -269,8 +278,7 @@ ansible = { version = "latest", uvx = false, expose = [], pipx_args = "--include
 "pypi:my-tool" = { version = "latest", registry_url = "https://packages.example.com/pypi/{}/json" }
 ```
 
-依赖锁定也会根据此 URL 推导安装索引。对于仅锁定版本的安装，请在 `uvx_args` 或 `pipx_args` 中
-单独设置安装索引。以下为 pipx 示例：
+依赖关系图锁定也会根据此 URL 确定 uv 用于解析的索引；默认情况下，该索引会取代 PyPI，因此工具的所有依赖都必须来自该注册表，如同使用完整 PyPI 镜像一样。仅托管自身软件包的注册表无法满足此要求，因此请设置 [`registry_index`](#registry-index)，让其他依赖从 PyPI 获取。仅锁定版本的安装则需在 `uvx_args` 或 `pipx_args` 中单独设置安装索引。pipx 示例：
 
 ```toml
 [tools."pypi:my-tool"]
@@ -279,6 +287,20 @@ uvx = false
 registry_url = "https://packages.example.com/pypi/{}/json"
 pipx_args = "--pip-args='--index-url https://packages.example.com/pypi/simple'"
 ```
+
+### `registry_index` {#registry-index}
+
+选择依赖关系图锁定时如何使用该工具的 [`registry_url`](#registry-url)。
+
+- `default`（默认值）：该注册表取代 PyPI，工具及其所有依赖都必须从中获取。适用于完整 PyPI 镜像和隔离网络环境。如果注册表缺少某个依赖，mise 不会从其他来源获取，而会发出警告，并为该工具保留仅含版本的锁条目。
+- `priority`：先搜索该注册表，再搜索 PyPI；适用于只托管自身软件包的注册表（Gitea、Forgejo、pypiserver 或静态索引）。
+
+```toml
+[tools]
+"pypi:my-tool" = { version = "latest", registry_url = "https://gitea.example/api/packages/org/pypi/simple/{}/", registry_index = "priority" }
+```
+
+每个项目都只会从第一个托管它的索引获取。注册表托管的软件包（包括工具本身）绝不会从 PyPI 获取，即使 PyPI 中存在同名软件包，或注册表中缺少已固定的版本也是如此。只有注册表对某个项目返回 404 时，才会回退到 PyPI。这也意味着，如果注册表刻意隐藏某个软件包（例如镜像阻止了该软件包），它将不再被排除在锁文件之外；因此，只有当注册表并非唯一可信来源时才使用 `priority`。第二个搜索的索引由 [`pypi.registry_url`](/dev-tools/backends/pypi.html#pypi.registry_url) 指定，默认是 PyPI。以此模式锁定时，mise 会忽略环境变量和 `install_env` 中的 `UV_EXTRA_INDEX_URL` 与 `UV_INDEX_URL`，确保中间不会搜索其他索引。该选项仅影响锁定过程，不会记录在锁文件中；锁文件会为每个软件包记录其来源索引。
 
 ### `install_env`
 

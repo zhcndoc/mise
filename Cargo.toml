@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/mise-cache-core",
+  "crates/mise-tls",
   "crates/mise-brew-relocation",
   "crates/mise-agent-env",
   "crates/mise-brew-metadata",
@@ -20,11 +21,12 @@ members = [
   "crates/mise-system",
   "crates/mise-config",
   "crates/mise-dotenv",
+  "crates/mise-lsp",
 ]
 
 [package]
 name = "mise"
-version = "2026.10.15"
+version = "2026.11.1"
 edition = "2024"
 description = "Dev tools, env vars, and tasks in one CLI"
 authors = ["Jeff Dickey (@jdx)"]
@@ -142,8 +144,10 @@ filetime = "0.2"
 flate2 = "1"
 futures-util = "0.3"
 mise-cache-core = { path = "crates/mise-cache-core", version = "0.1", default-features = false }
+mise-tls = { path = "crates/mise-tls", version = "0.1", default-features = false }
 mise-settings = { path = "crates/mise-settings", version = "2026" }
 mise-daemons = { path = "crates/mise-daemons", version = "0.1" }
+mise-lsp = { path = "crates/mise-lsp", version = "0.1" }
 mise-oci = { path = "crates/mise-oci", version = "0.1" }
 mise-system = { path = "crates/mise-system", version = "0.1" }
 mise-config = { path = "crates/mise-config", version = "0.1" }
@@ -189,12 +193,12 @@ path-absolutize = "4"
 petgraph = "0.8"
 phf = "0.14"
 rand = "0.10"
-rattler = { version = "0.54", default-features = false }
-rattler_conda_types = { version = "0.57", default-features = false }
-rattler_repodata_gateway = { version = "0.36", default-features = false, features = [
+rattler = { version = "0.55", default-features = false }
+rattler_conda_types = { version = "0.58", default-features = false }
+rattler_repodata_gateway = { version = "0.37", default-features = false, features = [
   "gateway",
 ] }
-rattler_solve = { version = "11", default-features = false, features = [
+rattler_solve = { version = "12", default-features = false, features = [
   "resolvo",
 ] }
 rattler_package_streaming = { version = "0.27", default-features = false }
@@ -251,7 +255,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 toml = { version = "1", features = ["parse", "preserve_order"] }
 toml_edit = { version = "0.25", features = ["parse"] }
-ubi = { version = "0.12", default-features = false }
+toml_writer = "1"
+ubi = { version = "0.13", default-features = false }
 url = "2"
 urlencoding = "2"
 usage-lib = { version = "7.0", features = ["docs"] }
@@ -326,12 +331,12 @@ phf_codegen = "0.14"
 regex = "1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
-serde-saphyr = "1"
+serde-saphyr = "2"
 toml = "1"
 
 [dev-dependencies]
 insta = { version = "1", features = ["filters", "json"] }
-jsonschema = { version = "0.59", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 mockito = "1"
 opentelemetry_sdk = { version = "0.33", default-features = false, features = [
   "testing",
@@ -349,6 +354,7 @@ native-tls = [
   "rattler_repodata_gateway/native-tls",
   "mise-cache-core/native-tls",
   "mise-util/native-tls",
+  "mise-tls/native-tls",
   "ubi/native-tls",
   "vfox/native-tls",
   "xx/native-tls",
@@ -363,6 +369,7 @@ rustls = [
   "ubi/rustls-tls",
   "vfox/rustls",
   "xx/rustls",
+  "mise-tls/rustls",
 ]
 rustls-native-roots = [
   "gix/blocking-http-transport-reqwest-rust-tls",
@@ -374,6 +381,7 @@ rustls-native-roots = [
   "ubi/rustls-tls",
   "vfox/rustls-native-roots",
   "xx/rustls-native-roots",
+  "mise-tls/rustls",
 ]
 
 [package.metadata.binstall]

@@ -19,29 +19,31 @@ outline: [2, 3]
 
 | Crate                     | Contents                                                                                                   |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `mise-util`               | 环境、目录、文件、HTTP、缓存、模板以及 `EnvDiff`/`PathEnv` 辅助功能                                         |
-| `mise-daemons`            | 守护进程声明、端口、预设和 supervisor 运行时（toolset 集成代码仍位于 `src/daemons/`）                    |
-| `mise-oci`                | OCI registry 客户端、镜像层和镜像布局（镜像构建器仍位于 `src/oci/`）                                     |
-| `mise-system`             | bootstrap、dotfiles 和历史记录模块                                                                        |
-| `mise-config`             | `mise.toml` 声明类型，目前包括 `[bootstrap]`、`[dotfiles]` 和 `[history]`                                 |
-| `mise-system-packages`    | 系统包管理器驱动，包括 apt、dnf、brew、brew-cask 等                                                        |
-| `mise-ui`                 | 终端进度报告、提示和主题                                                                                   |
-| `mise-settings`           | 根据 `settings.toml` 生成的 `Settings` 类型，以及进程级设置缓存                                              |
-| `vfox`                    | 内嵌 Lua 运行时，以及 vfox 插件使用的 hook 和模块接口                                                        |
-| `aqua-registry`           | aqua registry 的解析、软件包查找和缓存格式                                                                  |
-| `mise-bootstrap`          | Bootstrap 资源规划和依赖排序                                                                                |
-| `mise-cache-core`         | 远程任务缓存协议、内容寻址存储、身份验证和传输                                                               |
-| `mise-shim`               | `mise-shim.exe`：Windows shim 在默认 `exe` 模式下使用的原生可执行文件                                      |
-| `mise-sigstore`           | Sigstore 验证辅助功能                                                                                       |
-| `mise-agent-env`          | 根据进程环境检测 AI 编码代理                                                                                 |
-| `mise-interactive-config` | `mise edit` 使用的交互式 TOML 编辑器                                                                         |
-| `mise-brew-metadata`      | Homebrew formula 元数据模型                                                                                  |
-| `mise-brew-relocation`    | Homebrew bottle 占位符替换和二进制重定位                                                                    |
-| `mise-dotenv`             | 可明确控制变量替换行为的 dotenv 解析器                                                                        |
+| `mise-util`               | Environment, directory, file, HTTP, cache, template, and `EnvDiff`/`PathEnv` helpers                       |
+| `mise-daemons`            | Daemon declarations, ports, presets, and the supervisor runtime (the toolset glue stays in `src/daemons/`) |
+| `mise-oci`                | The OCI registry client, layers, and image layout (the image builder stays in `src/oci/`)                  |
+| `mise-system`             | The bootstrap, dotfiles, and history modules                                                               |
+| `mise-config`             | The `mise.toml` declaration types, so far for `[bootstrap]`, `[dotfiles]`, and `[history]`                 |
+| `mise-system-packages`    | System package manager drivers: apt, dnf, brew, brew-cask, and more                                        |
+| `mise-ui`                 | Progress reports, prompts, and themes for the terminal                                                     |
+| `mise-settings`           | The `Settings` types, generated from `settings.toml`, and the process-wide settings cache                  |
+| `vfox`                    | The embedded Lua runtime and the hook and module interfaces for vfox plugins                               |
+| `aqua-registry`           | Parsing, package lookup, and cache formats for aqua registries                                             |
+| `mise-bootstrap`          | Bootstrap resource planning and dependency ordering                                                        |
+| `mise-lsp`                | `mise lsp` 背后的语言服务器；mise 会将 `schema/mise.json` 和 `mise fmt` 格式化器传给它 |
+| `mise-cache-core`         | The remote task cache protocol, content-addressed storage, authentication, and transport                   |
+| `mise-shim`               | `mise-shim.exe`, the native executable that Windows shims use in the default `exe` mode                    |
+| `mise-sigstore`           | Sigstore verification helpers                                                                              |
+| `mise-tls`                | 系统信任库为空时，为 HTTPS 客户端提供根证书回退方案 |
+| `mise-agent-env`          | Detection of AI coding agents from the process environment                                                 |
+| `mise-interactive-config` | The interactive TOML editor behind `mise edit`                                                             |
+| `mise-brew-metadata`      | Homebrew formula metadata models                                                                           |
+| `mise-brew-relocation`    | Homebrew bottle placeholder and binary relocation                                                          |
+| `mise-dotenv`             | A dotenv parser with explicit control over variable substitution                                           |
 
-## 代码位置 {#where-things-live}
+## Where things live {#where-things-live}
 
-| 功能                                      | 代码                                                                                                               | 用户文档                                         |
+| Behavior                                 | Code                                                                                                               | User docs                                        |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
 | 命令、标志和帮助文本                     | `src/cli/`；`mod.rs` 负责分发，每条命令都有对应文件或目录，例如 `use.rs`、`exec.rs` 或 `tasks/`              | [CLI 参考](/cli/)                                |
 | 各命令会修改的内容                        | `src/cli/command_effects.rs`                                                                                       |                                                  |

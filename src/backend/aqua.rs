@@ -4,15 +4,14 @@ use crate::backend::{SecurityFeature, VersionInfo};
 
 use crate::args::BackendArg;
 use crate::backend::platform_target::PlatformTarget;
-use crate::backend::static_helpers::get_filename_from_url;
+use crate::backend::static_helpers::{ensure_safe_relative_bin_path, get_filename_from_url};
 use crate::config::{Settings, SettingsExt};
 use crate::dirs;
 use crate::file::{ExtractOptions, ExtractionFormat};
 use crate::http::HTTP;
 use crate::install_context::InstallContext;
-use crate::lockfile::{PlatformInfo, ProvenanceType};
+use crate::lockfile::{ChecksumSource, PlatformInfo, ProvenanceType};
 use crate::path::{Path, PathBuf, PathExt};
-use crate::platform::{ARCH, OS};
 use crate::plugins::VERSION_REGEX;
 use crate::registry::REGISTRY;
 use crate::toolset::{EPHEMERAL_OPT_KEYS, ToolRequest, ToolVersion, ToolVersionOptions};
@@ -211,6 +210,14 @@ enum GithubAttestationStatus {
 
 /// What `install_version_` needs before it fetches anything, and the point at which aqua can
 /// already tell that a version is not installable on this machine.
+/// The version as aqua templates it (`{{.Version}}`), and the release tag it
+/// names, when mise knows it.
+#[derive(Clone, Copy)]
+struct AquaVersion<'a> {
+    v: &'a str,
+    release_tag: Option<&'a str>,
+}
+
 struct ResolvedPackage {
     platform_key: String,
     existing_platform: Option<String>,
@@ -218,6 +225,10 @@ struct ResolvedPackage {
     pkg: AquaPackage,
     v: String,
     v_prefixed: Option<String>,
+    /// `v`, when it is the release tag and not a guess: the tag was listed, or
+    /// is in the lockfile's URL and maps back to the version, or the recipe's
+    /// `version_prefix` makes it.
+    release_tag: Option<String>,
 }
 
 /// The versions an aqua fuzzy `query` selects. Resolution runs this for every
@@ -266,6 +277,10 @@ pub(crate) fn aqua_fuzzy_match(
 impl Backend for AquaBackend {
     fn version_order(&self, opts: &ToolVersionOptions) -> Result<VersionOrder> {
         VersionOrder::from_options_or(opts, self.ba.registry_version_order().unwrap_or_default())
+    }
+
+    fn resolves_locked_url_from_checksum(&self) -> bool {
+        true
     }
 
     fn get_type(&self) -> BackendType {
@@ -489,6 +504,7 @@ impl Backend for AquaBackend {
             mut pkg,
             v,
             v_prefixed,
+            release_tag,
         } = self.resolve_validated_package(&tv).await?;
 
         // Validate lockfile URL matches expected asset pattern from registry
@@ -558,7 +574,12 @@ impl Backend for AquaBackend {
                 tv.version.clone()
             };
             (url, existing_url_api.clone(), v, filename, None)
-        } else if ctx.locked {
+        } else if ctx.locked
+            && !tv
+                .lock_platforms
+                .get(&platform_key)
+                .is_some_and(PlatformInfo::is_pinned_without_url)
+        {
             bail!(
                 "No lockfile URL found for {} on platform {} (--locked mode requires pre-resolved URLs)",
                 self.id,
@@ -609,6 +630,13 @@ impl Backend for AquaBackend {
             (url, url_api, v.to_string(), filename, digest)
         };
 
+        // A lockfile's URL only hints at `v` (the prefix may not be in it), so
+        // the tag is the one resolved before the URL was read.
+        let release_tag = match validated_url {
+            Some(_) => release_tag,
+            None => selected_release_tag(&pkg, &v, release_tag.as_deref()),
+        };
+
         let original_linux_replacement = pkg.replacements.get("linux").cloned();
         pkg = Self::apply_selected_asset_libc_replacement(pkg, os(), &filename);
         let selected_libc_sibling =
@@ -619,7 +647,11 @@ impl Backend for AquaBackend {
         // Public repos download from the browser URL; private repos return 404/HTML there
         // and must be fetched from the API asset endpoint instead.
         let download_url = select_github_download_url(pkg.private, &url, url_api.as_deref()).await;
-        self.download(ctx, &tv, &download_url, &filename, api_digest.as_deref())
+        // verify() still compares a digest mise-versions supplied after the
+        // download; it just may not pick a kept file.
+        let pin_digest =
+            crate::versions_host::digest_download_pin(api_digest.as_deref(), url_api.as_deref());
+        self.download(ctx, &tv, &download_url, &filename, pin_digest.as_deref())
             .await?;
 
         // Snapshot before any mutation so verify() knows whether the lockfile
@@ -645,8 +677,19 @@ impl Backend for AquaBackend {
         if pkg.checksum.as_ref().is_some_and(|c| c.enabled()) || api_digest.is_some() {
             ctx.pr.next_operation();
         }
-        self.verify(ctx, &mut tv, &pkg, &v, &filename, lockfile_has_checksum)
-            .await?;
+        let version = AquaVersion {
+            v: &v,
+            release_tag: release_tag.as_deref(),
+        };
+        self.verify(
+            ctx,
+            &mut tv,
+            &pkg,
+            version,
+            &filename,
+            lockfile_has_checksum,
+        )
+        .await?;
 
         // Advance to extraction operation if applicable
         if needs_extraction(format, &pkg.package_type()) {
@@ -859,6 +902,8 @@ impl Backend for AquaBackend {
                 }
             });
         }
+        ensure_url_safe_version(&v)?;
+        let known_tag = (tag.is_some() || pkg.version_prefix.is_some()).then(|| v.clone());
 
         // Check if this platform is supported
         if !is_platform_supported(&pkg.supported_envs, target_os, target_arch) {
@@ -940,6 +985,13 @@ impl Backend for AquaBackend {
             pkg = Self::apply_selected_asset_libc_replacement(pkg, target_os, filename);
         }
 
+        // A digest from a release mise-versions served is recorded but marked,
+        // unless the lock-time provenance check below downloads the artifact.
+        let mut mirror_digest = checksum.is_some()
+            && url_api
+                .as_deref()
+                .is_some_and(crate::versions_host::is_mirrored_asset_api_url);
+
         // Try to get checksum from checksum file if not available from GitHub API
         let mut checksum = match checksum {
             Some(c) => Some(c),
@@ -959,8 +1011,15 @@ impl Backend for AquaBackend {
         };
 
         // Detect provenance from aqua registry config
-        let mut provenance = self.detect_provenance_type(&pkg);
-        if matches!(provenance, Some(ProvenanceType::GithubAttestations))
+        // A registry requirement is recorded without asking anyone (a "none" answer is
+        // exactly what it must not trust); the lock-time verification below still has to
+        // pass.
+        let required = self.registry_required_provenance(tv, &pkg);
+        let mut provenance = required
+            .clone()
+            .or_else(|| self.detect_provenance_type(&pkg));
+        if required.is_none()
+            && matches!(provenance, Some(ProvenanceType::GithubAttestations))
             && let Some(digest) = checksum.as_deref().filter(|d| d.starts_with("sha256:"))
             && let Some(attestations) = &pkg.github_artifact_attestations
         {
@@ -1018,6 +1077,7 @@ impl Backend for AquaBackend {
         }
 
         // Record only cryptographically verified provenance for the target artifact.
+        let mut verified_at_lock_time = false;
         if provenance.is_some()
             && let Some(ref artifact_url) = url
         {
@@ -1027,15 +1087,23 @@ impl Backend for AquaBackend {
             match verifier
                 .verify_provenance_at_lock_time(
                     &pkg,
-                    &v,
+                    AquaVersion {
+                        v: &v,
+                        release_tag: selected_release_tag(&pkg, &v, known_tag.as_deref())
+                            .as_deref(),
+                    },
                     artifact_url,
                     provenance.as_ref().unwrap(),
+                    required.is_some(),
                     &mut checksum,
                 )
                 .await
             {
                 Ok(verified) => {
                     provenance = verified;
+                    // The artifact was downloaded and checked against it.
+                    mirror_digest = false;
+                    verified_at_lock_time = true;
                 }
                 Err(e) => {
                     return Err(e.wrap_err(format!(
@@ -1045,7 +1113,18 @@ impl Backend for AquaBackend {
                 }
             }
         }
+        if let Some(required) = &required
+            && (!verified_at_lock_time || provenance.as_ref() != Some(required))
+        {
+            bail!(
+                "mise registry requires {required} provenance for {}@{} but none was verified. \
+                 This may indicate a downgrade attack.",
+                self.ba(),
+                tv.version
+            );
+        }
         Ok(PlatformInfo {
+            checksum_source: mirror_digest.then_some(ChecksumSource::VersionsHost),
             url,
             url_api,
             checksum,
@@ -1103,6 +1182,7 @@ impl AquaBackend {
         let locked_tag = existing_platform
             .as_deref()
             .and_then(github_release_tag_from_url);
+        let tag_is_locked = locked_tag.is_some();
         let tag = if let Some(tag) = locked_tag {
             Some(tag)
         } else if existing_platform.is_some() {
@@ -1137,6 +1217,17 @@ impl AquaBackend {
         let mut v_prefixed =
             (tag.is_none() && !tv.version.starts_with('v')).then(|| format!("v{v}"));
         let pkg = AQUA_REGISTRY.package(&self.id).await?;
+        // A listed tag was mapped to the version when it was listed; a locked
+        // URL's tag has to be mapped here, or it could name another release.
+        let current = PlatformTarget::from_current();
+        let tag_names_version = !tag_is_locked
+            || tag.as_deref().is_some_and(|tag| {
+                let (target_os, target_arch) = Self::to_aqua_platform(&current);
+                versioned_package_from_tag(&pkg, tag, target_os, target_arch, None)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(version, _)| version == tv.version)
+            });
         let versions = resolved_package_version_candidates(&tv.version, tag.as_deref(), &pkg);
         let versions = versions.iter().map(|v| v.as_ref()).collect_vec();
         let pkg = Self::package_with_options_for_pkg(tv, pkg, &versions)?;
@@ -1154,6 +1245,11 @@ impl AquaBackend {
             });
         }
         validate(&pkg, &v)?;
+        ensure_url_safe_version(&v)?;
+        let release_tag = match tag {
+            Some(_) => tag_names_version.then(|| v.clone()),
+            None => pkg.version_prefix.is_some().then(|| v.clone()),
+        };
 
         Ok(ResolvedPackage {
             platform_key,
@@ -1162,6 +1258,7 @@ impl AquaBackend {
             pkg,
             v,
             v_prefixed,
+            release_tag,
         })
     }
 
@@ -1197,9 +1294,14 @@ impl AquaBackend {
         Self::package_with_options_for_pkg(tv, pkg, &versions)
     }
 
+    /// The aqua platform name and architecture for a target, so a lockfile
+    /// target resolves the assets that platform would install.
     fn to_aqua_platform(target: &PlatformTarget) -> (&str, &str) {
         let target_os = match target.os_name() {
             "macos" => "darwin",
+            // No aqua recipe publishes Android assets. The Linux build is the
+            // closest one, and Android keeps the musl-only preference below.
+            "android" => "linux",
             other => other,
         };
         let target_arch = to_aqua_arch(target.arch_name());
@@ -1232,6 +1334,9 @@ impl AquaBackend {
     /// has no musl build for mise to invent. The tool's `libc` option and `libc = "musl"` in
     /// settings are explicit, so they still select the musl build.
     fn asset_libc(target: &PlatformTarget, tool_libc: Option<&str>) -> Option<String> {
+        if target.os_name() == "android" {
+            return Some("musl".to_string());
+        }
         let libc = Self::target_libc(target, tool_libc)?;
         if libc == "musl" && !Self::musl_requested(tool_libc) {
             return None;
@@ -1243,7 +1348,14 @@ impl AquaBackend {
         tool_libc == Some("musl") || Settings::get().libc() == Some("musl")
     }
 
+    /// The libc qualifier for an asset on a target, which makes an Android target
+    /// a musl target whatever the tool asked for.
     fn target_variant_libc(target: &PlatformTarget, tool_libc: Option<&str>) -> Option<String> {
+        // Bionic only runs static musl binaries, so an Android target is a musl
+        // target whatever the tool asked for.
+        if target.os_name() == "android" {
+            return Some("musl".to_string());
+        }
         if target.os_name() != "linux" {
             return None;
         }
@@ -1518,6 +1630,28 @@ impl AquaBackend {
         Some((checksum, attestations))
     }
 
+    /// The provenance the mise registry requires for `tv`: GitHub attestations, when
+    /// the registry marks this backend as publishing them from a version on
+    /// (`attestations_since`) and the aqua recipe declares them. From that version
+    /// on, "no attestation for this file" is a downgrade, not a release that has
+    /// none. Earlier versions, versions the registry can't place, and users who
+    /// turned GitHub attestations off keep the recipe's best-effort check.
+    fn registry_required_provenance(
+        &self,
+        tv: &ToolVersion,
+        pkg: &AquaPackage,
+    ) -> Option<ProvenanceType> {
+        let settings = Settings::get();
+        (settings.github_attestations
+            && settings.aqua.github_attestations
+            && Self::has_github_attestations_config(pkg)
+            && crate::registry::requires_github_attestations(
+                &self.ba.full_without_opts(),
+                &tv.version,
+            ))
+        .then_some(ProvenanceType::GithubAttestations)
+    }
+
     fn has_github_attestations_config(pkg: &AquaPackage) -> bool {
         pkg.github_artifact_attestations
             .as_ref()
@@ -1677,11 +1811,13 @@ impl AquaBackend {
     async fn verify_provenance_at_lock_time(
         &self,
         pkg: &AquaPackage,
-        v: &str,
+        version: AquaVersion<'_>,
         artifact_url: &str,
         detected: &ProvenanceType,
+        attestations_required: bool,
         checksum: &mut Option<String>,
     ) -> Result<Option<ProvenanceType>> {
+        let AquaVersion { v, release_tag } = version;
         let tmp_dir = Self::lock_time_download_dir()?;
         let filename = get_filename_from_url(artifact_url);
         let artifact_path = tmp_dir.path().join(&filename);
@@ -1706,22 +1842,20 @@ impl AquaBackend {
         }
         let expected_checksum = checksum.as_deref();
 
-        match detected {
+        // GitHub attestations are the only mechanism that can come back with nothing to
+        // check. As at install, that is not the end of it: the next mechanism the registry
+        // declares (SLSA, cosign or minisign) still has to vouch for the artifact, or bytes
+        // nobody signed would be locked on the strength of their own checksum, and a later
+        // install would trust that entry without looking at any signature.
+        let detected = match detected {
             ProvenanceType::GithubAttestations => {
-                if let Some(attestations) = pkg
+                let status = if let Some(attestations) = pkg
                     .github_artifact_attestations
                     .as_ref()
                     .filter(|attestations| attestations.enabled != Some(false))
                 {
-                    match self
-                        .run_github_attestation_check(&artifact_path, pkg, attestations)
+                    self.run_github_attestation_check(&artifact_path, pkg, attestations)
                         .await?
-                    {
-                        GithubAttestationStatus::Verified => {
-                            Ok(Some(ProvenanceType::GithubAttestations))
-                        }
-                        GithubAttestationStatus::Unavailable => Ok(None),
-                    }
                 } else {
                     let (checksum_config, attestations) =
                         Self::checksum_github_attestations_config(pkg).wrap_err(
@@ -1730,26 +1864,50 @@ impl AquaBackend {
                     let checksum_path = self
                         .download_checksum_file(checksum_config, pkg, v, tmp_dir.path(), None)
                         .await?;
-                    match self
+                    let status = self
                         .run_github_attestation_check(&checksum_path, pkg, attestations)
-                        .await?
-                    {
-                        GithubAttestationStatus::Verified => {
-                            self.verify_checksum_file_matches_expected(
-                                checksum_config,
-                                &checksum_path,
-                                &filename,
-                                expected_checksum,
-                            )?;
-                            Ok(Some(ProvenanceType::GithubAttestations))
+                        .await?;
+                    if status == GithubAttestationStatus::Verified {
+                        self.verify_checksum_file_matches_expected(
+                            checksum_config,
+                            &checksum_path,
+                            &artifact_path,
+                            &filename,
+                            expected_checksum,
+                        )?;
+                    }
+                    status
+                };
+                match status {
+                    GithubAttestationStatus::Verified => {
+                        return Ok(Some(ProvenanceType::GithubAttestations));
+                    }
+                    GithubAttestationStatus::Unavailable if attestations_required => {
+                        bail!(
+                            "mise registry requires GitHub artifact attestations for {}/{} {v} \
+                             but none exist for {filename}. This may indicate a downgrade attack.",
+                            pkg.repo_owner,
+                            pkg.repo_name
+                        );
+                    }
+                    GithubAttestationStatus::Unavailable => {
+                        match self.detect_non_github_provenance_type(pkg) {
+                            Some(next) => next,
+                            None => return Ok(None),
                         }
-                        GithubAttestationStatus::Unavailable => Ok(None),
                     }
                 }
             }
+            detected => detected.clone(),
+        };
+
+        match detected {
+            ProvenanceType::GithubAttestations => {
+                unreachable!("detect_non_github_provenance_type never returns GitHub attestations")
+            }
             ProvenanceType::Slsa { .. } => {
                 let provenance_url = self
-                    .run_slsa_check(&artifact_path, pkg, v, tmp_dir.path(), None)
+                    .run_slsa_check(&artifact_path, pkg, v, release_tag, tmp_dir.path(), None)
                     .await?;
                 Ok(Some(ProvenanceType::Slsa {
                     url: Some(provenance_url),
@@ -1797,6 +1955,7 @@ impl AquaBackend {
                     self.verify_checksum_file_matches_expected(
                         checksum_config,
                         &checksum_path,
+                        &artifact_path,
                         &filename,
                         expected_checksum,
                     )?;
@@ -1819,6 +1978,7 @@ impl AquaBackend {
                     self.verify_checksum_file_matches_expected(
                         checksum_config,
                         &checksum_path,
+                        &artifact_path,
                         &filename,
                         expected_checksum,
                     )?;
@@ -1989,15 +2149,23 @@ impl AquaBackend {
         artifact_path: &Path,
         pkg: &AquaPackage,
         v: &str,
+        release_tag: Option<&str>,
         download_dir: &Path,
         pr: Option<&dyn SingleReport>,
     ) -> Result<String> {
         let (identity, issuer) = self.slsa_signer_identity(pkg, v)?.ok_or_else(|| {
             eyre!("SLSA provenance requires signer_identity and signer_issuer in Aqua registry metadata")
         })?;
+        let source_repository = slsa_source_repository(pkg);
+        let source_tag = slsa_source_tag(pkg, release_tag);
+        if source_tag.is_none() {
+            debug!("no release tag known for {v}; not checking the SLSA provenance's tag");
+        }
         let signer = crate::github::sigstore::SlsaSignerIdentity {
             identity: &identity,
             issuer: &issuer,
+            source_repository: Some(&source_repository),
+            source_tag,
         };
         let target = self.verification_target();
         let (provenance_url, url_api) = self
@@ -2352,10 +2520,16 @@ impl AquaBackend {
         }
     }
 
+    /// Bind the downloaded artifact to a checksum file whose signature has already been
+    /// verified. The expected checksum (usually GitHub's asset digest, which is sha256 and
+    /// follows a re-upload) can only be compared with the signed digest when both use the
+    /// same algorithm. Otherwise the artifact itself is hashed with the signed file's
+    /// algorithm: skipping the comparison would leave nothing tying it to the signature.
     fn verify_checksum_file_matches_expected(
         &self,
         checksum_config: &AquaChecksum,
         checksum_path: &Path,
+        artifact_path: &Path,
         artifact_filename: &str,
         expected_checksum: Option<&str>,
     ) -> Result<()> {
@@ -2365,29 +2539,37 @@ impl AquaBackend {
             checksum_config,
             artifact_filename,
         )?;
-        let checksum_val = format!("{}:{}", checksum_config.algorithm(), checksum_str);
+        let algorithm = checksum_config.algorithm();
+        let checksum_val = format!("{algorithm}:{checksum_str}");
         if let Some(expected) = expected_checksum
             && same_checksum_algorithm(expected, &checksum_val)
-            && expected != checksum_val
         {
-            bail!(
-                "verified checksum file digest does not match expected checksum for {artifact_filename}"
-            );
+            if expected != checksum_val {
+                bail!(
+                    "verified checksum file digest does not match expected checksum for {artifact_filename}"
+                );
+            }
+            return Ok(());
         }
-        Ok(())
+        crate::hash::ensure_checksum(artifact_path, &checksum_str, None, algorithm.as_ref())
+            .wrap_err_with(|| {
+                format!(
+                    "verified checksum file digest does not match downloaded {artifact_filename}"
+                )
+            })
     }
 
     pub(crate) fn from_arg(ba: BackendArg) -> Self {
         let full = ba.full_without_opts();
         let mut id = full.split_once(":").unwrap_or(("", &full)).1;
         if !id.contains("/") {
+            // A bare name that is not in mise's registry may be a package of a custom
+            // aqua registry, which can only be looked up asynchronously. If no registry
+            // has it, `AQUA_REGISTRY.package` reports "package not found" on first use.
             id = REGISTRY
                 .get(id)
                 .and_then(|t| t.backends.iter().find_map(|s| s.full.strip_prefix("aqua:")))
-                .unwrap_or_else(|| {
-                    warn!("invalid aqua tool: {}", id);
-                    id
-                });
+                .unwrap_or(id);
         }
         let cache_path = ba.cache_path().to_path_buf();
         Self {
@@ -2402,6 +2584,9 @@ impl AquaBackend {
             version_tags_cache: CacheManagerBuilder::new(
                 cache_path.join("version_tags_v2.msgpack.z"),
             )
+            // The directory is named by the kebab-cased short name, which two
+            // packages can share.
+            .with_cache_key(id.to_string())
             .with_fresh_duration(Settings::get().fetch_remote_versions_cache())
             .build(),
         }
@@ -2827,9 +3012,21 @@ impl AquaBackend {
         ))
     }
 
+    /// Built from path segments like the API URLs below, so the tag (which may hold `/`, as in
+    /// `cli/v1.2.3`) cannot add `..` segments, a query or a fragment.
     fn github_archive_url(&self, pkg: &AquaPackage, v: &str) -> String {
-        let gh_id = format!("{}/{}", pkg.repo_owner, pkg.repo_name);
-        format!("https://github.com/{gh_id}/archive/refs/tags/{v}.tar.gz")
+        let mut url = Url::parse("https://github.com").expect("GitHub URL should be valid");
+        url.path_segments_mut()
+            .expect("GitHub URL should support path segments")
+            .extend([
+                pkg.repo_owner.as_str(),
+                pkg.repo_name.as_str(),
+                "archive",
+                "refs",
+                "tags",
+            ])
+            .extend(format!("{v}.tar.gz").split('/'));
+        url.to_string()
     }
 
     fn github_archive_api_url(&self, pkg: &AquaPackage, v: &str) -> String {
@@ -2847,9 +3044,17 @@ impl AquaBackend {
     }
 
     fn github_content_url(&self, pkg: &AquaPackage, v: &str) -> String {
-        let gh_id = format!("{}/{}", pkg.repo_owner, pkg.repo_name);
-        let path = pkg.path.as_deref().unwrap();
-        format!("https://raw.githubusercontent.com/{gh_id}/{v}/{path}")
+        let mut url = Url::parse("https://raw.githubusercontent.com")
+            .expect("GitHub content URL should be valid");
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .expect("GitHub content URL should support path segments");
+            segments.extend([pkg.repo_owner.as_str(), pkg.repo_name.as_str()]);
+            segments.extend(v.split('/'));
+            segments.extend(pkg.path.as_deref().unwrap().split('/'));
+        }
+        url.to_string()
     }
 
     fn github_content_api_url(&self, pkg: &AquaPackage, v: &str) -> String {
@@ -3030,7 +3235,7 @@ impl AquaBackend {
         let pinned = tv
             .lock_platforms
             .get(&self.get_platform_key())
-            .and_then(|platform| platform.checksum.clone())
+            .and_then(|platform| platform.pin_checksum().cloned())
             .or_else(|| api_digest.map(str::to_string));
         let headers = crate::http::host_auth_headers(&reqwest::Url::parse(url)?)?;
         HTTP.download_file_linked(
@@ -3049,7 +3254,7 @@ impl AquaBackend {
         ctx: &InstallContext,
         tv: &mut ToolVersion,
         pkg: &AquaPackage,
-        v: &str,
+        version: AquaVersion<'_>,
         filename: &str,
         lockfile_has_checksum: bool,
     ) -> Result<()> {
@@ -3065,14 +3270,21 @@ impl AquaBackend {
         let settings = Settings::get();
         let force_verify = settings.force_provenance_verify();
         let platform_key = self.get_platform_key();
-        let has_lockfile_integrity = tv
-            .lock_platforms
-            .get(&platform_key)
-            .is_some_and(PlatformInfo::has_checksum_and_provenance);
-        let locked_provenance = tv
+        let recorded_provenance = tv
             .lock_platforms
             .get(&platform_key)
             .and_then(|p| p.provenance.clone());
+        // A lockfile entry stands in for verification only when it records what the
+        // registry requires: it may have been written after a wrong "no attestations".
+        let required = self.registry_required_provenance(tv, pkg);
+        let has_lockfile_integrity = tv
+            .lock_platforms
+            .get(&platform_key)
+            .is_some_and(PlatformInfo::has_checksum_and_provenance)
+            && required
+                .as_ref()
+                .is_none_or(|required| recorded_provenance.as_ref() == Some(required));
+        let locked_provenance = required.clone().or(recorded_provenance.clone());
         if lockfile_has_checksum && has_lockfile_integrity && !force_verify {
             self.ensure_provenance_setting_enabled(tv, &platform_key)?;
         } else if !force_verify && locked_provenance.is_none() && lockfile_has_checksum {
@@ -3084,8 +3296,9 @@ impl AquaBackend {
         } else {
             // Verifying for real needs the expected signer; without one the locked SLSA
             // requirement would be dropped silently.
-            Self::ensure_locked_slsa_signer(tv, locked_provenance.as_ref(), pkg)?;
-            self.verify_provenance(ctx, tv, pkg, v, filename).await?;
+            Self::ensure_locked_slsa_signer(tv, recorded_provenance.as_ref(), pkg)?;
+            self.verify_provenance(ctx, tv, pkg, version, filename, required)
+                .await?;
         }
 
         let tarball_path = tv.download_path().join(filename);
@@ -3115,17 +3328,22 @@ impl AquaBackend {
         ctx: &InstallContext,
         tv: &mut ToolVersion,
         pkg: &AquaPackage,
-        v: &str,
+        version: AquaVersion<'_>,
         filename: &str,
+        required: Option<ProvenanceType>,
     ) -> Result<()> {
+        let AquaVersion { v, release_tag } = version;
         // Check if the lockfile expects provenance for this platform, then clear it
-        // so we can detect whether verification actually re-set it
+        // so we can detect whether verification actually re-set it. The registry's
+        // requirement, when there is one, takes precedence: a lockfile may have been
+        // written without it.
         let platform_key = self.get_platform_key();
         let locked_provenance = tv
             .lock_platforms
             .get_mut(&platform_key)
             .and_then(|pi| pi.provenance.take());
-        let expected_provenance = locked_provenance.as_ref();
+        let expected = required.or(locked_provenance);
+        let expected_provenance = expected.as_ref();
 
         // When the lockfile specifies a provenance type, only run that specific mechanism.
         // This prevents false-positive downgrade errors when a tool supports multiple mechanisms
@@ -3158,7 +3376,8 @@ impl AquaBackend {
                 .and_then(|pi| pi.provenance.as_ref())
                 .is_some_and(|p| *p > ProvenanceType::Slsa { url: None });
             if !already_verified {
-                self.verify_slsa(ctx, tv, pkg, v, filename).await?;
+                self.verify_slsa(ctx, tv, pkg, v, release_tag, filename)
+                    .await?;
             }
         }
         if !skip_minisign {
@@ -3304,14 +3523,20 @@ impl AquaBackend {
                     self.parse_checksum_from_content(&checksum_content, checksum, filename)?;
                 let checksum_val = format!("{}:{}", checksum.algorithm(), checksum_str);
                 let platform_key = self.get_platform_key();
+                let artifact_path = tv.download_path().join(filename);
                 let platform_info = tv.lock_platforms.entry(platform_key).or_default();
-                if let Some(existing_checksum) = &platform_info.checksum
-                    && same_checksum_algorithm(existing_checksum, &checksum_val)
-                    && existing_checksum != &checksum_val
-                {
-                    bail!(
-                        "verified checksum file digest does not match existing checksum for {filename}"
-                    );
+                if let Some(existing_checksum) = &platform_info.checksum {
+                    if same_checksum_algorithm(existing_checksum, &checksum_val) {
+                        if existing_checksum != &checksum_val {
+                            bail!(
+                                "verified checksum file digest does not match existing checksum for {filename}"
+                            );
+                        }
+                    } else if let Some((algorithm, expected)) = existing_checksum.split_once(':') {
+                        // The signed file uses another algorithm, so replacing the
+                        // pin would drop it unchecked.
+                        crate::hash::ensure_checksum(&artifact_path, expected, None, algorithm)?;
+                    }
                 }
                 platform_info.checksum = Some(checksum_val);
             }
@@ -3335,7 +3560,7 @@ impl AquaBackend {
                     .map(|g| g.to_string())
                     .unwrap_or_else(|| "no verification".to_string());
                 return Err(eyre!(
-                    "Lockfile requires {expected} provenance for {tv} but {got_str} was used. \
+                    "Lockfile or mise registry requires {expected} provenance for {tv} but {got_str} was used. \
                      This may indicate a downgrade attack. Enable the corresponding verification setting \
                      or update the lockfile."
                 ));
@@ -3414,6 +3639,7 @@ impl AquaBackend {
         tv: &mut ToolVersion,
         pkg: &AquaPackage,
         v: &str,
+        release_tag: Option<&str>,
         filename: &str,
     ) -> Result<()> {
         let settings = Settings::get();
@@ -3437,6 +3663,7 @@ impl AquaBackend {
                     &artifact_path,
                     pkg,
                     v,
+                    release_tag,
                     &tv.download_path(),
                     Some(ctx.pr.as_ref()),
                 )
@@ -3614,12 +3841,9 @@ impl AquaBackend {
         }
         let bin_paths: Vec<_> = bin_names
             .iter()
-            .map(|name| {
-                let name_str: &str = name.as_ref();
-                install_path.join(name_str)
-            })
-            .map(|path| complete_windows_ext(path, pkg, os(), v))
-            .collect();
+            .map(|name| join_registry_path(&install_path, name))
+            .map_ok(|path| complete_windows_ext(path, pkg, os(), v))
+            .collect::<Result<_>>()?;
         let first_bin_path = bin_paths
             .first()
             .expect("at least one bin path should exist");
@@ -3636,6 +3860,9 @@ impl AquaBackend {
                 extraction_format,
                 &extract_opts,
             )?;
+            #[cfg(unix)]
+            Self::rebase_embedded_guest_rootfs_links(&install_path, pkg)?;
+            file::ensure_symlinks_stay_within(&install_path)?;
             make_executable = true;
         } else if let AquaPackageType::GithubContent = pkg.package_type() {
             if let Some(parent) = first_bin_path.parent() {
@@ -3663,6 +3890,11 @@ impl AquaBackend {
                 extraction_format,
                 &extract_opts,
             )?;
+            #[cfg(unix)]
+            Self::rebase_embedded_guest_rootfs_links(&install_path, pkg)?;
+            // The bins are chmodded and linked by name below, which would
+            // follow a link the archive shipped out of the install directory.
+            file::ensure_symlinks_stay_within(&install_path)?;
             make_executable = true;
         }
 
@@ -3681,12 +3913,39 @@ impl AquaBackend {
             }
         }
 
+        // Bionic provides no glibc or musl loader, so an asset that names no
+        // libc can still be linked against one and die at exec. The interpreter
+        // says which build it is, whatever the file is called.
+        if Settings::get().os() == "android" {
+            Self::ensure_binaries_run_on_android(&srcs)?;
+        }
+
         let raw_opts = tv.request.options();
         let opts = AquaOptions::new(&raw_opts);
         if opts.symlink_bins() || selected_libc_sibling {
             self.create_symlink_bin_dir(tv, &srcs)?;
         }
 
+        Ok(())
+    }
+
+    /// Reject an installed binary whose dynamic loader Android does not have.
+    ///
+    /// Reading the interpreter, rather than trusting the asset name, also covers
+    /// an unqualified `...-linux` asset that is really linked against glibc: the
+    /// name cannot tell a static build from a dynamically linked one.
+    fn ensure_binaries_run_on_android(srcs: &[AquaFileLink]) -> Result<()> {
+        for src in srcs.iter().map(|link| &link.src) {
+            let Some(interpreter) = elf_interpreter(src) else {
+                continue;
+            };
+            if !is_android_interpreter(&interpreter) {
+                bail!(
+                    "{} needs the dynamic loader {interpreter}, which Android does not provide; the release has no static build for this platform",
+                    src.display()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -3707,6 +3966,43 @@ impl AquaBackend {
             }
         }
         Ok(())
+    }
+
+    /// Rebase the guest-rootfs links shipped by SmolVM-style sidecars before
+    /// applying the archive containment check. The marker is the guest agent
+    /// binary, which is mounted with this directory as the guest's `/`.
+    #[cfg(unix)]
+    fn rebase_embedded_guest_rootfs_links(install_path: &Path, pkg: &AquaPackage) -> Result<()> {
+        if pkg.repo_owner != "smol-machines" || pkg.repo_name != "smolvm" {
+            return Ok(());
+        }
+        for entry in fs::read_dir(install_path)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let rootfs = entry.path().join("agent-rootfs");
+            if Self::is_smolvm_agent_rootfs(&rootfs) {
+                file::rebase_guest_rootfs_absolute_symlinks(&rootfs)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn is_smolvm_agent_rootfs(rootfs: &Path) -> bool {
+        let mut path = rootfs.to_path_buf();
+        for component in ["usr", "local", "bin"] {
+            if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+                return false;
+            }
+            path.push(component);
+        }
+        if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            return false;
+        }
+        fs::symlink_metadata(path.join("smolvm-agent"))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
     }
 
     /// Creates a `.mise-bins` directory with symlinks only to the binaries defined in the aqua registry.
@@ -3794,7 +4090,7 @@ impl AquaBackend {
                 .and_then(|n| n.split('/').next_back())
                 .unwrap_or(&pkg.repo_name);
 
-            let mut path = install_path.join(fallback_name);
+            let mut path = join_registry_path(install_path, fallback_name)?;
             path = complete_windows_ext(path, pkg, os, version);
 
             return Ok(vec![AquaFileLink {
@@ -3848,11 +4144,13 @@ impl AquaBackend {
             .into_iter()
             .map(|src| {
                 let src = src.unwrap_or_else(|| f.name.clone());
-                let mut src = install_path.join(src);
-                let mut dst = src
-                    .parent()
-                    .wrap_err_with(|| format!("file source has no parent: {}", src.display()))?
-                    .join(link.as_deref().unwrap_or(f.name.as_str()));
+                let mut src = join_registry_path(install_path, &src)?;
+                let mut dst = join_registry_path(
+                    src.parent().wrap_err_with(|| {
+                        format!("file source has no parent: {}", src.display())
+                    })?,
+                    link.as_deref().unwrap_or(f.name.as_str()),
+                )?;
                 src = complete_windows_ext(src, pkg, os, version);
                 dst = complete_windows_dst_ext(&src, dst, pkg, os, version);
 
@@ -3911,6 +4209,17 @@ impl AquaBackend {
         }
         Ok(())
     }
+}
+
+/// Joins a path a registry entry names (`files[].src`, `name`, `link`, or the
+/// package name when there are no files) onto a directory of the install. A
+/// downloaded registry is remote data, so an absolute path or `..` must not
+/// place the download, its chmod or its link outside the install directory.
+fn join_registry_path(dir: &Path, path: &str) -> Result<PathBuf> {
+    // The standard registry has `src: ./cmd/topicctl`.
+    let rel = path.strip_prefix("./").unwrap_or(path);
+    ensure_safe_relative_bin_path("aqua registry file", rel)?;
+    Ok(dir.join(path))
 }
 
 fn same_disk_entry(a: &Path, b: &Path) -> bool {
@@ -4057,7 +4366,9 @@ async fn select_github_download_url(
     api_url: Option<&str>,
 ) -> String {
     match api_url {
-        Some(api_url) if private => api_url.to_string(),
+        // No probe for private repos, but an asset ID that mise-versions or a
+        // lockfile supplied still has to be confirmed before it is used.
+        Some(api_url) if private => github::checked_api_asset_url(browser_url, api_url).await,
         Some(api_url) => github::pick_reachable_asset_url(browser_url, api_url).await,
         None => browser_url.to_string(),
     }
@@ -4415,6 +4726,31 @@ async fn get_tags_with_release_dates(
         .collect())
 }
 
+/// The version or tag is rendered into registry URL templates (`{{.Version}}`) and checksum and
+/// signature options, none of which encode it. It can come from a config file or from release
+/// metadata, so refuse anything that would change the URL's structure: a percent escape (`%2e%2e`
+/// resolves like `..`), a query or fragment, a backslash, or a `.`/`..` path segment.
+fn ensure_url_safe_version(version: &str) -> Result<()> {
+    if let Some(c) = version
+        .chars()
+        .find(|c| matches!(c, '%' | '#' | '?' | '\\'))
+    {
+        bail!(
+            "invalid version {version:?}: contains {c:?}, which cannot be used in a download URL"
+        );
+    }
+    if version
+        .split('/')
+        .any(|segment| matches!(segment, "." | ".."))
+    {
+        bail!("invalid version {version:?}: contains a relative path segment");
+    }
+    Ok(())
+}
+
+/// Reject a package the aqua registry says cannot be installed here: no asset,
+/// an upstream error, an environment the recipe does not support, or a package
+/// type this backend does not handle.
 fn validate(pkg: &AquaPackage, version: &str) -> Result<()> {
     if pkg.no_asset.unwrap_or(false) {
         bail!("no asset released");
@@ -4478,6 +4814,50 @@ fn go_install_backend(pkg: &AquaPackage, version: &str) -> Result<String> {
 }
 
 /// Resolve repo owner and name from an override config, falling back to pkg defaults.
+/// The repository whose workflow run must have made a package's SLSA
+/// provenance, as slsa-verifier's `--source-uri` took it: the recipe's
+/// `source_uri`, or else the repository the provenance is published in.
+fn slsa_source_repository(pkg: &AquaPackage) -> String {
+    let slsa = pkg.slsa_provenance.as_ref();
+    if let Some(source_uri) = slsa.and_then(|s| s.source_uri.clone()) {
+        return source_uri;
+    }
+    let (owner, name) = resolve_repo_info(
+        slsa.and_then(|s| s.repo_owner.as_ref()),
+        slsa.and_then(|s| s.repo_name.as_ref()),
+        pkg,
+    );
+    format!("{owner}/{name}")
+}
+
+/// The release tag of `v`, the version an install or lock picked for `pkg`.
+/// A GitHub release package's asset was found in the release `v` names, so
+/// `v` is its tag. For other packages, a `v` whose URL happened to work is no
+/// tag, so it counts only when it is `known_tag`: listed, locked, or made by
+/// `version_prefix`.
+fn selected_release_tag(pkg: &AquaPackage, v: &str, known_tag: Option<&str>) -> Option<String> {
+    if pkg.package_type() == AquaPackageType::GithubRelease {
+        return Some(v.to_string());
+    }
+    known_tag.filter(|tag| *tag == v).map(str::to_string)
+}
+
+/// The tag a package's SLSA provenance must have been built from, as
+/// slsa-verifier's `--source-tag` took it: the recipe's `source_tag`, or else
+/// the version's release tag, when mise knows it. A `source_tag` of `-` turns
+/// the check off, for tools built from a branch.
+fn slsa_source_tag<'a>(pkg: &'a AquaPackage, release_tag: Option<&'a str>) -> Option<&'a str> {
+    match pkg
+        .slsa_provenance
+        .as_ref()
+        .and_then(|s| s.source_tag.as_deref())
+    {
+        Some("-") => None,
+        Some(tag) => Some(tag),
+        None => release_tag,
+    }
+}
+
 fn resolve_repo_info(
     override_owner: Option<&String>,
     override_name: Option<&String>,
@@ -4526,7 +4906,16 @@ enum LibcAssetPreference {
     MuslStrict,
 }
 
+/// Which libc an asset name may carry on this target.
+///
+/// Android is `MuslStrict`: bionic runs static musl builds and never a gnu one,
+/// so a gnu asset is refused rather than installed to fail at exec.
 fn libc_asset_preference(target: &PlatformTarget, tool_libc: Option<&str>) -> LibcAssetPreference {
+    // A glibc build installs on Android and then fails at exec on bionic, so
+    // take the musl sibling, or the registry's unqualified asset, but never gnu.
+    if target.os_name() == "android" {
+        return LibcAssetPreference::MuslStrict;
+    }
     if target.os_name() != "linux" {
         return LibcAssetPreference::Exact;
     }
@@ -4651,6 +5040,111 @@ fn is_libc_variant_of_expected_asset(
         )
 }
 
+/// The `PT_INTERP` path of an ELF file, or `None` when the file is not ELF or has
+/// no interpreter, which is what a fully static binary looks like.
+fn elf_interpreter(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut header = [0u8; 64];
+    let read = file.read(&mut header).ok()?;
+    if read < 52 || !header.starts_with(b"\x7fELF") {
+        return None;
+    }
+    let is_64 = header[4] == 2;
+    // Every Android architecture is little-endian, so a big-endian ELF is not a
+    // binary this check can find an Android loader for.
+    if header[5] != 1 {
+        return None;
+    }
+    let (phoff, phentsize, phnum) = if is_64 {
+        (
+            le_u64(&header, 0x20)?,
+            usize::from(le_u16(&header, 0x36)?),
+            usize::from(le_u16(&header, 0x38)?),
+        )
+    } else {
+        (
+            u64::from(le_u32(&header, 0x1c)?),
+            usize::from(le_u16(&header, 0x2a)?),
+            usize::from(le_u16(&header, 0x2c)?),
+        )
+    };
+    if phentsize == 0 || phnum == 0 {
+        return None;
+    }
+    // A downloaded file is untrusted. Read one program header at a time into a
+    // buffer whose size comes from an ELF header field's own width (at most
+    // 64 KiB), so no read allocates more than the file can justify, and bound
+    // the interpreter by the file's length and the length a path can have.
+    let file_len = file.metadata().ok()?.len();
+    let mut entry = vec![0u8; phentsize];
+    for index in 0..phnum {
+        let phdr_offset = phoff.checked_add(u64::try_from(index * phentsize).ok()?)?;
+        file.seek(SeekFrom::Start(phdr_offset)).ok()?;
+        if file.read_exact(&mut entry).is_err() {
+            return None;
+        }
+        if le_u32(&entry, 0)? != 3 {
+            continue; // not PT_INTERP
+        }
+        let (offset, size) = if is_64 {
+            (le_u64(&entry, 8)?, le_u64(&entry, 32)?)
+        } else {
+            (
+                u64::from(le_u32(&entry, 4)?),
+                u64::from(le_u32(&entry, 16)?),
+            )
+        };
+        let size = usize::try_from(size).ok()?;
+        if size == 0 || size > 4096 || offset.checked_add(size as u64)? > file_len {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut buf).ok()?;
+        let end = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
+        return Some(String::from_utf8_lossy(&buf[..end]).into_owned());
+    }
+    None
+}
+
+/// Whether a `PT_INTERP` path is one of bionic's own loaders.
+///
+/// Android's interpreter is `/system/bin/linker64` on 64-bit and
+/// `/system/bin/linker` on 32-bit, with the ASan and runtime-APEX variants.
+/// Compared exactly: the path comes from the downloaded file, so a binary naming
+/// `/system/bin/linker_anything` must not pass as a loader Android provides.
+fn is_android_interpreter(interpreter: &str) -> bool {
+    matches!(
+        interpreter,
+        "/system/bin/linker"
+            | "/system/bin/linker64"
+            | "/system/bin/linker_asan"
+            | "/system/bin/linker_asan64"
+            | "/apex/com.android.runtime/bin/linker"
+            | "/apex/com.android.runtime/bin/linker64"
+    )
+}
+
+fn le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+}
+
+fn le_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn le_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    bytes
+        .get(offset..offset + 8)
+        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+}
+
 fn asset_name_tokens(name: &str) -> Vec<String> {
     name.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
@@ -4658,16 +5152,37 @@ fn asset_name_tokens(name: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn os() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "darwin"
-    } else {
-        &OS
+/// The aqua platform name for the binaries this host should install.
+///
+/// Reads the settings rather than `env::consts`, so `os = "linux"` resolves
+/// Linux assets. Android is reported as `linux`: aqua metadata has no Android
+/// packages, and the Linux build is the one mise installs there.
+static AQUA_OS: LazyLock<String> = LazyLock::new(|| to_aqua_os(Settings::get().os()).to_string());
+
+/// The aqua platform name for a mise OS name.
+///
+/// aqua calls macOS `darwin`, and has no Android packages, so an Android host
+/// takes the Linux recipes. Split out so the mapping is testable: the cached
+/// [`AQUA_OS`] cannot be re-evaluated in-process.
+fn to_aqua_os(os: &str) -> &str {
+    match os {
+        "macos" => "darwin",
+        "android" => "linux",
+        other => other,
     }
 }
 
+/// The aqua platform name for the binaries this host installs.
+pub(crate) fn os() -> &'static str {
+    AQUA_OS.as_str()
+}
+
+static AQUA_ARCH: LazyLock<String> =
+    LazyLock::new(|| to_aqua_arch(Settings::get().arch()).to_string());
+
+/// The aqua architecture name for the binaries this host installs.
 pub(crate) fn arch() -> &'static str {
-    to_aqua_arch(&ARCH)
+    AQUA_ARCH.as_str()
 }
 
 fn to_aqua_arch(arch: &str) -> &str {
@@ -4770,6 +5285,7 @@ mod lock_candidate_tests {
             .verify_checksum_file_matches_expected(
                 &checksum,
                 &path,
+                &tmp.path().join(ARTIFACT),
                 ARTIFACT,
                 Some(&format!("sha256:{DIGEST}")),
             )
@@ -4781,12 +5297,51 @@ mod lock_candidate_tests {
             .verify_checksum_file_matches_expected(
                 &checksum,
                 &path,
+                &tmp.path().join(ARTIFACT),
                 ARTIFACT,
                 Some(&format!("sha256:{}", "0".repeat(64))),
             )
             .unwrap_err()
             .to_string();
         assert!(err.contains("does not match expected checksum"), "{err}");
+    }
+
+    /// A signed sha512 checksum file cannot be compared with GitHub's sha256 asset digest, so
+    /// the downloaded artifact itself has to match it. Skipping the check let `mise lock`
+    /// record a re-uploaded artifact as signature-verified.
+    #[test]
+    fn test_verify_checksum_file_hashes_artifact_when_algorithms_differ() {
+        const ARTIFACT: &str = "tool_linux_amd64";
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let artifact = tmp.path().join(ARTIFACT);
+        std::fs::write(&artifact, "published").unwrap();
+        let sums = tmp.path().join("SHA512SUMS");
+        let digest = crate::hash::file_hash_prog::<sha2::Sha512>(&artifact, None).unwrap();
+        std::fs::write(&sums, format!("{digest}  {ARTIFACT}\n")).unwrap();
+
+        let backend = AquaBackend::from_arg(BackendArg::new(
+            "tool".to_string(),
+            Some("aqua:owner/repo".to_string()),
+        ));
+        let checksum: AquaChecksum = serde_json::from_str(r#"{"algorithm":"sha512"}"#).unwrap();
+        // the asset digest follows a re-upload, the signed file does not
+        let verify = || {
+            let api_digest = crate::hash::file_hash_sha256(&artifact, None).unwrap();
+            backend.verify_checksum_file_matches_expected(
+                &checksum,
+                &sums,
+                &artifact,
+                ARTIFACT,
+                Some(&format!("sha256:{api_digest}")),
+            )
+        };
+
+        verify().unwrap();
+
+        std::fs::write(&artifact, "replaced").unwrap();
+        let err = format!("{:?}", verify().unwrap_err());
+        assert!(err.contains("does not match downloaded"), "{err}");
     }
 
     /// A checksum file listing several other filenames, but not the requested one, must not
@@ -5182,6 +5737,63 @@ slsa_provenance:
     }
 
     #[test]
+    fn slsa_source_repository_follows_the_recipe() {
+        let pkg = |slsa: &str| {
+            pkg_from_yaml(&format!(
+                "type: github_release\nrepo_owner: owner\nrepo_name: tool\nslsa_provenance:\n  type: github_release\n  asset: tool.intoto.jsonl\n{slsa}"
+            ))
+        };
+        assert_eq!(slsa_source_repository(&pkg("")), "owner/tool");
+        assert_eq!(
+            slsa_source_repository(&pkg("  repo_name: releases\n")),
+            "owner/releases"
+        );
+        assert_eq!(
+            slsa_source_repository(&pkg("  source_uri: github.com/owner/source\n")),
+            "github.com/owner/source"
+        );
+    }
+
+    #[test]
+    fn selected_release_tag_needs_a_release_or_a_known_tag() {
+        let release = pkg_from_yaml(
+            "type: github_release\nrepo_owner: owner\nrepo_name: tool\nasset: tool.tar.gz\n",
+        );
+        let http = pkg_from_yaml(
+            "type: http\nrepo_owner: owner\nrepo_name: tool\nurl: https://example.com/tool-{{.SemVer}}.tar.gz\n",
+        );
+        // The asset was found in the release `v1.2.3` names.
+        assert_eq!(
+            selected_release_tag(&release, "v1.2.3", None).as_deref(),
+            Some("v1.2.3")
+        );
+        // A URL that worked for `v1.2.3` says nothing about the tag.
+        assert_eq!(selected_release_tag(&http, "v1.2.3", None), None);
+        assert_eq!(selected_release_tag(&http, "v1.2.3", Some("1.2.3")), None);
+        assert_eq!(
+            selected_release_tag(&http, "v1.2.3", Some("v1.2.3")).as_deref(),
+            Some("v1.2.3")
+        );
+    }
+
+    #[test]
+    fn slsa_source_tag_follows_the_recipe() {
+        let pkg = |slsa: &str| {
+            pkg_from_yaml(&format!(
+                "type: github_release\nrepo_owner: owner\nrepo_name: tool\nversion_prefix: tool-\nslsa_provenance:\n  type: github_release\n  asset: tool.intoto.jsonl\n{slsa}"
+            ))
+        };
+        let tag = Some("tool-1.2.3");
+        assert_eq!(slsa_source_tag(&pkg(""), tag), tag);
+        assert_eq!(slsa_source_tag(&pkg(""), None), None);
+        assert_eq!(
+            slsa_source_tag(&pkg("  source_tag: release-1.2.3\n"), None),
+            Some("release-1.2.3")
+        );
+        assert_eq!(slsa_source_tag(&pkg("  source_tag: \"-\"\n"), tag), None);
+    }
+
+    #[test]
     fn test_version_from_tag_rejects_version_filter_mismatch() {
         let pkg = pkg_from_yaml(
             r#"
@@ -5499,6 +6111,164 @@ no_asset: true
             LibcAssetPreference::Exact
         );
         assert_eq!(AquaBackend::target_variant_libc(&macos, Some("musl")), None);
+    }
+
+    #[test]
+    fn test_android_uses_linux_metadata_and_musl_assets() {
+        let android = PlatformTarget::new(Platform::parse("android-arm64").unwrap());
+
+        // No aqua recipe publishes Android assets, so the recipe's Linux
+        // replacements have to supply the asset name.
+        assert_eq!(AquaBackend::to_aqua_platform(&android), ("linux", "arm64"));
+
+        // Bionic only runs static musl builds: a gnu request still resolves to
+        // musl, and a gnu asset is not accepted even when the registry names it.
+        assert_eq!(
+            AquaBackend::target_variant_libc(&android, Some("gnu")).as_deref(),
+            Some("musl")
+        );
+        assert_eq!(
+            AquaBackend::asset_libc(&android, Some("gnu")).as_deref(),
+            Some("musl")
+        );
+        assert_eq!(
+            libc_asset_preference(&android, Some("gnu")),
+            LibcAssetPreference::MuslStrict
+        );
+        assert!(is_platform_supported(
+            &["linux".to_string()],
+            AquaBackend::to_aqua_platform(&android).0,
+            AquaBackend::to_aqua_platform(&android).1
+        ));
+    }
+
+    #[test]
+    fn test_aqua_os_maps_android_to_linux() {
+        // The cached AQUA_OS cannot be re-evaluated in-process, so removing the
+        // mapping is what this pins: without it, validate() would reject every
+        // Linux-only recipe on Android before any asset is looked up.
+        assert_eq!(to_aqua_os("android"), "linux");
+        assert_eq!(to_aqua_os("macos"), "darwin");
+        assert_eq!(to_aqua_os("linux"), "linux");
+        assert_eq!(to_aqua_os("windows"), "windows");
+    }
+
+    /// A minimal ELF64 little-endian file whose only program header is `PT_INTERP`,
+    /// or no program headers at all when `interpreter` is `None`.
+    fn elf64(interpreter: Option<&str>) -> Vec<u8> {
+        const HEADER: usize = 64;
+        const PHDR: usize = 56;
+        let interp_offset = HEADER + PHDR;
+        let mut bytes = vec![0u8; interp_offset + interpreter.map_or(0, |i| i.len() + 1)];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = 2; // ELFCLASS64
+        bytes[5] = 1; // ELFDATA2LSB
+        bytes[0x20..0x28].copy_from_slice(&(HEADER as u64).to_le_bytes());
+        bytes[0x36..0x38].copy_from_slice(&(PHDR as u16).to_le_bytes());
+        bytes[0x38..0x3a].copy_from_slice(&u16::from(interpreter.is_some()).to_le_bytes());
+        let Some(interpreter) = interpreter else {
+            return bytes;
+        };
+        bytes[HEADER..HEADER + 4].copy_from_slice(&3u32.to_le_bytes()); // PT_INTERP
+        bytes[HEADER + 8..HEADER + 16].copy_from_slice(&(interp_offset as u64).to_le_bytes());
+        bytes[HEADER + 32..HEADER + 40]
+            .copy_from_slice(&((interpreter.len() + 1) as u64).to_le_bytes());
+        bytes[interp_offset..interp_offset + interpreter.len()]
+            .copy_from_slice(interpreter.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn test_elf_interpreter_reads_the_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let glibc = dir.path().join("glibc");
+        std::fs::write(&glibc, elf64(Some("/lib/ld-linux-aarch64.so.1"))).unwrap();
+        assert_eq!(
+            elf_interpreter(&glibc).as_deref(),
+            Some("/lib/ld-linux-aarch64.so.1")
+        );
+
+        let static_bin = dir.path().join("static");
+        std::fs::write(&static_bin, elf64(None)).unwrap();
+        assert_eq!(elf_interpreter(&static_bin), None);
+
+        let script = dir.path().join("script");
+        std::fs::write(&script, b"#!/bin/sh\necho hi\n").unwrap();
+        assert_eq!(elf_interpreter(&script), None);
+    }
+
+    #[test]
+    fn test_elf_interpreter_ignores_a_header_beyond_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A truncated header that claims more program headers than the file holds.
+        let mut truncated = elf64(Some("/system/bin/linker64"));
+        truncated.truncate(64 + 8);
+        let path = dir.path().join("truncated");
+        std::fs::write(&path, &truncated).unwrap();
+        assert_eq!(elf_interpreter(&path), None);
+
+        // A program header that points the interpreter past the end of the file.
+        let mut runaway = elf64(Some("/system/bin/linker64"));
+        runaway[64 + 8..64 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+        let path = dir.path().join("runaway");
+        std::fs::write(&path, &runaway).unwrap();
+        assert_eq!(elf_interpreter(&path), None);
+    }
+
+    #[test]
+    fn test_android_loader_paths_are_exact() {
+        // Bionic's own linkers, including the ASan and runtime-APEX variants.
+        for loader in [
+            "/system/bin/linker",
+            "/system/bin/linker64",
+            "/system/bin/linker_asan",
+            "/system/bin/linker_asan64",
+            "/apex/com.android.runtime/bin/linker64",
+        ] {
+            assert!(is_android_interpreter(loader), "{loader}");
+        }
+
+        // The path comes from the file, so a prefix that only looks like a
+        // loader, or any other host loader, is not one.
+        for impostor in [
+            "/system/bin/linker_evil",
+            "/system/bin/linker64.old",
+            "/system/lib64/ld-android.so",
+            "/lib/ld-linux-aarch64.so.1",
+            "/lib/ld-musl-aarch64.so.1",
+        ] {
+            assert!(!is_android_interpreter(impostor), "{impostor}");
+        }
+    }
+
+    #[test]
+    fn test_android_install_rejects_a_foreign_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = |name: &str, bytes: Vec<u8>| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            AquaFileLink {
+                src: path.clone(),
+                dst: path,
+                hard: false,
+                explicit_link: false,
+            }
+        };
+
+        // A static build and a bionic-linked one both run on Android.
+        let static_bin = link("static", elf64(None));
+        let bionic = link("bionic", elf64(Some("/system/bin/linker64")));
+        assert!(AquaBackend::ensure_binaries_run_on_android(&[static_bin, bionic]).is_ok());
+
+        // glibc and a dynamically linked musl build both name a loader Android
+        // does not have, whatever the asset was called.
+        let glibc = link("glibc", elf64(Some("/lib/ld-linux-aarch64.so.1")));
+        let err = AquaBackend::ensure_binaries_run_on_android(&[glibc]).unwrap_err();
+        assert!(format!("{err}").contains("ld-linux-aarch64.so.1"), "{err}");
+
+        let musl = link("musl", elf64(Some("/lib/ld-musl-aarch64.so.1")));
+        assert!(AquaBackend::ensure_binaries_run_on_android(&[musl]).is_err());
     }
 
     #[test]

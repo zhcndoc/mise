@@ -12,6 +12,7 @@
 ---@field envType string|nil libc environment type ("gnu" on glibc Linux, "musl" on musl Linux, nil on other platforms)
 ---@field version string Runtime version
 ---@field pluginDirPath string Path to the plugin directory
+---@field cacheDirPath string|nil Persistent cache directory owned by the plugin, under mise's cache directory
 RUNTIME = {}
 
 --- @deprecated Use RUNTIME.osType instead
@@ -139,6 +140,8 @@ ARCH_TYPE = ""
 
 ---@class BackendExecEnvResult
 ---@field env_vars EnvKey[] Environment variables to set
+---@field cacheable? boolean false runs the hook every time instead of caching its result (default true)
+---@field watch_files? string[] Files whose changes, including appearing or going away, rerun the hook
 
 ---@class BackendUninstallCtx
 ---@field tool string Tool name
@@ -231,6 +234,13 @@ local cmd = {}
 ---@field setenv fun(key: string, val: string) Set an environment variable
 ---@field getenv fun(key: string): string? Get an environment variable
 local env = {}
+
+-- mise.cache module -------------------------------------------------
+
+---@class mise.cache
+---@field watch_files fun(paths: string[]) Rerun EnvKeys or BackendExecEnv when one of these files changes, appears or goes away
+---@field disable fun() Run EnvKeys or BackendExecEnv every time instead of caching the result
+local mise_cache = {}
 
 -- archiver module ----------------------------------------------------
 

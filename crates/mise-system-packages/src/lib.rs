@@ -1,4 +1,4 @@
-//! Host package managers (apk, apt, aur, brew, brew-cask, flatpak, flatpak-user, macos-app, mas, scoop, snap, winget, zypper) for the `[bootstrap.packages]` config section.
+//! Host package managers (apk, apt, aur, brew, brew-cask, choco, flatpak, flatpak-user, macos-app, mas, scoop, snap, winget, zypper) for the `[bootstrap.packages]` config section.
 //!
 //! These are host-owned, unversioned packages — deliberately separate from
 //! the `Backend` system, which manages per-project, version-pinned dev tools.
@@ -19,6 +19,7 @@ pub mod apt_sources;
 pub(crate) mod aur;
 #[cfg(unix)]
 pub mod brew;
+pub(crate) mod choco;
 pub mod dnf;
 pub mod dnf_repos;
 pub(crate) mod flatpak;
@@ -139,6 +140,32 @@ impl PackageState {
     }
 }
 
+/// Who maintains an installed package, as `status --json` reports it.
+///
+/// This is the decision `apply` and `upgrade` make for the package, not a
+/// promise about every updater: an app that updates itself is still
+/// [`Self::Mise`] here, and says so separately with `auto_updates`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageManagement {
+    /// mise installs, upgrades and prunes it.
+    Mise,
+    /// Homebrew installed it, so mise counts it as installed and leaves it alone.
+    Homebrew,
+    /// The decision could not be determined, such as when Homebrew's records
+    /// for the package could not be read.
+    Unknown,
+}
+
+impl PackageManagement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mise => "mise",
+            Self::Homebrew => "homebrew",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PackageStatus {
     pub request: PackageRequest,
@@ -209,6 +236,19 @@ pub trait SystemPackageManager: Send + Sync {
         Ok(())
     }
 
+    /// Reconcile packages that are already installed with the manager's options,
+    /// after installed state is queried and before anything is installed.
+    ///
+    /// Never called for status or dry-run operations. brew-cask uses it to hand
+    /// casks installed earlier to Homebrew when `homebrew_metadata` is set.
+    async fn reconcile_installed(
+        &self,
+        _statuses: &[PackageStatus],
+        _manager_options: &ManagerPackageOptions,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Whether each name exists as an installable package, positionally.
     ///
     /// This is *availability*, not installed state — [`Self::installed`]
@@ -250,6 +290,17 @@ pub trait SystemPackageManager: Send + Sync {
         _manager_options: &ManagerPackageOptions,
     ) -> Result<Vec<PackageStatus>> {
         self.installed(pkgs).await
+    }
+
+    /// Who maintains an installed package, for managers where mise can leave a
+    /// package it finds installed to another tool. `None` means the manager
+    /// has no such distinction, or the package is not installed.
+    async fn management(
+        &self,
+        _status: &PackageStatus,
+        _manager_options: &ManagerPackageOptions,
+    ) -> Option<PackageManagement> {
+        None
     }
 
     /// Upgrade with manager-specific declarative options, for the same reason
@@ -383,6 +434,7 @@ pub fn builtin_managers() -> Vec<Arc<dyn SystemPackageManager>> {
         Arc::new(brew::BrewCaskManager::new()),
         #[cfg(unix)]
         Arc::new(brew::BrewCaskManager::new_macos_app()),
+        Arc::new(choco::ChocoManager::new()),
         Arc::new(dnf::DnfManager::new()),
         Arc::new(flatpak::FlatpakManager::new()),
         Arc::new(flatpak::FlatpakManager::new_user()),
@@ -449,7 +501,7 @@ mod tests {
         }
     }
 
-    /// Stands in for winget/scoop, where names fold to one package.
+    /// Stands in for winget/scoop/choco, where names fold to one package.
     struct FoldingManager;
 
     #[async_trait(?Send)]
@@ -569,9 +621,19 @@ mod test_harness {
     mise_util::run_before_main!(init);
 
     fn init() {
-        // Under the crate, not `/tmp`: the cask tests need ancestors that are not world-writable.
-        let home = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test");
-        std::fs::create_dir_all(&home).unwrap();
+        // The cask tests need ancestors that are not world-writable, so not
+        // `/tmp`: under the crate, or, for a checkout under `/tmp`, under the
+        // real home.
+        let crate_home = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test");
+        let home = std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".cache/mise-system-packages-tests"))
+            .filter(|_| !trusted_ancestors(&crate_home))
+            // A home that cannot be written to falls back to the crate.
+            .filter(|h| {
+                trusted_ancestors(h) && create_private_dir(h).is_ok() && trusted_ancestors(h)
+            })
+            .unwrap_or(crate_home);
+        create_private_dir(&home).unwrap();
         mise_util::env::set_var("HOME", &home);
         mise_util::testing::enable(home);
         mise_settings::set_loader(mise_settings::load_defaults);
@@ -590,6 +652,47 @@ mod test_harness {
             package_plugin_names: Vec::new,
             load_package_plugin: |name| eyre::bail!("no package plugin {name} in these tests"),
         });
+    }
+
+    /// `path` and any parents it lacks, readable only by this user, so the
+    /// umask cannot leave them open to others.
+    fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(path)
+    }
+
+    /// Whether every directory above `path` that exists passes the cask
+    /// code's trusted walk: owned by root or this user, not world-writable,
+    /// and writable by its group only when that is one of this user's groups.
+    fn trusted_ancestors(path: &std::path::Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let uid = nix::unistd::geteuid().as_raw();
+            let gid = nix::unistd::getegid().as_raw();
+            let groups = crate::brew::current_process_groups().unwrap_or_default();
+            // With symlinks resolved, as the trusted walk sees the path: its
+            // deepest part that exists, whose ancestors all exist.
+            let Some(existing) = path.ancestors().find_map(|dir| dir.canonicalize().ok()) else {
+                return false;
+            };
+            existing.ancestors().all(|dir| {
+                std::fs::metadata(dir).is_ok_and(|meta| {
+                    let mode = meta.mode();
+                    (meta.uid() == 0 || meta.uid() == uid)
+                        && mode & 0o002 == 0
+                        && (mode & 0o020 == 0 || meta.gid() == gid || groups.contains(&meta.gid()))
+                })
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            true
+        }
     }
 
     /// Ruby-backed tests skip without a usable Ruby, so offer one only if it can run the shims.

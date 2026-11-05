@@ -38,32 +38,67 @@ project/
 4. `.config/mise/tasks`
 5. `mise/tasks`
 
-mise 会递归搜索每个目录。它会将每个可执行文件作为文件任务加载，并将每个非 mise 配置文件的 `.toml` 文件作为 [TOML 任务文件](#included-toml-files)加载。名称以 `.` 开头的文件和子目录会被跳过。子目录会成为任务名称的一部分，详见[文件任务分组](/tasks/file-tasks.html#task-grouping)。如果这些目录中有多个定义了同一任务，则列表中靠后的定义优先。
+mise searches each directory recursively. It loads every executable file as a
+file task and every `.toml` file that is not a mise config file as a
+[TOML task file](#included-toml-files). It skips files and subdirectories
+inside them whose names start with `.`. Subdirectories become part of the task
+name, as described in [file task grouping](/tasks/file-tasks.html#task-grouping).
+When two of these directories define the same task, the one later in the list
+wins.
 
-Windows 没有可执行权限；mise 在 Windows 上如何识别任务文件，请参阅 [Windows](/tasks/file-tasks.html#windows)。
+搜索会跟随符号链接。单个任务目录的条目数超过 100,000 时会报错停止；正常任务目录不会达到此上限，但多个符号链接可能通过不同路径指向相同目录，从而触发限制。
 
-### 全局任务 {#global-tasks}
+On Windows there is no execute permission; see
+[Windows](/tasks/file-tasks.html#windows) for how mise decides that a file is a
+task there.
 
-`$MISE_CONFIG_DIR/tasks` 中的文件任务（默认目录为 `~/.config/mise/tasks`）是全局任务，可在任意目录中使用，无论是否存在全局配置文件。如果存在 `~/.config/mise/config.toml` 之类的全局配置文件，mise 也会将主目录下的其他默认任务目录作为全局目录解析。该文件中的内联任务同样是全局任务。如果没有全局配置文件，主目录下的其他任务目录就不是全局目录；你在主目录下工作时，它们会像项目任务目录一样加载。
+### Global tasks
 
-### 信任 {#trust}
+File tasks in `$MISE_CONFIG_DIR/tasks`, by default `~/.config/mise/tasks`, are
+global: they are available in every directory, with or without a global config
+file. When a global config file such as `~/.config/mise/config.toml` exists,
+mise also resolves the other default task directories from your home directory
+as global. Inline tasks in that file are global too. Without a global config
+file, those other directories in your home directory are not global; they load
+like a project's task directories when you work under your home directory.
 
-如果任务文件包含 Tera 模板语法，加载文件时就可能执行代码，因为 mise 会在加载任务时渲染模板。如果目录中没有受信任的配置文件，那么此类文件或列出 `secrets` 的文件必须先获得信任，mise 才会加载，处理方式与不受信任的配置文件相同。在[偏执模式](/paranoid.html)下，该目录中的每个任务文件都需要获得信任。详见[配置文件信任](/security.html#configuration-trust)。
+### Trust
 
-## 采用哪个定义 {#which-definition-wins}
+Loading a task file can run code when the file contains Tera template syntax,
+because mise renders templates while it loads tasks. In a directory with no
+trusted config file, such a file, or one that lists `secrets`, must be trusted
+before mise loads it, the same way an untrusted config file must be. In
+[偏执模式](/paranoid.html)下，每个全局和系统配置以外的任务文件都必须单独信任，并绑定到其内容，即使文件位于受信任配置旁边也是如此：请为每个文件运行 `mise trust <file>`。详见[配置文件信任](/security.html#configuration-trust)。
 
-多个来源定义了同名任务时，mise 按以下规则选择定义：
+## Which definition wins
 
-- 来自较近目录的任务会取代父目录中的同名任务，项目任务会取代全局任务。
-- 在同一目录中，优先级较高的配置文件中的任务优先，例如 `mise.local.toml` 高于 `mise.toml`。详见[配置文件优先级](/configuration.html#mise-toml)。不带命令的任务块则会添加元数据，详见[分层任务定义](#layered-task-definitions)。
-- 带命令的内联 `[tasks.<name>]` 块会取代引入的 TOML 文件或任务目录中的同名任务，前提是该块来自选择了该文件的配置，或来自优先级更高的配置。详见[通过 TOML 配置文件任务](#configuring-file-tasks-from-toml)。
-- 对同一个 `includes` 列表，最后一个定义该名称的条目优先。
-- 用户全局配置文件和系统配置文件分别属于不同的作用域。用户全局任务会完全取代同名系统任务，不会继承其元数据。其他名称的系统任务仍然可用。
-- 每个 [conf.d 目录](/configuration.html#conf-d-folders)都是独立的根目录。其 `includes` 只会在该目录中解析，并且只会取代该目录自己的默认任务目录。
+When more than one source defines a task with the same name, these rules pick
+the definition:
 
-## 引入任务文件和目录 {#include-task-files-and-directories}
+- A task from a nearer directory replaces a same-named task from a parent
+  directory, and a project task replaces a global task.
+- Within one directory, the task from the higher-precedence config file wins,
+  for example `mise.local.toml` over `mise.toml`. See
+  [config file precedence](/configuration.html#mise-toml). A block without a
+  command adds metadata instead; see
+  [layered task definitions](#layered-task-definitions).
+- An inline `[tasks.<name>]` block with a command replaces a task of the same
+  name from an included TOML file or a task directory, as long as the block
+  comes from the config that selected that file or a higher-precedence one. See
+  [configuring file tasks from TOML](#configuring-file-tasks-from-toml).
+- Among the entries of one `includes` list, the last entry that defines a name
+  wins.
+- User-global config files form one scope and system config files another. A
+  user-global task replaces a system task of the same name entirely, without
+  inheriting its metadata. System tasks with other names stay available.
+- Each [conf.d folder](/configuration.html#conf-d-folders) is its own root. Its
+  `includes` resolve inside the folder and replace only the folder's own
+  default directories.
 
-设置 `task_config.includes`，列出 mise 为某个配置根目录读取的 TOML 任务文件和任务目录：
+## Include task files and directories
+
+Set `task_config.includes` to list the TOML task files and task directories
+mise reads for a config root:
 
 ```toml
 [task_config]

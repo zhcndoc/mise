@@ -9,24 +9,13 @@ mise 欢迎修复缺陷、改进文档，以及为广泛使用的工具添加注
 
 ## 参与社区 {#community-participation}
 
-::: danger AI replies to Discussions and Issues are restricted
-违反此规则会导致你**立即被 jdx 的所有项目封禁**。
-
-只有在以下情况下，才可以使用 AI 回复 [Discussion](https://github.com/jdx/mise/discussions) 或 [Issue](https://github.com/jdx/mise/issues)：该主题由你创建；你提交了修复该问题的 PR；或你此前已有署名归属于自己 GitHub 账号的贡献合并进 mise 默认分支。其他人不得使用 AI 回复。随意发布的 AI 回复属于垃圾信息，而且问题正在加剧。
-
-这包括原始、轻度编辑、经审阅以及已披露的模型输出。添加“AI 辅助”页脚本身并不能让 AI 回复变得
-合规。如果你正在运行代理，请确保它不会向你无权回复的主题发帖，也绝不要让它一次处理大量主题。
-:::
-
-可以使用 AI 协助撰写并提交自己的 Discussion、Issue 或 pull request。发布前请先审阅内容，并在末尾添加以下格式的说明：
+可以使用 AI 协助撰写 Discussion、Issue、回复或 pull request。发布前请先审核，并以如下格式添加说明：
 
 ```text
 *AI-assisted — Tool: <tool>; model: <provider>/<model>; version: <version-or-unavailable>.*
 ```
 
-如果你符合使用 AI 回复主题的条件，发布前也必须审阅并核实回复内容，并以相同方式注明。
-
-## 提交 pull request 前 {#before-you-open-a-pull-request}
+## Before you open a pull request {#before-you-open-a-pull-request}
 
 mise 有明确的项目范围和设计取向。除非改动显而易见，否则请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出方案，再开始编写。跳过这一步的 PR 往往会被拒绝，或需要大幅修改。
 
@@ -196,17 +185,38 @@ mise run test:e2e --all              # every test except *_slow ones
 TEST_ALL=1 mise run test:e2e --all   # including *_slow tests
 ```
 
-包装器会将每个参数缩减为文件名，并且不会固定匹配模式的开头或结尾。因此，`e2e/cli/test_version` 也会运行 `test_version_order`、`test_version_range` 和 `test_version_update_hint`；`e2e/tasks` 会运行名称中含有 `tasks` 的所有测试，而不只是该目录中的测试。不带参数时不会运行任何测试。请查看 `Running test:` 行确认实际运行的测试。
+The wrapper reduces each argument to its file name and does not anchor the
+pattern. `e2e/cli/test_version` therefore also runs `test_version_order`,
+`test_version_range`, and `test_version_update_hint`, and `e2e/tasks` runs every
+test whose name contains `tasks`, not the tests in that directory. With no
+arguments, it runs nothing. Check the `PASS:` lines to see which tests ran.
 
-`--all` 最多同时运行四项测试；设置 `E2E_JOBS` 可更改并发数，也可让选定测试并行运行。和 CI 一样，可使用 `TEST_TRANCHE` 和 `TEST_TRANCHE_COUNT` 将整套测试拆分为多个批次。
+通过的测试会输出一行，包含耗时和通过的断言数，例如 `PASS: cli/test_version (2s, 4 assertions)`。失败的测试会输出其全部内容，运行结束时显示 `E2E: ran 3 tests (2 passed, 1 failed)` 以及失败测试名称。设置 `E2E_SHOW_PASSING_LOGS=1` 也可显示通过测试的输出。输出按测试给定顺序打印，每个测试及其之前的测试全部完成后才会显示，而不是边运行边输出。
 
-每项测试都会在新的工作目录中运行，并使用独立的 `HOME`、mise 目录和受信任配置路径；环境中会设置 `MISE_EXPERIMENTAL=1`，且 `target/debug` 位于 `PATH` 最前面。测试所需的 Shell、编译器和服务仍须由主机提供。设置 `MISE_E2E_DOCKER=1` 后，每项测试会在 `ghcr.io/jdx/mise:e2e` 容器镜像中运行；这是 CI 执行 E2E 测试所用的镜像，已包含这些软件包，但要求使用 Linux 构建的 mise。运行会调用 GitHub API 的测试时，请设置 `MISE_GITHUB_TOKEN` 或 `GITHUB_TOKEN`；测试 harness 会传递这些变量。测试失败时，harness 会保留其工作目录并打印路径。
+`--all` runs up to four tests at a time; set `E2E_JOBS` to change that, or to
+run selected tests in parallel. `TEST_TRANCHE` and `TEST_TRANCHE_COUNT` split
+the full suite, as CI does.
 
-不要直接运行 `e2e/` 下的文件，也不要将它们设为可执行。
+Each test runs in a fresh working directory with its own `HOME`, mise
+directories, and trusted config path, with `MISE_EXPERIMENTAL=1` set and your
+`target/debug` first on `PATH`. The host still has to provide the shells,
+compilers, and services a test uses. `MISE_E2E_DOCKER=1` runs each test inside
+`ghcr.io/jdx/mise:e2e`, the image CI runs the E2E tests in, which has those
+packages; it needs a Linux build of mise. Set `MISE_GITHUB_TOKEN` or
+`GITHUB_TOKEN` for tests that call the GitHub API; the harness passes them
+through. When a test fails, the harness keeps its directory and prints the
+path.
 
-### 编写 E2E 测试 {#writing-an-e2e-test}
+Do not run files under `e2e/` directly or make them executable.
 
-新建 `e2e/<area>/test_<name>` 文件，例如 `e2e/env/test_env_greeting`。harness 会加载 `e2e/assert.sh`，并在启用 `set -euo pipefail` 的情况下使用 Bash 运行文件。若首行为 `#!/usr/bin/env zsh`，则使用 zsh 运行，同时仍会加载 `assert.sh` 并启用 `-euo pipefail`。首行为 `#!/usr/bin/env fish` 的测试则使用 `fish --no-config` 运行，不会加载 `assert.sh`，也不会启用上述选项。不要在测试中清理文件；harness 会删除测试目录。
+### Writing an E2E test {#writing-an-e2e-test}
+
+Create `e2e/<area>/test_<name>`, such as `e2e/env/test_env_greeting`. The
+harness sources `e2e/assert.sh` and runs the file with Bash, with
+`set -euo pipefail` in effect. A `#!/usr/bin/env zsh` first line runs it with
+zsh, still with `assert.sh` and `-euo pipefail`. A `#!/usr/bin/env fish` test
+runs with `fish --no-config` and gets neither. Do not clean up after the test:
+the harness deletes its directory.
 
 ```sh
 #!/usr/bin/env bash

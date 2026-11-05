@@ -207,25 +207,54 @@ mise 不会将本机环境复制到主机。本机的 `-E` 只会改变 mise 读
 mise bootstrap remote --host devbox --install-mise --adopt you/mise-config
 ```
 
-`OWNER/REPO` 会展开为 `https://github.com/OWNER/REPO.git`。HTTPS 和 SSH URL、本机上的本地路径也都可用。其他传输方式和自定义 Git helper 不受支持；克隆时不会跟随 HTTP 重定向，因此请使用仓库的规范 URL。`--adopt` 不能与 `--source`、`--copy-link`、`--copy-links` 或 `--exclude` 同时使用。目标主机仍然必须通过 `--host` 或主机清单指定，不能从被接管仓库的主机清单中读取。
+`OWNER/REPO` expands to `https://github.com/OWNER/REPO.git`. HTTPS and SSH URLs,
+本机上的本地路径也可使用。相对路径请写成 `./OWNER/REPO`：如果当前目录中也存在同名的 `OWNER/REPO`，mise 会拒绝不带 `./` 的写法。
 
-mise 会使用本机的 Git 凭据在本机获取一次仓库，为所有选中主机固定到同一个提交，并通过 SSH 将 Git bundle 发送到每台主机。它不会更改本机的全局配置，也不会复制本机的 Git 配置；私有仓库无需额外选项。如果主机上尚未安装 mise，请添加 `--install-mise`。
+Other transports and custom Git helpers are rejected, and clones do not follow
+HTTP redirects, so use the repository's canonical URL. `--adopt` cannot be
+combined with `--source`, `--copy-link`, `--copy-links`, or `--exclude`. Hosts
+still come from `--host` or the inventory, never from the adopted repository's
+inventory.
 
-传输仓库不需要使用 [GitHub 中继](/bootstrap/github-relay.html)。只有后续 bootstrap 需要访问其他私有 GitHub 内容（例如私有的 `[bootstrap.repos]` 条目或私有发行版）时，才添加 `--github-relay-read-only --github-relay-repo OWNER/REPO`；每个仓库都要单独重复指定 `--github-relay-repo`。
+mise fetches the repository once on this machine, with this machine's Git
+credentials, pins that commit for every selected host, and sends it to each one
+as a Git bundle over SSH. It does not change this machine's global config or
+copy its Git configuration, and a private repository needs no extra flags. Add
+`--install-mise` when the host does not have mise yet.
 
-### 全局配置
+You do not need the [GitHub relay](/bootstrap/github-relay.html) for this
+transfer. Add `--github-relay-read-only --github-relay-repo OWNER/REPO` only
+when the bootstrap that follows needs other private GitHub content, such as a
+private `[bootstrap.repos]` entry or a private release, and repeat
+`--github-relay-repo` for each repository.
 
-一个全局 mise 配置仓库会作为检出内容放入主机的全局配置目录，并保留原始的无凭据 origin、分支和 upstream。运行结束后会保留该检出目录。在主机上：
+### Global configuration
 
-- origin 相同的现有检出目录会被重用；使用 `--update` 时会对其执行快进更新。
-- 如果存在未提交更改、origin 不同、文件冲突，或仓库中有以 `.local.toml` 结尾的文件，运行会停止并等待你处理。
-- 非空但尚未检出为 Git 仓库的目录，在你确认后可以接管；现有文件和本地覆盖项都会保留。
+A repository of global mise config becomes a checkout in the host's global
+config directory, with the original credential-free origin, branch, and
+upstream. The checkout stays after the run. On the host:
 
-使用 `--dry-run` 时，mise 会执行除更改主机以外的所有步骤：获取仓库、连接、暂存并运行全部检查，然后报告将要执行克隆、快进还是接管，以及新文件数量。如果主机已有全局配置，后续 bootstrap 也会预览。
+- An existing checkout with the same origin is reused, and `--update`
+  fast-forwards it.
+- Uncommitted changes, a different origin, conflicting files, or repository
+  files ending in `.local.toml` stop the run for you to fix.
+- A non-empty directory that is not a Git checkout can be adopted after you
+  confirm, and its existing files and local overrides are kept.
 
-### Setup 仓库
+With `--dry-run`, mise does everything except change the host: it fetches,
+connects, stages, runs every check, and reports whether it would clone,
+fast-forward, or adopt, with the number of new files. If the host already has a
+global config, the bootstrap that follows is previewed too.
 
-对于通过 `mise dot origin set` 关联的 setup 仓库，主机会还原其中已跟踪的文件，而不是检出仓库，然后记录 origin。请确保需要的 mise 配置和模板源文件已在第一台机器上纳入版本控制；仅被引用的文件不会自动包含。如果配置声明了历史记录监视器，bootstrap 会像其他用户服务一样安装它。如果主机上的现有文件与仓库不同，setup 会在运行 bootstrap 前停止。
+### Setup repository
+
+For a setup repository, one connected with `mise dot origin set`, the host
+restores your tracked files instead of checking the repository out, then records
+the origin. Track the mise config and template sources the bootstrap needs on
+your first machine; a file that is only referenced is not included. If that
+config declares the history watcher, bootstrap installs it like any other user
+service. If a file already on the host differs, setup stops before bootstrap
+runs.
 
 ```sh
 mise bootstrap remote --host devbox --install-mise --adopt you/setup --dry-run

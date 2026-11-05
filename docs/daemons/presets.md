@@ -57,7 +57,9 @@ options.database = "analytics"
 
 ## 端口 {#ports}
 
-每个预设都会监听默认端口，以及（若有）命名端口。设置 `port` 可更换默认端口，设置 `port = "auto"` 可为每个 Git worktree 分配独立端口，设置 `ports.<name>` 可更改命名端口。详见[端口](/daemons/worktrees.html#ports)。
+Each preset listens on its default port, and on its named ports if it has any.
+Set `port` for a different port, `port = "auto"` to give each Git worktree its
+own，或通过 `ports.<name>` 更改命名端口，也可使用 `ports.<name> = { auto = true, base = 27000 }` 为每个工作树单独分配端口。详见[端口](/daemons/worktrees.html#ports)。
 
 ## 预设选项 {#preset-options}
 

@@ -48,7 +48,11 @@ mise bootstrap
 
 不同键的声明都会参与同一次运行。如果同一目录中的两个模块声明了相同的键，则 `env` 中靠后的模块优先。例如 `env = ["ssh", "gpg"]` 同时在两个文件中声明某项服务时，会使用 `config.gpg.toml` 中的定义。
 
-`mise config` 会列出已加载的文件。`mise bootstrap plan --json` 会为每个托管文件和服务提供 `origin.config` 与 `origin.environment`，方便追溯资源对应的声明。
+若要仅在同时选择另一个模块时部署 dotfile，请为其条目添加 `profile` 变体；详见[仅为特定配置部署条目](/dotfiles/managed.html#only-for-a-profile)。
+
+`mise config` lists the files that loaded. `mise bootstrap plan --json`
+includes `origin.config` and `origin.environment` for each managed file and
+service, so you can trace a resource back to its declaration.
 
 应始终加载的设置应放在基础配置中，或放在不带环境后缀的 [`conf.d` 片段](/configuration.html#conf-d)中，例如 `conf.d/ssh.toml`。若要将模块与其源文件放在一起，请使用 [`conf.d` 文件夹](/configuration.html#conf-d-folders)。相对 dotfile 源路径会在文件夹内解析，其中的 `mise.<env>.toml` 文件仅在对应环境启用时加载：
 

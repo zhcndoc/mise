@@ -37,6 +37,7 @@ pub use install_options::InstallOptions;
 pub use running::RunningProcess;
 pub use tool_deps::ensure_compatible_install_requests;
 pub use tool_request::ToolRequest;
+pub(crate) use tool_request::{record_safe_mode_credential_hosts, with_safe_mode_tool_scope};
 pub(crate) use tool_request_set::configured_options_for_runtime_request;
 pub use tool_request_set::{
     ToolRequestSet, ToolRequestSetBuilder, apply_config_options_to_runtime_arg, tool_env_var_name,
@@ -49,8 +50,8 @@ pub(crate) use tool_version_list::ToolVersionList;
 pub(crate) use tool_version_options::fill_registry_defaults;
 pub use tool_version_options::{
     CoreToolOptions, EPHEMERAL_OPT_KEYS, RawBackendOptions, ResolvedToolOptions, ToolOptionSource,
-    ToolOptions, ToolVersionOptions, parse_tool_options, scalar_value_to_string,
-    try_parse_tool_options,
+    ToolOptions, ToolVersionOptions, parse_tool_options, redact_tool_options,
+    scalar_value_to_string, try_parse_tool_options,
 };
 
 mod builder;
@@ -97,6 +98,40 @@ pub struct Toolset {
 }
 
 /// Which versions `Toolset::list_outdated_versions_selecting` looks up.
+/// What a check for newer versions found.
+#[derive(Debug, Default)]
+pub struct OutdatedVersions {
+    pub outdated: Vec<OutdatedInfo>,
+    /// The tool versions whose check failed, already reported with a warning.
+    /// A check that failed found nothing, so an empty `outdated` does not mean
+    /// these are up to date.
+    pub unchecked: Vec<String>,
+}
+
+impl OutdatedVersions {
+    pub fn extend(&mut self, other: OutdatedVersions) {
+        self.outdated.extend(other.outdated);
+        self.unchecked.extend(other.unchecked);
+    }
+
+    /// A warning naming the unchecked tool versions, if there are any. A tool
+    /// that failed more than one lookup is named once.
+    pub fn warn_unchecked(&self) {
+        let unchecked = self.unchecked.iter().unique().collect::<Vec<_>>();
+        if !unchecked.is_empty() {
+            warn!(
+                "Could not check {} for updates: {}",
+                if unchecked.len() == 1 {
+                    "1 tool".to_string()
+                } else {
+                    format!("{} tools", unchecked.len())
+                },
+                unchecked.iter().join(", ")
+            );
+        }
+    }
+}
+
 pub struct OutdatedSelection<'a> {
     pub filter_tools: Option<&'a [crate::args::ToolArg]>,
     pub exclude_tools: Option<&'a [crate::args::ToolArg]>,
@@ -158,10 +193,13 @@ impl Toolset {
     ) -> eyre::Result<()> {
         let mut progress = show_progress
             .then(|| {
+                // A lazy tool left for its first run is not looked up, so listing
+                // it would only suggest work that does not happen.
                 crate::ui::install_progress::resolution_progress(
                     self.versions
-                        .keys()
-                        .map(|ba| (ba.short.clone(), ba.short.clone())),
+                        .iter()
+                        .filter(|(_, tvl)| !tvl.defers_resolution(opts))
+                        .map(|(ba, _)| (ba.short.clone(), ba.short.clone())),
                 )
             })
             .flatten();
@@ -419,11 +457,12 @@ impl Toolset {
 
     /// Whether any configured tool is declared `lazy = true`. Such a tool installs the
     /// first time one of its bootstrap shims runs, so environments mise builds for this
-    /// toolset have to make those shims reachable behind the real tool paths.
+    /// toolset have to make those shims reachable behind the real tool paths. Safe mode
+    /// ignores the declarations of project config (see [`ToolRequest::provides_lazy_bins`]).
     pub fn has_lazy_declarations(&self) -> bool {
         self.list_current_requests()
             .iter()
-            .any(|request| request.options().lazy == Some(true))
+            .any(|request| request.provides_lazy_bins())
     }
 
     pub fn list_versions_by_plugin(&self) -> Vec<(Arc<dyn Backend>, &ToolVersionList)> {
@@ -477,7 +516,7 @@ impl Toolset {
         config: &Arc<Config>,
         bump: bool,
         opts: &ResolveOptions,
-    ) -> Vec<OutdatedInfo> {
+    ) -> OutdatedVersions {
         self.list_outdated_versions_filtered(config, bump, opts, None, None)
             .await
     }
@@ -489,7 +528,7 @@ impl Toolset {
         opts: &ResolveOptions,
         filter_tools: Option<&[crate::args::ToolArg]>,
         exclude_tools: Option<&[crate::args::ToolArg]>,
-    ) -> Vec<OutdatedInfo> {
+    ) -> OutdatedVersions {
         self.list_outdated_versions_with_progress(
             config,
             bump,
@@ -509,7 +548,7 @@ impl Toolset {
         filter_tools: Option<&[crate::args::ToolArg]>,
         exclude_tools: Option<&[crate::args::ToolArg]>,
         show_progress: bool,
-    ) -> Vec<OutdatedInfo> {
+    ) -> OutdatedVersions {
         self.list_outdated_versions_selecting(
             config,
             bump,
@@ -533,7 +572,7 @@ impl Toolset {
         bump: bool,
         opts: &ResolveOptions,
         selection: OutdatedSelection<'_>,
-    ) -> Vec<OutdatedInfo> {
+    ) -> OutdatedVersions {
         let OutdatedSelection {
             filter_tools,
             exclude_tools,
@@ -628,7 +667,7 @@ impl Toolset {
                             Ok(None) => {}
                             Err(e) => {
                                 error = Some(e.to_string());
-                                warn!("Error creating OutdatedInfo for {tv}: {e:#}");
+                                warn!("Error getting latest version for {tv}: {e:#}");
                             }
                         }
                         Ok(outdated)
@@ -638,7 +677,7 @@ impl Toolset {
                 if let Some(reporter) = reporter {
                     reporter.complete(error.as_deref());
                 }
-                result
+                result.map(|outdated| (outdated, error.map(|_| tv.to_string())))
             },
         )
         .await
@@ -649,7 +688,12 @@ impl Toolset {
         if let Some(progress) = progress.as_mut() {
             progress.finish(vec![]);
         }
-        outdated.into_iter().flatten().collect()
+        let mut versions = OutdatedVersions::default();
+        for (outdated, unchecked) in outdated {
+            versions.outdated.extend(outdated);
+            versions.unchecked.extend(unchecked);
+        }
+        versions
     }
 
     pub(crate) fn build_tools_tera_map(&self, config: &Arc<Config>) -> HashMap<String, ToolInfos> {
@@ -1005,6 +1049,7 @@ async fn get_versions_needed_by_tracked_configs_with_progress(
     // Prune also passes offline=true: it only protects installed versions, so
     // remote resolution can never affect the outcome and just adds latency.
     let tracked = config.get_tracked_config_files().await?;
+    let mut workspace_graphs = crate::config::WorkspaceGraphCache::new();
     for (done, (path, cf)) in tracked.clone().into_iter().enumerate() {
         // Without the animated display each message is a separate log line, so
         // a long list of configs would flood CI logs and piped output.
@@ -1120,7 +1165,7 @@ async fn get_versions_needed_by_tracked_configs_with_progress(
         crate::daemons::glue::load(&files)?.add_tool_requests(&mut requests)?;
         // Tools scoped to a task are still referenced by the config.
         let (task_requests, task_templated) =
-            crate::config::task_tool_requests(config, &tracked, &cf);
+            crate::config::task_tool_requests(config, &tracked, &cf, &mut workspace_graphs);
         for tvr in task_requests {
             requests.add_version(tvr, &cf.source());
         }
@@ -1417,33 +1462,36 @@ fn keep_uv_python_variants(
                 }
             };
             let (python, version) = selected_python_receipt(&contents, &receipt)?;
-
-            let identity_install = crate::install_layout::resolver::installs_of(&python_ba)
-                .into_iter()
-                .find(|(_, python_dir)| python.starts_with(python_dir));
-            if let Some((_, python_dir)) = identity_install {
-                let Some(dir_name) = crate::install_layout::resolver::dir_name_of(&python_dir)
-                else {
-                    bail!(
-                        "cannot safely prune: Python receipt {} points to an unkeyable identity installation {}",
-                        receipt.display(),
-                        python_dir.display()
-                    );
-                };
-                needed
-                    .entry((String::new(), dir_name))
-                    .or_default()
-                    .insert(source.to_path_buf());
-                continue;
-            }
-
-            let legacy_dir = python_ba.installs_path().join(&version);
-            if python.starts_with(&legacy_dir) {
-                needed
-                    .entry((python_ba.short.to_string(), version.to_string()))
-                    .or_default()
-                    .insert(source.to_path_buf());
-                continue;
+            let identity_installs = crate::install_layout::resolver::installs_of(&python_ba);
+            match receipt_python_install(
+                &python,
+                &version,
+                &identity_installs,
+                python_ba.installs_path(),
+            ) {
+                Some(ReceiptPython::Identity(python_dir)) => {
+                    let Some(dir_name) = crate::install_layout::resolver::dir_name_of(&python_dir)
+                    else {
+                        bail!(
+                            "cannot safely prune: Python receipt {} points to an unkeyable identity installation {}",
+                            receipt.display(),
+                            python_dir.display()
+                        );
+                    };
+                    needed
+                        .entry((String::new(), dir_name))
+                        .or_default()
+                        .insert(source.to_path_buf());
+                    continue;
+                }
+                Some(ReceiptPython::Legacy(name)) => {
+                    needed
+                        .entry((python_ba.short.to_string(), name))
+                        .or_default()
+                        .insert(source.to_path_buf());
+                    continue;
+                }
+                None => {}
             }
 
             bail!(
@@ -1464,6 +1512,75 @@ fn keep_uv_python_variants(
         }
     }
     Ok(())
+}
+
+/// Whether a receipt's interpreter lives in `dir`. A path that only matches once the
+/// symlinks in it are followed counts only for the install the identity names: the
+/// live `python/3.14` link may since have moved on to a newer patch release.
+fn receipt_python_in_dir(python: &Path, resolved: &Path, dir: &Path) -> bool {
+    python.starts_with(dir)
+        || resolved.starts_with(dir)
+        || dir
+            .canonicalize()
+            .is_ok_and(|dir| resolved.starts_with(dir))
+}
+
+fn resolve_receipt_python(python: &Path) -> PathBuf {
+    match (
+        python.parent().and_then(|p| p.canonicalize().ok()),
+        python.file_name(),
+    ) {
+        (Some(dir), Some(name)) => dir.join(name),
+        _ => python.to_path_buf(),
+    }
+}
+
+/// The mise Python installation a receipt's interpreter belongs to.
+#[derive(Debug, PartialEq)]
+enum ReceiptPython {
+    /// An identity-layout installation directory.
+    Identity(PathBuf),
+    /// A legacy `python/<name>` installation.
+    Legacy(String),
+}
+
+/// Map a receipt's interpreter to the installation that keeps it working.
+///
+/// The receipt may reach the interpreter through a minor-version symlink
+/// (`python/3.14 -> ./3.14.9`), and the data dir may itself be a symlink, so both spellings
+/// are compared. The recorded `version` is preferred, but the link can lag the identity (it had
+/// not moved yet when the environment was built), so otherwise whatever the interpreter
+/// resolves into is retained.
+fn receipt_python_install(
+    python: &Path,
+    version: &str,
+    identity_installs: &[(String, PathBuf)],
+    legacy_root: &Path,
+) -> Option<ReceiptPython> {
+    let resolved = resolve_receipt_python(python);
+    let in_dir = |dir: &Path| receipt_python_in_dir(python, &resolved, dir);
+    let identity = identity_installs
+        .iter()
+        .find(|(name, dir)| python.starts_with(dir) || (name == version && in_dir(dir)))
+        .or_else(|| identity_installs.iter().find(|(_, dir)| in_dir(dir)));
+    if let Some((_, dir)) = identity {
+        return Some(ReceiptPython::Identity(dir.clone()));
+    }
+    if in_dir(&legacy_root.join(version)) {
+        return Some(ReceiptPython::Legacy(version.to_string()));
+    }
+    receipt_legacy_install_name(&resolved, legacy_root).map(ReceiptPython::Legacy)
+}
+
+/// The legacy installation directory (`python/<version>`) that `python` resolves into, for a
+/// receipt whose recorded version no longer names the directory its path leads to.
+fn receipt_legacy_install_name(resolved: &Path, installs: &Path) -> Option<String> {
+    let root = installs
+        .canonicalize()
+        .unwrap_or_else(|_| installs.to_path_buf());
+    let name = resolved.strip_prefix(&root).ok()?.components().next()?;
+    let name = name.as_os_str().to_str()?;
+    root.join(name).is_dir().then(|| name.to_string())
 }
 
 fn selected_python_receipt(contents: &str, receipt: &Path) -> Result<(PathBuf, String)> {
@@ -1620,6 +1737,97 @@ mod tests {
                 .to_string()
                 .contains("does not name a mise core Python runtime")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn receipt_python_install_keeps_what_a_lagging_link_resolves_into() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("python");
+        std::fs::create_dir_all(root.join("3.14.8/bin")).unwrap();
+        std::fs::create_dir_all(root.join("hash-3149/bin")).unwrap();
+        std::os::unix::fs::symlink("./3.14.8", root.join("3.14")).unwrap();
+        let python = root.join("3.14/bin/python");
+
+        // Legacy layout: the receipt records 3.14.7, but the link leads into 3.14.8.
+        assert_eq!(
+            receipt_python_install(&python, "3.14.7", &[], &root),
+            Some(ReceiptPython::Legacy("3.14.8".into()))
+        );
+        // Identity layout: the installation the link resolves into is kept, not an
+        // unrelated one.
+        std::fs::remove_file(root.join("3.14")).unwrap();
+        std::os::unix::fs::symlink("./hash-3149", root.join("3.14")).unwrap();
+        let installs = vec![
+            ("3.14.8".to_string(), root.join("3.14.8")),
+            ("3.14.9".to_string(), root.join("hash-3149")),
+        ];
+        assert_eq!(
+            receipt_python_install(&python, "3.14.7", &installs, &root),
+            Some(ReceiptPython::Identity(root.join("hash-3149")))
+        );
+        // An interpreter outside every mise installation still fails closed.
+        let elsewhere = tmp.path().join("other/bin/python");
+        assert_eq!(
+            receipt_python_install(&elsewhere, "3.14.7", &installs, &root),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn receipt_legacy_install_name_follows_the_link_to_the_current_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let installs = tmp.path().join("python");
+        std::fs::create_dir_all(installs.join("3.14.8/bin")).unwrap();
+        std::os::unix::fs::symlink("./3.14.8", installs.join("3.14")).unwrap();
+        let resolved = resolve_receipt_python(&installs.join("3.14/bin/python"));
+        assert_eq!(
+            receipt_legacy_install_name(&resolved, &installs).as_deref(),
+            Some("3.14.8")
+        );
+        let elsewhere = tmp.path().join("other/bin/python");
+        assert_eq!(receipt_legacy_install_name(&elsewhere, &installs), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_receipt_python_follows_the_minor_version_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let concrete = tmp.path().join("python/3.14.9");
+        std::fs::create_dir_all(concrete.join("bin")).unwrap();
+        std::os::unix::fs::symlink("./3.14.9", tmp.path().join("python/3.14")).unwrap();
+        let resolved = resolve_receipt_python(&tmp.path().join("python/3.14/bin/python"));
+        assert_eq!(
+            resolved,
+            concrete.canonicalize().unwrap().join("bin/python")
+        );
+        // A symlinked data dir still matches the install dir spelled through it.
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(tmp.path(), &link).unwrap();
+        let python = link.join("python/3.14/bin/python");
+        let resolved = resolve_receipt_python(&python);
+        assert!(receipt_python_in_dir(
+            &python,
+            &resolved,
+            &link.join("python/3.14.9")
+        ));
+        assert!(!receipt_python_in_dir(
+            &python,
+            &resolved,
+            &link.join("python/3.13.1")
+        ));
+        // Once `python/3.14` has moved on to a newer patch, a receipt that names 3.14.9
+        // through it must not match the install the link now points at.
+        std::fs::create_dir_all(tmp.path().join("python/3.14.10/bin")).unwrap();
+        std::fs::remove_file(tmp.path().join("python/3.14")).unwrap();
+        std::os::unix::fs::symlink("./3.14.10", tmp.path().join("python/3.14")).unwrap();
+        let python = tmp.path().join("python/3.14/bin/python");
+        let resolved = resolve_receipt_python(&python);
+        assert!(!receipt_python_in_dir(&python, &resolved, &concrete));
+        // A path that does not exist is left alone rather than failing.
+        let missing = tmp.path().join("nope/bin/python");
+        assert_eq!(resolve_receipt_python(&missing), missing);
     }
 
     #[tokio::test]

@@ -52,6 +52,9 @@ resource-level changes.
 
   The replaced versions are saved first, so `mise dot undo` restores them.
 - **`--from-dir <DIR>`** — Directory for the `--from` checkout (default: `$MISE_DATA_DIR/bootstrap-repo`)
+- **`--config-dir <DIR>`** — Link the global config directory to this directory of the `--from` checkout
+
+  mise links its config directory, normally ~/.config/mise, to the directory, then bootstraps from it, so its `config.toml`, `config.<env>.toml`, `conf.d/`, and `miserc.toml` are the global config from this run on. The directory must exist in the checkout, and the path to it is relative to the checkout and must stay inside it; `.` is the checkout itself. mise's config directory, where the link goes, must be missing, empty, or already this link. See <https://mise.jdx.dev/bootstrap/from-repository.html#global-config-elsewhere>.
 - **`-n --dry-run`** — Show what would change without changing anything
 
   Hooks and the `bootstrap` task are printed instead of run.
@@ -70,6 +73,9 @@ resource-level changes.
 - **`--prompt-vars`** — Ask for `[vars]` entries that declare a `prompt` and have no saved answer
 
   mise saves each answer under `$MISE_STATE_DIR`, not in any config file, and never asks for it again. Without a terminal, a var keeps its default. A `--dry-run` still saves the answers it asks for.
+- **`--save-env`** — Save the environments of `-E` or `MISE_ENV` to `miserc.local.toml`
+
+  Writes `env` in the `miserc.local.toml` of mise's config directory, so later runs, including `mise bootstrap --update`, select the same environments without `-E`. Names may be sets from `[env_sets]` in `miserc.toml`. Other keys in the file are kept. Needs `-E` or `MISE_ENV`, and a `--dry-run` writes nothing.
 - **`--skip <PART>`** — Skip these parts
 
   Repeat the flag or separate parts with commas. Cannot be combined with `--only`.
@@ -77,8 +83,8 @@ resource-level changes.
   **Choices:** `plugins`, `packages`, `accounts`, `files`, `services`, `firewall`, `compose`, `repos`, `dotfiles`, `mise-shell-activate`, `macos-defaults`, `macos-launchd-agents`, `linux-systemd-units`, `user`, `tools`, `task`, `final-hook`
 - **`--update`** — Refresh package metadata and update repositories before applying
 
-  Also fast-forwards a checkout that `--from` or `--adopt` reuses. Without `--update`, a reused checkout stays at its current commit.
-- **`--upgrade`** — 升级已安装的软件包和工具，并安装缺少的软件包和工具
+  Also fast-forwards a checkout that `--from` or `--adopt` reuses. Without either, fast-forwards the global config when it is a Git checkout with an upstream, as `--adopt` makes, or links into one, as `--config-dir` makes, then bootstraps from the new commit. Without `--update`, a checkout stays at its current commit.
+- **`--upgrade`** — Upgrade installed packages and tools as well as installing missing ones
 
   packages 阶段会在安装后执行相当于 `mise bootstrap packages upgrade` 的操作；tools 阶段会在安装后执行 `mise upgrade`（不带 `--bump`）。软件包固定版本和工具版本范围均会生效。此选项不会更新 mise 自身、软件仓库或容器镜像，也不会重启服务；更新软件仓库请参阅 `--update`，更新 mise 请参阅 `mise self-update`。
 - **`-h --help`** — Print help
@@ -125,6 +131,12 @@ Do the same and also load the project's mise.work.toml
 
 ```
 mise -E work bootstrap --from git@github.com:example/workstation.git
+```
+
+Clone a dotfiles repository and link ~/.config/mise to its .config/mise
+
+```
+mise bootstrap --from https://github.com/example/dotfiles.git --from-dir ~/.dotfiles --config-dir .config/mise
 ```
 
 Clone global config into ~/.config/mise, then apply it

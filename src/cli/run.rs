@@ -3,11 +3,16 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::iter::once;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set when `--timeout` stops the run: the tasks it kills were cut short, not
+/// stopped because another failed, so `summary` shows what they printed.
+static RUN_TIMED_OUT: AtomicBool = AtomicBool::new(false);
 use std::time::Duration;
 
 use super::args::ToolArg;
 use crate::cli::{render_subcommand_help, unescape_task_args};
-use crate::config::{Config, Settings, SettingsExt};
+use crate::config::{Config, Settings, SettingsExt, config_file};
 use crate::deps::{DepsEngine, DepsOptions, DepsStepResult};
 use crate::duration;
 use crate::env;
@@ -18,7 +23,7 @@ use crate::task::task_executor::TaskRunContext;
 use crate::task::task_helpers::task_needs_permit;
 use crate::task::task_list::{get_task_lists, resolve_depends};
 use crate::task::task_output::TaskOutput;
-use crate::task::task_output_handler::OutputHandler;
+use crate::task::task_output_handler::{OutputHandler, SummaryOutcome};
 use crate::task::task_scheduler::RunLoopHooks;
 use crate::task::{Deps, Task, TaskCacheMode, usage_command_for_args};
 use crate::toolset::{InstallOptions, ResolveOptions, ToolVersion, ToolsetBuilder};
@@ -197,6 +202,7 @@ pub(crate) struct Run {
     /// - `replacing` - Stdout is replaced each time, stderr is printed as is
     /// - `timed` - Only show stdout lines if they are displayed for more than 1 second
     /// - `keep-order` - Print stdout/stderr by line, prefixed with the task's label, but keep the order of the output
+    /// - `summary` - Print one line for each task that passed, and all of a failed task's output once it ends
     /// - `quiet` - Deprecated; use `--output interleave --quiet`
     /// - `silent` - Do not show any output, including the task's stdout and stderr, except errors
     #[usage(short, long, verbatim_doc_comment, env = "MISE_TASK_OUTPUT")]
@@ -367,6 +373,12 @@ pub(crate) struct Run {
     /// Overrides the `task.timeout` setting.
     #[usage(long)]
     pub timeout: Option<String>,
+
+    /// Fail a task that waits longer than this for a lock, e.g. 30s or 5m
+    ///
+    /// Overrides the `task.lock_timeout` setting.
+    #[usage(long)]
+    pub lock_timeout: Option<String>,
 
     /// Show the elapsed time after each task completes
     ///
@@ -665,6 +677,12 @@ fn display_affected_text(text: &str) -> String {
 }
 
 impl Run {
+    /// The parser leaves `--help` to the task, so `mise run --help` arrives here as a task name.
+    /// It prints this command's own help and runs nothing the project defines.
+    pub(crate) fn only_prints_help(&self) -> bool {
+        matches!(self.task.as_deref(), Some("-h" | "--help"))
+    }
+
     pub(crate) async fn run(mut self) -> Result<()> {
         // Check help flags before doing any work
         if self.task.as_deref() == Some("-h") {
@@ -826,6 +844,19 @@ impl Run {
                         .await?;
                 }
             }
+        }
+        // A process that requires explicit trust (a task hook, an MCP request) has no typed
+        // `mise run` behind it. Task files already need trust there, but the inline tasks of a
+        // tasks-only `mise.toml` load without it, so check every task this run would reach. The
+        // tasks carry the caller's arguments by now, so dependencies named from usage values
+        // resolve as they will when the run starts. The executor checks each task again as it
+        // schedules it.
+        if config_file::requires_explicit_trust()
+            && let Some(task) =
+                crate::config::untrusted_task_reached(&config, task_list.clone(), self.skip_deps)
+                    .await?
+        {
+            return Err(crate::errors::Error::UntrustedConfig(task.config_source.clone()).into());
         }
         time!("run get_task_lists");
 
@@ -1029,6 +1060,7 @@ impl Run {
                     // and their children would outlive mise. It is dropped only
                     // afterwards: that aborts the jobs, whose commands would
                     // leave the running list before they could be stopped.
+                    RUN_TIMED_OUT.store(true, Ordering::SeqCst);
                     crate::cmd::CmdLineRunner::terminate_all().await;
                     Err(eyre!("mise run timed out after {:?}", timeout))
                 }
@@ -1113,7 +1145,7 @@ impl Run {
                     on_task_dropped: |task: &Task| this.retire_keep_order_slot(task),
                     continue_on_error: this.continue_on_error,
                 },
-                |task, deps_for_remove, allow_during_interruption, injected| {
+                |task, deps_for_remove, allow_during_interruption, injected, covered| {
                     let this = this.clone();
                     let spawn_context = spawn_context.clone();
                     async move {
@@ -1123,6 +1155,7 @@ impl Run {
                             deps_for_remove,
                             allow_during_interruption,
                             injected,
+                            covered,
                             spawn_context,
                         )
                         .await
@@ -1167,6 +1200,7 @@ impl Run {
         deps_for_remove: Arc<Mutex<Deps>>,
         inherited_allow_during_interruption: bool,
         injected: bool,
+        covered: crate::task::task_scheduler::Cover,
         ctx: crate::task::task_scheduler::SpawnContext,
     ) -> Result<()> {
         if Self::should_abort_while_stopping(
@@ -1184,9 +1218,10 @@ impl Run {
             );
             return Ok(());
         }
-        let needs_task_permit = task_needs_permit(&task);
+        // A covered task runs under the slot of the locked task that started it.
+        let needs_task_permit = task_needs_permit(&task) && !covered.is_covered();
         let needs_install = injected && !this.skip_tools;
-        let mut permit_opt = if needs_task_permit || needs_install {
+        let mut permit_opt = if needs_task_permit || (needs_install && !covered.is_covered()) {
             let wait_start = std::time::Instant::now();
             let p = Some(ctx.semaphore.clone().acquire_owned().await?);
             trace!(
@@ -1299,6 +1334,7 @@ impl Run {
                 allow_during_interruption,
                 otel_span_cx,
                 injected,
+                covered,
             }))
             .catch_unwind()
             .await
@@ -1415,6 +1451,21 @@ impl Run {
             {
                 oh.keep_order_state.lock().unwrap().on_task_finished(&task);
             }
+            if let Some(oh) = &this.output_handler
+                && oh.output(Some(&task)) == TaskOutput::Summary
+            {
+                // An interrupted task's output may be all there is to go on;
+                // one stopped because a sibling failed says nothing more.
+                let outcome = match &result {
+                    Ok(_) => SummaryOutcome::Passed,
+                    Err(_) if interrupted || RUN_TIMED_OUT.load(Ordering::SeqCst) => {
+                        SummaryOutcome::Failed
+                    }
+                    Err(_) if cancelled => SummaryOutcome::Cancelled,
+                    Err(_) => SummaryOutcome::Failed,
+                };
+                oh.finish_summary(&task, outcome);
+            }
             let mut deps = deps_for_remove.lock().await;
             if result
                 .as_ref()
@@ -1459,6 +1510,11 @@ impl Run {
             crate::cmd::CmdLineRunner::kill_all();
         }
         self.retire_keep_order_slot(&task);
+        if let Some(oh) = &self.output_handler
+            && oh.output(Some(&task)) == TaskOutput::Summary
+        {
+            oh.finish_summary(&task, SummaryOutcome::Failed);
+        }
         // The task never started, but its failure is what stopped the run, so
         // it still gets a span; otherwise the trace's only error is the root.
         if let Some(t) = &self.telemetry {
@@ -1594,6 +1650,10 @@ impl Run {
             task_cache: self.task_cache,
             task_cache_explain: self.task_cache_explain,
             task_cache_explain_json: self.task_cache_explain_json,
+            lock_timeout: match &self.lock_timeout {
+                Some(value) => Some(duration::parse_duration(value)?),
+                None => Settings::get().task_lock_timeout_duration(),
+            },
             secrets_file_dir: self.tmpdir.join("secrets"),
             secrets_denied: self.secrets_denied,
             cli_secrets: self.cli_secrets.take(),

@@ -87,10 +87,10 @@ mise 也会读取 `.tool-versions` 文件。要读取 `.nvmrc`、`.python-versio
 `--bump` 会升级到最新发行版，并以相同精度改写版本请求：`node = "24"` 会变为 `node = "26"`，而 `node = "24.11.1"` 会变为最新的确切版本。如果你像 `mise upgrade --bump node@latest` 这样指定了请求，mise 会改为写入该请求。
 
 ```sh
-mise upgrade --dry-run      # 查看将发生的更改
-mise upgrade --interactive  # 从列表中选择工具
-mise upgrade --bump --local # 仅提升项目配置中的版本请求
-mise upgrade --global       # 仅升级全局配置中的工具
+mise upgrade --dry-run      # show what would change
+mise upgrade --interactive  # pick tools from a list
+mise upgrade --bump --no-global # bump only tools in project config
+mise upgrade --global       # upgrade only tools in global config
 ```
 
 即使项目为某个工具设置了自己的版本，`--global` 也只会升级全局配置中的请求，并且绝不会更改项目配置或锁文件。`mise outdated --global` 会报告将要安装的版本。工具的自动更新功能也会使用这两个命令；参阅[自动更新工具](/dev-tools/self-updating-tools.html)。

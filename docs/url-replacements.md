@@ -31,7 +31,7 @@ socialDescription: "重写 mise 请求的 URL，通过镜像或代理获取下�
 | `https://github.com/owner/repo/releases/download/v1.0.0/file.tar.gz`   | `http://pkgproxy.internal:8080/generic/github/owner/repo/releases/download/v1.0.0/file.tar.gz` |
 | `https://api.github.com/repos/owner/repo/releases`                     | `http://pkgproxy.internal:8080/generic/github-api/repos/owner/repo/releases`             |
 
-`https://github.com/` 不会匹配 `https://api.github.com/`，因此这两条规则不会重叠。只有代理也提供 GitHub API 时才应重定向 API 请求；重定向后，mise 也不会再通过 [mise-versions](/configuration/settings.html#use_versions_host) 获取 GitHub 发行版和证明元数据。如果代理只镜像发行版下载，请只保留第一条规则。
+`https://github.com/` 与 `https://api.github.com/` 不匹配，因此两条规则不会重叠。只有当代理也提供 API 时才改道 API：改道后 mise 也无法使用 [mise-versions](/configuration/settings.html#use_versions_host) 获取 GitHub 发布和证明元数据。改道后的 API 同样无法确认仓库改名或转移，因此 GitHub 制品证明和 SLSA 来源证明必须准确使用你配置的仓库名称。如果代理只镜像发布下载，请仅保留第一条规则。
 
 ## 规则匹配方式
 

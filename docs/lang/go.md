@@ -82,11 +82,7 @@ use (
 )
 ```
 
-不带补丁版本号的 `go X.Y` 指令并不对应某个 Go 发行版，只声明模块支持的最低 Go 版本。
-mise 在 `go.work` 中会忽略它；从 `go.mod` 读取这种指令的行为已弃用，并将在 mise
-2026.11.0 中移除。请改用 `toolchain` 行，或设置
-`idiomatic_version_file_ignore_minimum_versions` 立即忽略该版本要求。参见[mise
-读取哪些字段](/dev-tools/versions.html#which-fields-mise-reads)。
+没有补丁版本号的 `go X.Y` 指令不对应任何 Go 发行版，只声明模块支持的最低 Go 版本。mise 会忽略 `go.work` 和 `go.mod` 中的此类指令；请改为添加 `toolchain` 行。详见[mise 读取哪些字段](/dev-tools/versions.html#which-fields-mise-reads)。
 
 ### 工作区和 `GOWORK`
 

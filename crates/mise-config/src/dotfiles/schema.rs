@@ -20,6 +20,10 @@ pub(crate) fn entry_rules(schema: &mut Schema) {
         rule_6(),
         rule_7(),
         rule_8(),
+        rule_9(),
+        rule_10(),
+        rule_11(),
+        rule_12(),
     ];
     schema.insert("allOf".into(), rules.into());
     // an encrypted entry is a whole file from a source, never inline content or an edit
@@ -32,7 +36,8 @@ pub(crate) fn entry_rules(schema: &mut Schema) {
     );
 }
 
-/// A merge edits a structured file, so it takes none of the whole-file or line keys.
+/// A merge edits a structured file, so it takes none of the whole-file or line keys except
+/// `permissions`, which sets the mode of a target the merge creates.
 fn rule_0() -> Value {
     json!({
         "if": {"properties": {"merge": {"enum": [true, "missing"]}}, "required": ["merge"]},
@@ -40,7 +45,6 @@ fn rule_0() -> Value {
             "properties": {
                 "mode": false,
                 "content": false,
-                "permissions": false,
                 "exclude": false,
                 "include": false,
                 "manifest": false,
@@ -50,9 +54,11 @@ fn rule_0() -> Value {
                 "variants": false,
                 "enabled": false,
                 "remove_empty": false,
+                "create_if_missing": false,
                 "relative": false,
                 "dot_prefix": false,
                 "group": false,
+                "depends": false,
                 "block": false,
                 "line": false,
                 "position": false,
@@ -109,6 +115,7 @@ fn rule_2() -> Value {
                 "manifest": false,
                 "permissions": false,
                 "remove_empty": false,
+                "create_if_missing": false,
                 "dot_prefix": {"const": false},
                 "encrypt": {"const": false},
                 "block": false,
@@ -167,15 +174,15 @@ fn rule_4() -> Value {
     })
 }
 
-/// `permissions` applies to copy, template and inline content, or on its own to an existing target.
+/// `permissions` applies to copy, template and inline content, to a merge that creates its
+/// target, or on its own to an existing target.
 fn rule_5() -> Value {
     json!({
         "oneOf": [
             {
                 "properties": {
-                    "mode": {"enum": ["copy", "template"]},
+                    "mode": {"enum": ["copy", "template", "fnox"]},
                     "block": false,
-                    "template": false,
                     "comment": false
                 },
                 "required": ["permissions"],
@@ -184,6 +191,9 @@ fn rule_5() -> Value {
                     {"required": ["content"]},
                     {"required": ["mode"]},
                     {"properties": {"exclude": false, "manifest": false, "encrypt": false}}
+                ],
+                "allOf": [
+                    {"anyOf": [{"properties": {"template": false}}, {"required": ["merge"]}]}
                 ]
             },
             {"properties": {"permissions": false}}
@@ -240,6 +250,20 @@ fn rule_7() -> Value {
     })
 }
 
+/// `depends` orders whole-file deployment, so an edit or a track entry takes none.
+fn rule_12() -> Value {
+    json!({
+        "if": {"required": ["depends"]},
+        "then": {
+            "properties": {
+                "block": false,
+                "line": false,
+                "mode": {"not": {"enum": ["track", "track-local"]}}
+            }
+        }
+    })
+}
+
 /// `allow_plaintext` applies to track modes only.
 fn rule_8() -> Value {
     json!({
@@ -250,6 +274,67 @@ fn rule_8() -> Value {
             },
             {"properties": {"allow_plaintext": false}}
         ]
+    })
+}
+
+/// `format` names the format of a merge, so it takes `merge = true` or `"missing"`.
+fn rule_10() -> Value {
+    json!({
+        "anyOf": [
+            {"properties": {"format": false}},
+            {"properties": {"merge": {"enum": [true, "missing"]}}, "required": ["merge"]}
+        ]
+    })
+}
+
+/// `create_if_missing` applies to copy, template and inline content.
+fn rule_9() -> Value {
+    json!({
+        "anyOf": [
+            {"properties": {"create_if_missing": {"const": false}}},
+            {
+                "properties": {
+                    "mode": {"enum": ["copy", "template"]},
+                    "block": false,
+                    "line": false,
+                    "template": false,
+                    "comment": false
+                },
+                "anyOf": [
+                    {"required": ["source"]},
+                    {"required": ["content"]},
+                    {"required": ["mode"]}
+                ]
+            }
+        ]
+    })
+}
+
+/// `fnox` writes the file fnox stores for the target, so it takes no source,
+/// inline content, edit, or directory key.
+fn rule_11() -> Value {
+    json!({
+        "if": {"properties": {"mode": {"const": "fnox"}}, "required": ["mode"]},
+        "then": {
+            "properties": {
+                "source": false,
+                "content": false,
+                "exclude": false,
+                "manifest": false,
+                "remove_empty": false,
+                "create_if_missing": false,
+                "dot_prefix": {"const": false},
+                "relative": {"const": false},
+                "encrypt": {"const": false},
+                "merge": false,
+                "format": false,
+                "block": false,
+                "line": false,
+                "position": false,
+                "template": false,
+                "comment": false
+            }
+        }
     })
 }
 

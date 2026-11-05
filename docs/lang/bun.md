@@ -85,8 +85,7 @@ build. On musl systems such as Alpine, or with the [`libc`](/configuration/setti
 setting set to `musl`, it picks the `musl` build. Windows on arm64 gets the
 native build from Bun 1.3.10 on, and the x64 baseline build for older versions.
 
-[`mise lock`](/cli/lock.html) records the checksum Bun publishes in
-`SHASUMS256.txt` for each platform.
+归档会与 Bun 发布的 `SHASUMS256.txt` 校验和核对；[`mise lock`](/cli/lock.html) 会按平台记录该校验和。如果无法获取该文件或其中未列出该归档，安装会失败；只有从未发布校验和的版本才会在警告后跳过验证并安装。
 
 An installed plugin named `bun` takes precedence over the built-in
 installer. If mise behaves differently from this page, check

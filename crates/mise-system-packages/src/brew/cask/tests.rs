@@ -45,6 +45,22 @@ fn trusted_tempdir() -> Result<tempfile::TempDir> {
         .tempdir_in(base)?)
 }
 
+/// A Ruby that runs, as `cask_ruby_bin` picks one, without provisioning:
+/// `ruby` on PATH can be a version manager's shim with no version set, or
+/// one that fails in this environment, and a test given it would fail
+/// instead of skipping.
+fn working_ruby() -> Option<PathBuf> {
+    let ruby = file::which("ruby")?;
+    std::process::Command::new(&ruby)
+        .args(["-e", "exit 0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+        .then_some(ruby)
+}
+
 fn run_cask_shim(
     ruby: &Path,
     shim: &Path,
@@ -387,6 +403,63 @@ fn detects_any_foreign_homebrew_metadata_object() -> Result<()> {
     mise_util::file::write(&metadata, "foreign")?;
     assert!(homebrew_metadata_present("example")?);
     Ok(())
+}
+
+#[test]
+fn only_official_tap_casks_get_homebrew_metadata() {
+    assert!(is_official_cask_request("foo"));
+    assert!(is_official_cask_request("homebrew/cask/foo"));
+    assert!(!is_official_cask_request("vendor/tools/foo"));
+    assert!(!is_official_cask_request("homebrew/cask/"));
+}
+
+#[test]
+fn written_homebrew_metadata_hands_the_cask_to_homebrew() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let token_dir = tmp.path().join("Caskroom/example");
+    file::create_dir_all(token_dir.join("2.40.0"))?;
+    assert_eq!(homebrew_installed_version("example")?, None);
+
+    write_homebrew_metadata(&token_dir, "example", "2.40.0", true)?;
+
+    let versions = token_dir.join(".metadata/2.40.0");
+    let stamps = std::fs::read_dir(&versions)?.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(stamps.len(), 1);
+    let stamp = stamps[0].file_name().into_string().unwrap();
+    // Homebrew's own format: YYYYMMDDHHMMSS.mmm
+    assert_eq!(stamp.len(), 18);
+    assert_eq!(stamp.as_bytes()[14], b'.');
+    let record = versions.join(&stamp).join("Casks/example.json");
+    assert_eq!(mise_util::file::read_to_string(record)?, "{}");
+    let receipt: serde_json::Value = serde_json::from_str(&mise_util::file::read_to_string(
+        token_dir.join(".metadata/INSTALL_RECEIPT.json"),
+    )?)?;
+    assert_eq!(receipt["installed_on_request"], true);
+    assert_eq!(receipt["installed_as_dependency"], false);
+    assert_eq!(receipt["loaded_from_api"], true);
+    assert_eq!(receipt["arch"], "arm64");
+    assert_eq!(receipt["source"]["tap"], "homebrew/cask");
+    assert_eq!(receipt["source"]["version"], "2.40.0");
+    // The install time is the version directory's, not the handoff time.
+    let meta = token_dir.join("2.40.0").metadata()?;
+    let created = meta.created().or_else(|_| meta.modified())?;
+    let created = created.duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+    assert_eq!(receipt["time"].as_i64(), Some(created));
+    assert!(receipt.get("uninstall_artifacts").is_none());
+    assert_eq!(
+        homebrew_installed_version("example")?.as_deref(),
+        Some("2.40.0")
+    );
+    Ok(())
+}
+
+#[test]
+fn dependency_receipt_is_not_marked_as_requested() {
+    let receipt = install_receipt("1.0.0", false, 1_700_000_000);
+    assert_eq!(receipt["installed_on_request"], false);
+    assert_eq!(receipt["installed_as_dependency"], true);
 }
 
 #[test]
@@ -932,8 +1005,11 @@ fn self_updating_receipt_accepts_app_bundle_drift() -> Result<()> {
         caskroom.join(".mise-cask.toml"),
         toml::to_string_pretty(&legacy_receipt)?,
     )?;
-    let plan =
-        cask_prune_plan_from_tokens(&BTreeSet::new(), &prefix::prefix().join(".mise-test-state"))?;
+    let plan = cask_prune_plan_from_tokens(
+        &BTreeSet::new(),
+        &prefix::prefix().join(".mise-test-state"),
+        false,
+    )?;
     assert!(plan.remove.is_empty());
     assert!(plan.skipped.iter().any(|skip| {
         skip.token == "self-updating" && skip.reason.contains("metadata-only app ownership")
@@ -3912,7 +3988,7 @@ fn ensure_cask_shim_creates_parent_dir() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn cask_shim_supports_language_and_system_conditionals() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -3956,7 +4032,7 @@ end
 #[test]
 #[cfg(unix)]
 fn cask_shim_supports_csv_version_array_helpers() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -3990,7 +4066,7 @@ end
 #[test]
 #[cfg(unix)]
 fn cask_shim_supports_completion_stanzas_and_system_command() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -4059,7 +4135,7 @@ end
 #[test]
 #[cfg(unix)]
 fn cask_shim_system_command_reports_denied_sudo() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -4094,7 +4170,7 @@ end
 #[test]
 #[cfg(unix)]
 fn cask_shim_system_command_reports_failed_commands() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -4125,7 +4201,7 @@ end
 #[test]
 #[cfg(unix)]
 fn cask_shim_reports_missing_system_conditional() -> Result<()> {
-    let Some(ruby) = file::which("ruby") else {
+    let Some(ruby) = working_ruby() else {
         return Ok(());
     };
     let tmp = tempfile::tempdir()?;
@@ -6667,7 +6743,7 @@ fn cask_prune_removes_only_receipt_owned_direct_artifacts() -> Result<()> {
         &[],
     )?;
 
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
     assert_eq!(plan.remove.len(), 1);
     assert!(plan.skipped.is_empty());
     assert_eq!(apply_cask_prune_plan_in(&plan, true, &state_dir)?, 0);
@@ -6695,7 +6771,7 @@ fn cask_prune_keeps_nonempty_token_directory_and_continues() -> Result<()> {
     let staged_token_dir = caskroom_token_dir(CaskManager::BrewCask, "a-staged");
     file::create_dir_all(staged_token_dir.join(".mise-tmp-interrupted"))?;
 
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
     assert_eq!(plan.remove.len(), 2);
 
     assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 2);
@@ -6793,8 +6869,11 @@ fn cask_prune_skips_configured_drifted_and_legacy_casks() -> Result<()> {
         })?,
     )?;
 
-    let plan =
-        cask_prune_plan_from_tokens(&BTreeSet::from([configured.token.clone()]), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(
+        &BTreeSet::from([configured.token.clone()]),
+        &state_dir,
+        false,
+    )?;
     assert!(plan.remove.is_empty());
     assert_eq!(
         plan.skipped
@@ -6823,7 +6902,7 @@ fn cask_prune_skips_shared_targets_and_pending_transactions() -> Result<()> {
     file::create_dir_all(&journal_dir)?;
     file::write(journal_dir.join("1.0.0.json"), "{}")?;
 
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
     assert!(plan.remove.is_empty());
     assert_eq!(plan.skipped.len(), 5);
     for token in ["shared-a", "shared-b"] {
@@ -6855,7 +6934,7 @@ fn cask_prune_rechecks_shared_targets_before_removal() -> Result<()> {
     let _guard = BrewPrefixGuard::set(tmp.path());
     let state_dir = tmp.path().join("state");
     let target = write_test_app_receipt(&test_cask("planned", "1.0.0"), "Shared.app")?;
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
     assert_eq!(plan.remove.len(), 1);
 
     write_test_app_receipt(&test_cask("late-claim", "1.0.0"), "Shared.app")?;
@@ -6873,7 +6952,7 @@ fn cask_prune_rechecks_homebrew_ownership_before_removal() -> Result<()> {
     let _guard = BrewPrefixGuard::set(tmp.path());
     let state_dir = tmp.path().join("state");
     let target = write_test_app_receipt(&test_cask("claimed", "1.0.0"), "Claimed.app")?;
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
     assert_eq!(plan.remove.len(), 1);
 
     file::create_dir_all(caskroom_token_dir(CaskManager::BrewCask, "claimed").join(".metadata"))?;
@@ -6906,7 +6985,7 @@ fn cask_prune_fails_closed_when_a_receipt_is_corrupt() -> Result<()> {
     file::create_dir_all(&corrupt_dir)?;
     file::write(corrupt_dir.join(".mise-cask.toml"), "not = [valid")?;
 
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir)?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
 
     assert!(plan.remove.is_empty());
     assert!(plan.skipped.iter().any(|skip| {
@@ -6932,7 +7011,7 @@ fn cask_prune_fails_closed_when_a_token_directory_is_unreadable() -> Result<()> 
     file::create_dir_all(&unreadable)?;
     std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000))?;
 
-    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir);
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false);
     std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o755))?;
     let plan = plan?;
 
@@ -6994,6 +7073,353 @@ fn cask_prune_receipt_rejects_pkg_and_lifecycle_casks() -> Result<()> {
         cask_prune_blocker(&cask, &wrapper).as_deref(),
         Some("command wrapper artifacts are not supported for pruning")
     );
+    Ok(())
+}
+
+/// Install a self-updating cask with an app and a binary link, the shape of
+/// OrbStack, whose receipt never permits a plain prune.
+fn write_self_updating_receipt(token: &str) -> Result<(PathBuf, PathBuf)> {
+    let mut cask = test_cask(token, "1.0.0");
+    cask.auto_updates = true;
+    let app = AppArtifact {
+        source: "Updater.app".to_string(),
+        target: Some("$HOMEBREW_PREFIX/Applications/Updater.app".to_string()),
+    };
+    let binary = BinaryArtifact {
+        source: format!("bin/{token}"),
+        target: Some(format!("$HOMEBREW_PREFIX/bin/{token}")),
+    };
+    let app_target = app_target_path(app.target_name()?)?;
+    file::create_dir_all(&app_target)?;
+    file::write(app_target.join("version"), "1.0.0")?;
+    let version_dir = caskroom_version_dir(CaskManager::BrewCask, &cask.token, &cask.version);
+    let binary_source = version_dir.join("bin").join(token);
+    file::create_dir_all(version_dir.join("bin"))?;
+    file::write(&binary_source, "#!/bin/sh\n")?;
+    let binary_target = binary.target_path(Path::new("/Applications"))?;
+    file::create_dir_all(binary_target.parent().unwrap())?;
+    std::os::unix::fs::symlink(&binary_source, &binary_target)?;
+    write_receipt_with_flight_targets(
+        &version_dir,
+        &cask,
+        &CaskArtifacts {
+            apps: vec![app],
+            binaries: vec![binary],
+            ..Default::default()
+        },
+        &[],
+        &BTreeMap::new(),
+        &[],
+        &[],
+    )?;
+    Ok((app_target, binary_target))
+}
+
+#[test]
+fn cask_prune_force_removes_a_self_updated_cask() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let (app_target, binary_target) = write_self_updating_receipt("updater")?;
+    file::write(app_target.join("version"), "2.0.0")?;
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
+    assert!(plan.remove.is_empty());
+    assert_eq!(plan.skipped.len(), 1);
+    assert!(plan.skipped[0].forceable);
+    assert!(
+        plan.skipped[0]
+            .reason
+            .contains("metadata-only app ownership")
+    );
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert!(plan.skipped.is_empty());
+    assert_eq!(plan.remove.len(), 1);
+    assert!(
+        plan.remove[0]
+            .forced
+            .as_deref()
+            .is_some_and(|reason| reason.contains("metadata-only app ownership"))
+    );
+
+    assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 1);
+    assert!(!app_target.exists());
+    assert!(binary_target.symlink_metadata().is_err());
+    assert!(!caskroom_token_dir(CaskManager::BrewCask, "updater").exists());
+    assert!(!cask_journal_pending_in(
+        &state_dir,
+        CaskManager::BrewCask,
+        "updater"
+    ));
+    Ok(())
+}
+
+#[test]
+fn cask_prune_force_keeps_a_link_that_now_points_elsewhere() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let (app_target, binary_target) = write_self_updating_receipt("updater")?;
+    let other = tmp.path().join("other/updater");
+    file::create_dir_all(other.parent().unwrap())?;
+    file::write(&other, "#!/bin/sh\n")?;
+    std::fs::remove_file(&binary_target)?;
+    std::os::unix::fs::symlink(&other, &binary_target)?;
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert_eq!(plan.remove.len(), 1);
+
+    assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 1);
+    assert!(!app_target.exists());
+    assert_eq!(std::fs::read_link(&binary_target)?, other);
+    assert!(!caskroom_token_dir(CaskManager::BrewCask, "updater").exists());
+    Ok(())
+}
+
+#[test]
+fn cask_prune_force_removes_a_receipt_without_prune_metadata() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let target = write_test_app_receipt(&test_cask("legacy", "1.0.0"), "Legacy.app")?;
+    let version_dir = caskroom_version_dir(CaskManager::BrewCask, "legacy", "1.0.0");
+    let mut receipt = read_receipt(&version_dir)?.unwrap();
+    receipt.schema_version = 2;
+    receipt.prune_safe = false;
+    file::write(
+        version_dir.join(".mise-cask.toml"),
+        toml::to_string_pretty(&receipt)?,
+    )?;
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
+    assert!(plan.remove.is_empty());
+    assert!(plan.skipped[0].forceable);
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert_eq!(plan.remove.len(), 1);
+    assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 1);
+    assert!(!target.exists());
+    assert!(!caskroom_token_dir(CaskManager::BrewCask, "legacy").exists());
+    Ok(())
+}
+
+#[test]
+fn cask_management_reports_who_owns_an_installed_cask() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+
+    let owned = test_cask("owned", "1.0.0");
+    write_test_app_receipt(&owned, "Owned.app")?;
+    assert_eq!(cask_management(&owned), PackageManagement::Mise);
+
+    let homebrew = test_cask("homebrew", "1.0.0");
+    file::create_dir_all(caskroom_token_dir(CaskManager::BrewCask, "homebrew").join(".metadata"))?;
+    assert_eq!(cask_management(&homebrew), PackageManagement::Homebrew);
+
+    // Homebrew's records can't be inspected when a Caskroom path component is a file.
+    let unreadable = test_cask("unreadable", "1.0.0");
+    file::write(
+        caskroom_token_dir(CaskManager::BrewCask, "unreadable"),
+        "not a directory",
+    )?;
+    assert_eq!(cask_management(&unreadable), PackageManagement::Unknown);
+
+    // A same-named Homebrew cask is a different install for macos-app.
+    let mut app = test_cask("homebrew", "1.0.0");
+    app.manager = CaskManager::MacosApp;
+    assert_eq!(cask_management(&app), PackageManagement::Mise);
+    Ok(())
+}
+
+#[test]
+fn cask_prune_force_still_refuses_casks_it_cannot_attribute() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+
+    write_test_app_receipt(&test_cask("homebrew", "1.0.0"), "Homebrew.app")?;
+    file::create_dir_all(caskroom_token_dir(CaskManager::BrewCask, "homebrew").join(".metadata"))?;
+    file::create_dir_all(caskroom_version_dir(
+        CaskManager::BrewCask,
+        "unrecorded",
+        "1.0.0",
+    ))?;
+    write_test_app_receipt(&test_cask("pending", "1.0.0"), "Pending.app")?;
+    let journal_dir = state_dir.join("brew-cask/pending");
+    file::create_dir_all(&journal_dir)?;
+    file::write(journal_dir.join("1.0.0.json"), "{}")?;
+    write_test_app_receipt(&test_cask("shared-a", "1.0.0"), "Shared.app")?;
+    write_test_app_receipt(&test_cask("shared-b", "1.0.0"), "Shared.app")?;
+    let ancient_dir = caskroom_version_dir(CaskManager::BrewCask, "ancient", "1.0.0");
+    file::create_dir_all(&ancient_dir)?;
+    file::write(
+        ancient_dir.join(".mise-cask.toml"),
+        "schema_version = 1\nversion = \"1.0.0\"\n",
+    )?;
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert!(plan.remove.is_empty());
+    assert_eq!(
+        plan.skipped
+            .iter()
+            .map(|skip| (skip.token.as_str(), skip.forceable))
+            .collect::<Vec<_>>(),
+        vec![
+            ("ancient", false),
+            ("homebrew", false),
+            ("pending", false),
+            ("shared-a", false),
+            ("shared-b", false),
+            ("unrecorded", false),
+        ]
+    );
+    Ok(())
+}
+
+/// Record `app` as owned by a `macos-app` entry, which keeps its receipts in
+/// mise's state directory rather than the Caskroom.
+fn write_macos_app_claim(state_dir: &Path, token: &str, app: &Path) -> Result<()> {
+    let receipt_dir = state_dir.join("macos-apps").join(token).join("1.0.0");
+    file::create_dir_all(&receipt_dir)?;
+    file::write(
+        receipt_dir.join(".mise-cask.toml"),
+        toml::to_string_pretty(&CaskReceipt {
+            schema_version: 3,
+            version: "1.0.0".to_string(),
+            auto_updates: true,
+            metadata_only_apps: vec![app.to_path_buf()],
+            apps: vec![app.to_path_buf()],
+            binaries: Vec::new(),
+            fonts: Vec::new(),
+            completions: Vec::new(),
+            flight_directories: Vec::new(),
+            generic: Vec::new(),
+            pkg_ids: Vec::new(),
+            targets: Vec::new(),
+            prune_safe: false,
+            prune_blocker: None,
+        })?,
+    )
+}
+
+#[test]
+fn cask_prune_keeps_an_app_a_macos_app_entry_owns() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let (forced_app, _) = write_self_updating_receipt("updater")?;
+    let plain_app = write_test_app_receipt(&test_cask("plain", "1.0.0"), "Plain.app")?;
+    write_macos_app_claim(&state_dir, "updater-app", &forced_app)?;
+    write_macos_app_claim(&state_dir, "plain-app", &plain_app)?;
+
+    for force in [false, true] {
+        let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, force)?;
+        assert!(plan.remove.is_empty());
+        assert_eq!(plan.skipped.len(), 2);
+        for skip in &plan.skipped {
+            assert!(!skip.forceable, "{}", skip.token);
+            assert!(
+                skip.reason.contains("claimed by another cask"),
+                "{}",
+                skip.reason
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn cask_claims_match_other_spellings_and_ignore_the_asking_cask() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let app = write_test_app_receipt(&test_cask("plain", "1.0.0"), "Plain.app")?;
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(app.parent().unwrap(), &alias)?;
+    let spelled = alias.join(app.file_name().unwrap());
+    write_macos_app_claim(&state_dir, "plain", &spelled)?;
+
+    let claims = CaskClaims::read_in(&state_dir)?;
+    assert!(claims.claimed_by_another(CaskManager::BrewCask, "plain", &app));
+    assert!(claims.claimed_by_another(CaskManager::MacosApp, "plain", &spelled));
+    assert!(claims.claimed_by_another(CaskManager::BrewCask, "other", &spelled));
+
+    file::remove_all(state_dir.join("macos-apps"))?;
+    let claims = CaskClaims::read_in(&state_dir)?;
+    assert!(!claims.claimed_by_another(CaskManager::BrewCask, "plain", &app));
+    assert!(!claims.claimed_by_another(CaskManager::BrewCask, "plain", &spelled));
+    assert!(claims.claimed_by_another(CaskManager::MacosApp, "plain", &spelled));
+    Ok(())
+}
+
+#[test]
+fn cask_prune_force_rechecks_macos_app_claims_before_removal() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let (app_target, _) = write_self_updating_receipt("updater")?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert_eq!(plan.remove.len(), 1);
+
+    write_macos_app_claim(&state_dir, "updater-app", &app_target)?;
+
+    assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 0);
+    assert!(app_target.exists());
+    assert!(caskroom_token_dir(CaskManager::BrewCask, "updater").exists());
+    Ok(())
+}
+
+#[test]
+fn cask_prune_offers_force_only_when_force_would_remove_the_cask() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    // Both self-updating casks record the same app, so neither can be forced.
+    write_self_updating_receipt("updater-a")?;
+    write_self_updating_receipt("updater-b")?;
+
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, false)?;
+    assert!(plan.remove.is_empty());
+    assert_eq!(
+        plan.skipped
+            .iter()
+            .map(|skip| (skip.token.as_str(), skip.forceable))
+            .collect::<Vec<_>>(),
+        vec![("updater-a", false), ("updater-b", false)]
+    );
+    assert!(
+        plan.skipped
+            .iter()
+            .all(|skip| skip.reason.contains("claimed by another cask"))
+    );
+    Ok(())
+}
+
+#[test]
+fn cask_prune_force_rechecks_homebrew_ownership_before_removal() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let state_dir = tmp.path().join("state");
+    let (app_target, _) = write_self_updating_receipt("updater")?;
+    let plan = cask_prune_plan_from_tokens(&BTreeSet::new(), &state_dir, true)?;
+    assert_eq!(plan.remove.len(), 1);
+
+    file::create_dir_all(caskroom_token_dir(CaskManager::BrewCask, "updater").join(".metadata"))?;
+
+    assert_eq!(apply_cask_prune_plan_in(&plan, false, &state_dir)?, 0);
+    assert!(app_target.exists());
     Ok(())
 }
 
@@ -7227,6 +7653,172 @@ fn links_a_stage_sourced_binary_into_its_payload_when_the_target_moves_it() -> R
             .and_then(Path::parent)
             .is_some_and(|root| root.join("lib").is_dir())
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn merges_a_linked_payload_directory_into_an_existing_caskroom_directory() -> Result<()> {
+    // A generic artifact already created `payload/` in the caskroom, and the
+    // stage reaches its payload through a directory link. The merge has to
+    // follow that link to copy the binary, but only while it stays in the stage.
+    let tmp = tempfile::tempdir()?;
+    let stage = tmp.path().join("stage");
+    let outside = tmp.path().join("outside");
+    file::create_dir_all(stage.join("real/bin"))?;
+    file::create_dir_all(&outside)?;
+    mise_util::file::write(stage.join("real/bin/tool"), "launcher")?;
+    mise_util::file::write(outside.join("secret"), "secret")?;
+    std::os::unix::fs::symlink("real", stage.join("payload"))?;
+    std::os::unix::fs::symlink(&outside, stage.join("external"))?;
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(caskroom.join("payload/docs"))?;
+    file::create_dir_all(caskroom.join("external"))?;
+
+    durabilize_stage_payload(&stage, &caskroom, &[])?;
+
+    assert_eq!(
+        mise_util::file::read_to_string(caskroom.join("payload/bin/tool"))?,
+        "launcher"
+    );
+    assert!(caskroom.join("payload/docs").is_dir());
+    assert!(
+        caskroom.join("external/secret").symlink_metadata().is_err(),
+        "a link out of the stage must not be merged"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn keeps_payload_file_links_pointing_into_the_caskroom() -> Result<()> {
+    // A launcher linked to a sibling file has to stay linked, or a postflight
+    // edit to that file never reaches the installed binary. A link into an app
+    // bundle the merge skips is copied, since the bundle will not be there.
+    let tmp = tempfile::tempdir()?;
+    let stage = tmp.path().join("stage");
+    file::create_dir_all(stage.join("pkg/bin"))?;
+    file::create_dir_all(stage.join("pkg/lib"))?;
+    file::create_dir_all(stage.join("Example.app/Contents/MacOS"))?;
+    mise_util::file::write(stage.join("pkg/lib/tool"), "launcher")?;
+    mise_util::file::write(stage.join("Example.app/Contents/MacOS/example"), "app")?;
+    std::os::unix::fs::symlink("../lib/tool", stage.join("pkg/bin/relative"))?;
+    std::os::unix::fs::symlink(stage.join("pkg/lib/tool"), stage.join("pkg/bin/absolute"))?;
+    std::os::unix::fs::symlink(
+        "../../Example.app/Contents/MacOS/example",
+        stage.join("pkg/bin/example"),
+    )?;
+    // An artifact phase already created `pkg/bin`, so its entries are merged
+    // one by one rather than copied as a tree.
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(caskroom.join("pkg/bin"))?;
+    let app = AppArtifact {
+        source: "Example.app".to_string(),
+        target: None,
+    };
+
+    durabilize_stage_payload(&stage, &caskroom, &[app])?;
+    file::remove_all(&stage)?;
+
+    assert_eq!(
+        std::fs::read_link(caskroom.join("pkg/bin/relative"))?,
+        Path::new("../lib/tool")
+    );
+    assert_eq!(
+        std::fs::read_link(caskroom.join("pkg/bin/absolute"))?,
+        Path::new("../lib/tool")
+    );
+    mise_util::file::write(caskroom.join("pkg/lib/tool"), "edited")?;
+    for link in ["relative", "absolute"] {
+        assert_eq!(
+            mise_util::file::read_to_string(caskroom.join("pkg/bin").join(link))?,
+            "edited"
+        );
+    }
+    let example = caskroom.join("pkg/bin/example");
+    assert!(!example.is_symlink());
+    assert_eq!(mise_util::file::read_to_string(&example)?, "app");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn points_a_link_reached_through_a_directory_link_at_its_caskroom_file() -> Result<()> {
+    // `payload` links to `real/nested`, so `../../lib/tool` from inside it
+    // reaches `lib/tool`. Kept verbatim at `caskroom/payload/tool`, the same
+    // text would climb out of the caskroom.
+    let tmp = tempfile::tempdir()?;
+    let stage = tmp.path().join("stage");
+    file::create_dir_all(stage.join("real/nested"))?;
+    file::create_dir_all(stage.join("lib"))?;
+    mise_util::file::write(stage.join("lib/tool"), "launcher")?;
+    std::os::unix::fs::symlink("../../lib/tool", stage.join("real/nested/tool"))?;
+    std::os::unix::fs::symlink("real/nested", stage.join("payload"))?;
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(caskroom.join("payload"))?;
+
+    durabilize_stage_payload(&stage, &caskroom, &[])?;
+    file::remove_all(&stage)?;
+
+    let link = caskroom.join("payload/tool");
+    assert_eq!(std::fs::read_link(&link)?, Path::new("../lib/tool"));
+    assert_eq!(mise_util::file::read_to_string(&link)?, "launcher");
+    assert_eq!(
+        std::fs::read_link(caskroom.join("real/nested/tool"))?,
+        Path::new("../../lib/tool"),
+        "a link copied in place keeps its relative target"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn rebases_links_inside_a_payload_directory_missing_from_the_caskroom() -> Result<()> {
+    // `caskroom/pkg` exists but `pkg/bin` does not, so `bin` is copied into
+    // it. An absolute link inside has to point into the caskroom, or it
+    // dangles once the stage is gone, and has to survive activation renaming
+    // the caskroom even though `bin` is read-only by then. A directory link
+    // stays a link, so a link back to its own directory does not recurse.
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir()?;
+    let stage = tmp.path().join("stage");
+    file::create_dir_all(stage.join("pkg/bin"))?;
+    file::create_dir_all(stage.join("pkg/lib"))?;
+    mise_util::file::write(stage.join("pkg/lib/tool"), "launcher")?;
+    std::os::unix::fs::symlink(stage.join("pkg/lib/tool"), stage.join("pkg/bin/launcher"))?;
+    std::os::unix::fs::symlink(".", stage.join("pkg/bin/current"))?;
+    std::fs::set_permissions(
+        stage.join("pkg/bin"),
+        std::fs::Permissions::from_mode(0o555),
+    )?;
+    let tmp_caskroom = tmp.path().join("tmp-caskroom");
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(tmp_caskroom.join("pkg"))?;
+
+    durabilize_stage_payload(&stage, &tmp_caskroom, &[])?;
+    std::fs::set_permissions(
+        stage.join("pkg/bin"),
+        std::fs::Permissions::from_mode(0o755),
+    )?;
+    file::remove_all(&stage)?;
+    std::fs::rename(&tmp_caskroom, &caskroom)?;
+    let activated = retarget_transient_symlinks(
+        &tmp_caskroom,
+        &caskroom,
+        &caskroom,
+        &FlightTargetTransaction::default(),
+    );
+
+    let bin = caskroom.join("pkg/bin");
+    let mode = std::fs::metadata(&bin)?.permissions().mode();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+    activated?;
+    assert_eq!(mode & 0o777, 0o555);
+    let launcher = bin.join("launcher");
+    assert_eq!(std::fs::read_link(&launcher)?, Path::new("../lib/tool"));
+    assert_eq!(mise_util::file::read_to_string(&launcher)?, "launcher");
+    assert_eq!(std::fs::read_link(bin.join("current"))?, Path::new("."));
     Ok(())
 }
 
@@ -8490,6 +9082,7 @@ fn dependency_appdir_uses_its_own_package_setting() {
     let options = ManagerPackageOptions::BrewCask {
         adopt: BTreeSet::new(),
         appdirs: BTreeMap::from([("dependency".to_string(), dependency.clone())]),
+        homebrew_metadata: false,
     };
     let request = PackageRequest {
         name: "dependency".to_string(),
@@ -8519,10 +9112,12 @@ fn failed_app_activation_preserves_caskroom_copy() -> Result<()> {
     file::create_dir_all(&caskroom_app)?;
     file::write(caskroom_app.join("version"), "staged")?;
 
+    // The stage holds no staged bundle, so the swap has nothing to rename.
+    let stage = create_stage_dir_at(&parent.fd, std::ffi::OsStr::new(".mise-tmp-test"))?;
     let result = activate_app_at(
         &parent,
         std::ffi::OsStr::new("Example.app"),
-        std::ffi::OsStr::new("missing.mise-tmp"),
+        &stage,
         std::ffi::OsStr::new("Example.mise-old-test"),
         &caskroom_app,
         &target,
@@ -8556,7 +9151,7 @@ fn upgrades_app_with_protected_existing_contents() -> Result<()> {
         .status()?;
     assert!(status.success());
 
-    let tmp_target = base.join("Docker.mise-tmp-test");
+    let tmp_target = base.join(".mise-tmp-test/Docker.app");
     file::create_dir_all(&tmp_target)?;
     mise_util::file::write(tmp_target.join("version"), "new")?;
 
@@ -8565,10 +9160,11 @@ fn upgrades_app_with_protected_existing_contents() -> Result<()> {
     let parent = ensure_trusted_appdir(&base)?;
     let old_name = std::ffi::OsString::from("Docker.mise-old-test");
     let old_target = base.join(&old_name);
+    let stage = open_dir_nofollow_at(&parent.fd, ".mise-tmp-test")?;
     let result = swap_app_at(
         &parent,
         std::ffi::OsStr::new("Docker.app"),
-        std::ffi::OsStr::new("Docker.mise-tmp-test"),
+        &stage,
         &old_name,
         // This repro replaces an app it owns; the no-replace path is covered
         // by activation_refuses_an_app_that_appeared_during_staging.
@@ -9120,9 +9716,36 @@ fn auto_updates_matches_homebrew_short_build_decisions() {
         ("latest", Some("1"), Some("1"), false),
     ] {
         assert_eq!(
-            app_version_outdated(current, short, build),
+            app_version_outdated(current, short, build, None),
             expected,
             "current={current}, short={short:?}, build={build:?}"
+        );
+    }
+}
+
+/// A short version still equal to the install record means the app has not
+/// updated itself, so it is outdated even when its component count differs
+/// from the cask version (Firefox 158.0.1 against 159.0).
+#[test]
+fn auto_updates_treats_an_unchanged_recorded_version_as_outdated() {
+    for (current, short, recorded, expected) in [
+        ("159.0", "158.0.1", Some("158.0.1"), true),
+        ("4.2.4", "4.2", Some("4.2"), true),
+        ("159.0", "158.0.1", None, false),
+        // The app updated itself past the record to an incomparable version.
+        ("159.0", "158.0.2", Some("158.0.1"), false),
+        // A comparable newer app still wins over a stale record.
+        ("2.0", "2.1", Some("2.1"), false),
+        // Several version candidates fall through to the build comparison.
+        ("2.61,3000", "2.60.1", Some("2.60.1"), false),
+        // A comma-separated record never matches: its second field is not
+        // reliably the app's build, so Homebrew does not use it here either.
+        ("4.2.4", "2.61", Some("2.61,3000"), false),
+    ] {
+        assert_eq!(
+            app_version_outdated(current, Some(short), None, recorded),
+            expected,
+            "current={current}, short={short}, recorded={recorded:?}"
         );
     }
 }
@@ -10614,7 +11237,7 @@ fn activation_refuses_an_app_that_appeared_during_staging() -> Result<()> {
     let parent = open_trusted_directory(&root, Path::new(""), true, false)?;
 
     // mise's staged replacement, ready to activate.
-    let staged = root.join("Example.mise-tmp-test");
+    let staged = root.join(".mise-tmp-test/Example.app");
     file::create_dir_all(staged.join("Contents"))?;
     mise_util::file::write(staged.join("Contents/marker"), "ours")?;
 
@@ -10624,10 +11247,11 @@ fn activation_refuses_an_app_that_appeared_during_staging() -> Result<()> {
     mise_util::file::write(target.join("Contents/marker"), "theirs")?;
     let before = target.symlink_metadata()?;
 
+    let stage = open_dir_nofollow_at(&parent.fd, ".mise-tmp-test")?;
     let err = swap_app_at(
         &parent,
         std::ffi::OsStr::new("Example.app"),
-        std::ffi::OsStr::new("Example.mise-tmp-test"),
+        &stage,
         std::ffi::OsStr::new("Example.mise-old-test"),
         false,
     )
@@ -10650,12 +11274,12 @@ fn activation_refuses_an_app_that_appeared_during_staging() -> Result<()> {
     // A rename failure must not leave the placeholder behind: a later apply
     // would read that empty bundle as a foreign app and refuse forever.
     file::remove_all(&target)?;
-    let missing_tmp = std::ffi::OsStr::new("Example.absent-tmp");
+    let empty_stage = create_stage_dir_at(&parent.fd, std::ffi::OsStr::new(".mise-empty"))?;
     assert!(
         swap_app_at(
             &parent,
             std::ffi::OsStr::new("Example.app"),
-            missing_tmp,
+            &empty_stage,
             std::ffi::OsStr::new("Example.mise-old-test"),
             false,
         )
@@ -10672,7 +11296,7 @@ fn activation_refuses_an_app_that_appeared_during_staging() -> Result<()> {
     swap_app_at(
         &parent,
         std::ffi::OsStr::new("Example.app"),
-        std::ffi::OsStr::new("Example.mise-tmp-test"),
+        &stage,
         std::ffi::OsStr::new("Example.mise-old-test"),
         true,
     )?;
@@ -10680,5 +11304,36 @@ fn activation_refuses_an_app_that_appeared_during_staging() -> Result<()> {
         mise_util::file::read_to_string(target.join("Contents/marker"))?,
         "ours"
     );
+    assert!(
+        !staged.exists(),
+        "the staged bundle was copied rather than moved out of the stage"
+    );
     Ok(())
+}
+
+#[test]
+fn homebrew_receipt_needs_a_release_that_verifies_uninstall_recovery() {
+    let min = MIN_SAFE_HOMEBREW;
+    assert!(homebrew_version_at_least("Homebrew 6.0.22\n", min));
+    assert!(homebrew_version_at_least(
+        "Homebrew 7.0.11-24-g2833c25\nHomebrew/homebrew-core",
+        min
+    ));
+    assert!(!homebrew_version_at_least("Homebrew 6.0.21\n", min));
+    assert!(!homebrew_version_at_least("Homebrew 5.9.99\n", min));
+    assert!(!homebrew_version_at_least("Homebrew\n", min));
+    assert!(!homebrew_version_at_least("", min));
+}
+
+#[test]
+fn requested_tokens_use_the_last_segment_of_a_tapped_name() {
+    let requests = ["foo", "homebrew/cask/bar"].map(|name| PackageRequest {
+        name: name.to_string(),
+        version: None,
+        tap_url: None,
+        desired: crate::PackageDesiredState::Present,
+    });
+    let tokens = requested_tokens(&requests);
+    assert!(tokens.contains("foo") && tokens.contains("bar"));
+    assert_eq!(tokens.len(), 2);
 }

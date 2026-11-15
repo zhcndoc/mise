@@ -39,7 +39,7 @@ mise 不会读取 Erlang 专属版本文件。请在 `mise.toml` 或 `.tool-vers
 
 将 [`erlang.compile`](/lang/erlang.html#erlang.compile) 设为 `true` 可始终从源码构建；设为 `false` 则在没有预编译构建时直接报错，而不进行编译。mise 不会设置 Erlang 环境变量；安装目录中的 `bin` 会加入 `PATH`。
 
-在 Linux 上，mise 会读取 `/etc/os-release` 来识别 Ubuntu 发行版。在 GitHub Actions 的 Ubuntu runner 上，则读取 runner 的 `ImageOS`（`ubuntu20`、`ubuntu22` 或 `ubuntu24`）。如果没有适用的预编译构建，[`mise lock`](/cli/lock.html) 会记录 Erlang/OTP 源码归档，使所有使用锁文件的机器都编译相同的发行版。如果在 macOS 或 Windows 上运行 `mise lock` 并解析 Linux 平台，它会记录 Bob 的 Ubuntu 24.04 构建。
+在 Linux 上，mise 会读取 `/etc/os-release` 来识别 Ubuntu 发行版。在 GitHub Actions 的 Ubuntu runner 上，mise 会读取 runner 的 `ImageOS`（`ubuntu20`、`ubuntu22` 或 `ubuntu24`）；但如果某个镜像只设置了通用值 `Linux`，则会改为读取 `/etc/os-release`。如果没有适用的预编译构建，[`mise lock`](/cli/lock.html) 会记录 Erlang/OTP 源码归档，使所有使用锁文件的机器都编译相同的发行版。如果在 macOS 或 Windows 上运行 `mise lock` 并解析 Linux 平台，它会记录 Bob 的 Ubuntu 24.04 构建。
 
 在 Alpine 和 NixOS 上，[`all_compile`](/configuration/settings.html#all_compile) 当前默认为 `true`，因此 mise 会直接编译 Erlang，不会尝试使用预编译构建。此默认值已弃用，并将在 mise 2027.8.0 中更改，但对 Erlang 影响不大：mise 没有适用于 musl 的预编译 Erlang，因此 Alpine 始终需要编译。mise 不会将 NixOS 识别为 Ubuntu 发行版，所以即使默认值更改，除非选择 Bob 的某个目标版本，否则 NixOS 仍会编译。在启用了 [nix-ld](https://github.com/Mic92/nix-ld) 的 NixOS 上，可将 `all_compile = false`，并设置 [`erlang.precompiled_os`](/lang/erlang.html#erlang.precompiled_os) 来使用 Bob 的构建（见下一节）。如果设置 `erlang.compile = false`，在没有适用预编译构建时安装会失败而非编译，因此不要在 Alpine 上设置，也不要在未配置 `erlang.precompiled_os` 的 NixOS 上设置。若要继续编译，请显式设置 `all_compile = true`。
 

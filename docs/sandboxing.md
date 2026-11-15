@@ -15,6 +15,7 @@ socialDescription: "限制 mise exec 和 mise run 启动的命令可访问的文
 | --------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------- | ---------------- |
 | 文件读写（`--deny-read`、`--deny-write`、`--allow-read`、`--allow-write`） | Landlock，Linux 5.13（写入限制需 6.2） | Seatbelt (`sandbox-exec`)               | 不强制执行     |
 | All network access (`--deny-net`)                                                 | seccomp, on x86_64 and arm64            | Seatbelt                                | Not enforced     |
+| Unix socket 连接（`--deny-unix`、`--allow-unix`）                                  | Landlock，Linux 7.1；旧版内核会失败     | 不支持；mise 会报错退出                 | 不强制执行     |
 | Access to particular hosts (`--allow-net`)                                        | Not supported; mise exits with an error | Not supported; mise exits with an error | Not enforced     |
 | Environment variables (`--deny-env`, `--allow-env`)                               | Filtered by mise                        | Filtered by mise                        | Filtered by mise |
 
@@ -53,12 +54,14 @@ mise exec --allow-env='MYAPP_*' -- node app.js
 | `--deny-all`           | `deny_all`         | Turn on the read, write, network and environment restrictions                                    |
 | `--deny-read`          | `deny_read`        | Block reads, except the [implicit paths](#implicit-access)                                       |
 | `--deny-write`         | `deny_write`       | Block writes, except to `/tmp` and `/dev`                                                        |
-| `--deny-net`           | `deny_net`         | 禁止网络套接字和 io_uring；Unix 套接字仍可使用 |
+| `--deny-net`           | `deny_net`         | 禁止网络套接字和 io_uring；Unix 套接字仍可使用（见 `--deny-unix`） |
+| `--deny-unix`          | `deny_unix`        | 禁止连接 Unix 套接字，但允许列出的 socket（需要 Linux 7.1 或更高版本） |
 | `--deny-env`           | `deny_env`         | Pass only the [essential variables](#environment-variables)                                      |
 | `--allow-read=<path>`  | `allow_read`       | Allow reads under a path, and block other reads                                                  |
 | `--allow-write=<path>` | `allow_write`      | Allow reads and writes under a path, and block other writes                                      |
 | `--allow-env=<var>`    | `allow_env`        | Pass a variable or a `*` pattern, and block other variables                                      |
 | `--allow-net=<host>`   | `allow_net`        | Does not work on any platform; see [access to particular hosts](#access-to-particular-hosts)     |
+| `--allow-unix=<path>`  | `allow_unix`       | 允许连接某个 socket 或目录下的所有 socket，并禁止连接其他 socket |
 |                        | `pass_through_env` | Experimental. Pass a variable without adding it to the task cache key; does not filter by itself |
 
 ## 对所有命令启用沙箱 {#default-restrictions}
@@ -143,6 +146,22 @@ mise 会在命令运行前报告影响沙箱的问题：Linux 上允许路径不
 - 在 Windows 上，mise 会发出警告，然后不应用网络限制直接运行命令。
 
 若要阻止网络 socket，请使用 `--deny-net`。若命令只能访问特定主机，请在 mise 之外配置防火墙或代理。
+
+#### Unix 套接字
+
+`--deny-net` 不会限制 Unix 套接字；文件读写限制也不会阻止命令连接到其无权写入的套接字，例如 SSH agent、密码管理器或容器运行时。`--deny-unix` 使用 Landlock 补上这一限制，要求 Linux 7.1 或更高版本；较旧的内核会让 mise 报错退出，而不会在缺少限制的情况下运行命令。
+
+设置 `--deny-unix` 后，命令无法连接到有路径的套接字（例如 `/run/user/1000/ssh-agent.sock`），除非 `--allow-unix` 指定该套接字或其上层目录。命令也无法连接到在沙箱外创建的抽象套接字；但命令启动的进程仍可访问彼此创建的抽象套接字。抽象套接字不能逐个允许。
+
+允许的套接字必须在命令启动时存在，与其他允许路径相同。命令自行创建的套接字无法连接，除非其所在目录也在允许列表中。通过套接字与本地 daemon 通信的程序（例如 `nscd`、`systemd-resolved` 或使用 `/dev/log` 的 `syslog`）在未允许套接字时会停止工作。`--deny-all` 不会自动启用 `--deny-unix`。
+
+```mise-toml
+[tasks."agent:omp"]
+run = "omp"
+allow_write = ["."]
+deny_unix = true
+allow_unix = ["/run/user/1000/allowed-service.sock"]
+```
 
 ## 平台详情
 

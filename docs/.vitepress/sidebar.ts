@@ -20,6 +20,7 @@ export const sidebar: SidebarItem[] = [
       { text: "编辑器和 IDE", link: "/ide-integration" },
       { text: "持续集成", link: "/continuous-integration" },
       { text: "Docker", link: "/mise-cookbook/docker" },
+      { text: "编程代理", link: "/agents" },
       { text: "AI 助手（MCP）", link: "/mcp" },
     ],
   },
@@ -273,6 +274,10 @@ export const sidebar: SidebarItem[] = [
           { text: "macOS 默认设置", link: "/bootstrap/macos-defaults" },
           { text: "macOS LaunchAgents", link: "/bootstrap/launchd" },
           { text: "systemd 用户单元", link: "/bootstrap/systemd" },
+          {
+            text: "初始化设置插件",
+            link: "/bootstrap/settings-plugins",
+          },
         ],
       },
     ],

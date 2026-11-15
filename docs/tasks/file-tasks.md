@@ -284,6 +284,18 @@ mise ERROR Invalid choice for arg output_file: invalid.txt, expected one of gree
 
 启用补全后，输入 `mise run greet <Tab>` 会显示 `greeting.txt` 和 `file.txt`。
 
+### 带参数的 Lua 任务
+
+Lua 注释以 `--` 开头，因此 `--MISE` 和 `--USAGE` 行的用法相同：
+
+```lua [mise-tasks/hello]
+#!/usr/bin/env lua
+--MISE description="Say hello"
+--USAGE arg "<name>"
+
+print("Hello, " .. os.getenv("usage_name") .. "!")
+```
+
 ## 工作目录
 
 文件任务会从[配置根目录](/configuration.html#config-root)（即项目目录）运行。例如，`~/proj/mise.toml` 和 `~/proj/.config/mise.toml` 的项目目录都是 `~/proj`。如需从调用 mise 时所在目录运行，请添加 <span v-pre>`#MISE dir="{{cwd}}"`</span>：

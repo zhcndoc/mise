@@ -37,7 +37,7 @@ pub(crate) struct SystemStatus {
 impl SystemStatus {
     pub(crate) async fn run(self) -> Result<()> {
         let config = Config::get().await?;
-        let mgrs = system::packages_from_config(&config)?;
+        let (mgrs, unresolved) = system::packages_and_unresolved_from_config(&config)?;
         let mut any_missing = false;
         let mut rows: Vec<Vec<String>> = vec![];
         let mut json_out = serde_json::Map::new();
@@ -168,6 +168,38 @@ impl SystemStatus {
                     name.to_string(),
                     json!({ "available": true, "packages": json_pkgs }),
                 );
+            }
+        }
+        // unprefixed keys that no manager can take are listed like those of an
+        // unavailable manager
+        if self.json {
+            if !unresolved.is_empty() {
+                json_out.insert(
+                    "unprefixed".to_string(),
+                    json!({
+                        "available": false,
+                        "reason": "no package manager is available",
+                        "packages": unresolved.iter().map(|pkg| {
+                            json!({
+                                "package": pkg.key,
+                                "requested_version": pkg.version,
+                                "desired_state": if pkg.absent { "absent" } else { "present" },
+                                "state": "skipped",
+                                "installed_version": "",
+                                "reason": pkg.reason,
+                            })
+                        }).collect::<Vec<_>>(),
+                    }),
+                );
+            }
+        } else {
+            for pkg in &unresolved {
+                rows.push(vec![
+                    "-".to_string(),
+                    pkg.key.clone(),
+                    "".to_string(),
+                    format!("skipped ({})", pkg.reason),
+                ]);
             }
         }
         if self.json {

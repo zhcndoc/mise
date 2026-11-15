@@ -127,7 +127,7 @@ includes = [
 
 - 相对于配置根目录的路径、绝对路径，或以 `~` 开头的路径
 - glob 模式，例如 `tasks/*.toml`
-- [`git::` URL](#remote-git-includes) 或 [`oci::` 引用](#remote-oci-includes)
+- [`git::` URL](#remote-git-includes)、[`oci::` 引用](#remote-oci-includes)或 [`zip::` URL](#remote-zip-includes)
 
 mise 会将条目作为 Tera 模板渲染，因此可以使用
 <code v-pre>{{ config_root }}</code>、<code v-pre>{{ env.HOME }}</code> 和已解析的 `vars`：
@@ -325,6 +325,17 @@ mise 会将制品解包到目录中，并像加载本地任务目录一样加载
 mise 会根据清单中的摘要校验每个 blob，并拒绝符号链接和其他特殊文件。凭据的来源与 [`mise oci push`](/cli/oci/push.html) 相同，包括 `docker login` 或 `podman login` 配置；找不到凭据时会匿名访问。mise 会通过普通 HTTP 访问环回地址上的注册表；如需使用其他普通 HTTP 注册表，请添加到 [`oci.insecure_registries`](/configuration/settings.html#oci.insecure_registries)。
 
 拉取结果会按引用缓存在 `MISE_CACHE_DIR/remote-oci-tasks-cache` 中，因此标签指向新摘要时 mise 不会自动发现。要刷新缓存，可以改用新的标签或摘要、删除该目录，或设置 [`task.remote_no_cache`](/configuration/settings.html#task.remote_no_cache)，使每次运行都重新拉取。
+
+## 远程 zip include
+
+在 HTTP(S) URL 前加上 `zip::`，即可引入以 zip 压缩包发布的任务目录：
+
+```toml
+[task_config]
+includes = ["zip::https://example.com/shared-tasks-1.0.0.zip"]
+```
+
+mise 会下载压缩包、解压到目录中，并像加载本地任务目录一样加载它，与 [OCI include](#remote-oci-includes) 相同：会发现可执行文件任务和 `.toml` 任务文件，并将以 shebang 开头的非 TOML 文件设为可执行。请使用带版本的 URL，因为 mise 会为相同 URL 复用缓存的下载文件。设置 [`task.remote_no_cache`](/configuration/settings.html#task.remote_no_cache) 后，每次运行都会重新下载压缩包。
 
 ## 从发现结果中排除路径 {#exclude-paths-from-discovery}
 

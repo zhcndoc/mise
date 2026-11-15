@@ -19,6 +19,8 @@ pub struct SandboxConfig {
     pub deny_read: bool,
     pub deny_write: bool,
     pub deny_net: bool,
+    /// Block connections to Unix sockets outside the sandbox (Linux 7.1 or later).
+    pub deny_unix: bool,
     pub deny_env: bool,
     /// Block child-process creation. Internal-only: task/CLI sandboxes leave this disabled.
     pub deny_process: bool,
@@ -27,6 +29,8 @@ pub struct SandboxConfig {
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
     pub allow_net: Vec<String>,
+    /// Unix sockets that stay reachable under `deny_unix`; implies it.
+    pub allow_unix: Vec<PathBuf>,
     pub allow_env: Vec<String>,
     /// Environment patterns that survive an active env sandbox without enabling it themselves.
     pub pass_through_env: Vec<String>,
@@ -303,6 +307,7 @@ impl SandboxConfig {
         self.deny_read
             || self.deny_write
             || self.deny_net
+            || self.effective_deny_unix()
             || self.deny_process
             || self.deny_temp_write
             || !self.allow_read.is_empty()
@@ -328,6 +333,7 @@ impl SandboxConfig {
         // would lift the restriction instead of allowing nothing.
         self.deny_read |= !self.allow_read.is_empty();
         self.deny_write |= !self.allow_write.is_empty();
+        self.deny_unix |= !self.allow_unix.is_empty();
         // Keep the spelling a canonicalization replaces. It is the one a caller
         // inside the sandbox will use, and macOS has to let a walk take that
         // route — see `symlinked_allow_paths`.
@@ -338,6 +344,18 @@ impl SandboxConfig {
                 *p = replace_path(&*p);
                 if p.is_relative() {
                     *p = cwd.join(&*p);
+                }
+                // `Path` equality ignores `.` components, so `./dist` would
+                // reach the profile as `<cwd>/./dist`, which Seatbelt never
+                // matches against the canonical path it checks. Drop them.
+                // A trailing `/` still demands a directory, so keep it when
+                // the path exists and is not one (`./config/` naming a file stays
+                // refused). A missing path loses it, so it matches once created.
+                let bytes = p.as_os_str().as_encoded_bytes();
+                let wants_dir = bytes.ends_with(b"/") || bytes.ends_with(b"/.");
+                *p = p.components().collect();
+                if wants_dir && p.exists() && !p.is_dir() {
+                    p.push("");
                 }
                 #[cfg(unix)]
                 check_symlinks_stay_in_roots(p, &roots)?;
@@ -357,6 +375,7 @@ impl SandboxConfig {
         };
         resolve(&mut self.allow_read)?;
         resolve(&mut self.allow_write)?;
+        resolve(&mut self.allow_unix)?;
         self.symlinked_allow_paths = symlinked;
         Ok(())
     }
@@ -375,6 +394,10 @@ impl SandboxConfig {
     #[cfg_attr(windows, allow(dead_code))]
     pub fn effective_deny_net(&self) -> bool {
         self.deny_net || !self.allow_net.is_empty()
+    }
+
+    pub fn effective_deny_unix(&self) -> bool {
+        self.deny_unix || !self.allow_unix.is_empty()
     }
 
     pub fn effective_deny_env(&self) -> bool {
@@ -404,6 +427,21 @@ impl SandboxConfig {
         Ok(())
     }
 
+    /// Refuse Unix socket restrictions where the platform cannot enforce them.
+    ///
+    /// Only Landlock on Linux 7.1 or later can tell one socket from another;
+    /// running without the restriction would hand the command the very access
+    /// it was asked to lose.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn reject_unix_sockets(&self) -> eyre::Result<()> {
+        if self.effective_deny_unix() {
+            eyre::bail!(
+                "Unix socket restrictions (--deny-unix, --allow-unix) are only supported on Linux 7.1 or later"
+            );
+        }
+        Ok(())
+    }
+
     /// Allow-list paths that do not exist, in declaration order and listed once
     /// even when named by both `allow_read` and `allow_write`.
     ///
@@ -418,6 +456,7 @@ impl SandboxConfig {
         self.allow_read
             .iter()
             .chain(self.allow_write.iter())
+            .chain(self.allow_unix.iter())
             // Only paths confirmed absent. `exists()` would fold a metadata
             // error — no listing permission on a parent, say — into "missing"
             // and report a cause nothing checked, which is the habit this whole
@@ -566,7 +605,11 @@ impl SandboxConfig {
 
     #[cfg(target_os = "linux")]
     fn apply_linux(&self, program: &str) -> eyre::Result<()> {
-        if self.effective_deny_read() || self.effective_deny_write() || self.deny_process {
+        if self.effective_deny_read()
+            || self.effective_deny_write()
+            || self.effective_deny_unix()
+            || self.deny_process
+        {
             landlock::apply_landlock(self, Some(std::path::Path::new(program)))?;
         }
         if self.effective_deny_net() || self.deny_process {
@@ -583,6 +626,7 @@ impl SandboxConfig {
         args: &[String],
     ) -> eyre::Result<Option<SandboxedCommand>> {
         self.reject_allow_net()?;
+        self.reject_unix_sockets()?;
         let profile = macos::generate_seatbelt_profile(self, Some(std::path::Path::new(program)));
         let mut sandbox_args = vec![
             "-p".to_string(),
@@ -878,6 +922,66 @@ mod tests {
         assert_eq!(config.allow_read, vec![target]);
         assert_eq!(config.allow_write, vec![plain]);
         assert_eq!(config.symlinked_allow_paths, vec![through_link]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_paths_drops_current_dir_components() {
+        // `Path` equality ignores `.`, so a `./` spelling survives
+        // canonicalization and reaches the macOS profile, where it never matches.
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let mut config = SandboxConfig {
+            allow_read: vec![root.join("./sub"), root.join("./")],
+            ..Default::default()
+        };
+        config.resolve_paths(&[]).unwrap();
+
+        let rendered: Vec<_> = config
+            .allow_read
+            .iter()
+            .map(|p| p.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![sub.to_str().unwrap(), root.to_str().unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_paths_keeps_a_trailing_slash_on_a_file() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let file = root.join("config");
+        std::fs::write(&file, "").unwrap();
+        for spelling in ["./config/", "config/."] {
+            let mut config = SandboxConfig {
+                allow_read: vec![root.join(spelling)],
+                ..Default::default()
+            };
+            config.resolve_paths(&[]).unwrap();
+
+            assert_eq!(
+                config.allow_read[0].as_os_str().as_encoded_bytes().last(),
+                Some(&b'/'),
+                "{spelling}"
+            );
+        }
+
+        // A directory that does not exist yet must match once it is created.
+        let mut config = SandboxConfig {
+            allow_write: vec![root.join("./new/")],
+            ..Default::default()
+        };
+        config.resolve_paths(&[]).unwrap();
+        assert_eq!(
+            config.allow_write[0].as_os_str(),
+            root.join("new").as_os_str()
+        );
     }
 
     /// The project holds the code being confined, so whoever wrote that code
@@ -1178,6 +1282,28 @@ mod tests {
         assert!(config.deny_write);
         assert!(config.deny_net);
         assert!(config.deny_env);
+    }
+
+    #[test]
+    fn test_allow_unix_implies_deny_unix() {
+        let mut config = SandboxConfig {
+            allow_unix: vec![PathBuf::from("/run/agent.sock")],
+            ..Default::default()
+        };
+        assert!(!config.deny_unix);
+        assert!(config.effective_deny_unix());
+        assert!(config.restricts_more_than_env());
+        config.resolve_paths(&[]).unwrap();
+        assert!(config.deny_unix);
+
+        assert!(!SandboxConfig::default().effective_deny_unix());
+        assert!(SandboxConfig::default().reject_unix_sockets().is_ok());
+        let denied = SandboxConfig {
+            deny_unix: true,
+            ..Default::default()
+        };
+        assert!(denied.reject_unix_sockets().is_err());
+        assert!(denied.is_active());
     }
 
     #[test]

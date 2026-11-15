@@ -119,7 +119,7 @@ run = "exec echo {{ vars.greeting | quote }} {{ env.AUDIENCE | quote }}"
 | `tool`                 | preset                          | Installs the server from a different tool than the preset's default.                                                                                                                                               |
 | `options`              | preset                          | [Preset options](/daemons/presets.html#preset-options), such as `options.database`.                                                                                                                                |
 | `port`                 | custom, task, container, preset | 固定端口、`"auto"` 或 `{ auto = true, base = 3000 }`。单独使用 `"auto"` 仅适用于预设；自定义或任务守护进程需要设置 `base`。详见[端口](/daemons/worktrees.html#ports)。 |
-| `ports`                | preset, container               | 覆盖预设的[命名端口](/daemons/worktrees.html#named-ports)，或设置容器的[映射端口](/daemons/containers.html#several-ports)。 |
+| `ports`                | custom, task, preset, container | 覆盖预设的[命名端口](/daemons/worktrees.html#named-ports)、容器的[映射端口](/daemons/containers.html#several-ports)，或自定义 daemon 的[命名端口](/daemons/worktrees.html#named-ports-on-custom-daemons)。 |
 | `init`                 | custom, task, container, preset | 进程启动前运行的[设置命令](#setup-before-the-process-starts)。 |
 | `mise`                 | custom, task, container         | 设为 `false` 时，进程及其初始化命令不会使用项目工具环境。 |
 | `data_dir`             | preset, container               | 预设数据的存放位置，详见[在检出目录中保留数据](/daemons/data.html#keep-data-in-the-checkout)。对于容器，此项是 `data_mount` 在主机上的路径。 |

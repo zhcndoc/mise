@@ -306,18 +306,6 @@ sudo snap install mise --classic
 
 在 Windows 上，推荐使用 PowerShell 脚本安装。安装后请设置 [PowerShell 激活](/shell-setup.html#powershell)，或按照 [Windows Shell](/shell-setup.html#windows) 中的说明，将 shims 目录加入 cmd.exe 的 `Path`。
 
-### winget {#windows-winget}
-
-```powershell
-winget install jdx.mise
-```
-
-::: warning winget 版本可能落后于最新发行版
-由于每次提交都需要审核，新版本可能要数天甚至更久才会出现在 winget 中。mise 也会对通过 winget 安装的版本关闭自更新；请使用 `winget upgrade jdx.mise` 进行升级。若要及时获取新版本，请使用 [PowerShell 脚本](#windows-script)。
-:::
-
-[winget manifest](https://github.com/microsoft/winget-pkgs/tree/master/manifests/j/jdx/mise)
-
 ### PowerShell 脚本 {#windows-script}
 
 ```powershell
@@ -334,6 +322,18 @@ irm https://mise.run/powershell | iex
 | `MISE_INSTALL_MODIFY_PATH` | 设为 `0` 时不修改当前用户的 `Path`                           |
 | `MISE_INSTALL_SHIMS_PATH`  | 设为 `1` 时也将 shims 目录添加到当前用户的 `Path`            |
 | `MISE_INSTALL_FROM_GITHUB` | 设为 `1` 时从 GitHub Releases 下载，而不是 mise.jdx.dev       |
+
+### winget {#windows-winget}
+
+```powershell
+winget install jdx.mise
+```
+
+::: warning winget 版本可能落后于最新发行版
+由于每次提交都需要审核，新版本可能要数天甚至更久才会出现在 winget 中。mise 也会对通过 winget 安装的版本关闭自更新；请使用 `winget upgrade jdx.mise` 进行升级。若要及时获取新版本，请使用 [PowerShell 脚本](#windows-script)。
+:::
+
+[winget manifest](https://github.com/microsoft/winget-pkgs/tree/master/manifests/j/jdx/mise)
 
 ### Scoop {#windows-scoop}
 

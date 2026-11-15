@@ -282,6 +282,16 @@ mise settings shims.exclude=python,python3,pip,pip3
 不要使用 mise 安装 `bash`、`zsh` 等 Shell。几乎所有脚本都会按名称运行它们，因此对应的 shim 会影响整个系统。请使用系统软件包管理器安装 Shell；[`mise bootstrap`](/bootstrap.html) 可以管理这些软件包。
 :::
 
+## 未配置版本时使用已安装版本 {#fallback-to-installed}
+
+在没有配置文件选择对应工具的目录中运行 shim 时，默认会报错 `No version is set for shim`，并显示可使用 `mise use -g` 或 `mise x` 的提示，命令中会使用一个已安装版本。设置 [`shims.fallback_to_installed`](/configuration/settings.html#shims.fallback_to_installed) 后，mise 会改为运行最新的已安装版本：
+
+```sh
+mise settings shims.fallback_to_installed=true
+```
+
+此设置默认关闭，因为运行的版本并非用户明确选择。它不会替代配置文件明确选择的工具：缺少固定版本时仍会失败，命令名称与已配置工具相同时也仍会失败。此设置适用于 Unix shim；Windows `.exe` shim 仍会显示单行错误。
+
 ## 在 mise activate 中排除 shims {#activate-shims}
 
 PATH 激活会优先放置真实工具目录。默认开启的 [`activate_shims`](/configuration/settings.html#activate_shims) 也会将用户级和系统级 shim 目录保留在 `PATH` 中，排在真实工具目录之后，因此仍可通过运行缺少的工具命令来安装它。默认开启 `not_found_auto_install` 时，无论当前目录是否配置了工具，都会保留这些 shim；关闭该设置后，只有声明了[延迟安装工具](#lazy-tools)时才会保留 shim。运行 `mise settings activate_shims=false` 并重启 Shell，即可完全禁止激活过程添加 shim。关闭后会有哪些功能不可用，详见 [`activate_shims`](/configuration/settings.html#activate_shims)；[命令包装器](#command-wrappers)仍可使用，因为它们使用独立目录；显式运行 `mise activate --shims` 仍会添加 shim。
@@ -354,6 +364,25 @@ command = "foo-real"
 env = { FOO_HOME = "{{ [xdg_data_home, 'foo'] | join_path }}" }
 ```
 
+在 `args` 和 `env` 的值中，`argv` 是用户在命令名后输入的参数列表，不包含 wrapper 自身的 `command` 或 `args`；后两者仍会排在前面，用户参数会原样转发。空列表中的 `argv[0]` 不会报错，只会比较为不相等。以下示例会让 `rails test` 使用 `test` 密钥配置，其余命令使用 `development`：
+
+```toml [mise.toml]
+[wrappers.rails]
+command = "fnox"
+args = [
+  "--profile={{ 'test' if argv[0] == 'test' else 'development' }}",
+  "exec", "--", "rails",
+]
+```
+
+`rails test models/user_test.rb` 会运行 `fnox --profile=test exec -- rails test models/user_test.rb`，而单独运行 `rails` 会运行 `fnox --profile=development exec -- rails`。`argv` 也可用于选择 `env` 值：
+
+```toml [mise.toml]
+[wrappers.myserver]
+command = "myserver-real"
+env = { RUST_LOG = "{{ 'debug' if '--verbose' in argv else 'info' }}" }
+```
+
 值中直接包含 <span v-pre>`{{`</span> 或 <span v-pre>`{%`</span>（例如 Docker 的 <span v-pre>`{{.Names}}`</span> 格式字符串）时，mise 现在会将其解析为模板。请用 raw 块包裹这类内容：
 
 ```toml [mise.toml]
@@ -365,3 +394,5 @@ args = ["ps", "--format", "{% raw %}{{.Names}}{% endraw %}"]
 运行 wrapper 命令及其启动的所有进程时，该 wrapper 会被跳过，因此 `mbx` 可以找到真正的 Cargo：如果配置了由 mise 管理的 Rust，则使用 mise 版本；否则使用 rustup 或系统安装的版本。若要通过 mise 管理 Rust，请参阅 [Rust 指南](/lang/rust.html#share-cargo-builds-with-mr-boxington)，使用 `mr_boxington` 工具选项和 `mr-boxington` 工具进行配置。
 
 其他 wrapper 仍会生效。如果 `pnpm` 和 `node` 都配置了 wrapper，`pnpm` 运行的脚本会使用 `node` wrapper 及其 `args` 和 `env`；而 `pnpm` 自身查找 `pnpm` 时会直接使用真正的工具。mise 会在 `__MISE_ACTIVE_WRAPPERS` 环境变量中记录正在运行的 wrapper。
+
+`cargo`、`npm` 和 `pipx` 后端会在不含命令 wrapper 的 `PATH` 环境中运行安装命令，因此 `cargo` wrapper 不会接管 `cargo:` 工具执行的 `cargo install`。

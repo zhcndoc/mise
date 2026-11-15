@@ -20,6 +20,8 @@ JSON, dotenv, and shell output contain actual variable values, including secrets
 Tools you pass as TOOL@VERSION arguments are installed first if they are missing;
 missing tools from the config are reported, not installed.
 
+输出值会在需要时加引号并转义，确保 mise 能以相同内容重新读取。Docker `--env-file` 等不会解析引号的工具会将引号作为值的一部分接收。
+
 ## Arguments
 - **`[TOOL@VERSION]…`** — Tools to include in addition to those in the config, such as `node@24`
 

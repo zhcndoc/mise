@@ -84,6 +84,8 @@ use ($nu.default-config-dir | path join mise.nu)
 
 保存两个文件后重启 Nushell。如果 `mise` 不在 `PATH` 中，请在 `env.nu` 中使用它的绝对路径。每次启动时，`env.nu` 都会重新生成模块，因此 mise 升级后也会自动使用新版本。
 
+该模块定义的 `mise` 命令会自行补全子命令和参数，因此仅启用激活模块就能使用 Tab 补全。Nushell 0.116 之前，包装后的命令不会补全标志；可通过 [补全脚本](#autocompletion)使用 `^mise --<Tab>` 补全标志。
+
 ## Xonsh {#xonsh}
 
 将以下内容添加到 `~/.xonshrc` 或所用的 Xonsh 配置文件中：
@@ -185,6 +187,8 @@ mise completion powershell --install
 :::
 
 通过 bash-completion 软件包加载 Bash 补全脚本；该软件包必须已安装并在 Shell 中启用。
+
+fish 4.9.3 内置的加载器会运行 `mise completion fish | source`，因此该版本无需运行 `mise completion fish --install`。较早版本的 fish 可能没有此加载器，其他 Shell 或发行版也可能自带加载器。如果补全已经可用，无需另行安装。
 
 若要自行选择安装位置，请使用 `mise completion <shell>` 输出脚本并保存。例如，zsh 可运行：
 

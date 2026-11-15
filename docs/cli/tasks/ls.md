@@ -16,6 +16,7 @@ Lists tasks from `[tasks]` in your config files and from task directories such a
 See <https://mise.jdx.dev/tasks/task-discovery.html>
 
 ## Flags
+- **`--tag <TAG>`** — 仅显示带有此标签的任务；可重复指定多个标签
 - **`-g --global`** — Only show global tasks
 - **`-J --json`** — Output in JSON format
 - **`-l --local`** — Deprecated alias for --no-global
@@ -36,6 +37,12 @@ See <https://mise.jdx.dev/tasks/task-discovery.html>
 - **`-h --help`** — 打印帮助
 
 ## 示例
+
+列出带有 `lint` 标签的任务
+
+```
+mise tasks ls --tag lint
+```
 
 List tasks
 

@@ -2945,7 +2945,7 @@ mod tests {
         let config = Config::get().await.unwrap();
         let before: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
         backend
-            .versions_hidden_by_before_date(&config, query, before)
+            .versions_hidden_by_before_date(&config, query, before, None)
             .await
             .unwrap()
             .into_iter()
@@ -3227,6 +3227,13 @@ pub trait Backend: Debug + Send + Sync {
     /// this to return false, since they don't have downloadable artifacts with lockable URLs.
     fn supports_lockfile_url(&self) -> bool {
         true
+    }
+
+    /// Whether `--locked` requires a lockfile URL for this tool version.
+    /// Defaults to [`Backend::supports_lockfile_url`]; a backend whose releases
+    /// may or may not have a downloadable artifact overrides it.
+    fn requires_lockfile_url(&self, _tv: &ToolVersion) -> bool {
+        self.supports_lockfile_url()
     }
 
     /// Whether locked mode may resolve the download URL itself when the
@@ -3924,6 +3931,13 @@ pub trait Backend: Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Whether the concrete versions of the `request` version have no order, such
+    /// as content digests: a candidate is newer exactly when it differs from the
+    /// installed one, however the two would sort as version strings.
+    fn versions_are_unordered(&self, _request: &str) -> bool {
+        false
+    }
+
     /// Whether a rolling channel must be resolved to a concrete version before it
     /// can be used. Backends that opt in fail in offline mode when neither a lock
     /// entry nor a concrete installed channel build is available.
@@ -4251,8 +4265,14 @@ pub trait Backend: Debug + Send + Sync {
         config: &Arc<Config>,
         query: &str,
         before: Timestamp,
+        selection_opts: Option<&ToolVersionOptions>,
     ) -> eyre::Result<Vec<VersionInfo>> {
-        let opts = config.get_tool_opts_with_overrides(self.ba()).await?;
+        // The active request's options, not the first config entry's: a later
+        // entry can enable prereleases that the first one does not.
+        let opts = match selection_opts {
+            Some(opts) => opts.clone(),
+            None => config.get_tool_opts_with_overrides(self.ba()).await?,
+        };
         let backend = self.ba().full();
         let hidden: Vec<VersionInfo> = self
             .list_remote_versions_with_info_with_selection_options(config, &opts, false)
@@ -5259,7 +5279,7 @@ pub trait Backend: Debug + Send + Sync {
                 hint: Remove `lockfile = false` or set `lockfile = true`, or disable locked mode"
             );
         }
-        if ctx.locked && self.supports_lockfile_url() {
+        if ctx.locked && self.requires_lockfile_url(&tv) {
             let platform_key = self.get_platform_key_for(&tv);
             let locked_platform = tv.lock_platforms.get(&platform_key);
             let has_lockfile_url = locked_platform.is_some_and(|p| {
@@ -6063,6 +6083,10 @@ pub trait Backend: Debug + Send + Sync {
                 );
             if install_removed {
                 install_state::clear_incomplete_marker_best_effort(tv.ba(), &tv.state_key());
+                // The per-version cache dir is wiped at the start of every install
+                // attempt, so nothing can resume from it. Like the marker, it stays
+                // while the install dir could not be removed.
+                let _ = remove_all_with_warning(tv.cache_path());
             }
             // Remove parent installs dir if it's now empty (no other versions present)
             let installs_path = &self.ba().installs_path();
@@ -6089,6 +6113,11 @@ pub trait Backend: Debug + Send + Sync {
     fn cleanup_empty_installs_dir(&self) {
         let installs_path = &self.ba().installs_path();
         if file::dir_subdirs(installs_path).is_ok_and(|entries| entries.is_empty()) {
+            // `dir_subdirs` skips links whose target is gone, so the alias links of the
+            // version just removed (`latest`, `5`, `global`) leave the directory looking
+            // empty. Drop them here: once the backend metadata below is gone, nothing
+            // would visit this directory again, and they would stay forever.
+            let _ = crate::runtime_symlinks::remove_missing_symlinks_in_dir(installs_path);
             let _ = file::remove_file(installs_path.join(".mise.backend.toml"));
             if installs_path
                 .read_dir()
@@ -6426,6 +6455,9 @@ pub trait Backend: Debug + Send + Sync {
     /// `use_versions_host` and cache contexts, which callers check themselves.
     fn versions_host_tool(&self) -> std::result::Result<String, String> {
         let ba = self.ba();
+        if mise_util::versions_host::backend_excluded(&ba.full_without_opts()) {
+            return Err("it matches versions_host_exclude".to_string());
+        }
         let tool;
         if let Some(plugin) = self.plugin()
             && let Ok(Some(remote_url)) = plugin.get_remote_url()
@@ -6501,9 +6533,10 @@ pub trait Backend: Debug + Send + Sync {
         // which keeps existing cache entries valid, and only for listings the
         // host would otherwise serve: a context already bypasses the host, and
         // the other listings are always direct, so their one entry is correct.
+        let excluded = mise_util::versions_host::backend_excluded(&self.ba().full_without_opts());
         if context.is_none()
-            && !Settings::get().use_versions_host
-            && self.versions_host_skip_reason().is_none()
+            && ((!Settings::get().use_versions_host && self.versions_host_skip_reason().is_none())
+                || excluded)
         {
             return Ok(Some("direct".to_string()));
         }

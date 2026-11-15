@@ -845,6 +845,42 @@ impl GithubRetryFailed {
     }
 }
 
+/// Whether `err` is a real 404, including one api.github.com answered after
+/// mise-versions failed: [`GithubRetryFailed`] words itself without the
+/// status, so the outer error cannot show it. Unlike
+/// [`crate::http::error_code`] this never reads "404" out of a URL or a
+/// version in a timeout message.
+pub fn is_not_found(err: &eyre::Report) -> bool {
+    fn names_404(cause: &(dyn std::error::Error + 'static)) -> bool {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::status)
+            .is_some_and(|status| status == reqwest::StatusCode::NOT_FOUND)
+            || {
+                // mise-versions' own missing-tag errors (`after_mirror_404`
+                // and `ensure_private_repo_lookup` in github.rs) word it so.
+                let message = cause.to_string();
+                message.starts_with("HTTP status client error (404")
+                    || message.contains("(404 from mise-versions.jdx.dev")
+            }
+    }
+    err.chain().any(|cause| {
+        names_404(cause)
+            || cause
+                .downcast_ref::<GithubRetryFailed>()
+                .is_some_and(|failed| {
+                    let mut source = std::error::Error::source(failed);
+                    while let Some(inner) = source {
+                        if names_404(inner) {
+                            return true;
+                        }
+                        source = inner.source();
+                    }
+                    false
+                })
+    })
+}
+
 fn versions_host_error_message(status: u16, body: &str) -> String {
     let body = body.trim();
     let status_code = reqwest::StatusCode::from_u16(status);
@@ -881,7 +917,46 @@ pub fn enabled_for_github_metadata() -> bool {
 /// [`enabled_for_github_metadata`] for one repository (`owner/repo`), which
 /// also catches `url_replacements` rules that only match its paths.
 pub fn enabled_for_github_repo(repo: &str) -> bool {
-    enabled_for_github_metadata() && !github_is_url_replaced(Some(repo))
+    enabled_for_github_metadata()
+        && !github_is_url_replaced(Some(repo))
+        && !github_repo_excluded(repo)
+}
+
+/// Whether `versions_host_exclude` names `repo` (`owner/repo`), which then
+/// goes to GitHub directly so the host never learns its name.
+pub fn github_repo_excluded(repo: &str) -> bool {
+    let settings = Settings::get();
+    github_repo_matches_any(&settings.versions_host_exclude, repo)
+}
+
+/// The first `versions_host_exclude` pattern that is not a valid glob, so a
+/// typo is reported instead of quietly sending the repository to the host.
+pub fn invalid_exclude_pattern(patterns: &[String]) -> Option<(&str, String)> {
+    patterns.iter().find_map(|pattern| {
+        globset::Glob::new(pattern.trim())
+            .err()
+            .map(|err| (pattern.as_str(), err.to_string()))
+    })
+}
+
+/// [`github_repo_excluded`] for a backend's full name, such as
+/// `github:owner/repo[opts]@1.0`. Other backends are never excluded.
+pub fn backend_excluded(full: &str) -> bool {
+    let Some(rest) = full.strip_prefix("github:") else {
+        return false;
+    };
+    let repo = rest.split(['[', '@']).next().unwrap_or(rest);
+    github_repo_excluded(repo)
+}
+
+fn github_repo_matches_any(patterns: &[String], repo: &str) -> bool {
+    patterns.iter().any(|pattern| {
+        globset::GlobBuilder::new(pattern.trim())
+            .case_insensitive(true)
+            .literal_separator(true)
+            .build()
+            .is_ok_and(|glob| glob.compile_matcher().is_match(repo))
+    })
 }
 
 /// Whether `url_replacements` sends GitHub's API, or this repository's
@@ -1148,6 +1223,21 @@ fn path_segments_match(segments: &[&str], expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_versions_host_exclude_patterns() {
+        let patterns = vec!["My-Org/*".to_string(), "other/internal-cli".to_string()];
+        assert!(super::github_repo_matches_any(&patterns, "my-org/tool"));
+        assert!(super::github_repo_matches_any(
+            &patterns,
+            "other/internal-cli"
+        ));
+        assert!(!super::github_repo_matches_any(&patterns, "other/public"));
+        assert!(!super::github_repo_matches_any(&patterns, "my-org/a/b"));
+        assert!(!super::github_repo_matches_any(&[], "my-org/tool"));
+        assert!(super::invalid_exclude_pattern(&["my-org/[abc".to_string()]).is_some());
+        assert!(super::invalid_exclude_pattern(&patterns).is_none());
+    }
+
     use super::*;
 
     #[test]

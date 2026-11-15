@@ -26,13 +26,13 @@ experimental = true
 | 类别                                                      | 属性                                                                                                                                                                                                                           |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Command](#command)                                       | [`run`](#run), [`run_windows`](/tasks/task-configuration.html#run-windows), [`file`](#file), [`shell`](#shell), [`dir`](#dir), [`usage`](#usage), [`raw_args`](/tasks/task-configuration.html#raw-args), [`extends`](#extends) |
-| [Description and visibility](#description-and-visibility) | [`description`](#description), [`alias`](#alias), [`hide`](#hide), [`confirm`](#confirm)                                                                                                                                       |
+| [描述与可见性](#description-and-visibility)              | [`description`](#description), [`alias`](#alias), [`tags`](#tags), [`hide`](#hide), [`confirm`](#confirm)                                                                                                                      |
 | [Ordering](#ordering)                                     | [`depends`](#depends), [`depends_post`](/tasks/task-configuration.html#depends-post), [`wait_for`](/tasks/task-configuration.html#wait-for), [`daemons`](/tasks/task-configuration.html#daemons)                               |
 | [Environment and tools](#environment-and-tools)           | [`env`](#env), [`vars`](#task-vars), [`secrets`](/tasks/task-configuration.html#secrets), [`tools`](#tools)                                                                                                                    |
 | [Skipping work](#skipping-work)                           | [`skip_if`](/tasks/task-configuration.html#skip-if), [`sources`](#sources), [`outputs`](#outputs), [`watch`](#watch), [`cache`](/tasks/task-configuration.html#cache)                                                          |
 | [Execution](#execution)                                   | [`timeout`](#timeout), [`lock`](#lock), [`raw`](#raw), [`interactive`](#interactive)                                                                                                                                           |
 | [Output](#output-properties)                              | [`output`](#output), [`quiet`](#quiet), [`silent`](#silent)                                                                                                                                                                    |
-| [Sandbox](#sandbox)                                       | `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`, `allow_read`, `allow_write`, `allow_net`, `allow_env`, `pass_through_env`                                                                                       |
+| [Sandbox](#sandbox)                                       | `deny_all`, `deny_read`, `deny_write`, `deny_net`, `deny_env`, `deny_unix`, `allow_read`, `allow_write`, `allow_net`, `allow_unix`, `allow_env`, `pass_through_env`                                                            |
 | [Deprecated](#deprecated)                                 | [`rust_cache`](/tasks/task-configuration.html#rust-cache)                                                                                                                                                                      |
 
 The rest of the page covers [`[task_config]` options](#task-config-options),
@@ -238,6 +238,24 @@ run = "cargo build"
 ```
 
 任务名称优先于别名。因此，如果存在名为 `b` 的任务，`mise run b` 会运行该任务，即使别名来自父目录的配置也是如此。
+
+### `tags`
+
+- **类型**：`string | string[]`
+
+用于说明任务类别的标签词，例如 `build`、`test`、`lint`、`format` 或 `slow`。`mise run --tag lint` 会运行所有带有 `lint` 标签的任务，`mise tasks ls --tag lint` 会列出这些任务，而 `mise tasks ls --json` 会在每项任务中包含 `tags`，让 CI 脚本和其他工具无需从任务名称猜测即可找到项目检查项。
+
+```mise-toml
+[tasks."lint:eslint"]
+tags = "lint"
+run = "eslint ."
+
+[tasks."test:e2e"]
+tags = ["test", "slow"]
+run = "./e2e/run"
+```
+
+mise 不会为任何标签指定内置含义。文件任务可通过 `#MISE tags=["test"]` 设置标签；[任务模板](/tasks/templates.html)会将自身标签附加到每个继承该模板的任务。参见[按标签选择任务](/tasks/running-tasks.html#select-tasks-by-tag)。
 
 ### `hide`
 
@@ -598,6 +616,8 @@ mise 会按顺序检查条目，以最后一个匹配项为准，因此后续条
 `["src/**/*.ts", "!src/**/*.test.ts", "src/keep.test.ts"]` 会排除除 `src/keep.test.ts` 以外的所有 `*.test.ts` 文件。
 若要匹配以 `!` 开头的字面路径，请将其转义为 `\!`（在 TOML 基本字符串中写作 `"\\!important.txt"`）。
 
+为加快新鲜度检查，mise 不会遍历无法匹配任何 source 的目录。这包括不符合模式首个路径组件的目录（例如模式为 `packages/*/src/**/*` 时的 `packages/*/node_modules`），以及被以 `/**` 结尾的 `!` 条目排除的目录（例如 `!**/node_modules/**`）。该检查会采取保守策略：`!` 条目之后只要还有任何正向条目（即使无关），就会停止跳过这些目录；`task_source_files()` 仍会遍历被排除的目录。不以 `/**` 结尾的条目（例如 `!**/node_modules`）只会排除匹配的路径，其下的文件仍可能作为 source，因此 mise 仍会遍历这些目录。
+
 #### 依赖失效
 
 带有 `sources` 的依赖任务运行或恢复其输出时，所有依赖它的任务也会运行；详见[依赖关系](/tasks/caching.html#dependencies)。
@@ -688,8 +708,8 @@ timeout = "10m"
 
 ### `lock`
 
-- **Type**: `boolean | string | string[]`
-- **Default**: unset
+- **类型**：`boolean | string | { name, count } | (string | { name, count })[]`
+- **默认值**：未设置
 
 任务运行命令期间持有的资源锁。如果某次运行需要的锁正被另一次运行持有，它会等待锁释放，让共享资源的任务依次执行，避免冲突。多个代理或终端在不同工作树中同时运行相同任务时，这项功能尤其有用。
 
@@ -710,6 +730,34 @@ lock = true
 - 某个名称会在本机所有项目中被使用该名称的任务间共享。请使用具体名称，例如 `shop-test-db`，而不是 `db`。
 - 设置为 `true` 后，同一仓库的所有工作树中，同一任务同时只能运行一个实例。其他仓库中同名的任务不受影响。
 - 设置为 `false` 或空列表时不获取锁，例如可用于关闭模板设置的锁。
+- 锁名称可以使用[模板](/templates.html)，例如 <code v-pre>lock = "{{config_root}}/package-lock.json"</code> 会只在该项目的任务间共享，而不是在机器上的所有项目间共享。
+- 对于锁数量超过 1 的情况，`{ name = "...", count = N }` 可以一次获取该锁的 N 个槽位，适用于 CPU 或内存等有容量上限而非唯一的资源。参见[具有多个槽位的锁](#locks-with-several-slots)。
+
+#### 具有多个槽位的锁
+
+锁是一个槽位池。默认情况下每个名称只有一个槽位，因此同一时间只有一次运行可持有它。可在每台机器上通过 [`task.lock_pools`](/configuration/settings.html#task.lock_pools) 为名称配置多个槽位，再由任务按需获取：
+
+```toml
+# ~/.config/mise/config.toml
+[settings.task.lock_pools]
+cpu = "8"
+```
+
+```toml
+[tasks.lint]
+run = "..."
+lock = "cpu" # one slot
+
+[tasks.test]
+run = "..."
+lock = [{ name = "cpu", count = 4 }, "test-db"]
+```
+
+只要总需求不超过 8 个槽位，`lint` 和 `test` 就能并行；超出容量的运行会等待。任务必须一次获取全部 `count` 个槽位，否则一个任务可能占有部分槽位，另一个任务也占有部分槽位，彼此等待。无法一次满足大任务时，如果有较小任务能够运行，它仍可使用空闲槽位。超过池容量的 `count` 会获取全部槽位。任务等待锁时会让出 `--jobs` 名额。等待的任务不会排队，因此连续的小任务可能让大任务一直等待；若这会影响场景，请让大任务获取整个槽位池。
+
+`MISE_TASK_LOCKS` 会列出任务持有的槽位，例如 `cpu,cpu:2,cpu:5,cpu:6`：第一个槽位使用裸名称，其余槽位追加 `:N`。任务可利用这些编号选择其他运行任务未占用的资源，例如测试数据库或端口。嵌套任务若需要的槽位数不超过父任务持有的数量，会共享父任务的槽位；若需要更多槽位则会失败，因为多个父任务可能分别等待对方占用的槽位。
+
+请在每台机器的同一处配置槽位数量，通常使用全局配置，不要在每个项目中分别设置：如果不同运行对同一池使用不同容量，实际并发可能超过较小的配置值。
 
 任务会在依赖项完成、且 mise 确定必须运行后才获取锁：被 `skip_if` 跳过、`sources` 已是最新，或从[缓存](/tasks/task-configuration.html#cache)恢复的任务都不会等待。任务会一直持有锁，直到最后一条命令结束（包括其 `run` 条目启动的任务）；无论以何种方式结束，锁都会释放。多个锁名称会按排序后的顺序获取。任务等待时会让出 `--jobs` 名额，使本次运行中的其他任务继续执行；mise 也会显示锁的持有者：
 
@@ -795,11 +843,13 @@ and `task.quiet = true` under `[settings]`.
 | `deny_all`                                                      | `bool`     | 禁止文件系统读写、网络访问和继承环境变量。`allow_*` 条目可添加例外。                                                                                      |
 | `deny_read`                                                     | `bool`     | 禁止读取文件系统，但保留任务运行所需的系统路径和 mise 路径。                                                                                               |
 | `deny_write`                                                    | `bool`     | 禁止写入文件系统，但保留临时目录等默认可写路径。                                                                                                           |
-| `deny_net`                                                      | `bool`     | 禁止网络访问。                                                                                                                                            |
+| `deny_net`                                                      | `bool`     | 禁止网络访问；Unix socket 仍可连接，参见 `deny_unix`。                                                                                                     |
 | `deny_env`                                                      | `bool`     | 丢弃继承的环境变量，仅保留 `PATH`、`HOME`、`USER`、`SHELL`、`TERM`、`COLORTERM` 和 `LANG`。                                                               |
+| `deny_unix`                                                     | `bool`     | 禁止连接 Unix socket，但允许 `allow_unix` 中列出的 socket。抽象 socket 在沙箱内创建时仍可访问。需要 Linux 7.1 或更高版本；旧版内核和 macOS 会在任务启动前失败，Windows 会发出警告并在不限制 socket 的情况下运行任务。 |
 | `allow_read`                                                    | `string[]` | 允许读取这些路径，并禁止读取其他路径。                                                                                                                    |
 | `allow_write`                                                   | `string[]` | 允许写入这些路径（它们也会变为可读），并禁止写入其他路径。                                                                                                 |
 | `allow_net`                                                     | `string[]` | 尚不支持：Linux 和 macOS 上设置此项会导致任务在运行前失败。详见[访问特定主机](/sandboxing.html#access-to-particular-hosts)。                              |
+| `allow_unix`                                                    | `string[]` | 允许连接这些 socket，或允许连接这些目录下的所有 socket，并禁止连接其他 Unix socket。平台支持与 `deny_unix` 相同。                                       |
 | `allow_env`                                                     | `string[]` | 保留这些继承变量（支持 `MYAPP_*` 等 `*` 通配符），并丢弃其他变量。                                                                                        |
 | `pass_through_env` <Badge type="warning" text="experimental" /> | `string[]` | 禁止继承环境变量时，仍保留这些继承变量（支持 `*` 通配符），但不会将其值加入任务缓存键。                                                                  |
 
@@ -889,8 +939,7 @@ shell = "bash -c"
 - **默认值**：
 [默认任务目录](/tasks/task-discovery.html#default-task-directories)
 
-此配置根目录要加载的 TOML 任务文件和任务目录。该列表会替换默认任务目录，而不是在其基础上追加。条目可以是路径、glob 模式、`git::` URL 或
-`oci::` 引用；mise 会将它们作为 Tera 模板渲染。
+此配置根目录要加载的 TOML 任务文件和任务目录。该列表会替换默认任务目录，而不是在其基础上追加。条目可以是路径、glob 模式、`git::` URL、`oci::` 引用或 `zip::` URL；mise 会将它们作为 Tera 模板渲染。
 
 ```toml
 [task_config]
@@ -900,8 +949,7 @@ includes = [
 ]
 ```
 
-哪些列表会生效、如何覆盖包含的任务，以及远程 [Git](/tasks/task-discovery.html#remote-git-includes) 和
-[OCI](/tasks/task-discovery.html#remote-oci-includes) include 的说明见[任务发现与优先级](/tasks/task-discovery.html#include-task-files-and-directories)。
+哪些列表会生效、如何覆盖包含的任务，以及远程 [Git](/tasks/task-discovery.html#remote-git-includes)、[OCI](/tasks/task-discovery.html#remote-oci-includes) 和 [zip](/tasks/task-discovery.html#remote-zip-includes) include 的说明见[任务发现与优先级](/tasks/task-discovery.html#include-task-files-and-directories)。
 
 ### `task_config.excludes` {#task_config.excludes}
 

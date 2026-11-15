@@ -93,7 +93,7 @@ mise dot status
 [`mise doctor`](/cli/doctor.html) 会报告已声明但已停止的 watcher、重复出现的保存失败、不可用的历史存储，以及因持续变化而降低保存频率的文件。
 报告中也会提供启动已停止 watcher 的命令。
 
-`mise dot status` 会提供更多细节：watcher 正在运行、已声明但已停止，还是尚未声明；保存是否失败；最近一次保存和完整扫描的时间；
+`mise dot status` 会提供更多细节：watcher 正在运行、已声明但已停止，还是尚未声明（显示为 `manual`，表示更改会在运行 `mise dot save` 时保存）；保存是否失败；最近一次保存和完整扫描的时间；
 最近一次失败；以及每个繁忙文件的保存间隔、上次保存时间和待处理编辑。它还会列出最新检查点之后发生变化、可由 `mise dot save` 记录的跟踪文件：
 
 ```text
@@ -440,6 +440,13 @@ include 列表只适用于被跟踪的目录。单个文件可以直接跟踪，
 
 条目列表和全局 `[history] exclude` 列表会同时生效；全局 `!glob` 不能重新包含已由条目排除的文件。
 `mise dot paths` 和 `mise dot track --dry-run` 会显示实际生效的规则。
+
+若要逐个检查目录中的文件，请运行 [`mise dot files`](/cli/dotfiles/files.html)。它会将每个文件标记为已跟踪、已排除（并指出对应规则）、已省略或未跟踪：
+
+```sh
+mise dot files ~/.codex
+mise dot files -r --untracked ~/.config/nvim
+```
 
 ### 在所有跟踪条目中排除文件 {#exclude-files-across-tracked-entries}
 

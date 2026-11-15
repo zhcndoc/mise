@@ -18,6 +18,8 @@ macOS defaults, LaunchAgents, systemd user units, the login shell, `[tools]`,
 and the system dependencies of those tools, without changing anything.
 Checking dotfiles can render trusted templates, which may run `exec()`.
 
+`[bootstrap.settings]` 尚未纳入此命令的检查范围：请改用 `mise bootstrap settings status`。
+
 `--missing` exits with status 1 if anything differs from the config; it
 still lists every entry.
 

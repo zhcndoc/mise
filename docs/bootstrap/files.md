@@ -140,6 +140,32 @@ owner = "root"
 
 更改你拥有的文件权限时，会以你的身份运行。声明了 `owner` 或 `group`，或要更改其他用户拥有的文件权限时，则以 root 身份运行。在 Linux 和 macOS 上，即使文件所有者无法读取文件，也可以不使用 `sudo` 更改其权限；其他 Unix 系统可能会通过 `sudo` 重试该操作。如果 root 操作需要经过不受信任的符号链接（参见[mise 如何应用更改](#how-mise-applies-changes)），应用操作会发出警告并保留仅管理权限的文件，而不会失败。
 
+## 在他人管理的文件中维护代码块 {#blocks}
+
+若只需管理文件的一部分并保留其余内容，例如 `/etc/hosts` 中的一组行或 `/etc/ssh/sshd_config` 中的设置块，请设置 `block` 和 `id`，而不是 `source` 或 `content`：
+
+```toml
+[bootstrap.files."/etc/hosts"]
+id = "dev"
+block = """
+127.0.0.1 dev.local
+127.0.0.1 api.local
+"""
+```
+
+mise 会在文件中保留由 `id` 命名的两条标记注释：
+
+```text
+# >>> mise:dev >>> managed by mise — do not edit between markers
+127.0.0.1 dev.local
+127.0.0.1 api.local
+# <<< mise:dev <<<
+```
+
+应用时会替换标记之间的内容；若缺少标记，则会追加代码块；若文件不存在，则会创建仅含该代码块的文件。标记之外的内容保持不变；除非条目声明了所有者和权限模式，否则现有文件的所有者和权限模式也会保留。与其他系统文件一样，只有当前用户无权修改时才会通过 `sudo` 执行。标记注释默认使用 `#`；如果文件扩展名对应其他注释符号，则会使用相应符号，例如 `.js` 使用 `//`，`.lua` 使用 `--`。Dotfiles 代码块也使用相同标记；详情参见[块编辑](/dotfiles/edits.html#blocks)。
+
+`block` 也可以使用 `template = true`、`os`、`notify`、`owner`、`group` 和 `mode`。它不能与 `source`、`content`、`replace`、`remove_empty` 或 `state = "absent"` 同时使用。一个条目只能维护一个代码块，因此每个文件只能有一个代码块。若要删除代码块，请手动移除其中的行和标记。
+
 ## 在软件包前应用文件 {#files-before-packages}
 
 对于包管理器所需的文件和目录（例如仓库定义和签名密钥），请设置 `phase = "pre-packages"`：

@@ -11,6 +11,7 @@
 - [Editors and IDEs](https://mise.jdx.dev/ide-integration.html): An editor's integrated terminal, language servers, debugger and extensions can each run with a different environment. Find out which process needs the tool or variable, then pick an integration.
 - [Continuous integration](https://mise.jdx.dev/continuous-integration.html): Use the same mise.toml in CI and development so both environments select the same tools. Run commands with mise exec or mise run to load those tools and the project's environment variables.
 - [Docker](https://mise.jdx.dev/mise-cookbook/docker.html): Run mise in a container in one of two ways: build on the -debian image, which has mise, curl and git ready for CI jobs and development containers, or copy the static binary from the scratch image into…
+- [Coding agents](https://mise.jdx.dev/agents.html): A coding agent such as Claude Code or Codex runs each command in a non-interactive shell. mise activate in your .zshrc or .bashrc never runs there, so the agent does not get the project's tools or…
 - [AI assistants (MCP)](https://mise.jdx.dev/mcp.html): mise mcp runs a Model Context Protocol server that lets an AI assistant read a project's tools, tasks, environment variables and config files, and run its tasks.
 
 ## Dev tools
@@ -146,6 +147,7 @@
 - [macOS defaults](https://mise.jdx.dev/bootstrap/macos-defaults.html): Declare macOS preferences in mise.toml, and mise bootstrap, or mise bootstrap macos defaults apply, writes them the way the defaults command does.
 - [macOS LaunchAgents](https://mise.jdx.dev/bootstrap/launchd.html): Declare LaunchAgents for your macOS user in [bootstrap.macos.launchd.agents]. mise bootstrap, or mise bootstrap macos launchd-agents apply, writes each agent to…
 - [systemd user units](https://mise.jdx.dev/bootstrap/systemd.html): Declare systemd user services and timers in [bootstrap.linux.systemd.units]. mise bootstrap, or mise bootstrap linux systemd-units apply, writes each to ~/.config/systemd/user/dev.mise.<name>.service…
+- [Bootstrap settings plugins](https://mise.jdx.dev/bootstrap/settings-plugins.html): A bootstrap settings plugin applies the settings of one program or desktop, such as a Linux distro's appearance settings, from a [bootstrap.settings.<plugin>] section.
 
 ## Dotfiles
 
@@ -222,7 +224,7 @@
 
 ## Contributing
 
-- [Contributing](https://mise.jdx.dev/contributing.html): mise welcomes bug fixes, documentation improvements, and registry entries for widely used tools. Agree on the direction of anything larger before you write code.
+- [Contributing](https://mise.jdx.dev/contributing.html): mise does not accept external pull requests, and GitHub does not let anyone outside the maintainer team create one.
 - [Adding tools to the registry](https://mise.jdx.dev/contributing/registry.html): A registry entry gives a widely used tool a short name, so mise use ripgrep works without a backend identifier.
 - [Codebase architecture](https://mise.jdx.dev/architecture.html): Use this map to find the code that owns a behavior before you change it. For setup, checks, and how to submit a change, see Contributing.
 - [Packaging mise](https://mise.jdx.dev/packaging.html): A package manager that installs mise should own its updates, so turn off mise self-update in your package and tell users how to update instead.
@@ -252,7 +254,7 @@
 - [mise bootstrap linux systemd-units](https://mise.jdx.dev/cli/bootstrap/linux/systemd-units.html): Manage systemd user units from [bootstrap.linux.systemd.units]
 - [mise bootstrap linux systemd-units apply](https://mise.jdx.dev/cli/bootstrap/linux/systemd-units/apply.html): Install and start the configured systemd user units
 - [mise bootstrap linux systemd-units status](https://mise.jdx.dev/cli/bootstrap/linux/systemd-units/status.html): Show the state of the configured systemd user units
-- [mise bootstrap macos](https://mise.jdx.dev/cli/bootstrap/macos.html): Manage macOS preferences and LaunchAgents from [bootstrap.macos]
+- [mise bootstrap macos](https://mise.jdx.dev/cli/bootstrap/macos.html): Manage macOS preferences and LaunchAgents from [bootstrap.settings.macos] and [bootstrap.macos.launchd]
 - [mise bootstrap macos defaults](https://mise.jdx.dev/cli/bootstrap/macos/defaults.html): Manage macOS preferences such as Dock, Finder, and keyboard settings
 - [mise bootstrap macos defaults apply](https://mise.jdx.dev/cli/bootstrap/macos/defaults/apply.html): Write the configured macOS preferences
 - [mise bootstrap macos defaults status](https://mise.jdx.dev/cli/bootstrap/macos/defaults/status.html): Show the state of the configured macOS preferences
@@ -290,6 +292,9 @@
 - [mise bootstrap services apply](https://mise.jdx.dev/cli/bootstrap/services/apply.html): Apply the service state declared in [bootstrap.services]
 - [mise bootstrap services remove](https://mise.jdx.dev/cli/bootstrap/services/remove.html): Uninstall a user-scope service
 - [mise bootstrap services status](https://mise.jdx.dev/cli/bootstrap/services/status.html): Show the state of services from [bootstrap.services]
+- [mise bootstrap settings](https://mise.jdx.dev/cli/bootstrap/settings.html): [experimental] Apply [bootstrap.settings] through bootstrap settings plugins
+- [mise bootstrap settings apply](https://mise.jdx.dev/cli/bootstrap/settings/apply.html): Write the settings that differ from [bootstrap.settings]
+- [mise bootstrap settings status](https://mise.jdx.dev/cli/bootstrap/settings/status.html): Show each setting in [bootstrap.settings] and its current value
 - [mise bootstrap status](https://mise.jdx.dev/cli/bootstrap/status.html): Show the state of every configured bootstrap part
 - [mise bootstrap unapply](https://mise.jdx.dev/cli/bootstrap/unapply.html): Remove what a config environment's bootstrap sections created
 - [mise bootstrap user](https://mise.jdx.dev/cli/bootstrap/user.html): Manage your login shell from [bootstrap.user]
@@ -338,6 +343,7 @@
 - [mise dotfiles diff](https://mise.jdx.dev/cli/dotfiles/diff.html): Show what mise dot apply would change
 - [mise dotfiles edit](https://mise.jdx.dev/cli/dotfiles/edit.html): Open a dotfile's source in your editor
 - [mise dotfiles exclude](https://mise.jdx.dev/cli/dotfiles/exclude.html): Never save paths matching a glob
+- [mise dotfiles files](https://mise.jdx.dev/cli/dotfiles/files.html): List a directory's files and whether each one is tracked
 - [mise dotfiles history](https://mise.jdx.dev/cli/dotfiles/history.html): Browse saved versions of your tracked files
 - [mise dotfiles history describe](https://mise.jdx.dev/cli/dotfiles/history/describe.html): Set the description of a checkpoint
 - [mise dotfiles history diff](https://mise.jdx.dev/cli/dotfiles/history/diff.html): Compare checkpoints, or your files against one
@@ -439,7 +445,9 @@
 - [mise tasks deps](https://mise.jdx.dev/cli/tasks/deps.html): Show the dependency tree of tasks
 - [mise tasks edit](https://mise.jdx.dev/cli/tasks/edit.html): Open a task in your editor
 - [mise tasks graph](https://mise.jdx.dev/cli/tasks/graph.html): Show the monorepo project graph
+- [mise tasks history](https://mise.jdx.dev/cli/tasks/history.html): Show recent task runs and how long they took
 - [mise tasks info](https://mise.jdx.dev/cli/tasks/info.html): Show a task's definition
+- [mise tasks log](https://mise.jdx.dev/cli/tasks/log.html): Print the output of a task's last run
 - [mise tasks ls](https://mise.jdx.dev/cli/tasks/ls.html): List available tasks
 - [mise tasks rm](https://mise.jdx.dev/cli/tasks/rm.html): Remove tasks
 - [mise tasks set](https://mise.jdx.dev/cli/tasks/set.html): Change fields of an existing TOML task

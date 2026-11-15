@@ -8,14 +8,16 @@ use crate::task::task_cache_store::{
     compose_task_cache_stores,
 };
 use crate::task::task_source_checker::{
-    TaskCacheInputs, build_output_matcher, expand_enumeration_patterns, glob_walk, is_output,
-    output_glob_patterns, symlink_walk_error_path, task_cache_inputs, task_cwd,
+    DirPruner, TaskCacheInputs, build_output_matcher, expand_enumeration_patterns,
+    glob_has_entries, glob_walk_pruned, is_output, output_glob_patterns, symlink_walk_error_path,
+    task_cache_inputs, task_cwd, task_source_paths,
 };
 use crate::task::{RunEntry, Task};
 use crate::toolset::Toolset;
 use bytesize::ByteSize;
 use eyre::{Context, Report, Result, bail, eyre};
 use ignore::overrides::Override;
+use itertools::Itertools;
 use jdx_tar::{Builder, EntryType, Header};
 use mise_cache_core::RemoteCacheConfig;
 use serde::{Deserialize, Serialize};
@@ -196,6 +198,11 @@ pub struct TaskArtifactCache {
     explanation: Option<TaskCacheKeyExplanation>,
     state_path: PathBuf,
     limits: TaskCacheLimits,
+    /// Absolute paths of the sources hashed into the key.
+    source_files: Vec<PathBuf>,
+    /// When the key's inputs started being read. A source modified after this
+    /// may differ from the content the key describes.
+    inputs_read_at: SystemTime,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -230,6 +237,7 @@ pub(crate) struct TaskArtifactCacheBuilder {
     root: PathBuf,
     inputs: TaskCacheInputs,
     output_roots: Vec<PathBuf>,
+    inputs_read_at: SystemTime,
 }
 
 pub(crate) struct TaskCacheContext<'a> {
@@ -253,6 +261,7 @@ impl TaskArtifactCache {
         Settings::get().ensure_experimental("task artifact caching")?;
         let root = task_cwd(task, config).await?;
         validate_config(task, &root)?;
+        let inputs_read_at = SystemTime::now();
         let output_roots = resolve_output_roots(task, &root, false)?;
         for output in &output_roots {
             ensure_no_symlink_ancestors(&root, output)?;
@@ -280,6 +289,7 @@ impl TaskArtifactCache {
             root,
             inputs,
             output_roots,
+            inputs_read_at,
         }))
     }
 }
@@ -303,6 +313,7 @@ impl TaskArtifactCacheBuilder {
             root,
             inputs,
             output_roots,
+            inputs_read_at,
         } = self;
         // The encoded action is uploaded to remote caches, so env, var, and
         // arg values enter it only as digests. Args can carry them too: dep
@@ -333,6 +344,11 @@ impl TaskArtifactCacheBuilder {
             .map(|(_, tv)| tv.to_string())
             .collect::<Vec<_>>();
         tools.sort();
+        let source_files = inputs
+            .source_paths
+            .iter()
+            .map(|path| root.join(path))
+            .collect_vec();
         let source_paths = if explain {
             inputs.source_paths.clone()
         } else {
@@ -440,12 +456,42 @@ impl TaskArtifactCacheBuilder {
             explanation,
             state_path,
             limits,
+            source_files,
+            inputs_read_at,
         })
     }
 }
 
 /// Digest of an env, var, or arg value as recorded in the cache action, so the
 /// action changes with the value without carrying the value itself.
+fn source_changed_since(path: &Path, since: SystemTime) -> bool {
+    // Sources are hashed through symlinks, so a write to a link's target must count
+    // as well as a change to the link itself.
+    [fs::symlink_metadata(path), fs::metadata(path)]
+        .into_iter()
+        .any(|metadata| {
+            let Ok(metadata) = metadata else {
+                return true;
+            };
+            if metadata.modified().is_ok_and(|modified| modified > since) {
+                return true;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let changed = SystemTime::UNIX_EPOCH
+                    + Duration::new(
+                        metadata.ctime().max(0) as u64,
+                        metadata.ctime_nsec().clamp(0, 999_999_999) as u32,
+                    );
+                if changed > since {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
 fn value_digest(value: &str) -> String {
     format!("blake3:{}", hash::hash_blake3_to_str(value))
 }
@@ -505,6 +551,42 @@ impl TaskArtifactCache {
 
     pub(crate) fn explanation(&self) -> Option<&TaskCacheKeyExplanation> {
         self.explanation.as_ref()
+    }
+
+    /// Returns a source that was modified, replaced, removed or newly selected
+    /// after the key was computed. The key describes the content read at that
+    /// time, so a result recorded under it could belong to different content.
+    /// Comparing timestamps instead of hashing again also catches a file that
+    /// was written and then restored, and a status change (ctime) cannot be set
+    /// back by a restore.
+    pub(crate) async fn source_changed_since_key(
+        &self,
+        task: &Task,
+        config: &Arc<Config>,
+    ) -> Option<PathBuf> {
+        if let Some(path) = self
+            .source_files
+            .iter()
+            .find(|path| source_changed_since(path, self.inputs_read_at))
+        {
+            return Some(path.clone());
+        }
+        // A file that started matching a glob is not in the recorded set.
+        let known = self.source_files.iter().collect::<BTreeSet<_>>();
+        match task_source_paths(task, config).await {
+            Ok(paths) => paths
+                .into_iter()
+                .map(|path| self.root.join(path))
+                .find(|path| !known.contains(path)),
+            Err(err) => {
+                // Without a rescan the result cannot be tied to the key's inputs.
+                warn!(
+                    "task {}: could not rescan sources, so its result is not cached: {err}",
+                    task.name
+                );
+                Some(self.root.clone())
+            }
+        }
     }
 
     pub(crate) async fn current_output(&self) -> Option<Vec<TaskCacheOutput>> {
@@ -697,7 +779,13 @@ impl TaskArtifactCache {
         });
         let archive_bytes = if !roots.is_empty() {
             let output_matcher = build_output_matcher(&self.root, &task.outputs.patterns())?;
-            write_archive(write.artifact_path(), &self.root, &roots, &output_matcher)?
+            write_archive(
+                write.artifact_path(),
+                &self.root,
+                &roots,
+                &output_matcher,
+                &DirPruner::for_outputs(&self.root, &task.outputs.patterns()),
+            )?
         } else {
             0
         };
@@ -965,16 +1053,62 @@ fn verify_artifact_checksum(manifest: &CacheManifest, archive_path: Option<&Path
 }
 
 pub fn task_cache_entries(task: &Task, root: &Path) -> Result<Vec<TaskCacheEntry>> {
+    Ok(task_cache_entries_for(&[(task, root)])?
+        .pop()
+        .unwrap_or_default())
+}
+
+/// Lists the cache entries of several tasks while reading the cache directory once.
+///
+/// Returns one list per requested task, in the order given. The directory holds the
+/// manifests of every task, so scanning it per task would cost tasks × entries.
+pub fn task_cache_entries_for(tasks: &[(&Task, &Path)]) -> Result<Vec<Vec<TaskCacheEntry>>> {
     Settings::get().ensure_experimental("task artifact caching")?;
+    let mut results = tasks.iter().map(|_| Vec::new()).collect::<Vec<_>>();
     let cache_dir = task_cache_dir();
     if !cache_dir.is_dir() {
-        return Ok(Vec::new());
+        return Ok(results);
     }
-    let identity = task_cache_identity(task, root);
-    let current_key = file::read_to_string(task_cache_state_path(task, root))
-        .ok()
-        .map(|key| key.trim().to_string());
-    let mut entries = Vec::new();
+    struct Requested {
+        identity: String,
+        current_key: Option<String>,
+    }
+    let requested = tasks
+        .iter()
+        .map(|(task, root)| Requested {
+            identity: task_cache_identity(task, root),
+            current_key: file::read_to_string(task_cache_state_path(task, root))
+                .ok()
+                .map(|key| key.trim().to_string()),
+        })
+        .collect_vec();
+    // which requested tasks a manifest belongs to, and whether by verified identity
+    let owners = |manifest: &CacheManifest| {
+        requested
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, req)| {
+                let by_identity = manifest.task_identity == req.identity;
+                let by_legacy_current = manifest.task_identity.is_empty()
+                    && req.current_key.as_deref() == Some(manifest.key.as_str());
+                (by_identity || by_legacy_current).then_some((idx, by_identity))
+            })
+            .collect_vec()
+    };
+    let read_manifest = |path: &Path| -> Option<CacheManifest> {
+        // manifests are renamed into place, so an unlocked read sees a whole file or none
+        let contents = fs::read(path).ok()?;
+        match serde_json::from_slice(&contents) {
+            Ok(manifest) => Some(manifest),
+            Err(err) => {
+                warn!(
+                    "ignoring unreadable task cache manifest {}: {err}",
+                    path.display()
+                );
+                None
+            }
+        }
+    };
     for entry in fs::read_dir(&cache_dir)? {
         let entry = entry?;
         let manifest_path = entry.path();
@@ -991,24 +1125,20 @@ pub fn task_cache_entries(task: &Task, root: &Path) -> Result<Vec<TaskCacheEntry
         let Some(key) = manifest_path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        let _entry_lock = task_cache_entry_lock(&cache_dir, key)?;
-        let manifest: CacheManifest = match fs::read(&manifest_path)
-            .map_err(Report::from)
-            .and_then(|contents| serde_json::from_slice(&contents).map_err(Report::from))
-        {
-            Ok(manifest) => manifest,
-            Err(err) => {
-                warn!(
-                    "ignoring unreadable task cache manifest {}: {err}",
-                    manifest_path.display()
-                );
-                continue;
-            }
+        // Skip other tasks' entries without taking their lock.
+        let Some(manifest) = read_manifest(&manifest_path) else {
+            continue;
         };
-        let matches_identity = manifest.task_identity == identity;
-        let matches_legacy_current = manifest.task_identity.is_empty()
-            && current_key.as_deref() == Some(manifest.key.as_str());
-        if !matches_identity && !matches_legacy_current {
+        if owners(&manifest).is_empty() {
+            continue;
+        }
+        // Re-read under the lock so a concurrent rewrite or removal is observed.
+        let _entry_lock = task_cache_entry_lock(&cache_dir, key)?;
+        let Some(manifest) = read_manifest(&manifest_path) else {
+            continue;
+        };
+        let owners = owners(&manifest);
+        if owners.is_empty() {
             continue;
         }
         let archive_path = cache_dir.join(format!("{}.tar.zst", manifest.key));
@@ -1025,50 +1155,70 @@ pub fn task_cache_entries(task: &Task, root: &Path) -> Result<Vec<TaskCacheEntry
             .map(|duration| duration.as_secs())
             .max()
             .unwrap_or_default();
-        entries.push(TaskCacheEntry {
-            current: current_key.as_deref() == Some(manifest.key.as_str()),
-            key: manifest.key,
-            identity_verified: matches_identity,
-            artifact_checksum: manifest.artifact_checksum,
-            size_bytes: manifest_metadata
-                .len()
-                .saturating_add(archive_metadata.map_or(0, |metadata| metadata.len())),
-            restored_bytes: manifest.restored_bytes,
-            execution_duration_ns: manifest.execution_duration_ns,
-            last_accessed,
-            outputs: manifest.roots,
+        let size_bytes = manifest_metadata
+            .len()
+            .saturating_add(archive_metadata.map_or(0, |metadata| metadata.len()));
+        for (idx, identity_verified) in owners {
+            results[idx].push(TaskCacheEntry {
+                current: requested[idx].current_key.as_deref() == Some(manifest.key.as_str()),
+                key: manifest.key.clone(),
+                identity_verified,
+                artifact_checksum: manifest.artifact_checksum.clone(),
+                size_bytes,
+                restored_bytes: manifest.restored_bytes,
+                execution_duration_ns: manifest.execution_duration_ns,
+                last_accessed,
+                outputs: manifest.roots.clone(),
+            });
+        }
+    }
+    for entries in &mut results {
+        entries.sort_by(|a, b| {
+            b.last_accessed
+                .cmp(&a.last_accessed)
+                .then_with(|| a.key.cmp(&b.key))
         });
     }
-    entries.sort_by(|a, b| {
-        b.last_accessed
-            .cmp(&a.last_accessed)
-            .then_with(|| a.key.cmp(&b.key))
-    });
-    Ok(entries)
+    Ok(results)
 }
 
 pub fn clear_task_cache(task: &Task, root: &Path) -> Result<TaskCacheClearResult> {
-    let entries = task_cache_entries(task, root)?;
+    clear_task_caches(&[(task, root)])
+}
+
+/// Clears the cache entries of several tasks while reading the cache directory twice
+/// in total: once to list their entries and once to find their partial writes.
+pub fn clear_task_caches(tasks: &[(&Task, &Path)]) -> Result<TaskCacheClearResult> {
+    let entries = task_cache_entries_for(tasks)?;
     let cache_dir = task_cache_dir();
-    let identified_entries = entries.iter().filter(|entry| entry.identity_verified);
-    let mut size_bytes = identified_entries
-        .clone()
-        .fold(0_u64, |total, entry| total.saturating_add(entry.size_bytes));
-    for entry in identified_entries.clone() {
+    let mut size_bytes = 0_u64;
+    let mut entry_count = 0;
+    let mut legacy_entries = 0;
+    // A manifest can belong to more than one requested task; remove it once.
+    let mut removed = BTreeSet::new();
+    for entry in entries.iter().flatten() {
+        if !entry.identity_verified {
+            legacy_entries += 1;
+            continue;
+        }
+        if !removed.insert(entry.key.clone()) {
+            continue;
+        }
+        size_bytes = size_bytes.saturating_add(entry.size_bytes);
+        entry_count += 1;
         let _entry_lock = task_cache_entry_lock(&cache_dir, &entry.key)?;
         remove_cache_file(&cache_dir.join(format!("{}.tar.zst", entry.key)))?;
         remove_cache_file(&cache_dir.join(format!("{}.json", entry.key)))?;
     }
-    let legacy_entries = entries
-        .len()
-        .saturating_sub(identified_entries.clone().count());
     if legacy_entries > 0 {
         warn!(
             "skipping {legacy_entries} legacy task cache entries because ownership cannot be verified; use `mise cache clear` to remove them"
         );
     }
-    let identity = task_cache_identity(task, root);
-    let mut entry_count = identified_entries.count();
+    let identities = tasks
+        .iter()
+        .map(|(task, root)| task_cache_identity(task, root))
+        .collect::<BTreeSet<_>>();
     let partial_entries = match fs::read_dir(&cache_dir) {
         Ok(entries) => Some(entries),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -1097,7 +1247,7 @@ pub fn clear_task_cache(task: &Task, root: &Path) -> Result<TaskCacheClearResult
         let Ok(manifest) = serde_json::from_slice::<CacheManifest>(&contents) else {
             continue;
         };
-        if manifest.task_identity != identity {
+        if !identities.contains(&manifest.task_identity) {
             continue;
         }
         let archive_path = cache_dir.join(format!("{stem}.tar.zst"));
@@ -1108,7 +1258,9 @@ pub fn clear_task_cache(task: &Task, root: &Path) -> Result<TaskCacheClearResult
         remove_cache_file(&manifest_path)?;
         remove_cache_file(&archive_path)?;
     }
-    remove_cache_file(&task_cache_state_path(task, root))?;
+    for (task, root) in tasks {
+        remove_cache_file(&task_cache_state_path(task, root))?;
+    }
     Ok(TaskCacheClearResult {
         entries: entry_count,
         size_bytes,
@@ -1292,13 +1444,16 @@ fn resolve_output_roots(task: &Task, root: &Path, require_matches: bool) -> Resu
     let mut resolved = BTreeSet::new();
     let patterns = task.outputs.patterns();
     let matcher = build_output_matcher(root, &patterns)?;
+    let pruner = crate::task::task_source_checker::DirPruner::for_outputs(root, &patterns);
     for output in output_glob_patterns(&patterns) {
         ensure_safe_relative(Path::new(&output))?;
         if crate::task::task_source_checker::is_glob_pattern(&output) {
             let mut glob_matched = false;
             for expanded in expand_enumeration_patterns(&output)? {
                 ensure_safe_relative(Path::new(&expanded))?;
-                for entry in glob_walk(&root.join(expanded), false)? {
+                let full = root.join(expanded);
+                let mut walker = glob_walk_pruned(&full, false, &pruner)?;
+                for entry in walker.by_ref() {
                     let path = match entry {
                         Ok(entry) => entry.into_path(),
                         Err(err) => match symlink_walk_error_path(&err) {
@@ -1313,6 +1468,9 @@ fn resolve_output_roots(task: &Task, root: &Path, require_matches: bool) -> Resu
                     if is_output(&matcher, &path, is_dir) {
                         resolved.insert(rel);
                     }
+                }
+                if !glob_matched && walker.pruned() {
+                    glob_matched = glob_has_entries(&full, true);
                 }
             }
             if require_matches && !glob_matched {
@@ -1613,6 +1771,7 @@ fn write_archive(
     root: &Path,
     roots: &[PathBuf],
     output_matcher: &Override,
+    pruner: &DirPruner,
 ) -> Result<u64> {
     let file = File::create(path)?;
     let encoder = zstd::Encoder::new(file, 0)?;
@@ -1627,7 +1786,7 @@ fn write_archive(
             }
             continue;
         }
-        for entry in WalkDir::new(&abs_root).follow_links(false) {
+        for entry in pruner.walk_dir(&abs_root, false) {
             let entry = entry?;
             let abs = entry.path().to_path_buf();
             let rel = abs.strip_prefix(root)?.to_path_buf();
@@ -1697,6 +1856,22 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn sources_changed_after_the_key_are_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.txt");
+        fs::write(&path, "old").unwrap();
+        let after_write = SystemTime::now() + Duration::from_secs(60);
+        assert!(!source_changed_since(&path, after_write));
+        let before_write = SystemTime::now() - Duration::from_secs(60);
+        assert!(source_changed_since(&path, before_write));
+        // content restored later still counts: the timestamps moved
+        fs::write(&path, "old").unwrap();
+        assert!(source_changed_since(&path, before_write));
+        fs::remove_file(&path).unwrap();
+        assert!(source_changed_since(&path, after_write));
+    }
 
     #[test]
     fn config_deserializes_and_rejects_unknown_fields() {

@@ -15,6 +15,7 @@ Update installed plugins
 With no names, updates every installed plugin. This updates the plugin code,
 not the tool versions it manages. Linked local plugins are skipped; plugins
 installed from an archive cannot be updated with Git.
+系统插件（例如位于 `/usr/share/mise/plugins` 的插件）会被跳过并显示警告；请使用安装它的软件包或管理员提供的方式更新。
 
 ## Arguments
 - **`[PLUGIN]…`** — Plugins to update; append #ref to switch to a branch, tag, or commit

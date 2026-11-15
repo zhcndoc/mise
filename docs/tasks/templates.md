@@ -97,8 +97,8 @@ extends = "e2e"
 | `alias`、`sources`、`outputs`                                                                 | 任务值替代模板值。                                                                                                               |
 | `dir`                                                                                         | 依次采用任务值、模板值、`task_config.dir`，或任务的配置根目录。                                                                  |
 | `usage`                                                                                       | 两份规范都会合并，模板规范在前。                                                                                                 |
-| `deny_all`、`deny_read`、`deny_write`、`deny_net`、`deny_env`                                | 任一方设置即启用。任务不能关闭模板设置的限制。                                                                                   |
-| `allow_read`、`allow_write`、`allow_net`、`allow_env`、`pass_through_env`                    | 先列出模板条目，再列出任务条目。                                                                                                 |
+| `deny_all`、`deny_read`、`deny_write`、`deny_net`、`deny_env`、`deny_unix`                    | 任一方设置即启用。任务不能关闭模板设置的限制。                                                                                   |
+| `allow_read`、`allow_write`、`allow_net`、`allow_unix`、`allow_env`、`pass_through_env`、`tags` | 先列出模板条目，再列出任务条目。                                                                                                 |
 | `description`、`shell`、`timeout`、`output`、`silent`、`confirm`、`cache`、`watch`、`daemons` | 如果任务已设置，则采用任务值；否则采用模板值。                                                                                   |
 | `quiet`、`hide`、`raw`、`interactive`、`raw_args`、`extends`                                 | 模板不接受这些属性；mise 会将其视为未知字段并发出警告。请在每个任务上分别设置。模板不能扩展其他模板。                            |
 | `secrets`                                                                                     | 模板不允许设置此项；mise 会报告配置错误。                                                                                         |

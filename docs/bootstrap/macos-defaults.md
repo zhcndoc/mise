@@ -5,31 +5,37 @@ socialDescription: "在 mise.toml 中设置 macOS 用户偏好，效果与 defau
 
 # macOS 默认设置
 
-在 `mise.toml` 中声明 macOS 偏好设置，然后运行 [`mise bootstrap`](/bootstrap.html) 或 [`mise bootstrap macos defaults apply`](/cli/bootstrap/macos/defaults/apply.html)；mise 会像 `defaults` 命令一样写入这些设置。常见的 Dock、Finder、键盘和触控板设置有对应的命名键；其他设置则按域和键放入 `[bootstrap.macos.defaults]`。
+在 `mise.toml` 中声明 macOS 偏好设置，然后运行 [`mise bootstrap`](/bootstrap.html) 或 [`mise bootstrap macos defaults apply`](/cli/bootstrap/macos/defaults/apply.html)；mise 会像 `defaults` 命令一样写入这些设置。常见的 Dock、Finder、键盘和触控板设置有对应的命名键；其他设置则按域和键放入 `[bootstrap.settings.macos.defaults]`。
+
+::: warning 配置项已从 `[bootstrap.macos]` 移动
+以下配置项以前位于 `[bootstrap.macos]`：`[bootstrap.macos.dock]`、`finder`、`keyboard`、`trackpad`、`defaults`、`defaults_entries` 和 `login_items`。旧写法仍可用，但已弃用。mise 将从 2027.5.0 开始发出警告，并从 2028.5.0 起停止读取旧写法。请将每个表移动到 `[bootstrap.settings.macos]` 下，并保留其中的键。如果同一键在新旧位置都设置了值，则新写法优先。
+
+早于此版本的 mise 会忽略 `[bootstrap.settings.macos]`，因此在读取配置的所有机器都更新前，请继续使用旧写法。[`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html) 的位置不变。
+:::
 
 ## 示例
 
 ```toml
-[bootstrap.macos.dock]
+[bootstrap.settings.macos.dock]
 autohide = true
 orientation = "left"
 tilesize = 48
 show_recents = false
 
-[bootstrap.macos.finder]
+[bootstrap.settings.macos.finder]
 show_all_files = true
 show_pathbar = true
 preferred_view_style = "list"
 
-[bootstrap.macos.keyboard]
+[bootstrap.settings.macos.keyboard]
 key_repeat = 2
 initial_key_repeat = 15
 press_and_hold = false
 
-[bootstrap.macos.trackpad]
+[bootstrap.settings.macos.trackpad]
 tap_to_click = true
 
-[bootstrap.macos.defaults]
+[bootstrap.settings.macos.defaults]
 "com.apple.screencapture" = { type = "png", "disable-shadow" = true }
 ```
 
@@ -46,7 +52,7 @@ mise 只会写入缺失或不同的偏好设置，其余设置保持不变。Doc
 
 每个命名键会写入一项偏好设置，触控板键会写入两项。未知键、类型错误的值或超出所列选项的值都会被忽略，并显示警告。
 
-`[bootstrap.macos.dock]` 会写入 `com.apple.dock` 域：
+`[bootstrap.settings.macos.dock]` 会写入 `com.apple.dock` 域：
 
 | 配置键                    | 偏好设置键               | 值                                                                         |
 | ------------------------ | ------------------------ | -------------------------------------------------------------------------- |
@@ -61,7 +67,7 @@ mise 只会写入缺失或不同的偏好设置，其余设置保持不变。Doc
 | `mru_spaces`             | `mru-spaces`             | 布尔值：按最近使用情况重新排列桌面空间                                       |
 | `apps`                   | `persistent-apps`        | 应用路径列表；参见[固定 Dock 应用](#dock-applications)                       |
 
-除一个键外，`[bootstrap.macos.finder]` 都会写入 `com.apple.finder` 域：
+除一个键外，`[bootstrap.settings.macos.finder]` 都会写入 `com.apple.finder` 域：
 
 | 配置键                        | 域                  | 偏好设置键                           | 值                                                             |
 | ----------------------------- | ------------------ | ----------------------------------- | -------------------------------------------------------------- |
@@ -73,7 +79,7 @@ mise 只会写入缺失或不同的偏好设置，其余设置保持不变。Doc
 | `preferred_view_style`        | `com.apple.finder` | `FXPreferredViewStyle`              | `"icon"`（图标）、`"list"`（列表）、`"column"`（分栏）或 `"gallery"`（图库） |
 | `save_new_documents_to_cloud` | `NSGlobalDomain`   | `NSDocumentSaveNewDocumentsToCloud` | 布尔值：所有应用默认将新文稿存储到 iCloud                         |
 
-`[bootstrap.macos.keyboard]` 会写入 `NSGlobalDomain`：
+`[bootstrap.settings.macos.keyboard]` 会写入 `NSGlobalDomain`：
 
 | 配置键                          | 偏好设置键                              | 值                                                              |
 | ------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
@@ -84,7 +90,7 @@ mise 只会写入缺失或不同的偏好设置，其余设置保持不变。Doc
 | `automatic_spelling_correction` | `NSAutomaticSpellingCorrectionEnabled` | 布尔值                                                            |
 | `fn_state`                      | `com.apple.keyboard.fnState`           | 布尔值：设为 `true` 后，F1 至 F12 会作为标准功能键使用               |
 
-`[bootstrap.macos.trackpad]` 会将每个键同时写入 `com.apple.AppleMultitouchTrackpad` 和 `com.apple.driver.AppleBluetoothMultitouch.trackpad`，分别适用于内置触控板和蓝牙触控板：
+`[bootstrap.settings.macos.trackpad]` 会将每个键同时写入 `com.apple.AppleMultitouchTrackpad` 和 `com.apple.driver.AppleBluetoothMultitouch.trackpad`，分别适用于内置触控板和蓝牙触控板：
 
 | 配置键               | 偏好设置键                 | 值                               |
 | ------------------- | ------------------------- | -------------------------------- |
@@ -96,7 +102,7 @@ mise 只会写入缺失或不同的偏好设置，其余设置保持不变。Doc
 `apps` 按顺序声明固定在 Dock 中的应用：
 
 ```toml
-[bootstrap.macos.dock]
+[bootstrap.settings.macos.dock]
 apps = [
   "/System/Applications/Utilities/Terminal.app",
   "/Applications/Firefox.app",
@@ -112,10 +118,10 @@ mise 会在 `com.apple.dock` 的 `persistent-apps` 偏好设置中添加、移�
 
 ## 登录时打开应用 {#login-items}
 
-`[bootstrap.macos.login_items]` 用于声明登录时打开的应用，对应“系统设置 → 通用 → 登录项与扩展 → 登录时打开”列表：
+`[bootstrap.settings.macos.login_items]` 用于声明登录时打开的应用，对应“系统设置 → 通用 → 登录项与扩展 → 登录时打开”列表：
 
 ```toml
-[bootstrap.macos.login_items]
+[bootstrap.settings.macos.login_items]
 apps = [
   "/Applications/Bitwarden.app",
   "/Applications/Ghostty.app",
@@ -128,7 +134,7 @@ apps = [
 默认情况下，此列表采用追加模式。`mise bootstrap status` 会报告缺失的已声明应用，`apply` 会添加这些应用；未声明的条目则保持不变，因为 Rectangle 等应用会自行注册。设置 `exclusive = true` 可让配置完全接管该列表，此时 `apply` 也会移除未声明的条目：
 
 ```toml
-[bootstrap.macos.login_items]
+[bootstrap.settings.macos.login_items]
 apps = ["/Applications/Ghostty.app"]
 exclusive = true
 ```
@@ -139,7 +145,7 @@ mise 使用 `LSSharedFileList` API 管理此列表，因为 `SMAppService` 只�
 
 ## 原始默认值
 
-`[bootstrap.macos.defaults]` 下的每个键都是一个偏好设置域，其中的每个键则是一项偏好设置。域名中包含点号时请加引号。TOML 值会转换为对应的属性列表类型：
+`[bootstrap.settings.macos.defaults]` 下的每个键都是一个偏好设置域，其中的每个键则是一项偏好设置。域名中包含点号时请加引号。TOML 值会转换为对应的属性列表类型：
 
 | TOML 值    | 属性列表类型        | 示例                           |
 | ---------- | ------------------ | ------------------------------ |
@@ -153,7 +159,7 @@ mise 使用 `LSSharedFileList` API 管理此列表，因为 `SMAppService` 只�
 数组和表会递归转换，因此嵌套值会保留其类型。例如，Dock 条目可以是由字典组成的数组：
 
 ```toml
-[bootstrap.macos.defaults."com.apple.dock"]
+[bootstrap.settings.macos.defaults."com.apple.dock"]
 "persistent-apps" = [
   { "tile-type" = "file-tile", "tile-data" = { "file-label" = "Terminal" } },
 ]
@@ -172,7 +178,7 @@ defaults read-type com.apple.dock tilesize
 
 ## 显式条目
 
-偏好设置需要指定主机范围或字典内路径时，请使用 `[[bootstrap.macos.defaults_entries]]`。每个条目可以设置：
+偏好设置需要指定主机范围或字典内路径时，请使用 `[[bootstrap.settings.macos.defaults_entries]]`。每个条目可以设置：
 
 | 字段     | 值                                                                                    |
 | -------- | -------------------------------------------------------------------------------------- |
@@ -187,7 +193,7 @@ defaults read-type com.apple.dock tilesize
 使用 `defaults -currentHost` 写入的偏好设置需要设置 `host = "current"`：
 
 ```toml
-[[bootstrap.macos.defaults_entries]]
+[[bootstrap.settings.macos.defaults_entries]]
 domain = "NSGlobalDomain"
 key = "com.apple.mouse.tapBehavior"
 host = "current"
@@ -201,7 +207,7 @@ value = 1
 添加 `path` 可更改共享字典中的一个值，而不替换其周围的其他值。以下示例会关闭一个键盘快捷键，同时保留该快捷键的其他设置和所有其他快捷键：
 
 ```toml
-[[bootstrap.macos.defaults_entries]]
+[[bootstrap.settings.macos.defaults_entries]]
 domain = "com.apple.symbolichotkeys"
 key = "AppleSymbolicHotKeys"
 path = ["64", "enabled"]
@@ -224,7 +230,7 @@ Safari 等沙盒应用会将偏好设置保存在 `~/Library/Containers/<domain>
 
 偏好设置会在[配置层级](/configuration.html#configuration-hierarchy)中按域、键、主机范围和路径合并。更接近项目的配置可以更改较不具体配置声明的值，但不能移除该设置；mise 永远不会删除偏好设置。
 
-命名设置和原始 defaults 会写入相同的偏好设置。在同一个配置文件中，对于相同域和键，`[bootstrap.macos.defaults]` 的值优先于命名设置，而 `[[bootstrap.macos.defaults_entries]]` 条目又优先于两者。因此，同一文件中的原始 `persistent-apps` 值会替换 `apps`，并作为整体进行比较。跨文件时仍由更接近项目的配置优先，因此项目中的命名设置会覆盖全局配置中的原始默认值。
+命名设置和原始 defaults 会写入相同的偏好设置。在同一个配置文件中，对于相同域和键，`[bootstrap.settings.macos.defaults]` 的值优先于命名设置，而 `[[bootstrap.settings.macos.defaults_entries]]` 条目又优先于两者。因此，同一文件中的原始 `persistent-apps` 值会替换 `apps`，并作为整体进行比较。跨文件时仍由更接近项目的配置优先，因此项目中的命名设置会覆盖全局配置中的原始默认值。
 
 只有值及其类型都匹配时才算已设置：整数 `1` 不等同于 `true`，apply 会将其重写为布尔值。偏好设置属于当前用户，因此 mise 不会对其使用 `sudo`，也不支持通过 `sudo defaults` 写入的系统级域。
 

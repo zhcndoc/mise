@@ -272,6 +272,7 @@ enum BootstrapPart {
     Shell,
     #[usage(name = "macos-defaults", alias = "defaults")]
     Defaults,
+    Settings,
     #[usage(name = "macos-launchd-agents", alias = "launchd")]
     Launchd,
     #[usage(name = "linux-systemd-units", alias = "systemd")]
@@ -285,7 +286,7 @@ enum BootstrapPart {
 impl BootstrapPart {
     // Keep this in sync with every enum variant. `--only` computes a
     // complement from ALL, so an omitted variant would always run.
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Plugins,
         Self::Packages,
         Self::Accounts,
@@ -297,6 +298,7 @@ impl BootstrapPart {
         Self::Dotfiles,
         Self::Shell,
         Self::Defaults,
+        Self::Settings,
         Self::Launchd,
         Self::Systemd,
         Self::User,
@@ -584,6 +586,7 @@ fn bootstrap_resource_is_skipped(resource: &ResourceId, skip: &HashSet<Bootstrap
         "service" => BootstrapPart::Services,
         "firewall" | "firewall-rule" => BootstrapPart::Firewall,
         "user" | "group" => BootstrapPart::Accounts,
+        "repo" => BootstrapPart::Repos,
         _ => return false,
     };
     skip.contains(&part)
@@ -674,6 +677,7 @@ enum Commands {
     Repos(BootstrapRepos),
     Secrets(BootstrapSecrets),
     Services(BootstrapServices),
+    Settings(BootstrapSettings),
     Status(BootstrapStatus),
     #[usage(hide = true)]
     Systemd(BootstrapSystemdCompat),
@@ -688,6 +692,7 @@ enum Commands {
 /// macOS defaults, LaunchAgents, systemd user units, the login shell, `[tools]`,
 /// and the system dependencies of those tools, without changing anything.
 /// Checking dotfiles can render trusted templates, which may run `exec()`.
+/// `[bootstrap.settings]` is not checked yet: use `mise bootstrap settings status`.
 ///
 /// `--missing` exits with status 1 if anything differs from the config; it
 /// still lists every entry.
@@ -722,10 +727,12 @@ struct BootstrapStatus {
 /// Show what applying bootstrap resources would change
 ///
 /// Covers accounts, packages, files and directories, system and user services,
-/// the firewall, and Compose projects, in dependency order. Repositories,
-/// dotfiles, shell activation, macOS defaults, LaunchAgents, systemd user
-/// units, the login shell, tools, hooks, and the `bootstrap` task are not
-/// planned; preview the whole run with `mise bootstrap --dry-run`.
+/// the firewall, Compose projects, and Git repositories, in dependency order.
+/// Hooks are listed with the action `run`, since a command cannot be diffed;
+/// they do not count as changes for `--detailed-exitcode`. Dotfiles, shell
+/// activation, macOS defaults, LaunchAgents, systemd user units, the login
+/// shell, tools, and the `bootstrap` task are not planned; preview the whole
+/// run with `mise bootstrap --dry-run`.
 #[derive(Debug, usage_rs::Args)]
 #[usage(
     verbatim_doc_comment,
@@ -1472,6 +1479,57 @@ struct BootstrapPackages {
     command: BootstrapPackagesCommands,
 }
 
+/// [experimental] Apply `[bootstrap.settings]` through bootstrap settings plugins
+///
+/// A bootstrap settings plugin reads and writes the settings of one program or
+/// desktop, such as a Linux distro's appearance settings. mise compares the
+/// values in `[bootstrap.settings.<plugin>]` with the values the plugin reports
+/// and asks it to write only the ones that differ.
+/// See https://mise.jdx.dev/bootstrap/settings-plugins.html
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+struct BootstrapSettings {
+    #[usage(subcommand)]
+    command: BootstrapSettingsCommands,
+}
+
+#[derive(Debug, usage_rs::Subcommands)]
+enum BootstrapSettingsCommands {
+    Apply(BootstrapSettingsApply),
+    Status(BootstrapSettingsStatus),
+}
+
+/// Write the settings that differ from `[bootstrap.settings]`
+///
+/// It does not ask for confirmation.
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+struct BootstrapSettingsApply {
+    /// Plugins whose sections to apply; all of them by default
+    #[usage(value_name = "PLUGIN")]
+    plugins: Vec<String>,
+
+    /// Show which settings would change without changing them
+    #[usage(long, short = 'n')]
+    dry_run: bool,
+}
+
+/// Show each setting in `[bootstrap.settings]` and its current value
+#[derive(Debug, usage_rs::Args)]
+struct BootstrapSettingsStatus {
+    /// Plugins whose sections to show; all of them by default
+    #[usage(value_name = "PLUGIN")]
+    plugins: Vec<String>,
+
+    /// Exit with status 1 if a setting differs from the config or its plugin cannot run
+    #[usage(long)]
+    missing: bool,
+
+    /// Output in JSON format
+    #[usage(long, short = 'J')]
+    json: bool,
+}
+
 /// Manage package manager plugins declared in `[bootstrap.plugins]`
 ///
 /// A package plugin adds a package manager, such as one for VS Code extensions,
@@ -1649,7 +1707,7 @@ struct BootstrapReposStatus {
     missing: bool,
 }
 
-/// Manage macOS preferences and LaunchAgents from `[bootstrap.macos]`
+/// Manage macOS preferences and LaunchAgents from `[bootstrap.settings.macos]` and `[bootstrap.macos.launchd]`
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct BootstrapMacos {
@@ -1683,11 +1741,13 @@ enum BootstrapLinuxCommands {
 
 /// Manage macOS preferences such as Dock, Finder, and keyboard settings
 ///
-/// Applies `[bootstrap.macos.defaults]`, `[[bootstrap.macos.defaults_entries]]`,
-/// and the `[bootstrap.macos.dock]`, `finder`, `keyboard`, and `trackpad`
-/// sections. Preferences are written the way `defaults write` writes them.
-/// mise does not restart apps: Dock, Finder, and some others show a change
-/// only after they relaunch.
+/// Applies `[bootstrap.settings.macos]`: its `defaults`, `dock`, `finder`,
+/// `keyboard`, `trackpad`, and `login_items` tables, and its
+/// `[[bootstrap.settings.macos.defaults_entries]]` array of tables.
+/// Preferences are written the way `defaults write` writes them. mise does not
+/// restart apps: Dock, Finder, and some others show a change only after they
+/// relaunch. Other `[bootstrap.settings.<plugin>]` sections are applied by
+/// bootstrap settings plugins through `mise bootstrap settings`.
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct BootstrapMacosDefaults {
@@ -2034,7 +2094,15 @@ impl Bootstrap {
             }
             return self.run_from().await;
         }
-        if let Some(command) = self.command.take() {
+        if let Some(mut command) = self.command.take() {
+            // `mise bootstrap --dry-run settings apply` must not write settings.
+            if self.dry_run
+                && let Commands::Settings(BootstrapSettings {
+                    command: BootstrapSettingsCommands::Apply(apply),
+                }) = &mut command
+            {
+                apply.dry_run = true;
+            }
             return command.run().await;
         }
         if self.save_env {
@@ -2559,7 +2627,7 @@ impl Bootstrap {
                 .await?;
             let defaults = system::defaults_from_config(&config);
             if defaults.is_empty() {
-                debug!("bootstrap: no [bootstrap.macos.defaults] configured, skipping");
+                debug!("bootstrap: no [bootstrap.settings.macos] preferences configured, skipping");
             } else {
                 info!("bootstrap: system defaults");
                 let requested = defaults.len();
@@ -2701,6 +2769,16 @@ impl Bootstrap {
             }
         }
 
+        // Settings plugins run after tools, like package plugins: a plugin's `requires` may be a
+        // tool this run just installed.
+        if skip.contains(&BootstrapPart::Settings) {
+            debug!("bootstrap: settings plugins skipped");
+        } else {
+            for item in apply_bootstrap_settings(&config, &[], self.dry_run).await? {
+                follow_up.add_skipped(item);
+            }
+        }
+
         // resolved again: the run may have installed a durable mise since
         // the requests were first built (a remote-staged bootstrap)
         let late = if services_enabled {
@@ -2734,6 +2812,7 @@ impl Bootstrap {
                     &["bootstrap".to_string()],
                     false,
                     skip_deps,
+                    false,
                     false,
                 )
                 .await?;
@@ -2915,10 +2994,28 @@ impl Bootstrap {
             return Ok(false);
         }
         let before = git_stdout(checkout, ["rev-parse", "HEAD"]);
-        let generation = OperationScope::begin("bootstrap --update", false).await?;
+        // Opening the scope reads the config the checkout holds now, which is
+        // the very thing a broken commit stops from loading. The pull is how a
+        // machine gets the fix, so when only that config fails to load, pull
+        // without the history record, but still under the operation lock so
+        // it cannot overlap an operation that holds it. A lock timeout, or any
+        // other error opening the scope, stops the update.
+        let (generation, _lock) = match system::host::config().await {
+            Ok(_) => (
+                Some(OperationScope::begin("bootstrap --update", false).await?),
+                None,
+            ),
+            Err(err) => {
+                debug!("bootstrap: pulling the global config without a history record: {err:#}");
+                (
+                    None,
+                    Some(system::history::scope::hold_operation_lock().await?),
+                )
+            }
+        };
         let pulled = run_bootstrap_git(checkout, ["pull", "--ff-only"]);
-        match &pulled {
-            Ok(()) => {
+        match (&pulled, generation) {
+            (Ok(()), Some(generation)) => {
                 journal::note(format!(
                     "updated the checkout of the global config in {}",
                     checkout.display_user()
@@ -2930,7 +3027,8 @@ impl Bootstrap {
                     }),
                 );
             }
-            Err(err) => generation.finish(Some(format!("{err:#}")), None),
+            (Err(err), Some(generation)) => generation.finish(Some(format!("{err:#}")), None),
+            (_, None) => {}
         }
         pulled.wrap_err_with(|| {
             format!(
@@ -3099,6 +3197,9 @@ impl Bootstrap {
             args: vec![],
             args_last: vec![],
             all: false,
+            multi: false,
+            at: None,
+            at_setup: None,
             affected: false,
             affected_base: None,
             affected_head: None,
@@ -3107,6 +3208,7 @@ impl Bootstrap {
             affected_committed: false,
             affected_uncommitted: false,
             affected_untracked: false,
+            tag: vec![],
             cd: None,
             continue_on_error: false,
             dry_run: self.dry_run,
@@ -3126,6 +3228,7 @@ impl Bootstrap {
             context_builder: Default::default(),
             executor: None,
             telemetry: None,
+            task_history: None,
             secrets_denied: Some(crate::secrets::SecretsDenied::Bootstrap),
             cli_secrets: None,
             secrets: vec![],
@@ -3135,6 +3238,8 @@ impl Bootstrap {
             task_cache_explain: false,
             task_cache_explain_json: false,
             task_cache_stats: false,
+            report_file: None,
+            run_report: None,
             timeout: None,
             lock_timeout: None,
             skip_deps: false,
@@ -3148,10 +3253,12 @@ impl Bootstrap {
             deny_read: false,
             deny_write: false,
             deny_net: false,
+            deny_unix: false,
             deny_env: false,
             allow_read: vec![],
             allow_write: vec![],
             allow_net: vec![],
+            allow_unix: vec![],
             allow_env: vec![],
         }
         .run()
@@ -3664,6 +3771,7 @@ impl Commands {
             Self::Repos(cmd) => Box::pin(cmd.run()),
             Self::Secrets(cmd) => Box::pin(cmd.run()),
             Self::Services(cmd) => Box::pin(cmd.run()),
+            Self::Settings(cmd) => Box::pin(cmd.run()),
             Self::Status(cmd) => Box::pin(cmd.run()),
             Self::Systemd(cmd) => {
                 warn_legacy_bootstrap_command(
@@ -3683,7 +3791,9 @@ impl BootstrapPlan {
     async fn run(self) -> Result<()> {
         let config = Config::get().await?;
         let secrets = system::secrets::resolve(&config, self.prompt_secrets)?;
-        let plan = system::resources::plan(&config, &secrets, true).await?;
+        let mut plan = system::resources::plan(&config, &secrets, true).await?;
+        system::resources::add_repos_and_hooks(&mut plan, &config, bootstrap_hooks_enabled())
+            .await?;
         let output = plan.output()?;
         if self.json {
             miseprintln!("{}", serde_json::to_string_pretty(&output)?);
@@ -3716,11 +3826,12 @@ impl BootstrapPlan {
             }
             table.print()?;
             miseprintln!(
-                "Plan: {} create, {} update, {} unchanged, {} remove, {} unknown",
+                "Plan: {} create, {} update, {} unchanged, {} remove, {} run, {} unknown",
                 output.summary.create,
                 output.summary.update,
                 output.summary.unchanged,
                 output.summary.remove,
+                output.summary.run,
                 output.summary.unknown,
             );
         }
@@ -4486,7 +4597,16 @@ impl BootstrapRemote {
         };
         let mut configuration_errors = vec![];
         for host in selected.values_mut() {
-            if let Err(error) = host.apply_overrides(&overrides) {
+            let checked = host.apply_overrides(&overrides).and_then(|()| {
+                // before the first connection, so one bad source cannot leave
+                // other hosts half bootstrapped
+                if overrides.from_git || self.yes {
+                    Ok(())
+                } else {
+                    host.check_source()
+                }
+            });
+            if let Err(error) = checked {
                 configuration_errors.push(format!("{}: {error:#}", host.name));
             }
         }
@@ -5882,6 +6002,170 @@ impl BootstrapPackages {
     }
 }
 
+/// The `[bootstrap.settings]` sections of `plugins`, or of every plugin when it is empty.
+fn selected_settings_sections(
+    config: &Config,
+    plugins: &[String],
+) -> Result<Vec<system::bootstrap_settings::SettingsSection>> {
+    let sections = system::bootstrap_settings::sections_from_config(config)?;
+    // sections are keyed by the plugin's kebab-case name, so any spelling selects one
+    let ids: Vec<String> = plugins
+        .iter()
+        .map(|name| mise_system::plugin_identity(name))
+        .collect();
+    for (name, id) in plugins.iter().zip(&ids) {
+        if !sections.iter().any(|section| &section.plugin == id) {
+            bail!("no [bootstrap.settings.{name}] section is configured");
+        }
+    }
+    Ok(sections
+        .into_iter()
+        .filter(|section| ids.is_empty() || ids.contains(&section.plugin))
+        .collect())
+}
+
+/// Applies `[bootstrap.settings]`, limited to `plugins` unless it is empty. Returns the
+/// follow-up items: steps a plugin asks the user to take, and each section that could not run.
+async fn apply_bootstrap_settings(
+    config: &Config,
+    plugins: &[String],
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    let sections = selected_settings_sections(config, plugins)?;
+    if sections.is_empty() {
+        debug!("bootstrap: no [bootstrap.settings] configured, skipping");
+        return Ok(vec![]);
+    }
+    Settings::get().ensure_experimental("bootstrap settings plugins")?;
+    info!("bootstrap: settings");
+    let mut follow_up = vec![];
+    for section in sections {
+        match system::bootstrap_settings::BootstrapSettingsPlugin::load(&section.plugin).await {
+            Ok(plugin) => {
+                let report = match plugin.apply(&section, dry_run).await {
+                    Ok(report) => report,
+                    // Earlier plugins already wrote their changes, which will match next time,
+                    // so this is the only chance to report the steps they asked for.
+                    Err(err) if !follow_up.is_empty() => {
+                        return Err(err.wrap_err(format!(
+                            "bootstrap settings failed; follow-up from the plugins before it:\n  {}",
+                            follow_up.join("\n  ")
+                        )));
+                    }
+                    Err(err) => return Err(err),
+                };
+                follow_up.extend(
+                    report
+                        .follow_up
+                        .into_iter()
+                        .map(|item| format!("{}: {item}", section.plugin)),
+                );
+            }
+            Err(reason) => follow_up.push(format!(
+                "[bootstrap.settings.{}]: skipped ({reason})",
+                section.plugin
+            )),
+        }
+    }
+    Ok(follow_up)
+}
+
+impl BootstrapSettings {
+    async fn run(self) -> Result<()> {
+        match self.command {
+            BootstrapSettingsCommands::Apply(cmd) => cmd.run().await,
+            BootstrapSettingsCommands::Status(cmd) => cmd.run().await,
+        }
+    }
+}
+
+impl BootstrapSettingsApply {
+    async fn run(self) -> Result<()> {
+        OperationScope::wrap("bootstrap settings apply", self.dry_run, self.run_inner()).await
+    }
+
+    async fn run_inner(self) -> Result<()> {
+        let config = Config::get().await?;
+        for item in apply_bootstrap_settings(&config, &self.plugins, self.dry_run).await? {
+            info!("follow-up: {item}");
+        }
+        Ok(())
+    }
+}
+
+impl BootstrapSettingsStatus {
+    async fn run(self) -> Result<()> {
+        let config = Config::get().await?;
+        let sections = selected_settings_sections(&config, &self.plugins)?;
+        if !sections.is_empty() {
+            Settings::get().ensure_experimental("bootstrap settings plugins")?;
+        }
+        let mut any_missing = false;
+        let mut rows = vec![];
+        let mut entries = vec![];
+        for section in &sections {
+            match system::bootstrap_settings::BootstrapSettingsPlugin::load(&section.plugin).await {
+                Ok(plugin) => {
+                    for status in plugin.status(section).await? {
+                        let differs = status.differs();
+                        any_missing |= differs;
+                        let state = if differs { "differs" } else { "set" };
+                        rows.push(vec![
+                            section.plugin.clone(),
+                            status.key.clone(),
+                            status.declared.to_string(),
+                            status.current_display(),
+                            state.to_string(),
+                        ]);
+                        entries.push(json!({
+                            "plugin": section.plugin,
+                            "key": status.key,
+                            "value": status.declared,
+                            "current": status.current,
+                            "state": state,
+                        }));
+                    }
+                }
+                Err(reason) => {
+                    // A section for another OS is not drift here, so a config can hold every
+                    // platform's sections and still pass `--missing`.
+                    any_missing |= !reason.other_platform;
+                    for (key, value) in &section.values {
+                        let state = format!("skipped ({reason})");
+                        rows.push(vec![
+                            section.plugin.clone(),
+                            key.clone(),
+                            value.to_string(),
+                            String::new(),
+                            state.clone(),
+                        ]);
+                        entries.push(json!({
+                            "plugin": section.plugin,
+                            "key": key,
+                            "value": value,
+                            "current": null,
+                            "state": state,
+                        }));
+                    }
+                }
+            }
+        }
+        if self.json {
+            miseprintln!("{}", serde_json::to_string_pretty(&entries)?);
+        } else {
+            let mut table = MiseTable::new(false, &["Plugin", "Key", "Value", "Current", "State"]);
+            for row in rows {
+                table.add_row(row);
+            }
+            table.print()?;
+        }
+        if self.missing && any_missing {
+            return Err(crate::request_exit(1));
+        }
+        Ok(())
+    }
+}
+
 impl BootstrapPlugins {
     async fn run(self) -> Result<()> {
         match self.command {
@@ -5909,7 +6193,13 @@ impl BootstrapPluginsStatus {
         let mut any_missing = false;
         let mut table = MiseTable::new(false, &["Plugin", "URL", "State"]);
         for (name, url) in system::plugins_from_config(&config) {
-            let present = installed.get(&name) == Some(&crate::plugins::PluginType::Package);
+            let present = matches!(
+                installed.get(&name),
+                Some(
+                    crate::plugins::PluginType::Package
+                        | crate::plugins::PluginType::BootstrapSettings
+                )
+            );
             any_missing |= !present;
             table.add_row(vec![
                 name,
@@ -6467,7 +6757,9 @@ impl BootstrapMacosDefaultsStatus {
         if self.json {
             miseprintln!("{}", serde_json::to_string_pretty(&json_out)?);
         } else if rows.is_empty() {
-            info!("nothing configured in [bootstrap.macos.defaults]");
+            info!(
+                "no macOS defaults configured in [bootstrap.settings.macos]; `mise bootstrap status` shows login items"
+            );
         } else {
             let mut table = MiseTable::new(false, &["Domain", "Key", "Value", "Current", "State"]);
             for row in rows {

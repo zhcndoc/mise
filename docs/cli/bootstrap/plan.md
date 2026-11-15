@@ -11,11 +11,7 @@ description: "显示应用 bootstrap 资源将产生的变更"
 
 Show what applying bootstrap resources would change
 
-Covers accounts, packages, files and directories, system and user services,
-the firewall, and Compose projects, in dependency order. Repositories,
-dotfiles, shell activation, macOS defaults, LaunchAgents, systemd user
-units, the login shell, tools, hooks, and the `bootstrap` task are not
-planned; preview the whole run with `mise bootstrap --dry-run`.
+按依赖顺序涵盖账户、软件包、文件和目录、系统与用户服务、防火墙、Compose 项目以及 Git 仓库。钩子会以 `run` 操作列出，因为命令内容无法进行差异比较；使用 `--detailed-exitcode` 时，钩子不计为变更。计划不会涵盖 dotfiles、shell 激活、macOS 默认设置、LaunchAgents、systemd 用户单元、登录 shell、工具或 `bootstrap` 任务；请使用 `mise bootstrap --dry-run` 预览整个运行过程。
 
 ## Flags
 - **`-J --json`** — Output a stable machine-readable plan in JSON format

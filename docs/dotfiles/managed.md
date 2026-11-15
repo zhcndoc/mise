@@ -408,6 +408,10 @@ variants = [{ profile = "work" }]
 
 `MISE_ENV=ssh` 会跳过 `~/.ssh/work_key`，而 `MISE_ENV=ssh,work` 会创建该链接。
 
+`profile` 可以指定 `MISE_ENV` 列表中任意位置的一个环境名称。
+
+代码块、行和合并编辑不接受 `variants`，dotfile 条目也不接受 `env` 键；若配置了这些键，mise 会发出警告并忽略。若要仅对某种环境组合应用编辑、钩子或其他配置，请为该组合创建独立配置文件，例如 `mise.ssh-work.toml`，并与其他环境一起选择：`MISE_ENV=ssh,work,ssh-work`。
+
 To give a whole set of entries to one operating system, put them in a
 platform config file such as `config.macos.toml` instead, with the
 [`auto_env`](/configuration/settings.html#auto_env) setting on; see
@@ -482,7 +486,9 @@ source. To keep the file's content instead, [adopt it](#capturing-changes)
 with `mise dot add`. An existing symlink that points elsewhere is repointed
 without `--force`.
 
-`copy`、`template` 或内联 `content` 条目无需 `--force` 即可覆盖目标内容，并会将目标位置的符号链接替换为文件。目录若位于复制、模板或内联文件的目标位置，或文件位于目录复制的目标位置，仍会视为冲突，需要 `--force`。如果 `apply` 即将覆盖自 mise 上次写入后被你修改过的 `template` 目标，会先发出警告，方便你将修改移入来源。更改目标来源前，请先运行 `mise dot diff` 检查差异。
+`copy`、`template` 或内联 `content` 条目无需 `--force` 即可覆盖目标内容，并会将目标位置的符号链接替换为文件。目录若位于复制、模板或内联文件的目标位置，或文件位于目录复制的目标位置，仍会视为冲突，需要 `--force`。如果 `apply` 即将覆盖自 mise 上次写入后被你修改过的 `template` 或 `copy` 目标，会先发出警告，方便你将修改移入来源。对于 `copy` 目标，试运行和确认清单中也会将其标出。对于 mise 没有记录的文件（例如配置该条目之前就存在的文件），不会发出警告。不属于 [dotfile 组](/dotfiles/groups.html)的目录 `copy` 没有逐文件记录，因此不会检查其中的文件。更改目标来源前，请先运行 `mise dot diff` 检查差异。
+
+在没有终端的情况下（例如脚本、未使用 `ssh -t` 的 SSH 会话或代理 shell），如果 `copy` 目标与来源内容不同且文件未被[跟踪](/dotfiles/history.html)，`apply` 无法在覆盖前询问确认，因为 `mise dot undo` 无法恢复未跟踪的更改。此时命令会停止并提示使用 `--yes`；传入该选项即可替换内容。已与来源一致的副本和已跟踪文件会直接应用，无需确认。
 
 [Edit entries](/dotfiles/edits.html#conflicts) apply without `--force`.
 

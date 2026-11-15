@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::prelude::*;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -305,16 +306,21 @@ fn check_exit_early_fast() -> bool {
 
     // Every staleness check below returns via force_full_run() so the slow path
     // knows this run must reach build_session and refresh the session.
+    // A stale file must not skip the new-match check below, or a file moved in
+    // at the same time would never be recorded for its hook.
+    let mut stale = false;
     // Check if any loaded config files have been modified
     for config_path in &PREV_SESSION.loaded_configs {
         if let Ok(metadata) = config_path.metadata() {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return force_full_run();
+                stale = true;
+                break;
             }
         } else if !config_path.exists() {
-            return force_full_run();
+            stale = true;
+            break;
         }
     }
     // Check if any files accessed by tera template functions have been modified
@@ -323,10 +329,12 @@ fn check_exit_early_fast() -> bool {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return force_full_run();
+                stale = true;
+                break;
             }
         } else if !path.exists() {
-            return force_full_run();
+            stale = true;
+            break;
         }
     }
     // Check if any files from [[watch_files]] patterns have been modified
@@ -335,11 +343,32 @@ fn check_exit_early_fast() -> bool {
             if let Ok(modified) = metadata.modified()
                 && mtime_to_millis(modified) > PREV_SESSION.latest_update
             {
-                return force_full_run();
+                stale = true;
+                break;
             }
         } else if !path.exists() {
+            stale = true;
+            break;
+        }
+    }
+    if !PREV_SESSION.watch_patterns.is_empty() {
+        let known: HashSet<&PathBuf> = PREV_SESSION.watch_files.iter().collect();
+        let new_matches: Vec<PathBuf> = PREV_SESSION
+            .watch_patterns
+            .iter()
+            .flat_map(|p| p.new_matches(&known))
+            .collect();
+        if !new_matches.is_empty() {
+            // A file moved in keeps its old mtime, so the slow path would not
+            // see it as modified; record it so its watch_files hook still runs.
+            for path in new_matches {
+                watch_files::add_modified_file(path);
+            }
             return force_full_run();
         }
+    }
+    if stale {
+        return force_full_run();
     }
     if have_trust_state_dirs_been_modified() {
         return force_full_run();
@@ -520,6 +549,11 @@ pub struct HookEnvSession {
     /// Stored so the fast-path can detect changes without loading config.
     #[serde(default, with = "session_paths")]
     pub watch_files: Vec<PathBuf>,
+    /// The [[watch_files]] patterns behind `watch_files`. The fast path matches
+    /// them again, so a file created later is noticed wherever it appears,
+    /// without comparing directory mtimes that unrelated files would also change.
+    #[serde(default)]
+    pub watch_patterns: Vec<WatchPattern>,
     #[serde(default, with = "session_paths::option")]
     dir: Option<PathBuf>,
     env_var_hash: String,
@@ -529,6 +563,33 @@ pub struct HookEnvSession {
     /// loading settings. False in sessions from older mise versions.
     #[serde(default)]
     hook_env_shortcuts_unset: bool,
+}
+
+/// A [[watch_files]] pattern, and the directory it is relative to if it has one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchPattern {
+    #[serde(default, with = "session_paths::option")]
+    root: Option<PathBuf>,
+    pattern: String,
+}
+
+impl WatchPattern {
+    /// The files the pattern now matches that the session did not know about.
+    fn new_matches(&self, known: &HashSet<&PathBuf>) -> Vec<PathBuf> {
+        match &self.root {
+            Some(root) => watch_files::glob(root, std::slice::from_ref(&self.pattern))
+                .map(|matches| matches.into_iter().filter(|m| !known.contains(m)).collect())
+                .unwrap_or_default(),
+            None => {
+                let path = PathBuf::from(&self.pattern);
+                if path.exists() && !known.contains(&path) {
+                    vec![path]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
 }
 
 /// A path in `__MISE_SESSION`. serde refuses a path that is not valid UTF-8,
@@ -621,30 +682,121 @@ pub(crate) fn deserialize<T: serde::de::DeserializeOwned>(raw: String) -> Result
     Ok(rmp_serde::from_slice(&writer[..])?)
 }
 
-/// Collect mtimes for config-search ancestor directories.
+/// Collect mtimes for the places a config file could appear or change.
 /// Used by both `should_exit_early_fast` and `build_session` to avoid divergence.
+///
+/// For an ancestor directory itself this is the mtime of each candidate config
+/// file that exists there, not the directory's mtime: unrelated files come and
+/// go in directories like `~` (zsh's `.zsh_history.LOCK` with `share_history`,
+/// editor swap files), and each one would otherwise force a full run at every
+/// prompt. Config subdirectories such as `.config/mise` are still compared by
+/// directory mtime, since a file added to one changes that directory's mtime.
+/// Paths under the literal directory `dir` that match `pattern`, like
+/// `glob::glob(dir/pattern)` with `dir` escaped. `glob` re-stats every prefix
+/// from `/` on each call, so this walks the pattern's components itself and
+/// only reads the directories a wildcard applies to.
+fn glob_in_dir(dir: &Path, pattern: &str) -> Vec<PathBuf> {
+    let mut current = vec![dir.to_path_buf()];
+    // `components` splits on the platform's separators, so a Windows pattern
+    // with backslashes walks the same way as one with slashes.
+    for component in Path::new(pattern).components() {
+        let component = match component {
+            std::path::Component::Normal(name) => name.to_string_lossy(),
+            std::path::Component::CurDir => continue,
+            _ => {
+                // `..` or a root/prefix: leave it to glob.
+                let escaped_dir = glob::Pattern::escape(&dir.to_string_lossy());
+                return glob::glob(&Path::new(&escaped_dir).join(pattern).to_string_lossy())
+                    .map(|paths| paths.flatten().collect())
+                    .unwrap_or_default();
+            }
+        };
+        let component = component.as_ref();
+        if component.contains("**") {
+            // Recursive patterns are rare here; let glob handle them.
+            let escaped_dir = glob::Pattern::escape(&dir.to_string_lossy());
+            return glob::glob(&Path::new(&escaped_dir).join(pattern).to_string_lossy())
+                .map(|paths| paths.flatten().collect())
+                .unwrap_or_default();
+        }
+        if component.contains(['*', '?', '[']) {
+            let Ok(matcher) = glob::Pattern::new(component) else {
+                return vec![];
+            };
+            let mut next = vec![];
+            for base in &current {
+                let Ok(entries) = std::fs::read_dir(base) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    if matcher.matches(&entry.file_name().to_string_lossy()) {
+                        next.push(entry.path());
+                    }
+                }
+            }
+            current = next;
+        } else {
+            for base in &mut current {
+                base.push(component);
+            }
+            current.retain(|p| p.symlink_metadata().is_ok() || p.exists());
+        }
+    }
+    current
+}
+
 fn config_search_dir_mtimes() -> Vec<SystemTime> {
     let mut mtimes = Vec::new();
     if let Some(cwd) = &*dirs::CWD
         && let Ok(ancestor_dirs) = file::all_dirs(cwd, &env::MISE_CEILING_PATHS)
     {
-        let config_subdirs = DEFAULT_CONFIG_FILENAMES
+        let config_paths = DEFAULT_CONFIG_FILENAMES
             .iter()
-            .map(|f| Path::new(f).parent().and_then(|p| p.to_str()).unwrap_or(""))
+            .map(String::as_str)
+            .unique()
+            .collect::<Vec<_>>();
+        let config_subdirs = config_paths
+            .iter()
+            .map(|p| Path::new(p).parent().and_then(|p| p.to_str()).unwrap_or(""))
             .unique()
             .collect::<Vec<_>>();
         for dir in ancestor_dirs {
+            // `Config::watch_files` only lists lockfiles that exist, so a new one
+            // is noticed here. The names for the active environments are finite,
+            // so stat them rather than scanning the directory.
+            for path in crate::lockfile::active_lockfile_paths_in_dir(&dir) {
+                if let Ok(Ok(modified)) = path.metadata().map(|m| m.modified()) {
+                    mtimes.push(modified);
+                }
+            }
+            for name in &config_paths {
+                if !Path::new(name)
+                    .parent()
+                    .is_none_or(|p| p.as_os_str().is_empty())
+                {
+                    continue;
+                }
+                // The names are glob patterns (literal names are glob-escaped),
+                // so a name with metacharacters is matched, not statted.
+                let matches: Vec<PathBuf> = if name.contains(['*', '?', '[']) {
+                    glob_in_dir(&dir, name)
+                } else {
+                    vec![dir.join(name)]
+                };
+                for path in matches {
+                    if let Ok(Ok(modified)) = path.metadata().map(|m| m.modified()) {
+                        mtimes.push(modified);
+                    }
+                }
+            }
             for subdir in &config_subdirs {
+                if subdir.is_empty() {
+                    continue;
+                }
                 // `conf.d/*` names the folder fragments: a file added to one
                 // changes that folder's mtime, not conf.d's.
                 let check_dirs = if subdir.contains(['*', '?', '[']) {
-                    // `dir` is a literal directory: escape its glob metacharacters.
-                    let escaped_dir = glob::Pattern::escape(&dir.to_string_lossy());
-                    glob::glob(&Path::new(&escaped_dir).join(subdir).to_string_lossy())
-                        .map(|paths| paths.flatten().collect())
-                        .unwrap_or_default()
-                } else if subdir.is_empty() {
-                    vec![dir.clone()]
+                    glob_in_dir(&dir, subdir)
                 } else {
                     vec![dir.join(subdir)]
                 };
@@ -668,6 +820,15 @@ pub async fn build_session(
     config_paths: IndexSet<PathBuf>,
 ) -> Result<HookEnvSession> {
     let mut max_modtime = UNIX_EPOCH;
+    let watch_patterns: Vec<WatchPattern> = watch_files
+        .iter()
+        .flat_map(|wfp| {
+            wfp.patterns.iter().map(|pattern| WatchPattern {
+                root: wfp.root.clone(),
+                pattern: pattern.clone(),
+            })
+        })
+        .collect();
     let resolved_watch_files = get_watch_files(watch_files)?;
     for cf in &resolved_watch_files {
         if let Ok(Ok(modified)) = cf.metadata().map(|m| m.modified()) {
@@ -738,6 +899,7 @@ pub async fn build_session(
         aliases,
         tera_files: config.tera_files.clone(),
         watch_files: resolved_watch_files.into_iter().collect(),
+        watch_patterns,
         loaded_configs,
         loaded_tools,
         config_paths,
@@ -1001,6 +1163,47 @@ pub fn build_alias_commands(
 mod tests {
     use super::{FAST_PATH_FORCED_FULL_RUN, force_full_run, has_preclap_logging_flag};
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn glob_in_dir_matches_like_glob_with_an_escaped_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("we[ir]d dir");
+        for sub in ["conf.d/a", "conf.d/b"] {
+            std::fs::create_dir_all(dir.join(".config/mise").join(sub)).unwrap();
+        }
+        std::fs::write(dir.join(".config/mise/conf.d/c.toml"), "").unwrap();
+        for pattern in [
+            ".config/mise/conf.d/*",
+            ".config/mise/conf.d/*/mise.toml",
+            ".config/mise/conf.d/*.toml",
+            ".config/nothing/*",
+        ] {
+            let escaped = glob::Pattern::escape(&dir.to_string_lossy());
+            let mut expected: Vec<_> = glob::glob(
+                &std::path::Path::new(&escaped)
+                    .join(pattern)
+                    .to_string_lossy(),
+            )
+            .unwrap()
+            .flatten()
+            .collect();
+            let mut actual = super::glob_in_dir(&dir, pattern);
+            expected.sort();
+            actual.sort();
+            assert_eq!(actual, expected, "{pattern}");
+        }
+        assert_eq!(super::glob_in_dir(&dir, ".config/mise/conf.d/*").len(), 3);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn glob_in_dir_walks_backslash_patterns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join("config[dev]").join("nested")).unwrap();
+        let found = super::glob_in_dir(dir, "config[[]dev]\\nested");
+        assert_eq!(found, vec![dir.join("config[dev]").join("nested")]);
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()

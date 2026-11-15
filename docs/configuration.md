@@ -199,13 +199,13 @@ show_tools = false
   [`global_config_root`](/configuration/settings.html#global_config_root).
 - 此处会忽略 `[secrets.*]` 和 `[daemons_settings]`，而 `[daemon_providers]` 仅允许在此处使用。
 - [`global_config_file`](/configuration/settings.html#global_config_file)
-  （`MISE_GLOBAL_CONFIG_FILE`）会将这些文件替换为单个文件，同时关闭[全局覆盖文件](#override-file)。
+  （`MISE_GLOBAL_CONFIG_FILE`）会将这些文件替换为单个文件。mise 不会将其旁边的 `MISE_ENV` 变体（例如 `mise.ci.toml`）或 `.local` 文件作为全局配置加载；如果该文件位于项目逐级查找配置时会经过的目录中，这些文件仍可作为项目配置加载，因此若要使用某个变体，请直接指定该文件。此设置也会关闭[全局覆盖文件](#override-file)。它不会阻止主目录下的项目加载 `~/.config/mise/config.toml` 作为项目配置；若要跳过该文件，请将其加入 [`ignored_config_paths`](/configuration/settings.html#ignored_config_paths)。
 
 系统配置适用于机器上的所有用户，优先级最低。它位于 `/etc/mise`
 （[`MISE_SYSTEM_CONFIG_DIR`](/directories.html#system-config)），支持与全局配置目录相同的文件名，
 例如 `/etc/mise/config.toml`。
 [`system_config_file`](/configuration/settings.html#system_config_file)
-（`MISE_SYSTEM_CONFIG_FILE`）可将这些文件替换为单个文件。
+（`MISE_SYSTEM_CONFIG_FILE`）可将这些文件替换为单个文件。与 `MISE_GLOBAL_CONFIG_FILE` 一样，mise 不会将该文件旁边的 `MISE_ENV` 变体（例如 `mise.ci.toml`）或 `.local` 文件作为系统配置加载。
 
 ## 全局 override 文件 {#override-file}
 
@@ -523,6 +523,7 @@ include = [
   "./config/tools.toml",
   "git::https://github.com/myorg/platform.git//mise.toml?ref=main",
   "oci::ghcr.io/myorg/platform-config@sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "zip::https://example.com/platform-config.zip",
 ]
 
 [tools]
@@ -530,7 +531,7 @@ node = "24" # 当前文件中的条目会覆盖被包含文件中的条目
 ```
 
 本地 include 是相对于当前文件的 `.toml` 文件路径，也可以使用绝对路径。`git::` include 指向 `.toml` 文件；
-`oci::` include 则指向根目录中包含 `mise.toml` 的制品。
+`oci::` include 指向根目录中包含 `mise.toml` 的制品。`zip::` include 会通过 HTTP(S) 下载 zip 压缩包，并读取其根目录中的 `mise.toml`。URL 本身不标识内容，因此 zip 与分支一样会刷新；[安全模式](/paranoid)会拒绝此类 include。
 
 被包含文件的优先级紧随包含它的文件之后；`include` 中靠后的条目会覆盖靠前的条目。被包含文件中的相对路径（例如 `_.file`）
 和 <code v-pre>{{ config_root }}</code> 都以包含它的文件为基准解析。其工具会记录在包含文件的锁文件中，并且会检查它的 `min_version`。

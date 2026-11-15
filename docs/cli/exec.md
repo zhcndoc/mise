@@ -43,6 +43,9 @@ setting is off; when you name tools, only those are installed. The --allow-*and
   Per-host filtering does not work: Linux and macOS exit with an error,
   and Windows runs the command without network restrictions. See
   <https://mise.jdx.dev/sandboxing.html#access-to-particular-hosts>
+- **`--allow-unix <PATH>`** — 允许连接 PATH 指定的 Unix socket；PATH 为目录时，允许连接其下所有 socket（其他 socket 会由隐含的 `--deny-unix` 禁止）
+
+  沙箱内创建的抽象 socket 仍可访问。仅支持 Linux 7.1 或更高版本。
 - **`--allow-read <PATH>`** — Allow reads from PATH (implies --deny-read for everything else)
 - **`--allow-write <PATH>`** — Allow writes to PATH (implies --deny-write for everything else)
 - **`--deny-all`** — Block reads, writes, network, and env vars
@@ -51,6 +54,7 @@ setting is off; when you name tools, only those are installed. The --allow-*and
   On Windows it also keeps the variables programs need to start, such as
   SystemRoot and TEMP.
 - **`--deny-net`** — Block all network access
+- **`--deny-unix`** — 禁止连接沙箱外的 Unix socket（仅支持 Linux 7.1 或更高版本）
 - **`--deny-read`** — Block filesystem reads (system libs and tool dirs still accessible)
 - **`--deny-write`** — Block filesystem writes except temporary and device paths (/tmp, /dev)
 - **`--fresh-env`** — Bypass the environment cache and recompute the environment

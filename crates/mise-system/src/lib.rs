@@ -122,6 +122,49 @@ pub fn plugins_from_config(config: &Config) -> IndexMap<String, String> {
 
 pub use mise_config::dotfiles::DotfilesTomlConfig;
 
+/// Put `higher`'s values over `base`, merging nested tables key by key. A quoted dotted key such as
+/// `"appearance.blur"` means the same setting as `appearance = { blur = .. }`, so it is nested
+/// first, and a higher file's value wins however either file spells it.
+pub fn merge_settings_table(base: &mut toml::Table, higher: toml::Table) {
+    merge_nested_tables(base, nest_dotted_keys(higher));
+}
+
+fn merge_nested_tables(base: &mut toml::Table, higher: toml::Table) {
+    for (key, value) in higher {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(lower)), toml::Value::Table(higher)) => {
+                merge_nested_tables(lower, higher)
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
+}
+
+/// `table` with each quoted dotted key turned into nested tables, merged with the tables the
+/// same file already spells out.
+fn nest_dotted_keys(table: toml::Table) -> toml::Table {
+    let mut out = toml::Table::new();
+    for (key, value) in table {
+        let value = match value {
+            toml::Value::Table(table) => toml::Value::Table(nest_dotted_keys(table)),
+            value => value,
+        };
+        let mut parts = key.split('.').rev();
+        let last = parts.next().unwrap_or_default().to_string();
+        let mut nested = toml::Table::new();
+        nested.insert(last, value);
+        for part in parts {
+            let mut outer = toml::Table::new();
+            outer.insert(part.to_string(), toml::Value::Table(nested));
+            nested = outer;
+        }
+        merge_nested_tables(&mut out, nested);
+    }
+    out
+}
+
 /// Combining a file's `[bootstrap]` with the one it includes; it applies mise's macOS-defaults
 /// normalization, so it lives here rather than with the type.
 pub trait BootstrapMerge {
@@ -162,6 +205,25 @@ impl BootstrapMerge for BootstrapTomlConfig {
         fill(&mut self.apt.sources, lower.apt.sources);
         fill(&mut self.dnf.repos, lower.dnf.repos);
         fill(&mut self.mise_shell_activate, lower.mise_shell_activate);
+        // settings tables merge key by key, this file's own values winning, and every spelling
+        // of a plugin's name is the same section
+        for (plugin, shared) in lower.settings {
+            let id = plugin_identity(&plugin);
+            let mut merged = toml::Table::new();
+            merge_settings_table(&mut merged, shared);
+            let own: Vec<String> = self
+                .settings
+                .keys()
+                .filter(|name| plugin_identity(name) == id)
+                .cloned()
+                .collect();
+            for name in own {
+                if let Some(own) = self.settings.shift_remove(&name) {
+                    merge_settings_table(&mut merged, own);
+                }
+            }
+            self.settings.insert(id, merged);
+        }
         // hooks add up across files, the shared commands running first
         for (phase, shared) in lower.hooks {
             match self.hooks.entry(phase) {
@@ -282,6 +344,73 @@ pub fn parse_spec(spec: &str) -> eyre::Result<(String, String)> {
     }
 }
 
+/// Managers an unprefixed key tries when `system_packages.prefer` is unset: the
+/// distribution's own manager before Homebrew, which also runs on Linux, and
+/// before the Windows ones.
+const DEFAULT_MANAGER_PREFERENCE: &[&str] = &[
+    "apt", "dnf", "pacman", "zypper", "apk", "brew", "winget", "scoop", "choco",
+];
+
+/// Names of the managers an unprefixed key may choose: built-in managers that
+/// can run on this machine, and package manager plugins.
+///
+/// A plugin's binaries can come from mise's global toolset, which only the
+/// async availability check resolves, and selection here is synchronous. A
+/// plugin is therefore a candidate as declared, and `status` and `apply`
+/// report it as unavailable when it cannot run, as for a prefixed entry.
+/// Nothing moves on to the next manager. `system_packages.managers` still
+/// excludes managers.
+fn available_manager_names() -> Vec<String> {
+    let builtin: std::collections::HashSet<String> = packages::builtin_managers()
+        .iter()
+        .map(|manager| manager.name().to_string())
+        .collect();
+    packages::all_managers()
+        .into_iter()
+        .filter(|manager| {
+            package_manager_is_enabled(manager.name())
+                && (manager.is_available() || !builtin.contains(manager.name()))
+        })
+        .map(|manager| manager.name().to_string())
+        .collect()
+}
+
+/// Pick the one manager for a `[bootstrap.packages]` key without a prefix.
+///
+/// The choice depends only on which managers are available, never on the
+/// package repositories, so the same config plans the same way on every
+/// machine with the same managers. A failed install is an error; it does not
+/// move on to the next manager.
+fn resolve_unprefixed(
+    key: &str,
+    package: &PackageTomlConfig,
+    available: &[String],
+) -> eyre::Result<(String, String)> {
+    let settings = mise_settings::Settings::get();
+    let configured = settings.system_packages.prefer.as_deref();
+    let candidates: Vec<&str> = match configured {
+        Some(list) => list.iter().map(String::as_str).collect(),
+        None => DEFAULT_MANAGER_PREFERENCE.to_vec(),
+    };
+    let Some(manager) = candidates
+        .iter()
+        .find(|name| available.iter().any(|a| a == **name))
+    else {
+        bail!(
+            "no package manager is available for '{key}': tried {}. Prefix the key with a manager such as \"apt:{key}\"",
+            candidates.join(", ")
+        );
+    };
+    let reason = if configured.is_some() {
+        "system_packages.prefer"
+    } else {
+        "default order"
+    };
+    let name = package.name_for(manager).unwrap_or(key);
+    debug!("[bootstrap.packages]: '{key}' uses {manager}:{name} ({reason})");
+    Ok(((*manager).to_string(), name.to_string()))
+}
+
 /// Split a `mise bootstrap packages use` spec `manager:package[@version]` into its parts.
 ///
 /// `@version` mirrors `mise use tool@version`; `@latest` (or no `@`) means no
@@ -341,6 +470,15 @@ pub fn parse_use_spec(spec: &str) -> eyre::Result<(String, PackageRequest)> {
 pub fn packages_from_requests(
     by_mgr: IndexMap<String, Vec<PackageRequest>>,
 ) -> eyre::Result<Vec<ManagerPackages>> {
+    let known = all_manager_names();
+    let mut canonical: IndexMap<String, Vec<PackageRequest>> = IndexMap::new();
+    for (mgr, requests) in by_mgr {
+        canonical
+            .entry(canonical_manager_name(mgr, &known))
+            .or_default()
+            .extend(requests);
+    }
+    let by_mgr = canonical;
     resolve_managers(
         by_mgr,
         IndexMap::new(),
@@ -373,6 +511,33 @@ pub fn attach_brew_tap_urls(config: &Config, by_mgr: &mut IndexMap<String, Vec<P
 pub fn packages_from_config(config: &Config) -> Result<Vec<ManagerPackages>> {
     let brew_taps = brew_taps_from_config(config);
     packages_from_config_files_with_brew_taps(&config.config_files(), &brew_taps, true)
+}
+
+/// An unprefixed `[bootstrap.packages]` key that no manager can take.
+pub struct UnresolvedPackage {
+    pub key: String,
+    pub reason: String,
+    /// the declared version, `"latest"` when none
+    pub version: String,
+    pub absent: bool,
+}
+
+/// Like [`packages_from_config`], and also the unprefixed keys that no manager
+/// can take on this machine, with why, for `status` to list as skipped. Keys
+/// the platform or config environment disables are not listed. One resolution
+/// pass yields both, so they cannot disagree.
+pub fn packages_and_unresolved_from_config(
+    config: &Config,
+) -> Result<(Vec<ManagerPackages>, Vec<UnresolvedPackage>)> {
+    let brew_taps = brew_taps_from_config(config);
+    let mut unresolved = vec![];
+    let packages = packages_from_config_files_collecting(
+        &config.config_files(),
+        &brew_taps,
+        true,
+        &mut unresolved,
+    )?;
+    Ok((packages, unresolved))
 }
 
 /// Merge raw `[bootstrap.packages]` declarations inherited by `target` without
@@ -457,6 +622,24 @@ pub async fn config_files_declaring_package(
     ))
 }
 
+/// The package `spec` declares for `manager`, if it declares one. An unprefixed
+/// key declares its package for the manager it would select, with `names`
+/// applied.
+#[cfg(unix)]
+fn declared_spec(
+    spec: &str,
+    package: &PackageTomlConfig,
+    manager: &str,
+    available: &[String],
+) -> Option<String> {
+    let (mgr, pkg) = if spec.contains(':') {
+        parse_spec(spec).ok()?
+    } else {
+        resolve_unprefixed(spec, package, available).ok()?
+    };
+    (mgr == manager).then_some(pkg)
+}
+
 #[cfg(unix)]
 fn config_files_declaring_package_in<'a>(
     config_files: impl Iterator<Item = (&'a PathBuf, &'a Arc<dyn crate::host::ConfigFileView>)>,
@@ -465,15 +648,15 @@ fn config_files_declaring_package_in<'a>(
 ) -> Vec<PathBuf> {
     // brew resolves `homebrew/core/<name>` to the bare formula name
     let core_name = format!("homebrew/core/{name}");
+    let available = std::cell::LazyCell::new(available_manager_names);
     let mut paths: Vec<PathBuf> = vec![];
     for (path, cf) in config_files {
         let declares = cf.bootstrap_config().is_some_and(|sys| {
             sys.packages.iter().any(|(spec, package)| {
                 // skipped declarations never reach prune's keep-list
                 package.is_os_supported()
-                    && parse_spec(spec).is_ok_and(|(mgr, pkg)| {
-                        mgr == manager && (pkg == name || (manager == "brew" && pkg == core_name))
-                    })
+                    && declared_spec(spec, package, manager, &available)
+                        .is_some_and(|pkg| pkg == name || (manager == "brew" && pkg == core_name))
             })
         });
         if declares && !paths.contains(path) {
@@ -650,8 +833,17 @@ fn packages_from_config_files_with_brew_taps(
     brew_taps: &IndexMap<String, String>,
     filter_env: bool,
 ) -> Result<Vec<ManagerPackages>> {
+    packages_from_config_files_collecting(config_files, brew_taps, filter_env, &mut vec![])
+}
+
+fn packages_from_config_files_collecting(
+    config_files: &ConfigMap,
+    brew_taps: &IndexMap<String, String>,
+    filter_env: bool,
+    unresolved: &mut Vec<UnresolvedPackage>,
+) -> Result<Vec<ManagerPackages>> {
     let (requests, options) =
-        package_requests_from_config_files(config_files, brew_taps, filter_env);
+        package_requests_collecting(config_files, brew_taps, filter_env, unresolved);
     resolve_managers(
         requests,
         options,
@@ -667,6 +859,20 @@ fn package_requests_from_config_files(
     config_files: &ConfigMap,
     brew_taps: &IndexMap<String, String>,
     filter_env: bool,
+) -> (
+    IndexMap<String, Vec<PackageRequest>>,
+    IndexMap<String, ManagerPackageOptions>,
+) {
+    package_requests_collecting(config_files, brew_taps, filter_env, &mut vec![])
+}
+
+/// Resolve the declared packages, also pushing each unprefixed key that no
+/// manager can take onto `unresolved`.
+fn package_requests_collecting(
+    config_files: &ConfigMap,
+    brew_taps: &IndexMap<String, String>,
+    filter_env: bool,
+    unresolved: &mut Vec<UnresolvedPackage>,
 ) -> (
     IndexMap<String, Vec<PackageRequest>>,
     IndexMap<String, ManagerPackageOptions>,
@@ -688,7 +894,21 @@ fn package_requests_from_config_files(
     #[cfg(unix)]
     let mut app_adopt = BTreeSet::new();
     let mut snap_options = BTreeMap::new();
-    for (spec, package) in merged {
+    let available_managers = std::cell::LazyCell::new(available_manager_names);
+    let manager_names = std::cell::LazyCell::new(all_manager_names);
+    // (manager, package) pairs an unprefixed key declared
+    let mut bare_origin: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    // Entries with a prefix go first, so an unprefixed key that resolves to the
+    // same package as one of them yields to it.
+    // Among unprefixed keys, those that install a package go before those that
+    // remove it, so when two disagree the one that installs it wins.
+    let (explicit, mut unprefixed): (Vec<_>, Vec<_>) =
+        merged.into_iter().partition(|(spec, _)| spec.contains(':'));
+    unprefixed.sort_by_key(|(_, package)| {
+        package.desired() == mise_system_packages::PackageDesiredState::Absent
+    });
+    for (spec, package) in explicit.into_iter().chain(unprefixed) {
         if !package.is_os_supported() {
             debug!("[bootstrap.packages]: skipping '{spec}', not enabled for this platform");
             continue;
@@ -697,10 +917,54 @@ fn package_requests_from_config_files(
             debug!("[bootstrap.packages]: skipping '{spec}', not enabled for this environment");
             continue;
         }
-        match parse_spec(&spec) {
+        let parsed = if spec.contains(':') {
+            parse_spec(&spec)
+        } else {
+            resolve_unprefixed(&spec, &package, &available_managers)
+        };
+        match parsed {
             Ok((mgr, name)) => {
+                // Key every request by the manager's own spelling, so status, apply and prune
+                // all find `foo_bar:pkg` under a plugin named `foo-bar`.
+                let mgr = canonical_manager_name(mgr, &manager_names);
                 let version = package.version();
                 let version = (version != "latest").then(|| version.to_string());
+                // Validated before any conflict handling can drop an earlier request
+                let incoming_snap = match snap_options_for(&mgr, &name, &package) {
+                    Ok(options) => options,
+                    Err(err) => {
+                        warn!("[bootstrap.packages]: {err}");
+                        continue;
+                    }
+                };
+                let is_bare = !spec.contains(':');
+                if is_bare {
+                    let key = (mgr.clone(), name.clone());
+                    let existing = by_mgr
+                        .get(&mgr)
+                        .and_then(|requests| requests.iter().find(|r| r.name == name));
+                    if let Some(existing) = existing {
+                        let same = existing.version == version
+                            && existing.desired == package.desired()
+                            && snap_options.get(&name) == incoming_snap.as_ref();
+                        if same {
+                            debug!("[bootstrap.packages]: '{spec}' repeats {mgr}:{name}");
+                        } else if bare_origin.contains(&key) {
+                            // Two unprefixed keys disagree about one package. The one that
+                            // installs it was processed first, and the package is never
+                            // dropped, which would also drop it from prune's keep-list.
+                            warn!(
+                                "[bootstrap.packages]: '{spec}' and another unprefixed entry both resolve to '{mgr}:{name}' with a different state or version; keeping the one that installs it"
+                            );
+                        } else {
+                            warn!(
+                                "[bootstrap.packages]: '{spec}' resolves to '{mgr}:{name}', which another entry already declares; using that entry"
+                            );
+                        }
+                        continue;
+                    }
+                    bare_origin.insert(key);
+                }
                 if let Err(err) = validate_package_name(&mgr, &name) {
                     warn!("[bootstrap.packages]: {err}");
                     continue;
@@ -790,15 +1054,8 @@ fn package_requests_from_config_files(
                         }
                     }
                 }
-                match snap_options_for(&mgr, &name, &package) {
-                    Ok(Some(options)) => {
-                        snap_options.insert(name.clone(), options);
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        warn!("[bootstrap.packages]: {err}");
-                        continue;
-                    }
+                if let Some(options) = incoming_snap {
+                    snap_options.insert(name.clone(), options);
                 }
                 by_mgr.entry(mgr).or_default().push(PackageRequest {
                     name,
@@ -807,7 +1064,18 @@ fn package_requests_from_config_files(
                     desired: package.desired(),
                 });
             }
-            Err(err) => warn!("[bootstrap.packages]: {err}"),
+            Err(err) => {
+                warn!("[bootstrap.packages]: {err}");
+                if !spec.contains(':') {
+                    unresolved.push(UnresolvedPackage {
+                        version: package.version().to_string(),
+                        absent: package.desired()
+                            == mise_system_packages::PackageDesiredState::Absent,
+                        key: spec,
+                        reason: err.to_string(),
+                    });
+                }
+            }
         }
     }
     #[cfg(unix)]
@@ -906,7 +1174,7 @@ pub fn defaults_from_config_files(config_files: &ConfigMap) -> Vec<DefaultsReque
                         }
                     }
                     _ => warn!(
-                        "[bootstrap.macos.defaults]: expected a table of key/value pairs for domain '{domain}'"
+                        "[bootstrap.settings.macos.defaults]: expected a table of key/value pairs for domain '{domain}'"
                     ),
                 }
             }
@@ -946,7 +1214,7 @@ pub fn defaults_from_config_files(config_files: &ConfigMap) -> Vec<DefaultsReque
             }),
             None => {
                 warn!(
-                    "[bootstrap.macos.defaults]: unsupported value type for {domain} {key} \
+                    "[bootstrap.settings.macos.defaults]: unsupported value type for {domain} {key} \
                      (expected bool, integer, float, string, array, or table)"
                 );
             }
@@ -997,7 +1265,9 @@ pub fn login_items_from_config(config: &Config) -> login_items::LoginItemsReques
     }
     if invalid && exclusive {
         // an incomplete declaration must not decide which items are undeclared
-        warn!("[bootstrap.macos.login_items]: ignoring exclusive because an entry is invalid");
+        warn!(
+            "[bootstrap.settings.macos.login_items]: ignoring exclusive because an entry is invalid"
+        );
         exclusive = false;
     }
     login_items::LoginItemsRequest {
@@ -1208,7 +1478,7 @@ fn insert_friendly_default(
             ..
         } = spec;
         warn!(
-            "[bootstrap.macos.{section}].{key}: unsupported value type \
+            "[bootstrap.settings.macos.{section}].{key}: unsupported value type \
              (expected {expected_type})"
         );
     }
@@ -1235,7 +1505,7 @@ fn insert_friendly_multi_domain_default(
             ..
         } = spec;
         warn!(
-            "[bootstrap.macos.{section}].{key}: unsupported value type \
+            "[bootstrap.settings.macos.{section}].{key}: unsupported value type \
              (expected {expected_type})"
         );
     }
@@ -1319,11 +1589,11 @@ fn merge_dock_defaults(
                     );
                 }
                 toml::Value::String(_) => warn!(
-                    "[bootstrap.macos.dock].orientation: invalid value \
+                    "[bootstrap.settings.macos.dock].orientation: invalid value \
                      (expected bottom, left, or right)"
                 ),
                 _ => warn!(
-                    "[bootstrap.macos.dock].orientation: unsupported value type (expected string)"
+                    "[bootstrap.settings.macos.dock].orientation: unsupported value type (expected string)"
                 ),
             },
             "tilesize" => insert_friendly_default(
@@ -1386,7 +1656,7 @@ fn merge_dock_defaults(
                 },
                 value.clone(),
             ),
-            _ => warn!("[bootstrap.macos.dock].{key}: unknown key, ignoring entry"),
+            _ => warn!("[bootstrap.settings.macos.dock].{key}: unknown key, ignoring entry"),
         }
     }
 }
@@ -1488,17 +1758,17 @@ fn merge_finder_defaults(
                         );
                     } else {
                         warn!(
-                            "[bootstrap.macos.finder].preferred_view_style: invalid value \
+                            "[bootstrap.settings.macos.finder].preferred_view_style: invalid value \
                              (expected icon, list, column, or gallery)"
                         );
                     }
                 }
                 _ => warn!(
-                    "[bootstrap.macos.finder].preferred_view_style: unsupported value type \
+                    "[bootstrap.settings.macos.finder].preferred_view_style: unsupported value type \
                      (expected string)"
                 ),
             },
-            _ => warn!("[bootstrap.macos.finder].{key}: unknown key, ignoring entry"),
+            _ => warn!("[bootstrap.settings.macos.finder].{key}: unknown key, ignoring entry"),
         }
     }
 }
@@ -1581,7 +1851,7 @@ fn merge_keyboard_defaults(
                 },
                 value.clone(),
             ),
-            _ => warn!("[bootstrap.macos.keyboard].{key}: unknown key, ignoring entry"),
+            _ => warn!("[bootstrap.settings.macos.keyboard].{key}: unknown key, ignoring entry"),
         }
     }
 }
@@ -1622,7 +1892,7 @@ fn merge_trackpad_defaults(
                 },
                 value.clone(),
             ),
-            _ => warn!("[bootstrap.macos.trackpad].{key}: unknown key, ignoring entry"),
+            _ => warn!("[bootstrap.settings.macos.trackpad].{key}: unknown key, ignoring entry"),
         }
     }
 }
@@ -2049,8 +2319,10 @@ fn packages_from_specs_with_config_files(
     #[cfg(unix)]
     let mut app_adopt = BTreeSet::new();
     let mut by_mgr: IndexMap<String, Vec<PackageRequest>> = IndexMap::new();
+    let manager_names = std::cell::LazyCell::new(all_manager_names);
     for spec in specs {
         let (mgr, name) = parse_spec(spec)?;
+        let mgr = canonical_manager_name(mgr, &manager_names);
         validate_package_name(&mgr, &name)?;
         // An explicit `snap:<name>` installs from the channel the config
         // declares, the same as a full `mise bootstrap` would.
@@ -2492,6 +2764,34 @@ struct ResolveOpts {
     applies_together: bool,
 }
 
+/// The name of every package manager, built in or from a plugin.
+fn all_manager_names() -> Vec<String> {
+    packages::all_managers()
+        .into_iter()
+        .map(|manager| manager.name().to_string())
+        .collect()
+}
+
+/// The identity of a plugin name: `foo_bar`, `foo-bar` and `FooBar` are the same plugin, which
+/// mise installs under the kebab-case name.
+pub fn plugin_identity(name: &str) -> String {
+    mise_config::bootstrap::plugin_identity(name)
+}
+
+/// `mgr` as the installed manager spells it: a plugin installed as `foo-bar` answers to `foo_bar`
+/// too, since mise installs plugins under the kebab-case name.
+fn canonical_manager_name(mgr: String, known: &[String]) -> String {
+    if known.contains(&mgr) {
+        return mgr;
+    }
+    let id = mgr.replace('_', "-");
+    known
+        .iter()
+        .find(|name| name.replace('_', "-") == id)
+        .cloned()
+        .unwrap_or(mgr)
+}
+
 fn resolve_managers(
     by_mgr: IndexMap<String, Vec<PackageRequest>>,
     mut manager_options: IndexMap<String, ManagerPackageOptions>,
@@ -2589,6 +2889,23 @@ mod tests {
         let merged = own.macos.login_items.unwrap();
         assert_eq!(merged.apps, ["/Applications/A.app", "/Applications/B.app"]);
         assert_eq!(merged.exclusive, Some(true));
+    }
+
+    #[test]
+    fn merge_below_merges_every_spelling_of_a_settings_plugin() {
+        let table = |s: &str| -> toml::Table { s.parse().unwrap() };
+        let mut own = BootstrapTomlConfig::default();
+        own.settings.insert("desk_plugin".into(), table("size = 4"));
+        let mut lower = BootstrapTomlConfig::default();
+        lower
+            .settings
+            .insert("Desk-Plugin".into(), table("size = 2\nblur = true"));
+        own.merge_below(lower);
+        assert_eq!(own.settings.len(), 1);
+        let merged = &own.settings["desk-plugin"];
+        // this file's value wins over the include's, whichever spelling each uses
+        assert_eq!(merged["size"], toml::Value::Integer(4));
+        assert_eq!(merged["blur"], toml::Value::Boolean(true));
     }
 
     #[cfg(unix)]
@@ -3559,6 +3876,19 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_manager_answers_to_either_spelling() {
+        let known = vec![
+            "apt".to_string(),
+            "foo-bar".to_string(),
+            "baz_qux".to_string(),
+        ];
+        assert_eq!(canonical_manager_name("foo_bar".into(), &known), "foo-bar");
+        assert_eq!(canonical_manager_name("baz-qux".into(), &known), "baz_qux");
+        assert_eq!(canonical_manager_name("apt".into(), &known), "apt");
+        assert_eq!(canonical_manager_name("other".into(), &known), "other");
+    }
+
     /// Prune unions declarations across environments so it can protect whatever
     /// any environment declares, which means entries that are never active at
     /// the same time land in one list. They are not in conflict, and an
@@ -3753,6 +4083,7 @@ mod tests {
             artifact: None,
             channel: None,
             classic: None,
+            names: Default::default(),
         });
 
         assert!(package.is_env_supported(&["work".to_string()]));
@@ -4406,5 +4737,45 @@ value = []"#;
             value: tv("3"),
         });
         assert_eq!(macos_defaults_entry_count(&macos), 6);
+    }
+
+    #[test]
+    fn unprefixed_key_picks_the_first_available_manager_and_applies_names() {
+        let plain = PackageTomlConfig::Version("latest".to_string());
+        let available = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+
+        // the distribution's manager beats Homebrew, which also runs on Linux
+        let both = available(&["brew", "apt"]);
+        assert_eq!(
+            resolve_unprefixed("git", &plain, &both).unwrap(),
+            ("apt".to_string(), "git".to_string())
+        );
+        let fedora = available(&["brew", "dnf"]);
+        assert_eq!(resolve_unprefixed("git", &plain, &fedora).unwrap().0, "dnf");
+        let mac = available(&["brew"]);
+        assert_eq!(resolve_unprefixed("git", &plain, &mac).unwrap().0, "brew");
+
+        // names renames the package for the selected manager only
+        let mapped: PackageTomlConfig =
+            toml::from_str(r#"v = { names = { apt = "libssl-dev", dnf = "openssl-devel" } }"#)
+                .map(|t: std::collections::BTreeMap<String, PackageTomlConfig>| {
+                    t.into_values().next().unwrap()
+                })
+                .unwrap();
+        assert_eq!(
+            resolve_unprefixed("openssl", &mapped, &both).unwrap().1,
+            "libssl-dev"
+        );
+        assert_eq!(
+            resolve_unprefixed("openssl", &mapped, &fedora).unwrap().1,
+            "openssl-devel"
+        );
+        assert_eq!(
+            resolve_unprefixed("openssl", &mapped, &mac).unwrap().1,
+            "openssl"
+        );
+
+        // nothing available is an error, not a guess
+        assert!(resolve_unprefixed("git", &plain, &[]).is_err());
     }
 }

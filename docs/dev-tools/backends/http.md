@@ -551,6 +551,8 @@ shared_extraction = true
 安装。通过 `mise install --system`、`mise install --shared` 和 `mise install-into` 指定的
 目标位置始终会获得独立副本。
 
+在 Windows 上，如果原始文件（而非压缩包）设置了 `bin_path`，且共享副本与安装目录位于同一卷、文件系统支持硬链接，则 mise 会创建硬链接。否则会复制文件，文件会存储两份，共享机制无法为它节省空间。不设置 `bin_path` 时，整个安装目录会链接到共享存储，并继续依赖该目录。
+
 ::: warning 共享存储中的文件会被直接信任
 mise 不会根据锁文件中的校验和重新检查 `http-tarballs` 中已有的文件。不要允许不可信的任务
 或用户写入共享存储或恢复的存储。另见[恢复缓存与已安装工具](/dev-tools/mise-lock.html#restored-caches)。
@@ -568,6 +570,16 @@ mise 不会根据锁文件中的校验和重新检查 `http-tarballs` 中已有�
 find ~/.local/share/mise/installs -lname '*http-tarballs*' # 应当没有输出
 rm -rf ~/.local/share/mise/http-tarballs
 ```
+
+在 Windows 上请使用 PowerShell。目录链接会显示为 junction 或符号链接：
+
+```powershell
+Get-ChildItem -Recurse -Force "$env:LOCALAPPDATA\mise\installs" |
+  Where-Object { $_.LinkType -and ($_.Target -like '*http-tarballs*') } # should print nothing
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\mise\http-tarballs"
+```
+
+此检查不会显示硬链接的原始文件。即使删除目录，这些文件仍能使用，因为每个安装文件都是指向相同数据的链接。
 
 如果使用的不是默认路径，请按需替换为你的[数据目录](/directories.html)。
 

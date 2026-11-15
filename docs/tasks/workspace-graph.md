@@ -97,7 +97,7 @@ mise 会通过以下文件发现 npm、pnpm、Yarn 和 Bun 工作区软件包：
 - `workspaces` 的单模式字符串写法
 - Yarn Classic 的对象写法 `workspaces.packages`
 
-两个文件同时存在时，以 `pnpm-workspace.yaml` 确定工作区成员。对于 pnpm 和 Yarn 工作区，根目录 `package.json` 若设置了 `name`，也会作为项目纳入。支持正向和排除模式、递归 `**` glob，以及 `packages/{web,api}` 这样的花括号模式。发现过程中会跳过 `.git` 和 `node_modules`，但不会读取 `.gitignore` 或 `.ignore` 文件。
+两个文件同时存在时，以 `pnpm-workspace.yaml` 确定工作区成员。任何包管理器的根目录 `package.json` 只要设置了 `name`，也会作为项目纳入，因此其中的 `scripts` 可以像其他软件包的脚本一样运行。支持正向和排除模式、递归 `**` glob，以及 `packages/{web,api}` 这样的花括号模式。发现过程中会跳过 `.git` 和 `node_modules`，但不会读取 `.gitignore` 或 `.ignore` 文件。
 
 每个软件包都必须在 `package.json` 中设置 `name`。`mise tasks graph` 还会报告软件包根目录、工作区定义文件和检测到的包管理器。
 
@@ -174,6 +174,8 @@ mise 按以下优先级选择版本：
 2. `MISE_AFFECTED_BASE` and `MISE_AFFECTED_HEAD`.
 3. CI 元数据。在 GitHub Actions 中，pull request 会设置 base `origin/$GITHUB_BASE_REF`，head 为 `$GITHUB_SHA`。在 GitLab CI 中，base 为 `$CI_MERGE_REQUEST_DIFF_BASE_SHA` 或 `origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME`，head 为 `$CI_COMMIT_SHA`。
 4. `HEAD~1` 和 `HEAD`。
+
+在单体仓库根目录之外，`--affected` 没有可供选择的项目，因此会根据任务的 `sources` 来筛选任务。详见[运行受变更影响的任务](/tasks/running-tasks.html#affected-tasks)。
 
 两个版本都必须存在于克隆仓库中，因此 CI 需要获取足够的提交历史，例如在 `actions/checkout` 中设置 `fetch-depth: 0`。
 

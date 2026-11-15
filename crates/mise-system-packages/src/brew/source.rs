@@ -138,9 +138,13 @@ pub(super) async fn build(
     }
 
     pr.set_message("build from source".to_string());
+    // Like `brew`, start from a clean environment: toolchain variables from the
+    // caller's shell (GOROOT, CC, GOFLAGS, CARGO_HOME, ...) must not reach the build.
     let cmd = CmdLineRunner::new(&ruby)
         .arg(&shim_path)
         .current_dir(&buildpath)
+        .env_clear()
+        .envs(allowed_inherited_env(std::env::vars_os()))
         .envs(build_env(
             rf,
             closure,
@@ -193,6 +197,41 @@ pub(super) async fn build(
 /// Download the formula's .rb from homebrew/core, pinned to the commit the
 /// API metadata was generated from and verified against its sha256.
 async fn fetch_formula_rb(rf: &ResolvedFormula, pr: &dyn SingleReport) -> Result<PathBuf> {
+    let downloaded = fetch_formula_rb_file(rf, pr).await?;
+    // A tap formula that reads other files from its tap is loaded from a
+    // checkout of the tap, where `require_relative` finds them.
+    let (Some(raw_base), Some(commit), Some(rb_path), Some(sha256)) = (
+        rf.tap_raw_base.as_deref(),
+        rf.formula.tap_git_head.as_deref(),
+        rf.formula.ruby_source_path.as_deref(),
+        rf.formula
+            .ruby_source_checksum
+            .as_ref()
+            .and_then(|c| c.sha256.as_deref()),
+    ) else {
+        return Ok(downloaded);
+    };
+    if !super::tap::needs_tap_checkout(&mise_util::file::read_to_string(&downloaded)?) {
+        return Ok(downloaded);
+    }
+    let checkout = super::tap::tap_checkout(raw_base, commit, Some(pr)).await?;
+    // `rb_path` comes from the tap's metadata, so keep it inside the checkout.
+    if Path::new(rb_path)
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        bail!(
+            "{}: formula source path '{rb_path}' is not a relative path inside its tap",
+            rf.formula.name
+        );
+    }
+    let in_tap = checkout.join(rb_path);
+    mise_util::hash::ensure_checksum(&in_tap, sha256, Some(pr), "sha256")?;
+    Ok(in_tap)
+}
+
+/// Download the formula's .rb on its own into the cache.
+async fn fetch_formula_rb_file(rf: &ResolvedFormula, pr: &dyn SingleReport) -> Result<PathBuf> {
     let formula = &rf.formula;
     // all guaranteed present by check_buildable
     let rb_path = formula.ruby_source_path.as_ref().unwrap();
@@ -268,6 +307,45 @@ fn stage_source(archive: &Path, build_root: &Path, basename: &str) -> Result<Pat
         [single] if single.is_dir() => Ok(single.clone()),
         _ => Ok(stage),
     }
+}
+
+/// Variables a formula build still inherits from the caller, mirroring the
+/// allowlist `brew` keeps when it re-execs under `env -i`.
+fn is_inherited_var(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "TMPDIR",
+        "LANG",
+        "SSH_AUTH_SOCK",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "SOURCE_DATE_EPOCH",
+        // selects the Xcode / Command Line Tools install on macOS
+        "DEVELOPER_DIR",
+        // the shim prints Ruby backtraces on failure only when this is set
+        "MISE_DEBUG",
+    ];
+    EXACT.contains(&name)
+        || name.starts_with("LC_")
+        || name.starts_with("HOMEBREW_")
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "http_proxy" | "https_proxy" | "all_proxy" | "ftp_proxy" | "no_proxy"
+        )
+}
+
+fn allowed_inherited_env(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    vars.into_iter()
+        .filter(|(k, _)| k.to_str().is_some_and(is_inherited_var))
+        .collect()
 }
 
 /// The environment the formula builds in: dependency kegs first on PATH,
@@ -399,6 +477,38 @@ fn build_env(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    #[test]
+    fn build_env_drops_toolchain_vars_but_keeps_essentials() {
+        let vars = [
+            ("GOROOT", "/mise/go"),
+            ("CC", "/nonexistent/cc"),
+            ("GOFLAGS", "-x"),
+            ("PYTHONPATH", "/x"),
+            ("HOME", "/home/u"),
+            ("MISE_DEBUG", "1"),
+            ("HTTPS_PROXY", "http://p"),
+            ("no_proxy", "localhost"),
+            ("LC_ALL", "C"),
+            ("HOMEBREW_NO_ANALYTICS", "1"),
+        ]
+        .map(|(k, v)| (k.into(), v.into()));
+        let kept: Vec<String> = allowed_inherited_env(vars)
+            .into_iter()
+            .map(|(k, _)| k.into_string().unwrap())
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                "HOME",
+                "MISE_DEBUG",
+                "HTTPS_PROXY",
+                "no_proxy",
+                "LC_ALL",
+                "HOMEBREW_NO_ANALYTICS"
+            ]
+        );
+    }
 
     use super::super::api::{BottleFile, BottleSpec, RubySourceChecksum, SourceUrl, Versions};
     use super::*;
@@ -543,6 +653,74 @@ end
                 keg.join("share/fish/vendor_completions.d/example.fish")
             )?,
             "completions fish\n"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn shim_with_env_scopes_values_and_restores_after_errors() -> Result<()> {
+        let Some(ruby) = super::super::tap::test_ruby().await? else {
+            return Ok(());
+        };
+        let tmp = tempfile::tempdir()?;
+        let shim = tmp.path().join("shim.rb");
+        let formula_rb = tmp.path().join("example.rb");
+        let buildpath = tmp.path().join("build");
+        mise_util::file::create_dir_all(&buildpath)?;
+        mise_util::file::write(&shim, SHIM_RB)?;
+        mise_util::file::write(
+            &formula_rb,
+            r#"class Example < Formula
+  def install
+    ENV["MISE_SCOPE_EXISTING"] = "original"
+    ENV.delete("MISE_SCOPE_NEW")
+    result = with_env(MISE_SCOPE_EXISTING: nil, MISE_SCOPE_NEW: buildpath) do
+      raise "nil must unset" if ENV.key?("MISE_SCOPE_EXISTING")
+      raise "Pathname value" unless ENV["MISE_SCOPE_NEW"] == buildpath.to_s
+      with_env("MISE_SCOPE_NEW" => 42) do
+        raise "nested value" unless ENV["MISE_SCOPE_NEW"] == "42"
+      end
+      raise "nested restore" unless ENV["MISE_SCOPE_NEW"] == buildpath.to_s
+      :result
+    end
+    raise "block result" unless result == :result
+    raise "restore existing" unless ENV["MISE_SCOPE_EXISTING"] == "original"
+    raise "remove new" if ENV.key?("MISE_SCOPE_NEW")
+    begin
+      with_env("MISE_SCOPE_EXISTING" => "temporary", MISE_SCOPE_NEW: "new") do
+        raise "expected failure"
+      end
+    rescue RuntimeError => e
+      raise unless e.message == "expected failure"
+    end
+    raise "restore after error" unless ENV["MISE_SCOPE_EXISTING"] == "original"
+    raise "remove after error" if ENV.key?("MISE_SCOPE_NEW")
+    (prefix/"passed").write("ok")
+  end
+end
+"#,
+        )?;
+        let output = std::process::Command::new(ruby)
+            .arg(&shim)
+            .current_dir(&buildpath)
+            .env("MISE_BREW_PREFIX", tmp.path())
+            .env("MISE_BREW_CELLAR", tmp.path().join("Cellar"))
+            .env("MISE_BREW_FORMULA_FILE", &formula_rb)
+            .env("MISE_BREW_NAME", "example")
+            .env("MISE_BREW_VERSION", "1.0.0")
+            .env("MISE_BREW_PKG_VERSION", "1.0.0")
+            .env("MISE_BREW_BUILDPATH", &buildpath)
+            .env("MISE_BREW_CACHE", tmp.path().join("cache"))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            mise_util::file::read_to_string(tmp.path().join("Cellar/example/1.0.0/passed"))?,
+            "ok"
         );
         Ok(())
     }

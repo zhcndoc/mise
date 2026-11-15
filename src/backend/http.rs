@@ -40,6 +40,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Constants
 const HTTP_TARBALLS_DIR: &str = "http-tarballs";
 const METADATA_FILE: &str = "metadata.json";
+/// Longest cache key used verbatim as a directory name; longer keys are hashed.
+const MAX_CACHE_KEY_LEN: usize = 240;
 
 /// Metadata stored alongside cached extractions
 #[derive(Debug, Serialize, Deserialize)]
@@ -498,6 +500,18 @@ impl HttpBackend {
         Self::cache_path(cache_dir, cache_key).join(METADATA_FILE)
     }
 
+    /// Name for a staging directory next to a cache or install entry. The cache key
+    /// is hashed rather than embedded: it can already be over 220 bytes, and adding a
+    /// prefix, pid and timestamp to it overflows the 255-byte `NAME_MAX`.
+    fn tmp_dir_name(prefix: &str, cache_key: &str) -> Result<String> {
+        Ok(format!(
+            "{prefix}-{}-{}-{}",
+            hash::hash_blake3_to_str(cache_key),
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+        ))
+    }
+
     /// Check if a cache entry exists and is valid
     fn is_cached(cache_dir: &Path, cache_key: &str) -> bool {
         Self::cache_path(cache_dir, cache_key).exists()
@@ -567,7 +581,12 @@ impl HttpBackend {
             ));
         }
 
-        let key = parts.join("_");
+        let mut key = parts.join("_");
+        // The key names a cache directory. With rename_exe and bin_path it reaches
+        // 279 bytes, over the 255-byte NAME_MAX, so long keys are replaced by their hash.
+        if key.len() > MAX_CACHE_KEY_LEN {
+            key = hash::hash_blake3_to_str(&key);
+        }
         debug!("Cache key: {}", key);
         Ok(key)
     }
@@ -693,12 +712,7 @@ impl HttpBackend {
         file::create_dir_all(cache.dir)?;
 
         // Create unique temp directory for atomic extraction
-        let tmp_path = cache.dir.join(format!(
-            "{}.tmp-{}-{}",
-            cache.plan.key,
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-        ));
+        let tmp_path = cache.dir.join(Self::tmp_dir_name(".tmp", &cache.plan.key)?);
 
         // Clean up any stale temp directory
         if tmp_path.exists() {
@@ -756,12 +770,7 @@ impl HttpBackend {
             .parent()
             .ok_or_else(|| eyre::eyre!("HTTP install path must have a parent"))?;
         file::create_dir_all(parent)?;
-        let tmp_path = parent.join(format!(
-            ".mise-tmp-{}-{}-{}",
-            cache_plan.key,
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-        ));
+        let tmp_path = parent.join(Self::tmp_dir_name(".mise-tmp", &cache_plan.key)?);
         file::remove_all(&tmp_path)?;
 
         let extract_path = if matches!(cache_plan.file_info.format, file::ExtractionFormat::Raw)
@@ -1044,9 +1053,13 @@ impl HttpBackend {
             // resolved — the install looks fine and the binary will not run.
             // `make_symlink_or_copy` is what the rest of the codebase uses for a
             // file that has to be executable at the link path (swift, github,
-            // conda and aqua all do). The cost is that Windows keeps a copy
-            // rather than sharing the cached one, which is the right way round:
-            // a duplicate that works beats a link that does not.
+            // conda and aqua all do). On Windows it copies, which would store
+            // the file twice, so hard link there and copy only when the two
+            // paths are on different volumes or the filesystem has no hard
+            // links. Elsewhere it symlinks.
+            #[cfg(windows)]
+            file::hard_link_or_copy(&cached_file, &install_file)?;
+            #[cfg(not(windows))]
             file::make_symlink_or_copy(&cached_file, &install_file)?;
             return Ok(());
         }
@@ -2304,6 +2317,22 @@ mod tests {
     }
 
     #[test]
+    fn tmp_dir_name_stays_under_name_max_for_long_cache_keys() {
+        // http:yarn with a checksum: three 64-char hashes plus their labels (226 bytes).
+        let key = format!(
+            "{0}_name_{0}_windows_script_interpreter_{0}",
+            "a".repeat(64)
+        );
+        assert_eq!(key.len(), 226);
+        for prefix in [".mise-tmp", ".tmp"] {
+            let name = HttpBackend::tmp_dir_name(prefix, &key).unwrap();
+            // Linux pids reach 7 digits; the millisecond timestamp is 13 digits.
+            assert!(name.len() + 2 < 255, "{name} is {} bytes", name.len());
+            assert!(name.starts_with(prefix));
+        }
+    }
+
+    #[test]
     fn cache_key_is_path_safe_for_scalar_and_table_rename_exe() {
         let backend = HttpBackend {
             ba: Arc::new(BackendArg::new_raw(
@@ -2388,5 +2417,37 @@ mod tests {
                 .unwrap()
         };
         assert_ne!(rendered("1.0.0/bin"), rendered("2.0.0/bin"));
+    }
+
+    #[test]
+    fn cache_key_stays_under_name_max_with_every_part() {
+        let backend = HttpBackend {
+            ba: Arc::new(BackendArg::new_raw(
+                "http-mytool".to_string(),
+                Some("http:mytool".to_string()),
+                "mytool".to_string(),
+                None,
+                BackendResolution::new(true),
+            )),
+        };
+        let tmp = tempfile::Builder::new().suffix(".bin").tempfile().unwrap();
+        std::fs::write(tmp.path(), b"raw-binary").unwrap();
+        let opts = crate::toolset::parse_tool_options(
+            r#"rename_exe="plz",windows_script_interpreter="node",strip_components=1"#,
+        );
+        let opts = HttpOptions::new(&opts);
+        let file_info = FileInfo::new(tmp.path(), None, &opts);
+        let key = backend
+            .cache_key(tmp.path(), &opts, &file_info, 0, Some("bin"))
+            .unwrap();
+        assert!(
+            key.len() <= MAX_CACHE_KEY_LEN,
+            "{key} is {} bytes",
+            key.len()
+        );
+        let other = backend
+            .cache_key(tmp.path(), &opts, &file_info, 0, Some("other"))
+            .unwrap();
+        assert_ne!(key, other);
     }
 }

@@ -46,6 +46,12 @@ mise run build arg1 arg2 ::: test arg3 arg4
 
 除非任务之间存在依赖关系，否则它们会并行运行。
 
+若要从菜单中选择任务，而不是逐个输入，请使用 `--multi`。任务选择器会以清单形式显示任务：按 Space 选中任务，按 `/` 筛选，再按 Enter 运行所选任务，效果等同于使用 `:::` 指定这些任务。此功能需要交互式终端。
+
+```sh
+mise run --multi
+```
+
 ## 按名称选择任务
 
 可使用冒号分隔的组名为相关任务命名，例如 `test:unit` 和 `test:e2e`，这样就能用同一个模式选择它们。
@@ -94,6 +100,35 @@ depends = ["lint:*"]
 
 在单体仓库中，模式也可用于选择项目，例如 `//...:test`；参阅[单体仓库任务](/tasks/monorepo.html)。
 
+## 按标签选择任务
+
+为任务设置 [`tags`](/tasks/task-configuration.html#tags)，说明每项任务的类别：
+
+```mise-toml [mise.toml]
+[tasks.clippy]
+tags = "lint"
+run = "cargo clippy"
+
+[tasks.shellcheck]
+tags = "lint"
+run = "shellcheck scripts/*.sh"
+
+[tasks."test:e2e"]
+tags = ["test", "slow"]
+run = "./e2e/run"
+```
+
+`--tag` 会运行带有该标签的任务，无论任务名称是什么：
+
+```sh
+mise run --tag lint                # clippy and shellcheck
+mise run --tag lint --tag test     # every task tagged lint or test
+mise run --tag slow 'test:*'      # test:e2e, the only test:* task tagged slow
+mise tasks ls --tag lint           # list them instead
+```
+
+未指定任务名称时，`--tag` 会从所有任务中筛选，效果等同于任务名称为 `**`。指定名称或模式时，只会保留匹配且带有该标签的任务；如果没有匹配项则会失败。依赖项仍会运行，无论它们是否带有所选标签。请将 `--tag` 放在任务名称之前；放在名称之后时，该选项会传给任务。在单体仓库中，可添加模式以选择其他项目，例如 `mise run --tag lint '//...:**'`。
+
 ## 传递参数
 
 任务名称后面的参数会传给该任务：
@@ -126,6 +161,7 @@ mise 会根据任务类型转发额外参数：
 | `-c`, `--continue-on-error`   | Keep running after a task fails. See [When a task fails](#when-a-task-fails).                                                                                                                                       |
 | `--skip-deps`                 | Run only the named tasks, without their dependencies.                                                                                                                                                               |
 | `--timeout <DURATION>`        | Stop the whole run after a duration such as `30s` or `5m`. Overrides the [`task.timeout`](/configuration/settings.html#task.timeout) setting.                                                                       |
+| `--report-file <PATH>`        | 运行结束时将每项任务的结果写入 JSON 报告；见[运行报告](#run-report)。                                                                                                                                                |
 | `-C`, `--cd <DIR>`            | Run as if mise started in another directory.                                                                                                                                                                        |
 | `-t`, `--tool <TOOL@VERSION>` | Add a tool to the run, such as `--tool node@24`.                                                                                                                                                                    |
 | `--skip-tools`                | Do not install missing tools before the tasks start.                                                                                                                                                                |
@@ -144,6 +180,62 @@ already started. The run exits with the failed task's status.
 With `--continue-on-error`, running tasks finish and the remaining tasks still
 start, including tasks that depend on the failed one. At the end, mise lists the
 failed tasks and exits with a non-zero status.
+
+### 运行报告
+
+无论任务运行成功、失败、因 Ctrl-C 中断还是因 `--timeout` 停止，`mise run --report-file <PATH>` 都会在运行结束时写入 JSON 报告。CI 面板和代理工具可以读取运行了哪些任务以及运行结果，而无需解析终端输出。设置 `MISE_TASK_REPORT_FILE` 也有相同效果，无需更改命令行。运行启动的任务不会继承 `MISE_TASK_REPORT_FILE`，因此任务内部运行的 `mise run` 不会覆盖报告。即使尚无任务启动（例如正在安装工具时按下 Ctrl-C），也会写入 `cancelled` 报告。此选项和环境变量都不能与 `--dry-run` 同时使用。
+
+```json
+{
+  "version": 1,
+  "status": "failed",
+  "started_at": "2026-11-04T12:00:00.000Z",
+  "ended_at": "2026-11-04T12:00:01.500Z",
+  "duration_ms": 1500,
+  "tasks": [
+    {
+      "name": "lint",
+      "args": [],
+      "status": "skipped",
+      "exit_code": null,
+      "duration_ms": 2,
+      "started_at": "2026-11-04T12:00:00.100Z",
+      "ended_at": "2026-11-04T12:00:00.102Z"
+    },
+    {
+      "name": "test",
+      "args": ["--quick"],
+      "status": "failed",
+      "exit_code": 3,
+      "duration_ms": 1300,
+      "started_at": "2026-11-04T12:00:00.110Z",
+      "ended_at": "2026-11-04T12:00:01.410Z"
+    },
+    {
+      "name": "deploy",
+      "args": [],
+      "status": "not_run",
+      "exit_code": null,
+      "duration_ms": null,
+      "started_at": null,
+      "ended_at": null
+    }
+  ]
+}
+```
+
+`tasks` 会按启动顺序列出运行计划中的所有任务，包括依赖项，随后列出尚未启动的任务。任务的 `status` 为以下值之一：
+
+| 状态          | 含义                                                                                                       |
+| ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `passed`     | 已运行并以状态码 0 退出。                                                                                  |
+| `failed`     | 已运行但未成功，或启动失败。`exit_code` 为其退出状态；没有退出状态时为 `null`。                               |
+| `cancelled`  | mise 停止了任务：因为 Ctrl-C、`--timeout` 或其他任务失败。                                                 |
+| `skipped`    | 无需运行：其[输出已是最新](#skip-tasks-that-are-up-to-date)，或满足了 `skip_if` 条件。                      |
+| `cached`     | 结果已从[制品缓存](/tasks/caching.html)恢复。                                                              |
+| `not_run`    | 运行在任务启动前结束。                                                                                     |
+
+顶层的 `status` 为 `passed`、`failed`、`cancelled` 或 `timed_out`。参数会像终端输出一样脱敏，包括设置了 `redact = true` 的环境变量值和 URL 中的凭据。只有字段含义发生变化时才会提升 `version`；新增字段不需要更改该值。
 
 ## Output
 
@@ -189,6 +281,29 @@ mise 因其他任务失败而停止的任务会显示 `[name] cancelled`，试�
 
 持续运行的任务（例如开发服务器或文件监视器）在 `summary` 模式下不会输出内容，直到任务退出或运行被中断。若要实时查看输出，请为其设置 `output = "interleave"`。
 
+### 查看最近一次运行的输出
+
+启用 [`task.logs`](/configuration/settings.html#task.logs) 后，mise 会保存各任务最近一次运行的标准输出和标准错误合并内容。这样即使输出被 `replacing`、`timed`、`silent` 或 `summary` 隐藏，也无需重新运行任务即可查看。任务日志默认关闭；可在 `mise.toml` 中启用：
+
+```toml
+[settings]
+task.logs = true
+```
+
+也可以通过 `export MISE_TASK_LOGS=1` 为当前 shell 启用，然后运行：
+
+```sh
+mise run --output replacing test
+mise tasks log test          # print the output of the last run
+mise tasks log test --path   # print where the log is kept
+```
+
+每次运行都会替换该任务之前的日志，每个日志仅保留末尾 4 MiB。日志位于 mise 状态目录（`~/.local/state/mise/task-logs`）下，每个项目中的每项任务各有一个文件，只有当前用户可读取。全局任务会在其运行过的每个项目中分别保存日志；在任何项目之外运行时则共用一个日志。mise 在终端中脱敏的值也会在日志中脱敏。如果命令尚未启动就结束（例如任务先被取消，或程序不存在、不可执行），则会保留之前的日志。
+
+如果任务在 `replacing` 或 `timed` 模式下失败，或在 `summary` 模式下输出超过其保留的 64 KiB，mise 会在错误信息后显示日志路径。
+
+mise 只会记录它读取的输出。`raw` 或 `interactive` 任务会直接使用终端；当没有内容需要脱敏，且制品缓存与 OpenTelemetry 日志导出都没有读取输出时，`interleave` 任务也会直接使用终端。这些任务不会留下日志，并会移除之前运行留下的日志。
+
 ## Interactive input
 
 Unless a task is `interactive` or `raw`, stdin is connected only with
@@ -222,6 +337,66 @@ outputs = ["target/debug/mycli"]
 只要输出比源文件新，且自上次成功运行后没有任何更改，mise 就会打印 `[build] sources up-to-date, skipping`，
 而不会运行任务。[任务过期判定条件](/tasks/caching.html#what-makes-a-task-stale)列出了具体检查项。若仍要运行，
 请使用 `mise run --force build`。[任务缓存](/tasks/caching.html)还介绍了可恢复已删除输出的制品缓存。
+
+## 运行受变更影响的任务 {#affected-tasks}
+
+`mise run --affected` 只会运行匹配的任务，且任务的 `sources` 中至少包含一个 Git 变更文件：
+
+```mise-toml [mise.toml]
+[tasks."test:unit"]
+sources = ["src/**"]
+run = "cargo test"
+
+[tasks."test:docs"]
+sources = ["docs/**"]
+run = "vale docs"
+```
+
+```sh
+# After a commit that touches src/lib.rs, runs test:unit but not test:docs
+mise run --affected 'test:*'
+
+# Show why each task was or was not selected, without running anything
+mise run --affected --affected-explain --dry-run 'test:*'
+```
+
+如果任务的配置文件或 `file` 指定的脚本发生变更，任务也会被视为受影响。任务目录及其 `sources` 前置目录中的符号链接会跟随解析，因为 Git 会以各文件自身的路径报告变更。字面列出的 source 若是符号链接，也会匹配其目标；但匹配到链接的 glob 只会匹配链接名称。要捕获目标内容的变化，请列出目标路径或直接列出该链接。发生变更的子模块会被视为一组位于子模块路径下的变更文件，因此 `sources` 会像匹配普通目录一样匹配子模块内部内容。mise 只能检查已初始化的子模块：未检出的子模块在 Git 中只会显示其路径，因此请将该路径本身（例如 `sub`）加入 `sources`，以捕获子模块变更。mise 会比较父仓库在 merge base 和 head 所记录的子模块提交；只有子模块已检出到该 head 时，才会将其工作区变更加入比较；即使子模块记录的提交未改变，其中未跟踪的文件也会计入。从子模块内部运行时，`--affected` 会比较该子模块自身的历史记录。嵌套在项目中的独立检出目录（例如被忽略的克隆）会根据自身变更计算。
+
+没有 `sources` 的任务可能读取任何文件，因此只要发生任何变更，mise 就会运行该任务。没有变更时，`--affected` 不会运行任何任务。所选任务的依赖项仍会运行，且所有任务仍会执行常规的[最新状态检查](#skip-tasks-that-are-up-to-date)；添加 `--force` 可强制运行。
+
+mise 会像单体仓库中一样计算变更：比较 `--affected-base`（默认为 `HEAD~1`）与 `--affected-head`（默认为 `HEAD`）之间的提交，并在 head 已检出的情况下纳入未提交和未跟踪文件。`--affected-committed`、`--affected-uncommitted` 和 `--affected-untracked` 可缩小比较范围；`--affected-json` 会输出所选任务及原因（`changed-source`、`task-config`、`task-file`、`no-sources`，或适用于使用 <span v-pre>`{{ usage.* }}`</span> 的 source 的 `argument-sources`）。CI 中修订版的选择方式详见[运行受影响任务](/tasks/workspace-graph.html#affected-tasks)。
+
+在单体仓库根目录（`monorepo_root = true`）下，`--affected` 会改为选择[项目](/tasks/workspace-graph.html#affected-tasks)，并在每个受影响项目中运行匹配的任务。
+
+## 查看任务耗时
+
+mise 会记录此项目中每次任务运行的参数、开始时间、耗时，以及任务是成功、失败、从制品缓存恢复、跳过还是取消。[`mise tasks history`](/cli/tasks/history.html) 会按时间顺序列出运行记录；`--summary` 会为每项任务显示一行：
+
+```sh
+$ mise tasks history --summary
+Task   Runs  Failed  Median  Last    Last status
+build  12    1       41.20s  38.91s  ok
+lint   8     0       6.05s   5.87s   ok
+test   10    2       62.04s  58.30s  failed
+```
+
+中位数只统计已执行且成功的运行记录。它代表任务的典型成本，便于用户或代理在决定运行哪些检查前，了解各项检查是否耗时。`--json` 会为脚本输出相同数据：
+
+```sh
+mise tasks history --summary --json | jq -r '.[] | "\(.task) \(.median_ms)"'
+```
+
+相同摘要也会出现在 [`mise tasks info <task> --json`](/cli/tasks/info.html) 的 `history` 字段，以及 [`mise tasks ls --json`](/cli/tasks/ls.html) 所列每项任务的数据中。这样，已在读取任务定义的工具无需再运行一条命令，就能获知任务耗时。任务尚未运行时，该字段为 `null`：
+
+```sh
+mise tasks info test --json | jq '.history | {median_ms, last_status}'
+```
+
+耗时指任务从就绪到结束的墙上时间，包括解析环境和等待 [`lock`](/tasks/task-configuration.html#lock) 的时间，但不包括依赖项；依赖项会作为独立运行记录。没有实际运行内容的任务（例如只列出 `depends` 的任务）不会被记录。
+
+运行记录按项目保存（单体仓库中使用仓库根目录），路径为 `$MISE_STATE_DIR/task-history/`。每项任务最多保留 [`task.history_limit`](/configuration/settings.html#task.history_limit) 条记录（默认为 20 条）。将 [`task.history`](/configuration/settings.html#task.history) 设为 `false` 可停止记录。记录过程不会导致任务运行失败，`mise run --dry-run` 也不会写入记录。
+
+参数会像终端输出一样脱敏，并移除 URL 凭据。如果任务在解析其环境前就结束，例如因 source 未过期而跳过，日志会不包含参数，因为 mise 尚不知道该环境会登记哪些密钥。
 
 ## 文件更改时重新运行任务
 
@@ -258,6 +433,35 @@ watchexec 的 `--env` 和 `--quiet` 在此命令中写作 `--watchexec-env` 和 
 ```sh
 mise watch -E dev --watchexec-env LOG_LEVEL=debug build
 ```
+
+## 在其他修订版运行任务
+
+`--at REV` 会在另一个 Git 提交中的状态下运行任务，不会更改当前检出目录。你可以用它回答“在 `main` 上运行这个测试也会失败吗？”之类的问题：
+
+```sh
+mise run --at main test
+mise run --at HEAD~1 bench > before.txt
+```
+
+mise 会在临时目录中将 REV 检出为分离的 [`git worktree`](https://git-scm.com/docs/git-worktree)，使用该修订版自身的配置、任务和工具运行任务，之后删除此 worktree。即使任务失败、因 `--timeout` 超时或你按下 Ctrl-C，也会清理 worktree。命令以任务的退出状态结束。当前检出目录中的未提交更改不会参与运行：REV 必须是一个提交。
+
+- 任务会在仓库根目录下与当前 mise 工作目录相同的相对目录中运行。worktree 目录使用当前检出目录的名称。
+- 子模块会初始化到 REV，并使用现有克隆作为参考，因此只会获取缺少的对象。Git 钩子不会运行，包括当前检出目录中的钩子和 REV 仓库中的钩子。
+- 忽略的文件不会出现在新 worktree 中，例如 `target/`、`node_modules/` 或 `.env`。传入 `--at-setup CMD` 可进行准备。该命令会在任务启动前，以普通 shell 命令形式在 worktree 中与 mise 工作目录相对应的位置运行（不是任务的 `dir`），不会使用 mise 环境。`MISE_RUN_AT_SOURCE` 会设为当前检出目录，`MISE_RUN_AT_REV` 会设为该提交；任务运行时也会获得这两个变量：
+
+  ```sh
+  mise run --at main --at-setup 'cp -R "$MISE_RUN_AT_SOURCE/node_modules" .' test
+  ```
+
+  使用 `--dry-run` 时，mise 会打印准备命令而不执行。`--timeout` 只限制任务，不限制准备命令。
+
+- 如果在一次 `--at` 运行中（即设置了 `MISE_RUN_AT_REV` 时）再次运行 `mise run --at`，命令会被拒绝。
+
+- 配置会从 worktree 中查找，因此当前检出目录上层（全局配置除外）的 `mise.toml` 不会生效。
+
+- 任务所需的[守护进程](/daemons.html)会像普通 `mise run` 一样在运行结束后继续运行，但其项目目录会随 worktree 一起删除。`mise daemons prune` 会停止这些守护进程并删除其状态。
+
+REV 中的配置属于同一项目的另一个提交，因此它与仓库主检出目录共享[信任状态](/cli/trust.html)，和其他链接 worktree 一样。如果主检出目录未受信任，`--at` 会在任何内容启动前拒绝运行。mise 不会单独信任 REV 中的配置：不会通过提示、`--yes` 或 `mise run` 对当前运行目录配置采用的方式来信任。在[安全模式](/paranoid.html)中，信任与文件路径和内容绑定；由于每次运行都会创建新路径，REV 中的配置始终不受信任。
 
 ## Task environment {#task-environment}
 

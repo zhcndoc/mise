@@ -32,6 +32,10 @@ mise exec -- rg --version
 
 配方会下载并解压已发布的制品。如果工具需要自定义安装步骤或环境设置，请改用其他后端。
 
+### Java 软件包
+
+只发布单个 `.jar` 文件的软件包会像 aqua 一样通过 `java -jar` 运行。mise 会在软件包的可执行文件名称下生成一个小型启动脚本，因此可以直接运行 `ktfmt` 或 `checkstyle`。Java 需要由你自行安装，与 `gradle` 一样；请将 `java` 加入工具配置。Windows 不支持此功能。
+
 ## 内置注册表 {#bundled-registry}
 
 每个 mise 发行版都会内置一份 aqua 注册表快照，并默认使用它。启用 [`registry_floating`](/configuration/settings.html#registry_floating) 后，mise 会先检查当前官方 aqua 注册表，并将内置快照用作后备来源。此设置也会让 mise 自己的注册表跟随上游变化；相关权衡和缓存行为请参阅[浮动注册表](/registry.html#floating-registries)。

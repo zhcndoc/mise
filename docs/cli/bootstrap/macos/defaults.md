@@ -9,13 +9,9 @@ description: "管理 Dock、Finder 和键盘等 macOS 用户偏好"
 - **作用：** 只读
 - **源代码：** [`src/cli/bootstrap.rs`](https://github.com/jdx/mise/blob/main/src/cli/bootstrap.rs)
 
-Manage macOS preferences such as Dock, Finder, and keyboard settings
+管理 Dock、Finder 和键盘等 macOS 用户偏好设置。
 
-Applies `[bootstrap.macos.defaults]`, `[[bootstrap.macos.defaults_entries]]`,
-and the `[bootstrap.macos.dock]`, `finder`, `keyboard`, and `trackpad`
-sections. Preferences are written the way `defaults write` writes them.
-mise does not restart apps: Dock, Finder, and some others show a change
-only after they relaunch.
+应用 `[bootstrap.settings.macos]`，包括其 `defaults`、`dock`、`finder`、`keyboard`、`trackpad` 和 `login_items` 表，以及 `[[bootstrap.settings.macos.defaults_entries]]` 表数组。偏好设置的写入方式与 `defaults write` 相同。mise 不会重启应用；Dock、Finder 等应用只有在重新启动后才会显示更改。其他 `[bootstrap.settings.<plugin>]` 配置由 bootstrap 设置插件通过 `mise bootstrap settings` 应用。
 
 ## 标志
 - **`-h --help`** — 打印帮助

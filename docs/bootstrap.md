@@ -68,8 +68,8 @@ mise bootstrap: running `bootstrap` task
 | [`[dotfile_groups]`, `[bootstrap] dotfile_groups`](/dotfiles/groups.html) | dotfiles 目录树，以及机器要应用的目录树                                                     |
 | [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)                | 在 shell 启动文件中激活 mise                                                               |
 | [`[bootstrap.user]`](/bootstrap/shell.html#set-your-login-shell)          | 登录 shell                                                                                 |
-| [`[bootstrap.macos.defaults]`](/bootstrap/macos-defaults.html)            | 使用 `defaults write` 写入 macOS 用户偏好设置                                               |
-| [`[bootstrap.macos.*]`](/bootstrap/macos-defaults.html)                   | Dock、Finder、键盘和触控板等常见 macOS 偏好设置                                             |
+| [`[bootstrap.settings.macos]`](/bootstrap/macos-defaults.html)            | Dock、Finder、键盘、触控板、登录项目等 macOS 用户偏好设置，以及任意 `defaults write` 域       |
+| [`[bootstrap.settings]`](/bootstrap/settings-plugins.html)                | 通过 bootstrap 设置插件应用设置，例如 Linux 桌面外观                                        |
 | [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html)             | 使用 `launchctl` 写入并加载 macOS LaunchAgents                                              |
 | [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)              | 使用 `systemctl --user` 管理 systemd 用户单元                                               |
 | [`[tools]`](/dev-tools/)                                                  | 由 mise 安装和管理的工具                                                                   |
@@ -111,19 +111,20 @@ mise bootstrap --adopt you/setup
 | 9    | `repos`                            | [`[bootstrap.repos]`](/bootstrap/repos.html)                                                                                                          | `pre-repos`、`post-repos`       |
 | 10   | `dotfiles`                         | [`[dotfiles]`](/dotfiles.html)                                                                                                                        | `pre-dotfiles`、`post-dotfiles` |
 | 11   | `mise-shell-activate` (`shell`)    | [`[bootstrap.mise_shell_activate]`](/bootstrap/shell.html)                                                                                            |                                 |
-| 12   | `macos-defaults` (`defaults`)      | [`[bootstrap.macos.defaults]`](/bootstrap/macos-defaults.html) 和其他 `[bootstrap.macos.*]` 键                                                        | `pre-defaults`、`post-defaults` |
+| 12   | `macos-defaults` (`defaults`)      | [`[bootstrap.settings.macos]`](/bootstrap/macos-defaults.html)                                                                                        | `pre-defaults`、`post-defaults` |
 | 13   | `macos-launchd-agents` (`launchd`) | [`[bootstrap.macos.launchd.agents]`](/bootstrap/launchd.html)                                                                                         |                                 |
 | 14   | `linux-systemd-units` (`systemd`)  | [`[bootstrap.linux.systemd.units]`](/bootstrap/systemd.html)                                                                                          |                                 |
 | 15   | `user`                             | [`[bootstrap.user]`](/bootstrap/shell.html#set-your-login-shell)                                                                                      | `pre-user`、`post-user`         |
 | 16   | `tools`                            | `[tools]`，与 `mise install` 的行为相同                                                                                                               | `pre-tools`、`post-tools`       |
 | 17   | `packages`                         | 来自[包管理器插件](/bootstrap/packages/plugins.html)的软件包                                                                                          |                                 |
-| 18   | `services`                         | `requires_tools = true` 的用户服务                                                                                                                   |                                 |
-| 19   | `task`                             | 如果存在，则运行 [`bootstrap` 任务](#the-bootstrap-task)                                                                                             |                                 |
-| 20   | `final-hook`                       |                                                                                                                                                       | `final`                         |
+| 18   | `settings`                         | 通过[Bootstrap 设置插件](/bootstrap/settings-plugins.html)应用 [`[bootstrap.settings]`](/bootstrap/settings-plugins.html)                             |                                 |
+| 19   | `services`                         | `requires_tools = true` 的用户服务                                                                                                                   |                                 |
+| 20   | `task`                             | 如果存在，则运行 [`bootstrap` 任务](#the-bootstrap-task)                                                                                             |                                 |
+| 21   | `final-hook`                       |                                                                                                                                                       | `final`                         |
 
 在第 4 步中，mise 添加 apt 软件源前会先运行 `pre-packages` 钩子。
 
-除非 `[bootstrap.packages]` 中的软件包来自包管理器插件，否则 `post-packages` 钩子会在第 4 步后立即运行。如果有软件包来自插件，则会改为在第 17 步安装完这些软件包后运行。即使指定了 `--skip tools`，第 18 步仍会运行。
+除非 `[bootstrap.packages]` 中的软件包来自包管理器插件，否则 `post-packages` 钩子会在第 4 步后立即运行。如果有软件包来自插件，则会改为在第 17 步安装完这些软件包后运行。即使指定了 `--skip tools`，第 19 步仍会运行。
 
 声明式配置部分会将机器当前状态与配置对比，只更改不一致的内容。钩子和 `bootstrap` 任务每次都会运行，因此请确保它们可重复执行。整个运行流程是一系列步骤，而非事务：如果后续步骤失败，前面已完成的更改仍会保留。请修复报告的问题，然后再次运行 `mise bootstrap`。
 
@@ -166,14 +167,9 @@ the files on disk, so an `exec()` call in one of them runs during the dry run,
 as it does for `mise bootstrap plan` and `mise bootstrap status`. See
 [Templates that run commands](#templates-that-run-commands).
 
-### Plan declarative resources
+### 规划声明式资源
 
-`mise bootstrap plan` lists the changes to declarative resources in dependency
-order: accounts, packages (including packages from plugins), system files and
-directories, system and user services, firewall policy and rules, and Compose
-projects. It does not cover dotfiles, repositories, shell activation, macOS
-defaults, LaunchAgents, systemd user units, the login shell, tools, hooks, or
-the `bootstrap` task. Use `mise bootstrap --dry-run` for those.
+`mise bootstrap plan` 会按依赖顺序列出声明式资源的变更：账户、软件包（包括由插件提供的软件包）、系统文件和目录、系统与用户服务、防火墙策略和规则、Compose 项目，以及 Git 仓库（显示 `create` 以克隆、显示 `update` 以拉取）。`[bootstrap.hooks]` 中的命令会以 `run` 操作和 `hook_phase` 属性列出，因为无法对命令内容进行差异比较；每次 bootstrap 都会运行这些命令，因此不会将其计为变更。计划不包含 dotfiles、shell 激活、macOS 默认设置、LaunchAgents、systemd 用户单元、登录 shell、工具或 `bootstrap` 任务。要查看这些内容，请运行 `mise bootstrap --dry-run`。
 
 ```sh
 mise bootstrap plan
@@ -189,7 +185,7 @@ mise bootstrap plan --detailed-exitcode
 | 2         | 计划包含更改                                |
 | 1         | 规划失败，或某项资源状态为 `unknown`        |
 
-如果 mise 无法自行达到资源声明的状态，该资源就会标记为 `unknown`。例如，当前平台没有对应的软件包管理器，或无法安装请求的版本。mise 会报告此项而不是跳过它，以便你手动处理。
+如果 mise 无法自行达到资源声明的状态，该资源就会标记为 `unknown`。例如，当前平台没有对应的软件包管理器、无法安装请求的版本，或仓库存在本地修改（bootstrap 会拒绝操作；`--skip-dirty` 会保留并跳过此仓库）。mise 会报告此项而不是跳过它，以便你手动处理。
 
 ### 检查状态 {#inspecting-state}
 

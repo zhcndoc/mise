@@ -107,6 +107,9 @@ export const commands: { [key: string]: Command } = {
           exclude: {
             hide: false,
           },
+          files: {
+            hide: false,
+          },
           history: {
             hide: false,
             subcommands: {
@@ -373,6 +376,17 @@ export const commands: { [key: string]: Command } = {
           },
         },
       },
+      settings: {
+        hide: false,
+        subcommands: {
+          apply: {
+            hide: false,
+          },
+          status: {
+            hide: false,
+          },
+        },
+      },
       status: {
         hide: false,
       },
@@ -568,6 +582,9 @@ export const commands: { [key: string]: Command } = {
         hide: false,
       },
       exclude: {
+        hide: false,
+      },
+      files: {
         hide: false,
       },
       history: {
@@ -925,7 +942,13 @@ export const commands: { [key: string]: Command } = {
       graph: {
         hide: false,
       },
+      history: {
+        hide: false,
+      },
       info: {
+        hide: false,
+      },
+      log: {
         hide: false,
       },
       ls: {

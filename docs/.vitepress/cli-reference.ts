@@ -77,6 +77,10 @@ const guides: Record<string, [string, string]> = {
     "Homebrew 软件包和 tap",
     "/bootstrap/packages/brew.html#third-party-taps",
   ],
+  "bootstrap settings": [
+    "初始化设置插件",
+    "/bootstrap/settings-plugins.html",
+  ],
   "bootstrap plugins": [
     "软件包管理器插件",
     "/bootstrap/packages/plugins.html",
@@ -102,6 +106,7 @@ const guides: Record<string, [string, string]> = {
   "dotfiles exclude": ["点文件历史", "/dotfiles/history.html"],
   "dotfiles include": ["点文件历史", "/dotfiles/history.html"],
   "dotfiles paths": ["点文件历史", "/dotfiles/history.html"],
+  "dotfiles files": ["点文件历史", "/dotfiles/history.html"],
   "dotfiles capture": ["点文件历史", "/dotfiles/history.html"],
   "dotfiles recover": ["点文件历史", "/dotfiles/history.html"],
   secrets: ["fnox 密钥", "/environments/secrets/fnox.html"],

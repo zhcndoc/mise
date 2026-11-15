@@ -27,20 +27,28 @@ The experimental artifact cache (a task's `cache` field) has separate `--task-ca
 To create a script task, run `mise tasks add --file hello -- echo hello`, then `mise run hello`. See <https://mise.jdx.dev/tasks/running-tasks.html>
 
 ## Flags
-- **`--affected`** — Run matching tasks only in projects affected by Git changes
+- **`--affected`** — 仅在 Git 变更会影响任务时运行匹配的任务
 
-  Counts committed changes between the base and head revisions, plus staged, unstaged, and untracked changes in the working tree when the head revision is the checked-out commit. Requires a monorepo root (`monorepo_root = true`).
+  比较 base 与 head 之间的已提交变更；当 head 是当前检出的提交时，也会计算工作区中已暂存、未暂存和未跟踪的更改。在单体仓库根目录（`monorepo_root = true`）下会运行受影响项目中的任务；其他目录则会运行 `sources` 或任务定义配置文件包含变更文件的任务，以及未声明 `sources` 的任务。
 - **`--affected-base <REV>`** — Git base revision for `--affected`
 
   Defaults to `MISE_AFFECTED_BASE`, CI metadata, or `HEAD~1`.
 - **`--affected-committed`** — Count committed changes between the base and head revisions
 
   Alone, ignores the working tree. Combines with `--affected-uncommitted` and `--affected-untracked`. With none of the three, every source counts (the working-tree sources only when the head revision is the checked-out commit). Also set by `MISE_AFFECTED_COMMITTED`.
-- **`--affected-explain`** — Explain why `--affected` selected each project and task
+- **`--affected-explain`** — 说明 `--affected` 选择各项目或任务的原因
 - **`--affected-head <REV>`** — Git head revision for `--affected`
 
   Defaults to `MISE_AFFECTED_HEAD`, CI metadata, or `HEAD`.
 - **`--affected-json`** — Print the affected projects and tasks as JSON without running tasks
+- **`--at <REV>`** — 在另一个 Git 修订版中通过临时 worktree 运行任务
+
+  mise 会将 REV 检出为其临时目录下的分离 `git worktree`（包括初始化子模块），然后使用该修订版自己的配置和任务运行。完成后会删除 worktree，即使任务失败或中断也会清理。构建缓存等忽略文件不会出现在 worktree 中；可使用 `--at-setup` 准备。
+
+  只有仓库主检出目录受信任时，REV 中的配置才会被信任；它不会单独受信任，也不能通过提示或 `--yes` 绕过。
+- **`--at-setup <CMD>`** — 在运行任务前，于 `--at` worktree 中执行此 shell 命令
+
+  命令会在 worktree 中与 mise 启动目录对应的位置运行（不是任务的 `dir`），并且不使用 mise 环境。`MISE_RUN_AT_SOURCE` 会设为 worktree 所来自的仓库。`--timeout` 不会限制此命令，只会限制后续任务。
 - **`--affected-uncommitted`** — Count staged and unstaged changes to tracked files
 
   Combines with the other source flags. Alone, ignores committed changes. Needs the head revision to be the current checkout. Also set by `MISE_AFFECTED_UNCOMMITTED`.
@@ -48,6 +56,9 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 
   Combines with the other source flags. Alone, ignores committed changes. Needs the head revision to be the current checkout. Also set by `MISE_AFFECTED_UNTRACKED`.
 - **`--all`** — Open the task picker with tasks from every project in the monorepo
+- **`--multi`** — 打开任务清单，选择并运行多个任务
+
+  按 Space 选中任务，按 `/` 筛选，按 Enter 运行所选任务，效果等同于用 `:::` 指定任务。需要交互式终端。可与 `--all` 配合，以列出单体仓库中的所有项目任务。
 - **`-c --continue-on-error`** — Continue running tasks even if one fails
 - **`-C --cd <DIR>`** — Change to this directory before running the tasks
 - **`-f --force`** — Run the tasks even if their outputs are up to date
@@ -75,6 +86,11 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 - **`-r --raw`** — Connect the tasks directly to stdin, stdout, and stderr instead of reading their output by line
 
   Redactions are not applied, and tasks run one at a time. Set the `raw` setting to make this the default.
+- **`--report-file <PATH>`** — 在此文件中写入本次运行所有任务的 JSON 报告
+
+  运行成功、失败、按 Ctrl-C 中断或因 `--timeout` 停止时都会写入。每项任务包含状态（`passed`、`failed`、`cancelled`、`skipped`、`cached` 或 `not_run`）、退出码、耗时和时间戳。运行启动的任务不会继承 `MISE_TASK_REPORT_FILE`。
+
+  **环境变量：** `MISE_TASK_REPORT_FILE`
 - **`--secrets <SECRET>`** — [experimental] Give the named tasks these secrets (comma-separated); their dependencies and subtasks do not get them
 
   Put this flag before the task name. Not allowed in safe mode.
@@ -94,6 +110,9 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 - **`--allow-net <HOST>`** — Allow network access only to HOST (not supported on any platform)
 
   Per-host filtering does not work: Linux and macOS exit with an error, and Windows runs the task without network restrictions. See <https://mise.jdx.dev/sandboxing.html#access-to-particular-hosts>
+- **`--allow-unix <PATH>`** — 允许连接指定路径的 Unix socket；PATH 为目录时，允许连接其下所有 socket（其他 socket 会由 `--deny-unix` 禁止）
+
+  沙箱内创建的抽象 socket 仍可访问。仅支持 Linux 7.1 或更高版本。
 - **`--allow-read <PATH>`** — Allow reads from a specific path (implies `--deny-read` for everything else)
 - **`--allow-write <PATH>`** — Allow writes to a specific path (implies `--deny-write` for everything else)
 - **`--deny-all`** — Block reads, writes, network, and env vars
@@ -101,6 +120,7 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 
   On Windows it also keeps the variables programs need to start, such as `SystemRoot` and `TEMP`.
 - **`--deny-net`** — Block all network access
+- **`--deny-unix`** — 禁止连接沙箱外的 Unix socket（仅支持 Linux 7.1 或更高版本）
 - **`--deny-read`** — Block filesystem reads (system libraries and tool directories stay readable)
 - **`--deny-write`** — Block filesystem writes except temporary and device paths (/tmp, /dev)
 - **`--fresh-env`** — Bypass the environment cache and recompute the environment
@@ -117,6 +137,9 @@ To create a script task, run `mise tasks add --file hello -- echo hello`, then `
 - **`--skip-tools`** — Do not install missing tools before running the tasks
 
   Set `task.run_auto_install = false` to make this the default.
+- **`--tag <TAG>`** — 仅运行带有此标签的匹配任务；可重复指定多个标签
+
+  未指定任务名称时，会从所有任务中筛选，效果等同于任务名称为 `**`。标签来自各任务的 `tags` 属性。依赖项仍会运行，无论它们是否带有所选标签。
 - **`--task-cache <TASK_CACHE>`** — [experimental] Set artifact cache access for this run
 
   - `read-write` - Read cached results and write new results
@@ -184,10 +207,22 @@ Run every task that matches a pattern
 mise run 'test:*'
 ```
 
+运行所有带有 `lint` 标签的任务
+
+```
+mise run --tag lint
+```
+
 Run a task in a monorepo project
 
 ```
 mise run //services/api:build
+```
+
+在临时 Git worktree 中运行 `main` 上的 test
+
+```
+mise run --at main test
 ```
 
 Give "deploy" the DEPLOY_KEY secret (experimental); its dependencies do not get it

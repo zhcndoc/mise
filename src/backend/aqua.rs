@@ -3843,6 +3843,7 @@ impl AquaBackend {
             .iter()
             .map(|name| join_registry_path(&install_path, name))
             .map_ok(|path| complete_windows_ext(path, pkg, os(), v))
+            .map_ok(|path| complete_raw_windows_exe(path, pkg, os(), arch(), v))
             .collect::<Result<_>>()?;
         let first_bin_path = bin_paths
             .first()
@@ -3913,6 +3914,9 @@ impl AquaBackend {
             }
         }
 
+        #[cfg(unix)]
+        Self::wrap_jar_bins(&srcs, filename)?;
+
         // Bionic provides no glibc or musl loader, so an asset that names no
         // libc can still be linked against one and die at exec. The interpreter
         // says which build it is, whatever the file is called.
@@ -3926,6 +3930,75 @@ impl AquaBackend {
             self.create_symlink_bin_dir(tv, &srcs)?;
         }
 
+        Ok(())
+    }
+
+    /// Make a `.jar` package runnable, as aqua does by running it through
+    /// `java -jar`. The jar keeps a `.jar` name next to a launcher script that
+    /// takes the exposed binary name. Java itself comes from the user.
+    #[cfg(unix)]
+    fn wrap_jar_bins(srcs: &[AquaFileLink], download_filename: &str) -> Result<()> {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let download_is_jar = download_filename.to_ascii_lowercase().ends_with(".jar");
+        // Several links can share one source (aliases); the first one moves the
+        // file, so later ones reuse where it went.
+        let mut moved: HashMap<&Path, PathBuf> = HashMap::new();
+        for link in srcs {
+            let jar = if let Some(jar) = moved.get(link.src.as_path()) {
+                jar.clone()
+            } else {
+                let src_is_jar = link
+                    .src
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"));
+                if !(src_is_jar || download_is_jar) {
+                    continue;
+                }
+                if !fs::metadata(&link.src).is_ok_and(|meta| meta.is_file()) {
+                    continue;
+                }
+                // A jar is a zip archive; anything else is already a program.
+                let mut magic = [0u8; 4];
+                if fs::File::open(&link.src)
+                    .and_then(|mut f| f.read_exact(&mut magic))
+                    .is_err()
+                    || magic != *b"PK\x03\x04"
+                {
+                    continue;
+                }
+                let jar = if src_is_jar && link.src != link.dst {
+                    link.src.clone()
+                } else {
+                    let mut jar = link.src.clone().into_os_string();
+                    jar.push(".jar");
+                    PathBuf::from(jar)
+                };
+                if jar != link.src {
+                    // Moves the file the dst symlink points at, so remove dst first.
+                    if link.dst != link.src && link.dst.is_symlink() {
+                        fs::remove_file(&link.dst)?;
+                    }
+                    fs::rename(&link.src, &jar)?;
+                }
+                // The launcher is the command; the jar must not be shimmed too.
+                fs::set_permissions(&jar, fs::Permissions::from_mode(0o644))?;
+                moved.insert(link.src.as_path(), jar.clone());
+                jar
+            };
+            // The launcher always takes the exposed name (`link.dst`), the path
+            // `.mise-bins` and the registry's `files` refer to.
+            let launcher = &link.dst;
+            if launcher.is_symlink() || launcher.exists() {
+                fs::remove_file(launcher)?;
+            }
+            let script = format!(
+                "#!/bin/sh\nexec java -jar '{}' \"$@\"\n",
+                jar.to_string_lossy().replace('\'', "'\\''")
+            );
+            file::write(launcher, script)?;
+            file::make_executable(launcher)?;
+        }
         Ok(())
     }
 
@@ -4092,6 +4165,7 @@ impl AquaBackend {
 
             let mut path = join_registry_path(install_path, fallback_name)?;
             path = complete_windows_ext(path, pkg, os, version);
+            path = complete_raw_windows_exe(path, pkg, os, arch, version);
 
             return Ok(vec![AquaFileLink {
                 src: path.clone(),
@@ -4152,7 +4226,9 @@ impl AquaBackend {
                     link.as_deref().unwrap_or(f.name.as_str()),
                 )?;
                 src = complete_windows_ext(src, pkg, os, version);
+                src = complete_raw_windows_exe(src, pkg, os, arch, version);
                 dst = complete_windows_dst_ext(&src, dst, pkg, os, version);
+                dst = complete_raw_windows_exe(dst, pkg, os, arch, version);
 
                 Ok(AquaFileLink {
                     src,
@@ -4558,6 +4634,28 @@ fn complete_windows_ext(
         return path;
     };
     let completed = pkg.complete_windows_ext_to_file_src(&file_name, version, target_os);
+    if completed != file_name {
+        path.set_file_name(completed);
+    }
+    path
+}
+
+/// Keeps the `.exe` of a raw Windows download whose recipe turns
+/// `complete_windows_ext` off, which `complete_windows_ext` would leave bare.
+fn complete_raw_windows_exe(
+    mut path: PathBuf,
+    pkg: &AquaPackage,
+    target_os: &str,
+    arch: &str,
+    version: &str,
+) -> PathBuf {
+    let Some(file_name) = path
+        .file_name()
+        .map(|file_name| file_name.to_string_lossy().into_owned())
+    else {
+        return path;
+    };
+    let completed = pkg.raw_windows_exe_name(&file_name, version, target_os, arch);
     if completed != file_name {
         path.set_file_name(completed);
     }
@@ -6546,5 +6644,60 @@ no_asset: true
 
         let mode = std::fs::metadata(&universal).unwrap().permissions().mode();
         assert_ne!(mode & 0o111, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_wrap_jar_bins_keeps_launcher_at_exposed_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let jar = dir.path().join("tool.jar");
+        std::fs::write(&jar, b"PK\x03\x04").unwrap();
+        // A recipe naming its file `tool.jar` links nothing, so src == dst.
+        let link = AquaFileLink {
+            src: jar.clone(),
+            dst: jar.clone(),
+            hard: false,
+            explicit_link: false,
+        };
+
+        AquaBackend::wrap_jar_bins(&[link], "tool.jar").unwrap();
+
+        let script = std::fs::read_to_string(&jar).unwrap();
+        assert!(script.starts_with("#!/bin/sh\nexec java -jar "));
+        assert!(dir.path().join("tool.jar.jar").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_wrap_jar_bins_wraps_every_alias_and_unmarks_the_jar() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("payload");
+        std::fs::write(&payload, b"PK\x03\x04").unwrap();
+        let links: Vec<_> = ["tool", "tool-alt"]
+            .iter()
+            .map(|name| {
+                let dst = dir.path().join(name);
+                std::os::unix::fs::symlink(&payload, &dst).unwrap();
+                AquaFileLink {
+                    src: payload.clone(),
+                    dst,
+                    hard: false,
+                    explicit_link: false,
+                }
+            })
+            .collect();
+
+        AquaBackend::wrap_jar_bins(&links, "payload.jar").unwrap();
+
+        for name in ["tool", "tool-alt"] {
+            let script = std::fs::read_to_string(dir.path().join(name)).unwrap();
+            assert!(script.contains("payload.jar"), "{name}: {script}");
+        }
+        let mode = std::fs::metadata(dir.path().join("payload.jar"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0);
     }
 }

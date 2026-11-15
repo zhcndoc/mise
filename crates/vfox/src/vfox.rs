@@ -21,6 +21,9 @@ use crate::hooks::backend_list_versions::{
 use crate::hooks::backend_search_tools::BackendSearchToolsContext;
 use crate::hooks::backend_tools::BackendTool;
 use crate::hooks::backend_uninstall::BackendUninstallContext;
+use crate::hooks::bootstrap_settings::{
+    SettingsReadContext, SettingsReadResponse, SettingsWriteContext, SettingsWriteResponse,
+};
 use crate::hooks::env_keys::{EnvKey, EnvKeysContext};
 use crate::hooks::mise_env::{MiseEnvContext, MiseEnvResult};
 use crate::hooks::mise_install_satisfied::{
@@ -65,6 +68,10 @@ pub struct Vfox {
     /// no checksums, attestation always runs regardless of this flag.
     /// Set by the caller when the lockfile already has a provenance entry from a prior install.
     pub skip_verification: bool,
+    /// A checksum the downloaded artifact must match, as `algo:hex` (`sha256` or
+    /// `sha512`). Set by the caller in locked mode from the lockfile, so an artifact
+    /// that differs from the locked one fails even when the plugin supplies no checksum.
+    pub locked_checksum: Option<String>,
     /// Optional environment to set on plugins before executing backend hooks.
     /// When set, `plugin.set_cmd_env()` is called so Lua `cmd.exec()` uses this env
     /// instead of inheriting the process environment. This allows dependency tools'
@@ -132,6 +139,7 @@ impl std::fmt::Debug for Vfox {
             .field("cache_dir", &self.cache_dir)
             .field("download_dir", &self.download_dir)
             .field("skip_verification", &self.skip_verification)
+            .field("locked_checksum", &self.locked_checksum)
             .field("cmd_env", &self.cmd_env)
             .field("hook_dependencies", &self.hook_dependencies)
             .field("github_token", &self.github_token.as_deref().map(|_| "***"))
@@ -425,6 +433,7 @@ impl Default for Vfox {
             download_dir: home().join(".version-fox/downloads"),
             install_dir: home().join(".version-fox/installs"),
             skip_verification: false,
+            locked_checksum: None,
             cmd_env: None,
             hook_dependencies: None,
             default_inline_shell: None,

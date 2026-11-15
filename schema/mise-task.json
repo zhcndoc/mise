@@ -225,6 +225,22 @@
           "type": "string",
           "description": "description of task"
         },
+        "tags": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "what kind of task this is, such as `test` or `lint`; `mise run --tag` and `mise tasks ls --tag` select tasks by it"
+            },
+            {
+              "type": "array",
+              "description": "what kind of task this is, such as `test`, `lint` or `slow`; `mise run --tag` and `mise tasks ls --tag` select tasks by them",
+              "items": {
+                "type": "string",
+                "description": "a tag, such as `test`, `lint` or `slow`"
+              }
+            }
+          ]
+        },
         "dir": {
           "type": "string",
           "description": "directory to run script in, default is the project's base directory",
@@ -513,17 +529,63 @@
               "description": "`true` lets one run of this task at a time across every worktree of its repository; `false` takes no lock"
             },
             {
-              "type": "string",
-              "description": "a lock name shared by every task on this machine that names it",
-              "pattern": "^[^,]*\\S[^,]*$"
+              "description": "a lock shared by every task on this machine that names it",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "a lock name shared by every task on this machine that names it; the task holds one of its slots",
+                  "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                },
+                {
+                  "type": "object",
+                  "description": "a lock shared by every task on this machine that names it, of which the task holds `count` slots",
+                  "required": ["name"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "a lock name shared by every task on this machine that names it",
+                      "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "description": "how many of the lock's slots the task holds while it runs; `task.lock_pools` sets how many slots the lock has, one unless it says more, and a count above that is lowered to it",
+                      "minimum": 1
+                    }
+                  },
+                  "unevaluatedProperties": false
+                }
+              ]
             },
             {
               "type": "array",
-              "description": "lock names shared by every task on this machine that names them, taken in sorted order",
+              "description": "locks shared by every task on this machine that names them, taken in sorted order",
               "items": {
-                "type": "string",
-                "description": "a lock name shared by every task on this machine that names it",
-                "pattern": "^[^,]*\\S[^,]*$"
+                "description": "a lock shared by every task on this machine that names it",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "a lock name shared by every task on this machine that names it; the task holds one of its slots",
+                    "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                  },
+                  {
+                    "type": "object",
+                    "description": "a lock shared by every task on this machine that names it, of which the task holds `count` slots",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "a lock name shared by every task on this machine that names it",
+                        "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "description": "how many of the lock's slots the task holds while it runs; `task.lock_pools` sets how many slots the lock has, one unless it says more, and a count above that is lowered to it",
+                        "minimum": 1
+                      }
+                    },
+                    "required": ["name"],
+                    "unevaluatedProperties": false
+                  }
+                ]
               }
             }
           ]
@@ -557,6 +619,11 @@
           "description": "block env var inheritance",
           "default": false
         },
+        "deny_unix": {
+          "type": "boolean",
+          "description": "block connections to Unix sockets outside the sandbox; Linux 7.1 or later",
+          "default": false
+        },
         "allow_read": {
           "type": "array",
           "description": "allow reads from specific paths",
@@ -574,6 +641,13 @@
         "allow_net": {
           "type": "array",
           "description": "allow network to specific hosts; not supported yet, so Linux and macOS reject it",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_unix": {
+          "type": "array",
+          "description": "allow connections to the Unix sockets at specific paths (implies deny_unix); Linux 7.1 or later",
           "items": {
             "type": "string"
           }

@@ -468,7 +468,7 @@ fn homebrew_version_ignores_mise_working_directories() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let _guard = BrewPrefixGuard::set(tmp.path());
     let token_dir = caskroom_token_dir(CaskManager::BrewCask, "example");
-    file::create_dir_all(token_dir.join(".metadata"))?;
+    file::create_dir_all(token_dir.join(".metadata/1.0.0"))?;
     file::create_dir_all(token_dir.join("1.0.0"))?;
     file::create_dir_all(token_dir.join(".mise-tmp-interrupted"))?;
     file::create_dir_all(token_dir.join(".mise-backup-interrupted"))?;
@@ -487,7 +487,7 @@ fn rejects_non_utf8_homebrew_version_name() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let _guard = BrewPrefixGuard::set(tmp.path());
     let token_dir = caskroom_token_dir(CaskManager::BrewCask, "example");
-    file::create_dir_all(token_dir.join(".metadata"))?;
+    file::create_dir_all(token_dir.join(".metadata/1.0.0"))?;
     file::create_dir_all(token_dir.join("1.0.0"))?;
     file::create_dir_all(token_dir.join(Path::new(std::ffi::OsStr::from_bytes(b"\xff"))))?;
 
@@ -567,7 +567,8 @@ fn rejects_homebrew_metadata_with_multiple_versions() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let _guard = BrewPrefixGuard::set(tmp.path());
     let token_dir = caskroom_token_dir(CaskManager::BrewCask, "example");
-    file::create_dir_all(token_dir.join(".metadata"))?;
+    file::create_dir_all(token_dir.join(".metadata/2.0.0"))?;
+    file::create_dir_all(token_dir.join(".metadata/1.0.0"))?;
     file::create_dir_all(token_dir.join("2.0.0"))?;
     file::create_dir_all(token_dir.join("1.0.0"))?;
 
@@ -581,12 +582,30 @@ fn rejects_homebrew_metadata_with_multiple_versions() -> Result<()> {
 }
 
 #[test]
+fn homebrew_version_ignores_directories_without_a_metadata_record() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    // miniconda installs its conda root to `Caskroom/miniconda/base`.
+    let token_dir = caskroom_token_dir(CaskManager::BrewCask, "miniconda");
+    file::create_dir_all(token_dir.join(".metadata/py312_25.1.1-2"))?;
+    file::create_dir_all(token_dir.join("py312_25.1.1-2"))?;
+    file::create_dir_all(token_dir.join("base"))?;
+
+    assert_eq!(
+        homebrew_installed_version("miniconda")?,
+        Some("py312_25.1.1-2".to_string())
+    );
+    Ok(())
+}
+
+#[test]
 fn externally_managed_version_precedes_artifact_parsing() -> Result<()> {
     let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
     let tmp = tempfile::tempdir()?;
     let _guard = BrewPrefixGuard::set(tmp.path());
     let token_dir = caskroom_token_dir(CaskManager::BrewCask, "example");
-    file::create_dir_all(token_dir.join(".metadata"))?;
+    file::create_dir_all(token_dir.join(".metadata/1.0.0"))?;
     file::create_dir_all(token_dir.join("1.0.0"))?;
     let mut cask = test_cask("example", "1.0.0");
     cask.artifacts = vec![serde_json::json!({
@@ -620,6 +639,7 @@ fn both_receipt_types_satisfy_installed_state_without_mutation() -> Result<()> {
         caskroom_token_dir(CaskManager::BrewCask, &cask.token).join(".metadata/receipt.json");
     file::create_dir_all(metadata.parent().unwrap())?;
     file::write(&metadata, "homebrew")?;
+    file::create_dir_all(metadata.parent().unwrap().join(&cask.version))?;
     let mise_receipt = caskroom_version_dir(CaskManager::BrewCask, &cask.token, &cask.version)
         .join(".mise-cask.toml");
     let receipt_before = file::read_to_string(&mise_receipt)?;
@@ -644,6 +664,7 @@ fn both_receipt_types_satisfy_installed_state_without_mutation() -> Result<()> {
         &cask.token,
         "2.0.0",
     ))?;
+    file::create_dir_all(metadata.parent().unwrap().join("2.0.0"))?;
     let error = package_state(&request, &cask).unwrap_err();
     assert!(error.to_string().contains("multiple Caskroom versions"));
     assert_eq!(file::read_to_string(&mise_receipt)?, receipt_before);
@@ -668,8 +689,19 @@ fn mise_owned_state_validates_artifacts_before_receipt() -> Result<()> {
         desired: crate::PackageDesiredState::Present,
     };
 
-    let error = package_state(&request, &cask).unwrap_err();
-    assert!(error.to_string().contains("unsupported artifact type"));
+    // Linux reports the cask as unavailable rather than failing the query.
+    #[cfg(target_os = "linux")]
+    match package_state(&request, &cask)? {
+        PackageState::Unavailable { reason } => {
+            assert!(reason.contains("unsupported artifact type"));
+        }
+        state => panic!("expected unavailable, got {state:?}"),
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let error = package_state(&request, &cask).unwrap_err();
+        assert!(error.to_string().contains("unsupported artifact type"));
+    }
     Ok(())
 }
 
@@ -4451,6 +4483,78 @@ fn raw_executable_keeps_url_filename() -> Result<()> {
 }
 
 #[test]
+fn raw_opaque_url_stages_the_declared_binary() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let archive = tmp.path().join("cached-name");
+    file::write(&archive, "#!/bin/sh\necho fixture\n")?;
+    let mut cask = test_cask("example", "1.0.0");
+    cask.url = "https://example.com/download/?file=tool-arm64".to_string();
+    cask.artifacts = vec![serde_json::json!({
+        "binary": ["tool-arm64", {"target": "tool"}],
+    })];
+    let (name, executable) = raw_cask_artifact_name(&cask, &archive, "cached-name")?;
+    assert_eq!(name, "tool-arm64");
+    assert!(executable);
+    let stage = tmp.path().join("stage");
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(&stage)?;
+    file::create_dir_all(&caskroom)?;
+    file::copy(&archive, stage.join(name))?;
+    let binary = cask_artifacts(&cask)?.binaries.remove(0);
+    stage_binary(&stage, &caskroom, &cask, &[], &binary)?;
+    link_binary_for(&caskroom, &cask, Path::new("/Applications"), &binary)?;
+    assert_eq!(
+        file::read_to_string(tmp.path().join("bin/tool"))?,
+        "#!/bin/sh\necho fixture\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn raw_opaque_url_does_not_guess_ambiguous_or_unsafe_binary_names() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let archive = tmp.path().join("cached-name");
+    file::write(&archive, "raw")?;
+    let mut cask = test_cask("example", "1.0.0");
+    cask.url = "https://example.com/download/".to_string();
+    for source in [
+        "../tool",
+        "/tool",
+        "dir/tool",
+        "dir\\tool",
+        "$APPDIR/tool",
+        ".",
+        "..",
+        ".metadata",
+        ".mise-hidden",
+    ] {
+        cask.artifacts = vec![serde_json::json!({"binary": [source]})];
+        assert_eq!(
+            raw_cask_artifact_name(&cask, &archive, "cached-name")?.0,
+            "cached-name",
+            "{source}"
+        );
+    }
+    cask.artifacts = vec![
+        serde_json::json!({"binary": ["first"]}),
+        serde_json::json!({"binary": ["second"]}),
+    ];
+    assert_eq!(
+        raw_cask_artifact_name(&cask, &archive, "cached-name")?.0,
+        "cached-name"
+    );
+    cask.url = "https://example.com/original".to_string();
+    cask.artifacts = vec![serde_json::json!({"binary": ["other"]})];
+    assert_eq!(
+        raw_cask_artifact_name(&cask, &archive, "cached-name")?.0,
+        "original"
+    );
+    Ok(())
+}
+
+#[test]
 fn detects_a_single_suffixless_nested_archive() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let archive = tmp.path().join("download");
@@ -4784,6 +4888,27 @@ fn parses_binary_artifacts_and_generated_completions() -> Result<()> {
                     CompletionShell::Zsh,
                     CompletionShell::Fish,
                 ],
+            }],
+            ..Default::default()
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_empty_zap_artifact() -> Result<()> {
+    let mut cask = test_cask("widget", "1.2.3");
+    cask.artifacts = vec![
+        serde_json::json!({"binary": ["widget"]}),
+        serde_json::json!({"zap": []}),
+    ];
+
+    assert_eq!(
+        cask_artifacts(&cask)?,
+        CaskArtifacts {
+            binaries: vec![BinaryArtifact {
+                source: "widget".to_string(),
+                target: None
             }],
             ..Default::default()
         }
@@ -5187,6 +5312,47 @@ fn appdir_artifact_source_matches_app_case_insensitively() -> Result<()> {
 }
 
 #[test]
+fn stages_and_links_a_nested_appdir_bundle() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let appdir = tmp.path().join("Applications");
+    let nested = appdir.join("Parent.app/Contents/Applications/Child.app");
+    file::create_dir_all(nested.join("Contents"))?;
+    file::write(nested.join("Contents/Info.plist"), "bundle contents")?;
+    let stage = tmp.path().join("stage");
+    let caskroom = tmp.path().join("caskroom");
+    file::create_dir_all(&stage)?;
+    file::create_dir_all(&caskroom)?;
+    let mut cask = test_cask("example", "1.0.0");
+    cask.appdir = Some(appdir.clone());
+    let apps = [AppArtifact {
+        source: "Parent.app".to_string(),
+        target: None,
+    }];
+    let binary = BinaryArtifact {
+        source: "$APPDIR/Parent.app/Contents/Applications/Child.app".to_string(),
+        target: Some("$APPDIR/Child.app".to_string()),
+    };
+    stage_binary(&stage, &caskroom, &cask, &apps, &binary)?;
+    link_binary_for(&caskroom, &cask, &appdir, &binary)?;
+    let target = appdir.join("Child.app");
+    assert_eq!(target.canonicalize()?, nested.canonicalize()?);
+    assert_eq!(
+        file::read_to_string(target.join("Contents/Info.plist"))?,
+        "bundle contents"
+    );
+    // Completion lookup still requires a regular file.
+    assert!(find_completion_source(&stage, &caskroom, &cask, &apps, &binary.source)?.is_none());
+    let escape = BinaryArtifact {
+        source: "$APPDIR/Parent.app/../../outside".to_string(),
+        target: binary.target.clone(),
+    };
+    assert!(stage_binary(&stage, &caskroom, &cask, &apps, &escape).is_err());
+    Ok(())
+}
+
+#[test]
 fn generated_completion_executable_prefers_staged_prefix_binary() -> Result<()> {
     let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
     let tmp = tempfile::tempdir()?;
@@ -5209,6 +5375,32 @@ fn generated_completion_executable_prefers_staged_prefix_binary() -> Result<()> 
     assert_eq!(
         find_generated_completion_executable(&stage, &caskroom, &cask, &[], &completion,)?,
         caskroom.join("bin/op")
+    );
+    Ok(())
+}
+
+#[test]
+fn generated_completion_args_expand_the_homebrew_prefix() -> Result<()> {
+    let _lock = mise_util::testing::lock_ignoring_poison(&ENV_LOCK);
+    let tmp = tempfile::tempdir()?;
+    let _guard = BrewPrefixGuard::set(tmp.path());
+    let caskroom = tmp.path().join("staged");
+    let cask = test_cask("ngrok", "3.39.13,msmi2kd3cjc,a");
+    let args = vec![
+        "SHELL=/bin/bash".to_string(),
+        "$HOMEBREW_PREFIX/Caskroom/ngrok/3.39.13,msmi2kd3cjc,a/ngrok".to_string(),
+        "$HOMEBREW_PREFIX/bin/other".to_string(),
+        "completion".to_string(),
+    ];
+
+    assert_eq!(
+        expand_generated_completion_args(&caskroom, &cask, &args),
+        vec![
+            "SHELL=/bin/bash".to_string(),
+            caskroom.join("ngrok").to_string_lossy().into_owned(),
+            tmp.path().join("bin/other").to_string_lossy().into_owned(),
+            "completion".to_string(),
+        ]
     );
     Ok(())
 }
@@ -6459,6 +6651,26 @@ fn linux_rejects_non_font_casks() -> Result<()> {
         platform_unavailable_state(&cask, &artifacts),
         Some(PackageState::Unavailable { .. })
     ));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_skips_casks_with_unparseable_artifacts() -> Result<()> {
+    let mut cask = test_cask("example-appimage", "1.0.0");
+    cask.artifacts = vec![serde_json::json!({"app_image": ["Example.AppImage"]})];
+    let req = PackageRequest {
+        name: cask.token.clone(),
+        version: None,
+        tap_url: None,
+        desired: crate::PackageDesiredState::Present,
+    };
+
+    let state = package_state(&req, &cask)?;
+    assert!(
+        matches!(&state, PackageState::Unavailable { .. }),
+        "{state:?}"
+    );
     Ok(())
 }
 
@@ -10484,7 +10696,7 @@ fn macos_app_status_ignores_a_same_named_homebrew_cask() -> Result<()> {
 
     // Homebrew owns a cask called "nuvio" in its Caskroom.
     let token_dir = caskroom_token_dir(CaskManager::BrewCask, "nuvio");
-    file::create_dir_all(token_dir.join(".metadata"))?;
+    file::create_dir_all(token_dir.join(".metadata/9.9.9"))?;
     file::create_dir_all(token_dir.join("9.9.9"))?;
 
     let spec = crate::options::AppSpec {

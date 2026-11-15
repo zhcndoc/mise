@@ -7,7 +7,7 @@ socialDescription: "在 mise.toml 中声明 macOS LaunchAgent 并使用 launchct
 
 在 `[bootstrap.macos.launchd.agents]` 中为 macOS 用户声明 LaunchAgent。运行 [`mise bootstrap`](/bootstrap.html) 或 [`mise bootstrap macos launchd-agents apply`](/cli/bootstrap/macos/launchd-agents/apply.html) 后，每个代理都会写入 `~/Library/LaunchAgents/dev.mise.<name>.plist` 并加载到当前登录会话。
 
-若要用同一份声明在 macOS、Linux 和 Windows 后台运行程序，请改用[用户服务](/bootstrap/services.html#user-services)。需要日历计划、启动事件、队列目录或进程类型等 launchd 功能时，请使用 LaunchAgent。两个位置不能声明相同名称，因为它们会写入同一个 plist。
+若要用同一份声明在 macOS、Linux 和 Windows 后台运行程序，请改用[用户服务](/bootstrap/services.html#user-services)。需要日历计划、启动事件、队列目录、进程类型或资源限制等 launchd 功能时，请使用 LaunchAgent。两个位置不能声明相同名称，因为它们会写入同一个 plist。
 
 ## 示例
 
@@ -90,6 +90,19 @@ process_type = "Background"
 nice = 10
 ```
 
+## 提高资源限制
+
+launchd 默认以最多打开 256 个文件的软限制启动代理，持有大量连接的服务器可能会超过此值。`soft_resource_limits` 用于设置程序启动时的限制，`hard_resource_limits` 用于设置程序无法提升到的上限。两者均为表，可设置 `core`、`cpu`、`data`、`file_size`、`memory_lock`、`number_of_files`、`number_of_processes`、`resident_set_size` 和 `stack`，并分别写入 plist 中 launchd 的 `SoftResourceLimits` 和 `HardResourceLimits`。请仅设置需要的限制，其余值保持 launchd 默认值。大小以字节为单位，`cpu` 以秒为单位；同一键的软限制不能高于硬限制。
+
+```toml
+[bootstrap.macos.launchd.agents.proxy]
+program = "~/.local/bin/proxy"
+run_at_load = true
+keep_alive = true
+soft_resource_limits = { number_of_files = 10240 }
+hard_resource_limits = { number_of_files = 65536 }
+```
+
 ## 使用模板 {#templates}
 
 字符串值可以使用 [Tera 模板](/templates.html)，并在声明该代理的配置上下文中渲染。`args`、`environment` 和 `queue_directories` 中的条目也支持模板：
@@ -152,6 +165,8 @@ mise bootstrap macos launchd-agents apply --yes       # apply without prompting
 | `throttle_interval`       | `ThrottleInterval`                       | Minimum seconds between launches                                           |
 | `process_type`            | `ProcessType`                            | `Background`, `Standard`, `Adaptive`, or `Interactive`                     |
 | `nice`                    | `Nice`                                   | -20 to 20                                                                  |
+| `soft_resource_limits`    | `SoftResourceLimits`                     | 表，可设置 `number_of_files`、`stack`、`core` 等；见上文                  |
+| `hard_resource_limits`    | `HardResourceLimits`                     | 键相同；各软限制不能高于对应硬限制                                        |
 | `environment`             | `EnvironmentVariables`                   | Table of variables                                                         |
 | `working_directory`       | `WorkingDirectory`                       | `~` expanded                                                               |
 | `stdout_path`             | `StandardOutPath`                        | `~` expanded                                                               |

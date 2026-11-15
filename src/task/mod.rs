@@ -41,6 +41,8 @@ pub(crate) fn reset() {
 pub(crate) type FailedTasks = Arc<std::sync::Mutex<Vec<(Task, Option<i32>)>>>;
 
 mod deps;
+pub mod run_report;
+pub mod task_affected;
 pub mod task_cache;
 mod task_cache_audit;
 mod task_cache_store;
@@ -51,12 +53,14 @@ pub mod task_executor;
 pub mod task_fetcher;
 pub(crate) mod task_file_providers;
 pub mod task_helpers;
+pub mod task_history;
 pub mod task_list;
 mod task_load_context;
 pub mod task_lock;
 pub mod task_output;
 pub mod task_output_handler;
 pub mod task_results_display;
+pub mod task_run_log;
 pub mod task_scheduler;
 mod task_script_parser;
 pub mod task_source_checker;
@@ -125,8 +129,8 @@ use task_sources::TaskOutputs;
 pub use task_sources::{RawOutputTemplates, TaskOutputsExt};
 
 pub use mise_config::task::{
-    RunEntry, Silent, TaskDaemons, TaskDecl, TaskLock, TaskRustCacheConfig, TaskToolValue,
-    TaskToolValueMap, TaskWatchOptions,
+    NamedLock, RunEntry, Silent, TaskDaemons, TaskDecl, TaskLock, TaskRustCacheConfig,
+    TaskToolValue, TaskToolValueMap, TaskWatchOptions,
 };
 
 /// Turning a task's tool declaration into a request, and rendering its templates, needs mise's
@@ -149,7 +153,7 @@ fn task_tool_value_has_template(value: &toml::Value) -> bool {
 impl TaskToolValueExt for TaskToolValue {
     fn to_tool_arg(&self, tool: &str) -> Result<ToolArg> {
         match self {
-            Self::String(version) => format!("{tool}@{version}").parse(),
+            Self::String(version) => ToolArg::from_parts(tool, version),
             Self::Map(map) => {
                 let mut task_options = ToolVersionOptions::default();
                 for (key, value) in &map.opts {
@@ -332,6 +336,8 @@ pub struct Task {
     pub display_name: String,
     pub description: String,
     pub aliases: Vec<String>,
+    /// What kind of task this is, such as `test` or `lint`; `--tag` selects tasks by them.
+    pub tags: Vec<String>,
     pub config_source: PathBuf,
     /// Additional files that contributed to this task's definition.
     ///
@@ -470,12 +476,16 @@ pub struct Task {
     pub deny_net: bool,
     /// Block env var inheritance
     pub deny_env: bool,
+    /// Block connections to Unix sockets outside the sandbox
+    pub deny_unix: bool,
     /// Allow reads from specific paths
     pub allow_read: Vec<std::path::PathBuf>,
     /// Allow writes to specific paths
     pub allow_write: Vec<std::path::PathBuf>,
     /// Allow network to specific hosts
     pub allow_net: Vec<String>,
+    /// Allow connections to the Unix sockets at specific paths
+    pub allow_unix: Vec<std::path::PathBuf>,
     /// Allow specific env vars through
     pub allow_env: Vec<String>,
     /// Preserve ambient env vars when env inheritance is denied without hashing their values
@@ -624,7 +634,7 @@ fn scan_mise_header_entries(body: &str) -> Vec<MiseHeaderEntry> {
     // only that function accepted `# MISE`, a spaced `# MISE tools."x".version`
     // was suppressed from the usage text *and* never became config: it set
     // nothing and said nothing.
-    let header_regex = regex!(r"^(?:#|//|::)\s*(?:MISE|\[MISE\]) (.*)$");
+    let header_regex = regex!(r"^(?:#|//|::|--)\s*(?:MISE|\[MISE\]) (.*)$");
     // A TOML key path: bare segments, quoted segments, or a dotted mix. The old
     // `[a-z0-9_.-]+` matched neither a quoted segment nor an uppercase one, so
     // `tools."http:ruff".version = …` and `env.FOO = "bar"` were not recognised
@@ -725,6 +735,8 @@ const FILE_TASK_GUARD_KEYS: &[&str] = &[
     "deny_write",
     "deny_net",
     "deny_env",
+    "deny_unix",
+    "allow_unix",
 ];
 
 /// Reads a file task's merged `#MISE` header into a [`TaskDecl`], the type a `[tasks.<name>]`
@@ -977,8 +989,8 @@ fn parse_task_usage_raw(
 }
 
 fn extract_usage_from_comments(full: &str) -> String {
-    let usage_regex = regex!(r"^(?:#|//|::)\s*(?:(USAGE|MISE)|\[(USAGE|MISE)\])(.*)$");
-    let blank_comment_regex = regex!(r"^(?:#|//|::)\s*$");
+    let usage_regex = regex!(r"^(?:#|//|::|--)\s*(?:(USAGE|MISE)|\[(USAGE|MISE)\])(.*)$");
+    let blank_comment_regex = regex!(r"^(?:#|//|::|--)\s*$");
     // The same key path `scan_mise_header_entries` looks for. Both markers now
     // allow whitespace after the comment character, so the entry ranges below
     // already cover the ordinary shapes; this stays as the backstop for lines
@@ -1557,6 +1569,11 @@ impl Task {
         }
     }
 
+    /// Whether this task has at least one of `tags`, which is how `--tag` selects tasks.
+    pub fn has_any_tag(&self, tags: &[String]) -> bool {
+        tags.iter().any(|tag| self.tags.contains(tag))
+    }
+
     pub fn is_match(&self, pat: &str) -> bool {
         if self.name == pat || self.aliases.contains(&pat.to_string()) {
             return true;
@@ -2117,9 +2134,19 @@ impl Task {
             }
         } else {
             let scripts_only = self.run_script_strings();
-            TaskScriptParser::new(dir)
+            let parsed = TaskScriptParser::new(dir)
                 .parse_run_scripts_for_spec_only(config, self, &scripts_only)
-                .await?
+                .await;
+            match parsed {
+                Ok(spec) => spec,
+                // Like a file task's broken `#USAGE`: one bad spec must not break the
+                // completion and docs of every other task.
+                Err(err) if !strict => {
+                    warn!("{err}");
+                    usage::Spec::default()
+                }
+                Err(err) => return Err(err),
+            }
         };
         self.populate_spec_metadata(&mut spec);
         self.populate_usage_about(&mut spec);
@@ -2183,9 +2210,27 @@ impl Task {
         env: &EnvMap,
         extra_vars: Option<IndexMap<String, String>>,
     ) -> Result<Vec<(String, Vec<String>)>> {
-        let (spec, scripts) = self
+        let parsed = self
             .parse_usage_spec_with_vars(config, cwd.clone(), env, extra_vars.clone())
-            .await?;
+            .await;
+        let (spec, scripts) = match parsed {
+            Ok(parsed) => parsed,
+            // A task that bypasses the usage parser never uses its spec, so a broken one
+            // (a missing `include`, a parse error) must not keep the task from running.
+            Err(err) if self.should_bypass_usage_parser() => {
+                let mut without_usage = self.clone();
+                without_usage.usage = String::new();
+                let fallback = without_usage
+                    .parse_usage_spec_with_vars(config, cwd.clone(), env, extra_vars.clone())
+                    .await
+                    .map_err(|retry_err| {
+                        eyre!("{retry_err}\n\nthe task's usage spec also failed to load:\n{err}")
+                    })?;
+                warn!("{err}");
+                fallback
+            }
+            Err(err) => return Err(err),
+        };
         // Skip the usage parser entirely when the task opts into raw arg
         // passthrough, or when the user explicitly asked for `--help`/`-h`
         // to reach the underlying command via `mise run task -- --help`.
@@ -2635,6 +2680,11 @@ impl Task {
                 self.aliases.push(alias);
             }
         }
+        for tag in other.tags {
+            if !self.tags.contains(&tag) {
+                self.tags.push(tag);
+            }
+        }
         // Preserve each env/var directive's origin so relative paths resolve
         // correctly against the config file they were declared in.
         let overlay_src = other.config_source.clone();
@@ -2769,9 +2819,11 @@ impl Task {
         self.deny_write |= other.deny_write;
         self.deny_net |= other.deny_net;
         self.deny_env |= other.deny_env;
+        self.deny_unix |= other.deny_unix;
         self.allow_read.extend(other.allow_read);
         self.allow_write.extend(other.allow_write);
         self.allow_net.extend(other.allow_net);
+        self.allow_unix.extend(other.allow_unix);
         self.allow_env.extend(other.allow_env);
         self.pass_through_env.extend(other.pass_through_env);
     }
@@ -2815,6 +2867,8 @@ impl Task {
                 .is_some_and(|s| contains_template_syntax(s))
             || self.allow_read.iter().any(|p| path_contains_template(p))
             || self.allow_write.iter().any(|p| path_contains_template(p))
+            || matches!(&self.lock, Some(TaskLock::Names(names)) if names.iter().any(|n| contains_template_syntax(&n.name)))
+            || self.allow_unix.iter().any(|p| path_contains_template(p))
             || tools_have_template
     }
 
@@ -2898,6 +2952,21 @@ impl Task {
         {
             *timeout = render_str(&mut tera, timeout, &tera_ctx)?;
         }
+        if let Some(TaskLock::Names(names)) = &mut self.lock {
+            // Render and check every name before storing any, so a failure leaves the lock as
+            // it was for a caller that keeps the task.
+            let mut rendered_names = Vec::with_capacity(names.len());
+            for lock in names.iter() {
+                if contains_template_syntax(&lock.name) {
+                    let rendered = render_str(&mut tera, &lock.name, &tera_ctx)?;
+                    TaskLock::validate_name(&rendered).map_err(|e| eyre!("{}: {e}", self.name))?;
+                    rendered_names.push(NamedLock::new(rendered).with_count(lock.count));
+                } else {
+                    rendered_names.push(lock.clone());
+                }
+            }
+            *names = rendered_names;
+        }
         let mut render_sandbox_paths = |paths: &mut Vec<PathBuf>| -> Result<()> {
             let mut rendered = Vec::with_capacity(paths.len());
             for p in paths.drain(..) {
@@ -2920,9 +2989,11 @@ impl Task {
         // the restriction.
         self.deny_read |= !self.allow_read.is_empty();
         self.deny_write |= !self.allow_write.is_empty();
+        self.deny_unix |= !self.allow_unix.is_empty();
         // Tilde expansion is applied later when task and CLI sandbox paths are normalized.
         render_sandbox_paths(&mut self.allow_read)?;
         render_sandbox_paths(&mut self.allow_write)?;
+        render_sandbox_paths(&mut self.allow_unix)?;
         for tool in self.tools.values_mut() {
             tool.render_templates(&mut tera, &tera_ctx)?;
         }
@@ -3530,6 +3601,7 @@ impl Task {
         *self = Task {
             description: decl.description,
             aliases: decl.aliases,
+            tags: decl.tags,
             confirm: decl.confirm,
             depends: decl.depends,
             daemons: decl.daemons,
@@ -3571,9 +3643,11 @@ impl Task {
             deny_write: decl.deny_write,
             deny_net: decl.deny_net,
             deny_env: decl.deny_env,
+            deny_unix: decl.deny_unix,
             allow_read: decl.allow_read,
             allow_write: decl.allow_write,
             allow_net: decl.allow_net,
+            allow_unix: decl.allow_unix,
             allow_env: decl.allow_env,
             pass_through_env: decl.pass_through_env,
             extends: decl.extends,
@@ -3591,6 +3665,7 @@ impl Default for Task {
             display_name: "".to_string(),
             description: "".to_string(),
             aliases: vec![],
+            tags: vec![],
             config_source: PathBuf::new(),
             additional_config_sources: vec![],
             cf: None,
@@ -3648,9 +3723,11 @@ impl Default for Task {
             deny_write: false,
             deny_net: false,
             deny_env: false,
+            deny_unix: false,
             allow_read: vec![],
             allow_write: vec![],
             allow_net: vec![],
+            allow_unix: vec![],
             allow_env: vec![],
             pass_through_env: vec![],
             extends: None,
@@ -4162,11 +4239,36 @@ pub async fn parse_usage_values_from_task(
     config: &Arc<Config>,
     task: &Task,
 ) -> Result<IndexMap<String, tera::Value>> {
+    parse_usage_values(config, task, false).await
+}
+
+/// Like [`parse_usage_values_from_task`] for a task that bypasses the usage parser: a spec
+/// that fails to load yields no values, while toolset and environment errors still propagate.
+pub(crate) async fn parse_usage_values_from_bypassed_task(
+    config: &Arc<Config>,
+    task: &Task,
+) -> Result<IndexMap<String, tera::Value>> {
+    parse_usage_values(config, task, true).await
+}
+
+async fn parse_usage_values(
+    config: &Arc<Config>,
+    task: &Task,
+    tolerate_spec_error: bool,
+) -> Result<IndexMap<String, tera::Value>> {
     let ts = config.get_toolset().await?;
     let env = ts.full_env(config).await?;
-    let (spec, _) = task
+    let (spec, _) = match task
         .parse_usage_spec_with_vars(config, None, &env, None)
-        .await?;
+        .await
+    {
+        Ok(parsed) => parsed,
+        Err(err) if tolerate_spec_error => {
+            trace!("Usage parser bypassed, spec failed to load: {err}");
+            return Ok(IndexMap::new());
+        }
+        Err(err) => return Err(err),
+    };
     if spec.cmd.args.is_empty() && spec.cmd.flags.is_empty() && spec.cmd.subcommands.is_empty() {
         return Ok(IndexMap::new());
     }
@@ -5031,6 +5133,16 @@ exec shapeme "$@"
     }
 
     #[test]
+    fn test_task_usage_comment_extraction_accepts_lua_comments() {
+        let script = "#!/usr/bin/env lua\n--MISE description=\"Say hello\"\n--USAGE arg \"<name>\"\n--USAGE flag \"--loud\"\n\nprint(\"hi\")\n";
+        let raw = super::extract_usage_from_comments(script);
+        assert_eq!(raw, "arg \"<name>\"\nflag \"--loud\"");
+        let entries = super::scan_mise_header_entries(script);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].toml, "description=\"Say hello\"");
+    }
+
+    #[test]
     fn test_task_usage_comment_extraction_matches_usage_lib() {
         use std::io::Write;
 
@@ -5214,6 +5326,20 @@ exec proxy "$@"
 
         assert_eq!(task.allow_read, vec![crate::env::HOME.join("read")]);
         assert_eq!(task.allow_write, vec![crate::env::HOME.join("write")]);
+    }
+
+    #[tokio::test]
+    async fn test_render_allow_unix_templates() {
+        let config = Config::get().await.unwrap();
+        let mut task = Task {
+            allow_unix: vec![Path::new("{{ env.HOME }}/agent.sock").into()],
+            ..Default::default()
+        };
+
+        task.render(&config, Path::new(".")).await.unwrap();
+
+        assert_eq!(task.allow_unix, vec![crate::env::HOME.join("agent.sock")]);
+        assert!(task.deny_unix);
     }
 
     /// A list whose only entry renders to nothing allows no path; it must not
@@ -6632,6 +6758,7 @@ echo "hello world"
 #MISE extends="base-template"
 #MISE description="Test task with all fields"
 #MISE aliases=["alias1", "alias2"]
+#MISE tags=["test", "slow"]
 #MISE depends=["dep1", "dep2"]
 #MISE daemons=["postgres"]
 #MISE secrets=["DEPLOY_KEY"]
@@ -6666,10 +6793,12 @@ echo "hello world"
 #MISE deny_write=true
 #MISE deny_net=true
 #MISE deny_env=true
+#MISE deny_unix=true
 #MISE allow_read=["src"]
 #MISE allow_write=["out"]
 #MISE allow_net=["example.com"]
 #MISE allow_env=["HOME"]
+#MISE allow_unix=["agent.sock"]
 echo "test"
 "#;
         fs::write(&task_file, script_content).unwrap();
@@ -6683,6 +6812,7 @@ echo "test"
         assert_eq!(task.extends, Some("base-template".to_string()));
         assert_eq!(task.description, "Test task with all fields");
         assert_eq!(task.aliases, vec!["alias1", "alias2"]);
+        assert_eq!(task.tags, vec!["test", "slow"]);
         assert_eq!(task.depends.len(), 2);
         assert_eq!(
             task.daemons,
@@ -6738,7 +6868,10 @@ echo "test"
         assert_eq!(task.timeout, Some("5m".to_string()));
         assert_eq!(
             task.lock,
-            Some(super::TaskLock::Names(vec!["sim".into(), "test-db".into()]))
+            Some(super::TaskLock::Names(vec![
+                super::NamedLock::new("sim"),
+                super::NamedLock::new("test-db")
+            ]))
         );
         // Where a task was loaded from makes it global, never its own header.
         assert!(!task.global);
@@ -6750,6 +6883,8 @@ echo "test"
         assert_eq!(task.allow_write, [PathBuf::from("out")]);
         assert_eq!(task.allow_net, ["example.com"]);
         assert_eq!(task.allow_env, ["HOME"]);
+        assert!(task.deny_unix);
+        assert_eq!(task.allow_unix, [PathBuf::from("agent.sock")]);
 
         // A header reads every `TaskDecl` key except the ones the file itself provides, so the
         // script above must set each of them.

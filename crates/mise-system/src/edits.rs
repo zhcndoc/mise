@@ -316,8 +316,11 @@ pub(crate) fn edits_from_config_files(config_files: &ConfigMap) -> Vec<EditReque
     merged.into_values().collect()
 }
 
+/// keys that make an entry an edit of part of a file instead of a whole file
+pub(crate) const EDIT_KEYS: [&str; 5] = ["block", "line", "template", "comment", "position"];
+
 /// keys that only mean something on a whole-file entry
-const WHOLE_FILE_KEYS: [&str; 17] = [
+pub(crate) const WHOLE_FILE_KEYS: [&str; 17] = [
     "mode",
     "content",
     "permissions",
@@ -421,33 +424,27 @@ fn edit_entry_from_toml(path_and_id: &str, value: toml::Value) -> Option<EditTom
             }
         }
         toml::Value::Table(table) => {
-            // `{ enabled = false }` turns off an inherited whole-file entry
-            let only_enabled = table.len() == 1 && table.contains_key("enabled");
-            let is_whole_file_table = table.is_empty()
-                || only_enabled
-                || table.contains_key("mode")
-                || table.contains_key("remove_empty")
-                || table.contains_key("create_if_missing")
-                || (table.contains_key("source")
-                    || table.contains_key("content")
-                    || table.contains_key("permissions")
-                    || table.contains_key("dot_prefix"))
-                    && !table.contains_key("block")
-                    && !table.contains_key("line")
-                    && !table.contains_key("template")
-                    && !table.contains_key("comment")
-                    && !table.contains_key("position");
-            if is_whole_file_table {
-                return None;
-            }
-            // an edit owns lines in a file, not the file itself; dropping
-            // the key silently would leave the declared mode unapplied
-            for key in ["permissions", "dot_prefix"] {
-                if table.contains_key(key) {
-                    warn!(
-                        "[dotfiles].\"{path_and_id}\": {key} applies to whole-file entries, not block or line edits, ignoring entry"
-                    );
+            let has_edit_key = EDIT_KEYS.iter().any(|key| table.contains_key(*key));
+            if !has_edit_key {
+                // without an edit key a table that carries a whole-file key is
+                // a whole-file entry; anything else is an edit mise cannot read
+                let is_whole_file_table = table.is_empty()
+                    || table.contains_key("source")
+                    || WHOLE_FILE_KEYS.iter().any(|key| table.contains_key(*key));
+                if is_whole_file_table {
                     return None;
+                }
+            } else {
+                // an edit owns lines in a file, not the file itself; dropping
+                // the key silently would leave the declared mode, variants or
+                // other whole-file setting unapplied
+                for key in WHOLE_FILE_KEYS {
+                    if table.contains_key(key) {
+                        warn!(
+                            "[dotfiles].\"{path_and_id}\": {key} applies to whole-file entries, not block or line edits, ignoring entry"
+                        );
+                        return None;
+                    }
                 }
             }
         }
@@ -702,7 +699,7 @@ fn merge_op(
 
 /// comment prefix for marker lines, by file extension; `#` covers most
 /// config and shell files (and extensionless files like `.zshrc`, `hosts`)
-fn infer_comment(path: &Path) -> &'static str {
+pub(crate) fn infer_comment(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "lua" => "--",
         "vim" | "vimrc" => "\"",
@@ -2152,6 +2149,43 @@ fn permission_conflicts(requests: &[EditRequest], siblings: &[EditRequest]) -> V
     problems
 }
 
+/// Put `body` between the marker comments for `id` in `text`: replace the
+/// block when its markers are there, append it when they are not. `label`
+/// names the file in the error for corrupted markers.
+pub(crate) fn splice_block(
+    text: &str,
+    comment: &str,
+    id: &str,
+    body: &str,
+    label: &str,
+) -> Result<String> {
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    let mut block = vec![begin_marker(comment, id)];
+    // a body of "" means an empty block, not a blank line
+    if !body.is_empty() {
+        block.extend(body.lines().map(|l| l.to_string()));
+    }
+    block.push(end_marker(comment, id));
+    match find_block(
+        &lines.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
+        id,
+        comment,
+    ) {
+        // markers are rewritten too, so a changed comment style or
+        // marker wording converges on reapply
+        Ok(Some((begin, end))) => {
+            lines.splice(begin..=end, block);
+        }
+        Ok(None) => lines.extend(block),
+        Err(reason) => bail!("edits: \"{label}\": {reason}, fix the file manually"),
+    }
+    // a CRLF file stays CRLF, so lines outside the block are not rewritten
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = lines.join(eol);
+    out.push_str(eol);
+    Ok(out)
+}
+
 fn apply_to_string(req: &EditRequest, desired: Option<&str>, text: &str) -> Result<String> {
     match &req.op {
         EditOp::Merge {
@@ -2168,34 +2202,8 @@ fn apply_to_string(req: &EditRequest, desired: Option<&str>, text: &str) -> Resu
             merged.wrap_err_with(|| format!("merge into \"{}\" failed", req.path.display_user()))
         }
         EditOp::Block { comment, .. } => {
-            let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-            let id = &req.id;
             let desired = desired.expect("resolved block content");
-            let mut block = vec![begin_marker(comment, id)];
-            // a desired of "" means an empty block, not a blank line
-            if !desired.is_empty() {
-                block.extend(desired.lines().map(|l| l.to_string()));
-            }
-            block.push(end_marker(comment, id));
-            match find_block(
-                &lines.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
-                id,
-                comment,
-            ) {
-                // markers are rewritten too, so a changed comment style or
-                // marker wording converges on reapply
-                Ok(Some((begin, end))) => {
-                    lines.splice(begin..=end, block);
-                }
-                Ok(None) => lines.extend(block),
-                Err(reason) => bail!(
-                    "edits: \"{}\": {reason}, fix the file manually",
-                    req.path_raw
-                ),
-            }
-            let mut out = lines.join("\n");
-            out.push('\n');
-            Ok(out)
+            splice_block(text, comment, &req.id, desired, &req.path_raw)
         }
         EditOp::Line { line, position } => {
             // an earlier entry in the same batch may have just written an
@@ -2512,6 +2520,24 @@ mod tests {
         assert!(edit_entry_from_toml("~/a/config.toml/shared", value).is_some());
         let value: toml::Value = toml::from_str("source = \"s.toml\"").unwrap();
         assert!(edit_entry_from_toml("~/a/config.toml", value).is_none());
+    }
+
+    #[test]
+    fn whole_file_keys_on_a_block_or_line_edit_are_refused() {
+        for extra in [
+            "variants = [{ profile = \"work\" }]",
+            "enabled = false",
+            "mode = \"track\"",
+            "permissions = \"0600\"",
+        ] {
+            let value: toml::Value = toml::from_str(&format!("block = \"text\"\n{extra}")).unwrap();
+            assert!(
+                edit_entry_from_toml("~/a/config.toml/id", value).is_none(),
+                "{extra}"
+            );
+        }
+        let value: toml::Value = toml::from_str("block = \"text\"").unwrap();
+        assert!(edit_entry_from_toml("~/a/config.toml/id", value).is_some());
     }
 
     #[test]

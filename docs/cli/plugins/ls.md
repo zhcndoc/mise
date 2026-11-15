@@ -17,6 +17,8 @@ Use `--core` to list the core tools built into mise instead, or
 newer plugin code; it does not compare tool versions. Use `mise ls` for
 installed tool versions and `mise registry` for tools you can install.
 
+为机器上所有用户安装的系统插件（例如位于 `/usr/share/mise/plugins` 的插件）会排在个人插件之后，并标记为 `(system)`。这些插件由包管理器或机器管理员管理，因此 `--outdated` 会跳过它们，`mise plugins update` 和 `uninstall` 也不会更改它们。被个人插件覆盖的系统插件会标记为已覆盖。
+
 ## Flags
 - **`-c --core`** — List the core tools built into mise instead of installed plugins
 - **`-o --outdated`** — Only show plugins whose Git remote has newer commits

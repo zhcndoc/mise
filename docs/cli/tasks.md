@@ -18,6 +18,7 @@ With no subcommand, lists tasks like `mise tasks ls` and accepts the same flags.
 - **`[TASK]`** — Task to show, as `mise tasks info` does
 
 ## Flags
+- **`--tag <TAG>`** — 仅显示带有此标签的任务；可重复指定多个标签
 - **`-g --global`** — Only show global tasks
 - **`-J --json`** — Output in JSON format
 - **`-l --local`** — Deprecated alias for --no-global
@@ -63,8 +64,10 @@ mise tasks --hidden --sort source
 - [`mise tasks deps [FLAGS] [TASKS]…`](/cli/tasks/deps.html)
 - [`mise tasks edit [-p --path] <TASK>`](/cli/tasks/edit.html)
 - [`mise tasks graph [FLAGS]`](/cli/tasks/graph.html)
+- [`mise tasks history [-s --summary] [-J --json] [TASK]`](/cli/tasks/history.html)
 - [`mise tasks info [-J --json] <TASK>`](/cli/tasks/info.html)
 - [`mise tasks ls [FLAGS]`](/cli/tasks/ls.html)
+- [`mise tasks log [--path] <TASK>`](/cli/tasks/log.html)
 - [`mise tasks rm [FLAGS] <TASKS>…`](/cli/tasks/rm.html)
 - [`mise tasks set [FLAGS] <TASK> [-- RUN]…`](/cli/tasks/set.html)
 - [`mise tasks validate [--errors-only] [--json] [TASKS]…`](/cli/tasks/validate.html)

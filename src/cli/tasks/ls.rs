@@ -28,6 +28,7 @@ use serde_json::json;
     example("mise tasks ls", help = "List tasks"),
     example("mise tasks ls --hidden", help = "Include hidden tasks"),
     example("mise tasks ls --all", help = "List tasks from every monorepo project"),
+    example("mise tasks ls --tag lint", help = "List the tasks tagged \"lint\""),
     example(
         "mise tasks ls --name-only | fzf",
         help = "Pick a task name interactively"
@@ -77,6 +78,10 @@ pub(crate) struct TasksLs {
     )]
     pub name_only: bool,
 
+    /// Only show tasks that have this tag; repeat to accept any of several
+    #[usage(long, value_name = "TAG", verbatim_doc_comment)]
+    pub tag: Vec<String>,
+
     /// Do not print the table header
     #[usage(long, alias = "no-headers", verbatim_doc_comment)]
     pub no_header: bool,
@@ -121,6 +126,7 @@ impl TasksLs {
         self.hidden |= later.hidden;
         self.name_only |= later.name_only;
         self.no_header |= later.no_header;
+        self.tag.extend(later.tag);
         self.sort = later.sort.or(self.sort);
         self.sort_order = later.sort_order.or(self.sort_order);
         self.usage |= later.usage;
@@ -144,6 +150,7 @@ impl TasksLs {
             || self.hidden
             || self.name_only
             || self.no_header
+            || !self.tag.is_empty()
             || self.sort.is_some()
             || self.sort_order.is_some()
             || self.usage
@@ -194,6 +201,10 @@ impl TasksLs {
             fetcher
         };
         fetcher.fetch_tasks(&config, &mut tasks).await?;
+        // After the fetch, so a remote task's `#MISE tags` header counts.
+        if !self.tag.is_empty() {
+            tasks.retain(|t| t.has_any_tag(&self.tag));
+        }
 
         // Warn about non-executable files only when there are truly no tasks at all
         // (not just filtered out by --hidden/--local/--global)
@@ -246,8 +257,10 @@ impl TasksLs {
                 .map(|c| if c.is_control() { ' ' } else { c })
                 .collect();
             let description = description.replace(":", "\\:");
-            let shorthand = shorthand_name(current_root.as_deref(), &t);
-            for name in std::iter::once(t.display_name.clone()).chain(shorthand) {
+            let spellings = shorthand_name(current_root.as_deref(), &t)
+                .into_iter()
+                .chain(bare_names(current_root.as_deref(), &t));
+            for name in std::iter::once(t.display_name.clone()).chain(spellings) {
                 if name.chars().any(char::is_control) {
                     continue;
                 }
@@ -322,6 +335,10 @@ impl TasksLs {
             if let Some(name) = shorthand_name(current_root.as_deref(), &task) {
                 task_spec.cmd.aliases.push(name);
             }
+            task_spec
+                .cmd
+                .aliases
+                .extend(bare_names(current_root.as_deref(), &task));
             usage
                 .cmd
                 .subcommands
@@ -333,6 +350,14 @@ impl TasksLs {
 
     async fn display_json(&self, config: &Arc<Config>, tasks: Vec<Task>) -> Result<()> {
         let mut array_items: Vec<serde_json::Value> = Vec::with_capacity(tasks.len());
+        // Reading history is best effort: a missing or unreadable record is no history.
+        let history: std::collections::HashMap<String, _> =
+            crate::task::task_history::TaskHistory::for_config(config)
+                .summaries(None)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|summary| (summary.task.clone(), summary))
+                .collect();
         for task in tasks {
             // Report the resolved dir (including any inherited task_config.dir)
             // so consumers see the directory the task will actually run in.
@@ -353,6 +378,7 @@ impl TasksLs {
             array_items.push(json!({
                 "name": task.display_name,
                 "aliases": task.aliases,
+                "tags": task.tags,
                 "description": task.description,
                 "source": task.config_source.to_string_lossy(),
                 "config_sources": task
@@ -373,7 +399,10 @@ impl TasksLs {
                 "interactive": task.interactive,
                 "sources": task.sources,
                 "outputs": task.outputs,
+                "cache": task.cache.clone().unwrap_or_default(),
                 "shell": task.shell,
+                "skip_if": task.skip_if,
+                "lock": task.lock,
                 "quiet": task.quiet,
                 "silent": task.silent,
                 "tools": task.tools,
@@ -382,6 +411,7 @@ impl TasksLs {
                 "run": task.run(),
                 "args": task.args,
                 "file": task.file.as_ref().map(|p| p.to_string_lossy()),
+                "history": history.get(&task.name),
             }));
         }
         miseprintln!("{}", serde_json::to_string_pretty(&array_items)?);
@@ -465,6 +495,40 @@ fn current_root_prefix(config: &Config) -> Option<String> {
 fn shorthand_name(current_root: Option<&str>, task: &Task) -> Option<String> {
     let name = task.display_name.strip_prefix(current_root?)?;
     Some(format!(":{name}"))
+}
+
+/// The bare names of a task of the current config root.
+///
+/// `mise run test` resolves to `//:test`, so `mise run te<TAB>` has to offer `test`: a shell
+/// only offers candidates that extend the word being completed. A task whose display name is
+/// not under the root (an inferred `node:web#build`) is still reached through a root-qualified
+/// alias (`//apps/web:build`), so those give a bare name too.
+fn bare_names(current_root: Option<&str>, task: &Task) -> Vec<String> {
+    let Some(root) = current_root else {
+        return vec![];
+    };
+    // A task of a sibling root (`//apps/api:x`) may carry an alias qualified with this root, but
+    // running that spelling loads only this root's scope and its parents, so it is not found.
+    let own_aliases = match task.display_name.strip_prefix("//") {
+        None => true,
+        Some(rest) => {
+            let task_root = rest.split_once(':').map_or(rest, |(path, _)| path);
+            let root_path = root.trim_start_matches("//").trim_end_matches(':');
+            task_root.is_empty()
+                || root_path == task_root
+                || root_path.starts_with(&format!("{task_root}/"))
+        }
+    };
+    let aliases: &[String] = if own_aliases { &task.aliases } else { &[] };
+    let mut names: Vec<String> = std::iter::once(&task.display_name)
+        .chain(aliases)
+        .filter_map(|n| n.strip_prefix(root))
+        // `node:web#build` is a workspace identity the resolver does not expand.
+        .filter(|n| !n.is_empty() && !crate::task::is_workspace_project_task(n))
+        .map(str::to_string)
+        .collect();
+    names.dedup();
+    names
 }
 
 // TODO: fill this out

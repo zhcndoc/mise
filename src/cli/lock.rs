@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mise_util::redactions::{redact_json, redact_output};
+use mise_util::redactions::{redact_json, redact_output, redact_url_userinfo_in_arg};
 
 use crate::config::config_file::trust_check;
 use crate::config::{Config, ConfigMap, SettingsExt};
@@ -71,6 +71,54 @@ struct LockCollectionContext<'a> {
     resolve_options: &'a ResolveOptions,
 }
 
+/// Whether `resolved` is strictly older than `locked`. Only versions that both
+/// parse as SemVer are ordered; anything else (dates, commit SHAs, channels)
+/// has no known order here, so a different value is never called a downgrade.
+fn is_downgrade(resolved: &str, locked: &str) -> bool {
+    crate::semver::semver_precedence_cmp(resolved, locked) == Some(std::cmp::Ordering::Less)
+}
+
+/// Under `--bump`, put back the locked version of any tool the remote
+/// resolution moved backwards. A lagging remote version list (for example
+/// mise-versions missing the newest releases) can make the newest match older
+/// than what is locked; `--bump` only advances the lockfile.
+///
+/// The locked version comes from resolving the request against the lockfile,
+/// the same lookup a plain `mise lock` uses, so legacy entries and option or
+/// backend variants pick the right pin. If that lookup fails, the bump result
+/// stays as resolved.
+async fn keep_locked_over_downgrade(
+    context: &LockCollectionContext<'_>,
+    tools: &mut [LockTool],
+) -> Result<()> {
+    let config = context.config;
+    for (ba, tv) in tools.iter_mut() {
+        let unordered = ba
+            .backend()
+            .is_ok_and(|backend| backend.versions_are_unordered(&tv.request.version()));
+        if unordered {
+            continue;
+        }
+        let mut options = context.resolve_options.clone();
+        options.use_locked_version = true;
+        options.latest_versions = false;
+        options.latest_versions_for_all_requests = false;
+        let Ok(kept) = resolve_for_lock(config, &tv.request, &mut options).await else {
+            continue;
+        };
+        // Only a version this request's own lock entry supplied is a pin; the
+        // resolver falls back to installed or remote versions when it has none.
+        if kept.resolved_from_lockfile() && is_downgrade(&tv.version, &kept.version) {
+            warn!(
+                "{}: the newest version found remotely ({}) is older than the locked {}; keeping {}",
+                ba.short, tv.version, kept.version, kept.version
+            );
+            *tv = kept;
+        }
+    }
+    Ok(())
+}
+
 fn request_matches(a: &ToolRequest, b: &ToolRequest) -> bool {
     a.version() == b.version() && a.options() == b.options()
 }
@@ -108,7 +156,45 @@ async fn resolve_for_lock(
         .is_some_and(crate::errors::Error::is_not_in_lockfile)
     {
         resolve_options.use_locked_version = false;
-        return request.resolve(config, resolve_options).await;
+        return resolve_keeping_locked(config, request, resolve_options).await;
+    }
+    keep_locked_when_release_age_holds(config, request, resolve_options, resolved).await
+}
+
+/// Resolves `request`, keeping the locked version when release age hides every
+/// newer match.
+async fn resolve_keeping_locked(
+    config: &Arc<Config>,
+    request: &ToolRequest,
+    resolve_options: &ResolveOptions,
+) -> Result<ToolVersion> {
+    let resolved = request.resolve(config, resolve_options).await;
+    keep_locked_when_release_age_holds(config, request, resolve_options, resolved).await
+}
+
+/// `--bump` looks for something newer. When release age hides every candidate
+/// there is nothing newer, so the locked version stays.
+async fn keep_locked_when_release_age_holds(
+    config: &Arc<Config>,
+    request: &ToolRequest,
+    resolve_options: &ResolveOptions,
+    resolved: Result<ToolVersion>,
+) -> Result<ToolVersion> {
+    if !resolve_options.use_locked_version
+        && resolved
+            .as_ref()
+            .err()
+            .is_some_and(crate::errors::Error::is_release_age_hid_all_versions)
+    {
+        let mut keep_locked = resolve_options.clone();
+        keep_locked.use_locked_version = true;
+        keep_locked.latest_versions = false;
+        keep_locked.latest_versions_for_all_requests = false;
+        if let Ok(tv) = request.resolve(config, &keep_locked).await
+            && tv.resolved_from_lockfile()
+        {
+            return Ok(tv);
+        }
     }
     resolved
 }
@@ -494,6 +580,12 @@ struct LockRun<'a> {
     toolset: &'a Toolset,
     resolve_options: &'a ResolveOptions,
     inputs: LockInputs,
+    /// Config edits this run makes. They are known before any target is bound
+    /// so a lockfile binds the request the config will hold afterwards.
+    config_bumps: Vec<crate::toolset::outdated_info::ConfigBump>,
+    /// Each version argument as a tool's short name and every spelling its
+    /// request can carry: as typed, and with its alias expanded.
+    argument_versions: BTreeSet<(String, String)>,
 }
 
 /// A lockfile target whose tools have been resolved but not yet written.
@@ -615,7 +707,14 @@ pub(crate) fn skip_lockfile_updates_when_tasks_fail() {
 
 impl Lock {
     pub(crate) async fn run(self) -> Result<()> {
-        self.run_with_installed(None, Config::get().await?).await
+        // Plugins decide which idiomatic version files map to their tool, so a
+        // missing one must be installed before the tools to lock are known.
+        // Listing sidecars is read-only, so it never installs anything.
+        let mut config = Config::get().await?;
+        if !self.sidecars {
+            config = Toolset::install_config_plugins_and_reload(config, self.dry_run).await?;
+        }
+        self.run_with_installed(None, config).await
     }
 
     pub(crate) async fn generate_after_install(
@@ -729,12 +828,16 @@ impl Lock {
             &ts_owned
         };
 
+        let config_bumps = self.compute_config_bumps(&setup, &inputs);
+        let argument_versions = self.argument_versions(&config).await?;
         let run = LockRun {
             setup,
             settings,
             toolset: ts,
             resolve_options: &lock_resolve_options,
             inputs,
+            config_bumps,
+            argument_versions,
         };
         let mut outcome = LockOutcome::default();
 
@@ -742,6 +845,9 @@ impl Lock {
         // resolve just like a config-level tool, and a later failure must not leave
         // earlier environment/local/monorepo lockfiles partially updated.
         let prepared_targets = self.prepare_targets(&run).await?;
+        if generate && installed.is_none() {
+            self.reject_unconfigured_tool_args(&run, &prepared_targets)?;
+        }
         for target in prepared_targets {
             self.lock_target(&run, &mut outcome, target).await?;
         }
@@ -884,6 +990,9 @@ impl Lock {
             let mut tools = self
                 .get_tools_to_lock(&collection_context, lockfile_path, config_paths)
                 .await?;
+            if self.bump {
+                keep_locked_over_downgrade(&collection_context, &mut tools).await?;
+            }
             if let Some(installed) = installed {
                 for (_, tv) in &mut tools {
                     if let Some(actual) = installed.iter().find(|actual| {
@@ -967,6 +1076,41 @@ impl Lock {
                 )
             },
         )
+    }
+
+    /// Generate mode locks what configuration declares, so a tool argument is a
+    /// selector over those tools. One that selects nothing would otherwise be
+    /// dropped without a word, leaving a missing or empty lockfile.
+    fn reject_unconfigured_tool_args(
+        &self,
+        run: &LockRun<'_>,
+        targets: &[PreparedTarget],
+    ) -> Result<()> {
+        let missing: Vec<String> = self
+            .tool
+            .iter()
+            .filter(|arg| {
+                !targets.iter().flat_map(|t| &t.tools).any(|(ba, _)| {
+                    (!arg.ba.short.contains(':') && arg.ba.short == ba.short)
+                        || arg.ba.full() == ba.full()
+                })
+            })
+            .map(|arg| redact_url_userinfo_in_arg(&arg.ba.to_string()).into_owned())
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        // --local has no global equivalent, so it is not sent to global scope.
+        let hint = if !self.global && !self.local && self.global_config_declares_tools(run.toolset)
+        {
+            "Run `mise lock --global` for tools in global config, or add it with `mise use`"
+        } else {
+            "Add it with `mise use`, or remove it from the arguments"
+        };
+        bail!(
+            "cannot lock {}: not configured in this project. {hint}",
+            missing.join(", ")
+        );
     }
 
     /// Handle one prepared target, dispatching on what there is to do for it.
@@ -1158,6 +1302,46 @@ impl Lock {
         Ok(())
     }
 
+    /// After an install, drop the tools whose config sets `tool_config.locked`
+    /// and that locked resolution rejects as not in the lockfile. Installing
+    /// another tool must not author that entry; only an explicit `mise lock`
+    /// does. Returns the tools to lock and the shorts that were withheld.
+    async fn without_unrecorded_locked_pins(
+        run: &LockRun<'_>,
+        tools: &[LockTool],
+    ) -> (Vec<LockTool>, BTreeSet<String>) {
+        if run.setup.installed.is_none() {
+            return (tools.to_vec(), BTreeSet::new());
+        }
+        let options = ResolveOptions {
+            use_locked_version: true,
+            ..Default::default()
+        };
+        let mut withheld = BTreeSet::new();
+        let mut kept = Vec::new();
+        for tool in tools {
+            let (ba, tv) = tool;
+            if tv.request.tool_config_locked(run.setup.config, true)
+                && tv
+                    .request
+                    .resolve(run.setup.config, &options)
+                    .await
+                    .as_ref()
+                    .err()
+                    .is_some_and(crate::errors::Error::is_not_in_lockfile)
+            {
+                debug!(
+                    "not locking {}@{}: tool_config.locked requires `mise lock`",
+                    ba.short, tv.version
+                );
+                withheld.insert(ba.short.clone());
+            } else {
+                kept.push(tool.clone());
+            }
+        }
+        (kept, withheld)
+    }
+
     /// Resolve a target's tools into its lockfile, then bind and write it.
     async fn generate_target(
         &self,
@@ -1176,6 +1360,9 @@ impl Lock {
         let _lock = Self::lock_unless_held(run, lockfile_path)?;
         let original_content = read_optional_file(lockfile_path)?;
         let mut lockfile = self.read_lockfile(run, lockfile_path)?;
+        let previous = lockfile.clone();
+        let (tools, withheld) = Self::without_unrecorded_locked_pins(run, tools).await;
+        let tools = &tools;
         if !self.upgrade {
             self.report_lockfile_format(lockfile_path, &lockfile, false)?;
         }
@@ -1227,6 +1414,9 @@ impl Lock {
                 run.setup.installed.unwrap_or_default(),
             )
             .await?;
+            for short in &withheld {
+                lockfile.restore_missing_versions(&previous, short);
+            }
             (Vec::new(), Vec::new())
         } else {
             self.process_tools(&run.settings, tools, target_platforms, &mut lockfile)
@@ -1246,6 +1436,7 @@ impl Lock {
             run,
             outcome,
             target,
+            tools,
             target_platforms,
             ResolvedTarget {
                 lockfile,
@@ -1266,14 +1457,11 @@ impl Lock {
         run: &LockRun<'_>,
         outcome: &mut LockOutcome,
         target: &PreparedTarget,
+        tools: &[LockTool],
         target_platforms: &[Platform],
         resolved: ResolvedTarget,
     ) -> Result<()> {
-        let PreparedTarget {
-            lockfile_path,
-            tools,
-            ..
-        } = target;
+        let PreparedTarget { lockfile_path, .. } = target;
         let ResolvedTarget {
             mut lockfile,
             original_content,
@@ -1288,14 +1476,14 @@ impl Lock {
         let format_changed = self.upgrade && lockfile.needs_upgrade() && resolution_succeeded;
         if format_changed {
             self.prepare_lockfile_format(lockfile_path, &mut lockfile);
-            if !self.bind_requests(&mut lockfile, tools, target_platforms) {
+            if !self.bind_requests(run, &mut lockfile, tools, target_platforms) {
                 bail!(
                     "cannot upgrade {} because not every request binding was resolved",
                     display_path(lockfile_path)
                 );
             }
         } else {
-            self.bind_requests(&mut lockfile, tools, target_platforms);
+            self.bind_requests(run, &mut lockfile, tools, target_platforms);
         }
         let graph_tools = lockfile::generate::tools_on_platforms(tools, target_platforms);
         Box::pin(lockfile::generate::populate_uv_locks(
@@ -1380,40 +1568,71 @@ impl Lock {
         Ok(())
     }
 
-    /// Update config files when a specific version is requested that doesn't match
-    /// the current prefix (e.g., `mise lock tiny@3.0.1` when config has `tiny = "2"`).
-    /// Never under --bump, which is documented to leave config files untouched.
+    async fn argument_versions(&self, config: &Config) -> Result<BTreeSet<(String, String)>> {
+        let mut versions = BTreeSet::new();
+        // Only the last argument naming a tool decides its request.
+        let mut last: Vec<&ToolArg> = Vec::new();
+        for arg in &self.tool {
+            last.retain(|prev| prev.ba.short != arg.ba.short);
+            if arg.tvr.is_some() {
+                last.push(arg);
+            }
+        }
+        for arg in last {
+            let Some(tvr) = &arg.tvr else { continue };
+            let version = tvr.version();
+            if let Some(backend) = crate::backend::get(&arg.ba) {
+                let expanded = config.resolve_alias(&backend, &version).await?;
+                versions.insert((arg.ba.short.clone(), expanded));
+            }
+            versions.insert((arg.ba.short.clone(), version));
+        }
+        Ok(versions)
+    }
+
+    /// The config edits for a specific version that doesn't match the current
+    /// prefix (e.g., `mise lock tiny@3.0.1` when config has `tiny = "2"`).
+    /// None under --bump, which is documented to leave config files untouched.
+    fn compute_config_bumps(
+        &self,
+        setup: &LockSetup<'_>,
+        inputs: &LockInputs,
+    ) -> Vec<crate::toolset::outdated_info::ConfigBump> {
+        if self.bump {
+            return Vec::new();
+        }
+        // The last argument naming a tool decides its request, so an earlier
+        // argument's bump must not survive a later one that needs none.
+        let mut tool_versions: Vec<(String, String)> = Vec::new();
+        for t in &self.tool {
+            tool_versions.retain(|(short, _)| short != &t.ba.short);
+            if let Some(tvr) = &t.tvr {
+                tool_versions.push((t.ba.short.clone(), tvr.version()));
+            }
+        }
+        let refs: Vec<(&str, &str)> = tool_versions
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        crate::toolset::outdated_info::compute_config_bumps_for_paths(
+            setup.config,
+            &refs,
+            &inputs.scoped_config_paths,
+        )
+    }
+
+    /// Apply (or preview) the planned config bumps.
     /// Returns the bumps that atomic runs apply later with their lockfile writes.
     fn plan_config_bumps(
         &self,
         run: &LockRun<'_>,
     ) -> Result<Vec<crate::toolset::outdated_info::ConfigBump>> {
         let mut deferred_config_bumps = Vec::new();
-        if !self.bump {
-            use crate::toolset::outdated_info::{
-                apply_config_bumps, compute_config_bumps_for_paths,
-            };
-            let tool_versions: Vec<(String, String)> = self
-                .tool
-                .iter()
-                .filter_map(|t| {
-                    t.tvr
-                        .as_ref()
-                        .map(|tvr| (t.ba.short.clone(), tvr.version()))
-                })
-                .collect();
-            let refs: Vec<(&str, &str)> = tool_versions
-                .iter()
-                .map(|(n, v)| (n.as_str(), v.as_str()))
-                .collect();
-            let bumps = compute_config_bumps_for_paths(
-                run.setup.config,
-                &refs,
-                &run.inputs.scoped_config_paths,
-            );
+        if !run.config_bumps.is_empty() {
+            let bumps = &run.config_bumps;
             if self.dry_run {
                 if !self.json {
-                    for bump in &bumps {
+                    for bump in bumps {
                         miseprintln!(
                             "Would update {} from {} to {} in {}",
                             redact_output(&bump.tool_name),
@@ -1424,9 +1643,9 @@ impl Lock {
                     }
                 }
             } else if run.setup.atomic {
-                deferred_config_bumps = bumps;
+                deferred_config_bumps = bumps.clone();
             } else {
-                apply_config_bumps(run.setup.config, &bumps)?;
+                crate::toolset::outdated_info::apply_config_bumps(run.setup.config, bumps)?;
             }
         }
         Ok(deferred_config_bumps)
@@ -1781,6 +2000,7 @@ impl Lock {
 
     fn bind_requests(
         &self,
+        run: &LockRun<'_>,
         lockfile: &mut Lockfile,
         tools: &[LockTool],
         platforms: &[Platform],
@@ -1789,11 +2009,33 @@ impl Lock {
             return false;
         }
         let mut all_bound = true;
+        // A config bump rewrites the request, so bind what the config will say
+        // rather than the version argument that caused the bump.
+        let specifier_for = |ba: &crate::args::BackendArg, tv: &crate::toolset::ToolVersion| {
+            run.config_bumps
+                .iter()
+                .rfind(|bump| {
+                    bump.tool_name == ba.short
+                        && (tv.request.version() == bump.old_version
+                            || run
+                                .argument_versions
+                                .contains(&(ba.short.clone(), tv.request.version())))
+                        && tv.request.source().path() == Some(bump.config_path.as_path())
+                })
+                .map_or_else(|| tv.request.version(), |bump| bump.new_request.version())
+        };
+        // Spellings a request that is not bumped still needs.
+        let kept: BTreeSet<(&str, String)> = tools
+            .iter()
+            .filter(|(ba, tv)| specifier_for(ba, tv) == tv.request.version())
+            .map(|(ba, tv)| (ba.short.as_str(), tv.request.version()))
+            .collect();
         for (ba, tv) in tools {
             let Ok(backend) = tv.request.backend() else {
                 all_bound = false;
                 continue;
             };
+            let specifier = specifier_for(ba, tv);
             for platform in platforms {
                 if !tv.request.is_os_supported_on(platform) {
                     continue;
@@ -1806,12 +2048,15 @@ impl Lock {
                         all_bound = false;
                         continue;
                     };
-                    all_bound &= lockfile.bind_request(
-                        &ba.short,
-                        &tv.request.version(),
-                        &tv.version,
-                        &options,
-                    );
+                    let requested = tv.request.version();
+                    if specifier != requested
+                        && !kept.contains(&(ba.short.as_str(), requested.clone()))
+                    {
+                        // Generate mode already bound the argument's own spelling.
+                        lockfile.unbind_request(&ba.short, &requested, &options);
+                    }
+                    all_bound &=
+                        lockfile.bind_request(&ba.short, &specifier, &tv.version, &options);
                 }
             }
         }
@@ -2765,7 +3010,7 @@ impl Lock {
                         } else {
                             resolve_options.use_locked_version = false;
                             resolve_options.latest_versions = true;
-                            match request.resolve(config, &resolve_options).await {
+                            match resolve_keeping_locked(config, &request, &resolve_options).await {
                                 Ok(resolved_tv) => tv = resolved_tv,
                                 Err(err) if is_rolling => {
                                     return Err(err.wrap_err(format!(
@@ -3164,6 +3409,20 @@ impl Lock {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn bump_treats_only_semver_decreases_as_downgrades() {
+        assert!(is_downgrade("0.163.0", "0.166.0"));
+        assert!(is_downgrade("1.0.0-alpha.1", "1.0.0"));
+        assert!(!is_downgrade("0.168.0", "0.166.0"));
+        assert!(!is_downgrade("0.166.0", "0.166.0"));
+        // No known order: commit SHAs, dates, channels never count.
+        assert!(!is_downgrade("a1b2c3d", "e4f5a6b"));
+        assert!(!is_downgrade("2024.01.15", "2024.02.01"));
+        assert!(!is_downgrade("nightly", "0.166.0"));
+    }
+
     #[test]
     fn with_platform_adds_a_platform_the_lockfile_lacks() {
         let linux = Platform::parse("linux-x64").unwrap();

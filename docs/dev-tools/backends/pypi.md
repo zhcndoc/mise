@@ -292,7 +292,7 @@ pipx_args = "--pip-args='--index-url https://packages.example.com/pypi/simple'"
 
 选择依赖关系图锁定时如何使用该工具的 [`registry_url`](#registry-url)。
 
-- `default`（默认值）：该注册表取代 PyPI，工具及其所有依赖都必须从中获取。适用于完整 PyPI 镜像和隔离网络环境。如果注册表缺少某个依赖，mise 不会从其他来源获取，而会发出警告，并为该工具保留仅含版本的锁条目。
+- `default`（默认值）：该注册表取代 PyPI，工具及其所有依赖都必须从中获取。适用于完整 PyPI 镜像和隔离网络环境。如果注册表缺少某个依赖，mise 不会从其他来源获取，而会发出警告，并保持该工具现有的锁条目不变，包括已有的依赖关系图。
 - `priority`：先搜索该注册表，再搜索 PyPI；适用于只托管自身软件包的注册表（Gitea、Forgejo、pypiserver 或静态索引）。
 
 ```toml

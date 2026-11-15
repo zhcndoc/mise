@@ -61,10 +61,7 @@ reads the target's path under
 
 ## Modes and keys {#modes-and-keys}
 
-The table shows which whole-file keys each kind of entry accepts. An entry
-with `content` is an inline-content entry, and one with only `permissions`
-(no `source`, `content`, or `mode`) is a permissions-only entry. Every entry
-also accepts `enabled`.
+下表列出了各类条目可接受的整文件配置键。设置 `content` 的条目属于内联内容条目；仅设置 `permissions`（没有 `source`、`content` 或 `mode`）的条目属于仅管理权限的条目。所有整文件条目都接受 `enabled`；代码块、行和合并编辑不接受该键，若设置，mise 会发出警告并忽略此编辑。
 
 | Entry            | Accepts                                                                                                                                                             | Accepted, no effect              |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
@@ -259,9 +256,9 @@ mise dot recover <operation> --keep-current
 
 ## 历史记录锁 {#history-lock}
 
-记录历史的操作会锁定 `MISE_STATE_DIR` 中的历史存储。运行过程中需要记录历史时，最多会等待该锁 30 秒，之后才会失败。
+记录历史的操作会锁定 `MISE_STATE_DIR` 中的历史存储。运行过程中需要记录历史时，默认最多会等待该锁 30 秒；[`history.lock_wait`](/configuration/settings.html#history.lock_wait) 可更改等待时间。例如，`MISE_HISTORY_LOCK_WAIT=5m mise dot save` 最多等待五分钟，设为 `0` 则会立即失败。`mise dot watch` 和 `mise dot recover` 从不等待。
 
-如果没有任何跟踪文件且尚无历史记录，`mise bootstrap` 只会在首次重写 dotfile 或编辑项时访问历史存储，以便保留用于恢复中断写入的私有日志。如果此时另一个 mise 进程持有锁，当前操作会发出警告并在没有日志的情况下继续，而不是失败。如果运行开始时没有内容需要记录，但结束前声明了跟踪项，则会在结束时同样等待 30 秒。如果锁仍被占用，或者先前已有写入在没有日志的情况下运行，mise 会警告结果未被记录，但仍保留操作结果。
+如果没有任何跟踪文件且尚无历史记录，`mise bootstrap` 只会在首次重写 dotfile 或编辑项时访问历史存储，以便保留用于恢复中断写入的私有日志。如果此时另一个 mise 进程持有锁，当前操作会发出警告并在没有日志的情况下继续，而不是失败。如果运行开始时没有内容需要记录，但结束前声明了跟踪项，则会在结束时以相同等待时长再次尝试。如果锁仍被占用，或者先前已有写入在没有日志的情况下运行，mise 会警告结果未被记录，但仍保留操作结果。
 
 ## 监视器 {#watcher-reference}
 

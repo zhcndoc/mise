@@ -10,7 +10,7 @@ use eyre::{Result, eyre};
 use itertools::Itertools;
 
 use crate::args::ToolArg;
-#[cfg(any(test, windows))]
+#[cfg(test)]
 use crate::cmd;
 use crate::config::{Config, Settings};
 use crate::deps::{DepsEngine, DepsOptions};
@@ -97,6 +97,12 @@ pub(crate) struct Exec {
     #[usage(long, value_name = "PATH", verbatim_doc_comment)]
     pub allow_write: Vec<std::path::PathBuf>,
 
+    /// Allow connections to the Unix socket at PATH, or to every socket under it if PATH is a directory (implies --deny-unix for every other socket)
+    ///
+    /// Abstract sockets created inside the sandbox stay reachable. Linux 7.1 or later only.
+    #[usage(long, value_name = "PATH", verbatim_doc_comment)]
+    pub allow_unix: Vec<std::path::PathBuf>,
+
     /// Block reads, writes, network, and env vars
     #[usage(long, verbatim_doc_comment)]
     pub deny_all: bool,
@@ -119,6 +125,10 @@ pub(crate) struct Exec {
     /// Block filesystem writes except temporary and device paths (/tmp, /dev)
     #[usage(long, verbatim_doc_comment)]
     pub deny_write: bool,
+
+    /// Block connections to Unix sockets outside the sandbox (Linux 7.1 or later)
+    #[usage(long, verbatim_doc_comment)]
+    pub deny_unix: bool,
 
     /// Bypass the environment cache and recompute the environment
     #[usage(long)]
@@ -455,12 +465,14 @@ impl Exec {
                 deny_read: self.deny_read,
                 deny_write: self.deny_write,
                 deny_net: self.deny_net,
+                deny_unix: self.deny_unix,
                 deny_env: self.deny_env,
                 deny_process: false,
                 deny_temp_write: false,
                 allow_read: self.allow_read,
                 allow_write: self.allow_write,
                 allow_net: self.allow_net,
+                allow_unix: self.allow_unix,
                 allow_env: self.allow_env,
                 pass_through_env: vec![],
                 cache_env: vec![],
@@ -565,6 +577,9 @@ impl Exec {
         // shell_body_mode: true only for the `-c`/`--command` path, where
         // parse_command synthesized `shell + [flags.., body]`. A positional
         // command must not be reinterpreted as a shell body.
+        // `_.path` directories the caller's PATH may already hold. They stay ahead of
+        // the tool bins when `exec_program` resolves the program.
+        let configured_paths = config.path_dirs().await?.clone();
         exec_program(
             program,
             args,
@@ -572,7 +587,10 @@ impl Exec {
             env_remove,
             &sandbox,
             self.c.is_some(),
-            &scrub_on_failure,
+            &ExecExtras {
+                scrub_on_failure: &scrub_on_failure,
+                configured_paths: &configured_paths,
+            },
         )
         .await
     }
@@ -690,20 +708,15 @@ async fn warn_if_command_falls_back(
             return Ok(vec![]);
         }
     }
-    // A `_.path` entry that the inherited PATH lacks is searched ahead of every tool path, so it
-    // supplies the command whether or not the tool is installed. An inherited entry is searched
-    // after the tool paths, as in `exec_program`. Entries declared with `tools = true` resolve
-    // only with the full tool environment and are not consulted here.
+    // A `_.path` entry is searched ahead of every tool path, even when the inherited PATH already
+    // has it, so it supplies the command whether or not the tool is installed. Entries declared
+    // with `tools = true` resolve only with the full tool environment and are not consulted here.
     let path_dirs = config
         .path_dirs()
         .await?
         .iter()
         .filter(|dir| {
-            !env::PATH
-                .iter()
-                .any(|inherited| crate::file::paths_eq(inherited, dir))
-                && !crate::file::is_mise_shims_dir(dir)
-                && !crate::file::is_command_wrapper_dir(dir)
+            !crate::file::is_mise_shims_dir(dir) && !crate::file::is_command_wrapper_dir(dir)
         })
         .collect_vec();
     if !path_dirs.is_empty()
@@ -759,6 +772,17 @@ impl Drop for ScrubOnDrop<'_> {
     }
 }
 
+/// What `exec_program` needs besides the command and its environment.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct ExecExtras<'a> {
+    /// Variable names to take back out of mise's own environment when the exec fails.
+    pub scrub_on_failure: &'a [String],
+    /// `_.path` directories from the config (not the `position = "append"` ones, which rank with the
+    /// tool paths). The caller's PATH may already hold them, but they
+    /// still rank as mise-added when the program is resolved.
+    pub configured_paths: &'a [std::path::PathBuf],
+}
+
 #[cfg(all(not(test), unix))]
 pub(crate) async fn exec_program<T, U>(
     program: T,
@@ -767,13 +791,17 @@ pub(crate) async fn exec_program<T, U>(
     env_remove: std::collections::BTreeSet<String>,
     sandbox: &SandboxConfig,
     _shell_body_mode: bool,
-    scrub_on_failure: &[String],
+    extras: &ExecExtras<'_>,
 ) -> Result<()>
 where
     T: IntoExecutablePath,
     U: IntoIterator,
     U::Item: Into<OsString>,
 {
+    let ExecExtras {
+        scrub_on_failure,
+        configured_paths,
+    } = *extras;
     // Capture the marker before deny-env removes variables from the process.
     // The lazy state must retain the dispatching shim for candidate filtering.
     drop(env::MISE_SHIM_PATH.read().unwrap());
@@ -819,9 +847,14 @@ where
             // tool binary, which would cause infinite recursion and E2BIG.
             //
             // User-configured paths (_.path/venv) maintain their position
-            // relative to tool paths since both are "mise-added".
+            // relative to tool paths since both are "mise-added". That holds
+            // even when the caller's PATH already had the directory: the config
+            // put it at the front of the child's PATH, so lookup must too.
             // The child process still inherits the full unmodified PATH.
-            let pristine: std::collections::HashSet<_> = crate::env::PATH.iter().collect();
+            let pristine: std::collections::HashSet<_> = crate::env::PATH
+                .iter()
+                .filter(|p| !configured_paths.contains(p))
+                .collect();
             let all_paths: Vec<_> = std::env::split_paths(&OsString::from(path_val)).collect();
             let wrappers: Vec<_> = all_paths
                 .iter()
@@ -956,7 +989,7 @@ pub(crate) async fn exec_program<T, U>(
     env_remove: std::collections::BTreeSet<String>,
     sandbox: &SandboxConfig,
     shell_body_mode: bool,
-    scrub_on_failure: &[String],
+    extras: &ExecExtras<'_>,
 ) -> Result<()>
 where
     T: IntoExecutablePath,
@@ -968,6 +1001,10 @@ where
             "sandbox file, network and process restrictions are not supported on Windows, running without them"
         );
     }
+    let ExecExtras {
+        scrub_on_failure,
+        configured_paths,
+    } = *extras;
     // Capture the marker before deny-env removes variables from the process.
     // The lazy state must retain the dispatching shim for candidate filtering.
     drop(env::MISE_SHIM_PATH.read().unwrap());
@@ -1002,14 +1039,18 @@ where
     // Reorder PATH for program resolution: mise-added paths first, then
     // original system paths (minus shims). See Unix version for full rationale.
     let lookup_path = env.get(&*env::PATH_KEY).map(|path_val| {
+        let normalize = |p: &std::path::Path| {
+            crate::file::replace_path(p)
+                .to_string_lossy()
+                .to_lowercase()
+                .replace('/', "\\")
+        };
+        let configured: std::collections::HashSet<_> =
+            configured_paths.iter().map(|p| normalize(p)).collect();
         let pristine: std::collections::HashSet<_> = crate::env::PATH
             .iter()
-            .map(|p| {
-                crate::file::replace_path(p)
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .replace('/', "\\")
-            })
+            .map(|p| normalize(p))
+            .filter(|p| !configured.contains(p))
             .collect();
         let all_paths: Vec<_> = std::env::split_paths(&OsString::from(path_val)).collect();
         let wrappers: Vec<_> = all_paths
@@ -1115,6 +1156,7 @@ where
             .collect();
         let body = last.to_string_lossy();
         if let Some(mut c) = crate::path::cmd_verbatim_command(prog, &flags, &body) {
+            mise_util::windows_process::disinherit_std_handles();
             match c.status()?.code() {
                 Some(code) => return Err(crate::request_exit(code)),
                 None => return Err(eyre!("command failed: terminated by signal")),
@@ -1132,6 +1174,7 @@ where
         && let Some((switches, command)) = crate::path::positional_cmd_command(&args)
         && let Some(mut c) = crate::path::cmd_verbatim_command(prog, switches, command)
     {
+        mise_util::windows_process::disinherit_std_handles();
         match c.status()?.code() {
             Some(code) => return Err(crate::request_exit(code)),
             None => return Err(eyre!("command failed: terminated by signal")),
@@ -1157,9 +1200,13 @@ where
         };
     }
 
-    let cmd = cmd::cmd(program, args);
-    let res = cmd.unchecked().run()?;
-    match res.status.code() {
+    // Not `duct`: it keeps its own inheritable copies of mise's standard handles while the child
+    // starts, and the child passes them on to any process it detaches, which then holds the
+    // caller's pipe open until it exits (#15582).
+    debug!("$ {} {}", program.display(), args.len());
+    mise_util::windows_process::disinherit_std_handles();
+    let status = std::process::Command::new(&program).args(&args).status()?;
+    match status.code() {
         Some(code) => Err(crate::request_exit(code)),
         None => Err(eyre!("command failed: terminated by signal")),
     }
@@ -1173,13 +1220,18 @@ pub(crate) async fn exec_program<T, U>(
     env_remove: std::collections::BTreeSet<String>,
     _sandbox: &SandboxConfig,
     _shell_body_mode: bool,
-    _scrub_on_failure: &[String],
+    extras: &ExecExtras<'_>,
 ) -> Result<()>
 where
     T: IntoExecutablePath,
     U: IntoIterator,
     U::Item: Into<OsString>,
 {
+    let ExecExtras {
+        scrub_on_failure,
+        configured_paths,
+    } = *extras;
+    trace!("exec extras: scrub {scrub_on_failure:?}, configured paths {configured_paths:?}");
     let mut cmd = cmd::cmd(program, args);
     for (k, v) in env.iter() {
         cmd = cmd.env(k, v);

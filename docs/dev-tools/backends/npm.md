@@ -54,6 +54,20 @@ mise use 'npm:git+https://github.com/owner/repo'
 mise use 'npm:github:owner/repo@v1.2.0'
 ```
 
+### 从 tarball URL 安装
+
+`https://` tarball URL 也可以作为软件包来源，例如 [pkg.pr.new](https://pkg.pr.new) 发布的预览构建。Tarball 没有版本列表，因此 `latest` 表示 URL 当前提供的内容：mise 会使用 tarball SHA-256 摘要的前缀作为版本。`mise outdated` 和 `mise up` 会重新获取 URL 并比较摘要，摘要不同时就会更新。
+
+```toml
+[tools."npm:https://pkg.pr.new/owner/repo/@scope/pkg@343"]
+version = "latest"
+allow_exotic_deps = ["@scope/pkg-linux-x64"]
+```
+
+整个 URL 都是工具名称，包括路径中的 `@`，因此 `mise use 'npm:https://…/pkg@343'` 不会将 `343` 识别为版本。安装时会下载一次 tarball，将其摘要前缀与版本比较（不同时会失败，直到运行 `mise up`），然后安装该文件；因此即使在检查和安装之间推送了新版本，安装内容也不会变化。软件包名称取自其自身的 `package.json`。
+
+不支持 `http://` URL 和 `checksum` 选项。由于 aube 无法在没有 tarball 的情况下解析其 `optionalDependencies`，`mise.lock` 只会记录 tarball URL 的版本，不记录依赖关系图。使用嵌入式 aube 或 `aube_cli` 时，若 tarball 本身依赖其他 URL（例如按平台划分的 `optionalDependencies`），需要通过 [`allow_exotic_deps`](#allow-exotic-deps) 允许这些依赖。请像上例一样列出需要的依赖名称，不要设为 `true`，否则会豁免整个依赖图；npm、pnpm 和 Bun 不会执行此检查。
+
 ## 私有注册表 {#registry-configuration}
 
 mise 通过 HTTP 从注册表读取软件包元数据，内置 aube 也从该注册表安装软件包。两者都会从
@@ -98,8 +112,7 @@ mise lock --bump npm:prettier
 ## 最短发行等待时间 {#minimum-release-age}
 
 mise 会将 [`minimum_release_age`](/configuration/settings.html#minimum_release_age) 同时
-应用于工具及其依赖项。内置 aube 会自行处理此设置。对于已锁定的依赖关系图，等待时间门槛
-只在解析依赖关系图时生效；安装时会重放已提交的依赖项。
+应用于工具及其依赖项。内置 aube 会自行处理此设置。如果某个工具没有启用此设置（值为零、被排除或指定了精确版本），也不会应用 aube 默认的 24 小时限制。对于已锁定的依赖关系图，等待时间门槛只在解析依赖关系图时生效；安装时会重放已提交的依赖项。
 
 外部安装程序必须使用支持 mise 所传标志的版本：
 

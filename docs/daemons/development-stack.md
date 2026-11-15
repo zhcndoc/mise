@@ -87,6 +87,8 @@ mise daemons urls
 
 `mise run test` 会在运行测试前启动数据库。若要手动启动 API，请运行 `mise daemons start api`，并用 `mise daemons logs api` 查看输出。
 
+启动 daemon 时会显示最初几行日志。可为 `mise daemons start` 或 `mise run` 添加 `--quiet` 或 `--silent` 来隐藏这些内容，包括由任务启动的 daemon。
+
 ## 通过 URL 访问 {#open-it-by-url}
 
 访问 `https://api.shop.localhost`。请求会启动数据库、等待其就绪，再启动 API 并转发到该服务。Supervisor 及其代理必须已经运行。仅执行 DNS 查询不会启动 daemon，访问未知主机名也无法注册检出目录。

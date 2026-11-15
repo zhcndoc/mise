@@ -24,6 +24,7 @@ assert_json "mise tasks info lint --json" "$(
 {
   "name": "lint",
   "aliases": [],
+  "tags": [],
   "description": "",
   "source": "$(pwd)/mise.toml",
   "config_sources": [
@@ -91,7 +92,8 @@ assert_json "mise tasks info lint --json" "$(
     "usage": "",
     "complete": {},
     "unknown_flags": null
-  }
+  },
+  "history": null
 }
 EOF
 )"

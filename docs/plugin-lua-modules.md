@@ -91,6 +91,7 @@ PLUGIN = {
 | `legacyFilenames`                              | 否       | 列出工具插件通过 `ParseLegacyFile` 读取的[惯用版本文件](/dev-tools/versions.html#idiomatic-version-files)。mise 只会为列入 [`idiomatic_version_file_enable_tools`](/configuration/settings.html#idiomatic_version_file_enable_tools) 的工具读取这些文件。                               |
 | `depends`                                      | 否       | 列出需要先于此工具安装、并加入其安装钩子 `PATH` 的工具。参见 [`PLUGIN.depends`](/tool-plugin-development.html#depends)。                                                                                                                                                                   |
 | `systemDependencies`                           | 否       | 列出安装前由 mise 检查是否存在的系统程序和库。参见[系统依赖项](/tool-plugin-development.html#system-dependencies)。                                                                                                                                                                     |
+| `downloads`                                    | 否       | 对于 `PreInstall` 不返回 `url` 的工具插件（例如选择系统中已有工具的插件），设为 `false`。这样 `mise install --locked` 无需锁文件 URL 也能安装锁定版本。如果设为 `false` 的插件返回了 `url`，mise 会停止安装。默认值为 `true`。 |
 
 缺少 `name` 或 `version` 时，mise 会报错并停止。每次加载插件时都会执行整个文件，因此其中只应包含赋值操作，不要运行命令或读取宿主机信息。
 

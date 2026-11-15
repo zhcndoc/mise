@@ -29,6 +29,21 @@ pub enum TaskAlias {
 #[derive(JsonSchema)]
 pub struct TaskAliasName(pub String);
 
+// A task, or a template, may name its tags as one string or a list of them.
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[schemars(transform = crate::schema::one_of)]
+pub enum TaskTags {
+    /// what kind of task this is, such as `test` or `lint`; `mise run --tag` and `mise tasks ls --tag` select tasks by it
+    One(String),
+    /// what kind of task this is, such as `test`, `lint` or `slow`; `mise run --tag` and `mise tasks ls --tag` select tasks by them
+    Many(Vec<TaskTagName>),
+}
+
+/// a tag, such as `test`, `lint` or `slow`
+#[derive(JsonSchema)]
+pub struct TaskTagName(pub String);
+
 /// resources this task holds while its commands run, so runs that need the same one wait their turn
 #[derive(JsonSchema)]
 #[serde(untagged)]
@@ -36,16 +51,38 @@ pub struct TaskAliasName(pub String);
 pub enum TaskLockDecl {
     /// `true` lets one run of this task at a time across every worktree of its repository; `false` takes no lock
     Task(bool),
-    /// a lock name shared by every task on this machine that names it
-    One(TaskLockName),
-    /// lock names shared by every task on this machine that names them, taken in sorted order
-    Many(Vec<TaskLockName>),
+    /// a lock shared by every task on this machine that names it
+    One(TaskLockEntry),
+    /// locks shared by every task on this machine that names them, taken in sorted order
+    Many(Vec<TaskLockEntry>),
+}
+
+/// a lock shared by every task on this machine that names it
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[schemars(transform = crate::schema::one_of)]
+pub enum TaskLockEntry {
+    /// a lock name shared by every task on this machine that names it; the task holds one of its slots
+    Name(TaskLockName),
+    /// a lock shared by every task on this machine that names it, of which the task holds `count` slots
+    Table(TaskLockTable),
 }
 
 /// a lock name shared by every task on this machine that names it
 #[derive(JsonSchema)]
-#[schemars(extend("pattern" = "^[^,]*\\S[^,]*$"))]
+#[schemars(extend("pattern" = "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"))]
 pub struct TaskLockName(pub String);
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::schema::unevaluated)]
+pub struct TaskLockTable {
+    /// a lock name shared by every task on this machine that names it
+    pub name: TaskLockName,
+    /// how many of the lock's slots the task holds while it runs; `task.lock_pools` sets how many slots the lock has, one unless it says more, and a count above that is lowered to it
+    #[schemars(range(min = 1))]
+    pub count: Option<u32>,
+}
 
 /// prompt to answer before this task's own command runs, after its dependencies
 #[derive(JsonSchema)]
@@ -345,10 +382,10 @@ pub struct TaskWatchDecl {
     pub no_vcs_ignore: Option<bool>,
 }
 
-/// files/directories to include searching for tasks. Can be local paths, git repository URLs using git:: prefix (e.g., git::https://github.com/org/repo.git//path?ref=branch), or OCI artifacts using oci:: prefix (e.g., oci::ghcr.io/org/tasks:1.0.0)
+/// files/directories to include searching for tasks. Can be local paths, git repository URLs using git:: prefix (e.g., git::https://github.com/org/repo.git//path?ref=branch), OCI artifacts using oci:: prefix (e.g., oci::ghcr.io/org/tasks:1.0.0), or zip archives using zip:: prefix (e.g., zip::https://example.com/tasks.zip)
 #[derive(JsonSchema)]
 pub struct TaskIncludes(pub Vec<TaskInclude>);
 
-/// file/directory root to include in task execution. Supports local paths, git URLs (git::https://github.com/org/repo.git//path?ref=branch), and OCI artifacts (oci::ghcr.io/org/tasks:1.0.0)
+/// file/directory root to include in task execution. Supports local paths, git URLs (git::https://github.com/org/repo.git//path?ref=branch), OCI artifacts (oci::ghcr.io/org/tasks:1.0.0), and zip archives (zip::https://example.com/tasks.zip)
 #[derive(JsonSchema)]
 pub struct TaskInclude(pub String);

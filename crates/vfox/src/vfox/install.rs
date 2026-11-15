@@ -46,6 +46,15 @@ impl Vfox {
         trace!("{pre_install:?}");
         let mut verified_attestation = None;
         let mut checksum_verified = false;
+        if pre_install.url.is_some() {
+            let metadata = sdk.get_metadata()?;
+            if !metadata.downloads {
+                return Err(crate::VfoxError::Error(format!(
+                    "plugin {} declares `downloads = false` in metadata.lua but PreInstall returned a url",
+                    metadata.name
+                )));
+            }
+        }
         if let Some(url) = pre_install.url.as_ref().map(|s| Url::from_str(s)) {
             let file = self
                 .download(
@@ -276,6 +285,17 @@ impl Vfox {
         file: &Path,
     ) -> Result<Option<VerifiedAttestation>> {
         self.log_emit(format!("Verifying {file:?} checksum"));
+        if let Some(locked) = &self.locked_checksum {
+            match locked.split_once(':') {
+                Some(("sha256", hex)) => xx::hash::ensure_checksum_sha256(file, hex)?,
+                Some(("sha512", hex)) => xx::hash::ensure_checksum_sha512(file, hex)?,
+                _ => {
+                    return Err(crate::VfoxError::Error(format!(
+                        "cannot verify {file:?} against the locked checksum {locked}: only sha256 and sha512 are supported"
+                    )));
+                }
+            }
+        }
         if let Some(sha256) = &pre_install.sha256 {
             xx::hash::ensure_checksum_sha256(file, sha256)?;
         }

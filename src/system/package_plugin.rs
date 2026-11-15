@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::{WrapErr, bail, eyre};
-use heck::ToKebabCase;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
@@ -86,6 +85,43 @@ impl PackagePluginState {
     }
 }
 
+/// The environment bootstrap plugin hooks run with: the process environment, with mise's shims
+/// and the tools of the global config on `PATH`, so a hook can use a host program from `[tools]`.
+pub(crate) async fn bootstrap_plugin_env() -> Result<IndexMap<String, String>> {
+    let config = Config::get().await?;
+    let toolset = ToolsetBuilder::new()
+        .with_scope(ConfigScope::GlobalOnly)
+        .build(&config)
+        .await?;
+    let mut paths = PackagePluginManager::sync_lookup_path();
+    paths.extend(toolset.list_paths(&config).await);
+    let path = join_paths(&paths).wrap_err("failed to construct bootstrap plugin PATH")?;
+    let mut env: IndexMap<String, String> = mise_util::env::vars_safe().collect();
+    env.insert("PATH".into(), path.to_string_lossy().into_owned());
+    Ok(env)
+}
+
+/// The first of `requires` not found on the `PATH` of `env`, the environment plugin hooks get.
+pub(crate) fn missing_in_env<'a>(
+    requires: &'a [String],
+    env: &IndexMap<String, String>,
+) -> Option<&'a str> {
+    let paths: Vec<PathBuf> = env
+        .get("PATH")
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    missing_in(requires, &paths)
+}
+
+fn missing_in<'a>(requires: &'a [String], paths: &[PathBuf]) -> Option<&'a str> {
+    let path = join_paths(paths).ok()?;
+    let cwd = std::env::current_dir().ok()?;
+    requires
+        .iter()
+        .find(|binary| which::which_in(binary, Some(&path), &cwd).is_err())
+        .map(String::as_str)
+}
+
 #[derive(Debug)]
 pub struct PackagePluginManager {
     name: String,
@@ -96,10 +132,15 @@ pub struct PackagePluginManager {
 
 impl PackagePluginManager {
     pub fn new(name: String) -> Result<Self> {
-        let plugin_path = mise_util::dirs::PLUGINS.join(name.to_kebab_case());
+        let plugin_path = crate::plugins::system_plugins::resolve(&name, &mise_util::dirs::PLUGINS);
         let config =
             MisePluginToml::from_file(&plugin_path.join("mise.plugin.toml"))?.package_manager;
-        let plugin = Arc::new(VfoxPlugin::new(name.clone(), plugin_path));
+        // vfox loads a plugin by the name of its directory, which can differ from `name` in case
+        // style (`foo_bar` in config, `foo-bar` on disk).
+        let dir_name = plugin_path
+            .file_name()
+            .map_or_else(|| name.clone(), |n| n.to_string_lossy().into_owned());
+        let plugin = Arc::new(VfoxPlugin::new(dir_name, plugin_path));
         Ok(Self {
             name,
             plugin,
@@ -184,7 +225,7 @@ impl PackagePluginManager {
             .exists()
     }
 
-    fn sync_lookup_path() -> Vec<PathBuf> {
+    pub(crate) fn sync_lookup_path() -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
             .map(|path| split_paths(&path).collect())
             .unwrap_or_default();
@@ -196,32 +237,11 @@ impl PackagePluginManager {
     }
 
     fn missing_from_path(&self, paths: &[PathBuf]) -> Option<&str> {
-        let path = join_paths(paths).ok()?;
-        let cwd = std::env::current_dir().ok()?;
-        self.config
-            .requires
-            .iter()
-            .find(|binary| which::which_in(binary, Some(&path), &cwd).is_err())
-            .map(String::as_str)
+        missing_in(&self.config.requires, paths)
     }
 
     async fn hook_env(&self) -> Result<&IndexMap<String, String>> {
-        self.hook_env
-            .get_or_try_init(|| async {
-                let config = Config::get().await?;
-                let toolset = ToolsetBuilder::new()
-                    .with_scope(ConfigScope::GlobalOnly)
-                    .build(&config)
-                    .await?;
-                let mut paths = Self::sync_lookup_path();
-                paths.extend(toolset.list_paths(&config).await);
-                let path =
-                    join_paths(&paths).wrap_err("failed to construct package plugin PATH")?;
-                let mut env: IndexMap<String, String> = mise_util::env::vars_safe().collect();
-                env.insert("PATH".into(), path.to_string_lossy().into_owned());
-                Ok(env)
-            })
-            .await
+        self.hook_env.get_or_try_init(bootstrap_plugin_env).await
     }
 
     async fn checked_hook_env(&self) -> Result<&IndexMap<String, String>> {
@@ -250,6 +270,11 @@ impl PackagePluginManager {
 
     fn vfox(&self, env: &IndexMap<String, String>) -> Result<vfox::Vfox> {
         let (mut vfox, _) = self.plugin.vfox()?;
+        // A system plugin lives outside the user's plugins directory, and vfox finds a plugin
+        // by name inside `plugin_dir`.
+        if let Some(dir) = self.plugin.plugin_path.parent() {
+            vfox.plugin_dir = dir.to_path_buf();
+        }
         vfox.cmd_env = Some(env.clone());
         Ok(vfox)
     }
@@ -274,9 +299,9 @@ impl PackagePluginManager {
                 .join("hooks/package_upgrade.lua")
                 .exists()
         {
-            vfox.package_upgrade(&self.name, ctx).await?;
+            vfox.package_upgrade(&self.plugin.name, ctx).await?;
         } else {
-            vfox.package_install(&self.name, ctx).await?;
+            vfox.package_install(&self.plugin.name, ctx).await?;
         }
         Ok(())
     }
@@ -286,7 +311,9 @@ impl PackagePluginManager {
         let ctx = PackageUninstallContext {
             packages: Self::requests(pkgs),
         };
-        self.vfox(env)?.package_uninstall(&self.name, ctx).await?;
+        self.vfox(env)?
+            .package_uninstall(&self.plugin.name, ctx)
+            .await?;
         Ok(())
     }
 
@@ -535,7 +562,7 @@ impl SystemPackageManager for PackagePluginManager {
         let response = self
             .vfox(env)?
             .package_installed(
-                &self.name,
+                &self.plugin.name,
                 PackageInstalledContext {
                     packages: Self::requests(pkgs),
                 },

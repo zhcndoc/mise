@@ -61,6 +61,7 @@ assert_json "mise tasks ls --json" "$(
  {
    "name": "confdtask",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/.config/mise/conf.d/confdtask-config.toml",
    "config_sources": ["$(pwd)/.config/mise/conf.d/confdtask-config.toml"],
@@ -77,7 +78,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -87,11 +91,13 @@ assert_json "mise tasks ls --json" "$(
      "echo \"confdtask\""
    ],
    "args": [],
-   "file": null
+   "file": null,
+   "history": null
  },
  {
    "name": "filetask2",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/mytasks/filetask2",
    "config_sources": ["$(pwd)/mytasks/filetask2"],
@@ -108,7 +114,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -116,11 +125,13 @@ assert_json "mise tasks ls --json" "$(
    "timeout": null,
    "run": [],
    "args": [],
-   "file": "$(pwd)/mytasks/filetask2"
+   "file": "$(pwd)/mytasks/filetask2",
+   "history": null
  },
  {
    "name": "filetask3",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/mytasks/filetask3.sh",
    "config_sources": ["$(pwd)/mytasks/filetask3.sh"],
@@ -137,7 +148,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -145,11 +159,13 @@ assert_json "mise tasks ls --json" "$(
    "timeout": null,
    "run": [],
    "args": [],
-   "file": "$(pwd)/mytasks/filetask3.sh"
+   "file": "$(pwd)/mytasks/filetask3.sh",
+   "history": null
  },
  {
    "name": "lint",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/mise.toml",
    "config_sources": ["$(pwd)/mise.toml"],
@@ -166,7 +182,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -176,11 +195,13 @@ assert_json "mise tasks ls --json" "$(
      "echo \"linting!\""
    ],
    "args": [],
-   "file": null
+   "file": null,
+   "history": null
  },
  {
    "name": "test",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/tasks.toml",
    "config_sources": ["$(pwd)/tasks.toml"],
@@ -197,7 +218,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -207,11 +231,13 @@ assert_json "mise tasks ls --json" "$(
      "echo \"testing!\""
    ],
    "args": [],
-   "file": null
+   "file": null,
+   "history": null
  },
  {
    "name": "test-with-args",
    "aliases": [],
+   "tags": [],
    "description": "",
    "source": "$(pwd)/tasks.toml",
    "config_sources": ["$(pwd)/tasks.toml"],
@@ -231,7 +257,10 @@ assert_json "mise tasks ls --json" "$(
    "interactive": false,
    "sources": [],
    "outputs": [],
+   "cache": {"enabled": false, "audit": false, "env": [], "command_inputs": []},
    "shell": null,
+   "skip_if": null,
+   "lock": null,
    "quiet": false,
    "silent": false,
    "tools": {},
@@ -241,7 +270,8 @@ assert_json "mise tasks ls --json" "$(
      "echo \"{{arg()}} {{flag(name=\"force\")}} {{option(name=\"user\")}}\""
    ],
    "args": [],
-   "file": null
+   "file": null,
+   "history": null
  }
 ]
 EOF

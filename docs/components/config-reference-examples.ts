@@ -367,6 +367,11 @@ npm run build
 run = "rm -rf dist"
 run_windows = "rmdir /s /q dist"
 `,
+  "tasks.<name>.lock.name": toml`
+[tasks.build]
+run = "cargo build"
+lock = [{ name = "cpu", count = 2 }]
+`,
   "tasks.<name>.description": toml`
 [tasks.build]
 description = "Compile the project"
@@ -380,6 +385,15 @@ run = "cargo build"
 [tasks.test]
 alias = ["t", "check"]
 run = "cargo test"
+`,
+  "tasks.<name>.tags": toml`
+[tasks.clippy]
+tags = "lint"
+run = "cargo clippy"
+
+[tasks.e2e]
+tags = ["test", "slow"]
+run = "./e2e/run"
 `,
   "tasks.<name>.depends": toml`
 [tasks.build]
@@ -1289,6 +1303,14 @@ login_shell = "zsh"
 version = "16"
 os = "linux"
 `,
+  "bootstrap.packages.<key>.names.<key>": toml`
+[bootstrap.packages.openssl]
+names = { apt = "libssl-dev" }
+`,
+  "bootstrap.packages.<key>.names": toml`
+[bootstrap.packages.openssl]
+names = { apt = "libssl-dev", dnf = "openssl-devel" }
+`,
   "bootstrap.repos": toml`
 [bootstrap.repos."~/src/mise"]
 url = "https://github.com/jdx/mise.git"
@@ -1326,6 +1348,16 @@ template = true
 owner = "root"
 group = "root"
 mode = "0644"
+`,
+  "bootstrap.files.<key>.block": toml`
+[bootstrap.files."/etc/hosts"]
+block = "127.0.0.1 dev.local"
+id = "dev"
+`,
+  "bootstrap.files.<key>.id": toml`
+[bootstrap.files."/etc/hosts"]
+block = "127.0.0.1 dev.local"
+id = "dev"
 `,
   "bootstrap.directories": toml`
 [bootstrap.directories."/srv/app"]
@@ -1489,85 +1521,97 @@ my-org = "https://github.com/my-org/homebrew-tools.git"
 my-org = "https://github.com/my-org/homebrew-tools.git"
 `,
   "bootstrap.macos": toml`
-[bootstrap.macos.dock]
+[bootstrap.macos.launchd.agents.backup]
+program = "/usr/local/bin/backup"
+start_interval = 3600
+`,
+  "bootstrap.settings": toml`
+[bootstrap.settings.macos.dock]
+autohide = true
+
+[bootstrap.settings.omarchy.appearance]
+blur = true
+`,
+  "bootstrap.settings.macos": toml`
+[bootstrap.settings.macos.dock]
 autohide = true
 orientation = "left"
 tilesize = 48
 
-[bootstrap.macos.finder]
+[bootstrap.settings.macos.finder]
 show_pathbar = true
 preferred_view_style = "column"
 
-[bootstrap.macos.keyboard]
+[bootstrap.settings.macos.keyboard]
 key_repeat = 2
 initial_key_repeat = 15
 
-[bootstrap.macos.trackpad]
+[bootstrap.settings.macos.trackpad]
 tap_to_click = true
 `,
-  "bootstrap.macos.dock": toml`
-[bootstrap.macos.dock]
+  "bootstrap.settings.macos.dock": toml`
+[bootstrap.settings.macos.dock]
 apps = ["/Applications/Safari.app", "~/Applications/Zed.app"]
 autohide = true
 orientation = "left"
 tilesize = 48
 show_recents = false
 `,
-  "bootstrap.macos.finder": toml`
-[bootstrap.macos.finder]
+  "bootstrap.settings.macos.finder": toml`
+[bootstrap.settings.macos.finder]
 show_all_files = true
 show_pathbar = true
 show_status_bar = true
 preferred_view_style = "column"
 `,
-  "bootstrap.macos.keyboard": toml`
-[bootstrap.macos.keyboard]
+  "bootstrap.settings.macos.keyboard": toml`
+[bootstrap.settings.macos.keyboard]
 key_repeat = 2
 initial_key_repeat = 15
 press_and_hold = false
 automatic_capitalization = false
 `,
-  "bootstrap.macos.trackpad": toml`
-[bootstrap.macos.trackpad]
+  "bootstrap.settings.macos.trackpad": toml`
+[bootstrap.settings.macos.trackpad]
 tap_to_click = true
 three_finger_drag = true
 `,
-  "bootstrap.macos.defaults": toml`
-[bootstrap.macos.defaults."com.apple.screencapture"]
+  "bootstrap.settings.macos.defaults": toml`
+[bootstrap.settings.macos.defaults."com.apple.screencapture"]
 location = "~/Screenshots"
 type = "png"
 
-[bootstrap.macos.defaults.NSGlobalDomain]
+[bootstrap.settings.macos.defaults.NSGlobalDomain]
 AppleShowAllExtensions = true
 NSAutomaticQuoteSubstitutionEnabled = false
 `,
-  "bootstrap.macos.defaults.<key>": toml`
-[bootstrap.macos.defaults."com.apple.screencapture"]
+  "bootstrap.settings.macos.defaults.<key>": toml`
+[bootstrap.settings.macos.defaults."com.apple.screencapture"]
 location = "~/Screenshots"
 type = "png"
 disable-shadow = true
 `,
-  "bootstrap.macos.defaults.<key>.<key>.<key>": toml`
-[bootstrap.macos.defaults."com.apple.finder".FXInfoPanesExpanded]
+  "bootstrap.settings.macos.defaults.<key>.<key>.<key>": toml`
+[bootstrap.settings.macos.defaults."com.apple.finder".FXInfoPanesExpanded]
 General = true
 Preview = false
 `,
-  "bootstrap.macos.defaults.<key>.<key>.<key>.<key>": toml`
-[bootstrap.macos.defaults."com.apple.symbolichotkeys".AppleSymbolicHotKeys."64"]
+  "bootstrap.settings.macos.defaults.<key>.<key>.<key>.<key>": toml`
+[bootstrap.settings.macos.defaults."com.apple.symbolichotkeys".AppleSymbolicHotKeys."64"]
 enabled = false
 `,
-  "bootstrap.macos.defaults.<key>.<key>.<key>.<key>.<key>": toml`
-[bootstrap.macos.defaults."com.apple.symbolichotkeys".AppleSymbolicHotKeys."64".value]
+  "bootstrap.settings.macos.defaults.<key>.<key>.<key>.<key>.<key>": toml`
+[bootstrap.settings.macos.defaults."com.apple.symbolichotkeys".AppleSymbolicHotKeys."64".value]
 parameters = [32, 49, 1048576]
 type = "standard"
 `,
-  "bootstrap.macos.defaults_entries": toml`
-[[bootstrap.macos.defaults_entries]]
+  "bootstrap.settings.macos.defaults_entries": toml`
+[[bootstrap.settings.macos.defaults_entries]]
 domain = "com.apple.finder"
 key = "FXPreferredViewStyle"
 value = "clmv"
 
-[[bootstrap.macos.defaults_entries]]
+[[bootstrap.settings.macos.defaults_entries]]
 domain = "com.apple.dock"
 key = "persistent-apps"
 host = "current"
@@ -1603,8 +1647,8 @@ weekday = 1
 hour = 2
 minute = 30
 `,
-  "bootstrap.macos.login_items": toml`
-[bootstrap.macos.login_items]
+  "bootstrap.settings.macos.login_items": toml`
+[bootstrap.settings.macos.login_items]
 apps = ["/Applications/Rectangle.app", "~/Applications/Raycast.app"]
 exclusive = false
 `,
@@ -1717,11 +1761,6 @@ run = [{ task = "test", env = { CI = "1" } }]
 # Run these tasks in parallel, then the next entry
 [tasks.ci]
 run = [{ tasks = ["lint", "test"] }, "echo done"]
-`,
-  "bootstrap.macos.defaults.<key>.<key>.<key>.<key>.<key>.<key>": toml`
-[bootstrap.macos.defaults."com.apple.symbolichotkeys".AppleSymbolicHotKeys."64".value]
-parameters = [32, 49, 1048576]
-type = "standard"
 `,
 };
 

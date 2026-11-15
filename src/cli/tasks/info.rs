@@ -9,6 +9,7 @@ use crate::file::display_path;
 use crate::task::Task;
 use crate::task::TaskOutputsExt;
 use crate::task::task_fetcher::TaskFetcher;
+use crate::task::task_history::TaskHistory;
 use crate::task::task_source_checker::task_cwd;
 use crate::ui::info;
 
@@ -72,6 +73,9 @@ impl TasksInfo {
         info::inline_section("Task", &task.display_name)?;
         if !task.aliases.is_empty() {
             info::inline_section("Aliases", task.aliases.join(", "))?;
+        }
+        if !task.tags.is_empty() {
+            info::inline_section("Tags", task.tags.join(", "))?;
         }
         info::inline_section("Description", &task.description)?;
         info::inline_section(
@@ -164,9 +168,15 @@ impl TasksInfo {
             .dir(config)
             .await?
             .map(|p| p.to_string_lossy().to_string());
+        // Reading history is best effort: a missing or unreadable record is no history.
+        let history = TaskHistory::for_config(config)
+            .summaries(Some(&task.name))
+            .ok()
+            .and_then(|summaries| summaries.into_iter().next());
         let o = json!({
             "name": task.display_name,
             "aliases": task.aliases,
+            "tags": task.tags,
             "description": task.description,
             "source": task.config_source.to_string_lossy(),
             "config_sources": task
@@ -202,6 +212,7 @@ impl TasksInfo {
             "run": task.run(),
             "file": task.file.as_ref().map(|p| p.to_string_lossy()),
             "usage_spec": spec,
+            "history": history,
         });
         miseprintln!("{}", serde_json::to_string_pretty(&o)?);
         Ok(())

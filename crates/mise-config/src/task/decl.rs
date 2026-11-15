@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, de::Error as _};
 use super::shapes::{
     RustCacheDecl, SilentDecl, TaskAlias, TaskCacheDecl, TaskConfirmDecl, TaskDaemonsDecl,
     TaskDepends, TaskDependsPost, TaskLockDecl, TaskOutputDecl, TaskOutputsDecl, TaskRunDecl,
-    TaskSecretsDecl, TaskSourcesDecl, TaskWaitFor,
+    TaskSecretsDecl, TaskSourcesDecl, TaskTags, TaskWaitFor,
 };
 use super::{
     G7_TEXT, RunEntry, Silent, TaskCacheConfig, TaskConfirm, TaskDaemons, TaskDep, TaskLock,
@@ -53,6 +53,9 @@ pub struct TaskDecl {
     /// description of task
     #[serde(default)]
     pub description: String,
+    #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
+    #[schemars(with = "TaskTags")]
+    pub tags: Vec<String>,
     /// directory to run script in, default is the project's base directory
     #[serde(default)]
     #[schemars(extend("default" = "{{ config_root }}"))]
@@ -153,6 +156,9 @@ pub struct TaskDecl {
     /// block env var inheritance
     #[serde(default)]
     pub deny_env: bool,
+    /// block connections to Unix sockets outside the sandbox; Linux 7.1 or later
+    #[serde(default)]
+    pub deny_unix: bool,
     /// allow reads from specific paths
     #[serde(default)]
     pub allow_read: Vec<PathBuf>,
@@ -163,6 +169,9 @@ pub struct TaskDecl {
     // Allow network to specific hosts
     #[serde(default)]
     pub allow_net: Vec<String>,
+    /// allow connections to the Unix sockets at specific paths (implies deny_unix); Linux 7.1 or later
+    #[serde(default)]
+    pub allow_unix: Vec<PathBuf>,
     /// allow specific env vars through
     #[serde(default)]
     pub allow_env: Vec<String>,
@@ -206,6 +215,9 @@ pub struct TaskTemplate {
         deserialize_with = "crate::de::deserialize_arr"
     )]
     pub aliases: Vec<String>,
+    /// Added to the tags of every task that uses the template
+    #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub confirm: Option<TaskConfirm>,
     #[serde(default, deserialize_with = "crate::de::deserialize_arr")]
@@ -276,6 +288,9 @@ pub struct TaskTemplate {
     /// Block env var inheritance
     #[serde(default)]
     pub deny_env: bool,
+    /// Block connections to Unix sockets outside the sandbox; Linux 7.1 or later
+    #[serde(default)]
+    pub deny_unix: bool,
     /// Allow reads from specific paths
     #[serde(default)]
     pub allow_read: Vec<PathBuf>,
@@ -285,6 +300,9 @@ pub struct TaskTemplate {
     /// Allow network to specific hosts
     #[serde(default)]
     pub allow_net: Vec<String>,
+    /// Allow connections to the Unix sockets at specific paths (implies deny_unix); Linux 7.1 or later
+    #[serde(default)]
+    pub allow_unix: Vec<PathBuf>,
     /// Allow specific env vars through
     #[serde(default)]
     pub allow_env: Vec<String>,

@@ -16,6 +16,7 @@ use crate::task::task_list::split_task_spec;
 use crate::task::task_lock;
 use crate::task::task_output::{TaskOutput, trunc};
 use crate::task::task_output_handler::OutputHandler;
+use crate::task::task_run_log::TaskRunLog;
 use crate::task::task_scheduler::{Cover, SchedMsg};
 use crate::task::task_script_parser::subcommand_name_from_parse;
 use crate::task::task_source_checker::{
@@ -79,6 +80,8 @@ pub struct TaskRunContext<'a> {
     /// Started by a run entry of a task that holds task locks: it runs under that task's
     /// `--jobs` permit and terminal and never takes either itself.
     pub covered: Cover,
+    /// Set once the task's env has been resolved and its secrets registered for redaction.
+    pub env_resolved: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone, Copy)]
@@ -88,6 +91,8 @@ struct TaskExecContext<'a> {
     env_remove: &'a BTreeSet<String>,
     prefix: &'a str,
     output_capture: Option<&'a TaskOutputCapture>,
+    /// This run's output, kept for `mise tasks log`.
+    run_log: &'a Arc<TaskRunLog>,
     allow_during_interruption: bool,
     /// Context of this task's live OpenTelemetry span, used to correlate
     /// exported log records with the task that produced them.
@@ -368,6 +373,22 @@ fn append_inline_args(script: &str, args: &[String], style: InlineArgsStyle) -> 
 
 /// Push a failure onto `failed`, returning whether an earlier one was already
 /// there. See [`TaskExecutor::add_failed_task`].
+/// `filter_env` reads allowed names back from mise's own environment, which holds the report
+/// path of the `mise run` that started this one. `env` has that name only when the config or
+/// the task set it, so a name `env` lacks came from there and is dropped.
+fn strip_inherited_report_file(
+    env: &BTreeMap<String, String>,
+    filtered: &mut BTreeMap<String, String>,
+) {
+    let report_env = crate::task::run_report::REPORT_FILE_ENV;
+    if !env
+        .keys()
+        .any(|key| mise_util::env::env_key_eq(key, report_env))
+    {
+        filtered.retain(|key, _| !mise_util::env::env_key_eq(key, report_env));
+    }
+}
+
 fn record_failed_task(failed: &FailedTasks, task: Task, status: Option<i32>) -> bool {
     let mut failed = failed.lock().unwrap();
     let was_stopping = !failed.is_empty();
@@ -430,12 +451,16 @@ pub struct TaskExecutor {
     cli_secrets: Option<crate::secrets::CliSecretGrant>,
     /// Forwards task stdout/stderr to the OTEL log pipeline (when enabled).
     pub output_forwarder: Option<crate::otel::TaskOutputForwarder>,
+    /// What `mise run --report-file` writes; tasks a `run` entry injects are listed in it.
+    pub run_report: Option<Arc<crate::task::run_report::RunReport>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskRunOutcome {
     pub did_work: bool,
     pub cache_key: Option<String>,
+    /// The task's result came from the artifact cache instead of running it.
+    pub restored: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -489,6 +514,7 @@ impl TaskExecutor {
             secrets_denied: Self::secrets_denied_from(config.secrets_denied),
             cli_secrets: config.cli_secrets,
             output_forwarder: None,
+            run_report: None,
         }
     }
 
@@ -532,6 +558,35 @@ impl TaskExecutor {
         self.output_handler.eprint(task, prefix, line);
     }
 
+    /// Writes the run's log. A failed task whose style hid its output names the log, so
+    /// the rest can be read without running the task again; styles that printed every
+    /// line add nothing.
+    fn finish_run_log(
+        &self,
+        config: &Config,
+        task: &Task,
+        prefix: &str,
+        run_log: &TaskRunLog,
+        failed: bool,
+    ) {
+        // Off, mise neither writes a log nor removes one an earlier run left.
+        if !Settings::get().task.logs {
+            return;
+        }
+        let Some(path) = run_log.finish(task, config) else {
+            return;
+        };
+        // `summary` prints a failed task's output in full unless it held only the end.
+        let hid_output = match self.output(Some(task)) {
+            TaskOutput::Replacing | TaskOutput::Timed => true,
+            TaskOutput::Summary => self.output_handler.summary_truncated(task),
+            _ => false,
+        };
+        if failed && hid_output && !self.quiet(Some(task)) {
+            self.eprint(task, prefix, &format!("full output: {}", path.display()));
+        }
+    }
+
     fn output(&self, task: Option<&Task>) -> crate::task::task_output::TaskOutput {
         self.output_handler.output(task)
     }
@@ -563,6 +618,7 @@ impl TaskExecutor {
             deny_write: task.deny_all || task.deny_write || self.sandbox.deny_write,
             deny_net: task.deny_all || task.deny_net || self.sandbox.deny_net,
             deny_env: task.deny_all || task.deny_env || self.sandbox.deny_env,
+            deny_unix: task.deny_unix || self.sandbox.deny_unix,
             deny_process: false,
             deny_temp_write: false,
             allow_read: task
@@ -582,6 +638,12 @@ impl TaskExecutor {
                 .iter()
                 .chain(self.sandbox.allow_net.iter())
                 .cloned()
+                .collect(),
+            allow_unix: task
+                .allow_unix
+                .iter()
+                .map(&resolve_task_path)
+                .chain(self.sandbox.allow_unix.iter().cloned())
                 .collect(),
             allow_env: task
                 .allow_env
@@ -655,6 +717,7 @@ impl TaskExecutor {
             otel_span_cx,
             injected,
             covered,
+            env_resolved,
         } = ctx;
         // Every task reaches this point before it runs, whether it was named, a dependency, or
         // the rendered name of a `run` entry, so this is where a run that must not execute
@@ -712,6 +775,13 @@ impl TaskExecutor {
         } = self
             .prepare_task_context(config, task, otel_span_cx.as_ref())
             .await?;
+        // A granted secret registers its redaction only once fnox returns it, below, so a
+        // task with a grant that skips or stops before then keeps its args out of history.
+        if grant.is_empty()
+            && let Some(flag) = &env_resolved
+        {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let task_file = self
             .parse_task_usage(config, task, &mut env, extra_vars.clone())
             .await?;
@@ -834,6 +904,7 @@ impl TaskExecutor {
                             return Ok(TaskRunOutcome {
                                 did_work: false,
                                 cache_key: Some(cache.key().to_string()),
+                                restored: false,
                             });
                         }
                         // The run may change the outputs and fail before it marks its key, so
@@ -871,6 +942,7 @@ impl TaskExecutor {
                         return Ok(TaskRunOutcome {
                             did_work: false,
                             cache_key: Some(cache.key().to_string()),
+                            restored: false,
                         });
                     }
                     if bypass_cache {
@@ -927,6 +999,7 @@ impl TaskExecutor {
                                     return Ok(TaskRunOutcome {
                                         did_work: true,
                                         cache_key: Some(cache.key().to_string()),
+                                        restored: true,
                                     });
                                 }
                                 TaskCacheRestore::Miss(reason) => reason,
@@ -948,6 +1021,7 @@ impl TaskExecutor {
             .as_ref()
             .filter(|_| self.task_cache.writes())
             .map(|_| Arc::new(StdMutex::new(Vec::new())));
+        let run_log = Arc::new(TaskRunLog::default());
         // Resolved here, after the skip, confirmation and cache checks: a task that does not
         // run never asks fnox. Held until every run entry ends, then dropped, which deletes
         // any secret files.
@@ -1013,11 +1087,16 @@ impl TaskExecutor {
                     err
                 })?
         };
+        if spawn_secrets.is_some()
+            && let Some(flag) = &env_resolved
+        {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         // Taken once the task has decided to run and has its secrets, just before its first
         // command, so a skipped or restored task never waits, and held until every run entry
         // ends.
         let mut task_env = task_env;
-        let lock_keys = task_lock::requested(task);
+        let lock_keys = task_lock::requested(task)?;
         let task_locks = if lock_keys.is_empty() || (task.run().is_empty() && task_file.is_none()) {
             None
         } else if self.dry_run {
@@ -1031,11 +1110,7 @@ impl TaskExecutor {
             None
         } else {
             let inherited = task_lock::inherited(&env);
-            let to_take: Vec<_> = lock_keys
-                .iter()
-                .filter(|key| !inherited.contains(key.id()))
-                .cloned()
-                .collect();
+            let to_take = task_lock::still_needed(&lock_keys, &inherited);
             task_lock::check_nested_order(task, &inherited, &to_take)?;
             // A task that takes locks takes its `--jobs` permit and its hold on the terminal
             // (write for an interactive task, read otherwise) with them, all or nothing, and
@@ -1114,7 +1189,7 @@ impl TaskExecutor {
                     confirm_guard = Some(acquire_runtime_lock(task.interactive).await);
                 }
             };
-            let locks = task_lock::exported(&inherited, &lock_keys);
+            let locks = task_lock::exported(&inherited, &held);
             env.insert(task_lock::LOCKS_ENV.to_string(), locks.clone());
             // Tasks a run entry injects inherit `task_env`, so they see the locks this task holds.
             task_env.push((task_lock::LOCKS_ENV.to_string(), locks));
@@ -1126,6 +1201,7 @@ impl TaskExecutor {
             env_remove: &env_remove,
             prefix: &prefix,
             output_capture: output_capture.as_ref(),
+            run_log: &run_log,
             allow_during_interruption,
             otel_span_cx: otel_span_cx.as_ref(),
             secrets: spawn_secrets.as_ref(),
@@ -1134,54 +1210,64 @@ impl TaskExecutor {
 
         let timer = std::time::Instant::now();
 
-        if let Some(file) = task_file {
-            let exec_start = std::time::Instant::now();
-            Self::check_interruption(allow_during_interruption)?;
-            remove_auto_output(task, config).await?;
-            self.exec_file(config, &file, confirm_guard, exec_ctx)
-                .await?;
-            trace!(
-                "task {} exec_file took {}ms (total {}ms)",
-                task.name,
-                exec_start.elapsed().as_millis(),
-                total_start.elapsed().as_millis()
-            );
-        } else {
-            let rendered_run_scripts = task
-                .render_run_scripts_with_args(
-                    config,
-                    self.cd.clone(),
-                    &task.args,
-                    &env,
-                    extra_vars.clone(),
+        // Every run entry's output goes to the task's log, which is written whether the
+        // entries pass or fail, so the body runs in a block that the error leaves.
+        let exec_result: Result<()> = async {
+            if let Some(file) = task_file {
+                let exec_start = std::time::Instant::now();
+                Self::check_interruption(allow_during_interruption)?;
+                remove_auto_output(task, config).await?;
+                self.exec_file(config, &file, confirm_guard, exec_ctx)
+                    .await?;
+                trace!(
+                    "task {} exec_file took {}ms (total {}ms)",
+                    task.name,
+                    exec_start.elapsed().as_millis(),
+                    total_start.elapsed().as_millis()
+                );
+            } else {
+                let rendered_run_scripts = task
+                    .render_run_scripts_with_args(
+                        config,
+                        self.cd.clone(),
+                        &task.args,
+                        &env,
+                        extra_vars.clone(),
+                    )
+                    .await?;
+
+                let exec_start = std::time::Instant::now();
+                Self::check_interruption(allow_during_interruption)?;
+                remove_auto_output(task, config).await?;
+                self.exec_task_run_entries(
+                    rendered_run_scripts,
+                    TaskRunEntriesContext {
+                        config,
+                        exec: exec_ctx,
+                        task_env: &task_env,
+                        sched_tx,
+                        existing_guard: confirm_guard,
+                        completion_state: &completion_state,
+                        semaphore,
+                        permit,
+                        holds_locks: task_locks.as_ref().is_some_and(|held| !held.is_empty()),
+                    },
                 )
                 .await?;
-
-            let exec_start = std::time::Instant::now();
-            Self::check_interruption(allow_during_interruption)?;
-            remove_auto_output(task, config).await?;
-            self.exec_task_run_entries(
-                rendered_run_scripts,
-                TaskRunEntriesContext {
-                    config,
-                    exec: exec_ctx,
-                    task_env: &task_env,
-                    sched_tx,
-                    existing_guard: confirm_guard,
-                    completion_state: &completion_state,
-                    semaphore,
-                    permit,
-                    holds_locks: task_locks.as_ref().is_some_and(|held| !held.is_empty()),
-                },
-            )
-            .await?;
-            trace!(
-                "task {} exec_task_run_entries took {}ms (total {}ms)",
-                task.name,
-                exec_start.elapsed().as_millis(),
-                total_start.elapsed().as_millis()
-            );
+                trace!(
+                    "task {} exec_task_run_entries took {}ms (total {}ms)",
+                    task.name,
+                    exec_start.elapsed().as_millis(),
+                    total_start.elapsed().as_millis()
+                );
+            }
+            Ok(())
         }
+        .await;
+        if !self.dry_run {
+            self.finish_run_log(config, task, &prefix, &run_log, exec_result.is_err());
+        }
+        exec_result?;
 
         let execution_duration = timer.elapsed();
         // A task that only has dependencies ran nothing, and gets no line; a
@@ -1210,27 +1296,20 @@ impl TaskExecutor {
         save_checksum(task, config).await?;
         // A raw or interactive run stores no artifact, but its key still identifies the
         // outputs it produced, so dependents include it in their own keys.
-        let raw_cache_key = raw_cache_state.map(|cache| {
-            if self.task_cache.writes()
-                && let Err(err) = cache.mark_current()
-            {
-                warn!(
-                    "task {} artifact cache state update failed: {err}",
-                    task.name
-                );
-            }
-            cache.key().to_string()
-        });
-        let cache_key = if self.task_cache.writes()
-            && let Some(cache) = artifact_cache
-        {
-            let output = output_capture
-                .as_ref()
-                .map(|output| output.lock().unwrap().clone())
-                .unwrap_or_default();
-            match cache.store(task, &output, execution_duration).await {
-                Ok(()) => {
-                    if let Err(err) = cache.mark_current() {
+        let raw_cache_key = match raw_cache_state {
+            Some(cache) => {
+                if let Some(source) = cache.source_changed_since_key(task, config).await {
+                    // Dependents would build on a result of unknown inputs.
+                    warn!(
+                        "task {}: {} changed while the task ran; not caching",
+                        task.name,
+                        display_path(&source)
+                    );
+                    None
+                } else {
+                    if self.task_cache.writes()
+                        && let Err(err) = cache.mark_current()
+                    {
                         warn!(
                             "task {} artifact cache state update failed: {err}",
                             task.name
@@ -1238,9 +1317,38 @@ impl TaskExecutor {
                     }
                     Some(cache.key().to_string())
                 }
-                Err(err) => {
-                    warn!("task {} artifact cache write failed: {err}", task.name);
-                    None
+            }
+            None => None,
+        };
+        let cache_key = if self.task_cache.writes()
+            && let Some(cache) = artifact_cache
+        {
+            let output = output_capture
+                .as_ref()
+                .map(|output| output.lock().unwrap().clone())
+                .unwrap_or_default();
+            if let Some(source) = cache.source_changed_since_key(task, config).await {
+                warn!(
+                    "task {}: {} changed while the task ran; not caching",
+                    task.name,
+                    display_path(&source)
+                );
+                None
+            } else {
+                match cache.store(task, &output, execution_duration).await {
+                    Ok(()) => {
+                        if let Err(err) = cache.mark_current() {
+                            warn!(
+                                "task {} artifact cache state update failed: {err}",
+                                task.name
+                            );
+                        }
+                        Some(cache.key().to_string())
+                    }
+                    Err(err) => {
+                        warn!("task {} artifact cache write failed: {err}", task.name);
+                        None
+                    }
                 }
             }
         } else {
@@ -1249,6 +1357,7 @@ impl TaskExecutor {
         Ok(TaskRunOutcome {
             did_work: true,
             cache_key,
+            restored: false,
         })
     }
 
@@ -1310,7 +1419,13 @@ impl TaskExecutor {
 
         let needs_tera = task.run().iter().any(RunEntry::has_tera_template);
         let mut tera_state = if needs_tera {
-            let usage_values = crate::task::parse_usage_values_from_task(config, task).await?;
+            let usage_values = if task.should_bypass_usage_parser() {
+                // A bypassed task never uses its usage values, so a broken spec must not
+                // stop its templated entries from running.
+                crate::task::parse_usage_values_from_bypassed_task(config, task).await?
+            } else {
+                crate::task::parse_usage_values_from_task(config, task).await?
+            };
             let config_root = task.config_root.clone().unwrap_or_default();
             let tera = crate::tera::get_tera(Some(&config_root));
             let mut tera_ctx = task.tera_ctx_for_usage(config).await?;
@@ -1490,6 +1605,13 @@ impl TaskExecutor {
         {
             return Err(crate::errors::Error::UntrustedConfig(task.config_source.clone()).into());
         }
+        // Listed now, like the run's own graph, so a task the run then never starts is
+        // reported as not run instead of missing.
+        if let Some(report) = &self.run_report {
+            for task in sub_deps.all_in_creation_order() {
+                report.schedule(task);
+            }
+        }
         // Give these tasks their keep-order slots now, while the order they were
         // written in is still known and before any of them can produce a line.
         // Reaching this from `&self` is fine: the state is behind the shared
@@ -1638,7 +1760,7 @@ impl TaskExecutor {
                 }
                 // Give a short time for the spawned task to finish cleanly
                 let _ = tokio::time::timeout(Duration::from_millis(100), done_rx).await;
-                return Err(eyre!("task sequence aborted due to failure"));
+                return Err(crate::errors::Error::TaskSequenceAborted.into());
             }
 
             // Try to receive the done signal with a short timeout
@@ -1659,7 +1781,7 @@ impl TaskExecutor {
 
         // Final check if we failed during the execution
         if self.is_stopping() && !self.continue_on_error && !allow_during_interruption {
-            return Err(eyre!("task sequence aborted due to failure"));
+            return Err(crate::errors::Error::TaskSequenceAborted.into());
         }
 
         let completion_state = sub_deps.lock().await.completion_state();
@@ -1689,6 +1811,7 @@ impl TaskExecutor {
             true => "$".to_string(),
             false => format!("$ {display_script}"),
         };
+        ctx.run_log.push(config.redact(&cmd).trim());
         if !self.quiet(Some(ctx.task)) {
             let msg = style::ebold(trunc(ctx.prefix, config.redact(&cmd).trim()))
                 .bright()
@@ -1873,6 +1996,7 @@ impl TaskExecutor {
             // environment, which still holds inherited secrets. A task that receives
             // secrets has no artifact cache, so grants never reach command inputs.
             mise_util::env::strip_inherited_secrets_for_child(&mut filtered, &mut BTreeSet::new());
+            strip_inherited_report_file(resolved_env, &mut filtered);
             filtered
         } else {
             resolved_env.clone()
@@ -1955,6 +2079,8 @@ impl TaskExecutor {
     ) -> Result<()> {
         let args = ctx.task.args.iter().cloned().collect_vec();
 
+        let header = format!("$ {} {}", display_path(file), args.join(" "));
+        ctx.run_log.push(config.redact(&header).trim());
         if !self.quiet(Some(ctx.task)) {
             let cmd = format!("{} {}", display_path(file), args.join(" "))
                 .trim()
@@ -2031,6 +2157,7 @@ impl TaskExecutor {
             env_remove,
             prefix,
             output_capture,
+            run_log,
             allow_during_interruption,
             otel_span_cx,
             secrets,
@@ -2098,6 +2225,7 @@ impl TaskExecutor {
             // environment, which still holds inherited secrets. `env_remove`
             // cannot undo this because the runner sets `env` afterwards.
             mise_util::env::strip_inherited_secrets_for_child(&mut filtered, &mut BTreeSet::new());
+            strip_inherited_report_file(env, &mut filtered);
             sandbox_env = filtered;
             &sandbox_env
         } else {
@@ -2248,6 +2376,18 @@ impl TaskExecutor {
             );
         }
 
+        // Task logs are opt-in (`task.logs`); off, nothing is piped or kept for them. On, the
+        // log reads the streams only where mise already pipes them. `interleave` hands a task
+        // without redactions the terminal itself, and piping it just to keep a log would
+        // change what the task sees (colors, progress bars, isatty checks).
+        let logs_output = Settings::get().task.logs
+            && !raw
+            && (!matches!(output, TaskOutput::Interleave | TaskOutput::Quiet)
+                || needs_redaction
+                || output_capture.is_some()
+                || forwards_output);
+        let captures_output = output_capture.is_some() || logs_output;
+
         match output {
             TaskOutput::Prefix => {
                 if !task.silent.suppresses_stdout() {
@@ -2258,7 +2398,7 @@ impl TaskExecutor {
                             prefix_println!(prefix, "{line}");
                         }
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stdout(|_| {});
                 } else {
                     cmd = cmd.stdout(Stdio::null());
@@ -2271,7 +2411,7 @@ impl TaskExecutor {
                             self.eprint(task, prefix, &line);
                         }
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stderr(|_| {});
                 } else {
                     cmd = cmd.stderr(Stdio::null());
@@ -2285,7 +2425,7 @@ impl TaskExecutor {
                     cmd = cmd.with_on_stdout(move |line| {
                         handler.summary_stdout(&task_clone, &prefix_str, &line);
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stdout(|_| {});
                 } else {
                     cmd = cmd.stdout(Stdio::null());
@@ -2297,7 +2437,7 @@ impl TaskExecutor {
                     cmd = cmd.with_on_stderr(move |line| {
                         handler.summary_stderr(&task_clone, &prefix_str, &line);
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stderr(|_| {});
                 } else {
                     cmd = cmd.stderr(Stdio::null());
@@ -2314,7 +2454,7 @@ impl TaskExecutor {
                             .unwrap()
                             .on_stdout(&task_clone, prefix_str.clone(), line);
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stdout(|_| {});
                 } else {
                     cmd = cmd.stdout(Stdio::null());
@@ -2329,7 +2469,7 @@ impl TaskExecutor {
                             .unwrap()
                             .on_stderr(&task_clone, prefix_str.clone(), line);
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stderr(|_| {});
                 } else {
                     cmd = cmd.stderr(Stdio::null());
@@ -2338,14 +2478,14 @@ impl TaskExecutor {
             TaskOutput::Replacing => {
                 // Replacing mode shows a progress indicator unless both streams are suppressed
                 if task.silent.suppresses_stdout() {
-                    if output_capture.is_some() {
+                    if captures_output {
                         cmd = cmd.with_on_stdout(|_| {});
                     } else {
                         cmd = cmd.stdout(Stdio::null());
                     }
                 }
                 if task.silent.suppresses_stderr() {
-                    if output_capture.is_some() {
+                    if captures_output {
                         cmd = cmd.with_on_stderr(|_| {});
                     } else {
                         cmd = cmd.stderr(Stdio::null());
@@ -2366,7 +2506,7 @@ impl TaskExecutor {
                             .unwrap()
                             .insert(prefix.to_string(), (SystemTime::now(), vec![line]));
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stdout(|_| {});
                 } else {
                     cmd = cmd.stdout(Stdio::null());
@@ -2379,14 +2519,14 @@ impl TaskExecutor {
                             self.eprint(task, prefix, &line);
                         }
                     });
-                } else if output_capture.is_some() {
+                } else if captures_output {
                     cmd = cmd.with_on_stderr(|_| {});
                 } else {
                     cmd = cmd.stderr(Stdio::null());
                 }
             }
             TaskOutput::Silent => {
-                if output_capture.is_some() {
+                if captures_output {
                     cmd = cmd.with_on_stdout(|_| {}).with_on_stderr(|_| {});
                 } else {
                     cmd = cmd.stdout(Stdio::null()).stderr(Stdio::null());
@@ -2430,6 +2570,13 @@ impl TaskExecutor {
                     }
                 }
             }
+        }
+        if logs_output {
+            let stdout = run_log.clone();
+            let stderr = run_log.clone();
+            cmd = cmd
+                .with_stdout_observer(move |line| stdout.push(line))
+                .with_stderr_observer(move |line| stderr.push(line));
         }
         if let Some(output_capture) = output_capture {
             let stdout = output_capture.clone();
@@ -2485,7 +2632,11 @@ impl TaskExecutor {
         }
         // Apply sandbox async (DNS resolution for macOS) before spawning.
         cmd.apply_sandbox().await?;
+        // The run replaces the task's log only once its process started: a run cancelled
+        // first, or whose program is missing or not executable, keeps the last log.
+        let spawned_log = run_log.clone();
         let result = cmd
+            .with_on_spawn(move || spawned_log.mark_spawned(logs_output))
             .execute_async_with_cancel_check(|| {
                 !allow_during_interruption && crate::ui::ctrlc::is_cancelled()
             })
@@ -2578,6 +2729,7 @@ impl TaskExecutor {
             // The same strip as for cache command inputs: filter_env reads allowed names back
             // from mise's own environment, which still holds inherited secrets.
             mise_util::env::strip_inherited_secrets_for_child(&mut filtered, &mut BTreeSet::new());
+            strip_inherited_report_file(env, &mut filtered);
             filtered
         } else {
             env.clone()
@@ -3013,12 +3165,13 @@ impl TaskExecutor {
                 );
             }
         }
-        if let Some(cwd) = &*crate::dirs::CWD {
+        // The directory mise started in, before `--cd`/`MISE_CD` moved it.
+        if let Some(cwd) = crate::env::original_cwd() {
             Self::insert_env_excluded_from_nested_mise_diff(
                 &mut env,
                 &mut nested_mise_diff_exclude_keys,
                 "MISE_ORIGINAL_CWD",
-                task_env_path(cwd),
+                task_env_path(&cwd),
             );
         }
 
@@ -3095,6 +3248,19 @@ impl TaskExecutor {
         } else {
             env.remove(crate::shims::TASK_TOOL_ARGS_ENV);
             env_remove.insert(crate::shims::TASK_TOOL_ARGS_ENV.to_string());
+        }
+        // The report this run writes is not the report of a `mise run` the task starts, which
+        // would otherwise overwrite it. A value the config or the task's env sets is passed
+        // on, even one equal to the inherited value.
+        let report_env = crate::task::run_report::REPORT_FILE_ENV;
+        if std::env::var_os(report_env).is_some()
+            && !env_keys
+                .mise
+                .iter()
+                .any(|key| mise_util::env::env_key_eq(key, report_env))
+        {
+            env.retain(|key, _| !mise_util::env::env_key_eq(key, report_env));
+            env_remove.insert(report_env.to_string());
         }
         if Settings::get().env_cache {
             let key = CachedEnv::ensure_encryption_key();
@@ -3175,13 +3341,20 @@ impl TaskExecutor {
             // so they must not influence spec discovery or parsing.
             crate::task::clear_usage_env(env);
         }
-        let (spec, _) = task
+        let parsed = task
             .parse_usage_spec_with_vars(config, self.cd.clone(), env, extra_vars)
-            .await?;
+            .await;
         if bypass_usage_parser {
+            // The spec is not used, so a broken one must not stop the task. Parsing still
+            // runs first so task-variable redactions get registered; rendering the scripts
+            // reports the broken spec.
+            if let Err(err) = &parsed {
+                trace!("Usage parser bypassed, spec failed to load: {err}");
+            }
             trace!("Usage parser bypassed");
             return Ok(());
         }
+        let (spec, _) = parsed?;
         let args = get_args();
         self.parse_usage_spec_and_init_env_from_spec(task, env, &args, &spec)
     }

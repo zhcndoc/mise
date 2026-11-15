@@ -36,6 +36,9 @@ pub(super) fn installed_versions(manager: CaskManager, token: &str) -> Vec<Strin
         .collect()
 }
 
+/// Versions Homebrew recorded under `.metadata/<version>`. A Caskroom directory
+/// without a record is part of the cask's own layout (miniconda's installer
+/// writes `base/` there), not an installed version.
 pub(super) fn homebrew_installed_versions(token: &str) -> Result<Vec<String>> {
     let dir = caskroom_token_dir(CaskManager::BrewCask, token);
     let entries = std::fs::read_dir(&dir).wrap_err_with(|| {
@@ -65,7 +68,11 @@ pub(super) fn homebrew_installed_versions(token: &str) -> Result<Vec<String>> {
                 path.display()
             )
         })?;
-        if file_type.is_dir() && name != ".metadata" && !name.starts_with(".mise-") {
+        if file_type.is_dir()
+            && name != ".metadata"
+            && !name.starts_with(".mise-")
+            && dir.join(".metadata").join(&name).is_dir()
+        {
             versions.push(name);
         }
     }
@@ -625,7 +632,16 @@ pub(super) fn package_state(req: &PackageRequest, cask: &Cask) -> Result<Package
     {
         return Ok(state_for_version(req, cask, version));
     }
-    let artifacts = cask_artifacts(cask)?;
+    let artifacts = match cask_artifacts(cask) {
+        Ok(artifacts) => artifacts,
+        // Linux installs only font casks, so a cask whose artifacts mise cannot
+        // parse (an AppImage, say) is unavailable there, not a failure that
+        // hides the state of every other package in the list.
+        Err(err) if cfg!(target_os = "linux") => {
+            return Ok(PackageState::unavailable(err.to_string()));
+        }
+        Err(err) => return Err(err),
+    };
     if let Some(state) = platform_unavailable_state(cask, &artifacts) {
         return Ok(state);
     }

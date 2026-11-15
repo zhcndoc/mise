@@ -1435,6 +1435,59 @@
       "minProperties": 1,
       "additionalProperties": false
     },
+    "launchd_resource_limits": {
+      "type": "object",
+      "description": "resource limits for launchd SoftResourceLimits and HardResourceLimits",
+      "properties": {
+        "core": {
+          "type": "integer",
+          "description": "write Core, the largest core file in bytes",
+          "minimum": 0
+        },
+        "cpu": {
+          "type": "integer",
+          "description": "write CPU, the CPU time in seconds",
+          "minimum": 0
+        },
+        "data": {
+          "type": "integer",
+          "description": "write Data, the data segment size in bytes",
+          "minimum": 0
+        },
+        "file_size": {
+          "type": "integer",
+          "description": "write FileSize, the largest file the program may create in bytes",
+          "minimum": 0
+        },
+        "memory_lock": {
+          "type": "integer",
+          "description": "write MemoryLock, the memory the program may lock in bytes",
+          "minimum": 0
+        },
+        "number_of_files": {
+          "type": "integer",
+          "description": "write NumberOfFiles, the open file descriptors; launchd starts agents with a soft limit of 256",
+          "minimum": 0
+        },
+        "number_of_processes": {
+          "type": "integer",
+          "description": "write NumberOfProcesses, the processes the user may run",
+          "minimum": 0
+        },
+        "resident_set_size": {
+          "type": "integer",
+          "description": "write ResidentSetSize, the resident memory in bytes",
+          "minimum": 0
+        },
+        "stack": {
+          "type": "integer",
+          "description": "write Stack, the stack size in bytes",
+          "minimum": 0
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
     "macos_defaults_value": {
       "description": "a property list value: boolean, integer, real, string, or an array or dictionary of these",
       "anyOf": [
@@ -1774,7 +1827,7 @@
           "type": "boolean"
         },
         "color_theme": {
-          "default": "default",
+          "default": "base16",
           "description": "Color theme for interactive prompts, such as the task picker in `mise run`.",
           "type": "string",
           "enum": [
@@ -2305,6 +2358,11 @@
             "fetch_interval": {
               "default": "15m",
               "description": "How often the history watcher fetches from the setup repository.",
+              "type": "string"
+            },
+            "lock_wait": {
+              "default": "30s",
+              "description": "How long a command waits for another history operation before failing.",
               "type": "string"
             },
             "notify": {
@@ -3117,6 +3175,11 @@
               "items": {
                 "type": "string"
               }
+            },
+            "fallback_to_installed": {
+              "default": false,
+              "description": "Let a shim run the latest installed version of a tool that no config file selects.",
+              "type": "boolean"
             }
           }
         },
@@ -3222,6 +3285,14 @@
               "description": "When you change directories in an activated shell, list the environment variables that mise adds, changes or removes.",
               "type": "boolean"
             },
+            "show_env_ignore": {
+              "default": [],
+              "description": "Environment variable names (or glob patterns) that `status.show_env` leaves out.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "show_tools": {
               "description": "When you change directories in an activated shell, list the tool versions that become active or inactive.",
               "type": "boolean"
@@ -3281,6 +3352,13 @@
               "description": "What mise does with `dnf:` packages on an image-based Fedora host such as Silverblue or Bazzite.",
               "type": "string",
               "enum": ["error", "layer"]
+            },
+            "prefer": {
+              "description": "Package managers, in order, that an unprefixed `[bootstrap.packages]` key may use.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "sudo": {
               "default": true,
@@ -3402,9 +3480,31 @@
               "description": "Build task usage specs only from the `usage` field, ignoring deprecated `arg()`, `option()` and `flag()` in run scripts.",
               "type": "boolean"
             },
+            "history": {
+              "default": true,
+              "description": "Record each task run's duration and result for `mise tasks history`.",
+              "type": "boolean"
+            },
+            "history_limit": {
+              "default": 20,
+              "description": "How many recent runs of each task `mise tasks history` keeps.",
+              "type": "integer"
+            },
+            "lock_pools": {
+              "description": "How many slots each named task `lock` has, for locks that several runs hold at once.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
             "lock_timeout": {
               "description": "How long a task waits for a lock another run holds before it fails.",
               "type": "string"
+            },
+            "logs": {
+              "default": false,
+              "description": "Keep the output of each task's last run, for `mise tasks log`.",
+              "type": "boolean"
             },
             "monorepo_depth": {
               "default": 5,
@@ -3642,6 +3742,14 @@
           "description": "Show extra output, such as installation logs, and set the log level to debug; same as `--verbose`.",
           "type": "boolean"
         },
+        "versions_host_exclude": {
+          "default": [],
+          "description": "GitHub repositories that never use mise-versions, such as `my-org/*`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "windows_default_file_shell_args": {
           "default": "cmd /c",
           "description": "Shell that runs a file task on Windows when the task sets no `shell` and the file has no shebang or known extension.",
@@ -3848,10 +3956,10 @@
         },
         "includes": {
           "type": "array",
-          "description": "files/directories to include searching for tasks. Can be local paths, git repository URLs using git:: prefix (e.g., git::https://github.com/org/repo.git//path?ref=branch), or OCI artifacts using oci:: prefix (e.g., oci::ghcr.io/org/tasks:1.0.0)",
+          "description": "files/directories to include searching for tasks. Can be local paths, git repository URLs using git:: prefix (e.g., git::https://github.com/org/repo.git//path?ref=branch), OCI artifacts using oci:: prefix (e.g., oci::ghcr.io/org/tasks:1.0.0), or zip archives using zip:: prefix (e.g., zip::https://example.com/tasks.zip)",
           "items": {
             "type": "string",
-            "description": "file/directory root to include in task execution. Supports local paths, git URLs (git::https://github.com/org/repo.git//path?ref=branch), and OCI artifacts (oci::ghcr.io/org/tasks:1.0.0)"
+            "description": "file/directory root to include in task execution. Supports local paths, git URLs (git::https://github.com/org/repo.git//path?ref=branch), OCI artifacts (oci::ghcr.io/org/tasks:1.0.0), and zip archives (zip::https://example.com/tasks.zip)"
           }
         },
         "excludes": {
@@ -4047,6 +4155,22 @@
         "description": {
           "type": "string",
           "description": "description of task"
+        },
+        "tags": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "what kind of task this is, such as `test` or `lint`; `mise run --tag` and `mise tasks ls --tag` select tasks by it"
+            },
+            {
+              "type": "array",
+              "description": "what kind of task this is, such as `test`, `lint` or `slow`; `mise run --tag` and `mise tasks ls --tag` select tasks by them",
+              "items": {
+                "type": "string",
+                "description": "a tag, such as `test`, `lint` or `slow`"
+              }
+            }
+          ]
         },
         "dir": {
           "type": "string",
@@ -4336,17 +4460,63 @@
               "description": "`true` lets one run of this task at a time across every worktree of its repository; `false` takes no lock"
             },
             {
-              "type": "string",
-              "description": "a lock name shared by every task on this machine that names it",
-              "pattern": "^[^,]*\\S[^,]*$"
+              "description": "a lock shared by every task on this machine that names it",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "a lock name shared by every task on this machine that names it; the task holds one of its slots",
+                  "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                },
+                {
+                  "type": "object",
+                  "description": "a lock shared by every task on this machine that names it, of which the task holds `count` slots",
+                  "required": ["name"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "a lock name shared by every task on this machine that names it",
+                      "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "description": "how many of the lock's slots the task holds while it runs; `task.lock_pools` sets how many slots the lock has, one unless it says more, and a count above that is lowered to it",
+                      "minimum": 1
+                    }
+                  },
+                  "unevaluatedProperties": false
+                }
+              ]
             },
             {
               "type": "array",
-              "description": "lock names shared by every task on this machine that names them, taken in sorted order",
+              "description": "locks shared by every task on this machine that names them, taken in sorted order",
               "items": {
-                "type": "string",
-                "description": "a lock name shared by every task on this machine that names it",
-                "pattern": "^[^,]*\\S[^,]*$"
+                "description": "a lock shared by every task on this machine that names it",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "a lock name shared by every task on this machine that names it; the task holds one of its slots",
+                    "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                  },
+                  {
+                    "type": "object",
+                    "description": "a lock shared by every task on this machine that names it, of which the task holds `count` slots",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "a lock name shared by every task on this machine that names it",
+                        "pattern": "^(?![^,]*:\\d+$)[^,]*\\S[^,]*$"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "description": "how many of the lock's slots the task holds while it runs; `task.lock_pools` sets how many slots the lock has, one unless it says more, and a count above that is lowered to it",
+                        "minimum": 1
+                      }
+                    },
+                    "required": ["name"],
+                    "unevaluatedProperties": false
+                  }
+                ]
               }
             }
           ]
@@ -4380,6 +4550,11 @@
           "description": "block env var inheritance",
           "default": false
         },
+        "deny_unix": {
+          "type": "boolean",
+          "description": "block connections to Unix sockets outside the sandbox; Linux 7.1 or later",
+          "default": false
+        },
         "allow_read": {
           "type": "array",
           "description": "allow reads from specific paths",
@@ -4397,6 +4572,13 @@
         "allow_net": {
           "type": "array",
           "description": "allow network to specific hosts; not supported yet, so Linux and macOS reject it",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_unix": {
+          "type": "array",
+          "description": "allow connections to the Unix sockets at specific paths (implies deny_unix); Linux 7.1 or later",
           "items": {
             "type": "string"
           }
@@ -6810,7 +6992,7 @@
       ]
     },
     "include": {
-      "description": "config files merged into this one, ranking just below it: a local path (relative to this file), git::<url>//<path>.toml?ref=<ref> or oci::<registry>/<repo>[:tag|@sha256:<digest>] (the artifact holds a mise.toml). Paranoid mode requires a commit sha or digest for remote includes and rejects local ones; otherwise a branch or tag is refreshed after fetch_remote_versions_cache",
+      "description": "config files merged into this one, ranking just below it: a local path (relative to this file), git::<url>//<path>.toml?ref=<ref> oci::<registry>/<repo>[:tag|@sha256:<digest>] (the artifact holds a mise.toml) or zip::<http(s) url> (a zip archive with a mise.toml at its root). Paranoid mode requires a commit sha or digest for remote includes (so it rejects zip::) and rejects local ones; otherwise a branch or tag is refreshed after fetch_remote_versions_cache",
       "oneOf": [
         {
           "type": "string",
@@ -8482,6 +8664,14 @@
                 "type": "string",
                 "description": "inline file content; cannot be combined with source"
               },
+              "block": {
+                "type": "string",
+                "description": "block content kept between marker comments named by id, in a file mise does not own; the rest of the file is left alone, a missing file is created with just the block, and the block is appended when its markers are absent. Cannot be combined with source or content, and needs id"
+              },
+              "id": {
+                "type": "string",
+                "description": "names the block's marker comments, as in \"# >>> mise:<id> >>>\"; required with block"
+              },
               "owner": {
                 "type": "string",
                 "description": "user that should own the file; left as it is when unset"
@@ -8492,7 +8682,7 @@
               },
               "mode": {
                 "type": "string",
-                "description": "octal permissions such as \"0640\"; defaults to \"0644\" for a file with source or content, otherwise left as it is"
+                "description": "octal permissions such as \"0640\"; defaults to \"0644\" for a file with source or content, or one a block creates, otherwise left as it is"
               },
               "template": {
                 "type": "boolean",
@@ -8549,7 +8739,45 @@
                 }
               },
               {
-                "$comment": "A present file without source or content manages only its permissions: it must declare some, and cannot be templated or replaced.",
+                "$comment": "A block edits one marked region of a file mise does not own: it needs an id, takes its body from block alone, and is never removed or replaced.",
+                "if": {
+                  "required": ["block"]
+                },
+                "then": {
+                  "required": ["id"],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": ["source"]
+                      },
+                      {
+                        "required": ["content"]
+                      }
+                    ]
+                  },
+                  "properties": {
+                    "state": {
+                      "const": "present"
+                    },
+                    "replace": {
+                      "const": false
+                    },
+                    "remove_empty": {
+                      "const": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "required": ["id"]
+                },
+                "then": {
+                  "required": ["block"]
+                }
+              },
+              {
+                "$comment": "A present file without source, content or block manages only its permissions: it must declare some, and cannot be templated or replaced.",
                 "if": {
                   "properties": {
                     "state": {
@@ -8563,6 +8791,9 @@
                       },
                       {
                         "required": ["content"]
+                      },
+                      {
+                        "required": ["block"]
                       }
                     ]
                   }
@@ -9020,7 +9251,7 @@
         },
         "packages": {
           "type": "object",
-          "description": "system packages to install with `mise bootstrap packages apply`, keyed by \"manager:package\" (e.g. \"apt:libssl-dev\", \"brew:postgresql@17\", \"dnf:openssl-devel\", \"pacman:base-devel\")",
+          "description": "system packages to install with `mise bootstrap packages apply`, keyed by \"manager:package\", or by a bare package name that mise installs with one manager chosen from system_packages.prefer (e.g. \"apt:libssl-dev\", \"brew:postgresql@17\", \"dnf:openssl-devel\", \"pacman:base-devel\")",
           "additionalProperties": {
             "oneOf": [
               {
@@ -9110,6 +9341,13 @@
                     "description": "desired package state; pacman, scoop, snap, and zypper support absent",
                     "enum": ["present", "absent"],
                     "default": "present"
+                  },
+                  "names": {
+                    "type": "object",
+                    "description": "package names per manager for a key without a manager prefix, e.g. { apt = \"libssl-dev\", dnf = \"openssl-devel\" }; a manager not listed uses the key as the name",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 },
                 "dependentRequired": {
@@ -9119,7 +9357,7 @@
             ]
           },
           "propertyNames": {
-            "pattern": "^[A-Za-z0-9_-]+:.+$"
+            "pattern": "^([A-Za-z0-9_-]+:.+|[^:\\s]+)$"
           }
         },
         "repos": {
@@ -9166,23 +9404,28 @@
           "description": "macOS-specific bootstrap config",
           "properties": {
             "dock": {
-              "$ref": "#/$defs/bootstrap_macos_dock"
+              "$ref": "#/$defs/bootstrap_macos_dock",
+              "deprecated": true
             },
             "finder": {
-              "$ref": "#/$defs/bootstrap_macos_finder"
+              "$ref": "#/$defs/bootstrap_macos_finder",
+              "deprecated": true
             },
             "keyboard": {
-              "$ref": "#/$defs/bootstrap_macos_keyboard"
+              "$ref": "#/$defs/bootstrap_macos_keyboard",
+              "deprecated": true
             },
             "trackpad": {
-              "$ref": "#/$defs/bootstrap_macos_trackpad"
+              "$ref": "#/$defs/bootstrap_macos_trackpad",
+              "deprecated": true
             },
             "defaults": {
-              "$ref": "#/$defs/bootstrap_macos_defaults"
+              "$ref": "#/$defs/bootstrap_macos_defaults",
+              "deprecated": true
             },
             "defaults_entries": {
               "type": "array",
-              "description": "Explicit macOS preferences with a selectable host scope",
+              "description": "deprecated: use [[bootstrap.settings.macos.defaults_entries]]",
               "items": {
                 "type": "object",
                 "properties": {
@@ -9231,7 +9474,8 @@
                 },
                 "additionalProperties": false,
                 "required": ["domain", "key", "value"]
-              }
+              },
+              "deprecated": true
             },
             "launchd": {
               "type": "object",
@@ -9355,6 +9599,14 @@
                         "type": "string",
                         "description": "write StandardErrorPath"
                       },
+                      "soft_resource_limits": {
+                        "description": "write SoftResourceLimits, the resource limits the program starts with and may raise up to the hard limits",
+                        "$ref": "#/$defs/launchd_resource_limits"
+                      },
+                      "hard_resource_limits": {
+                        "description": "write HardResourceLimits, the ceilings the program cannot raise its soft limits above",
+                        "$ref": "#/$defs/launchd_resource_limits"
+                      },
                       "kickstart": {
                         "type": "boolean",
                         "description": "run `launchctl kickstart -k` after loading the agent",
@@ -9384,7 +9636,7 @@
             },
             "login_items": {
               "type": "object",
-              "description": "applications to open at login (System Settings > General > Login Items & Extensions)",
+              "description": "deprecated: use [bootstrap.settings.macos.login_items]",
               "properties": {
                 "apps": {
                   "type": "array",
@@ -9398,6 +9650,7 @@
                   "description": "also remove login items that are not declared (default: false, so apps that register themselves are left alone)"
                 }
               },
+              "deprecated": true,
               "additionalProperties": false
             }
           },
@@ -10228,6 +10481,117 @@
             "pattern": "^[A-Za-z_][A-Za-z0-9_-]*\\$?$",
             "maxLength": 32
           }
+        },
+        "settings": {
+          "type": "object",
+          "description": "[experimental] settings that bootstrap settings plugins apply, keyed by plugin name; which keys a plugin accepts is up to the plugin",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "properties": {
+            "macos": {
+              "type": "object",
+              "description": "macOS preferences, written the way `defaults write` writes them; `macos` is built in, not a plugin",
+              "properties": {
+                "dock": {
+                  "description": "Dock preferences (com.apple.dock)",
+                  "$ref": "#/$defs/bootstrap_macos_dock"
+                },
+                "finder": {
+                  "description": "Finder preferences (com.apple.finder)",
+                  "$ref": "#/$defs/bootstrap_macos_finder"
+                },
+                "keyboard": {
+                  "description": "keyboard preferences",
+                  "$ref": "#/$defs/bootstrap_macos_keyboard"
+                },
+                "trackpad": {
+                  "description": "trackpad preferences",
+                  "$ref": "#/$defs/bootstrap_macos_trackpad"
+                },
+                "defaults": {
+                  "description": "any preference, by domain and key",
+                  "$ref": "#/$defs/bootstrap_macos_defaults"
+                },
+                "defaults_entries": {
+                  "type": "array",
+                  "description": "Explicit macOS preferences with a selectable host scope",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "domain": {
+                        "type": "string",
+                        "description": "preferences domain, such as \"com.apple.dock\" or \"NSGlobalDomain\"; -g and -globalDomain mean NSGlobalDomain"
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "preference key within the domain"
+                      },
+                      "host": {
+                        "type": "string",
+                        "description": "any writes the preference for every host; current writes it for this machine only, like defaults -currentHost",
+                        "enum": ["any", "current"],
+                        "default": "any"
+                      },
+                      "path": {
+                        "type": "array",
+                        "description": "Dictionary keys below the preference key; omitted to replace the whole value",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1
+                      },
+                      "value": {
+                        "description": "desired value, written with the matching property list type; replaces the selected value in full",
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "array"
+                          },
+                          {
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": ["domain", "key", "value"]
+                  }
+                },
+                "login_items": {
+                  "type": "object",
+                  "description": "applications to open at login (System Settings > General > Login Items & Extensions)",
+                  "properties": {
+                    "apps": {
+                      "type": "array",
+                      "description": "application bundles to open at login: absolute or `~/` paths ending in `.app`",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "exclusive": {
+                      "type": "boolean",
+                      "description": "also remove login items that are not declared (default: false, so apps that register themselves are left alone)"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": {
+            "type": "object",
+            "description": "settings for the bootstrap settings plugin of this name"
+          }
         }
       },
       "additionalProperties": false
@@ -10674,6 +11038,50 @@
                   }
                 ]
               },
+              "ports": {
+                "type": "object",
+                "description": "More named ports, each exported as <NAME>_<PORT>_PORT and moved by the same worktree slot as `port`.",
+                "additionalProperties": {
+                  "description": "Port for this named port of the daemon: a fixed port, or an allocation that gives each linked git worktree its own.",
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "maximum": 65535,
+                      "minimum": 1
+                    },
+                    {
+                      "type": "object",
+                      "description": "Offset a base port by the same worktree slot the daemon's `port = \"auto\"` uses.",
+                      "additionalProperties": false,
+                      "properties": {
+                        "auto": {
+                          "description": "Enable per-worktree allocation of this named port.",
+                          "const": true
+                        },
+                        "base": {
+                          "type": "integer",
+                          "description": "Port used by the primary checkout.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "stride": {
+                          "type": "integer",
+                          "description": "Distance between consecutive worktree slots. Defaults to 1.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": ["auto", "base"]
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                  "not": {
+                    "enum": ["port", "container", "runtime"]
+                  }
+                }
+              },
               "proxy": {
                 "$ref": "#/$defs/daemon_proxy"
               },
@@ -10728,6 +11136,50 @@
               },
               "init": {
                 "$ref": "#/$defs/daemon_init"
+              },
+              "ports": {
+                "type": "object",
+                "description": "More named ports, each exported as <NAME>_<PORT>_PORT and moved by the same worktree slot as `port`.",
+                "additionalProperties": {
+                  "description": "Port for this named port of the daemon: a fixed port, or an allocation that gives each linked git worktree its own.",
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "maximum": 65535,
+                      "minimum": 1
+                    },
+                    {
+                      "type": "object",
+                      "description": "Offset a base port by the same worktree slot the daemon's `port = \"auto\"` uses.",
+                      "additionalProperties": false,
+                      "properties": {
+                        "auto": {
+                          "description": "Enable per-worktree allocation of this named port.",
+                          "const": true
+                        },
+                        "base": {
+                          "type": "integer",
+                          "description": "Port used by the primary checkout.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "stride": {
+                          "type": "integer",
+                          "description": "Distance between consecutive worktree slots. Defaults to 1.",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": ["auto", "base"]
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                  "not": {
+                    "enum": ["port", "container", "runtime"]
+                  }
+                }
               },
               "proxy": {
                 "$ref": "#/$defs/daemon_proxy"

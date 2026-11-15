@@ -803,6 +803,11 @@ pub async fn populate_aube_locks(
         if backend.get_type() != BackendType::Npm {
             continue;
         }
+        // aube resolves a tarball URL without its optionalDependencies, so a
+        // graph for it would lack packages; the lockfile holds only the version.
+        if crate::backend::npm::is_tarball_spec(&ba.tool_name) {
+            continue;
+        }
         let options = backend.lockfile_options(&tv.request, &PlatformTarget::from_current())?;
         let backend_name = ba.stored_full();
         let npm = crate::backend::npm::NPMBackend::from_arg(ba.clone());
@@ -940,17 +945,11 @@ pub async fn populate_uv_locks(
             }
             Err(error) => {
                 warn!(
-                    "{} dependency graph unavailable; keeping a version-only lock entry: {error:#}",
+                    "{} dependency graph unavailable; leaving the lock entry as it is: {error:#}",
                     ba.short
                 );
-                if let Some(entries) = lockfile.tools_for_mut(&ba.short) {
-                    for entry in entries
-                        .iter_mut()
-                        .filter(|entry| entry.version == tv.version && entry.options == options)
-                    {
-                        entry.uv = None;
-                    }
-                }
+                // Keep whatever graph the lockfile already has: a failure to resolve
+                // here may only reflect this machine, not that the graph is stale.
                 continue;
             }
         };
@@ -1158,6 +1157,9 @@ async fn artifact_checksum(
     } else {
         url.to_owned()
     };
+    // Headers resolved for the API asset endpoint (a forge token) are only valid
+    // there; the browser URL was reachable without them.
+    let headers = headers.filter(|_| api_url.is_none_or(|api_url| api_url == url));
     match headers.filter(|headers| !headers.is_empty()) {
         Some(headers) => {
             crate::backend::vfox::download_with_plugin_headers(&url, &path, headers).await?
@@ -2159,5 +2161,57 @@ mod tests {
         // The headers are never persisted.
         let written = toml::to_string(&info).unwrap();
         assert!(!written.contains("secret"), "{written}");
+    }
+
+    #[tokio::test]
+    async fn artifact_checksum_withholds_headers_from_a_reachable_browser_url() {
+        let mut server = mockito::Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/browser")
+            .with_header("content-type", "application/octet-stream")
+            .create_async()
+            .await;
+        let browser = server
+            .mock("GET", "/browser")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_body("artifact")
+            .create_async()
+            .await;
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        let browser_url = format!("{}/browser", server.url());
+        let api_url = format!("{}/api/asset", server.url());
+        let checksum = artifact_checksum(&browser_url, Some(&api_url), Some(&headers))
+            .await
+            .unwrap();
+        head.assert_async().await;
+        browser.assert_async().await;
+        assert!(checksum.starts_with("sha256:"));
+    }
+
+    #[tokio::test]
+    async fn artifact_checksum_sends_headers_to_the_api_url_when_the_browser_url_is_html() {
+        let mut server = mockito::Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/browser")
+            .with_header("content-type", "text/html; charset=utf-8")
+            .create_async()
+            .await;
+        let api = server
+            .mock("GET", "/api/asset")
+            .match_header("authorization", "Bearer secret")
+            .with_body("artifact")
+            .create_async()
+            .await;
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        let browser_url = format!("{}/browser", server.url());
+        let api_url = format!("{}/api/asset", server.url());
+        let checksum = artifact_checksum(&browser_url, Some(&api_url), Some(&headers))
+            .await
+            .unwrap();
+        head.assert_async().await;
+        api.assert_async().await;
+        assert!(checksum.starts_with("sha256:"));
     }
 }

@@ -23,6 +23,9 @@ pub enum Error {
         backend: Box<BackendArg>,
         version: String,
     },
+    /// Every release matching a request is newer than `minimum_release_age`.
+    #[error("{0}")]
+    ReleaseAgeHidAllVersions(String),
     #[error("{tool}@{version} is not in the lockfile\nhint: {hint}")]
     NotInLockfile {
         tool: String,
@@ -44,6 +47,9 @@ pub enum Error {
         display_path(.0)
     )]
     UntrustedEnvFile(PathBuf),
+    /// A parent stopped waiting for its nested tasks because another task failed.
+    #[error("task sequence aborted due to failure")]
+    TaskSequenceAborted,
     #[error("{}", format_install_failures(.failed_installations))]
     InstallFailed {
         successful_installations: Vec<ToolVersion>,
@@ -155,6 +161,13 @@ impl Error {
         ProcessError::is_task_interrupted_before_start(err)
     }
 
+    pub fn is_task_sequence_aborted(err: &Report) -> bool {
+        matches!(
+            err.downcast_ref::<Error>(),
+            Some(Error::TaskSequenceAborted)
+        )
+    }
+
     pub(crate) fn is_argument_err(err: &Report) -> bool {
         err.downcast_ref::<Error>()
             .map(|e| {
@@ -174,6 +187,15 @@ impl Error {
             matches!(
                 source.downcast_ref::<Error>(),
                 Some(Error::RequiredChannelResolution { .. })
+            )
+        })
+    }
+
+    pub fn is_release_age_hid_all_versions(err: &Report) -> bool {
+        err.chain().any(|source| {
+            matches!(
+                source.downcast_ref::<Error>(),
+                Some(Error::ReleaseAgeHidAllVersions(_))
             )
         })
     }

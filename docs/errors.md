@@ -176,7 +176,7 @@ mise 会从 [mise-versions](https://mise-versions.jdx.dev) 主机获取公开发
 
 ### `No version is set for shim: <command>` / `Tool not installed for shim: <command>` {#shim-errors}
 
-你在一个没有配置文件为该工具选择版本的目录中运行了 [shim](/dev-tools/shims.html)。请使用 `mise use <tool>@<version>` 添加版本，或使用 `mise use -g <tool>@<version>` 为所有目录设置默认版本；错误消息会列出可供选择的已安装版本。
+你在一个没有配置文件为该工具选择版本的目录中运行了 [shim](/dev-tools/shims.html)。错误消息会在 `mise use <tool>@<version>` 和 `mise use -g <tool>@<version>` 两个命令中都填入一个已安装版本；`mise x <tool>@<version> -- <command>` 可运行该版本一次。传入 `--verbose` 可列出所有已安装版本。若要改为运行最新的已安装版本，而不是失败，请设置 [`shims.fallback_to_installed`](/configuration/settings.html#shims.fallback_to_installed)。
 
 `Tool not installed for shim` 表示配置选择的版本尚未安装，且未触发自动安装。请运行 `mise install`。
 

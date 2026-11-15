@@ -103,7 +103,9 @@ ports.http_port = { auto = true, base = 27000 }
 
 主检出目录会使用 `27000`；每个关联工作树会像主端口一样加上相同的槽位，因此无论主端口的 `base` 如何设置，每个检出目录都会获得独立的 HTTP 端口。省略 `base` 时会从预设为该端口设置的默认值开始（本例为 `8080`）。即使主端口是固定整数，也可以使用此方式；此时槽位取自项目根目录。与[自动端口](#automatic-ports)一样，`stride` 用于拉开槽位间距，默认值为 `1`。未设置 `auto` 的命名端口仍为整数或预设默认值，因此不会影响现有配置。
 
-mise 加载配置时会拒绝以下自动分配的命名端口：解析后与同一项目中的其他守护进程端口冲突，或在工作树中超过 65535。该检查仅覆盖单个检出目录中的一个项目。mise 不会跨工作树或项目比较端口，因此不同位置的范围仍可能重叠并发生冲突：槽位最多会达到 `511 * stride`，所以一个工作树中的 `27000` 可能等于另一检出目录中其他守护进程的 `27000 + n`。请为每个守护进程及命名端口设置相隔至少 512 的 `base`；`stride` 更大时还需增加间距。
+mise 加载配置时会拒绝以下自动分配的命名端口：解析后与同一项目中的其他守护进程端口冲突，或在工作树中超过 65535。此检查仅覆盖单个检出目录中的一个项目。不同检出目录中的范围仍可能重叠并发生冲突：槽位最多会达到 `511 * stride`，所以一个工作树中的 `27000` 可能等于另一检出目录中其他守护进程的 `27000 + n`。请为每个守护进程及命名端口设置相隔至少 512 个端口的 `base`；`stride` 更大时还需增加间距。
+
+如果某个工作树槽位会让自定义 daemon 的一个端口与主检出目录中另一个端口相同，mise 会发出警告。例如，`app` 的基准端口为 `5173`，`db` 的基准端口为 `5432`；工作树槽位 259 会使 `app` 的端口变为 `5432`，因此两者无法同时运行。启动 daemon 时，mise 还会将其命名端口与其他检出目录中正在运行的 daemon 比较；若冲突，错误会指出 daemon、端口和占用它的检出目录。
 
 mise 会将每个命名端口导出为 `<NAME>_<PORT_NAME>`，daemon 名称按[端口变量](#port-variables)中的规则转换：使用 `cockroachdb` 预设的 `crdb` daemon 会导出 `CRDB_HTTP_PORT`，名为 `authz` 的 `spicedb` daemon 则会导出 `AUTHZ_HTTP_PORT` 和 `AUTHZ_METRICS_PORT`。这些变量的值就是 daemon 使用的端口，因此请直接读取，而不要自行增加偏移量：
 
@@ -155,6 +157,27 @@ mise 会将解析后的端口导出为 `API_PORT`；详见[端口变量](#port-v
 带有整数或自动 `port` 的自定义 daemon 会导出 `<NAME>_PORT`。mise 会将 daemon 名称转成大写，并将标点替换为下划线：`[daemons.api]` 导出 `API_PORT`，`[daemons.web-ui]` 导出 `WEB_UI_PORT`。预设则会使用解析后的端口导出自身连接变量，例如 `PGPORT` 和 `REDIS_URL`。这些变量可通过 `mise env`、`mise exec` 和 daemon 自身的进程环境获取。显式设置的 `[env]` 值优先于这些变量。
 
 如果 daemon 名称以数字开头，或两个名称转换后得到相同变量（`web-ui` 和 `web_ui`），mise 会发出警告，并且不会为它们导出 `<NAME>_PORT` 或 `<NAME>_URL`。Daemon 仍会运行，pitchfork 也仍会在进程中设置 `$PORT`。预设自己的变量优先于派生变量，因此自定义 daemon 的 `<NAME>_PORT` 与预设命名端口变量冲突时，会以预设变量为准。
+
+### 自定义 daemon 的命名端口 {#named-ports-on-custom-daemons}
+
+`run` 或 `task` daemon 可以声明自己的多个端口，例如会发布多个端口的 Docker Compose 服务栈。每个端口都需要名称；自动分配端口还必须设置 `base`，因为自定义 daemon 没有可供采用的预设默认端口：
+
+```toml
+[daemons.stack]
+run = "docker compose up"
+ports.app = { auto = true, base = 8080 }
+ports.db = { auto = true, base = 5432 }
+```
+
+主检出目录使用 `8080` 和 `5432`；每个关联 worktree 都会为两个端口加上相同的槽位偏移。mise 会在 daemon 启动前将它们导出为 `STACK_APP_PORT` 和 `STACK_DB_PORT`，因此 `mise env` 和 `mise exec` 都能读取；你也可以将它们映射为服务栈使用的变量名：
+
+```toml
+[env]
+APP_PORT = "{{ env.STACK_APP_PORT }}"
+DB_PORT = "{{ env.STACK_DB_PORT }}"
+```
+
+命名端口会像预设端口一样参与冲突检查。
 
 ### 项目布局与端口稳定性 {#project-layout-and-port-stability}
 

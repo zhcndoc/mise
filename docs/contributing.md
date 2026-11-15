@@ -1,37 +1,33 @@
 ---
-description: "从首次检出到 CLI 帮助、设置和文档，了解如何为 mise 提议、实现、测试并提交更改。"
+description: "mise 不接受外部 pull request。了解如何报告错误、提出更改请求，以及供维护者参考的构建、测试和文档说明。"
 outline: [2, 3]
 ---
 
 # 贡献指南
 
-mise 欢迎修复缺陷、改进文档，以及为广泛使用的工具添加注册表条目。较大的改动应先确认方向，再开始编写代码。请在 [Issues](https://github.com/jdx/mise/issues) 报告缺陷，并在 [Discussions](https://github.com/jdx/mise/discussions) 分享问题和想法。
+mise 不接受外部 pull request，GitHub 也不允许维护团队以外的人创建 PR。请在 [Issues](https://github.com/jdx/mise/issues) 报告缺陷，并在 [Discussions](https://github.com/jdx/mise/discussions) 分享问题、想法和功能请求。
 
-## 参与社区 {#community-participation}
+在 Issues 或 Discussions 中提交的缺陷报告，只应描述你在使用 mise 时遇到的问题。请说明你想做什么、运行了什么命令、相关配置以及实际结果。通过阅读源码或让代理搜索代码发现的问题报告会被关闭。
 
-可以使用 AI 协助撰写 Discussion、Issue、回复或 pull request。发布前请先审核，并以如下格式添加说明：
+本页其余内容是维护者关于构建、测试和编写 mise 文档的参考，也适用于希望从源码构建 mise 的读者。
+
+## 社区参与 {#community-participation}
+
+可以使用 AI 协助撰写 Discussion、Issue 或回复。发布前请先审核，并以如下格式添加说明：
 
 ```text
 *AI-assisted — Tool: <tool>; model: <provider>/<model>; version: <version-or-unavailable>.*
 ```
 
-## Before you open a pull request {#before-you-open-a-pull-request}
+## 维护者的 pull request
 
-mise 有明确的项目范围和设计取向。除非改动显而易见，否则请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出方案，再开始编写。跳过这一步的 PR 往往会被拒绝，或需要大幅修改。
+维护者提交 PR 时，以及代理代为提交 PR 时，请先确认：
 
-如果我对某项贡献犹豫不决，很可能仅因此就会拒绝它，否则 mise 会陷入功能膨胀。如果 PR 的质量不足以让我相信贡献者能够将其完成，我也可能拒绝。我没有时间指导每位贡献者，而且我维护的项目每周会收到数百个 PR，因此拒绝说明可能很简短。
-
-请求评审前，请确认以下事项：
-
-1. 除非改动显而易见，否则已在 Discussion 或 Discord 中就方案达成一致。
-2. CI 全部通过，包括 `mise run lint` 不会运行的 [Clippy](#clippy)。
-3. 标题符合 [PR 标题格式](#pull-request-titles-and-descriptions)。
-4. 描述说明了用户可见的变化；发布说明会使用这段描述。
-5. 已处理所有自动化 AI 评审意见。
-6. 生成文件和快照已与生成它们的改动一并提交。详见[生成文件](/architecture.html#generated-files)。
-7. 面向用户的改动附带了文档。
-
-如果 CI 失败、标题不符合格式，或仍有未处理的 AI 评审意见，请不要期待我会立即查看 PR。
+1. CI 全部通过，包括 `mise run lint` 不会运行的 [Clippy](#clippy)。
+2. 标题符合 [PR 标题格式](#pull-request-titles-and-descriptions)，且描述说明了用户可见的变化。标题和描述都会用于发布说明。
+3. 已处理所有自动化 AI 评审意见。
+4. 生成文件和快照已与生成它们的改动一并提交。详见[生成文件](/architecture.html#generated-files)。
+5. 面向用户的改动附带了文档。
 
 ## 设置代码检出目录 {#set-up-a-checkout}
 
@@ -431,7 +427,7 @@ registry: add twg (http:twg)
 CI 会使用以下工具检查依赖，而项目的 `mise.toml` 不会安装它们。具体参数见 [test-impl.yml](https://github.com/jdx/mise/blob/main/.github/workflows/test-impl.yml)。
 
 ```sh
-cargo deny check               # advisories, licenses, and allowed sources
+mise x -- cargo-deny check       # advisories, bans, licenses, and allowed sources
 cargo machete --with-metadata  # unused dependencies
 cargo msrv verify              # the minimum supported Rust version
 ```
@@ -440,11 +436,11 @@ cargo msrv verify              # the minimum supported Rust version
 
 ## 将工具添加到注册表 {#adding-tools}
 
-新简称仅面向已经广泛使用的工具，通常要求拥有数千个 GitHub stars；大多数提案都会被拒绝。提交 PR 前请阅读[将工具添加到注册表](/contributing/registry.html)，其中介绍了受欢迎程度门槛、[后端接纳等级](/contributing/registry.html#backend-acceptance-tiers)、条目格式和[工具测试](/contributing/registry.html#tool-testing)。
+新简称仅面向已经广泛使用的工具，通常要求拥有数千个 GitHub stars；大多数提案都会被拒绝。若要申请添加工具，请在 [Discussion](https://github.com/jdx/mise/discussions) 中提出，不要提交 PR。[将工具添加到注册表](/contributing/registry.html)介绍了受欢迎程度门槛、[后端接纳等级](/contributing/registry.html#backend-acceptance-tiers)、条目格式和[工具测试](/contributing/registry.html#tool-testing)。
 
 ## 添加后端 {#adding-backends}
 
-大多数贡献者想要的是[添加工具](/contributing/registry.html)，而非新增后端。核心项目很少接纳新后端，因为每个后端都意味着长期维护；不过，能够显著增强 mise 的主流包管理器后端仍可能被接纳。请先确认现有后端（例如 `github`、`aqua`、`npm` 或 `pypi`）是否已能安装目标工具。若要在不修改 mise 的情况下支持新来源，可基于 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 编写[后端插件](/backend-plugin-development.html)或[工具插件](/tool-plugin-development.html)。如果认为某个后端应加入核心项目，请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出想法。
+大多数请求是要[添加新工具](/contributing/registry.html)，而非新增后端。核心项目很少接纳新后端，因为每个后端都意味着长期维护；不过，能够显著增强 mise 的主流包管理器后端仍可能被接纳。请先确认现有后端（例如 `github`、`aqua`、`npm` 或 `pypi`）是否已能安装目标工具。若要在不修改 mise 的情况下支持新来源，可基于 [mise-tool-plugin-template](https://github.com/jdx/mise-tool-plugin-template) 编写[后端插件](/backend-plugin-development.html)或[工具插件](/tool-plugin-development.html)。如果认为某个后端应加入核心项目，请先在 [Discussion](https://github.com/jdx/mise/discussions) 或 [Discord](https://discord.gg/mABnUDvP57) 提出想法。
 
 实现后端的步骤如下：
 

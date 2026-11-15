@@ -49,7 +49,7 @@ mise bootstrap packages apply
 
 ## 支持的软件包管理器
 
-每个键都必须包含 `manager:` 前缀。各管理器页面介绍了使用前提、软件包名称以及 mise 会运行的命令。
+键中的 `manager:` 前缀用于指定管理器；不带前缀的键会自动选择管理器，见[无前缀软件包](#unprefixed-packages)。各管理器页面介绍了使用前提、软件包名称以及 mise 会运行的命令。
 
 | 管理器                                                      | 适用系统                                          | 版本固定                                              | `state = "absent"` | 导入、清理                              |
 | ----------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- | ------------------ | ----------------------------------------- |
@@ -74,8 +74,7 @@ mise bootstrap packages apply
 
 ## Declare packages
 
-Each key is `"manager:package"`. The value is a version string or a table of
-options:
+键可以写作 `"manager:package"`，也可以省略前缀以自动选择管理器。值可以是版本字符串或选项表：
 
 ```toml
 [bootstrap.packages]
@@ -87,6 +86,27 @@ options:
 "brew-cask:slack" = { env = "work" }
 ```
 
+### 无前缀软件包 {#unprefixed-packages}
+
+不带 `manager:` 前缀的键只会通过一个管理器安装，因此同一份配置可以用于采用不同软件包管理器的机器：
+
+```toml
+[bootstrap.packages]
+git = "latest"
+fish = "latest"
+openssl = { names = { apt = "libssl-dev", dnf = "openssl-devel" } }
+```
+
+mise 会选择当前机器上可用、且未被 [`system_packages.managers`](/configuration/settings.html#system_packages.managers) 排除的第一个管理器。未配置时，顺序为发行版自带的管理器（`apt`、`dnf`、`pacman`、`zypper`、`apk`），然后是 `brew`、`winget`、`scoop` 和 `choco`。因此，Ubuntu 上的 `git` 会使用 apt，即使内置 Homebrew 管理器也可用；Fedora 上使用 dnf，macOS 上使用 brew，Windows 上使用 winget。设置 [`system_packages.prefer`](/configuration/settings.html#system_packages.prefer) 可更改顺序；该列表也限定了无前缀键可以使用的管理器。
+
+- 管理器的选择只取决于哪些管理器可用，不会检查其软件源中是否包含对应软件包。如果软件包无法安装，就会报错；mise 不会改用下一个管理器重试。
+- 软件包名称默认为键名；如果 `names` 为所选管理器指定了其他名称，则使用指定名称，如上例中的 `openssl`。
+- 带前缀的键（例如 `"apt:git"`）始终使用指定管理器，并忽略 `system_packages.prefer`。如果无前缀键解析出的软件包与已声明的带前缀键重复，例如 Ubuntu 上同时声明 `git` 和 `"apt:git"`，mise 会发出警告并采用带前缀的条目。
+- `system_packages.prefer` 中指定的[包管理器插件](/bootstrap/packages/plugins.html)也会作为候选项，即使它暂时无法运行。`status` 和 `apply` 会将其报告为不可用；mise 不会选择下一个管理器。
+- 如果没有可用的候选管理器，mise 会发出警告并跳过该条目。`status` 会列出状态为 `skipped` 的条目及其尝试过的管理器；管理器名称显示为 `-`，在 `--json` 输出中显示为 `unprefixed`。
+- 固定版本使用所选管理器的格式，因此只有所有候选管理器都接受相同版本字符串时，才应为无前缀条目固定版本。
+- `MISE_DEBUG=1` 会记录所选管理器及选择原因。
+
 ### 条目选项 {#entry-options}
 
 | 键                          | 管理器                      | 说明                                                                                                                                                                                                                               |
@@ -94,6 +114,7 @@ options:
 | `version`                   | 全部                        | `"latest"`（默认值），或使用管理器自身格式的[固定版本](#version-pins)。                                                                                                                                                           |
 | `os`                        | 全部                        | 仅在指定操作系统上安装；见[按操作系统筛选](#by-operating-system)。                                                                                                                                                                  |
 | `env`                       | 全部                        | 仅在指定的[配置环境](/configuration/environments.html)启用时安装；见[按配置环境筛选](#by-config-environment)。                                                                                                                     |
+| `names`                     | 无前缀键                    | 按管理器指定软件包名称，例如 `{ apt = "libssl-dev" }`；见[无前缀软件包](#unprefixed-packages)。                                                                                                                                     |
 | `state`                     | pacman、scoop、snap、zypper | `"present"`（默认值）或 `"absent"`；见[声明式移除软件包](#remove-a-package-declaratively)。                                                                                                                                       |
 | `adopt`                     | brew-cask、macos-app        | 接管已安装的同一应用，而不是替换它；见 [brew-cask](/bootstrap/packages/brew-cask.html#adopt-an-existing-app) 和 [macos-app](/bootstrap/packages/macos-app.html#adopt-an-existing-app)。                                               |
 | `appdir`                    | brew-cask                   | 此 cask 的应用程序目录；见[应用程序目录](/bootstrap/packages/brew-cask.html#overriding-the-application-directory)。                                                                                                                 |

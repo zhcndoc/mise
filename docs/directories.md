@@ -61,6 +61,8 @@ mise 会将配置、已安装工具、缓存和机器本地状态分别保存在
 mise plugins link my-tool ~/src/mise-my-tool
 ```
 
+同名的本地插件会覆盖[系统插件](#system-plugins)，mise 每次运行会对此发出一次警告。
+
 ### `installs` {#local-share-mise-installs}
 
 此目录保存已安装的版本：`mise install node@24.0.0` 会将工具安装到 `installs/node/24.0.0`。mise 也会为版本前缀和别名创建链接，例如 `installs/node/24`。请使用 `mise where node` 或 `mise which node` 获取路径，而不要自行拼接路径。
@@ -88,3 +90,20 @@ shims 让编辑器、脚本和非交互式 Shell 无需运行 `mise activate` �
 ## 系统级安装和 shims {#system-installs-and-shims}
 
 `mise install --system` 会将工具安装到 `/usr/local/share/mise/installs`，`mise reshim --system` 则会将 shims 写入 `/usr/local/share/mise/shims`。`MISE_SYSTEM_DATA_DIR` 可同时更改这两个目录（默认值为 `/usr/local/share/mise`）；[`system_installs_dir`](/configuration/settings.html#system_installs_dir)（`MISE_SYSTEM_INSTALLS_DIR`）和[`system_shims_dir`](/configuration/settings.html#system_shims_dir)（`MISE_SYSTEM_SHIMS_DIR`）则可分别更改目录。在 Unix 上，如果目录不可写，mise 会使用 `sudo` 写入。详见[系统级安装](/dev-tools/system-installs.html)。
+
+## 系统插件 {#system-plugins}
+
+Bootstrap 插件（例如[包管理器插件](/bootstrap/packages/plugins.html)）也可以安装为机器上的所有用户共用。mise 会在你的个人插件目录之后，按以下顺序搜索这些目录：
+
+1. `/usr/share/mise/plugins`，用于发行版或应用软件包安装的插件。
+2. `MISE_SYSTEM_DATA_DIR` 下的 `plugins` 目录（默认为 `/usr/local/share/mise/plugins`），用于机器管理员安装的插件。
+
+`MISE_SYSTEM_PLUGINS_DIRS` 会替换整个列表，路径分隔符与 `PATH` 相同。插件通过目录名查找，例如管理器 `vscode` 对应 `/usr/share/mise/plugins/vscode`，无需在 `[bootstrap.plugins]` 中声明。若多个目录中有同名插件，则优先使用列表靠前的目录。同名的个人插件始终会覆盖系统插件。
+
+只有当系统插件目录和其中每个插件都由 root 或当前用户拥有，且组用户和其他用户都无法写入时，mise 才会使用它们。检查范围包括插件内的每个文件和目录、通向插件的所有目录，以及检查过程中跟随的每个符号链接，包括链接目标路径中的链接。若 `/tmp` 这类目录设置了 sticky 位，且其中的条目由 root 或当前用户拥有，则仍可通过检查。
+
+mise 会警告并跳过未通过检查的目录或插件。Windows 不支持此项检查，因此会忽略系统插件目录。
+
+配置中写作 `foo_bar` 的插件名也会匹配名为 `foo-bar` 的系统插件目录，反之亦然。
+
+`mise plugins ls` 会在个人插件之后列出系统插件，并标记为 `(system)`；被个人插件覆盖的系统插件也会特别标记。`mise plugins ls --urls` 会显示插件路径。包管理器或机器管理员拥有这些插件，因此 `mise plugins update` 和 `mise plugins uninstall` 会跳过它们并发出警告。
